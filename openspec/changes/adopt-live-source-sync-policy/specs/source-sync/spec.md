@@ -121,3 +121,25 @@ Before enabling a conversion, the system SHALL define and enforce its numerical 
 - **WHEN** exact phase, original geometry or the declared bound cannot be established
 - **THEN** conversion SHALL refuse before any effective mutation
 - **AND** it SHALL NOT substitute a one-frame cursor correction, snapping, nextafter search, relaxed comparison or silent scalar fallback
+
+### Requirement: Musical scalar coordinates preserve the original reader domain
+A coordinates-only musical scalar continuation SHALL use an explicit projection mode distinct from legacy and physical-pair trajectories. It SHALL retain the complete original Some(P) loop domain and an already canonical separate Normal source frame/fraction. Its numerical domain SHALL require finite binary64 P in [0.5, 2^64], exact |P minus physical length| at most one frame, a valid physical region, finite initial/target rates in [0.5, 2], and separate canonical pair comparison against P. Construction SHALL reject incompatible, noncanonical or malformed input rather than wrapping it at the anchor. It SHALL derive full-u64 constant-epoch displacement and period reduction exactly on a bounded integer dyadic grid, then round only the canonical fractional remainder. Circular source error SHALL be at most 2^-54 frame per constant epoch. Generic zero fractional displacement SHALL preserve fraction bits, including signed zero, on exact whole-period revisits.
+
+#### Scenario: A valid musical pair begins or exactly revisits its source phase
+- **WHEN** a qualified numeric continuation is queried at its anchor or at an exact whole-period displacement
+- **THEN** the separate canonical source pair and fraction bits SHALL be preserved
+- **AND** the unchanged SourceReadPlan and same immutable readers SHALL produce identical executed taps, gain bits and PCM at that pair
+- **AND** the existing musical interpolation, including its legacy phase recombination, SHALL remain unchanged
+
+#### Scenario: A musical period includes a virtual endpoint cursor
+- **WHEN** a canonical musical pair is at the physical end inside a longer admitted musical seam
+- **THEN** validation SHALL compare the separate pair against the actual period rather than applying the physical-pair frame-before-end rule
+- **AND** source ownership and actual tap coverage SHALL still require their original independent qualification
+
+#### Scenario: A copied musical continuation changes target or exhausts its epoch
+- **WHEN** the existing scalar glide, copied checkpoint, history query or bounded output advance services the musical pair mode
+- **THEN** it SHALL retain the existing .05-per-512-active-frame glide boundary, exact rebases, mode-aware comparisons and immutable constant-epoch addressing
+- **AND** unavailable pre-anchor/shifted history and u64 overflow SHALL refuse before mutation or output
+- **AND** no source, reader, mapped-conversion, adoption or realtime preparation permission SHALL follow from coordinates alone
+
+The musical coordinate prerequisite SHALL NOT change legacy/physical arithmetic, source timing ownership or reader-domain selection. Its per-epoch bound SHALL NOT be presented as a global ideal unrounded-glide, whole-process resource or music/device acceptance bound.

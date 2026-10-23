@@ -26,6 +26,14 @@
 
 ## Stage A: exact copied conversion prerequisite
 
+The independent musical coordinate prerequisite below must close before a
+conversion relies on a musical scalar continuation. It does not discharge the
+anchored map, original geometry or reader-domain conversion contract.
+
+- [x] Add a distinct coordinates-only musical pair mode retaining the exact original Some(P) domain, separate canonical anchor and bounded integer dyadic reduction.
+- [x] Preserve the existing reader, legacy/physical arithmetic, glide, history, copied state, exact guards and checked exhaustion; prove independent rational vectors and actual unchanged-reader taps/PCM.
+- [x] Finish affected integration, needed Release/import/preflight and one independent final-diff review for the musical coordinate prerequisite.
+
 - [ ] Freeze an analytically bounded anchored source/master representation and precise domain/boundary contract.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.

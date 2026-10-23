@@ -398,3 +398,80 @@ device acceptance. No App/device/hearing result, representation conversion,
 general mapped adoption, Native/pitch/Key-Lock acceptance or full-Goal gate is
 claimed. All original music/B2/resource/Human/parent/final gates remain open as
 applicable, with STOP before full Rust port/Slice8.
+
+## Independent musical scalar coordinate prerequisite, 2026-10-23
+
+`SourcePlayback::scalar_musical_continuation` now constructs a distinct PairMusical
+trajectory for an already canonical separate Normal frame/fraction and the exact
+original `Some(P)` domain. There is no production caller, conversion/adoption
+permission, new reader, owning source work or alternate time/rate authority.
+Existing Legacy and PairPhysical arithmetic remains unchanged. Shared pair guards
+retain checked elapsed counts, complete copy comparisons, existing .05/512 glide,
+unchanged-domain refresh, no-op Normal seek clearing and no invented prior history.
+
+The admitted period is finite binary64 [.5,2^64], the physical region is valid,
+exact |P-L|<=1 and both rates are [.5,2]. Separate q/f validation retains tiny
+fractions and virtual physical-end cursors. Fixed H=2^53 exactly represents P and
+rate; C=P*H<=2^117 and n*rate*H<2^118 fit u128 for complete u64 epochs. Reduction
+precedes large integer anchor addition; exact seam comparison retains raw f.
+Signed Euclidean splitting and TwoSum classify the exact fractional carry before
+one canonical-fraction RN, including rounded-one/period equality before usize
+conversion. Circular source error is <=2^-54 per constant epoch. Generic integer
+displacement preserves raw fraction bits, including -0 and subnormals. This does
+not establish a global ideal unrounded glide or representation-conversion bound.
+
+### Fresh verification and limits
+
+The first Release test build passes all 12 new tests (2m40s compile), including all
+12 independently derived exact Fraction vectors. These cover P<L/=/>L, full-u64
+epochs, binary64 1.16, >2^53 source offsets, tiny fractions, exact compatibility
+at P2^64/LusizeMAX versus rejected LusizeMAX-1, canonical virtual ends, exact and
+rounded carries, and two cases attaining the 2^-54 bound. Other new regressions
+exercise unchanged actual taps/gains/PCM, the legacy narrow-seam formula, copied
+SourceFeedSpan/SourceReadCheckpoint, unequal partitions, existing glide/history,
+invalid domain/rate/Intro/Tail and overflow refusal before state/output mutation.
+
+Eight current-source receipts have **144 distinct PASS**, 156 selected PASS
+(12 new cases repeated in the whole playback suite), zero failures and one
+pre-existing ignored source-feed-history resource profile. Selection: new12,
+whole SourcePlayback39, SourceFeedHistory15+1ignored, PreparedNativeHistory10,
+L3 reader6, SourceReader17, MappedSourceClock21 and RuntimePolicy36. RuntimePolicy
+finishes42.67s; PreparedNativeHistory18.76s. No failed build/test was observed in
+this block; invalid/refusal fixtures are actual passing negative cases, not a
+claimed prior regression run. Copy/no-drop, mapped span<=240B and 32 optional
+playbacks<=16KiB pass. No owning allocation or data-dependent traversal is added.
+
+Cargo fmt, explicit Rust2024 checks on both files, strict OpenSpec and whitespace
+checks pass. All-target Release Clippy passes39.74s with existing warning debt:
+100lib/131lib-test (56duplicates)/200example; three additional dormant-prerequisite
+warnings relative to StageS are retained, not suppressed. Private Release passes
+37.81s (43production warnings), private origin/profile, all13 Portable API checks
+and editor API4. Native is34,838,528B, SHA256
+`20c36188c8a38c09f769999ae6c95243719561caf0ffa7146d741610f035a11a`.
+
+No install was needed for an unused internal primitive with unchanged Python/API
+surface. The installed StageS Native remains byte-identical34,838,016B/SHA
+`3af872db756fe6f017fb0ac826f978902473e874c5a254f2462098ef53a0d209`.
+Fresh canonical start.bat --check passes without opening the App. StageS Python
+and installation evidence remains compatible for unchanged callers; its968PASS
+is reused evidence, not a fresh Python run against this private wheel.
+
+Receipts and the independent Fraction derivation are retained in
+`test-artifacts/pair-musical-continuation-20261023` outside Git; own generated TMP
+is47,355,007B before delivery cleanup. One existing cache/env/worker is retained
+under the standing storage decision. Cleanup follows reviewed commit/push and
+fresh clean actual-remote equality, terminal jobs and exact owner/path/process/
+no-reparse checks; unrelated, denied and Human roots remain protected.
+
+Primitive throughput and actual callback budget qualification remain open before
+a productive conversion caller uses this coordinate mode. The anchored-map,
+original-geometry, differing-reader-domain, first-PCM and actual live-conversion
+gates remain OPEN. No whole-process resource, device/hearing, real model inference,
+musical/Human or complete-Goal acceptance is claimed. STOP before Rust port/Slice8.
+
+One continuous independent NONAUTHOR final-diff review returns CLEAR for exact
+staged tree `e941af2351ee5a4f3a3db0dd67ae28fac50ca899`, including the six-file diff,
+independently recomputed distinct test count, actual Release/import/preflight and
+unchanged installed hash. Only this factual receipt and the final musical
+prerequisite checkbox follow; the same reviewer checks their consistency before
+coherent commit and normal existing-main push. General Stage A/B remain OPEN.

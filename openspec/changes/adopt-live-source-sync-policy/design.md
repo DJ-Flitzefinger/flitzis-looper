@@ -207,6 +207,36 @@ history may be fabricated from the endpoint; existing read receipts remain froze
 
 ## Initial dry live envelope
 
+Before musical reverse conversion, an independent coordinates-only PairMusical
+mode retains an already canonical Normal q/f and the exact original Some(P) domain.
+It does not change SourceReadPlan or its existing musical phase recombination.
+Manual markers alone do not imply a physical domain; identical pair bits do not
+prove PCM equality if scalar and mapped musical periods differ. That conversion
+contract remains open after this coordinate prerequisite.
+
+Admit only finite P in [.5,2^64], rates [.5,2], a valid physical region and exact
+|P-L|<=1. Decode period/rate dyadics on the fixed exact grid H=2^53. C=P*H<=2^117
+and D=n*rate*H<2^118 fit u128 for the full u64 epoch. Reduce U=D mod C before
+adding the integer anchor q*H. Compare its remaining period gap with raw f, never
+combine a large q and tiny f to decide canonicality or wrap. At most one exact
+period carry is needed. Euclidean splitting of the signed residual, an error-free
+fraction sum and one final RN of its canonical fractional remainder give circular
+error<=2^-54 source frame per constant epoch. Generic zero fractional displacement
+copies f bits, including -0. Exact whole/partial carries and rounded-period equality
+normalize canonically; malformed anchors are refused before this arithmetic.
+
+Keep the mode explicit in comparisons and reuse established checked elapsed,
+rebases, .05/512 glide, copy/checkpoint and no-invented-history behavior. Same raw
+pair plus the unchanged plan/readers gives exact executed E taps/gains/PCM without
+new pair-aware interpolation. Valid P>L may have a virtual frame at physical end;
+validation therefore compares q/f with P rather than reusing PairPhysical's bound.
+No production conversion/adoption caller or owning work is added here. Bounded
+tests check copied layout and no-drop ownership; the implementation has fixed
+integer operations and no data-dependent traversal. Primitive throughput and
+callback-budget qualification remain open before productive conversion uses it.
+No global ideal-glide/resource or musical/Human acceptance is inferred from the
+per-epoch bound.
+
 Initially admit stable manual physical loop regions only, with an already valid
 actual master for requested synchronization, zero pitch, Key Lock off, no active
 Native or retained Native input/history requirement, no stem transition and no

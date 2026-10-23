@@ -16,6 +16,8 @@ use super::source_reader::{
 
 const TEMPO_STEP: f64 = 0.05;
 const TEMPO_STEP_OUTPUT_FRAMES: usize = 512;
+const MUSICAL_PAIR_SCALE: u128 = 1u128 << 53;
+const MUSICAL_PAIR_MAX_PERIOD: f64 = 18_446_744_073_709_551_616.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct FractionalSourcePosition {
@@ -34,6 +36,7 @@ struct MappedCopyState {
 enum ScalarProjection {
     Legacy,
     PairPhysical,
+    PairMusical,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +86,13 @@ impl SourcePlayback {
         self.mapped.is_some()
     }
 
+    fn is_pair_scalar(&self) -> bool {
+        matches!(
+            self.scalar_projection,
+            ScalarProjection::PairPhysical | ScalarProjection::PairMusical
+        )
+    }
+
     pub(crate) fn mapped_epoch(&self) -> Option<MappedClockEpoch> {
         self.mapped.map(|state| state.span.epoch())
     }
@@ -93,7 +103,7 @@ impl SourcePlayback {
 
     /// Include the canonical exclusive endpoint, but never invent a later span.
     pub(crate) fn can_read_frames(&self, output_frames: usize) -> bool {
-        if self.scalar_projection == ScalarProjection::PairPhysical {
+        if self.is_pair_scalar() {
             return self
                 .elapsed_output_frames
                 .checked_add(output_frames as u64)
@@ -261,6 +271,36 @@ impl SourcePlayback {
         })
     }
 
+    /// Coordinates only, with the exact original musical domain and reader semantics.
+    /// An invalid anchor is refused, never wrapped into a different actual-E cursor.
+    /// This grants no source, conversion, reader, adoption or earlier-history permission.
+    pub(crate) fn scalar_musical_continuation(
+        position: FractionalSourcePosition,
+        domain: SourceLoopDomain,
+        initial_ratio: f64,
+        target: f64,
+    ) -> Option<Self> {
+        if !valid_musical_pair(position, domain)
+            || !initial_ratio.is_finite()
+            || !(SPEED_MIN..=SPEED_MAX).contains(&initial_ratio)
+            || !target.is_finite()
+            || !(SPEED_MIN..=SPEED_MAX).contains(&target)
+        {
+            return None;
+        }
+        Some(Self {
+            origin: position,
+            domain: Some(domain),
+            elapsed_output_frames: 0,
+            ratio: initial_ratio,
+            target,
+            frames_until_step: 0,
+            history_reconstructible: false,
+            scalar_projection: ScalarProjection::PairMusical,
+            mapped: None,
+        })
+    }
+
     /// Copy the current source phase into a constant-rate preparation epoch.
     ///
     /// Pending live smoothing is removed only from this value. Its logical counterpart retains
@@ -303,7 +343,7 @@ impl SourcePlayback {
             history.elapsed_output_frames -= output_frames as u64;
             return Some((history, 0));
         }
-        if self.scalar_projection == ScalarProjection::PairPhysical {
+        if self.is_pair_scalar() {
             return None;
         }
         if !self.history_reconstructible {
@@ -351,7 +391,7 @@ impl SourcePlayback {
     /// never introduces a new rounding anchor. This is derived input, not a claim
     /// that the live voice actually read these shifted source positions.
     pub(crate) fn shifted_normal_history(mut self, shift: f64) -> Option<Self> {
-        if self.is_mapped() || self.scalar_projection == ScalarProjection::PairPhysical {
+        if self.is_mapped() || self.is_pair_scalar() {
             return None;
         }
         let domain = self.domain?;
@@ -440,8 +480,8 @@ impl SourcePlayback {
             return true;
         }
         // A new domain needs its own future integration contract. An unchanged
-        // physical refresh retains this exact epoch; do not clamp, wrap or rebase it.
-        if self.scalar_projection == ScalarProjection::PairPhysical {
+        // pair refresh retains this exact epoch; do not clamp, wrap or rebase it.
+        if self.is_pair_scalar() {
             return false;
         }
         if self.is_mapped() {
@@ -474,8 +514,8 @@ impl SourcePlayback {
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
-        // PairPhysical is already Normal. An unchanged refresh must retain its epoch.
-        if self.is_mapped() || self.scalar_projection == ScalarProjection::PairPhysical {
+        // Both pair modes are already Normal. An unchanged refresh retains the epoch.
+        if self.is_mapped() || self.is_pair_scalar() {
             return;
         }
         self.rebase();
@@ -541,9 +581,7 @@ impl SourcePlayback {
             };
             // Once the new pair mode reaches its target this timer is inactive.
             // Canonical zero lets constant in-epoch rewind/replay retain exact state.
-            self.frames_until_step = if self.scalar_projection == ScalarProjection::PairPhysical
-                && self.ratio == self.target
-            {
+            self.frames_until_step = if self.is_pair_scalar() && self.ratio == self.target {
                 0
             } else {
                 TEMPO_STEP_OUTPUT_FRAMES
@@ -560,10 +598,16 @@ impl SourcePlayback {
     pub(crate) fn position(&self) -> FractionalSourcePosition {
         if self.is_mapped() {
             self.origin
-        } else if self.scalar_projection == ScalarProjection::PairPhysical {
-            self.pair_physical_position_at(self.elapsed_output_frames)
         } else {
-            self.scalar_position_at(0)
+            match self.scalar_projection {
+                ScalarProjection::Legacy => self.scalar_position_at(0),
+                ScalarProjection::PairPhysical => {
+                    self.pair_physical_position_at(self.elapsed_output_frames)
+                }
+                ScalarProjection::PairMusical => {
+                    self.pair_musical_position_at(self.elapsed_output_frames)
+                }
+            }
         }
     }
 
@@ -575,11 +619,14 @@ impl SourcePlayback {
                     .checked_add(output_offset as u64)?,
             );
         }
-        if self.scalar_projection == ScalarProjection::PairPhysical {
+        if self.is_pair_scalar() {
             let elapsed = self
                 .elapsed_output_frames
                 .checked_add(output_offset as u64)?;
-            return Some(self.pair_physical_position_at(elapsed));
+            return Some(match self.scalar_projection {
+                ScalarProjection::PairMusical => self.pair_musical_position_at(elapsed),
+                _ => self.pair_physical_position_at(elapsed),
+            });
         }
         Some(self.scalar_position_at(output_offset))
     }
@@ -614,6 +661,60 @@ impl SourcePlayback {
         }
         FractionalSourcePosition {
             frame: domain.region.start + relative as usize,
+            fraction,
+            seek_mode: ExplicitSeekMode::Normal,
+        }
+    }
+
+    fn pair_musical_position_at(&self, elapsed: u64) -> FractionalSourcePosition {
+        let domain = self.domain.expect("musical pair has its admitted domain");
+        let period = musical_pair_units(domain.musical_period.expect("musical pair period"));
+        // The fixed common grid H=2^53 exactly represents every admitted period
+        // and rate. C=P*H <=2^117; D=n*rate*H <2^118 for the entire u64 epoch.
+        let displacement = u128::from(elapsed) * musical_pair_units(self.ratio);
+        let relative = (self.origin.frame - domain.region.start) as u128;
+        let base = relative * MUSICAL_PAIR_SCALE + displacement % period;
+        // The canonical anchor gives base<2C. Keep f separate even when it is
+        // subnormal, including when f closes a sub-frame gap across the seam.
+        let wrap = base >= period
+            || (period - base < MUSICAL_PAIR_SCALE
+                && self.origin.fraction >= (period - base) as f64 / MUSICAL_PAIR_SCALE as f64);
+        let residual = base as i128 - if wrap { period as i128 } else { 0 };
+        let scale = MUSICAL_PAIR_SCALE as i128;
+        let mut whole = residual.div_euclid(scale);
+        let remainder = residual.rem_euclid(scale) as u128;
+        // Generic integer displacement preserves all raw f bits, including -0,
+        // at every exact revisit. This is not an actual-E-only cursor override.
+        let mut fraction = self.origin.fraction;
+        if remainder != 0 {
+            let addend = remainder as f64 / MUSICAL_PAIR_SCALE as f64;
+            // Error-free TwoSum. Classify the exact carry before rounding the
+            // canonical fractional remainder; a rounded sum of 1 may lie below 1.
+            let sum = fraction + addend;
+            let virtual_addend = sum - fraction;
+            let error = (fraction - (sum - virtual_addend)) + (addend - virtual_addend);
+            if sum > 1.0 || (sum == 1.0 && error >= 0.0) {
+                whole += 1;
+                // sum-1 is exact (Sterbenz); this is one final fractional RN.
+                fraction = (sum - 1.0) + error;
+            } else {
+                fraction = sum;
+            }
+            if fraction == 1.0 {
+                whole += 1;
+                fraction = 0.0;
+            }
+            // Rounding below P can reach exactly P. Since its fractional part
+            // is itself exactly representable, it cannot round beyond P.
+            if !canonical_musical_phase(whole as u128, fraction, period) {
+                whole = 0;
+                fraction = 0.0;
+            }
+        }
+        // Only the canonical fraction was rounded, with circular error <=2^-54
+        // source frame per constant epoch, not for an ideal unrounded whole glide.
+        FractionalSourcePosition {
+            frame: domain.region.start + whole as usize,
             fraction,
             seek_mode: ExplicitSeekMode::Normal,
         }
@@ -720,7 +821,7 @@ impl SourcePlayback {
             self.origin = position;
             return true;
         }
-        if self.scalar_projection == ScalarProjection::PairPhysical {
+        if self.is_pair_scalar() {
             let Some(elapsed) = self.elapsed_output_frames.checked_add(output_frames as u64) else {
                 return false;
             };
@@ -752,6 +853,48 @@ fn valid_physical_pair(position: FractionalSourcePosition, domain: SourceLoopDom
         && (0.0..1.0).contains(&position.fraction)
 }
 
+/// Exact units on H=2^53 for a validated normal value in [.5,2^64].
+fn musical_pair_units(value: f64) -> u128 {
+    let bits = value.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as u32;
+    let significand = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+    u128::from(significand) << (exponent - 1022)
+}
+
+fn canonical_musical_phase(whole: u128, fraction: f64, period: u128) -> bool {
+    let whole_units = whole * MUSICAL_PAIR_SCALE;
+    if whole_units >= period {
+        return false;
+    }
+    let gap = period - whole_units;
+    gap >= MUSICAL_PAIR_SCALE || fraction < gap as f64 / MUSICAL_PAIR_SCALE as f64
+}
+
+fn valid_musical_pair(position: FractionalSourcePosition, domain: SourceLoopDomain) -> bool {
+    let Some(period) = domain.musical_period else {
+        return false;
+    };
+    if !period.is_finite()
+        || !(0.5..=MUSICAL_PAIR_MAX_PERIOD).contains(&period)
+        || domain.region.start >= domain.region.end
+        || domain.region.end > domain.sample_frames
+        || position.seek_mode != ExplicitSeekMode::Normal
+        || position.frame < domain.region.start
+        || !position.fraction.is_finite()
+        || !(0.0..1.0).contains(&position.fraction)
+    {
+        return false;
+    }
+    let period = musical_pair_units(period);
+    let length = domain.region.len() as u128 * MUSICAL_PAIR_SCALE;
+    period.abs_diff(length) <= MUSICAL_PAIR_SCALE
+        && canonical_musical_phase(
+            (position.frame - domain.region.start) as u128,
+            position.fraction,
+            period,
+        )
+}
+
 fn same_position(left: FractionalSourcePosition, right: FractionalSourcePosition) -> bool {
     left.frame == right.frame
         && left.fraction.to_bits() == right.fraction.to_bits()
@@ -769,6 +912,10 @@ fn checked_ratio(ratio: f64) -> f64 {
 #[cfg(test)]
 #[path = "source_pair_continuation_tests.rs"]
 mod source_pair_continuation_tests;
+
+#[cfg(test)]
+#[path = "source_playback_musical_tests.rs"]
+mod source_playback_musical_tests;
 
 #[cfg(test)]
 mod tests {
