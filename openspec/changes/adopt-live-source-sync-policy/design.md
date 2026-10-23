@@ -443,6 +443,27 @@ caller is connected. Actual stack/callback throughput remains OPEN even with zer
 observed Rust allocation; a headless timing profile is descriptive only. All
 existing ownership, reader-domain and first-PCM guards remain mandatory.
 
+### Cost qualification before productive callers
+
+The 128-query span profile omits work performed by the existing copied reader.
+Full PCM rendering asks for one coordinate per frame; the checked reader first
+validates every tap, then renders, asking twice. Mixer endpoint preflight and
+advance add work per chunk; copied span refresh also repeats initial/endpoint
+checks. A test-only fixed32 cohort therefore exercises the unchanged reader,
+chunk/refresh/preflight/advance and shared original stereo PCM with preallocated
+buffers. Separate raw minsub/near-one/negative-zero/large-epoch and aligned or
+staggered knot/virtual-wrap shapes retain actual repeated refresh costs. Compare
+full and checked outputs outside timing and observe only current-thread Rust
+requests. Report entire512-frame blocks against512/48000 seconds, without a
+flaky timing assertion or claiming mixer/DSP/device inclusion.
+
+Read existing Windows Release EXE/PDB unwind records without loading the App.
+Record exact binary identities and fixed per-function stack allocations plus
+register pushes, excluding entry return addresses and transitive callees.
+Unknown symbols, chained/dynamic frames and unresolved calls remain explicit;
+individual frames and successful small-stack runs cannot certify complete peak
+stack or callback headroom. No current productive caller or guard changes.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

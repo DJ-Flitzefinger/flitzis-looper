@@ -873,3 +873,91 @@ env3249696864B/21323files, target16022538990B/10749files. Retain ONE compatible
 shared env/cache/worker under the existing >30GiB decision; only new exact own TMP
 46998968B is disposable after reviewed publication/clean fresh remote/terminal/
 ownership/path/no-reparse/process guards. Human/unknown/denied/old data protected.
+
+## Actual copied-reader cohort cost evidence — 2026-10-23
+
+This tests-only block changes no production behavior, source/reader/domain guard,
+adoption caller or RT eligibility. The new test uses32 independent copied
+playbacks and shared immutable stereo PCM, preallocated scratch/output storage,
+real chunk/refresh, separate mixer-style endpoint preflight and copied advance,
+and the original full or checked two-pass reader. Every route renders512frames
+per lane. Complete full/checked PCM, final copied state and scalar first-PCM
+comparisons pass outside timing. Zero-chunk refresh must immediately yield a
+positive consuming chunk; it cannot hang. Scalar first-PCM checks use the same
+unchanged reader with original domain/raw pair; they do not grant source custody.
+
+One isolated Release run,32lanes/16384cohort frames, nominal512/48000=10.6667ms:
+
+| Shape | Full reader ms | Checked reader ms | Chunks per route | Refreshes per route |
+| --- | ---: | ---: | ---: | ---: |
+| minsub |260.6119|518.2424|32|0|
+| near one |298.0743|594.2045|32|0|
+| negative zero |257.3028|513.7272|32|0|
+| large epoch |259.2630|523.8033|32|0|
+| aligned knot |433.9083|854.5548|64|32|
+| virtual aligned |2430.8454|2694.4045|8416|8384|
+| virtual staggered |2488.1280|2773.6272|8404|8372|
+
+The observed times are24.122–260.028 times that nominal interval. Thus these
+actual software cases do NOT qualify the exact path for productive callback use.
+They are not a statistical worstcase or actual device test. Full reader requests
+16384coordinates, checked reader32768, plus two explicit endpoint calls per
+chunk; refresh-internal coordinate evaluations are additional and not counted.
+Timing includes PCM copying/bookkeeping and original span refresh, excludes
+setup/verification, actual mixer/DSP/device scheduling. Only observed rendering
+thread Rust allocation requests were zero; frees, Native/global allocators and
+whole process resources remain unqualified. No timer threshold was weakened or
+functional RED hidden: the test checks exact behavior and reports the negative
+budget result descriptively.
+
+Fresh tests: new profile1PASS/14.96s plus8existing anchored regressionsPASS/0.01s,
+9distinct/0overlap/0ignored. Release compilation2m53; fmt/strict/diffPASS and
+all-target Release Clippy40.57sPASS, unchanged109lib/131libtest(56duplicates)/
+209example warnings. Earlier bfacd1e2 production324-regression/privateRelease/
+13API/editor4 evidence is source-compatible and reused, not rerun or relabeled
+as fresh. No new production Release, installation, App or device action.
+
+Read-only MSVC14.51.36231 dumpbin extraction retained named unwind records from
+the FINAL rebuilt Release test EXE, without executing/loading the image:
+EXE87909376B/SHA256c3f9bd1304792f5a227d4e2f5d316d2dd7287b9e6757085c28982eb35dc69061;
+PDB29814784B/SHA256191769e4dbf7b9c00c884d0359d9c4f131d8014a2d218cdf0090293028f6eaec.
+The header reports the exact hashed adjacent PDB as resolved, CodeViewGUID
+4BCE41E8-5601-40F4-8F3E-D9130CEB697D/Age8. Local symbol search only; input/tool
+hashes were equal before/after extraction.95matching named records retained;
+45unsupported flags/structures stay explicitly unresolved, not assigned zero.
+
+| Named function | Fixed allocation + pushes, bytes |
+| --- | ---: |
+| MappedSourceSpan::position_at |14568|
+| MappedLoopGeometry::anchored_position_at |14600|
+| SourceInteger::checked_add |6472|
+| SourceInteger::checked_mul |1672|
+| SourceInteger::rem_euclid |4856|
+| checked_magnitude_mul |1752|
+| split_source_coordinate_impl |9704|
+| SourcePlayback::refresh_mapped_span |952|
+
+These are individual fixed prologue adjustments, excluding entry return addresses
+and transitive callees; they are NOT a peak callchain bound. SAVE operations do
+not further adjust RSP and are not added. Anonymous, chained/dynamic and external
+callgraph gaps remain open. Interpretation follows Microsoft's
+[x64 unwind format](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170)
+and [stack usage](https://learn.microsoft.com/en-us/cpp/build/stack-usage?view=msvc-170).
+No anonymous function was inferred from a neighboring symbol. Inlining belongs
+to its compiled container; this test build is not callback-stack qualification.
+
+Artifacts: workspace/test-artifacts/anchored-cohort-cost-20261023 with OWNER,
+actual raw profile logs, exact image headers, matching raw unwind records,
+checked extractor and binary/tool identities. No binary/environment/cache copy
+or temporary tree was created. Actual peak-stack/callback cost, Source/FirstPCM/
+StageA/B/live adoption and ALL original/extension/Human/final gates remain open.
+
+ONE continuous independent NONAUTHOR source/evidence review CLEAR, including all
+raw14 timing rows,9distinct tests, exact resolved EXE/PDB identities and all8named
+fixed-stack adjustments. Only the completed profiling task is checked; callback
+eligibility and maximum stack are still open. Delivery all-regular/hidden census:
+test-artifacts17794479570B/454702files, env3249696864B/21323files,
+target16022043525B/10749files,0reparse traversed. Keep the existing ONE compatible
+shared env/cache/worker under the prior >30GiB decision; no new disposable TMP,
+binary copies or isolated environment existed to clean. Prior/Human/unknown/
+denied data and installations remain protected.

@@ -182,6 +182,13 @@ Before anchored conversion relies on a frozen master horizon, it SHALL certify o
 
 These numerical prerequisites SHALL add no productive conversion caller, second clock, source ownership, oversized copied span or realtime throughput approval. Geometry, reader-domain, original-knot, stack and actual callback-cost qualification SHALL remain separate mandatory gates.
 
+#### Scenario: Cost evidence uses the copied reader path and identifies its limits
+- **WHEN** supporting anchored coordinates are profiled before productive conversion
+- **THEN** evidence SHALL distinguish isolated coordinate queries from complete copied-reader blocks, including endpoint preflight, span refresh and advancement for a fixed 32-lane cohort
+- **AND** full-reader and checked-reader routes, original knot/wrap bursts, virtual periods, raw fraction edges and large epochs SHALL retain their actual work and report host timings against an explicitly stated frame-count/sample-rate interval
+- **AND** compiled unwind evidence SHALL identify its exact executable/PDB and distinguish individual fixed stack adjustments from a complete peak-stack bound
+- **AND** a successful software test or observed allocation count SHALL NOT discharge callback/DSP/device timing, maximum stack, source-custody, first-PCM or Human acceptance gates
+
 ### Requirement: Prepared exact geometry preserves the original loop and reader
 An independently prepared initial exact-continuation geometry SHALL certify an explicit intersection domain without changing existing legacy map construction or projection. Preparation SHALL be opt-in and off realtime, retaining the same original immutable map, binary64 seconds/beat anchors, captured B/Q, physical markers, full source extent and original Some(P) reader domain. Every original segment with positive-length overlap with the admitted beat interval SHALL retain trusted coverage, and both original knot products of each such segment SHALL equal their existing binary64-rounded products exactly. Endpoint-only contact SHALL retain the existing interval-open coverage policy rather than include an unused neighboring segment. Exact B plus Q SHALL equal the captured legacy endpoint beat. The original spline SHALL close exactly at the integer physical start and at physical start plus original P. Failure SHALL refuse this new qualification without clipping, moving markers, rescaling, replacing knots or rewriting the original reader period.
 
