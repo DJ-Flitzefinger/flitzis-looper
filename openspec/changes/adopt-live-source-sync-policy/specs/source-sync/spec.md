@@ -193,6 +193,7 @@ These numerical prerequisites SHALL add no productive conversion caller, second 
 - **THEN** evidence SHALL distinguish isolated coordinate queries from complete copied-reader blocks, including endpoint preflight, span refresh and advancement for a fixed 32-lane cohort
 - **AND** full-reader and checked-reader routes, original knot/wrap bursts, virtual periods, raw fraction edges and large epochs SHALL retain their actual work and report host timings against an explicitly stated frame-count/sample-rate interval
 - **AND** compiled unwind evidence SHALL identify its exact executable/PDB and distinguish individual fixed stack adjustments from a complete peak-stack bound
+- **AND** component timings SHALL identify their prepared inputs and non-additive observation costs; a counted boundary-search replay SHALL match actual span endpoints and SHALL NOT be presented as an instrumented production call trace
 - **AND** a successful software test or observed allocation count SHALL NOT discharge callback/DSP/device timing, maximum stack, source-custody, first-PCM or Human acceptance gates
 
 ### Requirement: Prepared exact geometry preserves the original loop and reader

@@ -734,3 +734,294 @@ fn descriptive_extended_profiles_keep_edge_shapes_separate() {
         );
     }
 }
+
+fn work_cases() -> [(&'static str, MappedLoopGeometry, MappedClockEpoch, u64); 5] {
+    let virtual_geometry = qualified_geometry(
+        &[(0.0, 0.0), (9.0 / 32768.0, 2.0_f64.powi(-13))],
+        8192,
+        3,
+        FrameRange { start: 0, end: 2 },
+        2.0_f64.powi(-13),
+    );
+    [
+        ("minsub", variable(), pair(0, 1), 0),
+        ("near_one", variable(), pair(0, 0x3fef_ffff_ffff_ffff), 0),
+        (
+            "negative_zero",
+            variable(),
+            pair(0, (-0.0_f64).to_bits()),
+            0,
+        ),
+        (
+            "virtual",
+            virtual_geometry,
+            pair(2, 0x3fc0_0000_0000_0000),
+            0,
+        ),
+        ("large_epoch", variable(), pair(17, 1), (1_u64 << 53) + 7),
+    ]
+    .map(|(name, geometry, position, first)| {
+        let epoch = new_epoch(&geometry, timeline(16_000.0, first, 0.0), position, first);
+        (name, geometry, epoch, first)
+    })
+}
+
+struct WorkQuery {
+    frame: u64,
+    span: MappedSourceSpan,
+    phase: Phase,
+}
+
+fn work_walk(
+    geometry: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    first: u64,
+) -> (Vec<WorkQuery>, Vec<u64>, u64) {
+    let mut span = geometry.refresh_span(epoch, first).unwrap();
+    let initial_width = span.end_frame().checked_sub(first).unwrap();
+    assert!(initial_width > 0);
+    let mut refresh_requests = vec![first];
+    let mut queries = Vec::with_capacity(512);
+    for frame in first..first.checked_add(512).unwrap() {
+        if frame == span.end_frame() {
+            span = geometry.refresh_span(epoch, frame).unwrap();
+            refresh_requests.push(frame);
+        }
+        assert!(frame >= span.start_frame() && frame < span.end_frame());
+        let phase = phase_at(
+            epoch,
+            span.beat_start,
+            span.quarters,
+            span.loaded_rate_hz,
+            frame,
+        )
+        .unwrap();
+        queries.push(WorkQuery { frame, span, phase });
+    }
+    assert_eq!(queries.len(), 512);
+    (queries, refresh_requests, initial_width)
+}
+
+#[test]
+fn descriptive_work_components_use_the_same_consuming_span_queries() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    for (name, geometry, epoch, first) in work_cases() {
+        // Prepared wide phases and their storage belong only to this test, outside timing.
+        let (queries, refresh_requests, initial_width) = work_walk(&geometry, epoch, first);
+        for query in &queries {
+            let terms = anchor_terms(
+                epoch,
+                query.span.beat_start,
+                query.span.quarters,
+                query.span.loaded_rate_hz,
+            )
+            .unwrap();
+            assert_eq!(terms.source_delta, query.phase.terms.source_delta);
+            assert_eq!(terms.initial, query.phase.terms.initial);
+            assert_eq!(terms.period, query.phase.terms.period);
+            assert_eq!(
+                unfolded_at(epoch, &query.phase.terms, query.frame),
+                Some(query.phase.unfolded)
+            );
+            assert_eq!(
+                query.phase.unfolded.rem_euclid(query.phase.terms.period),
+                Some(query.phase.remainder)
+            );
+            let actual = query.span.position_at(query.frame).unwrap();
+            let composed = position_on_segment(
+                epoch,
+                &query.phase,
+                query.span.segment,
+                query.span.beat_start,
+                query.span.loaded_rate_hz,
+                query.span.source_start,
+                query.span.source_period,
+            )
+            .unwrap();
+            assert_pair(composed, actual.frame, actual.fraction.to_bits());
+            let direct = geometry.position_at(epoch, query.frame).unwrap();
+            assert_pair(actual, direct.frame, direct.fraction.to_bits());
+        }
+        let original = anchor(epoch).unwrap();
+        assert_pair(
+            queries[0].span.position_at(first).unwrap(),
+            usize::try_from(original.frame).unwrap(),
+            original.fraction.to_bits(),
+        );
+        for component in [
+            "anchor_terms",
+            "unfolded_at",
+            "phase_at",
+            "position_on_segment",
+            "full_span_query",
+        ] {
+            let before = Instant::now();
+            let (ok, allocations) = observe_current_thread(|| {
+                queries.iter().all(|query| match component {
+                    "anchor_terms" => black_box(anchor_terms(
+                        black_box(epoch),
+                        black_box(query.span.beat_start),
+                        black_box(query.span.quarters),
+                        black_box(query.span.loaded_rate_hz),
+                    ))
+                    .is_some(),
+                    "unfolded_at" => black_box(unfolded_at(
+                        black_box(epoch),
+                        black_box(&query.phase.terms),
+                        black_box(query.frame),
+                    ))
+                    .is_some(),
+                    "phase_at" => black_box(phase_at(
+                        black_box(epoch),
+                        black_box(query.span.beat_start),
+                        black_box(query.span.quarters),
+                        black_box(query.span.loaded_rate_hz),
+                        black_box(query.frame),
+                    ))
+                    .is_some(),
+                    "position_on_segment" => black_box(position_on_segment(
+                        black_box(epoch),
+                        black_box(&query.phase),
+                        black_box(query.span.segment),
+                        black_box(query.span.beat_start),
+                        black_box(query.span.loaded_rate_hz),
+                        black_box(query.span.source_start),
+                        black_box(query.span.source_period),
+                    ))
+                    .is_some(),
+                    "full_span_query" => {
+                        black_box(black_box(query.span).position_at(black_box(query.frame)))
+                            .is_some()
+                    }
+                    _ => unreachable!("fixed component list"),
+                })
+            });
+            let elapsed = before.elapsed();
+            assert!(ok);
+            assert_eq!(allocations, ThreadAllocations::default());
+            eprintln!(
+                "anchored_work_component: shape={name} component={component} queries={} first={first} last={} initial_span_width={initial_width} refresh_requests_including_initial={} elapsed_ms={:.4}; actual consuming512-frame walk, no modulo sampling; prepared storage and comparisons outside clock, no timed output capture; zero observed thread Rust requests only; component times include call/copy/cache effects, not additive or exclusive; no reader/mixer/DSP/device/peakstack/RT permission; old isolated virtual modulo-width profile unchanged",
+                queries.len(),
+                queries.last().unwrap().frame,
+                refresh_requests.len(),
+                elapsed.as_secs_f64() * 1000.0,
+            );
+        }
+    }
+}
+
+#[test]
+fn descriptive_work_boundary_replay_matches_actual_refreshes() {
+    #[derive(Default)]
+    struct Counts {
+        left: usize,
+        max_probe: usize,
+        right: usize,
+        terminal: bool,
+    }
+
+    fn replay(geometry: &MappedLoopGeometry, epoch: MappedClockEpoch, request: u64) -> Counts {
+        let actual = geometry.refresh_span(epoch, request).unwrap();
+        let phase = phase_at(
+            epoch,
+            geometry.beat_start,
+            geometry.quarters,
+            geometry.loaded_rate_hz,
+            request,
+        )
+        .unwrap();
+        let segment = forward_segment(geometry, &phase).unwrap();
+        let cycle_base = phase.unfolded.checked_sub(phase.remainder).unwrap();
+        let loop_end = geometry.beat_start + geometry.quarters;
+        let left = segment.beat_start.max(geometry.beat_start);
+        let right = segment.beat_end.min(loop_end);
+        let left_target = cycle_base
+            .checked_add(beat_offset(left, geometry.beat_start, phase.terms.source_delta).unwrap())
+            .unwrap();
+        let right_offset = if right == loop_end {
+            phase.terms.period
+        } else {
+            beat_offset(right, geometry.beat_start, phase.terms.source_delta).unwrap()
+        };
+        let right_target = cycle_base.checked_add(right_offset).unwrap();
+        assert!(phase.unfolded >= left_target && phase.unfolded < right_target);
+        let mut counts = Counts::default();
+        let start = first_true(epoch.first_output_frame, request, |frame| {
+            counts.left += 1;
+            Some(unfolded_at(epoch, &phase.terms, frame)? >= left_target)
+        })
+        .unwrap();
+        counts.max_probe += 1;
+        let terminal = unfolded_at(epoch, &phase.terms, u64::MAX).unwrap() < right_target;
+        let end = if terminal {
+            counts.terminal = true;
+            u64::MAX
+        } else {
+            first_true(request.checked_add(1).unwrap(), u64::MAX, |frame| {
+                counts.right += 1;
+                Some(unfolded_at(epoch, &phase.terms, frame)? >= right_target)
+            })
+            .unwrap()
+        };
+        assert!(counts.left <= 64 && counts.right <= 64);
+        assert_eq!(counts.max_probe, 1);
+        assert_eq!(start, actual.start_frame());
+        assert_eq!(end, actual.end_frame());
+        if terminal {
+            assert_eq!(counts.right, 0);
+        }
+        counts
+    }
+
+    let aligned_geometry = variable();
+    let aligned_epoch = new_epoch(
+        &aligned_geometry,
+        timeline(16_000.0, 0, 0.0),
+        pair(23_999, 1.0_f64.next_down().to_bits()),
+        0,
+    );
+    for (name, geometry, epoch, first) in work_cases().into_iter().chain(std::iter::once((
+        "aligned_knot",
+        aligned_geometry,
+        aligned_epoch,
+        0,
+    ))) {
+        let (_, requests, _) = work_walk(&geometry, epoch, first);
+        let mut total = Counts::default();
+        let mut maximum_left = 0;
+        let mut maximum_right = 0;
+        let mut terminal_requests = 0;
+        for &request in &requests {
+            let counts = replay(&geometry, epoch, request);
+            total.left += counts.left;
+            total.max_probe += counts.max_probe;
+            total.right += counts.right;
+            maximum_left = maximum_left.max(counts.left);
+            maximum_right = maximum_right.max(counts.right);
+            terminal_requests += usize::from(counts.terminal);
+        }
+        if name == "virtual" || name == "aligned_knot" {
+            assert!(requests.len() > 1);
+        }
+        eprintln!(
+            "anchored_work_search_replay: shape={name} walk_frames=512 refresh_requests_including_initial={} left_predicates={} max_probes={} right_predicates={} maximum_left={maximum_left} maximum_right={maximum_right} terminal_requests={terminal_requests}; exact original first_true replay matched actual refreshed start/end; counts exclude phase setup/validation/endpoints and are not an instrumented production hotcall trace; no throughput/peakstack/RT permission",
+            requests.len(),
+            total.left,
+            total.max_probe,
+            total.right,
+        );
+    }
+    // A separate terminal request exercises the actual plateau branch without a 512-frame
+    // walk near MAX or any attempt to construct a renderable span at MAX itself.
+    let geometry = variable();
+    let epoch = new_epoch(&geometry, timeline(16_000.0, 0, 0.0), pair(0, 1), 0);
+    let counts = replay(&geometry, epoch, u64::MAX - 1);
+    assert!(counts.terminal);
+    assert_eq!(counts.right, 0);
+    eprintln!(
+        "anchored_work_search_replay: shape=terminal_request_only walk_frames=0 refresh_requests=1 left_predicates={} max_probes={} right_predicates={} terminal_requests=1; separate MAX-1 request matched actual span, one explicit MAX probe, no right search or refresh at MAX; no production trace/peakstack/RT claim",
+        counts.left, counts.max_probe, counts.right,
+    );
+}

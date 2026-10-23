@@ -488,6 +488,28 @@ quotient/sign/guard regressions on the existing authority. Detailed evidence is
 in results.md. Next attribute the unchanged repeated query/refresh/boundary work
 before choosing another optimization. No new arithmetic or realtime permit.
 
+### Test-only attribution of repeated anchored work
+
+Cost attribution before further optimization is test-only. Use the existing
+private anchor_terms, unfolded_at, phase_at and position_on_segment authorities
+on a consuming512-frame span walk; preserve each actual span/frame and prepared
+phase outside timing. Compare results outside timing with the unchanged complete
+span query, including raw fraction bits and seek mode. No product instrumentation,
+visibility, geometry, representation or authority changes are needed. Component
+times include their own calling/black-box/prepared-input effects and are not an
+additive decomposition of the pipeline. In particular the old isolated virtual
+profile uses offset modulo the initial span width; when that width is one it
+repeats anchor identity. Preserve it unchanged and identify this separate walk.
+
+Replay the existing first_true searches at actual refresh addresses using actual
+phase/segment/targets, counting left search, the explicit u64::MAX right probe and
+optional right search separately. Match replay start/end to the original refreshed
+span, retain at most64 predicate calls per binary search and propagate failure.
+This is a matched replay, not a literal instrumented production hotcall trace.
+In addition to the five component cases, replay the existing aligned-knot anchor
+and a separate terminal request at u64::MAX-1; never start a512-frame walk there.
+Actual copied-reader profiles remain the separate whole-path cost evidence.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

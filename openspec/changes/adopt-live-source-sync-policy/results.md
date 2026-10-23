@@ -1151,3 +1151,82 @@ One continuous independent NONAUTHOR final diff/evidence review CLEAR, including
 binary identities, unchanged product code and compatible Release reuse. Only the
 completed regression/evaluation task is closed; no product optimization, adoption
 or RT qualification is claimed by this delivery.
+
+### Test-only attribution of repeated anchored work, 2026-10-23
+
+No product arithmetic, clock, source/reader/domain, layout, custody, API or prior
+profile changes. Two new descriptive tests use the original private authorities
+on512 consecutive consuming span queries, with prepared storage and all pair/
+fraction-bit/seek/geometry comparisons outside timing. Timed calls black-box real
+results and only retain success; no timed wide-result capture. These are separate
+prepared-input component observations, including call/copy/cache/test-loop effects,
+not additive/exclusive costs or a percentage decomposition of the whole pipeline.
+All25 timed loops observed zero Rust requests on that thread only.
+
+Milliseconds for512 actual queries, one host run per component:
+
+| Shape | Anchor terms | Unfolded from prepared terms | Full phase | Position from prepared phase | Full span query |
+|---|---:|---:|---:|---:|---:|
+| minsub |0.9640|0.4120|1.4621|3.5488|4.8462|
+| near one |1.1181|0.4119|1.5969|2.8306|4.4332|
+| negative zero |0.9946|0.4086|1.4683|2.9526|3.7980|
+| virtual |1.1643|0.4143|1.7283|2.4228|4.1454|
+| large epoch |1.1025|0.4111|1.5912|3.5052|5.2898|
+
+The virtual initial span width is1. The earlier128-query modulo-width profile
+therefore repeats anchor identity and remains unchanged as such; this new walk
+instead consumes actual frames0..511 and includes263 span requests. Large-epoch
+addresses are9007199254740999..9007199254741510, preserving actual cast plateaus.
+
+Counted replay of the existing first_true/unfolded_at at actual refresh requests
+matches original refreshed start/end. Counts exclude setup/validation/endpoint
+queries and are a matched replay, not an instrumented production hotcall trace:
+
+| Shape | Requests including initial | Left predicates | Explicit MAX probes | Right predicates | Max left/right | Terminal |
+|---|---:|---:|---:|---:|---:|---:|
+| minsub |1|0|1|64|0/64|0|
+| near one |1|0|1|64|0/64|0|
+| negative zero |1|0|1|64|0/64|0|
+| virtual |263|1840|263|16832|8/64|0|
+| large epoch |1|0|1|64|0/64|0|
+| aligned knot |2|1|2|128|1/64|0|
+| separate MAX-1 request |1|64|1|0|64/0|1|
+
+Aligned-knot replay retains the existing23999.near-one anchor. The terminal case
+has no512-frame walk and no refresh atMAX; it keeps the explicit MAX probe and
+proves the branch without a right search. Each binary search stays within64
+predicates. Initial setup is included here and excluded from the existing timed
+cohort refresh counters; do not conflate these counts. This multiplicity justifies
+investigating the existing boundary-search work, without choosing an unproved
+replacement, changing finite/domain/rounding guards or inferring exclusive costs.
+
+Final frozen-source validation: new2 PASS0.25s after2m54s compile, existing clock45
+PASS and playback48 PASS (including actual copied-reader cohort7.04s):95 distinct
+PASS/0overlap/0ignored. Fmt/strict/diff PASS; serial all-target Release Clippy40.86s
+PASS with unchanged109lib/131lib-test(56duplicates)/209example warnings. The prior
+402-test receipt remains compatible; unrerun checks and8517 private Release/
+API13/editor4/preflight evidence are explicitly REUSED, not claimed newly run.
+Product/package/lockfiles unchanged;
+no fresh product build/install/App/device work was needed or performed.
+
+The fresh unchanged full/checked reader cohort remains12.187–126.172 times the
+nominal10.6667ms interval, with full PCM/first PCM and original counts unchanged.
+Those raw14 rows remain in native-playback.log under workspace/test-artifacts/
+anchored-work-attribution-20261023. Component or replay observations do not grant
+RT, peak-stack, Native/global/free/DSP/device/music/Human/source/FirstPCM/adoption
+or whole-system acceptance. Prior identified unwind facts retain their original
+EXE/PDB scope; this test-only timing delivery claims no new stack qualification.
+
+Installed34577920B/1cd2c058... remains unchanged; Scratch1480→1480/0new. All own
+Native jobs/authors terminal, no TMP/binary/env copy or new disposable root. Retain
+the concise source/log/positive/negative/limit receipts; no cleanup target exists.
+Storage snapshot10:25:47UTC (all regular including hidden, no reparse traversal):
+artifacts17,796,430,700B/454783files; shared environment3,249,696,864B/21323;
+target16,022,196,613B/10749. Retain ONE compatible environment/cache/worker under
+the existing >30GiB decision, without duplicating or deleting Human/private/
+unknown/denied/real-installation data. All original FULL parent/final gates remain.
+
+One continuous independent NONAUTHOR final source/evidence review CLEAR on the
+actual test/spec/design/results diff and95 unique raw receipts, all component and
+replay values, unchanged product source and explicit reused/negative limits. Only
+the completed test-attribution task is closed; no product or RT gate is closed.

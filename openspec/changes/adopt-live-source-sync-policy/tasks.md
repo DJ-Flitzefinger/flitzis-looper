@@ -51,6 +51,7 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Profile complete 32-lane copied-reader blocks and original knot/wrap refreshes, retain compiled executable/PDB unwind-frame evidence and precise limits, verify affected tests and independent final diff; actual peak-stack/callback qualification remains a separate open gate.
 - [x] Extend shared multiplication with lossless native odd-coefficient products and unchanged wide fallback, prove full-width/native-overflow boundaries and compare unchanged isolated/cohort/general profiles; finish affected checks and independent final diff without granting RT permission.
 - [x] Extend independent exact-division low-tail, wide-quotient, sign and guard regressions; retain the unsuccessful native-denominator experiment and its real cost/stack limits without adopting it, then finish affected checks and independent final review.
+- [x] Attribute unchanged anchored query components on a consuming512-frame walk and count matched original boundary-search replays at actual refresh addresses; retain profile limits, verify original pairs/endpoints and finish affected checks plus independent final review.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.
 - [ ] Finish affected checks, needed Release/import/preflight and one independent actual final-diff review.
