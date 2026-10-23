@@ -473,6 +473,21 @@ Unknown symbols, chained/dynamic frames and unresolved calls remain explicit;
 individual frames and successful small-stack runs cannot certify complete peak
 stack or callback headroom. No current productive caller or guard changes.
 
+### Evaluated denominator decomposition: not adopted
+
+An unpublished experiment used D=d*2^s and N=h*2^s+l to compute exact native
+q=floor(h/d), r=N-((h-(h mod d))<<s), retaining low bits and the original fallback.
+Its arithmetic and independent regressions passed, but unchanged copied-reader
+profiles showed no material gain. The original profile geometry already bounds
+source and RN highparts to at most 26 and 64 bits respectively; raw minsub tails widen
+the low part, not h. A wider-h extension therefore does not address this cost.
+Smaller individual frames also introduced new callees, so no peak-stack benefit
+was proved. The experiment is not in product arithmetic. Preserve its patch,
+positive/negative measurements and limits; retain independent low-tail/wide-
+quotient/sign/guard regressions on the existing authority. Detailed evidence is
+in results.md. Next attribute the unchanged repeated query/refresh/boundary work
+before choosing another optimization. No new arithmetic or realtime permit.
+
 ## Immutable custody and original lifetime
 
 Before enabling any conversion, an independent behavior-preserving prerequisite

@@ -592,6 +592,159 @@ fn quotient_free_remainder_matches_original_division_at_signed_full_width_edges(
     );
 }
 
+fn assert_original_signed_division(numerator: SourceInteger, denominator: SourceInteger) {
+    for numerator_negative in [false, true] {
+        for denominator_negative in [false, true] {
+            let numerator = if numerator_negative {
+                numerator.negated()
+            } else {
+                numerator
+            };
+            let denominator = if denominator_negative {
+                denominator.negated()
+            } else {
+                denominator
+            };
+            let expected = original_div_rem_euclid(numerator, denominator);
+            let ((division, remainder), allocations) = observe_current_thread(|| {
+                (
+                    numerator.div_rem_euclid(denominator),
+                    numerator.rem_euclid(denominator),
+                )
+            });
+            assert_eq!(division, expected);
+            assert_eq!(remainder, expected.map(|(_, remainder)| remainder));
+            assert_eq!(allocations, ThreadAllocations::default());
+            if let Some(remainder) = remainder {
+                assert!(remainder >= SourceInteger::ZERO && remainder < denominator);
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_division_preserves_low_bits_and_signed_results() {
+    for shift in [0, 63, 64, 127, 128, 1074, 2148, 3228, 5303, 6399] {
+        for odd in [1, 3, 9, 375, 1125, u128::MAX] {
+            let Some(denominator) = integer(odd).checked_shl(shift) else {
+                continue;
+            };
+            for numerator in [
+                Some(SourceInteger::ZERO),
+                Some(integer(1)),
+                denominator.checked_sub(integer(1)),
+                Some(denominator),
+                denominator.checked_add(integer(1)),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert_original_signed_division(numerator, denominator);
+            }
+            let low = if shift == 0 {
+                SourceInteger::ZERO
+            } else {
+                integer(1)
+            };
+            for high in [0, 1, 1125, 1127, u128::MAX] {
+                if let Some(numerator) = integer(high)
+                    .checked_shl(shift)
+                    .and_then(|value| value.checked_add(low))
+                {
+                    assert_original_signed_division(numerator, denominator);
+                }
+            }
+        }
+    }
+    // Independent integer oracle: the low minsub-grid unit is not divisible by 2^1074.
+    let denominator = integer(375).checked_shl(1074).unwrap();
+    let numerator = integer(1127)
+        .checked_shl(1074)
+        .unwrap()
+        .checked_add(integer(1))
+        .unwrap();
+    let expected_remainder = integer(2)
+        .checked_shl(1074)
+        .unwrap()
+        .checked_add(integer(1))
+        .unwrap();
+    assert_eq!(
+        numerator.div_rem_euclid(denominator),
+        Some((integer(3), expected_remainder))
+    );
+    assert_eq!(numerator.rem_euclid(denominator), Some(expected_remainder));
+    let whole = integer(1125).checked_shl(1074).unwrap();
+    for raw in [-0.0, f64::from_bits(1), 0.25] {
+        let remainder = SourceInteger::from_f64_grid(raw)
+            .unwrap()
+            .checked_mul(integer(375))
+            .unwrap();
+        let source = split_source_coordinate_preserving_fraction(
+            whole.checked_add(remainder).unwrap(),
+            denominator,
+            raw,
+        )
+        .unwrap();
+        assert_eq!(source.whole, 3);
+        assert_eq!(source.fraction.to_bits(), raw.to_bits());
+    }
+}
+
+#[test]
+fn exact_division_keeps_wide_quotients_and_zero_guards() {
+    let maximum = SourceInteger::canonical(Magnitude::MAX, false);
+    // D=1 has a full 6400-bit quotient. Power-of-two denominators never narrow it.
+    assert_eq!(
+        maximum.div_rem_euclid(integer(1)),
+        Some((maximum, SourceInteger::ZERO))
+    );
+    for denominator in [
+        integer(1),
+        integer(2),
+        power(63),
+        power(64),
+        power(127),
+        power(128),
+        power(1074),
+        power(2148),
+        power(3228),
+        power(5303),
+        power(6399),
+        maximum.checked_sub(integer(1)).unwrap(),
+        maximum,
+    ] {
+        assert_original_signed_division(maximum, denominator);
+    }
+    // Keep a 129-bit odd denominator coefficient in the established exact algebra.
+    let odd_129 = power(128).checked_add(integer(1)).unwrap();
+    for shift in [0, 64, 1074] {
+        let denominator = odd_129.checked_shl(shift).unwrap();
+        let numerator = denominator
+            .checked_shl(1)
+            .unwrap()
+            .checked_add(denominator)
+            .unwrap()
+            .checked_add(integer(1))
+            .unwrap();
+        assert_original_signed_division(numerator, denominator);
+    }
+    // A 129-bit high component also remains exact without a native-width restriction.
+    let high_129 = power(128).checked_add(integer(7)).unwrap();
+    for shift in [0, 64, 1074, 5303] {
+        let numerator = high_129
+            .checked_shl(shift)
+            .unwrap()
+            .checked_add(integer(1))
+            .unwrap();
+        let denominator = integer(3).checked_shl(shift).unwrap();
+        assert_original_signed_division(numerator, denominator);
+    }
+    assert_original_signed_division(SourceInteger::ZERO, SourceInteger::ZERO);
+    assert_original_signed_division(maximum, SourceInteger::ZERO);
+    assert_original_signed_division(SourceInteger::ZERO, maximum);
+    assert!(super::unsigned_div_rem(Magnitude::MIN, Magnitude::MIN).is_none());
+}
+
 #[test]
 fn lossless_shift_and_capacity_exhaustion_leave_original_values_unchanged() {
     let top = power(6399);

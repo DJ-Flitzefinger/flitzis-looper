@@ -1051,3 +1051,103 @@ clean fresh actual remote equality and terminal/path/reparse/process guards.
 Installed Native remains the unchanged fresh1cd2c058 baseline; Human/private/
 unknown/denied data, real installations and the shared environment/cache stay
 protected. Complete positive/negative/reproduction/limit receipts are retained.
+
+### Exact division: retained regressions and an unsuccessful cost experiment, 2026-10-23
+
+The final delivery keeps product arithmetic, normative source-sync requirements,
+API/layout, reader, original source/domain/FirstPCM, custody, scheduler and RT
+boundaries exactly as8517efb5. Two independent baseline regression tests add
+low-tail/D±1/full6400-bit quotient/sign/zero-divisor cases across10 binary scales,
+native-max and129-bit operands, plus raw -0/minsub/quarter-frame identity. Their
+retained direct bnum division/qD oracle is independent of production's optimized
+qD multiplication and quotient-free remainder. Thread request observations remain
+bounded evidence only. A separate standard-library unbounded-integer oracle
+retains14 signed vectors; the1127G+1 /375G witness is asserted explicitly.
+
+An unpublished denominator experiment used D=d*2^s, N=h*2^s+l and
+r=N-((h-(h mod d))<<s), with wide power-of-two quotients and unchanged fallback.
+Its25 numerical tests plus2 unchanged isolated profiles and1 actual copied-reader
+profile passed. Nevertheless it showed no material reader cost benefit. Full
+candidate patch and attempt-prefixed raw logs are retained under workspace/
+test-artifacts/exact-denominator-split-20261023. It was removed through targeted
+edits of only this owned unpublished attempt; prior product changes remain intact.
+
+Actual same-input copied-reader milliseconds (preceding8517 receipt versus
+unpublished experiment; one isolated host run per input, no timing assertions):
+
+| Shape | Baseline full | Attempt full | Baseline checked | Attempt checked |
+|---|---:|---:|---:|---:|
+| minsub |165.6068|166.5106|337.0970|340.1719|
+| near one |145.8277|146.0488|294.9381|293.2568|
+| negative zero |132.9471|135.4735|267.3729|272.1567|
+| large epoch |167.6932|169.2086|333.7094|327.7472|
+| aligned knot |169.8243|164.6021|332.9825|326.2086|
+| virtual aligned |944.8021|977.2923|1186.3257|1170.1276|
+| virtual staggered |994.1581|1024.1098|1147.0000|1187.6558|
+
+Fresh isolated minsub128queries1.2857→1.2573ms/16refreshes1.4879→1.4850ms;
+near-one refresh1.4415→2.0551ms, generic128products sparse298→299us/dense302→298.7us.
+Mixed small differences do not justify a throughput improvement claim. A final
+same-product control remains in the unprefixed logs, including13.072–120.350 times
+the nominal10.6667ms cohort interval: callback eligibility stays NEGATIVE.
+All original chunk/refresh/request counts, full PCM and first-PCM comparisons
+remain unchanged. No local request count grants Native/global/free/DSP/device/
+music/Human/worstcase or whole-system acceptance.
+
+Source-grounded algebra bounds these fixed profile source highparts to at most
+26 bits and RN highparts to64 bits. Raw minsub expands low bits, not h; the
+suspected native-width miss does not explain the neutral result. A wider-h branch
+therefore is not implemented. Repeated anchor reconstruction and refresh/boundary
+search remain to be attributed before another optimization, without inferring
+copy/extraction costs from total timings.
+
+Attempt EXE87976448B/SHA256
+42bab4d2c6877cfbf706083596817fab2ce0fe7d15c10de28537b70e6258cc34;
+resolved adjacent PDB29855744B/SHA256
+1503efdfca2c4062fd81ce961a8370835e0f2caac58e1776458a9427930daf0c,
+CodeView4BCE41E8-5601-40F4-8F3E-D9130CEB697D/Age11. Matching102 named records,
+45 unsupported structures. Fixed individual frames shrink span14568→13752,
+anchored14600→13800, split9704→7320 and rem4856→4072B, but introduce helpers
+unsigned-rem1704, factors2504 and factor-remainder4920B. These are individual
+prologue facts, excluding return addresses and transitive callees; no complete
+peak-stack gain is established. The final product retains the prior arithmetic.
+
+Final frozen-source checks:402 distinct selected Native PASS,0 overlaps and6
+pre-existing ignored cases. Numerics25, profiles2+1, clock45, playback47, beatmap62,
+transport46, feed15/1ignored, prepared10, reader17, custody132/5ignored. Two custody
+tests print JSON between their start and standalone `ok`; both names/statuses are
+accounted for and all raw suite summaries agree. Final numerical compile2m38s,
+run0.13s. Fmt/strict/diff PASS; all-target Release Clippy42.55s PASS with unchanged
+109lib/131lib-test(56duplicates)/209example warnings. Root accidentally began Clippy
+before the last test batch was terminal; all profile timings were already over.
+After both jobs were terminal, the potentially overlapping prepared group was
+rerun serially:10PASS/27.13s, additional execution not counted twice in402distinct.
+No source was mutable during any check and no functional failure occurred.
+
+Final test EXE87998464B/SHA256
+400a366a4f40b94b5de764355a6a9efbe8ac1cdab8cb00a8b318d123150fec71;
+resolved adjacent PDB29855744B/SHA256
+82b976a0c33007051db25e80bfe08333bdcf87b7198940c7d0d27a923c3a2199,
+same CodeView GUID/Age12.99 named records/45unsupported structures; original
+span14568/anchored14600/rem4856/helper4168/split9704B frames restored, still no
+overall peak-stack/callback qualification. The separately retained pure-integer
+profile-width repro distinguishes actual anchors0+minsub and17+minsub, with
+D=375*2^3228 and RN highpart61bits in both frame1 examples.
+
+Product/API/package/lockfiles are unchanged: private Release/API13/editor4 and
+canonical preflight evidence from8517efb5 is explicitly REUSED, not newly built,
+installed or claimed fresh. Actual installed34577920B/1cd2c058... is unchanged;
+Scratch1480→1480/0new. No App/device action or private TMP/binary/env copy was made.
+All jobs/authors terminal. Storage snapshot10:02:27UTC (regular including hidden,
+no reparse traversal): artifacts17,796,118,601B/454769files; shared environment
+3,249,696,864B/21323; target16,022,178,181B/10749. Retain ONE compatible environment/
+cache/worker under the existing >30GiB decision. No new disposable TMP or Scratch
+root exists to delete. Human/private/unknown/denied/real installations stay
+protected. All FULL source/FirstPCM/adoption, stack/cohort/music/resource/Native/
+Human/parent/final gates remain open where not separately proved.
+
+One continuous independent NONAUTHOR final diff/evidence review CLEAR, including
+402 unique raw receipts, the serial rerun, neutral attempt, distinct final/attempt
+binary identities, unchanged product code and compatible Release reuse. Only the
+completed regression/evaluation task is closed; no product optimization, adoption
+or RT qualification is claimed by this delivery.
