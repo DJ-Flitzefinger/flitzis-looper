@@ -153,13 +153,19 @@ The musical coordinate prerequisite SHALL NOT change legacy/physical arithmetic,
 ### Requirement: Supporting exact arithmetic has explicit fixed capacity and rounding
 Supporting source arithmetic SHALL use checked fixed-capacity values with at most 6400 magnitude bits and no heap owner. Finite binary64 inputs SHALL decode exactly onto the integer lattice G=2^1074; nonfinite input, lost high bits, arithmetic capacity exhaustion and zero divisors SHALL refuse without changing preceding state. A checked shift SHALL reject discarded high bits, not merely an excessive shift count. Signed Euclidean division SHALL retain the exact quotient and nonnegative remainder without a u64 cycle narrowing.
 
-Exact arithmetic optimizations SHALL preserve the admitted values and refusals of the checked 6400-bit algebra. Zero, unit and symmetric power-of-two multiplication MAY use lossless shifts; general products SHALL retain checked fixed-capacity multiplication. A fused binary64-grid/u32 product SHALL decode finite input before multiplying the integer significand, without a floating product or intermediate rounding. Nonfinite input SHALL refuse even with factor zero. Phase-only Euclidean remainder SHALL require a positive nonzero denominator and retain the same nonnegative remainder as exact signed division.
+Exact arithmetic optimizations SHALL preserve the admitted values and refusals of the checked 6400-bit algebra. Zero, unit and symmetric power-of-two multiplication MAY use lossless shifts. Additional products MAY factor exact trailing binary zeros and multiply odd coefficients in checked u128 only when both coefficients and their product fit losslessly; reconstruction SHALL retain the original lossless 6400-bit shift bound. Other products, including native coefficient overflow, SHALL retain the original checked fixed-capacity multiplication fallback rather than newly refuse. A fused binary64-grid/u32 product SHALL decode finite input before multiplying the integer significand, without a floating product or intermediate rounding. Nonfinite input SHALL refuse even with factor zero. Phase-only Euclidean remainder SHALL require a positive nonzero denominator and retain the same nonnegative remainder as exact signed division.
 
 #### Scenario: Optimized operations retain exact admission and edge decisions
 - **WHEN** optimized support evaluates signed zero, subnormal or maximum finite inputs, full-width products, negative phases or a decimal knot whose legacy product rounds
 - **THEN** canonical numeric zero, overflow refusal, exact phase and single fraction rounding SHALL remain unchanged
 - **AND** the original geometry intersection SHALL still compare the exact product against the unchanged legacy-rounded product, refusing any mismatch
 - **AND** descriptive timing and observed thread allocation counts SHALL NOT grant stack, callback, cohort or realtime permission
+
+#### Scenario: Native odd-coefficient overflow falls back without narrowing admission
+- **WHEN** binary scales are removed exactly but either odd coefficient or its checked native product exceeds u128
+- **THEN** multiplication SHALL use the unchanged 6400-bit fallback and retain every preceding accepted product and overflow refusal
+- **AND** a native coefficient product that fits SHALL still refuse if its reconstructed full magnitude exceeds 6400 bits
+- **AND** signs, canonical numeric zero, raw fraction identity and original rounding/domain guards SHALL remain unchanged
 
 #### Scenario: An exact source ratio rounds a separate fractional frame
 - **WHEN** nonnegative numerator N is below 2^6363, positive denominator D is below 2^5304 and the exact source coordinate is at most 2^64

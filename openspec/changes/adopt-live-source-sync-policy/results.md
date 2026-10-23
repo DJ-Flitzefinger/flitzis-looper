@@ -961,3 +961,93 @@ target16022043525B/10749files,0reparse traversed. Keep the existing ONE compatib
 shared env/cache/worker under the prior >30GiB decision; no new disposable TMP,
 binary copies or isolated environment existed to clean. Prior/Human/unknown/
 denied data and installations remain protected.
+
+## Exact native odd-coefficient multiplication — 2026-10-23
+
+The shared magnitude helper additionally factors A=a*2^s and B=b*2^t. Only when
+both odd coefficients and their product fit losslessly in u128 does it rebuild
+the exact result through the existing lossless6400-bit shift. Wider coefficients,
+conversion misses and native product overflow retain the original checked bnum
+fallback. Thus native overflow is NOT a new arithmetic refusal. The successful
+native reconstruction has exactly the original criterion
+bit_width(a*b)+s+t<=6400. Existing zero/unit/power-of-two paths, sign/canonical-zero
+handling, splitter/RN/raw fraction/domain/first-PCM/custody/history/master guards
+and APIs/layouts remain unchanged. No productive caller or RT permit is added.
+
+Two new tests exercise25 product pairs, both orders and all signs:200 direct
+pinned-bnum differential comparisons with zero observed product-thread Rust
+requests. Independent Python arbitrary-integer vectors include
+(2^64−1)*(2^64+1)=2^128−1 at combined shift6272 (6400bits admitted), shift6273
+(6401bits refused), native129-bit coefficient overflow with2277-bit wide success,
+and the1075-bit odd coefficient of1+minsub with2157-bit wide product. Word/scale,
+huge odd, summed-shift exhaustion and dense fallback cases remain covered.
+
+Fresh327distinctPASS/327selected/0overlap/4OLDignored. Numerics23, isolated
+profiles2, isolated actualcohort1, Clock45, Playback47, Beatmap62, Transport46,
+Feed15, Prepared10, Reader17, Custody59. Integrated filters skip the separately
+executed profile tests instead of rerunning/counting them twice. Numerics compile
+2m47/PASS0.13s; actualcohort1PASS6.65s. FMT/strict/diffPASS; Release all-target
+Clippy38.61sPASS with unchanged109lib/131libtest(56duplicates)/209example warnings.
+No failed functional test or weakened guard/timing assertion.
+
+Unchanged isolated profiles before/after (ms,128queries or16refreshes):
+
+| Shape | Queries before | Queries after | Refresh before | Refresh after |
+| --- | ---: | ---: | ---: | ---: |
+| minsub |1.9608|1.2541|3.7937|1.4858|
+| near one |2.3673|1.1078|4.8216|1.4863|
+| negative zero |1.9894|1.0067|4.0746|1.3988|
+| virtual |0.4376|0.4293|3.8754|1.3778|
+| large epoch |1.9575|1.2725|4.0263|1.5315|
+
+Generic128products sparse288→293.3us and dense293.2→297.8us were slightly slower
+in these runs. This fallback tradeoff is retained rather than claiming a universal
+gain. Full32-lane/stereo512-frame profile comparison against unchanged831f42a3:
+
+| Shape | Full before ms | Full after ms | Checked before ms | Checked after ms |
+| --- | ---: | ---: | ---: | ---: |
+| minsub |260.6119|165.6068|518.2424|337.0970|
+| near one |298.0743|145.8277|594.2045|294.9381|
+| negative zero |257.3028|132.9471|513.7272|267.3729|
+| large epoch |259.2630|167.6932|523.8033|333.7094|
+| aligned knot |433.9083|169.8243|854.5548|332.9825|
+| virtual aligned |2430.8454|944.8021|2694.4045|1186.3257|
+| virtual staggered |2488.1280|994.1581|2773.6272|1147.0000|
+
+Reader/endpoint request counts and actual chunks/refreshes are unchanged. These
+single-run host figures remain descriptive and still cost12.464–111.218 times
+the nominal10.6667ms interval; callback eligibility remains NEGATIVE. Only query,
+product or render thread Rust requests were observed as zero, not refresh frees,
+Native/global allocators, process resources, device scheduling or worstcase time.
+
+Re-extracted FINAL test EXE87970304B/SHA256
+9d2ccd97b0fa892008735e1d7258ea574fafd3589396633c5848eacff757b514;
+resolved adjacent PDB29831168B/SHA256
+c4b82efc2ed38136fd5d726344ddfddbe483a885c2b3e5c92f4693a4c010a2d4.
+Named fixed-prologue facts: the multiplication helper grows1752→4168bytes
+(+2416), while span14568/anchored14600/add6472/mul1672/rem4856/split9704/refresh952
+stay unchanged. These exclude return addresses/transitive callees; no overall
+peak-stack improvement or callback-stack permission is claimed.97matching named
+records/45unsupported structures remain explicit; no anonymous inference or
+zero-frame assumption. Exact header/GUID/age/tool/hash/raw-record receipts are
+retained under workspace/test-artifacts/native-odd-products-20261023.
+
+Private Release38.75sPASS/52existing build warnings, actual private-origin Native
+34578944B/SHA256d739573cebcf12acf94ee1c4717c9f89abb2e7101c1a5a74a997bed1a37f0dd8;
+fresh private release/API13/editor4PASS. NOT installed; canonical start.bat
+--checkPASS/noApp on the existing installation. Whole Python/device/music/Human
+acceptance is not claimed. Actual peak-stack/callback cost, original geometry/
+Source/FirstPCM/StageA/B/live adoption and every FULL parent/final gate remain open.
+
+One continuous independent NONAUTHOR final review CLEAR on the actual code/spec/
+evidence diff, including all327 distinct raw test receipts, negative callback
+timings, generic slowdowns and increased helper frame. Only the completed support
+optimization checkbox is closed. Delivery census (all regular including hidden,
+no reparse traversal): artifacts17,842,151,777B/454738files; shared environment
+3,249,696,864B/21323files; target16,022,125,294B/10749files. Retain ONE compatible
+environment/cache/worker under the existing >30GiB decision, without copies.
+Only exact owned tmp6files/47,000,878B is disposable after reviewed normal push,
+clean fresh actual remote equality and terminal/path/reparse/process guards.
+Installed Native remains the unchanged fresh1cd2c058 baseline; Human/private/
+unknown/denied data, real installations and the shared environment/cache stay
+protected. Complete positive/negative/reproduction/limit receipts are retained.

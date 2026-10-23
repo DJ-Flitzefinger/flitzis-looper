@@ -356,6 +356,138 @@ fn multiplication_shortcuts_match_original_bnum_in_both_orders_and_all_signs() {
     assert!(power(3200).checked_mul(power(3200)).is_none());
 }
 
+fn assert_original_signed_products(left: SourceInteger, right: SourceInteger) {
+    for (left, right) in [(left, right), (right, left)] {
+        let original = left.magnitude.checked_mul(right.magnitude);
+        for left_negative in [false, true] {
+            for right_negative in [false, true] {
+                let left = if left_negative { left.negated() } else { left };
+                let right = if right_negative {
+                    right.negated()
+                } else {
+                    right
+                };
+                let expected = original.map(|magnitude| {
+                    SourceInteger::canonical(magnitude, left_negative != right_negative)
+                });
+                let (actual, allocations) = observe_current_thread(|| left.checked_mul(right));
+                assert_eq!(actual, expected);
+                assert_eq!(allocations, ThreadAllocations::default());
+            }
+        }
+    }
+}
+
+#[test]
+fn scaled_odd_coefficients_reconstruct_losslessly_across_native_word_boundaries() {
+    for (left, left_shift, right, right_shift) in [
+        (3, 0, 5, 0),
+        (3, 31, 5, 32),
+        ((1_u128 << 32) - 1, 63, (1_u128 << 32) + 1, 64),
+        ((1_u128 << 63) + 1, 64, 3, 65),
+        ((1_u128 << 64) - 1, 127, (1_u128 << 64) + 1, 128),
+        ((1_u128 << 65) + 1, 129, 3, 1020),
+        ((1_u128 << 63) - 1, 1074, (1_u128 << 63) + 1, 2045),
+        ((1_u128 << 53) - 1, 1074, 375, 1074),
+        // The native coefficient product is exactly u128::MAX. Shifting it by
+        // 6272 places its highest bit at index 6399, preserving every bit at full capacity.
+        ((1_u128 << 64) - 1, 3100, (1_u128 << 64) + 1, 3172),
+    ] {
+        assert!(left & 1 != 0 && right & 1 != 0);
+        assert!(left.checked_mul(right).is_some());
+        let left = integer(left).checked_shl(left_shift).unwrap();
+        let right = integer(right).checked_shl(right_shift).unwrap();
+        assert_original_signed_products(left, right);
+    }
+    let boundary_left = integer(3).checked_shl(3198).unwrap();
+    let boundary_right = integer(5).checked_shl(3198).unwrap();
+    let exact = boundary_left.checked_mul(boundary_right).unwrap();
+    assert_eq!(exact, integer(15).checked_shl(6396).unwrap());
+    assert_eq!(exact.magnitude.bit_width(), SOURCE_MAGNITUDE_BITS);
+    let overflow_right = integer(5).checked_shl(3199).unwrap();
+    assert!(boundary_left.checked_mul(overflow_right).is_none());
+    assert_original_signed_products(boundary_left, boundary_right);
+    assert_original_signed_products(boundary_left, overflow_right);
+    let native_boundary_left = integer((1_u128 << 64) - 1).checked_shl(3100).unwrap();
+    let native_boundary_right = integer((1_u128 << 64) + 1).checked_shl(3172).unwrap();
+    let native_boundary = native_boundary_left
+        .checked_mul(native_boundary_right)
+        .unwrap();
+    assert_eq!(
+        native_boundary,
+        integer(u128::MAX).checked_shl(6272).unwrap()
+    );
+    let native_overflow_right = integer((1_u128 << 64) + 1).checked_shl(3173).unwrap();
+    assert!(
+        native_boundary_left
+            .checked_mul(native_overflow_right)
+            .is_none()
+    );
+    assert_original_signed_products(native_boundary_left, native_overflow_right);
+    // Even tiny coefficients cannot rescue an out-of-capacity combined scale.
+    assert_original_signed_products(
+        integer(3).checked_shl(3300).unwrap(),
+        integer(5).checked_shl(3300).unwrap(),
+    );
+    assert_original_signed_products(
+        integer(3).checked_shl(3300).unwrap(),
+        integer(7).checked_shl(3100).unwrap(),
+    );
+}
+
+#[test]
+fn scaled_odd_products_keep_wide_fallback_and_capacity_refusals() {
+    // Native coefficient overflow is only a fast-path miss, not an arithmetic refusal.
+    let native_overflow_left = integer(u128::MAX).checked_shl(1074).unwrap();
+    let native_overflow_right = integer(3).checked_shl(128).unwrap();
+    assert!(
+        native_overflow_left
+            .checked_mul(native_overflow_right)
+            .is_some()
+    );
+    assert_original_signed_products(native_overflow_left, native_overflow_right);
+    assert_original_signed_products(integer(u128::MAX), integer(u128::MAX));
+    let native_overflow_left = integer((1_u128 << 127) + 1).checked_shl(1074).unwrap();
+    let native_overflow_right = integer(3).checked_shl(1074).unwrap();
+    let wide = native_overflow_left
+        .checked_mul(native_overflow_right)
+        .unwrap();
+    assert_eq!(wide.magnitude.bit_width(), 2277);
+    assert_original_signed_products(native_overflow_left, native_overflow_right);
+
+    let odd_129 = power(128).checked_add(integer(1)).unwrap();
+    assert_original_signed_products(
+        odd_129.checked_shl(13).unwrap(),
+        integer(3).checked_shl(29).unwrap(),
+    );
+    assert_original_signed_products(
+        odd_129.checked_shl(1074).unwrap(),
+        integer(3).checked_shl(64).unwrap(),
+    );
+    // 1 + minsub has an odd 1075-bit grid coefficient; it must retain the wide path.
+    let minsub_pair = SourceInteger::from_source_pair_grid(1, f64::from_bits(1)).unwrap();
+    assert_eq!(minsub_pair, power(1074).checked_add(integer(1)).unwrap());
+    assert_original_signed_products(minsub_pair, integer(3).checked_shl(64).unwrap());
+    let scaled_375 = integer(375).checked_shl(1074).unwrap();
+    assert_eq!(
+        minsub_pair
+            .checked_mul(scaled_375)
+            .unwrap()
+            .magnitude
+            .bit_width(),
+        2157
+    );
+    assert_original_signed_products(minsub_pair, scaled_375);
+    let huge_odd = power(6330).checked_add(integer(17)).unwrap();
+    assert_original_signed_products(huge_odd, integer(3));
+    let dense = power(6398).checked_sub(integer(1)).unwrap();
+    assert!(dense.checked_mul(integer(3)).is_some());
+    assert!(dense.checked_mul(integer(5)).is_none());
+    assert_original_signed_products(dense, integer(3));
+    assert_original_signed_products(dense, integer(5));
+    assert_original_signed_products(SourceInteger::canonical(Magnitude::MAX, false), integer(3));
+}
+
 #[test]
 fn euclidean_division_floors_negative_inputs_without_cycle_narrowing() {
     for (value, divisor, quotient, remainder) in

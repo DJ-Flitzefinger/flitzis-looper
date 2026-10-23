@@ -293,6 +293,21 @@ fn checked_magnitude_mul(left: Magnitude, right: Magnitude) -> Option<Magnitude>
     if right.is_power_of_two() {
         return lossless_shl(left, right.trailing_zeros());
     }
+    let left_shift = left.trailing_zeros();
+    // Skip the right probe and all wide shifts when the first odd coefficient is too large.
+    if left.bit_width() - left_shift <= u128::BITS {
+        let right_shift = right.trailing_zeros();
+        if right.bit_width() - right_shift <= u128::BITS
+            && let Some(left_coefficient) = left.checked_shr(left_shift).and_then(magnitude_u128)
+            && let Some(right_coefficient) = right.checked_shr(right_shift).and_then(magnitude_u128)
+            && let Some(product) = left_coefficient.checked_mul(right_coefficient)
+            && let Ok(product) = Magnitude::try_from(product)
+        {
+            // The original product is exactly product*2^(left_shift+right_shift).
+            // Its unchanged 6400-bit limit still applies before this operation returns.
+            return lossless_shl(product, left_shift + right_shift);
+        }
+    }
     left.checked_mul(right)
 }
 

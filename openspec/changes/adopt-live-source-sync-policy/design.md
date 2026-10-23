@@ -276,7 +276,16 @@ converter. All capacity failures return before mutation.
 
 Cost refinement keeps the same capacity and algebra. A shared magnitude product
 dispatches zero/unit and either power-of-two operand through the existing lossless
-shift; general operands retain pinned checked multiplication. The helper also
+shift. For other operands A=a*2^s and B=b*2^t, exact trailing-zero counts produce
+odd coefficients. If both coefficients and their checked product fit u128,
+reconstruct a*b*2^(s+t) through that same lossless shift. Bitwidth/product failure
+uses the original pinned checked multiplication, not a new refusal. The full
+product fits exactly iff bit_width(a*b)+s+t<=6400; no intermediate overflow is
+rescued by cancellation and no representation capacity changes. Coefficient
+extraction is exact because only verified trailing zero bits are shifted out.
+General fallback costs remain measured alongside actual copied-reader cases.
+This does not reduce 800-byte argument/copy storage or qualify callback stack.
+The helper also
 serves exact qD reconstruction and raw-fraction identity. Decode finite binary64
 before an exact u128 significand*u32 product (at most 85 bits), then widen and
 shift: the result remains below 2^2130. Check nonfinite input before a zero factor;
