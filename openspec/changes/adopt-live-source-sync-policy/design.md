@@ -510,7 +510,40 @@ In addition to the five component cases, replay the existing aligned-knot anchor
 and a separate terminal request at u64::MAX-1; never start a512-frame walk there.
 Actual copied-reader profiles remain the separate whole-path cost evidence.
 
+### Qualified local boundary probes
+
+After the original refresh gates and target-range checks, retain the explicit
+unfolded(MAX) terminal test. The left search has known-true output: if output>firstE,
+probe output-1; false selects output, true brackets the unchanged first_true below
+that predecessor. The right search has known-true MAX: probe next, then next+1
+only when strictly below the known upper endpoint; a true probe selects that
+first address, otherwise run the unchanged first_true above the known-false probes.
+Empty/single-point intervals retain their old behavior and no neighbor arithmetic
+may wrap. General first_true remains untouched; these new helpers require the
+concrete already-admitted total monotone predicate, not arbitrary fallible closures.
+Unexpected probe None fails closed, never ignored or treated as a target.
+
+Totality proof under those original gates: finite f64 grid magnitude<2^2098;
+u32-rate grid<2^2130; source differences<2^2131; beat/master differences<2^2099.
+Initial products<2^4230 and sum<2^4231; original0<=initial<period constrains it below
+2^4229. Thus unfolded<2^4231 and targets<2^4233, all below6400bits. Successful phase
+and shifted finite horizon guarantee every addressed n in[firstE,MAX] is finite
+and valid; actual u64 casts/subtraction/positive division/addition remain monotone
+with their original plateaus. Local probes therefore cannot skip a numerical
+refusal hidden at an old search point. Other source/geometry/endpoint/RN/local-rate
+vetoes remain after search. At most65left+1MAX+66right=132 predicate calls versus
+the old129; bounded worstcase is explicit, not a RT claim.
+
+Update matched replay to count the same admitted search helpers and label their
+local-probe-inclusive bounds; preserve prior baseline receipts. Verify against
+the original binary search with pure total predicates over small/full-u64 ranges,
+plateaus, invalid intervals, failures, history and actual knot/wrap/terminal pairs.
+General fallible semantics need their own unchanged failure witness. Compare
+unchanged isolated/component/reader profiles and final stack facts before adopting
+this numerical cost change; no new layout, owner, clock or productive converter.
+
 ## Immutable custody and original lifetime
+
 
 Before enabling any conversion, an independent behavior-preserving prerequisite
 aggregates the current original CapturedPadStart and its effective immutable map

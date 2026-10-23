@@ -196,7 +196,18 @@ These numerical prerequisites SHALL add no productive conversion caller, second 
 - **AND** component timings SHALL identify their prepared inputs and non-additive observation costs; a counted boundary-search replay SHALL match actual span endpoints and SHALL NOT be presented as an instrumented production call trace
 - **AND** a successful software test or observed allocation count SHALL NOT discharge callback/DSP/device timing, maximum stack, source-custody, first-PCM or Human acceptance gates
 
+### Requirement: Qualified anchored boundary probes preserve the exact search
+For an already admitted anchored span, local boundary probes MAY precede the unchanged general binary search only after the original geometry, shifted finite-horizon, phase and target-range gates. The concrete unfolded predicate SHALL be total and nondecreasing over that admitted interval, preserving actual master evaluation and cast plateaus. The left predecessor and at most two right successors SHALL remain inside the original search interval; the explicit terminal MAX probe and all subsequent endpoint, reader/domain, rounding and local-rate checks SHALL remain. The original general fallible first_true helper SHALL retain its semantics for arbitrary fallible predicates. Additional probe errors SHALL NOT be ignored or interpreted as boundaries. No original admitted value or refusal SHALL be narrowed or rescued by changing an intermediate overflow; total anchored arithmetic SHALL retain the original 6400-bit bound.
+
+#### Scenario: Qualified nearby boundaries retain the original exact search result
+- **WHEN** the original admitted unfolded predicate reaches a source knot or wrap at the left predecessor or one of the first two right addresses
+- **THEN** local probes SHALL select the same first true frame as the original binary search, including actual master plateaus and shifted history
+- **AND** a boundary farther away SHALL use the unchanged binary search on a bracket with the same first true result
+- **AND** each binary search SHALL remain bounded by64 predicates, with at most three additional local probes and the unchanged explicit MAX probe per refresh, for a conservative total at most132
+- **AND** terminal MAX-1 requests, invalid intervals, failure, exact pairs, original endpoint normalization and no productive RT permit SHALL remain unchanged
+
 ### Requirement: Prepared exact geometry preserves the original loop and reader
+
 An independently prepared initial exact-continuation geometry SHALL certify an explicit intersection domain without changing existing legacy map construction or projection. Preparation SHALL be opt-in and off realtime, retaining the same original immutable map, binary64 seconds/beat anchors, captured B/Q, physical markers, full source extent and original Some(P) reader domain. Every original segment with positive-length overlap with the admitted beat interval SHALL retain trusted coverage, and both original knot products of each such segment SHALL equal their existing binary64-rounded products exactly. Endpoint-only contact SHALL retain the existing interval-open coverage policy rather than include an unused neighboring segment. Exact B plus Q SHALL equal the captured legacy endpoint beat. The original spline SHALL close exactly at the integer physical start and at physical start plus original P. Failure SHALL refuse this new qualification without clipping, moving markers, rescaling, replacing knots or rewriting the original reader period.
 
 #### Scenario: Original variable geometry belongs to the certified intersection

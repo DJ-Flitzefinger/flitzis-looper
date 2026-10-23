@@ -948,7 +948,7 @@ fn descriptive_work_boundary_replay_matches_actual_refreshes() {
         let right_target = cycle_base.checked_add(right_offset).unwrap();
         assert!(phase.unfolded >= left_target && phase.unfolded < right_target);
         let mut counts = Counts::default();
-        let start = first_true(epoch.first_output_frame, request, |frame| {
+        let start = first_true_near_high(epoch.first_output_frame, request, |frame| {
             counts.left += 1;
             Some(unfolded_at(epoch, &phase.terms, frame)? >= left_target)
         })
@@ -959,13 +959,13 @@ fn descriptive_work_boundary_replay_matches_actual_refreshes() {
             counts.terminal = true;
             u64::MAX
         } else {
-            first_true(request.checked_add(1).unwrap(), u64::MAX, |frame| {
+            first_true_near_low(request.checked_add(1).unwrap(), u64::MAX, |frame| {
                 counts.right += 1;
                 Some(unfolded_at(epoch, &phase.terms, frame)? >= right_target)
             })
             .unwrap()
         };
-        assert!(counts.left <= 64 && counts.right <= 64);
+        assert!(counts.left <= 65 && counts.right <= 66);
         assert_eq!(counts.max_probe, 1);
         assert_eq!(start, actual.start_frame());
         assert_eq!(end, actual.end_frame());
@@ -1006,7 +1006,7 @@ fn descriptive_work_boundary_replay_matches_actual_refreshes() {
             assert!(requests.len() > 1);
         }
         eprintln!(
-            "anchored_work_search_replay: shape={name} walk_frames=512 refresh_requests_including_initial={} left_predicates={} max_probes={} right_predicates={} maximum_left={maximum_left} maximum_right={maximum_right} terminal_requests={terminal_requests}; exact original first_true replay matched actual refreshed start/end; counts exclude phase setup/validation/endpoints and are not an instrumented production hotcall trace; no throughput/peakstack/RT permission",
+            "anchored_work_search_replay: shape={name} walk_frames=512 refresh_requests_including_initial={} left_predicates={} max_probes={} right_predicates={} maximum_left={maximum_left} maximum_right={maximum_right} terminal_requests={terminal_requests}; qualified near-probe-inclusive replay matched actual refreshed start/end, search bounds left65/right66; counts exclude phase setup/validation/endpoints and are not an instrumented production hotcall trace; no throughput/peakstack/RT permission",
             requests.len(),
             total.left,
             total.max_probe,
@@ -1021,7 +1021,122 @@ fn descriptive_work_boundary_replay_matches_actual_refreshes() {
     assert!(counts.terminal);
     assert_eq!(counts.right, 0);
     eprintln!(
-        "anchored_work_search_replay: shape=terminal_request_only walk_frames=0 refresh_requests=1 left_predicates={} max_probes={} right_predicates={} terminal_requests=1; separate MAX-1 request matched actual span, one explicit MAX probe, no right search or refresh at MAX; no production trace/peakstack/RT claim",
+        "anchored_work_search_replay: shape=terminal_request_only walk_frames=0 refresh_requests=1 left_predicates={} max_probes={} right_predicates={} terminal_requests=1; qualified near-probe-inclusive MAX-1 replay matched actual span, one explicit MAX probe, no right search or refresh at MAX; no production trace/peakstack/RT claim",
         counts.left, counts.max_probe, counts.right,
+    );
+}
+
+#[test]
+fn qualified_near_searches_match_original_for_total_monotone_predicates() {
+    fn compare(low: u64, high: u64, predicate: impl Fn(u64) -> bool) -> (usize, usize) {
+        assert!(low <= high && predicate(high));
+        let original = first_true(low, high, |frame| Some(predicate(frame)));
+        let mut upper_calls = 0;
+        let upper = first_true_near_high(low, high, |frame| {
+            upper_calls += 1;
+            Some(predicate(frame))
+        });
+        let mut lower_calls = 0;
+        let lower = first_true_near_low(low, high, |frame| {
+            lower_calls += 1;
+            Some(predicate(frame))
+        });
+        assert_eq!(upper, original);
+        assert_eq!(lower, original);
+        assert!(upper_calls <= 65 && lower_calls <= 66);
+        (upper_calls, lower_calls)
+    }
+
+    for low in 0..=16 {
+        for high in low..=16 {
+            for stride in [1, 2, 3, 8] {
+                for threshold in 0..=high / stride {
+                    compare(low, high, |frame| frame / stride >= threshold);
+                }
+            }
+        }
+    }
+    let mut maximum_upper = 0;
+    let mut maximum_lower = 0;
+    for (low, high) in [
+        (0, u64::MAX),
+        (0, u64::MAX - 1),
+        (1, u64::MAX),
+        ((1_u64 << 53) - 3, (1_u64 << 53) + 1025),
+        (u64::MAX - 1024, u64::MAX),
+        (u64::MAX - 2, u64::MAX),
+        (u64::MAX - 1, u64::MAX),
+        (u64::MAX, u64::MAX),
+    ] {
+        for stride in [1, 2, 3, 64, 1024, 1_u64 << 53, u64::MAX] {
+            for threshold in [
+                0,
+                low / stride,
+                (low / stride).saturating_add(1),
+                (low / stride).saturating_add(2),
+                high / stride,
+                (high / stride).saturating_sub(1),
+            ] {
+                if threshold <= high / stride {
+                    let (upper, lower) = compare(low, high, |frame| frame / stride >= threshold);
+                    maximum_upper = maximum_upper.max(upper);
+                    maximum_lower = maximum_lower.max(lower);
+                }
+            }
+        }
+    }
+    assert_eq!(maximum_upper, 65);
+    assert_eq!(maximum_lower, 66);
+}
+
+#[test]
+fn qualified_near_search_guards_and_probe_failures_do_not_change_generic_search() {
+    for (low, high) in [(1, 0), (u64::MAX, u64::MAX - 1)] {
+        assert!(first_true_near_high(low, high, |_| panic!("invalid interval probed")).is_none());
+        assert!(first_true_near_low(low, high, |_| panic!("invalid interval probed")).is_none());
+    }
+    for frame in [0, 1, u64::MAX - 1, u64::MAX] {
+        assert_eq!(first_true(frame, frame, |_| None), Some(frame));
+        assert_eq!(first_true_near_high(frame, frame, |_| None), Some(frame));
+        assert_eq!(first_true_near_low(frame, frame, |_| None), Some(frame));
+    }
+    let mut adjacent_calls = 0;
+    assert_eq!(
+        first_true_near_low(u64::MAX - 1, u64::MAX, |frame| {
+            adjacent_calls += 1;
+            Some(frame == u64::MAX)
+        }),
+        Some(u64::MAX)
+    );
+    assert_eq!(adjacent_calls, 1);
+
+    // This non-total predicate deliberately distinguishes the unchanged generic search:
+    // its original probes never visit 7. Qualified helpers do not promise equivalence here.
+    let fallible = |frame| if frame == 7 { None } else { Some(true) };
+    assert_eq!(first_true(0, 8, fallible), Some(0));
+    assert!(first_true_near_high(0, 8, fallible).is_none());
+    assert!(
+        first_true_near_low(0, 8, |frame| { if frame == 0 { None } else { Some(true) } }).is_none()
+    );
+    assert!(
+        first_true_near_low(0, 8, |frame| {
+            match frame {
+                0 => Some(false),
+                1 => None,
+                _ => Some(true),
+            }
+        })
+        .is_none()
+    );
+    // None also propagates from the original binary search after successful local probes.
+    assert!(
+        first_true_near_high(0, 8, |frame| { if frame == 3 { None } else { Some(true) } })
+            .is_none()
+    );
+    assert!(
+        first_true_near_low(0, 8, |frame| {
+            if frame == 5 { None } else { Some(frame >= 4) }
+        })
+        .is_none()
     );
 }

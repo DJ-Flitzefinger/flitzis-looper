@@ -183,7 +183,10 @@ impl MappedLoopGeometry {
         if phase.unfolded < left_target || phase.unfolded >= right_target {
             return Err(unavailable);
         }
-        let start_frame = first_true(epoch.first_output_frame, output_frame, |frame| {
+        // The original admission/horizon/range gates make this predicate total and
+        // monotone; the current frame is known true. The MAX probe below certifies
+        // the right search's true upper endpoint without changing its terminal branch.
+        let start_frame = first_true_near_high(epoch.first_output_frame, output_frame, |frame| {
             Some(unfolded_at(epoch, &phase.terms, frame)? >= left_target)
         })
         .ok_or(unavailable)?;
@@ -192,7 +195,7 @@ impl MappedLoopGeometry {
             if unfolded_at(epoch, &phase.terms, u64::MAX).ok_or(unavailable)? < right_target {
                 u64::MAX
             } else {
-                first_true(next, u64::MAX, |frame| {
+                first_true_near_low(next, u64::MAX, |frame| {
                     Some(unfolded_at(epoch, &phase.terms, frame)? >= right_target)
                 })
                 .ok_or(unavailable)?
@@ -416,6 +419,52 @@ fn first_true(
         }
     }
     Some(low)
+}
+
+/// Requires a total monotone predicate and a known-true high endpoint.
+/// Only the already-admitted anchored refresh supplies this stronger contract.
+fn first_true_near_high(
+    low: u64,
+    high: u64,
+    mut predicate: impl FnMut(u64) -> Option<bool>,
+) -> Option<u64> {
+    if low > high {
+        return None;
+    }
+    if low == high {
+        return Some(low);
+    }
+    let predecessor = high.checked_sub(1)?;
+    if !predicate(predecessor)? {
+        return Some(high);
+    }
+    first_true(low, predecessor, predicate)
+}
+
+/// Requires a total monotone predicate and a known-true high endpoint.
+/// Unexpected probe failures propagate; this is not a general fallible-search replacement.
+fn first_true_near_low(
+    low: u64,
+    high: u64,
+    mut predicate: impl FnMut(u64) -> Option<bool>,
+) -> Option<u64> {
+    if low > high {
+        return None;
+    }
+    if low == high {
+        return Some(low);
+    }
+    if predicate(low)? {
+        return Some(low);
+    }
+    let second = low.checked_add(1)?;
+    if second == high {
+        return Some(high);
+    }
+    if predicate(second)? {
+        return Some(second);
+    }
+    first_true(second.checked_add(1)?, high, predicate)
 }
 
 #[cfg(test)]

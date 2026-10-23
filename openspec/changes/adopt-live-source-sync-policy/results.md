@@ -1230,3 +1230,102 @@ One continuous independent NONAUTHOR final source/evidence review CLEAR on the
 actual test/spec/design/results diff and95 unique raw receipts, all component and
 replay values, unchanged product source and explicit reused/negative limits. Only
 the completed test-attribution task is closed; no product or RT gate is closed.
+
+### Qualified nearby anchored boundaries, 2026-10-23
+
+Short virtual spans previously searched the full future u64 interval at each
+refresh even when the next exact boundary was one or two addresses ahead. Two
+private helpers now probe the left predecessor or at most two right addresses
+before using the unchanged first_true on a bracket with the same answer. They
+are called only after the original geometry, shifted finite-horizon, current
+phase and target-range gates. The explicit MAX terminal probe and all subsequent
+endpoint, RN, reader/domain and local-rate vetoes retain their original order.
+No clock, source identity, copied layout, ownership, ACK or productive caller is
+added. General first_true is unchanged, including arbitrary fallible semantics.
+Unexpected probe or fallback None propagates; no failure is ignored as a boundary.
+
+The qualified predicate is total/monotone on its admitted interval: finite grid
+magnitudes<2^2098, rate grid<2^2130, source differences<2^2131 and beat/master
+differences<2^2099. Initial intermediates<2^4231; original0<=initial<period limits
+initial<2^4229. Thus unfolded<2^4231 and targets<2^4233, below6400bits. The original
+shifted horizon certifies every addressed master input, retaining actual floating
+evaluation and plateaus. This proof is specific to the admitted anchored path,
+not arbitrary fallible predicates. No old numerical refusal is rescued. Worst
+predicate work is explicitly65left+1MAX+66right=132 versus the prior129, not a
+weakened source or RT criterion. Invalid/single intervals and MAX arithmetic are
+checked; two new pure-oracle tests compare small/full-u64 thresholds and plateaus
+to the old search, realize65/66 worst bounds and retain all None witnesses.
+
+Unchanged actual consuming512-frame matched replay, including initial requests:
+virtual263 requests retain their endpoints with left1840→262, explicit MAX263→263
+and right16832→512; maximum left8→1/right64→2. Aligned-knot requests remain2,
+right128→67; terminalMAX-1 remains one MAX probe/no right search, left64→65.
+Ordinary cases' distant right search increases64→66. Labels/assertions now state
+near-probe-inclusive counts; the binary-search helper itself remains at most64.
+Old baseline receipts are preserved. These are matched replay counts, not an
+instrumented production trace. Component preparation/timers/inputs remain
+unchanged and non-additive.
+
+Fresh serial before/after copied-reader milliseconds, identical shapes and work:
+
+| Shape | Before full | After full | Before checked | After checked |
+|---|---:|---:|---:|---:|
+| minsub |165.3778|167.5904|332.8491|335.8182|
+| near one |142.2496|142.9142|285.9375|286.6215|
+| negative zero |130.0644|130.8984|259.3456|262.4199|
+| large epoch |162.8113|162.2014|323.1067|325.0731|
+| aligned knot |163.0617|165.7290|322.2132|326.7964|
+| virtual aligned |934.1174|447.1286|1101.1395|720.3366|
+| virtual staggered |966.5956|575.5656|1118.8708|734.4483|
+
+Only virtual refresh-heavy work shows a material gain; ordinary/distant work is
+mixed or slightly slower. Isolated minsub128queries1.2337→1.2810ms and16refreshes
+1.4529→1.5174ms; virtual16refreshes1.4104→0.5516ms (the old128-query virtual
+modulo-width identity profile is still labeled as such). Generic128products
+sparse298.3→300.4us/dense298.1→305.1us. Full512-query observations remain roughly
+unchanged: minsub4.8958→4.9349ms, near-one4.4018→4.4247, negative-zero3.9031→3.9513,
+virtual4.1711→4.0524, large5.1099→5.1428. Single host runs do not imply universal
+speedup or worstcase; no timing assertion was introduced or lowered. Full PCM,
+first PCM, endpoint/chunk/refresh/reader request counts stay unchanged. After
+costs remain12.272–68.855 times nominal10.6667ms: callback eligibility NEGATIVE.
+
+Final frozen-source validation:275 distinct selected Native PASS/0overlap,
+1 pre-existing ignored. Search2, descriptive5, clock45, playback47, numerics25,
+beatmap62, transport46, feed15/1ignored, prepared10, reader17, original accepted
+reader-domain/cold-custody1. Search compile2m55s/run0.00s; serial checks completed
+without mutable source or a functional failure. Fmt/strict/diff PASS; all-target
+Release Clippy44.61s PASS unchanged109lib/131lib-test(56duplicates)/209example.
+
+Fresh private Release37.99s PASS/52existing build warnings; private-origin Native
+34579456B/SHA25661d55af57d62a609bb643197f5e074db6f3ec0ca57db347e81763460f26a272c,
+release profile/API13/editor4 PASS. NOT installed. Canonical start.bat --checkPASS,
+no App/device started. Actual installed34577920B/1cd2c058... unchanged;
+Scratch1480→1480/0new. No Human settings, source, installation or held Native change.
+
+Final test EXE88033280B/SHA256
+b89c0a4666036e0683261d8eb9924a2e74f8fb3274e0dd1e9f9aeec0eb674fa7;
+resolved adjacent PDB29904896B/SHA256
+423a2fd5d254b53fdabbbb8a2a55fe6aba5d9d8761bb84d798b4253a4a1d3fe4,
+CodeView4BCE41E8-5601-40F4-8F3E-D9130CEB697D/Age14.103 matching named records,
+47unsupported structures. Named fixed frames: span14568/anchored14600/rem4856/
+mul-helper4168/split9704 and SourcePlayback refresh888B. Missing named near-helper/
+geometry-refresh frames are not inferred as zero or assigned anonymous records.
+These are individual fixed adjustments only, not a transitive peak/callback bound;
+prior receipts retain their own executable scope. No stack/RT acceptance follows.
+
+All own Native jobs/authors terminal. Own private TMP6files/47,000,331B is the only
+new disposable root, to remove after reviewed normal push, clean fresh actual
+remote equality and exact path/ownership/no-reparse/process guards. Preserve all
+positive/negative/repro/limit/source receipts under workspace/test-artifacts/
+near-boundary-search-20261023. Storage snapshot10:51:13UTC (regular including hidden,
+no reparse traversal): artifacts17,844,130,985B/454818files; shared environment
+3,249,696,864B/21323; target16,022,263,534B/10749. Retain ONE compatible environment/
+cache/worker under the existing >30GiB decision, without copies or Human/private/
+unknown/denied/real-installation cleanup. All FULL musical/Native/resource/B2/
+source/FirstPCM/adoption/Human/parent/final gates remain where not separately proved.
+
+One continuous independent NONAUTHOR final source/evidence review CLEAR on the
+actual six-file diff and275 unique raw receipts, exact search/gate proof, mixed
+before/after profiles, matched final EXE/PDB/private Release and explicit negative
+limits. Only the completed numerical cost step is closed; productive conversion,
+live adoption, peak stack and callback/Human/final acceptance remain open.
