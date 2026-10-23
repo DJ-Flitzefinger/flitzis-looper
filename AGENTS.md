@@ -1,3 +1,52 @@
+## Direkte Humanregel 2026-10-23: Modellkapazität abwarten und Auftrag fortsetzen
+
+Die Meldung "Selected model is at capacity. Please try a different model." ist
+allein KEIN Grund, autorisierte Arbeit zu beenden, freiwillig zu pausieren oder
+als fachlich blockiert/erledigt zu markieren. Gleichartige vorübergehende
+Modellkapazitätsfehler werden als technische Wartebedingung behandelt.
+Solange Ausführung möglich ist: in kurzen, unterbrechbaren Intervallen warten
+(zuerst etwa 20, dann 40, danach höchstens 60 Sekunden je Warteaufruf), den
+fehlgeschlagenen zulässigen Schritt erneut versuchen und dies OHNE selbst
+gewähltes Retry- oder Gesamtzeitlimit bis zur Verfügbarkeit fortsetzen. Vor einem
+Retry mit unbekanntem Seiteneffekt erst den tatsächlichen Zustand prüfen; keine
+doppelten Commits, Pushes, Schreibaktionen oder Jobs auslösen. Sinnvolle unabhängige
+autorisierte Arbeit darf währenddessen weitergehen. Kein eigenmächtiger
+Modellwechsel, kein reduzierter Scope, keine zusätzliche Start-/Freigabefrage.
+Human-Steuerung bleibt jederzeit wirksam; Warteaufrufe blockieren höchstens60s.
+
+Kein update_goal(paused/blocked/complete), kein freiwilliges endgültiges Aufgeben
+und keine Handoffpflicht allein wegen dieses Kapazitätsfehlers. Echte technische
+Grenzen ehrlich benennen: beendet der Dienst den Turn zwangsweise oder lässt er
+keinen weiteren Tool-/Modellaufruf zu, kann eine Markdownregel keinen laufenden
+Retryprozess erzeugen. Das nicht als gewählte Pause ausgeben; beim nächsten
+möglichen Ausführungsschritt tatsächlichen Chat-/Goal-/Arbeitsstand prüfen und
+den autorisierten Auftrag ohne weitere Bestätigung fortsetzen, soweit der
+Systemstatus das zulässt. Weder automatische Wiederaufnahme noch ACTIVE erfinden.
+Die Regel in jedes geplante Goal, jede Übergabe und jeden Writerauftrag übernehmen.
+
+## Aktuelle vollständige Numerik-Nachfolge — direkter Humanauftrag 2026-10-23
+
+Aktuelle Ausführung/Ownership/Restliste: codex-meta/handoff/pre-rust-successor-20261023-numerics.md
+im ursprünglichen Workspace (aus repo: ../codex-meta/handoff/...). Diese spätere
+Übergabe ersetzt ältere Ausführungs-/Pause-/Chat-ID-/Reihenfolgetexte, erhält ALLE
+Original-/Erweiterungs-/Human-/Finalgates und die permanente Systemsqualität.
+Der Human verlangt einen NEUEN wartenden LOOPER-Chat; erst sein dortiges `weiter`
+startet EIN tatsächliches FULL Goal ohne token_budget mit get_goal/reuse ACTIVE
+oder create_goal über GESAMTE goal-next-activation.txt/identisches Objective samt
+ALLEN Quellen; bindende kompakte Vollreferenz bei4000-Zeichenlimit, Resultat
+prüfen. Keine zweite Startfrage/kein enges Numerikgoal. Zuerst exakte Numerik nach
+be7e7c10 optimieren, alle Genauigkeits-/Sicherheitsgrenzen bewahren. SYNC/REALTIME
+BPM bleiben unvollständig. Aktueller Vorgänger tatsächlich BLOCKED nach failed
+Dienstturn mit Kapazitätsfehler, kein fachlicher Blocker/Budgetstopp und keine
+gewählte Pause. Nicht selbst paused/complete setzen. Obige Warte-/Retryregel in
+jedes Goal/Writerassignment übernehmen; keine alten Chats anschreiben/resumieren.
+Nach JEDEM geprüft erfolgreichen kohärenten Schritt tatsächlicher Diffreview,
+passende Checks, kohärenter Commit+normalmainPush ohne Einzelabsegnung, clean und
+HEAD=Tracking=frisch tatsächliches Remote-main vor unabhängigem Folgeschritt.
+Lokale-main-Ausnahme dieses Nicht-Git-Appworkspaces bleibt; kein Force/reset/
+discard/pull/remote/credentials/globalGitconfig/PR, keine Scope-/App-/Privatdaten-
+oder RT-Grenze wird geändert. STOP vor vollem Rustport/Slice8.
+
 ## Direkte Humanregel 2026-10-21: Commit und Push bei ALLEN geplanten Goals
 
 Diese Regel gilt für alle bereits geplanten und künftig gemeinsam geplanten
