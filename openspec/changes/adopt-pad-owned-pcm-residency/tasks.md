@@ -47,18 +47,18 @@ arrangement and pitch changes share those IDs, not alternative product plans.
 
 ### R0
 
-- [ ] **Erster naechster offizieller Plan-/OpenSpec-/Doc-Revisionsauftrag**, nach BEIDEN P0-CLOSURE UND PLAN-CLOSURE
-- [ ] Beide echten accepted Receiptsets mit Scope/aktueller Version/absoluten Pfaden/Bytes/SHA/TurnFinals vor Dispatch; Topologiekonflikt, volle 56+9+7, HoldRelease-Spec/Szenarien/Exitgates, pitch, jede affected strict; neue P1-Auftraege bleiben vorbereitet
+- [ ] **First upcoming official plan/OpenSpec/docs revision assignment**, after BOTH P0-CLOSURE AND PLAN-CLOSURE
+- [ ] Both actual accepted receipt sets with scope/current version/absolute paths/bytes/SHA/turn finals before dispatch; topology conflict, full 56+9+7, HoldRelease spec/scenarios/exit gates, pitch, every affected strict validation; new P1 assignments remain prepared
 
 ### R0-CLOSURE
 
-- [ ] Tatsaechlich terminale offizielle R0-Revisionsarbeit, danach eigener separater nativer Nichtautor-Abschluss
-- [ ] Vollstaendige kompatible offizielle Specs/docs/handoff/Matrix inkl Holdvertrag und echte affected strict; frozen eigene R0-Receipts/TurnFinals/Publication nach Goalrechten; zwingend vor J0/P1a/P1b
+- [ ] Official R0 revision work actually terminal, followed by its own separate native nonauthor closure
+- [ ] Complete compatible official specs/docs/handoff/matrix including the hold contract and actual affected strict validation; freeze R0's own receipts/turn finals/publication under Goal authorization; mandatory before J0/P1a/P1b
 
 ### J0
 
-- [ ] Bereits geforderte B6-SHUTDOWN-ORDER-Korrektur vor shared subscriber fanout
-- [ ] Echter deterministischer interleaving/order-Test plus native/control shutdown/cancel. Schliesst nur diesen konkreten Race, nicht B6 oder alle Fehlerursachen
+- [ ] Previously required B6-SHUTDOWN-ORDER correction before shared subscriber fanout
+- [ ] Actual deterministic interleaving/order test plus native/control shutdown/cancel. Closes only this specific race, not B6 or all failure causes
 
 ### P1a
 
@@ -67,8 +67,8 @@ roots, explicit import/restore intent and durable per-assignment content/materia
 Fresh focused storage/control/persistence validation and independent final review
 must pass before checking the bounded slice below. No P1b or mass migration claim.
 
-- [x] Ein authoritative material/slot Resolver, durable IDs/generations, neue canonical writes, sichere typed legacy/new readers
-- [x] Originalname/Encoding, #1/#216 endpoints, invalid/reparse/path/collision/old lease, echte import/native ACK; keine mass migration, kein neuer Separator
+- [x] One authoritative material/slot resolver, durable IDs/generations, new canonical writes, safe typed legacy/new readers
+- [x] Original name/encoding, #1/#216 endpoints, invalid/reparse/path/collision/old lease, actual import/native ACK; no mass migration or new separator
 
 ### P1b
 
@@ -80,8 +80,8 @@ old-version rejection restores the already reserved owner without reacquisition.
 Fresh relevant native/controller regressions and final independent review passed
 for this bounded slice. GUI Copy/Move and subsequent storage stages stay pending.
 
-- [x] Existing central lifecycle fuer all-bank equal assignment/material/subscriber owners; originunabhaengige StemSet binding/read eligibility
-- [x] Acquire-new-before-release, late/stale/cancel/queue/retirement, new version keeps old users, echte SourceTicket/ACK/projection. Noch keine GUI-Copy/Move
+- [x] Existing central lifecycle for equal assignment/material/subscriber owners across all banks; origin-independent StemSet binding/read eligibility
+- [x] Acquire-new-before-release, late/stale/cancel/queue/retirement, new version keeps old users, actual SourceTicket/ACK/projection. No GUI Copy/Move yet
 
 ### K-META
 
@@ -91,8 +91,8 @@ affected official strict. Unchanged native validation is reused from P1b; the
 whole-source formatting baseline failure remains scoped to unchanged files.
 This acceptance grants no native pitch, hearing or whole-program completion.
 
-- [x] Pure key-policy+neutral persistent source-correction/base/extra/Haken schema und epochs nach P1
-- [x] Legacy sound-neutral restore/reset/race/idempotence/mode/unknown/copy schema tests; **keine hoerbare KEY-Freigabe**
+- [x] Pure key-policy plus neutral persistent source-correction/base/extra/checkbox schema and epochs after P1
+- [x] Legacy sound-neutral restore/reset/race/idempotence/mode/unknown/copy schema tests; **no audible KEY release**
 
 ### P2a
 
@@ -105,8 +105,8 @@ fresh control/analysis scopes; the original FAILED batch and excluded accidental
 device-test invocation remain documented. That P2a acceptance did not close
 remaining-material migration or P2b recovery.
 
-- [x] Migration journal/current reference transaction pro material; Autosave serialized
-- [x] Verifizierte copy/reopen/source/timing fresh ACK/alias lineage; settings/newer revisions prevail, alte rollback owners bleiben
+- [x] Migration journal/current-reference transaction per material; serialized autosave
+- [x] Verified copy/reopen/fresh source/timing ACK/alias lineage; settings/newer revisions prevail, old rollback owners remain
 
 ### P2b
 
@@ -120,8 +120,8 @@ the Python failure was a stale exception oracle, while native timeout cause rema
 unproven. Unknown/foreign data, no power-loss/non-Windows inference and every later
 storage/audio/UI/Human gate remain protected/open.
 
-- [x] Crash/retry/recovery/rollback und erkannte staging/final-owner cleanup
-- [x] Alle flush/rename/config/native boundaries, mehrere gleiche/verschiedene material users; keine historische ACK, kein Power-loss-/NonWindows-PASS aus injection
+- [x] Crash/retry/recovery/rollback and cleanup of recognized staging/final owners
+- [x] All flush/rename/config/native boundaries, multiple users of equal/different materials; no historical ACK or power-loss/non-Windows PASS inferred from injection
 
 ### P3
 
@@ -138,8 +138,8 @@ its four stale test expectations. Five fresh long musical tests and the explicit
 strict 75/1000 gate passed. Static/format/official strict are current. No P4,
 hearing, Human or whole-program acceptance follows.
 
-- [x] Fuenf aligned persistent Stem-f32+fuenf WAVs, joint immutable pair/descriptor in canonical material container
-- [x] Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; vier Live-Komponenten, instrumental disk/offline, keine wiederholte complete alignment
+- [x] Five aligned persistent Stem-f32 artifacts plus five WAVs, joint immutable pair/descriptor in canonical material container
+- [x] Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; four live components, instrumental on disk/offline, no repeated complete alignment
 
 ### P4a
 
@@ -157,7 +157,7 @@ passed without App start. The original Human rejection reason remains UNKNOWN;
 P4b, later stages and final Human/hearing acceptance remain open.
 
 - [x] Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh
-- [x] Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles
+- [x] Complete-buffer dry tap/P-H/seam oracles at 75/1000 cycles; actual ACK, old voice/job/window races; 215 unchanged handles
 
 ### P4b
 
@@ -166,8 +166,8 @@ P4b, later stages and final Human/hearing acceptance remain open.
 - [x] Lifecycle/source-custody vertical: finite NormalLoop production-k=0 non-unity at fixed physical geometry; actual pause/resume/rate/storage-ACK continuity, same-source accepted-period refresh/clear, active/paused old-voice fresh authority, independently ACKed future-bank preparation and guarded explicit retrigger, with later real native requests/adoptions and distinct owner final-use/held-peak proof
 - [x] Seek/physical-domain vertical: production-k=0 finite Seek/Intro/Tail with real retained range worker/control ACK, current/old-source Native/FIFO preparation/adoption and sustained wet continuation; explicit seek and changed-next-tap cuts, continuous physical edits and own finite return from complete ALL exceptions
 - [x] Initial saved ON admission vertical: one verified physical hint policy across cold/warm/streaming/prepared subscribers, genuine partial KeyLockFiniteLoop and complete KeyLockFullTrack, consistent source/Load checks and finite markers; real public restore/source ACK/Play and actual nonunity Native/FIFO/filter continuation, later own source-history adoption, stale/cancel/pressure/ALL guards and preserved independent215; ordinary external Loader/default-loop preparation and whole parent gates remain separate
-- [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
-- [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
+- [ ] Actual finite DSP/KEYLOCK provisioning and continuation for current production k=0
+- [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; preserve causality1598/33.292ms, fallback-only leaves the gate open. Nonzero k remains B5
 
 The bounded [initial saved physical ON report](../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
 records the shared selection implementation, required oracles and passing bounded
@@ -279,19 +279,19 @@ vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
 
 ### P5a
 
-- [x] Typed residency-only erster aktiver None->Some fuer pad/source-bound schon selected unveraenderten committed disk Set, production k=0 NormalLoop; fresh Voice/Source/Request/STOP/Timing/Window/Selection/History guards, eigener residency ACK und separater effective-mode receipt
-- [x] FullMix bleibt waehrend pending unveraendert; nach eigenem ACK continuous128 sourceframes ueber actual two-side taps/smoothed feed, Native/FIFO/filter/voice/cursor/loop/timing; pause/resume und retained old-source voices behalten eigene Authority
-- [x] Cancellation/stale/history/worker/queue/byte/owner/recycle/feedback capacity before effects; old/new peak reservation und distinct actual-final-reader retirement ueber vorhandene Registry/Lanes, keine Callback-I/O/Allocation/Blocking/GIL
-- [x] Ordinary StemController ALL->FullMix->ALL nach wirklicher component retirement mit neuem eigenen residency/effective receipt und real public-route/Native continuation/negative regressions; saved intent oder permanent retained fixtures sind kein warm-return Beleg
-- [x] Affected official strict, impacted integrated/Release/import/preflight checks und eine unabhaengige Schlussreview; new-generation L3, whole P4b/P5b, nonzero KEY/B5 und Resource/Music/Human/Device/Hearing bleiben offen
+- [x] Typed residency-only first active None->Some for the pad/source-bound, already selected unchanged committed disk set, production k=0 NormalLoop; fresh Voice/Source/Request/STOP/Timing/Window/Selection/History guards, own residency ACK and separate effective-mode receipt
+- [x] FullMix remains unchanged while pending; after its own ACK, continuous 128 source frames through actual two-side taps/smoothed feed, Native/FIFO/filter/voice/cursor/loop/timing; pause/resume and retained old-source voices keep their own authority
+- [x] Cancellation/stale/history/worker/queue/byte/owner/recycle/feedback capacity before effects; old/new peak reservation and distinct actual-final-reader retirement through the existing registry/lanes, no callback I/O/allocation/blocking/GIL
+- [x] Ordinary StemController ALL->FullMix->ALL after actual component retirement with a new own residency/effective receipt and actual public-route/Native continuation/negative regressions; saved intent or permanently retained fixtures do not prove warm return
+- [x] Affected official strict, impacted integrated/Release/import/preflight checks and one independent final review; new-generation L3, whole P4b/P5b, nonzero KEY/B5 and Resource/Music/Human/Device/Hearing remain open
 
 Bounded software delivery and retained negative evidence:
 [P5a validation](../../../docs/pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 
 ### P5b
 
-- [ ] Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission
-- [ ] Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8/1GiB und timing/analysis512 separat. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall
+- [ ] Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair actual 216 admission
+- [ ] Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8/1GiB and timing/analysis512 separate. No unsupported 216-voice/96-handle claims; an actual supported case with sufficient budget
 
 ### P5b coherent runtime policy implementation
 
@@ -302,113 +302,113 @@ Bounded software delivery and retained negative evidence:
 
 ### R1
 
-- [ ] Expliziter musical CopySnapshot und sourceunabhaengiger save/reopen restore
-- [ ] Deep-copy mutable intent incl aktuelle **Sessionstemmask/preset/Mutes**, loop/grid/timing/correction/base/extra/KeyLock/GainEQ/Haken; same material refs, neue gestoppte instance/DSP, keine cursor/voice/progress/jobhandle Kopie; source-delete/reopen ohne model/analysis/decode
+- [ ] Explicit musical CopySnapshot and source-independent save/reopen restore
+- [ ] Deep-copy mutable intent including current **session stem mask/preset/mutes**, loop/grid/timing/correction/base/extra/KeyLock/GainEQ/checkbox; same material refs, new stopped instance/DSP, no cursor/voice/progress/job-handle copy; source-delete/reopen without model/analysis/decode
 
 ### R2
 
-- [ ] Atomarer nativer pair move/swap/copy-overwrite plus selected-content follow UND angenommene HoldRelease-Uebernahme
-- [ ] Zwei laufende Quellen ohne Restart/FIFO-/Filterreset; gestoppte Kopien ohne Holdtoken, nur removed target stop; slot-MIDI unveraendert; ContentInstance/Lifetime/PauseEffect/acceptedAction/NativeACK atomar remapped oder retired; alle R2-Holdfaelle der gebundenen Evidence-Matrix und eigenstaendige Nichtautor-Closure vor R3/R4
+- [ ] Atomic native pair move/swap/copy-overwrite plus selected-content follow AND accepted HoldRelease transfer
+- [ ] Two running sources without restart/FIFO/filter reset; stopped copies without hold tokens, stop only the removed target; slot MIDI unchanged; atomically remap or retire ContentInstance/Lifetime/PauseEffect/acceptedAction/NativeACK; all R2 hold cases in the bound evidence matrix and independent nonauthor closure before R3/R4
 
 ### R3
 
-- [ ] Re-Arrange toggle/Gestenhilfe/Pad-left move-swap/right copy-overwrite UI
-- [ ] DefaultOFF nach restart, Warnfarbe bevorzugt untenlinks, keine mouse trigger/stop bei dragbegin, MIDI nutzbar; eindeutig target/op, kein single-pad dialog; cancel/self/invalid/empty no-op
+- [ ] Re-Arrange toggle/gesture help/pad-left move-swap/right copy-overwrite UI
+- [ ] Default OFF after restart, warning color preferably at bottom left, no mouse trigger/stop at drag begin, MIDI usable; unambiguous target/operation, no single-pad dialog; cancel/self/invalid/empty no-op
 
 ### R4
 
-- [ ] Vollstaendiger nativer Bank-copy/clear transaction ueber genau36 Zielslots inkl HoldRelease-Retirement
-- [ ] Leere Sourceplaetze loeschen Targets; reserve all refs/voices/feedback/actions, pre/post-claim failures, no partial mutation; gestoppte Kopien ohne Holds, Sourcevoices/sourcehold intakt, alle entfernten Targetlifetimes/Holds gefenced; alle R4-Holdfaelle und eigene Nichtautor-Closure vor R5
+- [ ] Complete native bank-copy/clear transaction over exactly 36 target slots including HoldRelease retirement
+- [ ] Empty source slots clear targets; reserve all refs/voices/feedback/actions, pre/post-claim failures, no partial mutation; stopped copies without holds, source voices/source hold intact, fence all removed target lifetimes/holds; all R4 hold cases and own nonauthor closure before R5
 
 ### R5
 
-- [ ] Bank-UI anderer Banken pulse/copy warning/clear dialog+gesture fences
-- [ ] Andere Bank links: Overwrite Bank X?/OVERWRITE/CANCEL nur wenn belegt, Source bleibt gewaehlt/keine Navigation/Selbstcopy; rechts genau clicked Bank clear incl current, CLEAR BANK/CANCEL; hover/dragrelease erzeugt keine Bankaktion
+- [ ] Bank UI for other-bank pulse/copy warning/clear dialog plus gesture fences
+- [ ] Left-click another bank: Overwrite Bank X?/OVERWRITE/CANCEL only if occupied, source remains selected/no navigation/self-copy; right-click clears exactly the clicked bank including current, CLEAR BANK/CANCEL; hover/drag release creates no bank action
 
 ### P6
 
-- [ ] Volle bisherige Engineering-/Ressourcen-/Migration-/Performanceabnahme **plus R1-R5 und komplette HoldRelease-Integration**
-- [ ] 216unique/shared, preloadOFF/ON, cold/new-processwarm/in-processwarm, firstlive/ready/oneedit/long loops, disk/no-copy-duplicates/IObytes/integrity/RSS+commit+peaks; origin/sourcebank-delete+restore, leases/finalcleanup+repeat negative runs. Kein nonzero-k/Human/Goal-PASS
+- [ ] Full previous engineering/resource/migration/performance acceptance **plus R1-R5 and complete HoldRelease integration**
+- [ ] 216unique/shared, preloadOFF/ON, cold/new-processwarm/in-processwarm, firstlive/ready/oneedit/long loops, disk/no-copy-duplicates/IObytes/integrity/RSS+commit+peaks; origin/sourcebank-delete+restore, leases/finalcleanup+repeat negative runs. No nonzero-k/Human/Goal PASS
 
 ### B3a
 
-- [ ] Erlaubte genaue Fixture/offline/control B/S-Vorbereitung nach P6
-- [ ] Kein B2/default/live/SYNC-PASS, keine musical labels erfinden
+- [ ] Authorized exact-fixture/offline/control B/S preparation after P6
+- [ ] No B2/default/live/SYNC PASS or invented musical labels
 
 ### B2
 
-- [ ] Volle retained reference/temporal/musical/human/default acceptance und remediation
-- [ ] Genuine komplette T01-T05 + sechs balanced paired T03-T05; absolute/20%-time-operations/zero-baseline. Ohne Human bleibt Gate echt offen; BeatThis1.1.0/final0/minimal soleNEW erst danach
+- [ ] Full retained reference/temporal/musical/human/default acceptance and remediation
+- [ ] Genuine complete T01-T05 plus six balanced paired T03-T05; absolute/20%-time-operations/zero-baseline. Without Human evidence the gate remains open; BeatThis1.1.0/final0/minimal becomes soleNEW only afterward
 
 ### B3
 
 - [ ] Versioned monotone Rust B/S/shared interpolation/raw accepted gaps/units/scalar/restore
-- [ ] Content/material revisions kompatibel, numerische <=1frame/longloop/provenance; keine aus displays kommende audio authority
+- [ ] Compatible content/material revisions, numerical <=1frame/longloop/provenance; no audio authority derived from displays
 
 ### B4
 
-- [ ] Gleicher B/S editor/snap/auto-loop/anchors/localsource BPM/revision uncertainty
-- [ ] Source-sample precision, looprelative labels, master target getrennt; copy unabhängige edits, metadata correction kein beat truth
+- [ ] Same B/S editor/snap/auto-loop/anchors/local source BPM/revision uncertainty
+- [ ] Source-sample precision, loop-relative labels, separate master target; independent edits on copies, metadata correction does not establish beat truth
 
 ### B5
 
-- [ ] Original time/pitch proof **erweitert auf total -23..+24/all37 extra, aktuelle real r(n)**
-- [ ] RubberBand route, rate/unity/latency/nonzero/current finite context/fullmix/stems/mono-stereo/rates/partitions; fixe acoustics/cents criteria vor runs, kein stilles +/-12-Limit. B5 haengt an Mapsemantik, nicht an fertig B4 UI
+- [ ] Original time/pitch proof **extended to total -23..+24/all37 extra, actual current r(n)**
+- [ ] RubberBand route, rate/unity/latency/nonzero/current finite context/fullmix/stems/mono-stereo/rates/partitions; fix acoustics/cents criteria before runs, no silent +/-12 limit. B5 depends on map semantics, not a completed B4 UI
 
 ### B6-K-AUDIO
 
-- [ ] Original mapped live ownership/prepared pitch/current-output alignment, ein DSPpfad lockON/OFF
-- [ ] Stable moved/cloned content ownership, separate processors/history, actual pitch-readyACK/RT allocations/deadlines; J0 nicht voller B6. Device/acoustic liveactivation weiter gated
+- [ ] Original mapped live ownership/prepared pitch/current-output alignment, one DSP path for lockON/OFF
+- [ ] Stable moved/cloned content ownership, separate processors/history, actual pitch-readyACK/RT allocations/deadlines; J0 is not full B6. Device/acoustic live activation remains gated
 
 ### B7-K-ATOMIC
 
-- [ ] Original unified captured input/Quantize/SYNC **mit atomic pitch+retrigger envelope**
-- [ ] Selected/native projection, no detune-before-due, every admitted repeat event, immutable generations/tuples/time/authority, allfour QuantizeSYNC, original routes/timing; kein zweiter Scheduler
+- [ ] Original unified captured input/Quantize/SYNC **with atomic pitch+retrigger envelope**
+- [ ] Selected/native projection, no detune-before-due, every admitted repeat event, immutable generations/tuples/time/authority, allfour QuantizeSYNC, original routes/timing; no second scheduler
 
 ### B8-E
 
-- [ ] Original optimization/stress/live Engineering-Paket und Human-ready packet
-- [ ] 1/2/4/6 live target und 1/4/8 distinct-map DSP diagnostics erhalten; supported envelope/callback/latency tests. **Kein B8 device/listening/live-release Abschluss**
+- [ ] Original optimization/stress/live engineering packet and Human-ready packet
+- [ ] Retain 1/2/4/6 live target and 1/4/8 distinct-map DSP diagnostics; supported envelope/callback/latency tests. **No B8 device/listening/live-release closure**
 
 ### K1a
 
-- [ ] Stabile SET/SET_RETRIGGER MIDI actions/learn/persistence auf bewiesenem k und B7-Envelope
-- [ ] Zwei simultaneous variants/checkbox immutable/selected pad/multidevice-channel/NoteOff/vel0/fallback; unsupported absolute mode/unknown reject; runtime Freigabe bleibt an volle Originalgates gebunden
+- [ ] Stable SET/SET_RETRIGGER MIDI actions/learn/persistence on proven k and B7 envelope
+- [ ] Two simultaneous variants/immutable checkbox/selected pad/multidevice-channel/NoteOff/vel0/fallback; reject unsupported absolute mode/unknown; runtime release remains subject to all original gates
 
 ### K1b
 
-- [ ] Gemeinsames Key+Transposition UI, correction/reset/result und zwei independent stay-open playable menus
+- [ ] Combined Key+Transposition UI, correction/reset/result and two independent stay-open playable menus
 - [ ] Heads toggle, repeats/MIDI never collapse/block, compact scroll/highlight/both whiteblack, middle0/signed notes/root-relative enharmonic unique pitches/-12/0/+12; no harmony green/Camelot/scale correction, padchanges/closed summaries follow state
 
 ### V0
 
-- [ ] Gemeinsame Software-Reabnahme nach neuen nichtneutralen K1-Controls
-- [ ] P6 relevante measurements/216 sharing/independent DSP/pending actions/cleanup/bank races erneut fuer neuen pitch workload; actual B5 transitions via controls, restore origin-deleted copies, full docs/spec/types/negative preservation. Kein erfundener Geraete-/Hoerpass
+- [ ] Combined software reacceptance after new nonneutral K1 controls
+- [ ] Repeat relevant P6 measurements/216 sharing/independent DSP/pending actions/cleanup/bank races for the new pitch workload; actual B5 transitions via controls, restore origin-deleted copies, full docs/spec/types/negative preservation. No invented device/listening PASS
 
 ### H-LIVE
 
-- [ ] Menschlicher B6/B8 Geraete-/Akustik-/Live-Gate im finalen pre-port Abschnitt
-- [ ] Mensch startet/bedient App/CPAL/recorder, echte1/2/4/6-pad+30min recording/listening; sustained new pitches/copies/stems/moves/routes. Erst dieser Beleg darf B6/B8 live-release Gates schliessen
+- [ ] Human B6/B8 device/acoustic/live gate in the final pre-port section
+- [ ] Human starts/operates App/CPAL/recorder, actual 1/2/4/6-pad plus 30-minute recording/listening; sustained new pitches/copies/stems/moves/routes. Only this evidence may close B6/B8 live-release gates
 
 ### SLICE7
 
-- [ ] Verbleibende urspruengliche separator/optional inference/dependency/GPU/native-ort same-model parity/docs/rollback Arbeit
-- [ ] Production nach echter live acceptance laut Originaldesign; schon accepted BS/Demucs nicht duplizieren, default analyzer gates separat; echte source/runtime/model parity oder konkretes offenes Gate
+- [ ] Remaining original separator/optional inference/dependency/GPU/native-ort same-model parity/docs/rollback work
+- [ ] Production after actual live acceptance under the original design; do not duplicate already accepted BS/Demucs, keep default analyzer gates separate; actual source/runtime/model parity or a specific open gate
 
 ### H-FINAL
 
-- [ ] Schluss-Human-Gesamtabnahme **nach** Slice7
-- [ ] Alle sieben neuen Workflows+originales UI/device/hearing/corrections, save-close-reopen nach Origindelete und no-glitches; keine Fake hearing/time/labels. Fruehere H-LIVE ersetzt diese Schlussrunde nicht
+- [ ] Final overall Human acceptance **after** Slice7
+- [ ] All seven new workflows plus original UI/device/hearing/corrections, save-close-reopen after origin deletion and no glitches; no fabricated hearing/time/labels. Earlier H-LIVE does not replace this final round
 
 ### C-FINAL
 
-- [ ] Alle echten Befunde bounded korrigieren, unabhaengig erneut pruefen; geaenderte Humanaspekte erneut abnehmen
-- [ ] Keine automatische Abnahme bei retries oder schrumpfendem Scope. Alle Original56/9/new rows haben spezifische terminal receipts, kein offenes required Gate
+- [ ] Bounded correction of all actual findings, independent recheck; renewed acceptance of changed Human aspects
+- [ ] No automatic acceptance on retries or shrinking scope. All original56/9/new rows have specific terminal receipts, no required gate remains open
 
 ### STOP
 
-- [ ] Goal erst nach voller Abschlusspruefung complete; **vor fullRust-App-Portplanung/-implementation/Slice8 stoppen**
-- [ ] Keine Vollportplanung in diesem oder einem Nachfolger aus diesem Goal
+- [ ] Complete the Goal only after full final verification; **stop before full Rust-app port planning/implementation/Slice8**
+- [ ] No full-port planning in this chat or a successor under this Goal
 
 ## Common exit gate and retained proofs
 

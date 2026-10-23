@@ -1,135 +1,138 @@
-## Direkte Humanregel2026-10-23: verbindlicher Funktions-Zusammenspiel-Agent
+## Repository language rule — direct Human instruction, 2026-10-23
 
-Diese dauerhafte Projektregel gilt für alle künftigen Features, Bugfixes, Planung,
-Refactorings, UI, Persistenz, Tests und Pflege. Ein eigener spezialisierter Agent
-prüft das Zusammenspiel der Looper-Funktionen vor der Implementierung und nochmals
-am tatsächlich eingefrorenen Implementierungsversuch vor integrierten Tests/Build.
-Aktuelle Rolle systems_interactions; in späteren Chats neu einsetzen, nicht als
-fortbestehenden Laufzeitagenten erfinden. Root bleibt selbst für End-to-End-Urteil,
-Lösung und Integration verantwortlich.
+Conversation with the Human is explicitly in German. Everything committed or
+pushed to this repository MUST be in English, including documentation, specs,
+plans, comments, visible application/installer messages and commit messages.
+Do not infer repository language from the language used in conversation. Translate
+existing German prose faithfully without changing requirements, status, evidence,
+authorization or behavior. Preserve machine-readable identifiers, commands, real
+paths and intentional Unicode/protocol test data. Original Human wording retained
+outside this repository remains authoritative; the English translation must retain
+its complete meaning. Carry this rule into every writer assignment and handoff.
 
-Der Agent prüft explizite UND implizite Abhängigkeiten, sinnvolle Betriebszustände,
-Eltern-/Kindwechsel, gespeicherte Wünsche versus Verfügbarkeit/Pending/Actual/Phase,
-GUI/MIDI, Load/Restore/Recovery/Persistenz, Master/Zeit/Rate/Pitch, Source-/Content-/
-Lifetime-/ACK-/Retirement, Loop/OneShot/EOF/Pause/Hold und tatsächlich betroffene
-Nachbarfunktionen samt stale/cancel/ABA/Fehler-/Kapazitätsfällen. Er hinterfragt den
-Gesamtansatz; alte Pläne oder aktueller Code ersetzen keine logische kombinierte
-Produktprüfung. Neueste Humanentscheidungen und gültige spätere Normen steuern.
-Mode-/Tempo-/Map-ACK darf keine unbewiesene Gridphase oder Humanabnahme bestätigen.
+## Required function-interaction specialist — direct Human instruction, 2026-10-23
 
-Vor Writer-GO liefert er konkrete priorisierte Befunde, Quellen/Invarianten und
-passende Interaktionsregressionen. Root löst Vertrags-/Architekturkonflikte vor
-abhängigem Code. Nach dem Implementierungsversuch prüft er den tatsächlichen Diff
-und das kombinierte Verhalten sowie den Testplan; Quickformat/Syntax darf vorher.
-Nach wesentlichen Fixes nur betroffene Befunde erneut prüfen. Die Prüfung ergänzt
-den einen generischen unabhängigen Finaldiffreview und Tests; keine redundante
-Voll-Auditkette, keine eigenen Build-/Test-/Writer-/Git-/Appjobs des Agenten. Kleine
-Änderungen passend skalieren. Offene Befunde ehrlich lösen/als reale offene Gates
-führen, kein falsches CLEAR/Scopekürzen/Guardentfernen.
+This permanent project rule applies to all future features, bug fixes, planning,
+refactoring, UI, persistence, tests and maintenance. A dedicated specialist reviews
+how Looper functions interact before implementation and again on the actual frozen
+implementation attempt before integrated tests/builds. Current role:
+`systems_interactions`; recreate it in later chats rather than inventing continued
+runtime-agent existence. Root remains responsible for end-to-end judgment,
+solutions and integration.
 
-Diese Rolle und die originalen Workspace-/Systemsqualitäts-/Humanregeln in jeden
-Writerauftrag und jede Übergabe übernehmen, auch bei älterem Worktree-AGENTS.
-Rollendetail: codex-meta/quality/looper-systems-interactions.md im ursprünglichen
-Workspace. Humanabwesenheit erzeugt keine neue Start-/Freigabefrage. Voller
-Goalumfang, App/Privat/RT-Schutz und STOP vor Rustport/Slice8 bleiben. Nach jedem
-geprüften kohärenten Schritt im Rahmen der jeweils geltenden Goal-/Git-
-Autorisierung tatsächliche Checks/Review, Commit+normalmainPush OHNE Einzelabsegnung
-und clean HEAD=Tracking=frisch actualRemote vor Folgeschritt.
-Kapazität weiter unterbrechbar20/40/max60s ohne gewähltes Retry-/Gesamtlimit
-wiederholen/effectsfirst; kein Modell-/Scopewechsel oder freiwilliger Goalstopp
-allein deswegen. Keine zusätzlichen destruktiven Git-/Remote-/PR-Rechte.
+The agent checks explicit AND implicit dependencies, meaningful operating states,
+parent/child transitions, stored preferences versus availability/pending/actual/
+phase, GUI/MIDI, load/restore/recovery/persistence, master/time/rate/pitch, source/
+content/lifetime/ACK/retirement, loop/one-shot/EOF/pause/Hold, affected neighboring
+functions, and stale/cancel/ABA/failure/capacity cases. It challenges the overall
+approach: historical plans or current code do not replace logical combined product
+review. Latest Human decisions and valid later normative revisions control.
+Mode/tempo/map ACK must not certify unproved grid phase or Human acceptance.
 
-## Direkte Humanregel 2026-10-23: Modellkapazität abwarten und Auftrag fortsetzen
+Before writer GO, it supplies prioritized findings, sources/invariants and relevant
+interaction regressions. Root resolves contract/architecture conflicts before code
+relies on them. After the attempt it reviews the actual diff, combined behavior and
+test plan; quick formatting/syntax may precede it. After material fixes revisit
+only affected findings. This supplements the single generic independent final-diff
+review and tests: no redundant full-audit chain, no specialist build/test/writer/
+Git/App jobs. Scale small changes appropriately. Resolve open findings or retain
+them as real open gates; no false CLEAR, scope reduction or guard removal.
 
-Die Meldung "Selected model is at capacity. Please try a different model." ist
-allein KEIN Grund, autorisierte Arbeit zu beenden, freiwillig zu pausieren oder
-als fachlich blockiert/erledigt zu markieren. Gleichartige vorübergehende
-Modellkapazitätsfehler werden als technische Wartebedingung behandelt.
-Solange Ausführung möglich ist: in kurzen, unterbrechbaren Intervallen warten
-(zuerst etwa 20, dann 40, danach höchstens 60 Sekunden je Warteaufruf), den
-fehlgeschlagenen zulässigen Schritt erneut versuchen und dies OHNE selbst
-gewähltes Retry- oder Gesamtzeitlimit bis zur Verfügbarkeit fortsetzen. Vor einem
-Retry mit unbekanntem Seiteneffekt erst den tatsächlichen Zustand prüfen; keine
-doppelten Commits, Pushes, Schreibaktionen oder Jobs auslösen. Sinnvolle unabhängige
-autorisierte Arbeit darf währenddessen weitergehen. Kein eigenmächtiger
-Modellwechsel, kein reduzierter Scope, keine zusätzliche Start-/Freigabefrage.
-Human-Steuerung bleibt jederzeit wirksam; Warteaufrufe blockieren höchstens60s.
+Carry this role and the original workspace/systems-quality/Human rules into every
+writer assignment and handoff, including older worktree AGENTS. Role detail in the
+original workspace: codex-meta/quality/looper-systems-interactions.md. Human absence
+creates no additional start/approval question. Full Goal scope, App/private/RT
+protection and STOP before Rust-port/Slice8 remain. Within the applicable Goal/Git
+authorization, each checked coherent step requires actual checks/review, commit
+and normal existing-main push without individual approval, then clean
+HEAD=tracking=fresh actual remote before the next independent step.
+Capacity failures use interruptible20/40/max60-second same-step retries without a
+chosen retry/total limit; inspect unknown effects first. No model/scope change or
+voluntary Goal stop solely for capacity, and no added destructive Git/remote/PR rights.
 
-Kein update_goal(paused/blocked/complete), kein freiwilliges endgültiges Aufgeben
-und keine Handoffpflicht allein wegen dieses Kapazitätsfehlers. Echte technische
-Grenzen ehrlich benennen: beendet der Dienst den Turn zwangsweise oder lässt er
-keinen weiteren Tool-/Modellaufruf zu, kann eine Markdownregel keinen laufenden
-Retryprozess erzeugen. Das nicht als gewählte Pause ausgeben; beim nächsten
-möglichen Ausführungsschritt tatsächlichen Chat-/Goal-/Arbeitsstand prüfen und
-den autorisierten Auftrag ohne weitere Bestätigung fortsetzen, soweit der
-Systemstatus das zulässt. Weder automatische Wiederaufnahme noch ACTIVE erfinden.
-Die Regel in jedes geplante Goal, jede Übergabe und jeden Writerauftrag übernehmen.
+## Wait for model capacity and continue — direct Human instruction, 2026-10-23
 
-## Aktuelle vollständige Numerik-Nachfolge — direkter Humanauftrag 2026-10-23
+"Selected model is at capacity. Please try a different model." alone is NOT a
+reason to end authorized work, voluntarily pause, or mark it substantively blocked
+or complete. Treat similar transient model-capacity failures as a technical wait.
+While execution is possible, wait in short interruptible intervals (about20, then40,
+then at most60 seconds per call) and retry the same failed permissible step WITHOUT
+any chosen retry or overall time limit until available. Before retrying an operation
+with unknown side effects, inspect actual state: do not duplicate commits, pushes,
+writes or jobs. Continue useful independent authorized work meanwhile. No unilateral
+model switch, reduced scope or additional start/approval question. Human steering
+remains effective; each wait blocks at most60 seconds.
 
-Aktuelle Ausführung/Ownership/Restliste: codex-meta/handoff/pre-rust-successor-20261023-numerics.md
-im ursprünglichen Workspace (aus repo: ../codex-meta/handoff/...). Diese spätere
-Übergabe ersetzt ältere Ausführungs-/Pause-/Chat-ID-/Reihenfolgetexte, erhält ALLE
-Original-/Erweiterungs-/Human-/Finalgates und die permanente Systemsqualität.
-Der Human verlangt einen NEUEN wartenden LOOPER-Chat; erst sein dortiges `weiter`
-startet EIN tatsächliches FULL Goal ohne token_budget mit get_goal/reuse ACTIVE
-oder create_goal über GESAMTE goal-next-activation.txt/identisches Objective samt
-ALLEN Quellen; bindende kompakte Vollreferenz bei4000-Zeichenlimit, Resultat
-prüfen. Keine zweite Startfrage/kein enges Numerikgoal. Zuerst exakte Numerik nach
-be7e7c10 optimieren, alle Genauigkeits-/Sicherheitsgrenzen bewahren. SYNC/REALTIME
-BPM bleiben unvollständig. Aktueller Vorgänger tatsächlich BLOCKED nach failed
-Dienstturn mit Kapazitätsfehler, kein fachlicher Blocker/Budgetstopp und keine
-gewählte Pause. Nicht selbst paused/complete setzen. Obige Warte-/Retryregel in
-jedes Goal/Writerassignment übernehmen; keine alten Chats anschreiben/resumieren.
-Nach JEDEM geprüft erfolgreichen kohärenten Schritt tatsächlicher Diffreview,
-passende Checks, kohärenter Commit+normalmainPush ohne Einzelabsegnung, clean und
-HEAD=Tracking=frisch tatsächliches Remote-main vor unabhängigem Folgeschritt.
-Lokale-main-Ausnahme dieses Nicht-Git-Appworkspaces bleibt; kein Force/reset/
-discard/pull/remote/credentials/globalGitconfig/PR, keine Scope-/App-/Privatdaten-
-oder RT-Grenze wird geändert. STOP vor vollem Rustport/Slice8.
+No update_goal(paused/blocked/complete), voluntary final abandonment or mandatory
+handoff solely for this capacity error. State real technical limits honestly: if
+the service forcibly ends the turn or permits no further tool/model call, a Markdown
+rule cannot create a running retry process. Do not describe that as a chosen pause.
+At the next possible execution step inspect actual chat/Goal/work state and resume
+authorized work without further confirmation as system status permits. Do not invent
+automatic resumption or ACTIVE status. Carry this rule into every planned Goal,
+handoff and writer assignment.
 
-## Direkte Humanregel 2026-10-21: Commit und Push bei ALLEN geplanten Goals
+## Current full numerics succession — direct Human instruction, 2026-10-23
 
-Diese Regel gilt für alle bereits geplanten und künftig gemeinsam geplanten
-Goals. Der Human verlangt nach jedem erfolgreich implementierten und passend
-geprüften zusammenhängenden Feature-/Bugfix-Schritt einen kohärenten Commit und
-normalen Push auf das bestehende `main`, OHNE einzelne Commit-, Nachrichten- oder
-Push-Absegnung. Gegenteilige Freigaberegeln in `commit.md`, importiertem
-`git-commit.md` oder älteren Goal-/Projekttexten sind dafür ausdrücklich aufgehoben.
-Abwesenheit des Humans ist kein Grund, veröffentlichungsfähige Arbeit zu sammeln.
+Current execution/ownership/remaining work is recorded in
+codex-meta/handoff/pre-rust-successor-20261023-numerics.md in the original workspace
+(from repo: ../codex-meta/handoff/...). This later handoff supersedes older execution,
+pause/chat-ID/order texts, preserving ALL original/extension/Human/final gates and
+permanent systems quality. The Human requests a NEW waiting LOOPER chat; only the
+Human's `weiter` there starts ONE actual FULL Goal without token_budget, using
+get_goal/reuse ACTIVE or create_goal over the ENTIRE goal-next-activation.txt and
+identical objective with ALL sources. Use a binding compact full reference at the
+4000-character tool limit and inspect the result. No second start question or narrow
+numerics Goal. Optimize exact numerics after be7e7c10 FIRST, preserving every accuracy
+and safety bound. SYNC/REALTIME BPM remain incomplete. The current predecessor is
+actually BLOCKED after a failed service turn with a capacity error, not a substantive
+blocker, budget stop or chosen pause. Do not independently mark paused/complete.
+Carry the wait/retry rule above into each Goal/writer assignment; never message or
+resume old chats. After EACH successfully checked coherent step: actual diff review,
+appropriate checks, coherent commit+normal-main push without individual approval,
+then clean HEAD=tracking=fresh actual remote-main before an independent next step.
+The local-main exception for this non-Git App workspace remains. No force/reset/
+discard/pull/remote/credential/global-Git-config/PR rights or changes to scope,
+App/private-data/RT boundaries. STOP before full Rust-port/Slice8.
 
-Vor dem nächsten unabhängigen Feature-/Bugfix-Schritt: tatsächlichen Diff und
-passende Checks/Review abschließen, eigene kohärente Änderungen committen, seriell
-nach `main` integrieren und normal pushen; sauberen Arbeitsbaum sowie HEAD,
-Tracking und tatsächlich abgefragtes Remote-main auf Gleichheit prüfen. Nicht
-mehrere bereits fertige Funktionen über Tage uncommittet halten. Kein leeres
-Timestamp-Commit und kein Vermischen fremder/unbekannter Änderungen. Echte
-fehlgeschlagene Prüfungen zuerst beheben oder den konkreten Blocker ehrlich nennen;
-keine Freigabefrage anstelle bereits erteilter Autorisierung.
+## Commit and push for ALL planned Goals — direct Human instruction, 2026-10-21
 
-Bestehende Worktree-/Integrationsregeln bleiben. Keine Force-/Reset-/Discard-/
-Remoteeinrichtungs-/Credential-/GlobalGitconfig-/PR-Rechte entstehen dadurch.
-Diese ausdrückliche Commit/Push-Pflicht in jedes geplante Goal und jede Übergabe
-übernehmen. Außerhalb geplanter Goals sowie bei späterem ausdrücklichem Widerruf
-gelten die dortigen normalen Absprachen weiter.
+This rule applies to all previously planned and future jointly planned Goals.
+After each successfully implemented and appropriately checked coherent feature/
+bug-fix step, the Human requires a coherent commit and normal push to existing
+`main`, WITHOUT individual commit/message/push approval. Conflicting approval rules
+in commit.md, imported git-commit.md or older Goal/project texts are explicitly
+superseded for those Goals. Human absence is no reason to accumulate publishable work.
 
-## Neuester direkter Humanauftrag — vollständige neue Goal-Übergabe 2026-10-21
+Before the next independent feature/bug-fix step, finish actual diff review and
+appropriate checks, commit coherent own changes, integrate serially into main,
+and push normally. Verify a clean working tree and equality of HEAD, tracking and
+freshly queried actual remote-main. Do not accumulate completed features uncommitted
+for days. No empty timestamp commit or mixing unrelated/unknown changes. Fix real
+failed checks first or report the concrete blocker honestly; do not replace existing
+authorization with another approval question.
 
-Der bisherige Chat schließt nur seinen aktuellen kohärenten Lieferblock inklusive
-geprüftem Commit, normalem Push und sauberem Arbeitsbaum/Remote-Gleichheit ab und
-stoppt danach. Der Human öffnet selbst einen NEUEN LOOPER-Chat und schreibt `weiter`.
-Dann MUSS der Nachfolger tatsächlich get_goal/create_goal mit dem vollständigen
-../codex-meta/goal-next-activation.txt verwenden, ohne token_budget; ein schon aktives
-passendes FULL Goal wiederverwenden, andernfalls EIN NEUES vollständiges Goal
-anlegen und das Tool-Ergebnis prüfen. Nicht bloß ohne Goal im Chat weiterarbeiten.
-Setup/Öffnen allein wartet; keine weitere Startbestätigung und keine alten Chats
-anschreiben/resumieren. Aktuelle vollständige Zusammenführung und erster Auftrag:
-../codex-meta/handoff/pre-rust-successor-20261021.md und ../codex-meta/goal-next-plan.md.
-Jetzige reale Followups zuerst, danach ALLE alten tatsächlichen Restpflichten;
-48IDs/78Kanten/189Zeilen und sämtliche Original-/Erweiterungs-/Human-/Finalgates
-bleiben. Architektur/Implementierung/kompatible Belege wiederverwenden, alte OPEN-
-Rezepte nicht blind neu bauen; STOP vor Rust-Port/Slice8. Diese neueste Anweisung
-ersetzt ältere aktuelle/warte/Start-/Prioritäts-/Chat-ID-Texte, nicht den Vollumfang.
+Existing worktree/integration rules remain. This grants no force/reset/discard/
+remote-setup/credential/global-Git-config/PR rights. Carry this explicit commit/push
+requirement into every planned Goal and handoff. Outside planned Goals, or after a
+later explicit revocation, the normal agreements for that context continue to apply.
+
+## Full new Goal handoff — latest direct Human instruction, 2026-10-21
+
+The preceding chat finishes only its current coherent delivery, including checked
+commit, normal push and clean working tree/remote equality, then stops. The Human
+opens a NEW LOOPER chat and writes `weiter`. The successor MUST then actually use
+get_goal/create_goal with the full ../codex-meta/goal-next-activation.txt, without
+token_budget: reuse a matching active FULL Goal or create ONE NEW full Goal and
+inspect the tool result. Do not merely continue in chat without a Goal. Setup/opening
+alone waits; no additional start confirmation and no messaging/resuming old chats.
+Current full reconciliation and first assignment:
+../codex-meta/handoff/pre-rust-successor-20261021.md and ../codex-meta/goal-next-plan.md.
+Current real follow-ups come first, then ALL actual older remaining duties;
+48IDs/78edges/189rows and every original/extension/Human/final gate remain. Reuse
+architecture/implementation/compatible evidence; do not blindly rebuild old OPEN
+recipes. STOP before Rust-port/Slice8. This latest instruction supersedes older
+current/wait/start/priority/chat-ID texts, not full scope.
 
 # Agent Guidelines
 

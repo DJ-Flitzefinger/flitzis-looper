@@ -171,7 +171,7 @@ catch { $caught = $_.Exception.Message }
 Write-BuildPathResult @{ error=$caught; subst_calls=$script:substCalls }
 """,
     )
-    assert "Kein freier" in str(result["error"])
+    assert "No free temporary build drive letter" in str(result["error"])
     assert result["subst_calls"] == 0
 
 
@@ -252,7 +252,7 @@ Write-BuildPathResult @{ physical=$physical; error=$caught; queries=$script:quer
     assert result["physical"] == (
         r"C:\physical owned folder\nested owned folder\cache\installer.exe"
     )
-    assert "Zyklische SUBST-Zuordnung" in str(result["error"])
+    assert "Cyclic SUBST mapping" in str(result["error"])
     assert result["queries"] == 2
 
 
@@ -295,7 +295,7 @@ function Invoke-PortableBuildSubst([string[]] $Arguments) {
     if ($drive -eq 'Z:') {
         $script:queriesBeforeCollision = $script:queries[$drive]
         $script:targets[$drive] = $replacement
-        throw 'Befehl fehlgeschlagen (1): subst.exe; Laufwerk bereits SUBSTed'
+        throw 'Command failed (1): subst.exe; drive is already SUBSTed'
     }
     if ($drive -ne 'Y:') { throw 'Retry must select the next available fixture drive' }
     $script:targets[$drive] = $target

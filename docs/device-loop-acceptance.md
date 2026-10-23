@@ -10,50 +10,49 @@ The packet below records productive application output, not a standalone tone
 generator or a grid-only simulation. The human starts, plays and closes the app
 and recorder. Offline commands never instantiate the application controller.
 
-## Kurzanleitung: Was wird hier getestet?
+## Quick guide: what is being tested?
 
-Dieser Startbefehl öffnet ein eigenes Testprojekt mit einer bekannten Klickdatei.
-Es gibt zwei getrennte Prüfungen:
+This launch command opens a separate test project with a known click file.
+There are two separate checks:
 
-- **Hörtest:** Mindestens 30 Minuten durchgehend hören, ob die Schleifen gleichmäßig
-  laufen und ob Knackser, Aussetzer, Verzerrungen oder zunehmender Versatz auftreten.
-- **Technische Messung:** Die tatsächlich ausgegebenen Klicks als unveränderte WAV
-  aufnehmen. Die Auswertung prüft ihre zeitlichen Abstände am Audioausgang, auch bei
-  veränderter Geschwindigkeit und kurzen Schleifen. Die Aufnahme ist dafür nötig;
-  sie ersetzt den Hörtest nicht.
+- **Listening test:** Listen continuously for at least 30 minutes to assess whether
+  loops run evenly and whether clicks, dropouts, distortion or increasing offset occur.
+- **Technical measurement:** Record the actual output clicks as an untouched WAV.
+  The analysis checks their spacing at the audio output, including changed speeds
+  and short loops. The recording is required for this measurement; it does not
+  replace the listening test.
 
-Wenn dafür gerade keine Zeit ist, das Testfenster schließen. Es wird dadurch
-kein Hör- oder Geräte-Test als bestanden protokolliert. Diese beiden Prüfungen bleiben
-offen, bis echte Messungen und deine tatsächlichen Beobachtungen vorliegen.
+If there is no time for this now, close the test window. Doing so records no
+listening or device test as passed. Both checks remain open until actual
+measurements and your real observations are available.
 
-Für einen späteren vollständigen Test gilt diese Reihenfolge:
+For a later complete test, follow this sequence:
 
-1. Ein frisch vorbereitetes Testprojekt starten und im Startterminal auf `READY`
-   warten. Das offene Programmfenster allein bedeutet noch nicht, dass die
-   Vorbereitung erfolgreich war. Bei `NOT READY` mit einem Vorbereitungsfehler abbrechen; dieser
-   Versuch bleibt als fehlgeschlagen erhalten und zählt nicht als Test.
-2. Vorher die passende Aufnahme des tatsächlich verwendeten Audioausgangs einrichten.
-   Die Messroute und ihre Einstellungen müssen feststehen. Die Aufnahme zuerst
-   starten, dann **Pad #1** im Looper anklicken. Die Befehle bezeichnen dasselbe
-   Pad als `--pad-ids 0`.
-3. Sobald die Klicks gleichmäßig hörbar sind, den Startzustand mit dem untenstehenden
-   `request ... --label dry-start --pad-ids 0` sichern. Erst dann das durchgehende
-   Hörintervall beginnen. Zunächst nur Pad #1 spielen lassen und dessen Quelle,
-   Schleifenlänge, Tempo, Key Lock und Klangregler unverändert lassen.
-4. Durchgehend mindestens 30 Minuten zuhören. Bei Beginn sowie Minute 5, 10, 15, 20,
-   25 und 30 kurz notieren, was hörbar ist. Bei einem Problem den Zeitpunkt und die
-   Art des Problems notieren. Eine Unterbrechung beendet dieses Hörintervall.
-5. Während Pad #1 noch spielt, den Endzustand mit `--label dry-end --pad-ids 0`
-   sichern. Danach Wiedergabe und Aufnahme stoppen und die ursprüngliche WAV
-   speichern. Erst diese echten Dateien und Notizen bilden die Grundlage der
-   späteren Auswertung; das Programm erklärt den Test nicht automatisch für bestanden.
+1. Start a freshly prepared test project and wait for `READY` in the launch terminal.
+   An open application window alone does not establish successful preparation.
+   If `NOT READY` reports a preparation error, abort; retain that attempt as failed,
+   and do not count it as a test.
+2. Set up recording of the actual audio output beforehand. Establish the measurement
+   route and its settings. Start recording first, then click **Pad #1** in the Looper.
+   The commands identify the same pad as `--pad-ids 0`.
+3. Once the clicks are evenly audible, save the initial state using the
+   `request ... --label dry-start --pad-ids 0` command below. Only then begin the
+   uninterrupted listening interval. Initially let only Pad #1 play, keeping its
+   source, loop length, tempo, Key Lock and tone controls unchanged.
+4. Listen continuously for at least 30 minutes. Briefly record what is audible at
+   the beginning and at minutes 5, 10, 15, 20, 25 and 30. If a problem occurs, record
+   its time and nature. An interruption ends this listening interval.
+5. While Pad #1 is still playing, save the final state with
+   `--label dry-end --pad-ids 0`. Then stop playback and recording and save the
+   original WAV. These actual files and notes form the basis for later assessment;
+   the application does not automatically declare the test passed.
 
-Freies Ausprobieren vor dieser Reihenfolge wird nicht als kontrollierter Test
-gewertet. Jeder Start bekommt einen eigenen Beobachtungsordner. Gespeicherte
-Änderungen am Testprojekt bleiben jedoch auch beim nächsten Start erhalten: Ein
-neuer Beobachtungsordner setzt die Regler nicht zurück. Nach verändertem Testprojekt
-ein neues Paket mit `prepare --output-dir <neuer-Pfad>` vorbereiten; den bisherigen
-Ordner samt Konfiguration und Fehlversuchen erhalten.
+Unstructured experimentation before this sequence does not count as a controlled
+test. Each launch receives its own observation directory. Saved changes to the
+test project persist into the next launch: a new observation directory does not
+reset the controls. After changing the test project, prepare a new packet with
+`prepare --output-dir <new-path>`; retain the previous directory, including its
+configuration and failed attempts.
 
 ## Evidence that must travel together
 

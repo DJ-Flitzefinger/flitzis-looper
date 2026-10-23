@@ -46,7 +46,7 @@ function Get-PortableVcpkg {
         [IO.Directory]::Move($fresh, $directory)
     }
     $actual = & $Git -C $directory rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or $actual -ne $pin) { throw 'Die private vcpkg-Version stimmt nicht mit dem geprueften Stand ueberein.' }
+    if ($LASTEXITCODE -ne 0 -or $actual -ne $pin) { throw 'The private vcpkg version does not match the verified revision.' }
     $env:VCPKG_ROOT = $directory
     $env:VCPKG_DOWNLOADS = Join-Path $Root 'cache/vcpkg-downloads'
     $env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path $Root 'cache/vcpkg-binaries'
@@ -100,11 +100,11 @@ try {
     $prefix = $Root + '\'
     if (-not $Source.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
         $Source -ne $paths.source -or $RuntimeDirectory -ne $paths.candidate -or
-        (Test-Path -LiteralPath $RuntimeDirectory) -or $Commit -notmatch '^[a-f0-9]{40}$') { throw 'Ungueltige private Build-Pfade oder Quellidentitaet.' }
+        (Test-Path -LiteralPath $RuntimeDirectory) -or $Commit -notmatch '^[a-f0-9]{40}$') { throw 'Invalid private build paths or source identity.' }
     $marker = Get-Content -LiteralPath (Join-Path $Root 'portable-root.json') -Raw | ConvertFrom-Json
-    if ($marker.app -ne 'flitzis-looper' -or $marker.schema_version -ne 1) { throw 'Der Build benoetigt eine eigene Portable-Installation.' }
+    if ($marker.app -ne 'flitzis-looper' -or $marker.schema_version -ne 1) { throw 'The build requires its own portable installation.' }
     $actual = & $Git -C $Source rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or $actual -ne $Commit) { throw 'Der Build-Quellstand wurde veraendert.' }
+    if ($LASTEXITCODE -ne 0 -or $actual -ne $Commit) { throw 'The build source revision was modified.' }
     # MSVC/CMake still reject long paths; a temporary DOS drive keeps all files
     # in the chosen root while giving build tools short ASCII paths.
     if ($Root -match '^[A-Za-z]:$') {
@@ -131,7 +131,7 @@ try {
     foreach ($relative in $ownedDirectories) {
         $path = Join-Path $Root $relative
         Assert-PlainPath $path
-        if (Test-Path -LiteralPath $path) { throw "Build-Staging-Konflikt: $path" }
+        if (Test-Path -LiteralPath $path) { throw "Build staging conflict: $path" }
     }
     Write-AtomicJson (Join-Path $Root "cache/build-owned-$OperationId.json") @{
         schema_version=1; operation=$OperationId; directories=$ownedDirectories
@@ -151,33 +151,33 @@ try {
         [IO.Directory]::CreateDirectory($path) | Out-Null
     }
     $env:PATH = [IO.Path]::GetDirectoryName($Git) + ';' + $env:PATH
-    Write-Host 'Pruefe C++ Build Tools und Windows SDK ...'
+    Write-Host 'Checking C++ Build Tools and Windows SDK ...'
     $visualStudio = Enable-PortableMsvc $Root
     $env:VCPKG_VISUAL_STUDIO_PATH = $visualStudio
-    Write-Host 'Pruefe private Python- und Rust-Werkzeuge ...'
+    Write-Host 'Checking private Python and Rust tools ...'
     $uv = Get-PortableUv $Root
     $cargo = Get-PortableRust $Root
     Invoke-Checked $uv @('python','install','3.14.2','--no-bin','--no-registry') | Out-Host
-    Write-Host 'Installiere die festgelegten Python-Abhaengigkeiten ...'
+    Write-Host 'Installing the pinned Python dependencies ...'
     Push-Location -LiteralPath $Source
     try {
         Invoke-Checked $uv @('sync','--locked','--python','3.14.2','--no-install-project','--no-editable') | Out-Host
-        Write-Host 'Bereite RubberBand und seine privaten Bibliotheken vor ...'
+        Write-Host 'Preparing RubberBand and its private libraries ...'
         $vcpkg = Get-PortableVcpkg
         $wheelDirectory = Join-Path $Root "cache/wheels-$shortOperation"
         [IO.Directory]::CreateDirectory($wheelDirectory) | Out-Null
-        Write-Host 'Baue das native Audio-Modul im Release-Profil ...'
+        Write-Host 'Building the native audio module in the Release profile ...'
         Invoke-Checked $uv @('run','--no-sync','maturin','build','--locked','--release','--strip','--interpreter',(Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/python.exe'),'--out',$wheelDirectory) | Out-Host
         $wheels = @(Get-ChildItem -LiteralPath $wheelDirectory -Filter '*.whl')
-        if ($wheels.Count -ne 1) { throw 'Der Build muss genau ein Release-Wheel erzeugen.' }
-        Write-Host 'Bereite FFmpeg und die eigenstaendige Laufzeit vor ...'
+        if ($wheels.Count -ne 1) { throw 'The build must produce exactly one Release wheel.' }
+        Write-Host 'Preparing FFmpeg and the standalone runtime ...'
         $ffmpegArchive = Get-VerifiedArchive 'ffmpeg-8.1.1' 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-full_build-shared.zip' '4296b396bdfd5fbc3dfc75ab4c8703354a56963232d65c4182993543df2d2f45'
         $ffmpeg = Join-Path $ffmpegArchive 'ffmpeg-8.1.1-full_build-shared'
         $licenses = Get-RuntimeLicenses $vcpkg $ffmpeg
         $redistributables = @(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory |
             Where-Object { $_.Name -match '^\d+\.\d+\.\d+(?:\.\d+)?$' } |
             Sort-Object { [version]$_.Name } -Descending)
-        if ($redistributables.Count -eq 0) { throw 'Die MSVC-Installation enthaelt keine versionierte x64-Laufzeit.' }
+        if ($redistributables.Count -eq 0) { throw 'The MSVC installation contains no versioned x64 runtime.' }
         $redist = $redistributables[0].FullName
         $dllDirectories = @((Join-Path $vcpkg 'installed/x64-windows/bin'), (Join-Path $env:CARGO_TARGET_DIR 'release'))
         $dllDirectories += @(Get-ChildItem -LiteralPath (Join-Path $redist 'x64') -Directory | Where-Object { $_.Name -match '^Microsoft\.VC\d+\.(CRT|OpenMP)$' } | ForEach-Object { $_.FullName })
@@ -188,7 +188,7 @@ try {
     } finally { Pop-Location }
     exit 0
 } catch {
-    Write-Host "Portable-Build fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Portable build failed: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 } finally {
     if ($buildDrive) { Remove-PortableBuildDrive $buildDrive | Out-Null }

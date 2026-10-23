@@ -14,15 +14,15 @@ $launchExit = 1
 try {
     $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')
     if ($InstallerOwned -and -not ($Check -or $ModelMode -or $RelocationAction)) {
-        throw 'Installer-Pruefmodus darf keine Anwendung starten.'
+        throw 'Installer check mode must not start an application.'
     }
     if (-not $InstallerOwned -and -not $StartLockHeld) {
         try { $startLock = [IO.File]::Open((Join-Path $Root '.install.lock'), [IO.FileMode]::Open,
             [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
-        catch { throw 'Der Looper oder ein Installer laeuft bereits. Bitte schliessen und erneut starten.' }
+        catch { throw 'The Looper or an installer is already running. Please close it and start again.' }
     }
     if (-not $InstallerOwned -and (Test-Path -LiteralPath (Join-Path $Root 'portable-transaction.json'))) {
-        throw 'Eine Installation wurde unterbrochen. Bitte zuerst INSTALL-LOOPER-PORTABLE.bat erneut ausfuehren.'
+        throw 'An installation was interrupted. Please run INSTALL-LOOPER-PORTABLE.bat again first.'
     }
     if (-not $CheckoutDirectory) { $CheckoutDirectory = Join-Path $Root 'flitzis-looper' }
     if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $Root 'Runtime' }
@@ -34,10 +34,10 @@ try {
     $prefix = $Root.TrimEnd('\') + '\'
     foreach ($path in @($Root,$checkout,$runtime)) { Assert-PlainPath $path }
     foreach ($path in @($checkout,$runtime)) {
-        if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Portable-Pfad verlaesst die Installation.' }
+        if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Portable path escapes the installation.' }
     }
     if (-not $InstallerOwned -and ($checkout -ne (Join-Path $Root 'flitzis-looper') -or $runtime -ne (Join-Path $Root 'Runtime'))) {
-        throw 'Anwendungsstart muss den festen Checkout und die private Runtime verwenden.'
+        throw 'Application launch must use the fixed checkout and private runtime.'
     }
     if ([Math]::Max($checkout.Length,$runtime.Length) -gt 140) {
         $runtimeDrive = New-PortableBuildDrive $Root
@@ -65,11 +65,11 @@ try {
     & (Join-Path $env:PYTHONHOME 'python.exe') @arguments
     $launchExit = $LASTEXITCODE
 } catch {
-    Write-Host "Portable-Start fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Portable launch failed: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     if ($runtimeDrive) {
         try { Remove-PortableBuildDrive $runtimeDrive | Out-Null }
-        catch { Write-Warning "Temporaerer Portable-Pfad konnte nicht entfernt werden: $($_.Exception.Message)" }
+        catch { Write-Warning "Temporary portable path could not be removed: $($_.Exception.Message)" }
     }
     if ($startLock) { $startLock.Dispose() }
 }

@@ -9,7 +9,7 @@ function Get-PortableToolRoot([string] $Root) {
     if ($env:PROCESSOR_ARCHITEW6432) { $architecture = $env:PROCESSOR_ARCHITEW6432 }
     if (-not [Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitProcess -or
         [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or $architecture -ne 'AMD64') {
-        throw 'Die Portable-Toolchain benoetigt Windows x64 und 64-Bit-PowerShell.'
+        throw 'The portable toolchain requires Windows x64 and 64-bit PowerShell.'
     }
     return $path
 }
@@ -19,7 +19,7 @@ function New-PortableToolDirectory([string] $Root, [string] $RelativePath) {
     $path = [IO.Path]::GetFullPath((Join-Path $base $RelativePath))
     $prefix = $base.TrimEnd('\') + '\'
     if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Tool-Pfad verlaesst die Installation: $path"
+        throw "Tool path escapes the installation: $path"
     }
     Assert-PlainPath $path
     [IO.Directory]::CreateDirectory($path) | Out-Null
@@ -28,7 +28,7 @@ function New-PortableToolDirectory([string] $Root, [string] $RelativePath) {
 
 function Get-PortableVerifiedTool([string] $Root, [string] $Name, [Uri] $Uri, [string] $Sha256) {
     $cache = New-PortableToolDirectory $Root 'cache\toolchain'
-    if ($Name -ne [IO.Path]::GetFileName($Name)) { throw 'Tool-Download benoetigt einen einfachen Dateinamen.' }
+    if ($Name -ne [IO.Path]::GetFileName($Name)) { throw 'Tool download requires a plain filename.' }
     $destination = Join-Path $cache $Name
     Assert-PlainPath $destination
     if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
@@ -67,14 +67,14 @@ function Invoke-PortableCapturedProcess(
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     try {
-        if (-not $process.Start()) { throw "Prozess konnte nicht gestartet werden: $Executable" }
+        if (-not $process.Start()) { throw "Process could not be started: $Executable" }
         $outputTask = $process.StandardOutput.ReadToEndAsync()
         $errorTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
         $output = $outputTask.GetAwaiter().GetResult()
         $errorOutput = $errorTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
-            throw "Befehl fehlgeschlagen ($($process.ExitCode)): $Executable`n$output`n$errorOutput"
+            throw "Command failed ($($process.ExitCode)): $Executable`n$output`n$errorOutput"
         }
         if ($errorOutput.Trim()) { Write-Host $errorOutput.Trim() }
         return $output
@@ -90,7 +90,7 @@ function Get-PortableUv([string] $Root) {
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
     try {
         $entries = @($zip.Entries | Where-Object { [IO.Path]::GetFileName($_.FullName) -eq 'uv.exe' })
-        if ($entries.Count -ne 1) { throw 'Das verifizierte uv-Archiv enthaelt kein eindeutiges uv.exe.' }
+        if ($entries.Count -ne 1) { throw 'The verified uv archive does not contain a unique uv.exe.' }
         $entryName = $entries[0].FullName.Replace('/', '\')
         $algorithm = [Security.Cryptography.SHA256]::Create()
         $stream = $entries[0].Open()
@@ -111,12 +111,12 @@ function Get-PortableUv([string] $Root) {
     $executable = [IO.Path]::GetFullPath((Join-Path $directory $entryName))
     $prefix = $directory.TrimEnd('\') + '\'
     if (-not $executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'uv.exe liegt ausserhalb des Tool-Verzeichnisses.'
+        throw 'uv.exe is outside the tool directory.'
     }
     Assert-PlainPath $executable
     Assert-Hash $executable $exeHash
     $version = (Invoke-PortableCapturedProcess $executable '--version').Trim()
-    if ($version -notmatch '^uv 0\.13\.0(?:\s|$)') { throw "Unerwartete uv-Version: $version" }
+    if ($version -notmatch '^uv 0\.13\.0(?:\s|$)') { throw "Unexpected uv version: $version" }
     return $executable
 }
 
@@ -140,7 +140,7 @@ function Get-PortableRust([string] $Root) {
     Assert-PlainPath $rustup
     Assert-PlainPath $cargo
     if (-not (Test-Path -LiteralPath $rustup -PathType Leaf)) {
-        Write-Host 'Private Rust-Toolchain 1.95.0 wird vorbereitet.'
+        Write-Host 'Preparing private Rust toolchain 1.95.0.'
         Invoke-Checked $installer @('-y', '--no-modify-path', '--profile', 'minimal',
             '--default-host', 'x86_64-pc-windows-msvc', '--default-toolchain', $env:RUSTUP_TOOLCHAIN) | Out-Host
     }
@@ -151,7 +151,7 @@ function Get-PortableRust([string] $Root) {
     Invoke-Checked $rustup @('toolchain', 'install', $env:RUSTUP_TOOLCHAIN,
         '--profile', 'minimal', '--no-self-update') | Out-Host
     $version = (Invoke-PortableCapturedProcess $cargo '--version').Trim()
-    if ($version -notmatch '^cargo 1\.95\.0(?:\s|$)') { throw "Unerwartete Cargo-Version: $version" }
+    if ($version -notmatch '^cargo 1\.95\.0(?:\s|$)') { throw "Unexpected Cargo version: $version" }
     # rustc normally discovers the physical executable path behind SUBST. Keep
     # its library/link paths short for both the application and host build scripts.
     $sysroot = Join-Path $env:RUSTUP_HOME ('toolchains\' + $env:RUSTUP_TOOLCHAIN)
@@ -194,9 +194,9 @@ function Import-PortableMsvcEnvironment([string] $InstallationPath) {
     $installation = [IO.Path]::GetFullPath($InstallationPath)
     $vcvars = Join-Path $installation 'VC\Auxiliary\Build\vcvars64.bat'
     Assert-PlainPath $vcvars
-    if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) { throw "vcvars64.bat fehlt: $installation" }
+    if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) { throw "vcvars64.bat is missing: $installation" }
     # CALL expands percent signs twice; do not execute an ambiguous custom path.
-    if ($vcvars -match '[%"\r\n]') { throw "Nicht unterstuetzter Visual-Studio-Pfad: $installation" }
+    if ($vcvars -match '[%"\r\n]') { throw "Unsupported Visual Studio path: $installation" }
     $command = '/d /u /s /c "call "' + $vcvars + '" >nul && set"'
     $cmd = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'cmd.exe'
     $output = Invoke-PortableCapturedProcess $cmd $command ([Text.Encoding]::Unicode)
@@ -209,17 +209,17 @@ function Import-PortableMsvcEnvironment([string] $InstallationPath) {
     }
     if ($env:VSCMD_ARG_TGT_ARCH -ne 'x64' -or -not $env:VCToolsInstallDir -or
         -not $env:WindowsSdkDir -or -not $env:WindowsSDKVersion) {
-        throw "MSVC-x64- oder Windows-SDK-Umgebung fehlt: $installation"
+        throw "MSVC x64 or Windows SDK environment is missing: $installation"
     }
     $compiler = [IO.Path]::GetFullPath((Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\cl.exe'))
     if (-not $compiler.StartsWith($installation.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "MSVC stammt nicht aus der gewaehlten Installation: $compiler"
+        throw "MSVC does not come from the selected installation: $compiler"
     }
     Assert-PlainPath $compiler
-    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw "cl.exe fehlt: $compiler" }
+    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw "cl.exe is missing: $compiler" }
     $header = Join-Path $env:WindowsSdkDir ("Include\$($env:WindowsSDKVersion.TrimEnd('\'))\um\windows.h")
     Assert-PlainPath $header
-    if (-not (Test-Path -LiteralPath $header -PathType Leaf)) { throw "Windows-SDK-Header fehlt: $header" }
+    if (-not (Test-Path -LiteralPath $header -PathType Leaf)) { throw "Windows SDK header is missing: $header" }
     return $compiler
 }
 
@@ -233,7 +233,7 @@ function Test-PortableMsvc([string] $Root, [string] $InstallationPath) {
     [IO.File]::WriteAllText($source, $content, [Text.UTF8Encoding]::new($false))
     Invoke-Checked $compiler @('/nologo', '/W4', '/WX', '/MD', "/Fo$object", "/Fe$executable",
         $source, '/link', '/MACHINE:X64', 'kernel32.lib') | Out-Host
-    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'MSVC-Compile-/Linktest erzeugte keine EXE.' }
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'MSVC compile/link test did not produce an EXE.' }
 }
 
 function Assert-PortableMicrosoftSignature([string] $Path) {
@@ -246,7 +246,7 @@ function Assert-PortableMicrosoftSignature([string] $Path) {
     if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or
         -not $signature.SignerCertificate -or
         $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O="?Microsoft Corporation"?(,|$)') {
-        throw "Keine gueltige Microsoft-Signatur: $Path"
+        throw "No valid Microsoft signature: $Path"
     }
 }
 
@@ -257,7 +257,7 @@ function Install-PortableMsvc([string] $Root) {
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
         $temporary = "$installer.$([Guid]::NewGuid().ToString('N')).partial.exe"
         Assert-PlainPath $temporary
-        Write-Host 'Microsoft Build Tools und Windows SDK werden heruntergeladen.'
+        Write-Host 'Downloading Microsoft Build Tools and Windows SDK.'
         Read-Payload 'https://aka.ms/vs/17/release/vs_buildtools.exe' $temporary
         Assert-PortableMicrosoftSignature $temporary
         [IO.File]::Move($temporary, $installer)
@@ -279,11 +279,11 @@ function Install-PortableMsvc([string] $Root) {
     })
     if ((Test-Path -LiteralPath $installation) -and $registered.Count -eq 0 -and
         @(Get-ChildItem -LiteralPath $installation -Force).Count -gt 0) {
-        throw "Nicht registriertes, nicht leeres Build-Tools-Ziel bleibt unangetastet: $installation"
+        throw "Unregistered, nonempty Build Tools destination will remain untouched: $installation"
     }
     if ($registered.Count -gt 0 -and
         $registered[0].productId -ne 'Microsoft.VisualStudio.Product.BuildTools') {
-        throw "Das reservierte Build-Tools-Ziel gehoert zu einem anderen Visual-Studio-Produkt: $installation"
+        throw "The reserved Build Tools destination belongs to another Visual Studio product: $installation"
     }
     $arguments = @('--wait', '--passive', '--norestart', '--installPath', $installation,
         '--add', 'Microsoft.VisualStudio.Workload.VCTools',
@@ -292,7 +292,7 @@ function Install-PortableMsvc([string] $Root) {
         '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.26100')
     if ($registered.Count -gt 0) { $arguments = @('modify') + $arguments }
     $line = ($arguments | ForEach-Object { ConvertTo-PortableNativeArgument $_ }) -join ' '
-    Write-Host 'Microsoft C++ Build Tools werden installiert; Windows kann Administratorrechte anfordern.'
+    Write-Host 'Installing Microsoft C++ Build Tools; Windows may request administrator privileges.'
     $startArguments = @{
         FilePath = $physicalInstaller; ArgumentList = $line; WorkingDirectory = $physicalCache
         WindowStyle = 'Hidden'; Wait = $true; PassThru = $true; ErrorAction = 'Stop'
@@ -310,7 +310,7 @@ function Install-PortableMsvc([string] $Root) {
         $failure = $_.Exception
         while ($failure) {
             if ($failure -is [ComponentModel.Win32Exception] -and $failure.NativeErrorCode -eq 1223) {
-                throw 'Windows-Administratorfreigabe wurde abgelehnt. Die Portable-Version wurde nicht aktiviert.'
+                throw 'Windows administrator approval was declined. The portable version was not activated.'
             }
             $failure = $failure.InnerException
         }
@@ -319,10 +319,10 @@ function Install-PortableMsvc([string] $Root) {
     try { $code = $process.ExitCode }
     finally { $process.Dispose() }
     if ($code -eq 3010 -or $code -eq 1641) {
-        throw 'Microsoft Build Tools benoetigen einen Windows-Neustart. Danach den Installer erneut starten; die Portable-Version wurde nicht aktiviert.'
+        throw 'Microsoft Build Tools require a Windows restart. Run the installer again afterward; the portable version was not activated.'
     }
-    if ($code -eq 1602) { throw 'Microsoft Build-Tools-Installation wurde abgebrochen. Die Portable-Version wurde nicht aktiviert.' }
-    if ($code -ne 0) { throw "Microsoft Build-Tools-Installation fehlgeschlagen (Exitcode $code)." }
+    if ($code -eq 1602) { throw 'Microsoft Build Tools installation was cancelled. The portable version was not activated.' }
+    if ($code -ne 0) { throw "Microsoft Build Tools installation failed (exit code $code)." }
 }
 
 function Enable-PortableMsvc([string] $Root) {
@@ -331,23 +331,23 @@ function Enable-PortableMsvc([string] $Root) {
     foreach ($instance in @(Get-PortableVisualStudioInstances)) {
         try {
             Test-PortableMsvc $base $instance.installationPath
-            Write-Host "MSVC und Windows SDK geprueft: $($instance.installationPath)"
+            Write-Host "MSVC and Windows SDK verified: $($instance.installationPath)"
             return [IO.Path]::GetFullPath($instance.installationPath)
         } catch {
             Restore-PortableProcessEnvironment $snapshot
-            Write-Host "Build-Tools-Kandidat nicht verwendbar: $($_.Exception.Message)"
+            Write-Host "Build Tools candidate is not usable: $($_.Exception.Message)"
         }
     }
     Install-PortableMsvc $base
     foreach ($instance in @(Get-PortableVisualStudioInstances)) {
         try {
             Test-PortableMsvc $base $instance.installationPath
-            Write-Host "MSVC und Windows SDK geprueft: $($instance.installationPath)"
+            Write-Host "MSVC and Windows SDK verified: $($instance.installationPath)"
             return [IO.Path]::GetFullPath($instance.installationPath)
         } catch {
             Restore-PortableProcessEnvironment $snapshot
-            Write-Host "Build-Tools-Kandidat nicht verwendbar: $($_.Exception.Message)"
+            Write-Host "Build Tools candidate is not usable: $($_.Exception.Message)"
         }
     }
-    throw 'Microsoft Build Tools wurden installiert, aber der MSVC-x64-/Windows-SDK-Linktest schlug fehl. Details stehen im Installationslog.'
+    throw 'Microsoft Build Tools were installed, but the MSVC x64/Windows SDK link test failed. See the installation log for details.'
 }

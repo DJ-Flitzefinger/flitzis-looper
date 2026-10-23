@@ -240,7 +240,7 @@ Write-ToolchainResult $observed
 
 @pytest.mark.parametrize(
     ("failure", "message"),
-    [("uac", "Administratorfreigabe wurde abgelehnt"), ("reboot", "Windows-Neustart")],
+    [("uac", "administrator approval was declined"), ("reboot", "Windows restart")],
 )
 def test_msvc_declined_elevation_or_required_reboot_stops_before_adoption(
     tmp_path: Path, failure: str, message: str
@@ -280,7 +280,7 @@ Write-ToolchainResult @{ error=$caught; continued=$continued; probes=$script:pro
 """,
     )
     assert message in str(result["error"])
-    assert "nicht aktiviert" in str(result["error"])
+    assert "not activated" in str(result["error"])
     assert result["continued"] is False
     assert result["probes"] == 0
     assert isinstance(result["launches"], list)
@@ -304,7 +304,7 @@ catch { $caught = $_.Exception.Message }
 Write-ToolchainResult @{ error=$caught; launches=$script:launches }
 """,
     )
-    assert "Keine gueltige Microsoft-Signatur" in str(result["error"])
+    assert "No valid Microsoft signature" in str(result["error"])
     assert result["launches"] == 0
 
 

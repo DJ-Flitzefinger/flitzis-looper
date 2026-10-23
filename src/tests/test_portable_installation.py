@@ -1009,7 +1009,7 @@ def test_running_app_stops_update_and_is_not_terminated(
         installation.publish("second")
         result = installation.run()
         assert result.returncode != 0
-        assert "schliessen" in result.stdout.lower()
+        assert "close" in result.stdout.lower()
         assert process.poll() is None
         assert (installation.target / "current.json").read_bytes() == original
         assert len(installation.trace("helper-invocations.jsonl")) == 1

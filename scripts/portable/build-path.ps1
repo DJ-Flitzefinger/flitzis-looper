@@ -6,7 +6,7 @@ function Get-PortableBuildLogicalDrives {
 }
 
 function Get-PortableBuildDriveTarget([string] $Drive) {
-    if ($Drive -notmatch '^[A-Z]:$') { throw "Ungueltiger Laufwerksname: $Drive" }
+    if ($Drive -notmatch '^[A-Z]:$') { throw "Invalid drive name: $Drive" }
     if (-not ('FlitziPortable.BuildDriveNative' -as [type])) {
         $utility = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1'
         Import-Module -Name $utility -ErrorAction Stop
@@ -43,7 +43,7 @@ namespace FlitziPortable {
         if ($code -ne 122) { throw [ComponentModel.Win32Exception]::new($code) }
         $capacity *= 2
     }
-    throw "DOS-Laufwerkszuordnung ist zu lang: $Drive"
+    throw "DOS drive mapping is too long: $Drive"
 }
 
 function Invoke-PortableBuildSubst([string[]] $Arguments) {
@@ -60,7 +60,7 @@ function Resolve-PortablePhysicalPath([string] $Path) {
     for ($depth = 0; $depth -lt 26; $depth++) {
         if ($current -notmatch '^[A-Z]:\\') { return $current }
         $drive = $current.Substring(0, 2).ToUpperInvariant()
-        if (-not $visited.Add($drive)) { throw "Zyklische SUBST-Zuordnung: $drive" }
+        if (-not $visited.Add($drive)) { throw "Cyclic SUBST mapping: $drive" }
         $target = Get-PortableBuildDriveTarget $drive
         if (-not $target -or ($target -notmatch '^[A-Z]:\\' -and -not $target.StartsWith('\\'))) {
             return $current
@@ -69,7 +69,7 @@ function Resolve-PortablePhysicalPath([string] $Path) {
         if ($relative) { $current = [IO.Path]::GetFullPath([IO.Path]::Combine($target, $relative)) }
         else { $current = [IO.Path]::GetFullPath($target) }
     }
-    throw 'SUBST-Pfadaufloesung ueberschreitet die maximale Anzahl von Laufwerken.'
+    throw 'SUBST path resolution exceeds the maximum number of drives.'
 }
 
 function Get-PortableBuildDriveOwners {
@@ -81,12 +81,12 @@ function Get-PortableBuildDriveOwners {
 function New-PortableBuildDrive([string] $Root) {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
         -not [Environment]::Is64BitProcess) {
-        throw 'Der temporaere Build-Pfad benoetigt Windows und 64-Bit-PowerShell.'
+        throw 'The temporary build path requires Windows and 64-bit PowerShell.'
     }
     $original = [IO.Path]::GetFullPath($Root)
     if ($original.Length -gt 3) { $original = $original.TrimEnd('\') }
     Assert-PlainPath $original
-    if (-not [IO.Directory]::Exists($original)) { throw "Installationsverzeichnis fehlt: $original" }
+    if (-not [IO.Directory]::Exists($original)) { throw "Installation directory is missing: $original" }
     $owners = Get-PortableBuildDriveOwners
     $logical = @(Get-PortableBuildLogicalDrives)
     foreach ($letter in ('Z', 'Y', 'X', 'W', 'V', 'U', 'T', 'S', 'R')) {
@@ -108,22 +108,22 @@ function New-PortableBuildDrive([string] $Root) {
         }
         $actual = Get-PortableBuildDriveTarget $drive
         if (-not [string]::Equals($actual, $original, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Build-Laufwerk zeigt nicht auf das Installationsverzeichnis: $drive"
+            throw "Build drive does not point to the installation directory: $drive"
         }
         $mapping = [pscustomobject]@{ Drive=$drive; Path=$path; OriginalRoot=$original }
         # Keep the exact returned object and authoritative original path. A caller
         # cannot construct a mapping object to remove somebody else's drive.
         $owners[$drive] = @{ Mapping=$mapping; OriginalRoot=$original }
         try {
-            if (-not [IO.Directory]::Exists($path)) { throw "Build-Laufwerk ist nicht erreichbar: $drive" }
-            Write-Host "Temporaerer Build-Pfad: $path"
+            if (-not [IO.Directory]::Exists($path)) { throw "Build drive is inaccessible: $drive" }
+            Write-Host "Temporary build path: $path"
             return $mapping
         } catch {
             Remove-PortableBuildDrive $mapping | Out-Null
             throw
         }
     }
-    throw 'Kein freier temporaerer Build-Laufwerksbuchstabe zwischen Z: und R: verfuegbar.'
+    throw 'No free temporary build drive letter is available between Z: and R:.'
 }
 
 function Remove-PortableBuildDrive($Mapping) {
@@ -136,14 +136,14 @@ function Remove-PortableBuildDrive($Mapping) {
     $actual = Get-PortableBuildDriveTarget $drive
     if (-not [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
         $owners.Remove($drive)
-        Write-Warning "Temporaere Build-Zuordnung wurde geaendert; Laufwerk bleibt unangetastet: $drive"
+        Write-Warning "Temporary build mapping was changed; drive will remain untouched: $drive"
         return $false
     }
     Invoke-PortableBuildSubst @($drive, '/D')
     $owners.Remove($drive)
     if ([string]::Equals((Get-PortableBuildDriveTarget $drive), $expected,
         [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Temporaeres Build-Laufwerk konnte nicht entfernt werden: $drive"
+        throw "Temporary build drive could not be removed: $drive"
     }
     return $true
 }
