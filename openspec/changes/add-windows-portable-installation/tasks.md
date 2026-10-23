@@ -79,3 +79,21 @@ the actual-machine gates remain open.
 
 The protected Human installation is not a test target. Mocked transaction checks
 do not establish actual Native/model/device acceptance or the open machine gates.
+
+## Direct Human generated-Native follow-up — 2026-10-23
+
+The Human's actual update with the preceding installer failed on a changed
+generated Native artifact. Its cause is unknown; prior mocked transaction passes
+did not cover this state and are not Human acceptance.
+
+- [x] 20. Add only the exact previous-checkout CPython 3.14 Windows x64 generated
+  Native preservation case, bound to the accepted Native declaration and original
+  file inventory; force clean preparation and retain the complete old backup.
+- [x] 21. Keep missing/declaration/other-source/Runtime/candidate guards strict,
+  reuse the same allowance during old-backup cleanup and restored validation,
+  and synchronize BAT, official behavior/design and user documentation.
+- [x] 22. Verify same/new-main and file-only manifests, complete backup bytes and
+  identity, data/cache/repeat behavior, malformed declarations, missing Native,
+  additional tracked Python changes, interrupted recovery and candidate Native
+  negatives with an explicit MOCK import ledger; complete focused/static/spec
+  checks and the actual final diff review before publication.

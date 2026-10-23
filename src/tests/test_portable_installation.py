@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows portable installation")
 REPO = Path(__file__).resolve().parents[2]
+NATIVE_RELATIVE = "src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd"
+NATIVE_WRAPPER_RELATIVE = "src/flitzis_looper_audio/__init__.py"
+CHANGED_MOCK_NATIVE = b"MOCK changed generated Native; never import"
 REPOSITORY = "https://github.com/DJ-Flitzefinger/flitzis-looper.git"
 GIT_ARCHIVE = (
     "https://github.com/git-for-windows/git/releases/download/"
@@ -38,6 +41,14 @@ $ErrorActionPreference = 'Stop'
 $runtime = $PSScriptRoot
 . (Join-Path $runtime 'common.ps1')
 if (-not $CheckoutDirectory) { $CheckoutDirectory = Join-Path $Root 'flitzis-looper' }
+# MOCK import observation: fixture bytes are not a real Native module. Record
+# every entry-point import so preserved changed Native cannot execute unnoticed.
+$mockNative = Join-Path $CheckoutDirectory (
+    'src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd')
+$mockImport = @{kind='MOCK Native import'; native_sha256=(Get-Sha256 $mockNative);
+    checkout=$CheckoutDirectory} | ConvertTo-Json -Compress
+[IO.File]::AppendAllText((Join-Path $Root 'cache/mock-native-imports.jsonl'),
+    $mockImport + "`n")
 # Model an import performed by the private preflight or relocation entry point.
 # A contaminated old checkout must never reach this executable source seam.
 $importSentinel = Join-Path $CheckoutDirectory 'src/unregistered-import-sentinel.ps1'
@@ -157,6 +168,10 @@ function Inventory([string] $Path) {
     return $result
 }
 [IO.Directory]::CreateDirectory((Join-Path $Source 'config')) | Out-Null
+[IO.Directory]::CreateDirectory((Join-Path $Source 'src/flitzis_looper_audio')) | Out-Null
+$mockNative = Join-Path $Source (
+    'src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd')
+[IO.File]::WriteAllText($mockNative,'MOCK Native fixture: @VERSION@')
 function Directories([string] $Path) {
     foreach ($directory in @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Directory)) {
         $directory.FullName.Substring($Path.TrimEnd('\').Length + 1).Replace('\','/')
@@ -168,6 +183,7 @@ if ('@FAILURE@' -ne 'missing-manifest') {
     } else { $Commit }
     $release = @{schema_version=2; release_id=$Commit; git_commit=$runtimeCommit;
         source_dirty=('@FAILURE@' -eq 'dirty-manifest'); fixture_version='@VERSION@';
+        native_sha256=(Get-Sha256 $mockNative);
         checkout_files=(Inventory $Source); checkout_directories=@(Directories $Source);
         runtime_files=(Inventory $RuntimeDirectory)}
     $manifest = Join-Path $RuntimeDirectory 'release-manifest.json'
@@ -287,6 +303,10 @@ class Installation:
     def publish(self, version: str, *, failure: str = "") -> str:
         portable = self.source / "scripts/portable"
         portable.mkdir(parents=True, exist_ok=True)
+        (self.source / ".gitignore").write_text("src/flitzis_looper_audio/*.pyd\n")
+        wrapper = self.source / NATIVE_WRAPPER_RELATIVE
+        wrapper.parent.mkdir(parents=True, exist_ok=True)
+        wrapper.write_text("# Tracked MOCK Native wrapper for inventory validation.\n")
         helper = portable / "install-main.ps1"
         if failure == "missing-helper":
             helper.unlink(missing_ok=True)
@@ -632,6 +652,120 @@ def _legacy_file_only_checkout_inventory(installation: Installation) -> None:
     release.pop("checkout_directories")
     (installation.target / "current.json").write_text(json.dumps(pointer))
     (installation.target / "Runtime/release-manifest.json").write_text(json.dumps(release))
+
+
+def _assert_changed_mock_native_was_never_imported(installation: Installation) -> None:
+    """Observe controlled MOCK imports; no fixture loads a real Native module."""
+    imports = installation.trace("mock-native-imports.jsonl")
+    assert imports
+    assert all(entry["kind"] == "MOCK Native import" for entry in imports)
+    changed_hash = hashlib.sha256(CHANGED_MOCK_NATIVE).hexdigest()
+    assert all(entry["native_sha256"] != changed_hash for entry in imports)
+
+
+@pytest.mark.parametrize("update", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_changed_generated_native_forces_clean_candidate_and_preserves_old_bytes(
+    installation: Installation, *, update: bool, legacy: bool
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    checkout = installation.target / "flitzis-looper"
+    native = checkout / NATIVE_RELATIVE
+    release = cast("dict[str, object]", installation.pointer()["release"])
+    inventory = cast("dict[str, str]", release["checkout_files"])
+    assert release["native_sha256"] == inventory[NATIVE_RELATIVE]
+    native.write_bytes(CHANGED_MOCK_NATIVE)
+    native_identity = native.stat().st_ino
+    old_bytes = {relative: (checkout / relative).read_bytes() for relative in inventory}
+    caches = {
+        installation.target / "tools/native-reuse-tool.bin": b"retained tool",
+        installation.target / "cache/uv/native-reuse-package.bin": b"retained package",
+        installation.target / "b/native-reuse-build.bin": b"retained build",
+    }
+    for path, content in caches.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    if legacy:
+        _legacy_file_only_checkout_inventory(installation)
+    selected = installation.publish("second") if update else first
+
+    result = installation.run()
+
+    require_success(result)
+    assert installation.pointer()["git_commit"] == selected
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    backups = list((installation.target / "cache").glob("o-*"))
+    assert len(backups) == 1
+    retained_native = backups[0] / NATIVE_RELATIVE
+    assert retained_native.stat().st_ino == native_identity
+    assert retained_native.read_bytes() == CHANGED_MOCK_NATIVE
+    assert native.read_bytes() != CHANGED_MOCK_NATIVE
+    for relative, content in old_bytes.items():
+        assert (backups[0] / relative).read_bytes() == content
+    for path, content in (contents | caches).items():
+        assert path.read_bytes() == content
+    assert "preserved in full" in result.stdout
+    assert not (installation.target / "portable-transaction.json").exists()
+    _assert_changed_mock_native_was_never_imported(installation)
+    require_success(installation.run())
+    assert len(installation.trace("helper-invocations.jsonl")) == 2
+    assert retained_native.read_bytes() == CHANGED_MOCK_NATIVE
+    _assert_changed_mock_native_was_never_imported(installation)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing-native",
+        "missing-declaration",
+        "invalid-declaration",
+        "inconsistent-declaration",
+        "other-source",
+    ],
+)
+def test_generated_native_preservation_keeps_source_and_declaration_guards(
+    installation: Installation, damage: str
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    checkout = installation.target / "flitzis-looper"
+    native = checkout / NATIVE_RELATIVE
+    native.write_bytes(CHANGED_MOCK_NATIVE)
+    pointer = installation.pointer()
+    release = cast("dict[str, object]", pointer["release"])
+    if damage == "missing-native":
+        native.unlink()
+    elif damage == "missing-declaration":
+        release.pop("native_sha256")
+    elif damage == "invalid-declaration":
+        release["native_sha256"] = "invalid"
+    elif damage == "inconsistent-declaration":
+        release["native_sha256"] = "f" * 64
+    else:
+        (checkout / NATIVE_WRAPPER_RELATIVE).write_bytes(b"# Human tracked Python source edit\n")
+    pointer_path = installation.target / "current.json"
+    pointer_path.write_text(json.dumps(pointer))
+    pointer_bytes = pointer_path.read_bytes()
+    native_imports = installation.trace("mock-native-imports.jsonl")
+
+    result = installation.run()
+
+    assert result.returncode != 0
+    assert pointer_path.read_bytes() == pointer_bytes
+    assert installation.trace("mock-native-imports.jsonl") == native_imports
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
+    assert not (installation.target / "portable-transaction.json").exists()
+    if damage == "missing-native":
+        assert not native.exists()
+    else:
+        assert native.read_bytes() == CHANGED_MOCK_NATIVE
+    if damage == "other-source":
+        assert (checkout / NATIVE_WRAPPER_RELATIVE).read_bytes() == (
+            b"# Human tracked Python source edit\n"
+        )
+    _assert_changed_mock_native_was_never_imported(installation)
 
 
 @pytest.mark.parametrize(
@@ -1076,6 +1210,39 @@ def test_interrupted_update_preserves_old_checkout_extras(
         assert path.read_bytes() == content
 
 
+@pytest.mark.parametrize("seam", ["captured", "samples", "accepted"])
+def test_interrupted_update_preserves_changed_old_generated_native(
+    installation: Installation, seam: str
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    native = installation.target / "flitzis-looper" / NATIVE_RELATIVE
+    native.write_bytes(CHANGED_MOCK_NATIVE)
+    identity = native.stat().st_ino
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, seam, second)
+
+    result = installation.run()
+
+    if seam == "accepted":
+        require_success(result)
+        assert installation.pointer()["git_commit"] == second
+        assert not (installation.target / "portable-transaction.json").exists()
+        retained = paths.old_checkout / NATIVE_RELATIVE
+    else:
+        assert result.returncode != 0
+        assert installation.pointer()["git_commit"] == first
+        retained = native
+        assert not paths.old_checkout.exists()
+    assert retained.stat().st_ino == identity
+    assert retained.read_bytes() == CHANGED_MOCK_NATIVE
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+    _assert_changed_mock_native_was_never_imported(installation)
+
+
 @pytest.mark.parametrize("relative", ["samples", "config/input"])
 @pytest.mark.parametrize("kind", ["file", "empty-directory"])
 def test_accepted_cleanup_preserves_old_checkout_with_leftover_persistent_paths(
@@ -1157,7 +1324,7 @@ def test_failed_candidate_with_unproved_empty_directories_keeps_diagnostics(
 def _damage_recovery_candidate(paths: ActivationPaths, damage: str) -> Path:
     if damage == "source-extra":
         changed = paths.checkout / "src/unregistered-import-sentinel.ps1"
-        changed.parent.mkdir()
+        changed.parent.mkdir(exist_ok=True)
         changed.write_text(
             "[IO.File]::WriteAllText((Join-Path $Root 'cache/unregistered-executed'),'unsafe')"
         )
@@ -1170,6 +1337,9 @@ def _damage_recovery_candidate(paths: ActivationPaths, damage: str) -> Path:
     elif damage == "source-modified":
         changed = paths.checkout / "fixture-version.txt"
         changed.write_text("Human replacement")
+    elif damage == "native-modified":
+        changed = paths.checkout / NATIVE_RELATIVE
+        changed.write_bytes(CHANGED_MOCK_NATIVE)
     elif damage == "runtime-extra":
         changed = paths.runtime / "unregistered-runtime.bin"
         changed.write_bytes(b"unknown runtime bytes")
@@ -1190,6 +1360,7 @@ def _damage_recovery_candidate(paths: ActivationPaths, damage: str) -> Path:
         "source-empty",
         "source-manifest",
         "source-modified",
+        "native-modified",
         "runtime-extra",
         "runtime-modified",
         "runtime-missing",
@@ -1208,6 +1379,7 @@ def test_recovery_validates_candidate_before_any_execution(
     before = changed.read_bytes() if changed.is_file() else None
     checks = installation.trace("preflight-history.jsonl")
     models = installation.trace("model-history.jsonl")
+    native_imports = installation.trace("mock-native-imports.jsonl")
     relocations = installation.trace("native-relocation-history.jsonl")
     journal = (installation.target / "portable-transaction.json").read_bytes()
     input_checkout = paths.checkout if seam == "accepted" else paths.old_checkout
@@ -1230,6 +1402,7 @@ def test_recovery_validates_candidate_before_any_execution(
         assert not list(changed.iterdir())
     assert installation.trace("preflight-history.jsonl") == checks
     assert installation.trace("model-history.jsonl") == models
+    assert installation.trace("mock-native-imports.jsonl") == native_imports
     assert installation.trace("native-relocation-history.jsonl") == relocations
     for path, content in data_before.items():
         assert path.read_bytes() == content

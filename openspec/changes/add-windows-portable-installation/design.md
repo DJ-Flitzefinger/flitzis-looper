@@ -52,6 +52,18 @@ old checkout stays at its original `cache/o-<operation>` path when extras remain
 Cleanup reports its physical path and completes the accepted journal. It neither
 merges extras into the candidate nor executes or recursively removes that backup.
 
+Previous-checkout admission, restored previous-checkout validation and old-backup
+cleanup share one narrow generated-Native preservation case. Only the present
+`src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd` may have changed
+registered bytes, and only when a valid accepted `native_sha256` equals its original
+registered file hash. This generated untracked artifact is distinct from tracked
+Python/source files. Changed bytes count as extras, forcing the clean-candidate
+path and whole-backup retention without importing or copying the old Native.
+Missing Native or a missing/invalid/inconsistent declaration still fails. No other
+registered source, ABI filename, Runtime or candidate exception is introduced.
+The same strict candidate-custody checks remain unchanged. The preserved binary's
+provenance is not inferred from its bytes, timestamp or registration.
+
 New manifests add optional `checkout_directories` beside the schema-2 file inventories.
 The builder records empty Git directories and creates only the structural `config`
 parent before recording ownership. File-only older manifests derive directory ownership
@@ -71,8 +83,9 @@ and directories; Runtime rejects unknown or changed files. Directory inventories
 cover source only; Runtime directory handling is unchanged and is not verified by
 these checks. Active new source allows only journal-bound persistent data paths. Failed
 candidate cleanup keeps diagnostics when directory ownership cannot be proved.
-Unregistered/changed Runtime files, changed or missing registered source, unknown
-installations and reparse trees remain refusals. Models, tools and useful package/
+Unregistered/changed Runtime files, changed or missing registered source outside
+the narrow previous generated-Native preservation case, unknown installations
+and reparse trees remain refusals. Models, tools and useful package/
 Native caches retain their existing locations and reuse behavior.
 
 Model preparation calls the existing Demucs htdemucs resolver/checksum and pinned
@@ -96,3 +109,7 @@ actual Native relocation/recovery/FileID/bytes/held-reader guards, installer upd
 failure paths, fresh private Release/import/preflight and actual model CPU loads.
 Clean-Windows bootstrap and Human GUI/device/listening acceptance remain explicit
 open gates. Exact successful unchanged-input checks may be reused; failures remain evidence.
+Generated-Native preservation regressions use an explicitly labelled MOCK Native
+import ledger and fixture bytes, not a real extension load. They distinguish old
+changed Native from clean-candidate imports and do not establish real Native,
+separator-model, device or Human acceptance.

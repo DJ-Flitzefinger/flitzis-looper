@@ -236,9 +236,15 @@ function Get-PortableCheckoutDirectories($Release) {
     return $null
 }
 
+function Get-PortablePreviousNativeHash($Release) {
+    if ($Release.PSObject.Properties['native_sha256']) { return $Release.native_sha256 }
+    return $null
+}
+
 function Assert-PortableInventory([string] $Directory, $Inventory, $Directories = $null,
     [switch] $Persistent, [switch] $VerifyHashes, [switch] $AllowExtras,
-    [switch] $IgnoreUnrecordedDirectories, [switch] $ReleaseManifest) {
+    [switch] $IgnoreUnrecordedDirectories, [switch] $ReleaseManifest,
+    $PreviousNativeHash = $null) {
     Assert-PortableTree $Directory
     if ($null -eq $Inventory) { throw "No complete file ownership inventory for $Directory; files will be preserved." }
     if (-not (Test-Path -LiteralPath $Directory)) {
@@ -276,6 +282,15 @@ function Assert-PortableInventory([string] $Directory, $Inventory, $Directories 
         if (-not $known.ContainsKey($relative)) {
             if (-not $AllowExtras) { throw "Unknown file will be preserved: $($file.FullName)" }
             $extras = $true
+            continue
+        }
+        # Only previous-checkout preservation may retain changed generated Native
+        # bytes, bound to the accepted ABI path and its original recorded digest.
+        if ($AllowExtras -and
+            $relative -ceq 'src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd' -and
+            $PreviousNativeHash -is [string] -and $PreviousNativeHash -cmatch '^[a-f0-9]{64}$' -and
+            $PreviousNativeHash -ceq $known[$relative]) {
+            if ((Get-Sha256 $file.FullName) -ne $known[$relative]) { $extras = $true }
             continue
         }
         # Present bytes must still belong to this installation, even when absent
@@ -373,7 +388,7 @@ function Complete-PortableTransaction([string] $Root, $Record) {
     $custody = Get-PortableCandidateCustody $paths $Record
     if ($custody.checkout -ne $paths.checkout -or $custody.runtime -ne $paths.runtime) { throw 'Candidate was not fully activated.' }
     if (Test-Path -LiteralPath $paths.old_checkout) {
-        $extras = Assert-PortableInventory $paths.old_checkout $Record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $Record.old_release) -VerifyHashes -AllowExtras
+        $extras = Assert-PortableInventory $paths.old_checkout $Record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $Record.old_release) -PreviousNativeHash (Get-PortablePreviousNativeHash $Record.old_release) -VerifyHashes -AllowExtras
         if ($extras) {
             Write-Warning "Previous checkout contains unregistered files or directories and will be preserved in full: $(Resolve-PortablePhysicalPath $paths.old_checkout)"
         } else { Remove-PortableOwnedDirectory $Root $paths.old_checkout }
@@ -500,7 +515,7 @@ function Recover-PortableTransaction([string] $Root) {
     if (Test-Path -LiteralPath $paths.relocation) {
         if ($record.capture_completed) { Remove-Item -LiteralPath $paths.relocation }
         else {
-            if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $record.old_release) -Persistent -VerifyHashes -AllowExtras | Out-Null }
+            if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $record.old_release) -PreviousNativeHash (Get-PortablePreviousNativeHash $record.old_release) -Persistent -VerifyHashes -AllowExtras | Out-Null }
             if ($record.had_runtime) { Assert-PortableInventory $paths.runtime $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories }
             if ($record.legacy_directory) {
                 Assert-PortableInventory (Join-Path (Join-Path $Root 'versions') $record.legacy_directory) $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
@@ -768,7 +783,7 @@ try {
             if ((Test-Path -LiteralPath $checkout) -or (Test-Path -LiteralPath $runtime)) { throw 'Old and new portable layouts conflict; files will be preserved.' }
         } else {
             $oldRelease = $old.release
-            $checkoutExtras = Assert-PortableInventory $checkout $oldRelease.checkout_files -Directories (Get-PortableCheckoutDirectories $oldRelease) -Persistent -VerifyHashes -AllowExtras
+            $checkoutExtras = Assert-PortableInventory $checkout $oldRelease.checkout_files -Directories (Get-PortableCheckoutDirectories $oldRelease) -PreviousNativeHash (Get-PortablePreviousNativeHash $oldRelease) -Persistent -VerifyHashes -AllowExtras
             Assert-PortableInventory $runtime $oldRelease.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
             if ($checkoutExtras) { Write-Host 'Unregistered checkout files or directories will be preserved; preparing a clean source/runtime without executing that checkout.' }
             if ($old.git_commit -eq $commit -and -not $checkoutExtras) {

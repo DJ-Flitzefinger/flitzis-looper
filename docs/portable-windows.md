@@ -125,11 +125,23 @@ new checkout resumes ordinary unchanged-main updates without repeated Native bui
 Models, tools, downloads and useful package/build caches keep their existing reuse
 paths; missing or changed required assets can still need acquisition.
 
+A recognized previous checkout also has one narrow exception for a changed
+generated Native binary at
+`src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd`.
+The file must still exist, and its accepted `native_sha256` must match its original
+installed-file inventory hash. The installer treats its changed bytes as contents
+to preserve, builds and verifies a clean candidate even on unchanged `main`, and
+retains the entire old checkout. It never imports or copies the changed previous
+binary. This does not establish why that file changed. Missing Native, missing or
+inconsistent declarations, other changed registered source, Runtime changes and
+candidate Native changes still stop the relevant operation safely.
+
 New manifests record checkout directories as well as files. Older file-only
 manifests cannot prove ownership of otherwise empty folders, so one update may
 conservatively retain an old checkout even without additional files. A directory
 name alone never authorizes recursive deletion. Changed or missing registered
-source files still stop activation with their concrete preserved path. Existing
+source files outside that exact previous generated-Native preservation case still
+stop activation with their concrete preserved path. Existing
 Runtime files, including licenses and DLLs, must also match their recorded
 hashes; unknown or replacement bytes stop updates and retired-runtime cleanup. Missing
 Runtime files remain eligible for repair. Files are not removed based only on

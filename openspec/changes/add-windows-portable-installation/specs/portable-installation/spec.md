@@ -124,8 +124,17 @@ failure logs SHALL remain distinct from application data.
 - **THEN** it SHALL prepare and verify a clean candidate without executing the contaminated checkout, even when the selected source commit is unchanged
 - **AND** after journaled data relocation and successful activation it SHALL preserve the entire previous checkout at its existing transaction backup path and report the actual retained path
 - **AND** it SHALL finish the accepted transaction without copying unregistered contents into the active checkout, deleting them, or requiring otherwise healthy model/tool/package/build caches to be downloaded again
-- **AND** missing or changed registered source, unregistered or changed Runtime files, unknown installation ownership and reparse paths SHALL remain refusals that preserve existing bytes
+- **AND** missing or changed registered source, except the explicitly bound previous generated-Native preservation case below, unregistered or changed Runtime files, unknown installation ownership and reparse paths SHALL remain refusals that preserve existing bytes
 - **AND** a later repeat on the new healthy checkout SHALL retain the unchanged-main model-repair path without another Native build
+
+#### Scenario: Previous generated Native artifact has changed
+- **GIVEN** a recognized previous or rollback-restored checkout contains changed bytes at exactly `src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd`, the generated untracked CPython 3.14 Windows x64 Native artifact
+- **AND** that file remains present, the accepted manifest declares a valid `native_sha256` equal to its original registered file hash, and every other registered source file remains complete and hash-correct
+- **WHEN** update admission or old-checkout cleanup validates that previous checkout
+- **THEN** it MAY classify only those changed generated Native bytes as contents to preserve, SHALL force a clean candidate even on unchanged `main`, and SHALL preserve the entire previous checkout at its existing backup path
+- **AND** it SHALL neither execute/import the changed previous Native nor copy it into the candidate; model, tool, package and build cache reuse SHALL remain available
+- **AND** this preservation case SHALL NOT allow a missing Native file, missing/invalid/inconsistent Native declaration, another changed registered file, another ABI path, Runtime changes or candidate Native changes
+- **AND** candidate preparation, activation and recovery SHALL retain complete strict source/Runtime validation before execution; preservation SHALL grant no source, Native, audio, timing or acknowledgement authority
 
 #### Scenario: Candidate recovery must validate before executing
 - **GIVEN** an interrupted activation or an accepted transaction awaiting cleanup
