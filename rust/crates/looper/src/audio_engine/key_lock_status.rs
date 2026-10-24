@@ -53,6 +53,7 @@ pub(super) struct KeyLockStatusSlot {
     sync_policy_mode: AtomicU8,
     sync_policy_revision: AtomicU64,
     sync_policy_choices: AtomicU8,
+    sync_phase_revision: AtomicU64,
 }
 
 impl KeyLockStatusSlot {
@@ -86,7 +87,12 @@ impl KeyLockStatusSlot {
                         .is_some_and(|policy| policy.request.global_revision.is_some()),
                 ) << 3)
                 | (u8::from(status.policy.is_some_and(|policy| policy.settled)) << 4)
-                | (u8::from(status.policy.is_some_and(|policy| policy.target_current)) << 5),
+                | (u8::from(status.policy.is_some_and(|policy| policy.target_current)) << 5)
+                | (u8::from(
+                    status
+                        .policy
+                        .is_some_and(|policy| policy.phase_program_current),
+                ) << 6),
             Ordering::SeqCst,
         );
         let witness = status.witness.unwrap_or(SourceSyncWitness {
@@ -125,6 +131,13 @@ impl KeyLockStatusSlot {
                 choice(policy.request.policy_sync)
                     | (choice(policy.request.policy_realtime_bpm) << 2)
             }),
+            Ordering::SeqCst,
+        );
+        self.sync_phase_revision.store(
+            status
+                .policy
+                .and_then(|policy| policy.phase_program_revision)
+                .unwrap_or(0),
             Ordering::SeqCst,
         );
         for (word, value) in self.sync_map.iter().zip(witness.map_revision) {
@@ -179,6 +192,11 @@ impl KeyLockStatusSlot {
                 },
                 settled: flags & 16 != 0,
                 target_current: flags & 32 != 0,
+                phase_program_current: flags & 64 != 0,
+                phase_program_revision: match self.sync_phase_revision.load(Ordering::SeqCst) {
+                    0 => None,
+                    revision => Some(revision),
+                },
             }),
         };
         (status.source_generation != 0 && self.sequence.load(Ordering::SeqCst) == sequence)

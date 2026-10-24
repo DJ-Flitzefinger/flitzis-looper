@@ -31,6 +31,7 @@ struct ScalarLane {
     original: RateVoice,
     control: PairControlProjection,
     old_request: SourceSyncRequest,
+    old_static_policy_revision: Option<(u64, u64)>,
     request: SourceSyncRequest,
     candidate: SourcePlayback,
     map_owner: Option<OwnerIdentity>,
@@ -43,9 +44,53 @@ struct ScalarCapture {
     bpm_lock: bool,
     timing_fence: u64,
     timeline: TransportTimeline,
+    phase_only: bool,
 }
 
 impl RtMixer {
+    /// Choose ONE stage for the original complete cohort. Ordinary requested
+    /// effects cannot wait behind an independent source's unavailable phase.
+    fn scalar_policy_phase_only(
+        &self,
+        snapshot: &RuntimePolicySnapshot,
+        timeline: &TransportTimeline,
+        execution: u64,
+    ) -> bool {
+        self.voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| {
+                let Some(row) = snapshot.row(voice.sample_id) else {
+                    return false;
+                };
+                if voice.sync_request != row.request {
+                    return false;
+                }
+                if row.request.mode != SourceSyncMode::Mapped {
+                    return true;
+                }
+                let Some(target) = snapshot.prepared_map(voice.sample_id) else {
+                    return false;
+                };
+                snapshot.map_current(voice.sample_id)
+                    && voice.source_playback.is_compact_mapped()
+                    && voice.source_playback.mapped_output_frame() == Some(execution)
+                    && voice
+                        .source_playback
+                        .mapped_epoch()
+                        .is_some_and(|epoch| epoch.matches_timeline(timeline))
+                    && voice
+                        .mapped_start
+                        .as_ref()
+                        .and_then(|owner| owner.effective_source())
+                        .is_some_and(|old| {
+                            old.same_source(target)
+                                && old.sync_witness() == target.sync_witness()
+                                && old.geometry().domain() == target.geometry().domain()
+                        })
+            })
+    }
+
     #[cfg(test)]
     pub(crate) fn with_runtime_policy_after_global_lease_for_test<T>(
         hook: impl FnOnce() + 'static,
@@ -126,6 +171,7 @@ impl RtMixer {
         snapshot: &RuntimePolicySnapshot,
         timeline: &TransportTimeline,
         execution: u64,
+        phase_only: bool,
         evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<(PitchSourceSnapshot, SourcePlayback, SourceSyncRequest), Error> {
         let voice = &self.voices[index];
@@ -143,7 +189,13 @@ impl RtMixer {
         let early_inputs = self
             .scalar_policy_early_inputs(index, row)
             .ok_or(Error::SourceChanged)?;
-        if early_inputs.blocked() {
+        let static_exit = voice.source_playback.is_static_phase()
+            && matches!(
+                row.request.mode,
+                SourceSyncMode::Legacy | SourceSyncMode::Off
+            )
+            && !early_inputs.blocked_for_static_exit();
+        if early_inputs.blocked() && !static_exit {
             *evidence = Some(UnsupportedEvidence::Early {
                 index,
                 generation: voice.generation,
@@ -300,6 +352,37 @@ impl RtMixer {
         } else {
             raw.playback
         };
+        if candidate.is_static_phase() {
+            let compatible = row.request.mode == SourceSyncMode::Fixed
+                && voice.sync_request == row.request
+                && candidate.static_output_frame() == Some(execution)
+                && timeline
+                    .beat_projection()
+                    .is_some_and(|projection| candidate.static_matches_projection(projection))
+                && candidate.effective_domain().is_some_and(|domain| {
+                    domain
+                        == self
+                            .timing_for_voice(voice)
+                            .loop_domain(raw.sample.frame_count(), domain.region)
+                        && self
+                            .timing_for_voice(voice)
+                            .grid(f64::from(self.sample_rate_hz))
+                            .is_some_and(|grid| {
+                                grid.loop_metrics(domain.region.start, domain.region.end)
+                                    .and_then(|metrics| metrics.compatible_cycle_beats)
+                                    .is_some_and(|quarters| {
+                                        candidate.static_grid_matches(
+                                            grid.frames_per_beat(),
+                                            grid.origin_frame(),
+                                            quarters,
+                                        )
+                                    })
+                            })
+                });
+            if !compatible && !candidate.dissolve_static() {
+                return Err(Error::PhaseChanged);
+            }
+        }
         if target.to_bits() != candidate.rate_target().to_bits() {
             if !candidate.set_target(target) {
                 return Err(Error::InvalidTarget);
@@ -307,6 +390,49 @@ impl RtMixer {
             // Exactly the existing renderer's first new-target step, on a copy.
             // Installing this copy leaves its normal 512-active-frame timer intact.
             candidate.chunk(DEFAULT_BLOCK_SAMPLES);
+        }
+        if phase_only
+            && row.request.mode == SourceSyncMode::Fixed
+            && voice.sync_request == row.request
+        {
+            let grid = self
+                .timing_for_voice(voice)
+                .grid(f64::from(self.sample_rate_hz))
+                .ok_or(Error::Unsupported)?;
+            let domain = candidate.effective_domain().ok_or(Error::Unsupported)?;
+            let quarters = grid
+                .loop_metrics(domain.region.start, domain.region.end)
+                .and_then(|metrics| metrics.compatible_cycle_beats)
+                .ok_or(Error::Unsupported)?;
+            let projection = timeline.beat_projection().ok_or(Error::MissingMaster)?;
+            let same = candidate.is_static_phase()
+                && candidate.static_output_frame() == Some(execution)
+                && candidate.static_matches_projection(projection)
+                && candidate.static_grid_matches(
+                    grid.frames_per_beat(),
+                    grid.origin_frame(),
+                    quarters,
+                );
+            if !same {
+                if candidate.is_static_phase() && !candidate.dissolve_static() {
+                    return Err(Error::PhaseChanged);
+                }
+                // A phase attempt never interrupts the original active-frame glide.
+                // Busy is advancing state and cannot receive an immutable refusal token.
+                if candidate.tempo_ratio().to_bits() != candidate.rate_target().to_bits() {
+                    return Err(Error::Busy);
+                }
+                candidate = SourcePlayback::static_continuation(
+                    &candidate,
+                    projection,
+                    execution,
+                    snapshot.revision(),
+                    grid.frames_per_beat(),
+                    grid.origin_frame(),
+                    quarters,
+                )
+                .map_err(|_| Error::Unsupported)?;
+            }
         }
         self.scalar_policy_endpoint(&raw, &candidate)?;
         Ok((raw, candidate, row.request))
@@ -318,12 +444,13 @@ impl RtMixer {
         snapshot: &RuntimePolicySnapshot,
         timeline: &TransportTimeline,
         execution: u64,
+        phase_only: bool,
         evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<ScalarLane, Error> {
         let voice = &self.voices[index];
         let row = snapshot.row(voice.sample_id).ok_or(Error::SourceChanged)?;
-        let (raw, candidate, request) =
-            self.scalar_policy_candidate(index, snapshot, timeline, execution, evidence)?;
+        let (raw, candidate, request) = self
+            .scalar_policy_candidate(index, snapshot, timeline, execution, phase_only, evidence)?;
         let original = self
             .capture_rate_participant(index, &raw)
             .map_err(|_| Error::SourceChanged)?;
@@ -335,6 +462,7 @@ impl RtMixer {
             original,
             control,
             old_request: voice.sync_request,
+            old_static_policy_revision: voice.static_policy_revision,
             request,
             candidate,
             map_owner: voice
@@ -465,6 +593,7 @@ impl RtMixer {
             || self.bpm_lock_enabled != capture.bpm_lock
             || self.global_rate_timing_revision() != capture.timing_fence
             || !timeline.matches_clock_epoch(&capture.timeline)
+            || self.scalar_policy_phase_only(snapshot, timeline, execution) != capture.phase_only
         {
             return false;
         }
@@ -482,6 +611,7 @@ impl RtMixer {
                     .input_runtime_ownership
                     .pair_control_projection_current(&expected.control, 0)
                 || self.voices[index].sync_request != expected.old_request
+                || self.voices[index].static_policy_revision != expected.old_static_policy_revision
                 || self.voices[index]
                     .mapped_start
                     .as_ref()
@@ -491,9 +621,14 @@ impl RtMixer {
             {
                 return false;
             }
-            let Ok((raw, candidate, request)) =
-                self.scalar_policy_candidate(index, snapshot, timeline, execution, &mut None)
-            else {
+            let Ok((raw, candidate, request)) = self.scalar_policy_candidate(
+                index,
+                snapshot,
+                timeline,
+                execution,
+                capture.phase_only,
+                &mut None,
+            ) else {
                 return false;
             };
             if request != expected.request
@@ -624,11 +759,18 @@ impl RtMixer {
             bpm_lock: self.bpm_lock_enabled,
             timing_fence: self.global_rate_timing_revision(),
             timeline: *timeline,
+            phase_only: self.scalar_policy_phase_only(snapshot, timeline, execution),
         };
         for (index, lane) in capture.lanes.iter_mut().enumerate() {
             if self.voices[index].active {
-                *lane =
-                    Some(self.scalar_policy_lane(index, snapshot, timeline, execution, evidence)?);
+                *lane = Some(self.scalar_policy_lane(
+                    index,
+                    snapshot,
+                    timeline,
+                    execution,
+                    capture.phase_only,
+                    evidence,
+                )?);
             }
         }
         let anchor = capture
@@ -693,8 +835,18 @@ impl RtMixer {
                                         Some(PadStartCustody::for_runtime_map(target));
                                 }
                             }
+                            if !mixer.voices[index]
+                                .source_playback
+                                .matches_exact(&lane.candidate)
+                            {
+                                mixer.voices[index].invalidate_source_preparation();
+                            }
                             mixer.voices[index].sync_request = lane.request;
                             mixer.voices[index].source_playback = lane.candidate;
+                            mixer.voices[index].static_policy_revision = lane
+                                .candidate
+                                .is_static_phase()
+                                .then_some((snapshot.revision(), capture.timing_fence));
                         }
                     }
                 },

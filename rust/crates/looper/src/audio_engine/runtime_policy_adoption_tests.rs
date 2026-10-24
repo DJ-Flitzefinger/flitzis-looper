@@ -7,6 +7,9 @@ mod retry_tests;
 #[path = "runtime_policy_mapped_tests.rs"]
 mod mapped_tests;
 
+#[path = "runtime_policy_static_tests.rs"]
+mod static_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     ScheduledExecution, drain_parameter_messages, execute_scheduled_command,
@@ -265,12 +268,24 @@ fn equal_target_revision_and_cache_hit_preserve_complete_pending_glide() {
     for _ in 0..8 {
         assert!(Arc::ptr_eq(&request(&path), &next));
     }
-    assert!(path.source.consumer.is_empty());
+    // MODE adoption cannot certify the still-missing Fixed phase. The cached
+    // snapshot queues exactly one subsequent PHASE attempt, never one per poll.
+    assert_eq!(path.source.consumer.slots(), 1);
+    let crate::messages::ControlMessage::AdoptRuntimePolicy(work) =
+        path.source.consumer.peek().unwrap()
+    else {
+        panic!("the single queued work must be the original policy phase attempt");
+    };
+    assert!(std::ptr::eq(&**work, next.as_ref()));
+    let observation = next.observation().unwrap();
+    assert_eq!(observation.state, "pending");
+    assert_eq!(observation.attempt, 2);
+    assert!(observation.reason.is_none());
+    assert!(observation.execution_frame.is_none());
     assert!(path.voice(0).source_playback.matches_exact(&pending));
     assert_eq!(path.feedback(0)["settled"], false);
     assert!(path.timeline.matches_clock_epoch(&master));
     assert_eq!(path.timeline.output_frame(), master.output_frame());
-    assert_eq!(next.observation().unwrap().attempt, 1);
 }
 
 #[test]
@@ -1853,8 +1868,26 @@ fn independent_callback_ack_transition_recaptures_original_rows_once_before_cach
         Some(RuntimePolicyError::Stale)
     );
     assert_eq!(ready.observation().unwrap().state, "applied");
-    assert!(Arc::ptr_eq(&ready, &request(&path)));
-    assert!(path.source.consumer.is_empty());
+    let after_mode = scalar_state(&path);
+    let master = path.timeline;
+    for _ in 0..8 {
+        assert!(Arc::ptr_eq(&ready, &request(&path)));
+    }
+    assert_eq!(ready.revision(), pending_ack.revision() + 1);
+    assert_eq!(path.source.consumer.slots(), 1);
+    let crate::messages::ControlMessage::AdoptRuntimePolicy(work) =
+        path.source.consumer.peek().unwrap()
+    else {
+        panic!("the single queued work must retain the ACK-qualified snapshot");
+    };
+    assert!(std::ptr::eq(&**work, ready.as_ref()));
+    let observation = ready.observation().unwrap();
+    assert_eq!(observation.state, "pending");
+    assert_eq!(observation.attempt, 2);
+    assert!(observation.reason.is_none());
+    assert!(observation.execution_frame.is_none());
+    unchanged(&path, &after_mode);
+    assert!(path.timeline.matches_clock_epoch(&master));
 }
 
 #[test]

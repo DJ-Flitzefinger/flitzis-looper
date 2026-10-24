@@ -149,7 +149,7 @@ impl RtMixer {
         snapshot: &PitchSourceSnapshot,
         index: usize,
     ) -> Result<bool, PitchActionReject> {
-        if snapshot.playback.is_mapped() {
+        if snapshot.playback.is_mapped() || snapshot.playback.is_static_phase() {
             return Err(PitchActionReject::MappedTimingUnavailable);
         }
         let render = work.action.render();
@@ -191,10 +191,11 @@ impl RtMixer {
     }
 
     fn mapped_pitch_action_available(&self, id: usize) -> bool {
-        !self
-            .voices
-            .iter()
-            .any(|voice| voice.active && voice.sample_id == id && voice.source_playback.is_mapped())
+        !self.voices.iter().any(|voice| {
+            voice.active
+                && voice.sample_id == id
+                && (voice.source_playback.is_mapped() || voice.source_playback.is_static_phase())
+        })
     }
 
     fn pitch_action_voice(

@@ -427,9 +427,12 @@ impl NativeAdapterState {
         allow_owned_mapped_future: bool,
     ) -> Result<(), NativeSourcePreparationError> {
         if request.plan.loop_period.is_mapped()
+            || request.playback.is_static_phase()
             || request.playback.is_general_mapped()
             || request.actual_feed.is_some_and(|checkpoint| {
-                checkpoint.plan.loop_period.is_mapped() || checkpoint.playback.is_general_mapped()
+                checkpoint.plan.loop_period.is_mapped()
+                    || checkpoint.playback.is_general_mapped()
+                    || checkpoint.playback.is_static_phase()
             })
         {
             return Err(unavailable());
@@ -684,6 +687,8 @@ impl NativeAdapterState {
     ) -> Result<(), RubberBandError> {
         if logical.playback.is_mapped()
             || actual.playback.is_mapped()
+            || logical.playback.is_static_phase()
+            || actual.playback.is_static_phase()
             || !logical.is_consistent()
             || !actual.is_consistent()
             || !self.active
@@ -734,6 +739,8 @@ impl NativeAdapterState {
     ) -> Result<(), RubberBandError> {
         if logical.playback.is_mapped()
             || actual.playback.is_mapped()
+            || logical.playback.is_static_phase()
+            || actual.playback.is_static_phase()
             || !logical.project_output_frames(0)
             || !actual.project_output_frames(0)
         {

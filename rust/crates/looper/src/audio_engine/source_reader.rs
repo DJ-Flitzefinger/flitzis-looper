@@ -939,7 +939,9 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if (self.loop_period.is_mapped() || playback.reader_period().is_mapped())
+        if (self.loop_period.is_mapped()
+            || playback.reader_period().is_mapped()
+            || playback.is_static_phase())
             && (!self.domain().is_valid()
                 || !playback.matches_domain(self.domain())
                 || self.channels == 0
@@ -967,10 +969,10 @@ impl SourceReadPlan {
         if !playback.can_read_frames(output_frames) {
             return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
         }
-        // The exact mapped seam is fallible at this public copied-plan boundary.
+        // Mapped seams and static phase coordinates are fallible at this copied boundary.
         // Validate the entire requested chunk before changing any output buffer.
         // The admitted scalar path retains its preceding single-pass work.
-        if self.loop_period.is_mapped() {
+        if self.loop_period.is_mapped() || playback.is_static_phase() {
             for offset in 0..output_frames {
                 let position = position_at(offset)
                     .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;

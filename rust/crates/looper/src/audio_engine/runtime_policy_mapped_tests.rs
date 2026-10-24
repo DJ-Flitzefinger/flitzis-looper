@@ -5,6 +5,9 @@
 #[path = "runtime_policy_general_tests.rs"]
 mod general_tests;
 
+#[path = "runtime_policy_mapped_stage_tests.rs"]
+mod static_stage_tests;
+
 use super::*;
 use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
 use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;

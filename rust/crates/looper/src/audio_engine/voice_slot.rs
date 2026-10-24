@@ -94,6 +94,8 @@ pub struct VoiceSlot {
     // Stop/restart transfers the aggregate through one existing off-thread retirement slot.
     pub(crate) mapped_start: Option<super::pad_start::PadStartCustody>,
     pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
+    /// Full original snapshot claim, separate from the immutable numeric epoch.
+    pub(crate) static_policy_revision: Option<(u64, u64)>,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
@@ -122,6 +124,7 @@ impl VoiceSlot {
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             mapped_start: None,
             sync_request: super::source_sync_policy::SourceSyncRequest::default(),
+            static_policy_revision: None,
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
             frozen_stems: None,
@@ -154,6 +157,7 @@ impl VoiceSlot {
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
+        self.static_policy_revision = None;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -208,6 +212,7 @@ impl VoiceSlot {
 
     fn stop_inner(&mut self) {
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
+        self.static_policy_revision = None;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime.store(0, Ordering::Release);
@@ -249,6 +254,7 @@ impl VoiceSlot {
     ) {
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
         self.source_feed_history.reset();
+        self.static_policy_revision = None;
         self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);
         self.retire_mapped_start(retirement);
@@ -299,6 +305,7 @@ impl VoiceSlot {
 
     /// Source controls fence captured future reads separately from DSP-only mode preparation.
     pub(crate) fn invalidate_source_preparation(&mut self) {
+        self.static_policy_revision = None;
         self.source_control_epoch.invalidate();
         self.source_feed_history.invalidate_captures();
         self.stretch.invalidate_prepared();
@@ -310,12 +317,15 @@ impl VoiceSlot {
 
     /// Pause playback: set the paused flag. Does not change frame_pos.
     pub fn pause(&mut self) {
+        // An actual pause keeps this exact cursor, never the old absolute-master program.
+        self.source_playback.dissolve_static();
         self.invalidate_source_preparation();
         self.paused = true;
     }
 
     /// Resume playback: clear the paused flag.
     pub fn resume(&mut self) {
+        self.source_playback.dissolve_static();
         self.invalidate_source_preparation();
         self.paused = false;
     }

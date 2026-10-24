@@ -3763,6 +3763,18 @@ impl RtMixer {
             .any(|voice| voice.active && voice.source_playback.is_mapped())
     }
 
+    pub(crate) fn has_static_phase_voice(&self) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.active && voice.source_playback.is_static_phase())
+    }
+
+    fn static_phase_voice_active(&self, id: usize) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(id) && voice.source_playback.is_static_phase())
+    }
+
     fn finite_key_lock_voice_active(&self, id: usize) -> bool {
         self.pad_pitch_processing_enabled(id)
             && self.voices.iter().any(|voice| {
@@ -3795,6 +3807,9 @@ impl RtMixer {
         }
         if previous == next {
             return true;
+        }
+        if self.static_phase_voice_active(id) {
+            return false;
         }
         let transition = StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
         if !self.retained_stem_selection_available(id, next, transition) {
@@ -4627,7 +4642,9 @@ impl RtMixer {
             .input_runtime_ownership
             .binding_source_generation(id, binding)
             .map(|generation| (generation, binding.source_address));
-        if self.mapped_voice_active(id) && enabled != self.pad_key_lock_enabled[id] {
+        if (self.mapped_voice_active(id) || self.static_phase_voice_active(id))
+            && enabled != self.pad_key_lock_enabled[id]
+        {
             self.queued_key_lock_tuples[id] = None;
             self.pad_key_lock_rejected[id] = true;
             self.publish_key_lock_status(id);
@@ -4855,13 +4872,23 @@ impl RtMixer {
                         })
                 }
             };
+            let phase_program_current = request.mode
+                == super::source_sync_policy::SourceSyncMode::Fixed
+                && target_current
+                && !voice.paused
+                && voice.static_policy_revision.is_some()
+                && self.static_phase_program_current(voice);
+            let phase_program_revision = phase_program_current
+                .then_some(voice.static_policy_revision.map(|(revision, _)| revision))
+                .flatten();
             let settled = match request.mode {
                 super::source_sync_policy::SourceSyncMode::Legacy
                 | super::source_sync_policy::SourceSyncMode::Off
                 | super::source_sync_policy::SourceSyncMode::Fixed => {
                     target_current
-                        && voice.source_playback.tempo_ratio().to_bits()
-                            == voice.source_playback.rate_target().to_bits()
+                        && (phase_program_current
+                            || voice.source_playback.tempo_ratio().to_bits()
+                                == voice.source_playback.rate_target().to_bits())
                 }
                 _ => target_current,
             };
@@ -4871,11 +4898,18 @@ impl RtMixer {
                         request,
                         target_current,
                         settled,
+                        phase_program_current,
+                        phase_program_revision,
                     })
                 }
                 Some(previous) if previous.request == request => {
                     previous.target_current &= target_current;
                     previous.settled &= settled;
+                    previous.phase_program_current &= phase_program_current;
+                    if previous.phase_program_revision != phase_program_revision {
+                        previous.phase_program_current = false;
+                        previous.phase_program_revision = None;
+                    }
                 }
                 Some(_) => policy_coherent = false,
             }
@@ -4900,6 +4934,46 @@ impl RtMixer {
                     policy: (active && policy_coherent).then_some(policy).flatten(),
                 },
             );
+    }
+
+    /// Service custody only. Actual master mutations dissolve these programs in
+    /// their original successful claims; explicit phase/bootstrap anchors refuse
+    /// while one is active. No returned boolean is public grid-phase acceptance.
+    fn static_phase_program_current(&self, voice: &VoiceSlot) -> bool {
+        let playback = &voice.source_playback;
+        if !voice.static_policy_revision.is_some_and(|(_, fence)| {
+            fence == self.global_rate_timing_revision() && self.global_drains_claimed(fence)
+        }) {
+            return false;
+        }
+        let Some(grid) = self
+            .timing_for_voice(voice)
+            .grid(f64::from(self.sample_rate_hz))
+        else {
+            return false;
+        };
+        let Some(domain) = playback.effective_domain() else {
+            return false;
+        };
+        let Some(sample) = &voice.sample else {
+            return false;
+        };
+        let region = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(voice.sample_id, sample.frame_count()));
+        let quarters = grid
+            .loop_metrics(domain.region.start, domain.region.end)
+            .and_then(|metrics| metrics.compatible_cycle_beats);
+        region == Some(domain.region)
+            && domain
+                == self
+                    .timing_for_voice(voice)
+                    .loop_domain(sample.frame_count(), domain.region)
+            && playback.static_master_period().map(f64::to_bits)
+                == self.master_period_seconds.map(f64::to_bits)
+            && quarters.is_some_and(|quarters| {
+                playback.static_grid_matches(grid.frames_per_beat(), grid.origin_frame(), quarters)
+            })
     }
 
     #[cfg(test)]
@@ -4972,8 +5046,10 @@ impl RtMixer {
             }
         });
 
-        self.pad_period_seconds[id] = bpm;
-        self.invalidate_source_for_pad(id);
+        if self.pad_period_seconds[id].map(f64::to_bits) != bpm.map(f64::to_bits) {
+            self.pad_period_seconds[id] = bpm;
+            self.invalidate_source_for_pad(id);
+        }
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, metadata: PadTimingMetadata) {
@@ -4982,7 +5058,8 @@ impl RtMixer {
         }
 
         let frame = metadata.phase_anchor_s * self.sample_rate_hz as f64;
-        if frame.is_finite() {
+        if frame.is_finite() && self.pad_phase_anchor_frame[id].to_bits() != frame.round().to_bits()
+        {
             self.pad_phase_anchor_frame[id] = frame.round();
             self.invalidate_source_for_pad(id);
         }
@@ -5016,8 +5093,18 @@ impl RtMixer {
 
     fn invalidate_source_for_pad(&mut self, id: usize) {
         self.advance_source_control_revision(id);
+        let bank = self.sample_bank[id].as_ref();
         for voice in &mut self.voices {
             if voice.is_playing_sample(id) {
+                // A retained old pin keeps its own frozen timing/loop program.
+                if voice
+                    .sample
+                    .as_ref()
+                    .zip(bank)
+                    .is_some_and(|(active, bank)| active.same_source(bank))
+                {
+                    voice.source_playback.dissolve_static();
+                }
                 voice.invalidate_source_preparation();
             }
         }
@@ -5028,6 +5115,7 @@ impl RtMixer {
             *revision = revision.saturating_add(1);
         }
         for voice in &mut self.voices {
+            voice.source_playback.dissolve_static();
             voice.invalidate_source_preparation();
         }
     }
@@ -6059,6 +6147,11 @@ impl RtMixer {
                 while rendered < frames {
                     let output_frame =
                         output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
+                    if voice.source_playback.is_static_phase()
+                        && voice.source_playback.static_output_frame() != output_frame
+                    {
+                        break;
+                    }
                     if voice.source_playback.is_mapped() {
                         let Some(geometry) = voice
                             .mapped_start

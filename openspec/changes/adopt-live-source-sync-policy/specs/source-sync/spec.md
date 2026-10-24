@@ -487,3 +487,72 @@ The separate physical splitter SHALL prove A*d<=n<Z*d exactly before a single RN
 - **AND** runtime Q reduction, owning allocation, final-owner destruction and unbounded callback work SHALL remain forbidden
 
 Physical spans SHALL remain at most240 bytes, epochs128 bytes and32 optional copied playbacks at most16KiB, Copy with no destructor. Actual compiled Debug/Release2MiB, observed Rust allocation requests and complete consuming2/4/6/stress20 with conditional10 evidence remain required. Negative declared20/10, tiny20 or new physical timing results SHALL remain explicit open resource gates. This physical extent branch grants no common phase/bar commensurability, finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission, musical/device/Human acceptance or complete SYNC/REALTIME acceptance. All FULL-Goal obligations remain.
+
+### Requirement: Qualified dry static SYNC converges without changing its declared grid
+After the original Fixed request has adopted its ordinary rate and completed its existing active-frame glide, a later original all-participant policy claim MAY install an exact static correction. It SHALL use the effective source's existing signed scalar origin O, frames per quarter F, unchanged actual master projection M and canonical raw source pair s0 at actual E. Its target SHALL be the declared canonical source grid, not a newly invented downbeat at the loop marker. In loop-relative coordinates the target offset SHALL be minus the original beat at loop start. Arbitrary activation error SHALL NOT become an intentional musical offset.
+
+The admitted first class SHALL retain its actual Physical or already authorized ScalarMusical reader domain. The exact decoded product F*Q SHALL equal that domain's source-frame period P, with the existing compatible-cycle Q, P in [.5,2^64] and positive Q below2^64. A rounded compatibility product, manual/TAP metadata or ready variable map SHALL NOT manufacture accepted timing, a new reader period or bar-phase authority. Nonclosing cases SHALL keep their preceding ordinary audio and unconfirmed phase.
+
+Let u=(M(n)-M(E))*F and D be a feasible signed representative of O+M(E)*F-s0 modulo P. The copied clock SHALL evaluate s0+u+sign(D)*min(u/2^k,abs(D)) from immutable anchors before its own source modulo. It SHALL select the nearest feasible winding, positive on equal distance, and try the other winding when necessary. It SHALL require k from6 through64, exact analytic source rate and corrected rate in [.5,2], analytic correction at most.03125 source frame per output frame, and a finite capture within the admitted output horizon. Actual master cast plateaus SHALL remain plateaus. These are bounds on the analytic rate; they SHALL NOT falsely require every discrete binary64 master increment to be positive. The unwrapped phase SHALL remain continuous, with bounded rate steps; no seek, restart, stop, master rewrite or hidden phase clipping is permitted.
+
+#### Scenario: An ordinary Fixed glide precedes phase adoption
+- **WHEN** a new raw Fixed request is applied, including one whose target already matches
+- **THEN** the original rate/glide SHALL be adopted first without installing phase
+- **AND** later service of the same original snapshot SHALL retain rate-target-current and tempo settlement separately from static-program-current
+- **AND** a phase attempt while any required Fixed glide is unsettled SHALL leave the whole cohort unchanged and remain retryable
+- **AND** one unsupported Fixed phase participant SHALL refuse the complete phase attempt without undoing already adopted ordinary timing
+
+#### Scenario: Unequal static loops use the same unwrapped master
+- **GIVEN** independently qualified eight- and sixty-four-bar source loops
+- **WHEN** both actual dry voices render through repeated short-loop wraps and finite capture
+- **THEN** each SHALL use its own exact period while retaining the same unwrapped master
+- **AND** actual-E raw pair, first taps, gains and all-channel PCM SHALL remain bitwise unchanged
+- **AND** copied partitioning SHALL not introduce a new rounding anchor or change the trajectory
+
+### Requirement: Static phase arithmetic and copied authority remain bounded
+The static class SHALL separately check a common dyadic grid g in [-126,0]. Every signed integer coefficient AFTER exact alignment to2^g for F, O, raw fraction and every actual master value over the complete horizon SHALL have magnitude below2^126; raw whole/physical period retain at most64 bits. Unscaled f64 magnitude SHALL NOT substitute for this coefficient bound. With k<=64 the finest grid SHALL be at least-316; static-specific products, signed sums, residues and final numerators SHALL remain below384 bits in checked512-bit scratch. Final exact dyadic splitting SHALL use one ties-to-even binary64 rounding, at most2^-54 source-frame error, canonical seam carry and original raw fraction bits whenever exact fractional identity recurs, including negative zero. Out-of-certificate input SHALL refuse without mutation or a cursor-independent retry token.
+
+The static clock SHALL share the existing mutually exclusive copied playback storage with mapped clocks, preserve complete program/domain/request identity, and retain Copy/no destructor and the existing copied-layout limits. Actual source/map/ACK/content/lifetime custody, reader checks, global-before-placement all32 claim, retirement and scheduler remain authoritative. Static scalar reader tags SHALL NOT bypass complete layout/domain and full-chunk reader preflight before output writes.
+
+#### Scenario: Static history is not relabelled constant after capture
+- **WHEN** a static clock has reached capture, including nominal rate one
+- **THEN** scalar constant-history, Native future/preparation/FIFO retention and constant source-control proofs SHALL remain unavailable for that clock
+- **AND** actual source-feed checkpoints SHALL retain its complete copied trajectory identity
+- **AND** public grid phase SHALL remain unconfirmed until the separate unified current source/master/request/actual-read witness is implemented
+
+#### Scenario: Pause or source controls invalidate the effective static program
+- **WHEN** an actual pause/Hold/resume, changed source grid/domain, source timing revision or successful master/rate effect changes the effective trajectory
+- **THEN** the current source pair SHALL be preserved and the static program SHALL be dissolved or freshly qualified through its existing owner
+- **AND** resume SHALL not reuse an old addressed master as current live phase
+- **AND** failed Hold/global/master claims SHALL leave the complete preceding clock unchanged
+- **AND** identical scalar BPM/origin publication SHALL not restart a compatible program
+- **AND** retained old-source voices SHALL keep their own frozen grid and prevent a new source's feedback from certifying the whole PAD
+
+Native/pitch/Key Lock and late stem integration remain required separate work. Until then their unsupported static-history paths SHALL truthfully refuse through existing terminal owners before creating stranded work. A genuinely disabled SYNC/parent target MAY dissolve a dry static clock through the original all32 policy claim despite remembered requested pitch/KeyLock preferences; actual Native/retained/lane-busy, pending/queued/admitted work, residency, Hold, source, transition and reader guards SHALL remain. Busy or failed claims SHALL not speculatively invalidate or retire another actor. Ordinary scalar operations SHALL remain recoverable after the successful OFF effect.
+
+This productive dry static milestone SHALL NOT certify variable-map phase, broader static reader-domain conversion, a positive public phase witness, finite OneShot/EOF, Native/pitch/stem integration, practical settling quality, device/music/Human acceptance or complete SYNC/REALTIME. All original FULL-Goal gates and preserved negative resource evidence remain required.
+
+#### Scenario: Equal-tempo accepted refresh preserves other static master projections
+- **GIVEN** an active static source and an original accepted refresh for another PAD
+- **WHEN** the requested master-period bits equal the actual candidate Transport period
+- **THEN** the complete existing actual master projection SHALL remain unchanged, including its original binary64 evaluator
+- **AND** accepted refresh SHALL NOT reanchor that equal-tempo projection at the refresh frame
+- **AND** the original source/loop/ACK and bootstrap bookkeeping SHALL retain their existing authority
+- **AND** a changed-period refresh SHALL still preserve the current master beat and dissolve affected static programs only inside its successful original claim before later fresh qualification
+
+Internal static service custody SHALL correlate the complete successfully claimed original snapshot revision and original global timing fence. Equal-looking parent/intent OFF-to-ON publication before a callback SHALL require a new complete claim. That claim MAY retain a proved compatible numeric trajectory without restarting it, but SHALL NOT borrow an earlier raw request's service acknowledgement or imply actual-read/common-phase acceptance.
+
+### Requirement: Ordinary policy adoption precedes whole-cohort phase installation
+The original all32 capture SHALL choose one MODE or PHASE stage before constructing any lane, retain that stage in the capture and recompute it under the original final claim. A new raw request anywhere, or a needed original mapped source/witness/domain/projection replacement, SHALL use MODE for the complete cohort. MODE SHALL retain ordinary Legacy/Off/Fixed/Mapped effects and SHALL NOT construct new static phase clocks in any already-Fixed neighbor. A compatible existing static clock MAY remain; its actual E, projection, F/O/Q/domain, source/timing and readers SHALL still qualify, or it SHALL dissolve on the copy before ordinary behavior. No phase-unavailable neighbor SHALL block an otherwise qualified ordinary opt-out or mode conversion.
+
+PHASE SHALL be considered only for the complete already-current cohort. Its original all-participant numeric, source, ACK, raw request, reader, global-before-placement, claim and retirement guards SHALL remain; one unsupported phase participant SHALL still refuse the complete phase attempt. Original map-current and exact effective target source/witness/domain/projection checks SHALL NOT be replaced by reported mode or Ready status. Stage changes, new participants and stale/cancelled source/map/request inputs at the final claim SHALL preserve every preceding clock and request.
+
+#### Scenario: Unavailable phase cannot trap an ordinary neighboring control
+- **GIVEN** a Fixed source whose loop cannot qualify static phase and another active PAD with a new ordinary SYNC opt-out
+- **WHEN** the original complete policy claim qualifies its MODE stage
+- **THEN** the ordinary requested effect SHALL apply without attempting either PAD's new phase clock
+- **AND** actual source cursors, PCM and the master SHALL retain their existing transition contracts
+- **AND** later service of the same snapshot SHALL still refuse its unsupported complete PHASE attempt without undoing the ordinary effect
+- **AND** a real older Mapped voice converting to Fixed beside a newly born Fixed source SHALL follow the same separation
+
+Nominal unsettled feedback SHALL NOT alone suppress phase service: invalid static custody can also be unsettled. Without a separately proved ordinary-glide observation the original bounded Busy retry behavior SHALL remain. No elapsed-time, rate-equality or phase-pending shortcut grants service or phase acknowledgement.

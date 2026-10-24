@@ -230,6 +230,16 @@ pub(super) fn source_sync_status(
     )?;
     result.set_item("settled", status.policy.map(|policy| policy.settled))?;
     result.set_item(
+        "phase_program_current",
+        status.policy.map(|policy| policy.phase_program_current),
+    )?;
+    result.set_item(
+        "phase_program_revision",
+        status
+            .policy
+            .and_then(|policy| policy.phase_program_revision),
+    )?;
+    result.set_item(
         "intent_revision",
         status
             .policy

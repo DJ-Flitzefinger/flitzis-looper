@@ -211,9 +211,13 @@ mod source_map_admission;
 mod source_map_api;
 mod source_numerics;
 mod source_playback;
+mod static_source_clock;
+
 mod source_reader;
 mod source_reader_period;
 mod source_sync_policy;
+#[cfg(test)]
+mod static_source_clock_regression_tests;
 mod stem_cache;
 mod stem_pair;
 mod stem_pair_preparation;

@@ -36,6 +36,14 @@ pub(super) struct EarlyUnsupportedInputs {
 }
 
 impl EarlyUnsupportedInputs {
+    /// A real parent/SYNC OFF may release a dry static program despite remembered
+    /// Native preferences. Admitted pending work and every actual ownership guard remain.
+    pub(super) fn blocked_for_static_exit(mut self) -> bool {
+        self.requested_pitch = self.pitch;
+        self.requested_key_lock = self.key_lock;
+        self.blocked()
+    }
+
     pub(super) fn blocked(self) -> bool {
         self.wide_anchored
             || (self.target_mapped && self.preparation.class != RuntimeMapClass::Ready)

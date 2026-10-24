@@ -39,6 +39,9 @@ pub(crate) struct SourceSyncObservation {
     pub(crate) request: SourceSyncRequest,
     pub(crate) target_current: bool,
     pub(crate) settled: bool,
+    /// Exact static program custody for service suppression, never a phase/read ACK.
+    pub(crate) phase_program_current: bool,
+    pub(crate) phase_program_revision: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

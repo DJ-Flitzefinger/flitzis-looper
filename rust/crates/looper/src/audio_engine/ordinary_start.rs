@@ -217,6 +217,7 @@ impl OrdinaryStartWork {
     ) -> Result<(), PitchActionReject> {
         if self.launch_origin.is_some()
             || !origin.is_consistent()
+            || origin.playback.is_static_phase()
             || origin.plan.seek_mode != super::source_reader::ExplicitSeekMode::Normal
             || origin.plan.transition.is_active()
             || origin.playback.tempo_ratio().to_bits() != origin.playback.rate_target().to_bits()

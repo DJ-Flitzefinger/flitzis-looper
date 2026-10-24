@@ -30,6 +30,14 @@ pub(crate) struct SourceLoopMetrics {
 }
 
 impl SourceGrid {
+    pub(crate) fn frames_per_beat(self) -> f64 {
+        self.frames_per_beat
+    }
+
+    pub(crate) fn origin_frame(self) -> f64 {
+        self.origin_frame
+    }
+
     #[cfg(test)]
     pub(crate) fn new(sample_rate_hz: f64, pad_bpm: f64, origin_frame: f64) -> Option<Self> {
         if !sample_rate_hz.is_finite()

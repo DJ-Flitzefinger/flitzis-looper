@@ -486,7 +486,7 @@ fn anchor_transport_phase_from_pad_at_frame(
     id: usize,
     output_frame: u64,
 ) -> bool {
-    if mixer.has_mapped_voice() {
+    if mixer.has_mapped_voice() || mixer.has_static_phase_voice() {
         return false;
     }
     let Some(source_beat) = mixer.active_pad_beat_position(id) else {
@@ -514,7 +514,8 @@ fn try_bootstrap_transport_from_reference(
     transport: &mut TransportTimeline,
     output_frame: u64,
 ) -> bool {
-    if mixer.has_pending_global_rate() || mixer.has_mapped_voice() {
+    if mixer.has_pending_global_rate() || mixer.has_mapped_voice() || mixer.has_static_phase_voice()
+    {
         return false;
     }
     let Some(id) = transport.bootstrap_reference() else {
@@ -1105,7 +1106,14 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
             return CallbackEffectResult::Pending;
         }
         master_targets = Some(targets);
-        if !candidate.set_master_period_preserving_beat_position_at_frame(period, output_frame) {
+        // Equal tempo is not permission to replace the immutable actual-M evaluator.
+        // Reanchoring its f64 operations can change other retained static trajectories.
+        let same_period = candidate.beat_projection().is_some_and(|projection| {
+            projection.master_period_seconds().to_bits() == period.to_bits()
+        });
+        if !same_period
+            && !candidate.set_master_period_preserving_beat_position_at_frame(period, output_frame)
+        {
             return CallbackEffectResult::Settled(false);
         }
         if let Some(previous) = candidate.bootstrap_reference() {

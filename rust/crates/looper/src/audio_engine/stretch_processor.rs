@@ -421,6 +421,9 @@ impl StretchProcessor {
 
     /// Numeric equality alone cannot authorize keeping a source-specific DSP owner.
     pub(crate) fn can_retain_mode_at_unit_rate(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        if feed.playback.is_static_phase() {
+            return false;
+        }
         let Ok(actual) = self.actual_source_checkpoint(feed.playback, feed.plan) else {
             return false;
         };
@@ -428,6 +431,9 @@ impl StretchProcessor {
             playback: *feed.playback,
             plan: feed.plan,
         });
+        if actual.playback.is_static_phase() {
+            return false;
+        }
         let actual_feed = ProductiveSourceFeed {
             playback: &actual.playback,
             plan: actual.plan,
@@ -877,6 +883,12 @@ impl StretchProcessor {
             return None;
         };
         let wet = self.wet_processing_required(pitch_scale, feed.pitch_intent, feed.key_lock);
+        // Static correction has no Native/FIFO variable-history integration yet.
+        if feed.playback.is_static_phase() && wet {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        }
         if retained_feed.is_some()
             && (!wet
                 || !self.native.matches_effective_source(

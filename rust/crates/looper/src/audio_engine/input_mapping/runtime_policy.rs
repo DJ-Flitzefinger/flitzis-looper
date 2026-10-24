@@ -9,7 +9,7 @@ use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOw
 use crate::audio_engine::pad_start::MappedStartSource;
 use crate::audio_engine::runtime_policy_retry::RetryToken;
 use crate::audio_engine::source_map_admission::RuntimeMapPreparation;
-use crate::audio_engine::source_sync_policy::SourceSyncRequest;
+use crate::audio_engine::source_sync_policy::{SourceSyncMode, SourceSyncRequest};
 use crate::messages::ControlMessage;
 use std::sync::{
     Arc,
@@ -470,7 +470,11 @@ impl RuntimePolicySnapshot {
                             .is_none_or(|source| source.generation != status.source_generation)
                 })
                 || status.policy.is_none_or(|policy| {
-                    policy.request != row.source_map.request() || !policy.target_current
+                    policy.request != row.source_map.request()
+                        || !policy.target_current
+                        || (policy.request.mode == SourceSyncMode::Fixed
+                            && (!policy.phase_program_current
+                                || policy.phase_program_revision != Some(self.revision)))
                 })
             {
                 return false;

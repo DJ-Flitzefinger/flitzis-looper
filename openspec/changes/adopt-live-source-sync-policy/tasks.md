@@ -102,7 +102,7 @@ fresh clean remote equality and guarded own cleanup complete.
 - [x] Prepare exact original B(A), B(Z), Q=B(Z)-B(A), trusted positive interior and physical-H reader topology without legacy inverse/saved-bar prerequisites.
 - [x] Carry distinct Q identity and bounded k128 spans through all general dispatch, readers, original-scalar witnesses, history/retry/Native refusals and actual-E bidirectional atomic adoption.
 - [x] Verify actual None worker/source/ACK publication, independent original-knot Q beyond64 denominator bits, first PCM, replacements/seam recovery, lifecycle/pressure, copied layout/2MiB/allocation and consuming2/4/6/stress20 with conditional10 costs.
-- [ ] Complete actual frozen systems POST, appropriate integrated/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup.
+- [x] Complete actual frozen systems POST, appropriate integrated/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup (physical-marker delivery1fb1663a; post-cleanup actual remote equality2026-10-24T06:28:16Z).
 
 ### Remaining general conversion and acceptance
 
@@ -139,3 +139,12 @@ push to existing main without individual approval. Verify clean HEAD/tracking/fr
 actual remote equality before the next independent step. Preserve positive and
 negative evidence and clean only exact own disposable output after terminal jobs.
 All FULL-Goal musical/Native/B2/resource/Human/final gates remain required.
+
+### Productive dry static common phase
+
+- [x] Reconcile canonical signed-origin versus loop-relative labels, exact retained-domain closure and finite dyadic correction; obtain dedicated concrete systems PRE before writer GO.
+- [x] Implement same-snapshot after-glide all32 phase adoption, copied immutable static coordinates, reader preflights and source/master/pause/Hold invalidation.
+- [x] Verify independent exact numeric and actual simultaneous8/64 source/ACK/queue/renderer oracles, original first PCM, partitions, stale/ABA/atomic refusal, terminal Native/stem guards and recoverable OFF exit.
+- [ ] Complete actual frozen systems POST before integrated checks/builds, affected Debug/Release/resource/cost/import checks and one independent final-diff/evidence review.
+- [ ] Deliver English Conventional Commit, normal existing-main push, fresh clean HEAD/tracking/actual-remote equality and guarded own cleanup.
+- [ ] Complete later unified qualified public phase witness, variable-map phase, broader static domains, finite EOF, Native/pitch/stems, musical settling and every remaining FULL-Goal gate; do not infer them from this dry milestone.

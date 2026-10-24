@@ -6,6 +6,9 @@ use super::*;
 
 #[path = "committed_stem_ordinary_receipt_tests.rs"]
 mod committed_stem_ordinary_receipt_tests;
+
+#[path = "committed_stem_static_phase_tests.rs"]
+mod static_phase_tests;
 use crate::audio_engine::committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};

@@ -267,8 +267,13 @@ impl NativeAdapterState {
         endpoint_reset: Option<EndpointResetHistory>,
     ) -> Result<(), RubberBandError> {
         if request.plan.loop_period.is_mapped()
+            || request.playback.is_static_phase()
+            || request.actual_feed.is_some_and(|checkpoint| checkpoint.playback.is_static_phase())
+            || future.0.is_static_phase()
             || future.1.loop_period.is_mapped()
-            || history.spans().any(|span| span.plan.loop_period.is_mapped())
+            || history.spans().any(|span| {
+                span.plan.loop_period.is_mapped() || span.playback.is_static_phase()
+            })
             || !history.is_current()
             || request.mapped_input.is_some()
             || !request

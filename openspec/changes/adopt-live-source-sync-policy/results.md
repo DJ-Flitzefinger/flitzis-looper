@@ -1912,3 +1912,179 @@ total17937002193 bytes. Only this block's exact owned tmp2939 files/54701876 byt
 is disposable after reviewed push/fresh clean equality/terminal jobs. No reparse
 points or new Scratch roots were observed. Concise original positive AND negative
 receipts remain outside tmp. Cleanup/publication success is not inferred here.
+
+## Dry static common-phase delivery attempt, 2026-10-24
+
+Baseline is the reviewed physical-marker delivery1fb1663a, not a replacement of
+its declared/physical map foundations or their retained performance negatives.
+Dedicated concrete interaction PRE, actual combined POST and the SAME independent
+reviewer's source/coverage review cleared this frozen attempt and targeted fixes
+before integrated checks. Root remains the sole Native/build/Git owner.
+
+The original policy queue first adopts ordinary modes/rates for the whole cohort;
+only a subsequent original same-snapshot claim can install static phase after
+ordinary glide. One unsupported Fixed phase cannot block another PAD's ordinary
+opt-out or Mapped-to-Fixed effect. Every actual source/ACK/full raw request,
+reader-domain, global-before-placement and retirement guard remains. A changed
+raw parent snapshot requires its own complete claim even if request bits return
+to their earlier values. This is service custody, not a public phase witness.
+
+The copied dry clock preserves the actual first source pair, fraction bits,
+reader taps/gains and PCM. It evaluates the same actual unwrapped master, converges
+the canonical signed source grid by a finite bounded dyadic rate correction, and
+wraps each source's own exactly closing reader period. It does not reinterpret
+loop start as a downbeat. Physical and already-authorized musical periods retain
+their existing identities. Nonclosing/out-of-class cases remain ordinary scalar
+playback with phase unconfirmed. The new bounded512 arithmetic is separately
+proved; no declared/general/physical map numeric guard was widened.
+
+Actual master/source changes and pause/Hold dissolve the program at the current
+source pair. Resume requalifies against the live master. Equal-period accepted
+refresh preserves the entire actual master evaluator, avoiding a rounded
+re-anchor that could invalidate another source's frozen projection. Static copied
+history never certifies constant-unity Native input, including after capture.
+Pitch/Key Lock and committed stems honestly refuse unsupported static work;
+ordinary OFF can release remembered preferences while every actual pending,
+Native, source and retirement guard remains. Genuine pitch and same-selection
+committed-stem work progress through their original workers after OFF.
+
+### Actual Debug and independent reference evidence
+
+Original negative logs remain: initial three API/syntax errors, executable static
+runs19pass/9fail,25pass/3fail and29pass/1fail, a missing stage-test Mutex import,
+and two missing test-only qualified ControlMessage names. Fixture corrections
+use the real scheduler's later-frame retry, accepted-refresh E+1, completed drains,
+terminal policy retirement outside the callback and actual source-load semantics.
+No production admission guard or independent numerical expectation was weakened.
+
+The full Debug policy run passed130 and failed two superseded MODE-only empty-
+queue expectations in155.22s. Both corrected tests now pass individually0.35s:
+eight cache polls retain exactly ONE queued PHASE attempt2 for the SAME snapshot,
+with unchanged complete glide/master and independent source/ACK recapture.
+Peek preserves actual dispatch custody. The corrected competing-lease test passes
+0.39s and proves one real preceding scalar frame, the same deferred Work/attempt,
+then exact first pair at E+1. These focused receipts supplement the130 compatible
+passes; they are not relabeled as a fresh complete Debug policy run.
+
+Other current Debug groups pass: shared playback65 (13.66s), reader30, Native
+history10, feed8, source epoch9, transport58 and the unchanged actual production
+constructor/callback explicit2MiB1. Static numeric and original-runtime coverage
+includes actual simultaneous8/64-bar source/ACK/queue/render paths, partitions,
+full and checked fail-before-write readers, raw parent ABA, pause/real Hold,
+source replacement, genuine accepted master refresh, and actual dry6-voice
+constructor/claim/render on a2MiB child stack with zero observed Rust requests.
+
+An independent standard-library Fraction oracle passes9cases97selected positions
+and65,537 genuine ScalarMusical-period rows, including59,788 captured positions
+and53 physical last/first seam rows, rational taps/f32 gains/all-channel PCM.
+The Rust oracle is embedded and has no runtime artifact-path dependency. The
+retained helper passes configured Ruff/format/strictmypy; all three regenerated
+reference files remain byte-identical by SHA256 after helper style/type cleanup.
+Original lint failures and justified standalone CLI exclusions remain recorded.
+
+The retained-source regression uses original authorized source-write/LoadSample
+with a genuine separately decoded/ACKed replacement, proving the frozen old pin
+and negative whole-PAD service state. It does not claim two simultaneously running
+old/new voices or that normal Cold reload should preserve a voice; Cold reload
+intentionally stops it. Generated PCM and synthetic accepted timing establish
+bounded software facts, not music/device/Human acceptance.
+
+Current Release, consuming costs, Clippy, private Release/import, final staged
+evidence review, publication and guarded cleanup remain pending at this recording
+point. Public grid_phase_confirmed remains None. Unified qualified actual-read
+phase witness, variable-map phase, broader static domains, finite EOF/OneShot,
+complete Native/pitch/stem integration, musical settling, all retained resource
+misses and every original/extension/Human/final FULL-Goal gate remain OPEN.
+
+Validation-selection correction: Release callback filter audio_stream::tests
+inadvertently included existing test_audio_stream_creation (audio_stream.rs4864).
+It calls CPAL default host/device and may create an output stream, accepting both
+success/error without recording which. It returned ok among57 callback cases;
+that is NOT a device or hearing acceptance result and this whole callback run
+must NOT be called device-free. No Human App stop, installation or Native replacement
+was performed. The other56 callback cases and explicit2MiB child are retained
+bounded software evidence. Root acknowledged the selection error. Default helper
+now excludes test_audio_stream_creation for all later runs; source scan found no
+other direct CPAL/create_audio_stream calls in the selected test modules. Existing
+private-wheel/API/import checks continue without App or device construction.
+
+### Complete current Release and bounded consuming costs
+
+All twelve affected Release filter groups now pass. Counts below use each parent
+harness's final result; nested child runs are not added again. These are filter
+results, not a new whole-product acceptance claim.
+
+| Release group | Passed | Ignored | Execution seconds |
+| --- | ---: | ---: | ---: |
+| Original source policy, including all current static integration cases | 132 | 0 | 67.40 |
+| Shared playback | 65 | 0 | 0.31 |
+| Shared reader | 30 | 0 | 2.27 |
+| Prepared Native history | 10 | 0 | 24.67 |
+| Prepared source feed | 8 | 0 | 0.26 |
+| Source control epoch | 9 | 0 | 0.00 |
+| Transport | 58 | 0 | 2.88 |
+| Callback, with the hardware-selection limitation recorded above | 57 | 0 | 9.54 |
+| Committed-stem neighbors | 175 | 0 | 581.30 |
+| Pitch runtime | 101 | 1 | 262.66 |
+| Stretch processor | 41 | 0 | 20.50 |
+| Ordinary starts | 61 | 0 | 54.39 |
+
+The unchanged ignored pitch case is the explicit bounded six-profile Native
+stderr-owner diagnostic; it is not a pass. The six separate current static
+numeric tests also pass Release. Actual original production and consuming static,
+initial-intersection, declared and physical2MiB child-stack/layout/Rust-request
+checks pass through these groups. No claim is made about Native allocation or
+final-owner deallocation, measured peak stack or whole callback scheduling.
+
+The consuming static profile includes the original queue/drains, second actual-E
+claim, exact construction, full512-frame dry rendering, history and copied advance.
+One warmup precedes three measured repetitions per cohort; setup/output/retirement
+allocation is outside the measurement. Every measured region observes zero Rust
+allocation/zeroed/reallocation requests. Release compile takes160s; the complete
+profile command takes169.34s.
+
+| Active voices | Median ms | Maximum ms | Nominal interval ms |
+| ---: | ---: | ---: | ---: |
+| 2 | 0.8037 | 0.9665 | 10.6667 |
+| 4 | 1.5844 | 1.5927 | 10.6667 |
+| 6 | 2.4096 | 2.4930 | 10.6667 |
+| 20 | 7.8764 | 7.8801 | 10.6667 |
+
+All four measured maxima meet this interval for the generated F64/Q32 retained-
+domain class on this machine/profile. Conditional10 is NOT RUN because20 passes.
+Dedicated interaction cost interpretation is CLEAR for that bounded statement.
+Earlier physical20/10, declared20/10 and tiny20 misses remain OPEN; this profile
+neither replaces those inputs nor proves general-map, device, music, worst-case
+or practical phase-settling quality. No extra cache optimization was introduced.
+
+The current owned temporary tree is observed at564,180,107 bytes during the larger
+neighbor runs, above the initial512MiB estimate but below5GiB. The mid-run Scratch
+inventory contains the same1506 entries as the preceding checked physical block,
+with no new entry; it is honestly labeled mid-run, not an invented pre-run receipt.
+Private Release/import, Clippy, staged evidence review and publication/guarded own
+cleanup are still pending at this recording point. All remaining FULL gates stay.
+
+### Final private runtime and static checks
+
+Locked workspace/all-targets Clippy exits0 in36.68s. It reports154 library-test
+warnings (67 duplicates),123 library warnings and223 example warnings; analysis
+library tests report12 and its numerical integration target2. This is a successful
+warning-bearing check, not warning-free output; no callback boxing or lint-driven
+admission change was introduced. Rustfmt, strict affected OpenSpec and whitespace
+checks pass. The retained independent oracle's Ruff/format/strictmypy pass.
+
+A private locked stripped Release wheel builds in35.83s (56 production warnings).
+The actual private-origin Native is34,884,608 bytes, SHA256
+`0a584e0512afbab2e6a119d96c6eea00bc0780dffdeda7f77730c4f1a2d2b993`.
+Release profile, all13 bootstrap API checks, editor API4, current controller/UI
+imports and535 targeted Python tests pass (16.92s). Python uses the private Native
+and explicit temporary test root, with device cases excluded. No App or audio
+device is started by these private checks and no Native is installed. This does
+not erase the separately recorded inadvertent callback hardware smoke.
+
+The ordinary34,710,016-byte Native is freshly unchanged at09:30:54Z, SHA256
+`ea821e2017e4ca9c40702a5218ce61b92de78ca3a362e972bcef37dcf3beb2c2`.
+All own jobs are terminal. The actual final staged evidence review, English
+Conventional Commit, normal existing-main push, fresh clean remote equality and
+guarded exact owned cleanup remain pending at this recording point. No public
+phase, musical settling, variable/Native/finite-EOF or full acceptance is inferred.

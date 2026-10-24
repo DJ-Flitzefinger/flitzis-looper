@@ -961,3 +961,56 @@ positions plus global endpoint against an independent integer oracle, including 
 negative cached beat origin. Actual post-change stack/allocation and identical
 consuming profiles determine the benefit; initial rare6/20/10 cost failures remain
 preserved evidence rather than being erased by the source optimization.
+
+### Exact dry static common-phase step
+
+Fixed adoption first uses the existing ordinary scalar target/glide. A later
+same-request original all32 claim installs the admitted static law
+`s0+u+sign(D)*min(u/2^k,abs(D))`, `u=(M-M0)*F`, with canonical signed origin,
+nearest feasible source-period winding and k6..64. Exact F*Q must equal the
+retained existing period; manual/TAP gets no fabricated Accepted or map owner.
+Loop start remains an editing marker, not a new downbeat. Static phase and mapped
+phase are mutually exclusive nonowning copied-clock variants in the same storage.
+
+Aligned integer coefficients, complete actual-M horizon and the static-specific
+384/512-bit and exponent-316 theorem qualify this separate arithmetic path.
+The existing master evaluator, first pair/fraction bits, own modulo and source
+reader interpolation remain authoritative. Immutable evaluation makes callback
+partitions equivalent. Binary search finds the first actual capture frame in at
+most64 comparisons; advancing a copied clock proves no actual source read.
+
+One internal seqlock bit distinguishes exact static-program custody from scalar
+rate-target-current and nominal tempo settlement. It quiets same-snapshot service
+during correction, but public grid_phase_confirmed stays None. The separate
+unified source/master/request/actual-read witness remains open. Finite capture
+does not establish a satisfactory musical settling time or hearing acceptance.
+
+Actual pause/resume/source/master effects dissolve from the exact current pair
+and derivative through their original owners. Identical scalar metadata is a
+no-op; old frozen source pins retain their grid on new-bank metadata publication.
+Explicit transport anchors/bootstrap refuse active static programs. Native and
+constant-history boundaries explicitly reject static state even after unity
+capture; full/checked readers preflight complete scalar-tag static reads. Native,
+pitch and late stem paths retain truthful terminal refusals. The original all32
+OFF claim permits a dry exit past requested preferences only, retaining every
+pending/admitted/actual-owner guard and original retirement responsibility.
+
+Service custody also retains the original complete snapshot revision and global
+timing fence independently of numeric clock identity. Raw parent ABA needs a new
+claim even when SourceSyncRequest bits return to their old values. Compatible
+numeric clocks may pass through that new claim without a rounding-anchor change.
+An equal-period accepted refresh preserves the entire actual Transport projection;
+it must not reanchor the f64 evaluator merely because source/loop metadata was
+refreshed. Changed-period refresh retains its original claimed invalidation and
+beat-preserving master update. This closes the cross-PAD evaluator mismatch found
+by the actual final-diff reviewer; no general Transport arithmetic is replaced.
+
+The original fixed capture also chooses a whole-attempt MODE/PHASE stage. New raw
+requests or an exact original mapped replacement first use MODE across all lanes;
+an already-Fixed neighbor's unavailable numeric phase cannot trap another PAD's
+ordinary control. Static compatibility is still checked and incompatible clocks
+dissolve only on the candidate. A later already-current cohort attempts PHASE
+atomically. Capture/final claim compare the same stage and full original map
+source/witness/domain/currentness and epoch. This adds no scheduler or source
+authority. Invalid static custody can also report unsettled, so current Busy
+retry semantics remain rather than guessing an ordinary glide from that flag.

@@ -479,6 +479,7 @@ fn supported_request(request: &NativeHistoryRequest) -> bool {
         && (8_000..=768_000).contains(&request.binding.sample_rate_hz)
         && !request.plan.transition.is_active()
         && checkpoint.is_consistent()
+        && !request.playback.is_static_phase()
         && request.actual_feed_checkpoint().matches_exact(checkpoint)
         && ratio.is_finite()
         && ratio > 0.0
