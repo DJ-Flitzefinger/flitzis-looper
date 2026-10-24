@@ -7,6 +7,7 @@ use crate::audio_engine::input_mapping::{
 };
 use crate::audio_engine::native_history_permit::NativeSourceAdmissionIdentity;
 use crate::audio_engine::runtime_policy_retry::{RetryObservationSlot, RetryToken};
+use crate::audio_engine::source_map_admission::{RuntimeMapClass, RuntimeMapPreparation};
 use crate::audio_engine::source_reader::SourceLoopDomain;
 use crate::audio_engine::source_sync_policy::{SourceSyncMode, SourceSyncRequest};
 use crate::audio_engine::stretch_processor::SourceLaneRetryState;
@@ -16,6 +17,8 @@ use crate::audio_engine::transport::{TransportBeatProjection, TransportTimeline}
 pub(super) struct EarlyUnsupportedInputs {
     mapped: bool,
     target_mapped: bool,
+    wide_anchored: bool,
+    preparation: RuntimeMapPreparation,
     paused: bool,
     pitch: PitchIntent,
     key_lock: bool,
@@ -33,8 +36,8 @@ pub(super) struct EarlyUnsupportedInputs {
 
 impl EarlyUnsupportedInputs {
     pub(super) fn blocked(self) -> bool {
-        self.mapped
-            || self.target_mapped
+        self.wide_anchored
+            || (self.target_mapped && self.preparation.class != RuntimeMapClass::Ready)
             || self.paused
             || self.key_lock
             || self.pitch.total_semitones() != 0
@@ -56,6 +59,7 @@ pub(super) struct LateUnsupportedInputs {
     region_matches: bool,
     raw_domain_matches: bool,
     timing_domain_matches: bool,
+    mapped_domain_matches: bool,
     transition: bool,
     actual_feed: bool,
 }
@@ -65,6 +69,7 @@ impl LateUnsupportedInputs {
         !self.region_matches
             || !self.raw_domain_matches
             || !self.timing_domain_matches
+            || !self.mapped_domain_matches
             || self.transition
             || self.actual_feed
     }
@@ -153,6 +158,12 @@ pub(super) enum UnsupportedEvidence {
         generation: u64,
         inputs: LateUnsupportedInputs,
     },
+    MappedRate {
+        index: usize,
+        generation: u64,
+        inputs: EarlyUnsupportedInputs,
+        projection: TransportBeatProjection,
+    },
 }
 
 pub(super) struct PolicyRetryPublisher {
@@ -207,6 +218,9 @@ impl PolicyRetryPublisher {
             }
             | UnsupportedEvidence::Late {
                 index, generation, ..
+            }
+            | UnsupportedEvidence::MappedRate {
+                index, generation, ..
             } => (index, generation),
         };
         self.shapes
@@ -219,6 +233,16 @@ impl PolicyRetryPublisher {
                         UnsupportedEvidence::Early { inputs, .. } => shape.early == inputs,
                         UnsupportedEvidence::Loop { intent, .. } => shape.loop_intent == intent,
                         UnsupportedEvidence::Late { inputs, .. } => shape.late == Some(inputs),
+                        UnsupportedEvidence::MappedRate {
+                            inputs, projection, ..
+                        } => {
+                            shape.early == inputs
+                                && self.global.is_some_and(|global| {
+                                    global
+                                        .projection
+                                        .is_some_and(|current| current.matches_exact(projection))
+                                })
+                        }
                     }
             })
     }
@@ -373,6 +397,11 @@ impl RtMixer {
         Some(EarlyUnsupportedInputs {
             mapped: voice.source_playback.is_mapped(),
             target_mapped: row.request.mode == SourceSyncMode::Mapped,
+            wide_anchored: voice
+                .source_playback
+                .mapped_epoch()
+                .is_some_and(|epoch| epoch.is_anchored() && !epoch.is_compact_anchored()),
+            preparation: row.map_preparation,
             paused: voice.paused,
             pitch,
             key_lock,
@@ -402,6 +431,7 @@ impl RtMixer {
         index: usize,
         raw: &PitchSourceSnapshot,
         intent: (usize, Option<usize>),
+        preparation: RuntimeMapPreparation,
     ) -> LateUnsupportedInputs {
         self.policy_retry_late_inputs(
             index,
@@ -409,6 +439,7 @@ impl RtMixer {
             raw.plan,
             raw.actual_feed.is_some(),
             intent,
+            preparation,
         )
     }
 
@@ -419,6 +450,7 @@ impl RtMixer {
         plan: SourceReadPlan,
         actual_feed: bool,
         (start, end): (usize, Option<usize>),
+        preparation: RuntimeMapPreparation,
     ) -> LateUnsupportedInputs {
         LateUnsupportedInputs {
             region_matches: effective_loop_region(start, end, plan.sample_frames)
@@ -428,6 +460,12 @@ impl RtMixer {
                 self.timing_for_voice(&self.voices[index])
                     .loop_domain(plan.sample_frames, plan.loop_region),
             ),
+            mapped_domain_matches: preparation.class != RuntimeMapClass::Ready
+                || preparation.domain.is_some_and(|domain| {
+                    domain.sample_frames == plan.sample_frames
+                        && domain.region == plan.loop_region
+                        && domain.period_bits == plan.loop_period.map(f64::to_bits)
+                }),
             transition: plan.transition.is_active(),
             actual_feed,
         }
@@ -505,6 +543,7 @@ impl RtMixer {
                     plan,
                     actual_feed,
                     intent,
+                    row.map_preparation,
                 )
             }),
         })

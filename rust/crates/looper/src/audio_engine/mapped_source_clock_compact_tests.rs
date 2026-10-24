@@ -429,3 +429,242 @@ fn compact_tiny_fpb_terminal_plateau_keeps_exact_rate_original_period_and_raw_pa
         assert!(geometry.refresh_span(epoch, u64::MAX).is_err());
     }
 }
+
+fn productive_epoch(
+    geometry: &MappedLoopGeometry,
+    actual: TransportTimeline,
+    position: FractionalSourcePosition,
+    frame: u64,
+) -> MappedClockEpoch {
+    MappedClockEpoch::anchored_compact(7, actual, geometry, geometry.domain(), position, frame)
+        .unwrap()
+}
+
+#[test]
+fn actual_e_compact_constructor_retains_original_inverse_and_distinct_mode_without_wide_work() {
+    let geometry = variable();
+    let first = (1_u64 << 53) + 7;
+    let actual = timeline(16_000.0, first - 6, 3.125);
+    for raw in [
+        pair(17, (-0.0_f64).to_bits()),
+        pair(23_999, 0x3fef_ffff_ffff_ffff),
+    ] {
+        let (wide, (_, wide_entries)) =
+            observe_compact_queries_for_test(|| new_epoch(&geometry, actual, raw, first));
+        assert!(wide_entries > 0);
+        let (compact, (_, wide_entries)) =
+            observe_compact_queries_for_test(|| productive_epoch(&geometry, actual, raw, first));
+        assert_eq!(wide_entries, 0);
+        assert!(compact.is_compact_anchored());
+        assert!(!wide.is_compact_anchored());
+        assert!(!compact.matches_exact(wide));
+        assert!(compact.matches_exact(compact));
+        assert!(
+            compact
+                .anchor()
+                .unwrap()
+                .matches_exact(wide.anchor().unwrap())
+        );
+        assert!(compact.projection.matches_exact(wide.projection));
+        assert!(!compact.replacement_anchor_matches(wide, first));
+        for frame in [
+            first,
+            first + 1,
+            first + 32_000,
+            first + 96_001,
+            u64::MAX - 1,
+        ] {
+            // The separately constructed old epoch keeps this an independent wide oracle.
+            let expected = geometry.position_at(wide, frame).unwrap();
+            let (observed, (_, wide_entries)) = observe_compact_queries_for_test(|| {
+                let span = geometry.refresh_span(compact, frame).unwrap();
+                let local = span.local_compact_view().unwrap();
+                let observed = geometry.position_at(compact, frame).unwrap();
+                assert_pair(
+                    local.position_at(frame).unwrap(),
+                    observed.frame,
+                    observed.fraction.to_bits(),
+                );
+                assert_pair(
+                    span.position_at(frame).unwrap(),
+                    observed.frame,
+                    observed.fraction.to_bits(),
+                );
+                observed
+            });
+            assert_eq!(wide_entries, 0);
+            assert_pair(observed, expected.frame, expected.fraction.to_bits());
+        }
+    }
+}
+
+#[test]
+fn actual_e_inverse_orders_unused_finite_source_probes_outside_the_compact_grid() {
+    let tiny = 2.0_f64.powi(-200);
+    let geometry = make_geometry(
+        &[
+            (0.0, 0.0),
+            (tiny, tiny),
+            (tiny * 2.0, tiny * 2.0),
+            (1.0, 1.0),
+            (2.0, 2.0),
+        ],
+        &["uncertain", "uncertain", "uncertain", "trusted"],
+        1,
+        3,
+        FrameRange { start: 1, end: 2 },
+        1.0,
+    );
+    assert!(geometry.has_compact_continuation());
+    let actual = timeline(1.0, 0, 0.0);
+    let raw = pair(1, 0.25_f64.to_bits());
+    let wide = new_epoch(&geometry, actual, raw, 0);
+    let compact = productive_epoch(&geometry, actual, raw, 0);
+    assert!(
+        compact
+            .anchor()
+            .unwrap()
+            .matches_exact(wide.anchor().unwrap())
+    );
+    for frame in [0, 1, 2, 99, u64::MAX - 1] {
+        let a = geometry.position_at(compact, frame).unwrap();
+        let b = geometry.position_at(wide, frame).unwrap();
+        assert_pair(a, b.frame, b.fraction.to_bits());
+    }
+}
+
+#[test]
+fn tagged_local_coarser_grids_preserve_global_and_wide_queries_and_endpoints() {
+    let tiny = 2.0_f64.powi(-60);
+    let geometry = make_geometry(
+        &[(0.0, 0.0), (tiny, tiny), (1.0, 1.0), (2.0, 4.0)],
+        &["trusted"; 3],
+        1,
+        3,
+        FrameRange { start: 0, end: 2 },
+        4.0,
+    );
+    let actual = timeline(0.5, 0, 0.0);
+    let raw = pair(1, 0.25_f64.to_bits());
+    let compact = productive_epoch(&geometry, actual, raw, 0);
+    let wide = new_epoch(&geometry, actual, raw, 0);
+    let global = CompactClock::new(&geometry, compact).unwrap();
+    let span = geometry.refresh_span(compact, 0).unwrap();
+    let local = span.local_compact_view().unwrap();
+    assert!(local.core.source_grid.exponent() > global.core.source_grid.exponent());
+    assert!(local.core.beat_grid.exponent() > global.core.beat_grid.exponent());
+    for frame in [span.start_frame(), span.end_frame() - 1, span.end_frame()] {
+        let expected = geometry.position_at(wide, frame).unwrap();
+        assert_pair(
+            local.position_at(frame).unwrap(),
+            expected.frame,
+            expected.fraction.to_bits(),
+        );
+        assert_pair(
+            global.position_at(frame).unwrap(),
+            expected.frame,
+            expected.fraction.to_bits(),
+        );
+    }
+    assert!(
+        geometry
+            .refresh_span(wide, 0)
+            .unwrap()
+            .local_compact_view()
+            .is_err()
+    );
+}
+
+#[test]
+fn actual_e_compact_constructor_preserves_static_dynamic_and_terminal_refusals() {
+    let geometry = variable();
+    let actual = timeline(16_000.0, 0, 0.0);
+    let raw = pair(17, 0.25_f64.to_bits());
+    for (marker, frame) in [(0, 0), (7, u64::MAX)] {
+        assert!(matches!(
+            MappedClockEpoch::anchored_compact(
+                marker,
+                actual,
+                &geometry,
+                geometry.domain(),
+                raw,
+                frame
+            ),
+            Err(MappedClockError::InvalidEpoch)
+        ));
+    }
+    for position in [pair(17, 1), pair(48_000, 0), pair(17, 1.0_f64.to_bits())] {
+        assert!(
+            MappedClockEpoch::anchored_compact(
+                7,
+                actual,
+                &geometry,
+                geometry.domain(),
+                position,
+                0
+            )
+            .is_err()
+        );
+    }
+    let mut changed = geometry.domain();
+    changed.musical_period = Some(f64::from_bits(
+        changed.musical_period.unwrap().to_bits() + 1,
+    ));
+    assert!(MappedClockEpoch::anchored_compact(7, actual, &geometry, changed, raw, 0).is_err());
+    let slow = timeline(32_000.0, 0, 0.0);
+    assert!(matches!(
+        MappedClockEpoch::anchored_compact(7, slow, &geometry, geometry.domain(), raw, 0),
+        Err(MappedClockError::UnsupportedRate)
+    ));
+    let tiny = 2.0_f64.powi(-200);
+    let static_unavailable = make_geometry(
+        &[(0.0, 0.0), (tiny, tiny), (1.0, 1.0)],
+        &["trusted"; 2],
+        1,
+        2,
+        FrameRange { start: 0, end: 1 },
+        1.0,
+    );
+    assert!(!static_unavailable.has_compact_continuation());
+    assert!(
+        MappedClockEpoch::anchored_compact(
+            7,
+            timeline(1.0, 0, 0.0),
+            &static_unavailable,
+            static_unavailable.domain(),
+            pair(0, 0),
+            0
+        )
+        .is_err()
+    );
+    // Its old exact qualification and explicit reference remain available.
+    let wide = new_epoch(&static_unavailable, timeline(1.0, 0, 0.0), pair(0, 0), 0);
+    assert_pair(static_unavailable.position_at(wide, 0).unwrap(), 0, 0);
+}
+
+#[test]
+fn tagged_tiny_fpb_terminal_plateau_and_shifted_horizons_keep_original_raw_anchor() {
+    let geometry = make_geometry(
+        &[(0.0, 0.0), (0.5, 2.0_f64.powi(125))],
+        &["trusted"],
+        1,
+        2,
+        FrameRange { start: 0, end: 1 },
+        2.0_f64.powi(125),
+    );
+    let actual = timeline(2.0_f64.powi(-127), 1_u64 << 63, -2.0_f64.powi(190));
+    let first = u64::MAX - 1;
+    for bits in [0.25_f64.to_bits(), (-0.0_f64).to_bits()] {
+        let compact = productive_epoch(&geometry, actual, pair(0, bits), first);
+        let wide = new_epoch(&geometry, actual, pair(0, bits), first);
+        let span = geometry.refresh_span(compact, first).unwrap();
+        let local = span.local_compact_view().unwrap();
+        for frame in [first, u64::MAX] {
+            assert_pair(local.position_at(frame).unwrap(), 0, bits);
+            assert_pair(geometry.position_at(wide, frame).unwrap(), 0, bits);
+        }
+        assert_eq!(span.local_rate(), Some(2.0));
+        assert!(geometry.refresh_span(compact, u64::MAX).is_err());
+        assert_eq!(compact.anchor().unwrap().original_master.to_bits(), 0);
+    }
+}

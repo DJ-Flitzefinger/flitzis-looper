@@ -1,11 +1,14 @@
 //! One original Native runtime publication and its bounded callback attempt.
-//! This owns requested rows, never a prepared phase, source clock or scheduler.
+//! This owns requested rows and their optional immutable map derivative, never a prepared phase,
+//! source clock or scheduler.
 
 use super::{InputRuntime, RuntimePadState};
 use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
 use crate::audio_engine::content_placement::OwnerIdentity;
 use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
+use crate::audio_engine::pad_start::MappedStartSource;
 use crate::audio_engine::runtime_policy_retry::RetryToken;
+use crate::audio_engine::source_map_admission::RuntimeMapPreparation;
 use crate::audio_engine::source_sync_policy::SourceSyncRequest;
 use crate::messages::ControlMessage;
 use std::sync::{
@@ -94,6 +97,47 @@ pub(crate) struct RuntimePolicyRow {
     pub(crate) pitch: super::PitchPadProjection,
     pub(crate) loop_start_s: f64,
     pub(crate) loop_end_s: Option<f64>,
+    pub(crate) map_preparation: RuntimeMapPreparation,
+}
+
+struct PreparedRuntimeMap {
+    preparation: RuntimeMapPreparation,
+    source: Option<Arc<MappedStartSource>>,
+    available: bool,
+}
+
+impl PreparedRuntimeMap {
+    fn available(row: &RuntimePadState, ownership: &Arc<InputRuntimeOwnership>) -> bool {
+        row.binding
+            .filter(|_| row.loaded)
+            .is_some_and(|binding| row.source_map.runtime_map(ownership, binding).is_some())
+    }
+
+    /// Called once for the exact rows captured by the existing control-owned snapshot.
+    fn capture(row: &RuntimePadState, ownership: &Arc<InputRuntimeOwnership>) -> Self {
+        let unavailable = || Self {
+            preparation: RuntimeMapPreparation::unavailable(row.source_map.selected_sync_witness()),
+            source: None,
+            available: false,
+        };
+        let Some(binding) = row.binding.filter(|_| row.loaded) else {
+            return unavailable();
+        };
+        let Some(qualified) = row.source_map.runtime_map(ownership, binding) else {
+            return unavailable();
+        };
+        let (preparation, source) = MappedStartSource::prepare_runtime_map(
+            qualified,
+            binding,
+            row.loop_start_s,
+            row.loop_end_s,
+        );
+        Self {
+            preparation,
+            source,
+            available: true,
+        }
+    }
 }
 
 /// Scalar observation only. Original immutable rows retain all owning custody.
@@ -139,6 +183,8 @@ pub(crate) struct RuntimePolicySnapshot {
     // Exact clones of the ORIGINAL rows, including ACK and selected-map custody.
     // An unavailable/mismatched source-map proxy must never stand in for these.
     rows: Box<[RuntimePadState]>,
+    // Derivative geometry belongs to these same original rows and is prepared only once off RT.
+    maps: Box<[PreparedRuntimeMap]>,
     sources: Box<[Option<SourceFence>]>,
     ownership: Arc<InputRuntimeOwnership>,
     state: AtomicU8,
@@ -253,23 +299,37 @@ impl RuntimePolicySnapshot {
     /// Independent callback ACK/source fences can change without a row publish.
     /// Compare the existing capture in place before allocating any replacement.
     fn source_fences_current(&self) -> bool {
-        self.rows
+        let sources_current = self
+            .rows
             .iter()
             .enumerate()
-            .all(|(id, row)| self.sources[id] == Self::source_fence(&self.ownership, id, row))
+            .all(|(id, row)| self.sources[id] == Self::source_fence(&self.ownership, id, row));
+        // Source/ACK revocation always wins. Job cancellation after genuine adoption
+        // does not revoke effective immutable custody or restart a current trajectory.
+        sources_current
+            && (self.actual_current()
+                || self.rows.iter().enumerate().all(|(id, row)| {
+                    self.maps[id].available == PreparedRuntimeMap::available(row, &self.ownership)
+                }))
     }
 
     fn capture(runtime: &InputRuntime, state: &super::RuntimeState, revision: u64) -> Self {
-        let sources = state
-            .pads
+        let rows = state.pads.clone().into_boxed_slice();
+        let sources = rows
             .iter()
             .enumerate()
             .map(|(id, row)| Self::source_fence(&runtime.ownership, id, row))
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let maps = rows
+            .iter()
+            .map(|row| PreparedRuntimeMap::capture(row, &runtime.ownership))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
             revision,
-            rows: state.pads.clone().into_boxed_slice(),
+            rows,
+            maps,
             sources,
             ownership: runtime.ownership.clone(),
             state: AtomicU8::new(IDLE),
@@ -304,7 +364,39 @@ impl RuntimePolicySnapshot {
             pitch: row.pitch,
             loop_start_s: row.loop_start_s,
             loop_end_s: row.loop_end_s,
+            map_preparation: self.map_preparation(id),
         })
+    }
+
+    /// Borrow prepared custody only; the full actual-E claim separately repeats `map_current`.
+    pub(crate) fn prepared_map(&self, id: usize) -> Option<&Arc<MappedStartSource>> {
+        self.maps.get(id)?.source.as_ref()
+    }
+
+    pub(crate) fn map_preparation(&self, id: usize) -> RuntimeMapPreparation {
+        self.maps.get(id).map_or_else(
+            || RuntimeMapPreparation::unavailable(None),
+            |map| map.preparation,
+        )
+    }
+
+    /// This final successful source check is the pending map's admission decision. A later
+    /// overlapping data-job cancellation cannot revoke an already effective immutable pin.
+    pub(crate) fn map_current(&self, id: usize) -> bool {
+        let Some(row) = self.rows.get(id).filter(|row| row.loaded) else {
+            return false;
+        };
+        let Some(binding) = row.binding else {
+            return false;
+        };
+        self.row_current(id)
+            && row
+                .source_map
+                .runtime_map(&self.ownership, binding)
+                .is_some()
+            && self
+                .prepared_map(id)
+                .is_none_or(|source| source.current_for(&self.ownership, binding))
     }
 
     pub(crate) fn retry_row(&self, id: usize) -> Option<RuntimePolicyRetryRow> {

@@ -59,8 +59,25 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Prepare an optional constant-size compact grid class during the original off-RT exact qualification without narrowing the general reference.
 - [x] Implement explicit compact-only 256/512-bit phase/query/split/normalization and borrowed reader contexts, retaining whole-horizon master proof, original raw anchors/segments/domain, exact endpoint/search/rate guards and unchanged copied layouts.
 - [x] Prove compact/reference/independent-oracle equality, class refusal and atomic failure, pause/projection/geometry/terminal neighbors, first PCM and allocation/explicit 2-MiB limits; profile complete consuming 2/4/6 and 20/fallback 10 workloads.
-- [ ] Finish affected checks, needed private Release/import, one independent actual final-diff review, checked English commit/normal-main push/fresh clean equality and guarded own cleanup for this compact prerequisite.
-- [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
+- [x] Finish affected checks, needed private Release/import, one independent actual final-diff review, checked English commit/normal-main push/fresh clean equality and guarded own cleanup for this compact prerequisite.
+
+### Productive initial-intersection dry conversion
+
+- [x] Prepare the optional exact/compact map derivative from original immutable runtime rows off realtime; retain genuine effective custody independently of an optional original launch.
+- [x] Construct compact anchored epochs at actual E and close generic reader/endpoint/advance/journal/continuation paths without wide realtime arithmetic or copied-layout growth.
+- [x] Extend the original fixed cohort claim for bidirectional dry conversion, exact original domain/first PCM, global-before-placement ordering and fully reserved off-realtime retirement.
+- [x] Distinguish stable preparation/domain refusal from cursor-dependent eligibility; preserve original retry, source/ACK, stale/ABA and whole-cohort atomicity.
+- [x] Verify actual public runtime/scheduler/renderer conversion and neighboring pause/Hold/resume/rate/retrigger/history, pressure/lifetime, explicit 2-MiB/allocation/layout and productive 2/4/6 plus stress20/fallback10 costs including extreme seams.
+- [ ] Complete affected integration, strict specs, private Release/import, dedicated actual systems POST, one independent actual final-diff review and checked English commit/normal-main push/fresh clean equality/guarded cleanup.
+
+The final initial-dry delivery checkbox includes commit/push/cleanup and will be
+reconciled at the next coherent repository update using the actual final receipt
+in the original workspace handoff. A pending publication checkbox does not make
+the implemented and checked dry foundations missing again.
+
+### Remaining general conversion and acceptance
+
+- [ ] Complete general decimal-map and rational-domain scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.
 - [ ] Finish affected checks, needed Release/import/preflight and one independent actual final-diff review.
 
@@ -77,10 +94,14 @@ anchored map, original geometry or reader-domain conversion contract.
 
 ### Remaining representation conversion and full acceptance
 
-- [ ] Retain effective immutable map custody separately from the original launch and off-RT last-reader owners.
-- [ ] Connect original Native runtime publication to idempotent retryable adoption with complete raw revision and source custody.
-- [ ] Reuse the existing fixed 32-lane capture/preflight/claim kernel at actual E, including atomic refusal.
-- [ ] Project actual adoption/refusal/settlement through existing bounded feedback and diagnostics.
+The first four foundations below are delivered for the supported initial dry lane.
+General-map, Native/pitch, shared-phase, musical and complete GUI/MIDI acceptance
+remain open; checked foundations are reusable components, not whole-feature approval.
+
+- [x] Retain effective immutable map custody separately from the original launch and off-RT last-reader owners.
+- [x] Connect original Native runtime publication to idempotent retryable adoption with complete raw revision and source custody.
+- [x] Reuse the existing fixed 32-lane capture/preflight/claim kernel at actual E, including atomic refusal.
+- [x] Project actual adoption/refusal/settlement through existing bounded feedback and diagnostics.
 - [ ] Verify real GUI/MIDI/runtime-to-callback behavior, retries, pressure and affected lifecycle/transport/rate neighbors.
 - [ ] Finish integration, needed Release/import/preflight and one independent actual final-diff review.
 

@@ -19,7 +19,9 @@ mod compact;
 mod exact;
 
 use anchored::AnchoredClock;
-pub(crate) use compact::CompactSpanView;
+#[cfg(test)]
+pub(crate) use compact::observe_compact_queries_for_test;
+pub(crate) use compact::{CompactLocalSpanView, CompactSpanView};
 use exact::ExactContinuationQualification;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +79,9 @@ enum MappedClockMode {
         continuation_anchor: Option<ContinuationAnchor>,
     },
     Anchored(AnchoredClock),
+    // Same immutable anchor payload. Only the globally qualified compact constructor
+    // creates this tag; copied spans may then prepare bounded local arithmetic.
+    CompactAnchored(AnchoredClock),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -218,9 +223,11 @@ impl MappedClockEpoch {
             && self.address_shift == other.address_shift
             && self.first_output_frame == other.first_output_frame
             && match (self.mode, other.mode) {
-                (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right)) => {
-                    left.matches_exact(right)
-                }
+                (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
+                | (
+                    MappedClockMode::CompactAnchored(left),
+                    MappedClockMode::CompactAnchored(right),
+                ) => left.matches_exact(right),
                 (
                     MappedClockMode::Legacy {
                         phase_quarters: left_phase,
@@ -268,14 +275,28 @@ impl MappedClockEpoch {
     }
 
     pub(crate) fn is_anchored(self) -> bool {
-        matches!(self.mode, MappedClockMode::Anchored(_))
+        self.anchor().is_some()
+    }
+
+    pub(crate) fn is_compact_anchored(self) -> bool {
+        matches!(self.mode, MappedClockMode::CompactAnchored(_))
+    }
+
+    fn anchor(self) -> Option<AnchoredClock> {
+        match self.mode {
+            MappedClockMode::Anchored(anchor) | MappedClockMode::CompactAnchored(anchor) => {
+                Some(anchor)
+            }
+            MappedClockMode::Legacy { .. } => None,
+        }
     }
 
     /// A changed projection cannot replace the immutable original anchor or mode.
     pub(crate) fn replacement_anchor_matches(self, other: Self, frame: u64) -> bool {
         match (self.mode, other.mode) {
             (MappedClockMode::Legacy { .. }, MappedClockMode::Legacy { .. }) => true,
-            (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right)) => {
+            (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
+            | (MappedClockMode::CompactAnchored(left), MappedClockMode::CompactAnchored(right)) => {
                 self.marker == other.marker
                     && self.address_shift == other.address_shift
                     && left.matches_exact(right)
@@ -353,6 +374,9 @@ impl MappedSourceSpan {
         }
         if !self.contains(output_frame) {
             return None;
+        }
+        if self.epoch.is_compact_anchored() {
+            return self.local_compact_view().ok()?.position_at(output_frame);
         }
         if self.epoch.is_anchored() {
             return anchored::position_in_span(self, output_frame);
@@ -438,6 +462,12 @@ impl MappedLoopGeometry {
     pub(crate) fn domain(&self) -> SourceLoopDomain {
         self.domain
     }
+    /// Static optional preparation only; raw anchor and actual master admission
+    /// remain separate checks at the real execution frame.
+    pub(crate) fn has_compact_continuation(&self) -> bool {
+        self.exact_continuation
+            .is_some_and(|qualification| qualification.compact.is_some())
+    }
     pub(crate) fn exact_quarters(&self) -> f64 {
         self.quarters
     }
@@ -468,6 +498,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_compact_anchored() {
+            return self.position_at_compact(epoch, output_frame);
+        }
         if epoch.is_anchored() {
             self.validate_exact_continuation_epoch(epoch)?;
             return self.anchored_position_at(epoch, output_frame);
@@ -499,6 +532,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_compact_anchored() {
+            return self.refresh_span_compact(epoch, output_frame);
+        }
         if epoch.is_anchored() {
             return self.refresh_anchored_span(epoch, output_frame);
         }

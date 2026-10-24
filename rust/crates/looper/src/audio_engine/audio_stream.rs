@@ -929,13 +929,18 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             retirement.retire_global_playback_batch(batch);
         }
         ScheduledCommand::AdoptRuntimePolicy(work) => {
-            if retirement.available_retirement_slots() == 0 {
+            if retirement.available_retirement_slots()
+                < mixer.runtime_policy_retirement_slots(&work)
+            {
                 return ScheduledExecution::Pending(ScheduledCommand::AdoptRuntimePolicy(work));
             }
             // Actual E may be later than the original barrier after capacity refusal.
             // No phase was prepared or extrapolated by the owning request.
-            let (result, retry) =
-                mixer.adopt_runtime_policy_observed(&work, transport, output_frame);
+            let Some((result, retry)) =
+                mixer.adopt_runtime_policy_observed(&work, transport, output_frame, retirement)
+            else {
+                return ScheduledExecution::Pending(ScheduledCommand::AdoptRuntimePolicy(work));
+            };
             work.finish_with_retry(result, Some(output_frame), retry);
             retirement.retire_runtime_policy(work);
         }

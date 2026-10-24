@@ -604,7 +604,10 @@ impl RtMixer {
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
         if playback.is_mapped() {
-            if kind != SnapshotKind::GlobalRate {
+            if !matches!(
+                kind,
+                SnapshotKind::GlobalRate | SnapshotKind::RawScalarPolicy
+            ) {
                 return None;
             }
             let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
@@ -6033,6 +6036,7 @@ impl RtMixer {
                 let domain = voice
                     .mapped_start
                     .as_ref()
+                    .filter(|_| voice.source_playback.is_mapped())
                     .and_then(|owner| owner.mapped_geometry())
                     .map_or_else(
                         || voice.source_timing.loop_domain(sample_frames, loop_region),
@@ -6248,6 +6252,7 @@ impl RtMixer {
                     let domain = voice
                         .mapped_start
                         .as_ref()
+                        .filter(|_| voice.source_playback.is_mapped())
                         .and_then(|owner| owner.mapped_geometry())
                         .map_or_else(
                             || {

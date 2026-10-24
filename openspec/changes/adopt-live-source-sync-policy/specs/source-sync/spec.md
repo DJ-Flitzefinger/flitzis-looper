@@ -351,3 +351,53 @@ A temporary borrowed view MAY prepare constants once per reader chunk using at m
 - **AND** a skipped endpoint SHALL be evaluated from its own original segment rather than extrapolated from the current one
 
 This prerequisite SHALL NOT add a productive mixer/Native feed/adoption caller or establish callback throughput. Evidence SHALL cover complete consuming reader/endpoint/advance/refresh workloads at 2/4/6 active lanes, stress 20 with performance-related fallback 10, unchanged exact results/first PCM, allocation/layout and explicit 2-MiB compiled-stack gates. Extreme synthetic seam costs SHALL be identified separately. All productive conversion, common-phase, Native, musical, Human and FULL-Goal gates remain required.
+
+### Requirement: Initial dry conversion uses a complete compact callback path
+A supported running dry cohort MAY adopt the prepared original exact-intersection map at actual E through the existing runtime publication, scheduler and fixed 32-lane claim. Its compact actual-E constructor SHALL preserve the original separate source pair, inverse segment, M0, full original Some(P) domain, finite shifted master horizon, nominal and exact rate guards and first reader taps/gain/PCM. It SHALL use bounded original-map binary searches and small exact arithmetic without a wide constructor, wide validation scan or hidden wide fallback on realtime. A distinct compact anchored mode SHALL retain the original copied layouts and route generic reader, endpoint, advance, journal slice/merge/trim and continuation operations through that compact representation. Reader constants SHALL be prepared once per full or checked chunk using the same interpolation loops. Original geometry SHALL remain separately retained and borrowed for global refresh and endpoint association.
+
+#### Scenario: A scalar-born dry voice adopts an original prepared map
+- **WHEN** a genuine current runtime row, source admission, accepted timing acknowledgement and original selected delivery qualify at actual E
+- **THEN** conversion SHALL retain the effective map without fabricating an original launch
+- **AND** every active participant SHALL pass the final original claim before any request, trajectory or owner changes
+- **AND** unsupported preparation SHALL preserve ordinary legacy launch availability and preceding effective audio
+
+#### Scenario: A compact mapped voice returns to scalar timing
+- **WHEN** the complete dry cohort qualifies for a scalar target with the identical original reader domain
+- **THEN** scalar continuation SHALL preserve the exact current pair and begin the existing glide from the applied local rate
+- **AND** renderer domain selection SHALL follow effective playback mode while historical map custody remains safely retained
+- **AND** a genuine original launch SHALL remain retained across effective map replacement
+
+### Requirement: Dry adoption orders global intent and owner retirement
+The final dry policy effect SHALL acquire the existing nonblocking global timing lease before the engine-wide placement claim, revalidate the original raw timing/request/source/master fences under that lease and commit the complete cohort infallibly. Retry observations SHALL occur outside its own lease. Only lease CAS contention SHALL retain the exact scheduled Work as Pending; existing unsettled rate/drain work SHALL retain its established retryable refusal rather than block its own completion. Work and all displaced ownership SHALL have retirement capacity before the claim; last-owner destruction SHALL remain on the existing worker.
+
+#### Scenario: A publisher wins before the adoption claim
+- **WHEN** a newer global timing or hierarchy publication wins before the final leased claim
+- **THEN** the preceding capture SHALL NOT change any participant
+- **AND** lease contention SHALL retain the same scheduled owner for a fresh actual-E retry without a partial effect
+
+#### Scenario: Adoption wins the global lease first
+- **WHEN** the complete original cohort passes the final placement predicate under the existing global lease
+- **THEN** all trajectory/request/custody changes SHALL complete before a competing global publication can succeed
+- **AND** retry observation SHALL resume only after releasing that lease
+
+#### Scenario: Source-map cancellation overlaps final admission
+- **WHEN** the last original delivery-currentness check succeeds inside the final claim predicate and independent job cancellation overlaps afterward
+- **THEN** that successful check MAY linearize admission before cancellation
+- **AND** an already effective map SHALL retain genuine delivery-owner provenance and actual source admission without requiring the old analysis job to remain current
+- **AND** cancellation visible before that final check SHALL prevent adoption; the system SHALL NOT claim the placement marker serializes the independent cancellation atomic
+
+### Requirement: Conversion retry distinguishes immutable preparation from advancing eligibility
+Stable original prepared-map and reader-domain unavailability MAY suppress automatic Unsupported retry only with the actual once-read immutable snapshot/guard evidence. A whole-map nominal or exact slope-rate refusal MAY use that suppression only when the original once-read inputs and complete actual master projection match both retry observations; an actual master or map change SHALL invalidate it. A refusal depending on advancing cursor, raw fraction, actual E, finite-horizon eligibility or first PCM SHALL NOT receive that stable suppression token. Existing source/ACK/raw revision, stale, ABA, unreadable and exhausted observation guards SHALL remain.
+
+#### Scenario: Playback progress makes conversion eligible
+- **WHEN** a cursor-dependent refusal is followed by actual playback progress without a runtime policy edit
+- **THEN** automatic service SHALL remain eligible to retry the same current request
+- **AND** immutable unavailable-map refusals SHALL remain quiet without repeated owning work
+
+#### Scenario: A selected map job is cancelled after preparation but before adoption
+- **WHEN** a cached ready derivative loses its original pending delivery currentness without a runtime row edit
+- **THEN** unchanged off-realtime service SHALL detect that original availability transition and recapture once through the existing policy revision path
+- **AND** the resulting immutable unavailable class SHALL remain quiet until genuine recovery rather than repeat owning SourceChanged work
+- **AND** source and acknowledgement fences SHALL always remain mandatory; only additional map-availability recapture MAY be skipped for completely current effective audio that already retained the immutable map
+
+This initial productive intersection SHALL NOT certify general decimal-map coverage, common-grid phase convergence, unequal-loop or one-shot EOF completion, Native/pitch adoption, arbitrary mapped history projection, device/hearing acceptance or the complete SYNC feature. Existing adoption refusals for paused/Hold, Native, pitch, Key Lock, residency conflicts and transitions SHALL remain until their actual contracts are implemented. Later pause/Hold/resume/retrigger/rate/history operations on an admitted dry voice SHALL retain their established source and continuation guards.

@@ -8,6 +8,7 @@ use super::loader_events::LoaderEventDelivery;
 use super::pitch_actions::PitchActionReject;
 use super::source_beatmap::SourceBeatmap;
 use super::source_beatmap_artifact::SourceBeatmapArtifact;
+use super::source_reader::{FrameRange, SourceLoopDomain};
 use super::source_sync_policy::{GlobalTimingPolicy, SourceSyncMode, SourceSyncRequest};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,51 @@ pub(crate) struct SourceMapRow {
     pub(crate) intent_revision: u64,
     pub(crate) delivery: Option<LoaderEventDelivery>,
     pub(crate) exact_quarters: Option<f64>,
+}
+
+/// Stable off-realtime preparation class, never actual-E or source-adoption permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeMapClass {
+    Unavailable,
+    Unsupported,
+    Ready,
+}
+
+/// Exact immutable geometry fingerprint used by the original policy retry observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeMapDomain {
+    pub(crate) sample_frames: usize,
+    pub(crate) region: FrameRange,
+    pub(crate) period_bits: Option<u64>,
+}
+
+impl From<SourceLoopDomain> for RuntimeMapDomain {
+    fn from(domain: SourceLoopDomain) -> Self {
+        Self {
+            sample_frames: domain.sample_frames,
+            region: domain.region,
+            period_bits: domain.musical_period.map(f64::to_bits),
+        }
+    }
+}
+
+/// Copy evidence describes only the original snapshot's prepared map and domain.
+/// Cursor, raw fraction and actual-master horizon eligibility must be checked at actual E.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeMapPreparation {
+    pub(crate) class: RuntimeMapClass,
+    pub(crate) domain: Option<RuntimeMapDomain>,
+    pub(crate) witness: Option<SourceSyncWitness>,
+}
+
+impl RuntimeMapPreparation {
+    pub(crate) fn unavailable(witness: Option<SourceSyncWitness>) -> Self {
+        Self {
+            class: RuntimeMapClass::Unavailable,
+            domain: None,
+            witness,
+        }
+    }
 }
 
 /// The genuine original worker delivery owns the source qualification and artifact pin.
@@ -105,6 +151,11 @@ impl QualifiedSourceMap {
         self.witness
     }
 
+    /// Retained effective provenance only. Pending admission separately checks `current_for`.
+    pub(crate) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
+        self.delivery.source_map_belongs_to(ownership)
+    }
+
     pub(crate) fn sync_witness_for(
         &self,
         key: ContentKey,
@@ -133,7 +184,7 @@ impl QualifiedSourceMap {
             && self.delivery.source_map_binding_current(ownership, binding)
     }
 
-    fn same_projection(&self, other: &Self) -> bool {
+    pub(super) fn same_projection(&self, other: &Self) -> bool {
         self.key == other.key
             && self.generation == other.generation
             && self.loaded_rate == other.loaded_rate
@@ -155,6 +206,25 @@ pub(crate) struct SourceMapProjection {
 }
 
 impl SourceMapProjection {
+    pub(crate) fn selected_sync_witness(&self) -> Option<SourceSyncWitness> {
+        self.selected.as_ref().map(QualifiedSourceMap::sync_witness)
+    }
+
+    /// Borrow only the selected original row; no fresh capture or proxy can supply its custody.
+    /// Runtime policy owns its publication revision and repeats this source check at admission.
+    pub(crate) fn runtime_map(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> Option<&QualifiedSourceMap> {
+        if self.request().mode != SourceSyncMode::Mapped {
+            return None;
+        }
+        self.selected
+            .as_ref()
+            .filter(|selected| selected.current_for(ownership, binding))
+    }
+
     #[cfg(test)]
     pub(crate) fn intent_revision_for_test(&self) -> u64 {
         self.intent_revision

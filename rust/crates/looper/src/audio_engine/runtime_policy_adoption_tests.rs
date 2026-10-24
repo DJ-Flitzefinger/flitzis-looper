@@ -4,6 +4,9 @@
 #[path = "runtime_policy_retry_tests.rs"]
 mod retry_tests;
 
+#[path = "runtime_policy_mapped_tests.rs"]
+mod mapped_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     ScheduledExecution, drain_parameter_messages, execute_scheduled_command,

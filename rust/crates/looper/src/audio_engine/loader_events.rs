@@ -24,6 +24,15 @@ pub struct LoaderEventDelivery {
 }
 
 impl LoaderEventDelivery {
+    /// Effective immutable map custody keeps its genuine original Native owner after admission.
+    /// Later job cancellation revokes pending work, not this comparison-only provenance.
+    pub(super) fn source_map_belongs_to(
+        &self,
+        ownership: &std::sync::Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    ) -> bool {
+        self.owner.belongs_to(ownership)
+    }
+
     pub(super) fn source_beatmap_raw_for(
         &self,
         owner: &super::complete_context::NativeAnalysisOwner,

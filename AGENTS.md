@@ -1,3 +1,33 @@
+## Next-chat full Goal handoff — direct Human instruction, 2026-10-24
+
+Finish only the current coherent productive initial-intersection dry conversion
+block with appropriate actual checks, final independent review, English commit,
+normal existing-main push, fresh clean HEAD/tracking/actual-remote equality and
+guarded own cleanup. Then stop independent implementation in the predecessor.
+The Human will open the next LOOPER chat and write `weiter`; only that actual
+start activates or reuses ONE FULL Goal without a token budget or another start
+question. Setup alone waits. Do not create a narrow Goal, message or resume old
+chats, invent automatic overnight execution, or mark incomplete work complete.
+
+Binding full successor handoff lives in the original workspace outside this Git
+checkout: `../codex-meta/handoff/pre-rust-successor-20261024-dry-sync.md`, alongside
+`goal-next-activation.txt`, identical `goal-next-objective.txt`, `goal-scope.md` and
+all preserved original references. Read startup3 first. Preserve ALL original,
+extension, Human and final gates; complete SYNC/REALTIME BPM first and repair the
+actual interrupted Portable update afterward. Reconcile current delivered code,
+real evidence and the remaining contracts rather than rebuilding historical OPEN
+recipes. Stop before full Rust-port planning/implementation or Slice8.
+
+The dedicated function-interaction specialist must review concrete plans before
+writer GO and the actual frozen combined attempt before integrated checks/builds;
+Root retains end-to-end responsibility. Each successfully checked coherent step
+requires review, English Conventional Commit, normal existing-main push and fresh
+clean remote equality before the next independent step, without extra approval.
+Preserve source/ACK/retirement/realtime, App/private data, English and storage
+rules. Capacity errors require interruptible20/40/max60-second unlimited same-step
+retries; inspect unknown effects first. No unilateral model/scope change or
+voluntary Goal stop solely for capacity. No new destructive Git/remote/PR rights.
+
 ## Repository language rule — direct Human instruction, 2026-10-23
 
 Conversation with the Human is explicitly in German. Everything committed or

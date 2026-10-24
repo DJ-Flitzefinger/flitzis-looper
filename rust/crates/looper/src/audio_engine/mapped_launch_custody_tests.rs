@@ -407,6 +407,7 @@ fn real_python_source_sync_status_matches_native_binding_then_reports_pending_di
         let map = Py::new(py, map).unwrap();
         let code = std::ffi::CString::new(r#"
 from types import SimpleNamespace
+from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapObservation
 from flitzis_looper.controller.transport.source_sync import SourceSyncController
 from flitzis_looper.models import ProjectState, PadContentIdentity
 from flitzis_looper.source_sync_intent import PadSourceSyncIntent
@@ -431,6 +432,7 @@ def make(audio, geometry):
     controller = SourceSyncController(transport)
     controller.bind_source_maps(SimpleNamespace(
         effective=lambda pad: geometry, status=lambda pad: 'effective', errors={},
+        _observe_state=lambda pad: SourceBeatmapObservation(geometry, 'effective', None),
     ))
     feedback = audio.pad_source_sync_status(0)
     assert feedback['active'] and feedback['effective'] and feedback['policy_mode'] == 'mapped'

@@ -12,7 +12,9 @@ use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_mapping::InputRuntime;
-use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
+use crate::audio_engine::input_runtime_binding::{
+    self, InputRuntimeOwnership, InputRuntimePadBinding,
+};
 use crate::audio_engine::loader_events::LoaderEventDelivery;
 use crate::audio_engine::pad_start::CapturedPadStart;
 use crate::audio_engine::pitch_actions::PitchActionReject;
@@ -24,6 +26,201 @@ use crate::audio_engine::timing::InputClock;
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ControlParameterMessage, TriggerQuantization};
 use std::sync::{Arc, Mutex};
+
+fn live_map_delivery(
+    fixture: &ColdCustody,
+    middle: Option<(f64, f64)>,
+) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+    let mut expected = record(fixture, 0);
+    let anchor = |id: &str, seconds, beat| {
+        serde_json::json!({
+            "id": id, "source_seconds_bits": bits(seconds), "beat_bits": bits(beat),
+            "raw_beat_index": null, "review": "reviewed", "sample_edit": null,
+        })
+    };
+    let mut anchors = vec![anchor("start", 0.0, 0.0)];
+    if let Some((seconds, beat)) = middle {
+        anchors.push(anchor("middle", seconds, beat));
+    }
+    anchors.push(anchor("end", 1.0, 4.0));
+    expected["record"]["accepted"]["intervals"] = serde_json::json!(
+        vec![expected["record"]["accepted"]["intervals"][0].clone(); anchors.len() - 1]
+    );
+    expected["record"]["accepted"]["anchors"] = serde_json::json!(anchors);
+    seal(&mut expected);
+    let (job, event) = stored_event(fixture, &expected);
+    let delivery = Python::attach(|py| {
+        let event = event.bind(py).cast::<PyDict>().unwrap();
+        let owner = event.get_item("_native_event_owner").unwrap().unwrap();
+        let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
+        assert!(job.resolve_source_beatmap_artifact_completion(&delivery).unwrap().is_some());
+        delivery.clone()
+    });
+    (job, delivery)
+}
+
+fn publish_live_map(fixture: &ColdCustody, delivery: &LoaderEventDelivery, revision: u64) {
+    let current = binding(fixture, 0);
+    let mut bindings = vec![None; NUM_SAMPLES];
+    bindings[0] = Some(current);
+    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
+    maps[0] = SourceMapRow {
+        sync_requested: true,
+        intent_revision: revision,
+        delivery: Some(delivery.clone()),
+        exact_quarters: None,
+    };
+    fixture.engine.input_runtime.as_ref().unwrap().set_runtime_state_with_source_maps(
+        true,
+        (0..NUM_SAMPLES).map(|id| id == 0).collect(),
+        vec![0.0; NUM_SAMPLES],
+        vec![Some(1.0); NUM_SAMPLES],
+        bindings.iter().map(Option::as_ref).collect(),
+        Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
+            sync: true, key_lock: false, ..Default::default()
+        }; NUM_SAMPLES]),
+        Some(maps),
+    ).unwrap();
+}
+
+fn live_map_snapshot(
+    fixture: &mut ColdCustody,
+) -> Arc<crate::audio_engine::input_mapping::RuntimePolicySnapshot> {
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    runtime.request_runtime_policy_adoption().unwrap();
+    let snapshot = runtime.runtime_policy_snapshot().unwrap().unwrap();
+    // This custody fixture has no adoption effect. Release queued work on the control thread
+    // so cache reuse can be examined independently of actual callback acknowledgement.
+    while let Ok(command) = fixture.consumer.pop() {
+        if let crate::messages::ControlMessage::AdoptRuntimePolicy(work) = command {
+            work.finish(Err(crate::audio_engine::input_mapping::RuntimePolicyError::Unsupported), None);
+        }
+    }
+    snapshot
+}
+
+#[test]
+fn runtime_map_snapshot_reuses_original_prepared_owner_without_inventing_a_launch() {
+    use crate::audio_engine::pad_start::PadStartCustody;
+    use crate::audio_engine::source_map_admission::RuntimeMapClass;
+    let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
+    let (_job, delivery) = live_map_delivery(&path.source, None);
+    publish_live_map(&path.source, &delivery, 1);
+    let snapshot = live_map_snapshot(&mut path.source);
+    let source = snapshot.prepared_map(0).unwrap();
+    let preparation = snapshot.map_preparation(0);
+    assert_eq!(preparation.class, RuntimeMapClass::Ready);
+    assert_eq!(preparation.witness.unwrap().intent_revision, 1);
+    let domain = preparation.domain.unwrap();
+    assert_eq!(domain.sample_frames, 65_536);
+    assert_eq!(domain.region, crate::audio_engine::source_reader::FrameRange { start: 0, end: 48_000 });
+    assert_eq!(domain.period_bits, Some(48_000.0_f64.to_bits()));
+    assert_eq!(snapshot.row(0).unwrap().map_preparation, preparation);
+    assert!(snapshot.map_current(0));
+    assert!(source.geometry().has_compact_continuation());
+    assert!(source.belongs_to(&path.source.engine.input_runtime_ownership));
+    assert!(!source.belongs_to(&Arc::new(InputRuntimeOwnership::default())));
+    let custody = PadStartCustody::for_runtime_map(source);
+    assert!(custody.original_launch().is_none());
+    assert!(Arc::ptr_eq(custody.effective_source().unwrap(), source));
+    let cached = live_map_snapshot(&mut path.source);
+    assert!(Arc::ptr_eq(&snapshot, &cached));
+    assert!(Arc::ptr_eq(source, cached.prepared_map(0).unwrap()));
+
+    publish_live_map(&path.source, &delivery, 2);
+    let next = live_map_snapshot(&mut path.source);
+    let next_source = next.prepared_map(0).unwrap();
+    assert!(!Arc::ptr_eq(source, next_source));
+    assert!(source.same_source(next_source), "a raw request revision is not a new map trajectory");
+    assert_ne!(preparation.witness, next.map_preparation(0).witness);
+    assert!(!snapshot.map_current(0));
+    assert!(next.map_current(0));
+    assert!(custody.original_launch().is_none());
+}
+
+#[test]
+fn map_job_cancel_revokes_pending_runtime_admission_but_preserves_effective_original_pins() {
+    use crate::audio_engine::pad_start::PadStartCustody;
+    let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
+    let (job, delivery) = live_map_delivery(&path.source, None);
+    publish_live_map(&path.source, &delivery, 1);
+    let snapshot = live_map_snapshot(&mut path.source);
+    assert!(snapshot.row_current(0) && snapshot.map_current(0));
+    let source = snapshot.prepared_map(0).unwrap();
+    let custody = PadStartCustody::for_runtime_map(source);
+    let coordinate = source.geometry().map().canonical_source_at_beat(2.0);
+    job.cancel();
+    assert!(snapshot.row_current(0), "data-only cancellation keeps runtime and source intent");
+    assert!(!snapshot.map_current(0), "the original job token still fences pending admission");
+    assert!(source.belongs_to(&path.source.engine.input_runtime_ownership));
+    assert!(delivery.source_map_belongs_to(&path.source.engine.input_runtime_ownership));
+    assert_eq!(source.geometry().map().canonical_source_at_beat(2.0), coordinate);
+    assert!(Arc::ptr_eq(custody.effective_source().unwrap(), source));
+    assert!(custody.original_launch().is_none());
+}
+
+#[test]
+fn unsupported_exact_runtime_derivative_keeps_original_legacy_launch_and_domain_evidence() {
+    use crate::audio_engine::source_map_admission::RuntimeMapClass;
+    let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
+    // The original binary64 0.1 * 48000 has a rounded product which differs from its
+    // exact dyadic product. Legacy geometry is valid; the existing exact intersection refuses.
+    let (_job, delivery) = live_map_delivery(&path.source, Some((0.1, 0.4)));
+    publish_live_map(&path.source, &delivery, 3);
+    let snapshot = live_map_snapshot(&mut path.source);
+    let preparation = snapshot.map_preparation(0);
+    assert_eq!(preparation.class, RuntimeMapClass::Unsupported);
+    assert_eq!(preparation.domain.unwrap().period_bits, Some(48_000.0_f64.to_bits()));
+    assert!(preparation.witness.is_some());
+    assert!(snapshot.prepared_map(0).is_none());
+    assert!(snapshot.map_current(0));
+    let launch = CapturedPadStart::capture_from_binding(
+        &binding(&path.source, 0), 0.0, Some(1.0), 1.0, false, 0, (48_000, 2), None,
+    ).unwrap();
+    assert!(launch.mapped_geometry().is_some());
+    assert!(!launch.mapped_geometry().unwrap().has_compact_continuation());
+    assert_eq!(launch.sync_request().mode, crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped);
+    let cached = live_map_snapshot(&mut path.source);
+    assert!(Arc::ptr_eq(&snapshot, &cached));
+    assert_eq!(cached.map_preparation(0), preparation);
+}
+
+#[test]
+fn effective_map_replacement_moves_old_arc_to_retirement_and_keeps_genuine_original_launch() {
+    use crate::audio_engine::pad_start::PadStartCustody;
+    let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
+    let (_first_job, first) = live_map_delivery(&path.source, None);
+    publish_live_map(&path.source, &first, 1);
+    let original = CapturedPadStart::capture_from_binding(
+        &binding(&path.source, 0), 0.0, Some(1.0), 1.0, false, 0, (48_000, 2), None,
+    ).unwrap();
+    let first_snapshot = live_map_snapshot(&mut path.source);
+    let first_source = first_snapshot.prepared_map(0).unwrap().clone();
+    let weak_first = Arc::downgrade(&first_source);
+    // Exercise aggregate storage only; this does not manufacture a voice/adoption permission.
+    let mut custody = PadStartCustody::from(original.clone());
+    assert!(custody.replace_effective_map(&first_source).is_none());
+    assert!(custody.original_launch().unwrap().same_owner(&original));
+    let (_second_job, second) = live_map_delivery(&path.source, Some((0.5, 1.0)));
+    publish_live_map(&path.source, &second, 2);
+    let second_snapshot = live_map_snapshot(&mut path.source);
+    let second_source = second_snapshot.prepared_map(0).unwrap();
+    assert!(!first_source.same_source(second_source));
+    let retired = custody.replace_effective_map(second_source).unwrap();
+    assert!(retired.original_launch().is_none());
+    assert!(Arc::ptr_eq(retired.effective_source().unwrap(), &first_source));
+    assert!(Arc::ptr_eq(custody.effective_source().unwrap(), second_source));
+    assert!(custody.original_launch().unwrap().same_owner(&original));
+    let count = Arc::strong_count(second_source);
+    assert!(custody.replace_effective_map(second_source).is_none());
+    assert_eq!(Arc::strong_count(second_source), count);
+    drop(first_source);
+    drop(first_snapshot);
+    assert_eq!(Arc::strong_count(retired.effective_source().unwrap()), 1);
+    assert!(weak_first.upgrade().is_some(), "the exact displaced map still belongs to retirement");
+    drop(retired); // This fixture releases the last source owner on its control/test thread.
+    assert!(weak_first.upgrade().is_none());
+}
 
 fn runtime_fixture() -> ColdCustody {
     let mut fixture = layout_fixture("legacy");

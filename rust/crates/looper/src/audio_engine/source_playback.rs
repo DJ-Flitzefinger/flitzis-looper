@@ -6,7 +6,8 @@
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::mapped_source_clock::{
-    CompactSpanView, MappedClockEpoch, MappedClockError, MappedLoopGeometry, MappedSourceSpan,
+    CompactLocalSpanView, CompactSpanView, MappedClockEpoch, MappedClockError, MappedLoopGeometry,
+    MappedSourceSpan,
 };
 #[cfg(test)]
 use super::source_reader::FrameRange;
@@ -46,6 +47,20 @@ impl CompactPlaybackView<'_> {
     }
 }
 
+/// Prepared coordinates from an already admitted compact span. This contains no
+/// geometry owner and is discarded after the reader chunk or copied query.
+pub(crate) struct CompactLocalPlaybackView {
+    span: CompactLocalSpanView,
+    intended_output_frame: u64,
+}
+
+impl CompactLocalPlaybackView {
+    pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
+        self.span
+            .position_at(self.intended_output_frame.checked_add(offset as u64)?)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScalarProjection {
     Legacy,
@@ -68,6 +83,55 @@ pub(crate) struct SourcePlayback {
 }
 
 impl SourcePlayback {
+    /// Bounded actual-E coordinates. Original source/map/ACK custody and the
+    /// complete live cohort claim remain the caller's separate responsibility.
+    pub(crate) fn mapped_anchored_compact_continuation(
+        geometry: &MappedLoopGeometry,
+        marker: u64,
+        timeline: super::transport::TransportTimeline,
+        original_domain: SourceLoopDomain,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let epoch = MappedClockEpoch::anchored_compact(
+            marker,
+            timeline,
+            geometry,
+            original_domain,
+            position,
+            output_frame,
+        )?;
+        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        if !same_position(position, replacement.origin) {
+            return Err(MappedClockError::NumericalUnavailable);
+        }
+        Ok(replacement)
+    }
+
+    /// A tagged span has already passed whole-original-geometry admission.
+    /// Untagged legacy and explicit wide reference trajectories retain their path.
+    pub(crate) fn local_compact_view(
+        &self,
+    ) -> Result<Option<CompactLocalPlaybackView>, MappedClockError> {
+        let Some(state) = self
+            .mapped
+            .filter(|state| state.span.epoch().is_compact_anchored())
+        else {
+            return Ok(None);
+        };
+        let span = state.span.local_compact_view()?;
+        if !span
+            .position_at(state.intended_output_frame)
+            .is_some_and(|position| same_position(position, self.origin))
+        {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        Ok(Some(CompactLocalPlaybackView {
+            span,
+            intended_output_frame: state.intended_output_frame,
+        }))
+    }
+
     /// Reference anchored map coordinates only; no productive caller or realtime-cost permit.
     /// The caller retains the same qualified original owning geometry and reader custody.
     pub(crate) fn mapped_anchored_continuation(
@@ -285,6 +349,11 @@ impl SourcePlayback {
 
     pub(crate) fn is_mapped(&self) -> bool {
         self.mapped.is_some()
+    }
+
+    pub(crate) fn is_compact_mapped(&self) -> bool {
+        self.mapped
+            .is_some_and(|state| state.span.epoch().is_compact_anchored())
     }
 
     /// Stable renderer configuration only, never playback progress or permission.

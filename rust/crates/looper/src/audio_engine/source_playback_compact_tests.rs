@@ -1165,3 +1165,346 @@ fn descriptive_compact_consuming_cohorts_report_median_max_and_actual_work() {
         }
     }
 }
+
+fn tagged_playback(
+    geometry: &MappedLoopGeometry,
+    actual: TransportTimeline,
+    raw: FractionalSourcePosition,
+    first: u64,
+) -> SourcePlayback {
+    SourcePlayback::mapped_anchored_compact_continuation(
+        geometry,
+        MARKER,
+        actual,
+        geometry.domain(),
+        raw,
+        first,
+    )
+    .unwrap()
+}
+
+#[test]
+fn tagged_generic_full_and_checked_readers_prepare_once_and_never_enter_wide_queries() {
+    use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
+    let geometry = variable_geometry();
+    let sample = sample();
+    let actual = timeline(false);
+    let raw = position(17, 0.25);
+    let compact = tagged_playback(&geometry, actual, raw, 17);
+    let wide_epoch = epoch(&geometry, actual, raw, 17);
+    let wide = SourcePlayback::mapped(&geometry, wide_epoch, 17).unwrap();
+    assert!(compact.is_compact_mapped());
+    assert!(!wide.is_compact_mapped());
+    assert!(!compact.matches_exact(&wide));
+    for reader in [Reader::Full, Reader::Checked] {
+        let mut expected = [vec![f32::NAN; BLOCK], vec![f32::NAN; BLOCK]];
+        let mut observed = [vec![f32::NAN; BLOCK], vec![f32::NAN; BLOCK]];
+        plan(wide)
+            .fill_fractional_buffers_checked_with_readers(
+                &sample,
+                StemReadSets::default(),
+                &wide,
+                &mut expected,
+                BLOCK,
+            )
+            .unwrap();
+        let (result, counts) = observe_compact_queries_for_test(|| match reader {
+            Reader::Full => plan(compact).fill_fractional_buffers_with_readers(
+                &sample,
+                StemReadSets::default(),
+                &compact,
+                &mut observed,
+                BLOCK,
+            ),
+            Reader::Checked => plan(compact).fill_fractional_buffers_checked_with_readers(
+                &sample,
+                StemReadSets::default(),
+                &compact,
+                &mut observed,
+                BLOCK,
+            ),
+        });
+        result.unwrap();
+        assert_eq!(counts, (1, 0));
+        for (observed, expected) in observed.iter().flatten().zip(expected.iter().flatten()) {
+            assert_eq!(observed.to_bits(), expected.to_bits());
+        }
+        assert_first_pcm(&sample, compact, &observed);
+    }
+}
+
+#[test]
+fn tagged_generic_partitioned_advance_refresh_resume_and_projection_preserve_original_trajectory() {
+    use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
+    let geometry = variable_geometry();
+    let actual = timeline(true);
+    let first = 1_u64 << 53;
+    let raw = position(23_999, 1.0_f64.next_down());
+    let initial = tagged_playback(&geometry, actual, raw, first);
+    let wide_epoch = epoch(&geometry, actual, raw, first);
+    let mut expected = SourcePlayback::mapped(&geometry, wide_epoch, first).unwrap();
+    expected
+        .project_mapped_to(&geometry, first + 32_000)
+        .unwrap();
+    for partition in [&[512][..], &[73, 511, 7, 127, 3][..]] {
+        let (mut compact, (_, wide_entries)) = observe_compact_queries_for_test(|| {
+            let mut compact = initial;
+            let mut rendered = 0;
+            let mut chunk = 0;
+            while rendered < 32_000 {
+                let remaining = partition[chunk % partition.len()].min(32_000 - rendered);
+                let (frames, _) = compact.chunk(remaining);
+                if frames == 0 {
+                    compact.refresh_mapped_span(&geometry).unwrap();
+                    continue;
+                }
+                let next = compact.position_at(frames).unwrap();
+                assert!(compact.advance(frames));
+                assert_position(compact.position(), next);
+                rendered += frames;
+                chunk += 1;
+            }
+            compact.refresh_mapped_span(&geometry).unwrap();
+            compact
+        });
+        assert_eq!(wide_entries, 0);
+        assert_position(compact.position(), expected.position());
+        assert_eq!(
+            compact.mapped_output_frame(),
+            expected.mapped_output_frame()
+        );
+        let saved = compact;
+        assert!(compact.replace_mapped_epoch(&geometry, wide_epoch).is_err());
+        assert_complete_copy(&compact, &saved);
+        let paused = compact.position();
+        compact
+            .resume_mapped_at(&geometry, &actual, first + 32_031)
+            .unwrap();
+        assert_position(compact.position(), paused);
+        assert!(compact.is_compact_mapped());
+        let mut resumed_wide = expected;
+        resumed_wide
+            .resume_mapped_at(&geometry, &actual, first + 32_031)
+            .unwrap();
+        compact
+            .project_mapped_to(&geometry, first + 32_032)
+            .unwrap();
+        resumed_wide
+            .project_mapped_to(&geometry, first + 32_032)
+            .unwrap();
+        assert_position(compact.position(), resumed_wide.position());
+    }
+    let frame = first + 32_000;
+    let mut compact = initial;
+    compact.project_mapped_to(&geometry, frame).unwrap();
+    let mut changed = actual;
+    assert!(changed.set_master_period_preserving_beat_position_at_frame(0.25, frame));
+    let replacement = compact
+        .mapped_epoch()
+        .unwrap()
+        .with_timeline_at(changed, frame)
+        .unwrap();
+    compact
+        .replace_mapped_epoch(&geometry, replacement)
+        .unwrap();
+    let wide_replacement = wide_epoch.with_timeline_at(changed, frame).unwrap();
+    expected
+        .replace_mapped_epoch(&geometry, wide_replacement)
+        .unwrap();
+    assert_position(compact.position(), expected.position());
+    assert_eq!(
+        compact.tempo_ratio().to_bits(),
+        expected.tempo_ratio().to_bits()
+    );
+    compact.project_mapped_to(&geometry, frame + 513).unwrap();
+    expected.project_mapped_to(&geometry, frame + 513).unwrap();
+    assert_position(compact.position(), expected.position());
+}
+
+#[test]
+fn tagged_journal_slice_merge_and_trim_keep_exact_coordinates_without_wide_fallback() {
+    use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
+    use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
+    use crate::audio_engine::source_feed_history::{
+        SOURCE_FEED_HISTORY_MAX_FRAMES, SourceFeedContext, SourceFeedHistory, SourceFeedSnapshot,
+        SourceFeedSpan,
+    };
+    let geometry = variable_geometry();
+    let sample = sample();
+    let actual = timeline(false);
+    let raw = position(17, 0.25);
+    let mut compact = tagged_playback(&geometry, actual, raw, 17);
+    let wide_epoch = epoch(&geometry, actual, raw, 17);
+    let context = SourceFeedContext::new(
+        ProductiveSourceBinding::new(&sample, RATE, None),
+        StemReadSets::default(),
+    );
+    let first_span = SourceFeedSpan {
+        active_start: 0,
+        frames: 512,
+        playback: compact,
+        plan: plan(compact),
+        context,
+    };
+    let suffix = first_span.slice(73, 439).unwrap();
+    assert_position(suffix.playback.position(), compact.position_at(73).unwrap());
+    let mut journal = SourceFeedHistory::new();
+    let mut snapshot = SourceFeedSnapshot::new();
+    let total = SOURCE_FEED_HISTORY_MAX_FRAMES + 777;
+    // Journal bookkeeping is isolated generated-coordinate evidence. The separate
+    // generic-reader test proves actual PCM; these entries do not grant source permits.
+    let (_, (_, wide_entries)) = observe_compact_queries_for_test(|| {
+        let mut rendered = 0;
+        while rendered < total {
+            let (frames, _) = compact.chunk((total - rendered).min(512));
+            if frames == 0 {
+                compact.refresh_mapped_span(&geometry).unwrap();
+                continue;
+            }
+            journal.record_success(compact, plan(compact), context, frames);
+            assert!(compact.advance(frames));
+            rendered += frames;
+        }
+        assert!(journal.capture_into(&mut snapshot));
+    });
+    assert_eq!(wide_entries, 0);
+    assert_eq!(snapshot.retained_range(), Some(777..total as u64));
+    assert!(snapshot.spans().len() < total / 512);
+    for span in snapshot.spans() {
+        let expected = geometry
+            .position_at(wide_epoch, 17 + span.active_start)
+            .unwrap();
+        assert_position(span.playback.position(), expected);
+        let offset = span.frames / 2;
+        let slice = span.slice(offset, span.frames - offset).unwrap();
+        let expected = geometry
+            .position_at(wide_epoch, 17 + span.active_start + offset as u64)
+            .unwrap();
+        assert_position(slice.playback.position(), expected);
+    }
+    let mut checkpoint = crate::audio_engine::prepared_native_history::SourceReadCheckpoint {
+        playback: compact,
+        plan: plan(compact),
+    };
+    let before = checkpoint;
+    assert!(!checkpoint.project_output_frames(1));
+    assert!(checkpoint.matches_exact(before));
+}
+
+#[test]
+fn actual_e_constructor_and_generic_consuming_reader_fit_two_mib_without_rust_allocations() {
+    use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<MappedSourceSpan>();
+    assert_copy::<SourcePlayback>();
+    assert!(!std::mem::needs_drop::<MappedSourceSpan>());
+    assert!(!std::mem::needs_drop::<SourcePlayback>());
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+    assert!(std::mem::size_of::<[SourcePlayback; MAX_VOICES]>() <= 16 * 1024);
+    let geometry = variable_geometry();
+    let sample = sample();
+    let actual = timeline(false);
+    let initial = prepared_lanes(&geometry, Shape::NegativeZero, 6);
+    let mut reference = reference_lanes(&geometry, initial, 6);
+    let mut reference_scratch = buffers(6);
+    let mut reference_output = buffers(6);
+    let mut reference_work = [Work::default(); 6];
+    render_reference(
+        &geometry,
+        &sample,
+        &mut reference[..6],
+        &mut reference_scratch,
+        &mut reference_output,
+        &mut reference_work,
+        Reader::Checked,
+    );
+    let child_geometry = geometry.clone();
+    let child_sample = sample.clone();
+    let mut scratch = buffers(6);
+    let mut output = buffers(6);
+    let child = std::thread::Builder::new()
+        .name("actual-e-compact-two-mib".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let mut work = [Work::default(); 6];
+            let ((playback, counts), allocations) = observe_current_thread(|| {
+                observe_compact_queries_for_test(|| {
+                    // The bounded actual-E constructor is INSIDE the observed child.
+                    let first = tagged_playback(&child_geometry, actual, position(17, -0.0), 17);
+                    let mut playback = [first; MAX_VOICES];
+                    for (lane, slot) in playback.iter_mut().enumerate().take(6).skip(1) {
+                        *slot = tagged_playback(
+                            &child_geometry,
+                            actual,
+                            position(17 + lane * 7, -0.0),
+                            17,
+                        );
+                    }
+                    render_reference(
+                        &child_geometry,
+                        &child_sample,
+                        &mut playback[..6],
+                        &mut scratch,
+                        &mut output,
+                        &mut work,
+                        Reader::Checked,
+                    );
+                    playback
+                })
+            });
+            (playback, output, work, allocations, counts)
+        })
+        .unwrap();
+    let (playback, output, work, allocations, counts) = child.join().unwrap();
+    assert_eq!(allocations, ThreadAllocations::default());
+    assert_eq!(counts.1, 0);
+    assert!(counts.0 >= 6);
+    assert_pcm(&output, &reference_output);
+    for lane in 0..6 {
+        assert!(playback[lane].is_compact_mapped());
+        assert!(!playback[lane].matches_exact(&reference[lane]));
+        assert_position(playback[lane].position(), reference[lane].position());
+        assert_eq!(
+            playback[lane].mapped_output_frame(),
+            reference[lane].mapped_output_frame()
+        );
+        assert_eq!(work[lane], reference_work[lane]);
+    }
+}
+
+#[test]
+fn tagged_terminal_queries_advance_and_checked_output_keep_atomic_refusals() {
+    use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
+    let geometry = variable_geometry();
+    let sample = sample();
+    let first = u64::MAX - 1;
+    let mut compact = tagged_playback(&geometry, timeline(false), position(17, 0.25), first);
+    let before = compact;
+    let mut output = [vec![-91.0; 2], vec![-92.0; 2]];
+    let unchanged = output.clone();
+    let (_, (_, wide_entries)) = observe_compact_queries_for_test(|| {
+        assert!(!compact.advance(2));
+        assert_complete_copy(&compact, &before);
+        assert!(
+            plan(compact)
+                .fill_fractional_buffers_checked_with_readers(
+                    &sample,
+                    StemReadSets::default(),
+                    &compact,
+                    &mut output,
+                    2,
+                )
+                .is_err()
+        );
+        assert_eq!(output, unchanged);
+        assert!(compact.advance(1));
+        assert_eq!(compact.mapped_output_frame(), Some(u64::MAX));
+        assert_position(compact.position(), before.position());
+        let terminal = compact;
+        assert!(compact.position_at(1).is_none());
+        assert!(!compact.advance(1));
+        assert!(compact.refresh_mapped_span(&geometry).is_err());
+        assert_complete_copy(&compact, &terminal);
+    });
+    assert_eq!(wide_entries, 0);
+}

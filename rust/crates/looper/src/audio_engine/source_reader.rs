@@ -786,6 +786,19 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        if let Some(view) = playback
+            .local_compact_view()
+            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?
+        {
+            return self.fill_fractional_buffers_queried(
+                sample,
+                readers,
+                playback,
+                buffers,
+                output_frames,
+                |frame| view.position_at(frame),
+            );
+        }
         self.fill_fractional_buffers_queried(
             sample,
             readers,
@@ -891,6 +904,19 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        if let Some(view) = playback
+            .local_compact_view()
+            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?
+        {
+            return self.fill_fractional_buffers_checked_queried(
+                sample,
+                readers,
+                playback,
+                buffers,
+                output_frames,
+                |frame| view.position_at(frame),
+            );
+        }
         self.fill_fractional_buffers_checked_queried(
             sample,
             readers,

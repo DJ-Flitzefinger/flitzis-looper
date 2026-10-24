@@ -56,6 +56,8 @@ impl MappedClockEpoch {
         position: FractionalSourcePosition,
         output_frame: u64,
     ) -> Result<Self, MappedClockError> {
+        #[cfg(test)]
+        super::compact::observe_wide_entry_for_test();
         let unavailable = MappedClockError::NumericalUnavailable;
         if marker == 0 || output_frame == u64::MAX {
             return Err(MappedClockError::InvalidEpoch);
@@ -119,6 +121,8 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        #[cfg(test)]
+        super::compact::observe_wide_entry_for_test();
         let unavailable = MappedClockError::NumericalUnavailable;
         epoch.anchored_horizon().ok_or(unavailable)?;
         let phase = phase_at(
@@ -147,6 +151,8 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        #[cfg(test)]
+        super::compact::observe_wide_entry_for_test();
         let unavailable = MappedClockError::NumericalUnavailable;
         if output_frame == u64::MAX {
             return Err(unavailable);
@@ -225,6 +231,8 @@ pub(super) fn position_in_span(
     span: MappedSourceSpan,
     output_frame: u64,
 ) -> Option<FractionalSourcePosition> {
+    #[cfg(test)]
+    super::compact::observe_wide_entry_for_test();
     // Extrema and the complete horizon were admitted at span construction; never
     // repeat those wide admission scans on this per-frame reference-query path.
     let phase = phase_at(
@@ -246,10 +254,7 @@ pub(super) fn position_in_span(
 }
 
 fn anchor(epoch: MappedClockEpoch) -> Option<AnchoredClock> {
-    match epoch.mode {
-        MappedClockMode::Anchored(anchor) => Some(anchor),
-        MappedClockMode::Legacy { .. } => None,
-    }
+    epoch.anchor()
 }
 
 fn frame_grid(seconds: f64, loaded_rate_hz: u32) -> Option<SourceInteger> {

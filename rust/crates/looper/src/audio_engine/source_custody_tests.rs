@@ -206,7 +206,7 @@ pub(in crate::audio_engine) mod cold {
             self.load_and_ack_selected_with_frames(id, hint, 128);
         }
 
-        fn load_and_ack_selected_with_frames(
+        pub(in crate::audio_engine) fn load_and_ack_selected_with_frames(
             &mut self,
             id: usize,
             hint: Option<ResidentLoadHint>,

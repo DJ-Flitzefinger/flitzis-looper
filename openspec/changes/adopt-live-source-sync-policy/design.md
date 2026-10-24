@@ -730,3 +730,48 @@ microbenchmarks. Require independent exact fixtures, existing reference equality
 actual PCM/layout/allocation and explicit 2-MiB tests plus descriptive 2/4/6 and
 stress 20/performance-related 10. Productive conversion, callback throughput and
 shared musical phase remain separate open gates.
+
+## Productive initial-intersection dry conversion
+
+Prepare an optional exact/compact derivative from the original immutable runtime
+rows once per cached snapshot, using the same genuine qualified delivery and
+geometry builder as ordinary starts. Absence must not reject legacy publication
+or cold launch. A scalar-born voice retains that map in the existing custody
+aggregate with no fabricated original launch. Replacement preserves a genuine
+launch and moves only displaced effective custody to the existing retirement
+worker after reserving every required slot. Reverse conversion may retain pins;
+only the actual playback mode chooses the renderer domain.
+
+A separate same-payload compact anchored tag permits bounded actual-E inverse
+construction and generic compact queries. A geometry-free temporary span context
+uses the already copied original inverse/current segments, raw pair, M0, B/Q,
+original P, rate and projection. Its source and beat grids are no finer than the
+original globally admitted grids. Common powers of two cancel exactly in phase,
+Euclidean remainder and forward numerator/denominator, preserving rounding and
+raw fraction identity while reducing intermediate widths. This never widens
+global admission. Full geometry still certifies original segments, all extrema,
+finite shifted horizon and globally evaluated cached endpoint. Reader context is
+prepared once per chunk; generic endpoint/advance and journal operations must use
+the compact tag without reaching wide arithmetic. Keep mode in exact identity.
+
+Reuse the original fixed 32-lane capture and engine-wide placement writer marker.
+Acquire the existing global timing lease before that marker, recheck the whole
+capture and raw global fences, then perform only infallible stores and reserved
+owner transfers. Observe automatic retry before and after the lease, since an
+observer under its own publishing flag deliberately becomes unreadable. Only
+lease CAS contention retains the same Work Pending; rate/drain Busy keeps its
+existing retryable terminal semantics to avoid scheduler head blocking.
+
+The final successful original delivery-currentness check in the claim predicate
+is the admission decision. Independent map-job cancellation is not serialized by
+the placement marker; an overlapping later cancellation can follow that decision.
+Effective continuation checks genuine retained delivery ownership and actual
+source admission, never continued currentness of a completed analysis job.
+Immutable prepared-class/domain failures may supply exact stable retry evidence;
+cursor/fraction/E/horizon/first-PCM failures remain nonlatching.
+
+This block integrates the initial exact intersection for running dry voices.
+General maps, genuine common-grid convergence, Native/pitch adoption, unequal
+loops and one-shot EOF remain explicit required follow-up gates. Existing paused,
+Hold, Native, pitch, Key-Lock, residency and transition adoption refusals remain;
+already converted dry voices must retain later continuation and lifecycle behavior.

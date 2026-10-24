@@ -1,18 +1,24 @@
-//! Dry scalar-to-scalar request changes at one actual scheduler execution frame.
-//! No owning work, projection conversion or pending rate authority lives here.
+//! Dry policy conversion at one actual scheduler execution frame.
+//! The original runtime snapshot, global lease and fixed content claim own the effect.
 
 use super::global_rate::RateVoice;
 use super::policy_retry::UnsupportedEvidence;
 use super::*;
+use crate::audio_engine::content_placement::OwnerIdentity;
 use crate::audio_engine::global_rate_status::RateTuple;
 use crate::audio_engine::input_mapping::{RuntimePolicyError as Error, RuntimePolicySnapshot};
 use crate::audio_engine::input_runtime_binding::PairControlProjection;
+use crate::audio_engine::mapped_source_clock::MappedClockError;
+use crate::audio_engine::pad_start::PadStartCustody;
 use crate::audio_engine::source_sync_policy::{SourceSyncMode, SourceSyncRequest};
 use crate::audio_engine::transport::TransportTimeline;
 use std::cell::RefCell;
 
 #[cfg(test)]
 thread_local! { static BEFORE_CLAIM: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
+
+#[cfg(test)]
+thread_local! { static AFTER_GLOBAL_LEASE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
 
 #[cfg(test)]
 thread_local! {
@@ -26,6 +32,8 @@ struct ScalarLane {
     old_request: SourceSyncRequest,
     request: SourceSyncRequest,
     candidate: SourcePlayback,
+    map_owner: Option<OwnerIdentity>,
+    replace_map: bool,
 }
 
 struct ScalarCapture {
@@ -37,6 +45,25 @@ struct ScalarCapture {
 }
 
 impl RtMixer {
+    #[cfg(test)]
+    pub(crate) fn with_runtime_policy_after_global_lease_for_test<T>(
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                AFTER_GLOBAL_LEASE.with(|value| *value.borrow_mut() = None);
+            }
+        }
+        AFTER_GLOBAL_LEASE
+            .with(|value| assert!(value.borrow_mut().replace(Box::new(hook)).is_none()));
+        let _reset = Reset;
+        let result = action();
+        assert!(AFTER_GLOBAL_LEASE.with(|value| value.borrow().is_none()));
+        result
+    }
+
     #[cfg(test)]
     pub(crate) fn with_runtime_policy_unsupported_hooks_for_test<T>(
         before: Option<Box<dyn FnOnce()>>,
@@ -82,7 +109,11 @@ impl RtMixer {
         if !snapshot.belongs_to(&self.input_runtime_ownership) || !snapshot.current() {
             return Err(Error::Stale);
         }
-        if self.global_rate_pending() || !self.global_rate_drains_settled() {
+        // These completed fields may be inspected during another publisher's
+        // lease. Only our own later lease and final claim can authorize effects.
+        if self.global_rate_pending()
+            || !self.global_drains_claimed(self.global_rate_timing_revision())
+        {
             return Err(Error::Busy);
         }
         Ok(())
@@ -92,6 +123,8 @@ impl RtMixer {
         &self,
         index: usize,
         snapshot: &RuntimePolicySnapshot,
+        timeline: &TransportTimeline,
+        execution: u64,
         evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<(PitchSourceSnapshot, SourcePlayback, SourceSyncRequest), Error> {
         let voice = &self.voices[index];
@@ -106,14 +139,14 @@ impl RtMixer {
         }
         // These exact once-read values decide the ORIGINAL guard and supply its
         // refusal evidence. A later re-read may not impersonate this decision.
-        let inputs = self
+        let early_inputs = self
             .scalar_policy_early_inputs(index, row)
             .ok_or(Error::SourceChanged)?;
-        if inputs.blocked() {
+        if early_inputs.blocked() {
             *evidence = Some(UnsupportedEvidence::Early {
                 index,
                 generation: voice.generation,
-                inputs,
+                inputs: early_inputs,
             });
             return Err(Error::Unsupported);
         }
@@ -137,7 +170,7 @@ impl RtMixer {
             });
             return Err(Error::Unsupported);
         };
-        let inputs = self.scalar_policy_late_inputs(index, &raw, intent);
+        let inputs = self.scalar_policy_late_inputs(index, &raw, intent, row.map_preparation);
         if inputs.blocked() {
             *evidence = Some(UnsupportedEvidence::Late {
                 index,
@@ -146,8 +179,67 @@ impl RtMixer {
             });
             return Err(Error::Unsupported);
         }
-        if row.request.mode == SourceSyncMode::Fixed && self.master_period_seconds.is_none() {
+        if matches!(
+            row.request.mode,
+            SourceSyncMode::Fixed | SourceSyncMode::Mapped
+        ) && self.master_period_seconds.is_none()
+        {
             return Err(Error::MissingMaster);
+        }
+        if row.request.mode == SourceSyncMode::Mapped {
+            if !self.bpm_lock_enabled || !snapshot.map_current(id) {
+                return Err(Error::SourceChanged);
+            }
+            let target = snapshot.prepared_map(id).ok_or(Error::Unsupported)?;
+            if raw.playback.is_mapped() && raw.playback.mapped_output_frame() != Some(execution) {
+                return Err(Error::PhaseChanged);
+            }
+            let same_map = voice
+                .mapped_start
+                .as_ref()
+                .and_then(|owner| owner.effective_source())
+                .is_some_and(|old| {
+                    old.same_source(target) && old.geometry().has_compact_continuation()
+                });
+            let candidate = if raw.playback.is_compact_mapped()
+                && same_map
+                && raw
+                    .playback
+                    .mapped_epoch()
+                    .is_some_and(|epoch| epoch.matches_timeline(timeline))
+            {
+                // New raw intent alone does not restart an already adopted trajectory.
+                raw.playback
+            } else {
+                SourcePlayback::mapped_anchored_compact_continuation(
+                    target.geometry(),
+                    snapshot.revision(),
+                    *timeline,
+                    raw.plan.domain(),
+                    raw.playback.position(),
+                    execution,
+                )
+                .map_err(|error| {
+                    // Only whole-map slope limits are cursor independent. Raw
+                    // inverse, fraction, epoch and horizon failures may recover
+                    // through ordinary playback and receive no stable evidence.
+                    if error == MappedClockError::UnsupportedRate
+                        && let Some(projection) = timeline.beat_projection()
+                    {
+                        *evidence = Some(UnsupportedEvidence::MappedRate {
+                            index,
+                            generation: voice.generation,
+                            inputs: early_inputs,
+                            projection,
+                        });
+                    }
+                    Error::Unsupported
+                })?
+            };
+            // Cursor/E/first-PCM eligibility can recover while playback advances.
+            // These failures deliberately carry no stable Unsupported evidence.
+            self.scalar_policy_endpoint(&raw, &candidate)?;
+            return Ok((raw, candidate, row.request));
         }
         let target = self
             .tempo_ratio_for_request_with_rate(
@@ -158,7 +250,20 @@ impl RtMixer {
             )
             .filter(|ratio| ratio.is_finite() && (SPEED_MIN..=SPEED_MAX).contains(ratio))
             .ok_or(Error::InvalidTarget)?;
-        let mut candidate = raw.playback;
+        let mut candidate = if raw.playback.is_mapped() {
+            if raw.playback.mapped_output_frame() != Some(execution) {
+                return Err(Error::PhaseChanged);
+            }
+            SourcePlayback::scalar_musical_continuation(
+                raw.playback.position(),
+                raw.plan.domain(),
+                raw.playback.tempo_ratio(),
+                raw.playback.tempo_ratio(),
+            )
+            .ok_or(Error::Unsupported)?
+        } else {
+            raw.playback
+        };
         if target.to_bits() != candidate.rate_target().to_bits() {
             if !candidate.set_target(target) {
                 return Err(Error::InvalidTarget);
@@ -175,11 +280,14 @@ impl RtMixer {
         &self,
         index: usize,
         snapshot: &RuntimePolicySnapshot,
+        timeline: &TransportTimeline,
+        execution: u64,
         evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<ScalarLane, Error> {
         let voice = &self.voices[index];
         let row = snapshot.row(voice.sample_id).ok_or(Error::SourceChanged)?;
-        let (raw, candidate, request) = self.scalar_policy_candidate(index, snapshot, evidence)?;
+        let (raw, candidate, request) =
+            self.scalar_policy_candidate(index, snapshot, timeline, execution, evidence)?;
         let original = self
             .capture_rate_participant(index, &raw)
             .map_err(|_| Error::SourceChanged)?;
@@ -193,6 +301,25 @@ impl RtMixer {
             old_request: voice.sync_request,
             request,
             candidate,
+            map_owner: voice
+                .mapped_start
+                .as_ref()
+                .and_then(|owner| owner.effective_source())
+                .map(OwnerIdentity::of),
+            replace_map: request.mode == SourceSyncMode::Mapped
+                && snapshot
+                    .prepared_map(voice.sample_id)
+                    .is_some_and(|target| {
+                        voice
+                            .mapped_start
+                            .as_ref()
+                            .and_then(|owner| owner.effective_source())
+                            .is_none_or(|old| {
+                                !old.same_source(target)
+                                    || old.sync_witness() != target.sync_witness()
+                                    || !old.geometry().has_compact_continuation()
+                            })
+                    }),
         })
     }
 
@@ -280,8 +407,12 @@ impl RtMixer {
         snapshot: &RuntimePolicySnapshot,
         capture: &ScalarCapture,
         timeline: &TransportTimeline,
+        execution: u64,
     ) -> bool {
-        if self.scalar_policy_available(snapshot).is_err()
+        if !snapshot.belongs_to(&self.input_runtime_ownership)
+            || !snapshot.current()
+            || self.global_rate_pending()
+            || !self.global_drains_claimed(capture.timing_fence)
             || self.effective_global_rate() != capture.rate
             || self.bpm_lock_enabled != capture.bpm_lock
             || self.global_rate_timing_revision() != capture.timing_fence
@@ -303,11 +434,17 @@ impl RtMixer {
                     .input_runtime_ownership
                     .pair_control_projection_current(&expected.control, 0)
                 || self.voices[index].sync_request != expected.old_request
+                || self.voices[index]
+                    .mapped_start
+                    .as_ref()
+                    .and_then(|owner| owner.effective_source())
+                    .map(OwnerIdentity::of)
+                    != expected.map_owner
             {
                 return false;
             }
             let Ok((raw, candidate, request)) =
-                self.scalar_policy_candidate(index, snapshot, &mut None)
+                self.scalar_policy_candidate(index, snapshot, timeline, execution, &mut None)
             else {
                 return false;
             };
@@ -324,7 +461,7 @@ impl RtMixer {
         }
         snapshot.current()
             && self.global_rate_timing_revision() == capture.timing_fence
-            && self.global_rate_drains_settled()
+            && self.global_drains_claimed(capture.timing_fence)
     }
 
     pub(crate) fn adopt_runtime_policy_observed(
@@ -332,14 +469,25 @@ impl RtMixer {
         snapshot: &RuntimePolicySnapshot,
         timeline: &TransportTimeline,
         execution: u64,
-    ) -> (
+        retirement: &mut dyn AudioBufferRetirement,
+    ) -> Option<(
         Result<(), Error>,
         Option<super::super::runtime_policy_retry::RetryToken>,
-    ) {
+    )> {
         self.prepare_runtime_policy_retry(snapshot);
         let before = self.observe_runtime_policy_retry(timeline);
         let mut evidence = None;
-        let result = self.adopt_runtime_policy(snapshot, timeline, execution, &mut evidence);
+        let result = match self.adopt_runtime_policy(
+            snapshot,
+            timeline,
+            execution,
+            retirement,
+            &mut evidence,
+        ) {
+            Ok(None) => return None,
+            Ok(Some(())) => Ok(()),
+            Err(error) => Err(error),
+        };
         #[cfg(test)]
         if result == Err(Error::Unsupported)
             && let Some(hook) = AFTER_UNSUPPORTED_DECISION.with(|hook| hook.borrow_mut().take())
@@ -359,16 +507,45 @@ impl RtMixer {
         } else {
             None
         };
-        (result, retry)
+        Some((result, retry))
+    }
+
+    /// Work plus the greatest owner displacement possible for this original snapshot.
+    /// This is capacity accounting only; the final claim repeats all source checks.
+    pub(crate) fn runtime_policy_retirement_slots(
+        &self,
+        snapshot: &RuntimePolicySnapshot,
+    ) -> usize {
+        1 + self
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .filter(|voice| {
+                snapshot
+                    .prepared_map(voice.sample_id)
+                    .is_some_and(|target| {
+                        voice
+                            .mapped_start
+                            .as_ref()
+                            .and_then(|owner| owner.effective_source())
+                            .is_some_and(|old| {
+                                !old.same_source(target)
+                                    || old.sync_witness() != target.sync_witness()
+                                    || !old.geometry().has_compact_continuation()
+                            })
+                    })
+            })
+            .count()
     }
 
     fn adopt_runtime_policy(
         &mut self,
         snapshot: &RuntimePolicySnapshot,
         timeline: &TransportTimeline,
-        _execution: u64,
+        execution: u64,
+        retirement: &mut dyn AudioBufferRetirement,
         evidence: &mut Option<UnsupportedEvidence>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<()>, Error> {
         self.scalar_policy_available(snapshot)?;
         if !self.voices.iter().any(|voice| voice.active) {
             return Err(Error::NoActiveVoices);
@@ -401,7 +578,8 @@ impl RtMixer {
         };
         for (index, lane) in capture.lanes.iter_mut().enumerate() {
             if self.voices[index].active {
-                *lane = Some(self.scalar_policy_lane(index, snapshot, evidence)?);
+                *lane =
+                    Some(self.scalar_policy_lane(index, snapshot, timeline, execution, evidence)?);
             }
         }
         let anchor = capture
@@ -413,13 +591,33 @@ impl RtMixer {
             .original
             .placement;
         let ownership = self.input_runtime_ownership.clone();
-        let write = ownership
-            .prepare_slot_write_fixed(anchor, anchor.lifetime())
-            .map_err(|_| Error::SourceChanged)?;
+        let slots = 1 + capture
+            .lanes
+            .iter()
+            .flatten()
+            .filter(|lane| lane.replace_map && lane.map_owner.is_some())
+            .count();
+        if retirement.available_retirement_slots() < slots {
+            return Err(Error::Capacity);
+        }
         #[cfg(test)]
         if let Some(hook) = BEFORE_CLAIM.with(|value| value.borrow_mut().take()) {
             hook();
         }
+        // Observe retry outside this lease. Global publishers and this complete
+        // effect share the established global-before-placement order.
+        let Some(_lease) =
+            crate::audio_engine::GlobalTimingLease::acquire(&ownership.global_timing_publishing)
+        else {
+            return Ok(None);
+        };
+        #[cfg(test)]
+        if let Some(hook) = AFTER_GLOBAL_LEASE.with(|value| value.borrow_mut().take()) {
+            hook();
+        }
+        let write = ownership
+            .prepare_slot_write_fixed(anchor, anchor.lifetime())
+            .map_err(|_| Error::SourceChanged)?;
         let mixer = RefCell::new(self);
         ownership
             .commit_slot_write_fixed(
@@ -427,12 +625,25 @@ impl RtMixer {
                 || {
                     mixer
                         .borrow()
-                        .scalar_policy_capture_current(snapshot, &capture, timeline)
+                        .scalar_policy_capture_current(snapshot, &capture, timeline, execution)
                 },
                 |_| {
                     let mut mixer = mixer.borrow_mut();
                     for (index, lane) in capture.lanes.iter().enumerate() {
                         if let Some(lane) = lane {
+                            if lane.replace_map {
+                                let target = snapshot
+                                    .prepared_map(lane.original.id)
+                                    .expect("complete claim retains the original prepared map");
+                                if let Some(owner) = &mut mixer.voices[index].mapped_start {
+                                    if let Some(displaced) = owner.replace_effective_map(target) {
+                                        retirement.retire_pad_start_target(displaced);
+                                    }
+                                } else {
+                                    mixer.voices[index].mapped_start =
+                                        Some(PadStartCustody::for_runtime_map(target));
+                                }
+                            }
                             mixer.voices[index].sync_request = lane.request;
                             mixer.voices[index].source_playback = lane.candidate;
                         }
@@ -443,6 +654,6 @@ impl RtMixer {
         for lane in capture.lanes.iter().flatten() {
             mixer.borrow().publish_source_sync_status(lane.original.id);
         }
-        Ok(())
+        Ok(Some(()))
     }
 }

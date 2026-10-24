@@ -14,7 +14,9 @@ use super::mapped_source_clock::MappedLoopGeometry;
 use super::ordinary_start::OrdinaryStartWork;
 use super::pitch_actions::PitchActionReject;
 use super::resident_relocation::{ResidentLaunchGuard, ResidentWindowTicket};
-use super::source_map_admission::{QualifiedSourceMap, SourceMapLaunchSnapshot};
+use super::source_map_admission::{
+    QualifiedSourceMap, RuntimeMapClass, RuntimeMapPreparation, SourceMapLaunchSnapshot,
+};
 use super::source_reader::effective_loop_region;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -36,10 +38,10 @@ pub(crate) struct MappedStartSource {
     geometry: MappedLoopGeometry,
 }
 
-/// One voice/retirement payload retains the exact launch and its effective immutable map.
-/// Pending start work continues to use only the original launch's own geometry.
+/// One voice/retirement payload retains its effective immutable map and any genuine launch.
+/// Runtime conversion creates no launch. Pending start work uses only its own original geometry.
 pub(crate) struct PadStartCustody {
-    original: CapturedPadStart,
+    original: Option<CapturedPadStart>,
     effective: Option<Arc<MappedStartSource>>,
 }
 
@@ -47,7 +49,7 @@ impl PadStartCustody {
     /// Called only after the existing complete mapped launch claim succeeds.
     pub(crate) fn for_mapped_voice(original: &CapturedPadStart) -> Self {
         Self {
-            original: original.clone(),
+            original: Some(original.clone()),
             effective: Some(
                 original
                     .mapped_source_owner()
@@ -56,8 +58,44 @@ impl PadStartCustody {
         }
     }
 
+    pub(crate) fn original_launch(&self) -> Option<&CapturedPadStart> {
+        self.original.as_ref()
+    }
+
+    #[cfg(test)]
     pub(crate) fn original(&self) -> &CapturedPadStart {
-        &self.original
+        self.original_launch()
+            .expect("original mapped launch fixture retains its genuine launch")
+    }
+
+    /// The actual policy claim already owns the snapshot's original prepared map.
+    /// A living scalar birth gains immutable map custody without inventing a launch action.
+    pub(crate) fn for_runtime_map(source: &Arc<MappedStartSource>) -> Self {
+        Self {
+            original: None,
+            effective: Some(source.clone()),
+        }
+    }
+
+    /// Keep the genuine original launch and move only a displaced effective map to retirement.
+    /// The caller reserves that existing worker-retirement slot before its atomic effect.
+    pub(crate) fn replace_effective_map(
+        &mut self,
+        source: &Arc<MappedStartSource>,
+    ) -> Option<Self> {
+        if self
+            .effective
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, source))
+        {
+            return None;
+        }
+        self.effective
+            .replace(source.clone())
+            .map(|effective| Self {
+                original: None,
+                effective: Some(effective),
+            })
     }
 
     pub(crate) fn effective_source(&self) -> Option<&Arc<MappedStartSource>> {
@@ -83,7 +121,7 @@ impl From<CapturedPadStart> for PadStartCustody {
     /// A raw target has no effective voice map, but still retires through the same one slot.
     fn from(original: CapturedPadStart) -> Self {
         Self {
-            original,
+            original: Some(original),
             effective: None,
         }
     }
@@ -113,6 +151,55 @@ impl MappedStartPendingGuard {
 impl MappedStartSource {
     pub(crate) fn geometry(&self) -> &MappedLoopGeometry {
         &self.geometry
+    }
+
+    pub(crate) fn sync_witness(&self) -> super::input_runtime_binding::SourceSyncWitness {
+        self.qualified.sync_witness()
+    }
+
+    pub(crate) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
+        self.qualified.belongs_to(ownership)
+    }
+
+    pub(crate) fn current_for(
+        &self,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+    ) -> bool {
+        self.qualified.current_for(ownership, binding)
+    }
+
+    pub(crate) fn same_source(&self, other: &Self) -> bool {
+        self.qualified.same_projection(&other.qualified)
+            && self.geometry.domain() == other.geometry.domain()
+    }
+
+    /// Prepare one optional exact live-policy derivative off realtime. Legacy ordinary
+    /// launch construction keeps using `prepare` and is unaffected by this narrower class.
+    pub(crate) fn prepare_runtime_map(
+        qualified: &QualifiedSourceMap,
+        binding: InputPadBinding,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> (RuntimeMapPreparation, Option<Arc<Self>>) {
+        let mut preparation = RuntimeMapPreparation {
+            class: RuntimeMapClass::Unsupported,
+            domain: None,
+            witness: Some(qualified.sync_witness()),
+        };
+        let Ok(mut source) = Self::prepare(qualified.clone(), binding, start_s, end_s) else {
+            return (preparation, None);
+        };
+        preparation.domain = Some(source.geometry.domain().into());
+        let Ok(geometry) = source.geometry.clone().qualify_exact_continuation() else {
+            return (preparation, None);
+        };
+        if !geometry.has_compact_continuation() {
+            return (preparation, None);
+        }
+        source.geometry = geometry;
+        preparation.class = RuntimeMapClass::Ready;
+        (preparation, Some(Arc::new(source)))
     }
 
     /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.

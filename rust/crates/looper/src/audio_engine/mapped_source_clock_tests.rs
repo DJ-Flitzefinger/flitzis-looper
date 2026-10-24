@@ -77,7 +77,9 @@ fn epoch(phase: f64) -> MappedClockEpoch {
 fn legacy_phase(epoch: MappedClockEpoch) -> f64 {
     match epoch.mode {
         MappedClockMode::Legacy { phase_quarters, .. } => phase_quarters,
-        MappedClockMode::Anchored(_) => panic!("legacy fixture expected"),
+        MappedClockMode::Anchored(_) | MappedClockMode::CompactAnchored(_) => {
+            panic!("legacy fixture expected")
+        }
     }
 }
 
