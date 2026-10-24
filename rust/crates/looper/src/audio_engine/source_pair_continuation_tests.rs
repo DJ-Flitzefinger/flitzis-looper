@@ -22,7 +22,7 @@ fn physical(start: usize, end: usize, sample_frames: usize) -> SourceLoopDomain 
     SourceLoopDomain {
         sample_frames,
         region: FrameRange { start, end },
-        musical_period: None,
+        musical_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
     }
 }
 
@@ -93,15 +93,24 @@ fn physical_constructor_rejects_invalid_rates_pairs_and_every_musical_domain() {
         physical(7, 32, 31),
         physical(0, 1, 0),
         SourceLoopDomain {
-            musical_period: Some(17.0),
+            musical_period:
+                crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(Some(
+                    17.0,
+                )),
             ..domain
         },
         SourceLoopDomain {
-            musical_period: Some(17.25),
+            musical_period:
+                crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(Some(
+                    17.25,
+                )),
             ..domain
         },
         SourceLoopDomain {
-            musical_period: Some(f64::NAN),
+            musical_period:
+                crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(Some(
+                    f64::NAN,
+                )),
             ..domain
         },
     ] {
@@ -286,7 +295,10 @@ fn unsupported_pair_domain_change_refuses_before_mutation_and_explicit_seek_is_l
         physical(2, 13, 12),
         physical(8, 2, 12),
         SourceLoopDomain {
-            musical_period: Some(8.0),
+            musical_period:
+                crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(Some(
+                    8.0,
+                )),
             ..domain
         },
     ] {

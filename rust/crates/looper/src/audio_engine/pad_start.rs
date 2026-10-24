@@ -17,7 +17,7 @@ use super::resident_relocation::{ResidentLaunchGuard, ResidentWindowTicket};
 use super::source_map_admission::{
     QualifiedSourceMap, RuntimeMapClass, RuntimeMapPreparation, SourceMapLaunchSnapshot,
 };
-use super::source_reader::effective_loop_region;
+use super::source_reader::{FrameRange, effective_loop_region};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::{
@@ -174,8 +174,8 @@ impl MappedStartSource {
             && self.geometry.domain() == other.geometry.domain()
     }
 
-    /// Prepare one optional exact live-policy derivative off realtime. Legacy ordinary
-    /// launch construction keeps using `prepare` and is unaffected by this narrower class.
+    /// Prepare one optional live-policy derivative off realtime. Legacy ordinary
+    /// launch construction keeps its preceding geometry and availability contract.
     pub(crate) fn prepare_runtime_map(
         qualified: &QualifiedSourceMap,
         binding: InputPadBinding,
@@ -187,28 +187,53 @@ impl MappedStartSource {
             domain: None,
             witness: Some(qualified.sync_witness()),
         };
-        let Ok(mut source) = Self::prepare(qualified.clone(), binding, start_s, end_s) else {
-            return (preparation, None);
-        };
-        preparation.domain = Some(source.geometry.domain().into());
-        let Ok(geometry) = source.geometry.clone().qualify_exact_continuation() else {
-            return (preparation, None);
-        };
-        if !geometry.has_compact_continuation() {
-            return (preparation, None);
+        if let Ok(mut source) = Self::prepare(qualified.clone(), binding, start_s, end_s) {
+            preparation.domain = Some(source.geometry.domain().into());
+            if let Ok(geometry) = source.geometry.clone().qualify_exact_continuation()
+                && geometry.has_compact_continuation()
+            {
+                source.geometry = geometry;
+                preparation.class = RuntimeMapClass::Ready;
+                return (preparation, Some(Arc::new(source)));
+            }
         }
-        source.geometry = geometry;
+        // The old displayed inverse and rounded endpoint are not a prerequisite
+        // of this separate exact original-map class. A failed legacy attempt must
+        // not narrow general declared-Q coverage.
+        let Some(quarters) = qualified.exact_quarters() else {
+            return (preparation, None);
+        };
+        let Ok((rate, sample_frames, region)) =
+            Self::loaded_region(qualified, binding, start_s, end_s)
+        else {
+            return (preparation, None);
+        };
+        let Ok(geometry) = MappedLoopGeometry::new_general_declared(
+            qualified.map().clone(),
+            sample_frames,
+            rate,
+            region,
+            quarters,
+            true,
+        ) else {
+            return (preparation, None);
+        };
+        preparation.domain = Some(geometry.domain().into());
         preparation.class = RuntimeMapClass::Ready;
+        let source = Self {
+            qualified: qualified.clone(),
+            geometry,
+        };
         (preparation, Some(Arc::new(source)))
     }
 
-    /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.
-    fn prepare(
-        qualified: QualifiedSourceMap,
+    /// Reuse the same persisted integer-marker interpretation for both classes.
+    fn loaded_region(
+        qualified: &QualifiedSourceMap,
         binding: InputPadBinding,
         start_s: f64,
         end_s: Option<f64>,
-    ) -> Result<Self, PitchActionReject> {
+    ) -> Result<(u32, usize, FrameRange), PitchActionReject> {
         let rate = qualified.loaded_rate();
         if rate == 0
             || binding.sample_rate_hz != rate
@@ -229,6 +254,18 @@ impl MappedStartSource {
             sample_frames,
         )
         .ok_or(PitchActionReject::InvalidAction)?;
+        Ok((rate, sample_frames, region))
+    }
+
+    /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.
+    fn prepare(
+        qualified: QualifiedSourceMap,
+        binding: InputPadBinding,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Result<Self, PitchActionReject> {
+        let (rate, sample_frames, region) =
+            Self::loaded_region(&qualified, binding, start_s, end_s)?;
         let exact = qualified.exact_quarters();
         let quarters = match exact {
             Some(quarters) => quarters,

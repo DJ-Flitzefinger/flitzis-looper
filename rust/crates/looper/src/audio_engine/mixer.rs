@@ -662,7 +662,7 @@ impl RtMixer {
             sample_frames: sample.frame_count(),
             frame_pos: position.frame,
             loop_region: region,
-            loop_period: playback.loop_period(),
+            loop_period: playback.reader_period(),
             seek_mode: position.seek_mode,
             selection,
             transition,
@@ -724,7 +724,7 @@ impl RtMixer {
             sample_frames: sample.frame_count(),
             frame_pos: position.frame,
             loop_region: region,
-            loop_period: playback.loop_period(),
+            loop_period: playback.reader_period(),
             seek_mode: position.seek_mode,
             selection: self.stem_render_selection(id),
             transition: self.stem_transitions[id],
@@ -885,7 +885,7 @@ impl RtMixer {
     /// A new `RtMixer` instance with empty sample bank and no active voices.
     #[cfg(test)]
     pub fn new(channels: usize, sample_rate_hz: f32) -> Self {
-        Self::try_new(channels, sample_rate_hz, None).expect("failed to prepare test mixer")
+        *Self::try_new(channels, sample_rate_hz, None).expect("failed to prepare test mixer")
     }
 
     /// Observe the actual adopted bank without manufacturing a control-side Ready state.
@@ -946,7 +946,7 @@ impl RtMixer {
         channels: usize,
         sample_rate_hz: f32,
         source_owners: Option<MixerSourceOwners>,
-    ) -> Result<Self, KeyLockPreparationError> {
+    ) -> Result<Box<Self>, KeyLockPreparationError> {
         let sample_rate_hz = if sample_rate_hz.is_finite() && sample_rate_hz > 0.0 {
             sample_rate_hz
         } else {
@@ -970,7 +970,10 @@ impl RtMixer {
         // cannot publish policy invalidation or a partially constructed mixer.
         assert_eq!(prepared_source_epochs.len(), NUM_SAMPLES);
 
-        Ok(Self {
+        // Return the existing complete mixer allocation directly. A by-value
+        // Result<Self> and its caller's `?` extraction otherwise duplicate the
+        // large fixed voice image on the Debug startup stack before boxing it.
+        Ok(Box::new(Self {
             channels,
             sample_rate_hz,
             volume: VOLUME_MAX,
@@ -1039,7 +1042,7 @@ impl RtMixer {
             _key_lock_preparation_worker: worker,
             pitch_runtime: Some(pitch_runtime),
             _pitch_preparation_worker: pitch_worker,
-        })
+        }))
     }
 
     pub(crate) fn set_current_timing_acknowledgements(
@@ -1635,7 +1638,7 @@ impl RtMixer {
                 sample_frames: sample.frame_count(),
                 frame_pos: playback.position().frame,
                 loop_region: region,
-                loop_period: playback.loop_period(),
+                loop_period: playback.reader_period(),
                 seek_mode: ExplicitSeekMode::Normal,
                 selection: self.stem_render_selection(id),
                 transition: self.stem_transitions[id],
@@ -1702,7 +1705,7 @@ impl RtMixer {
                 sample_frames: sample.frame_count(),
                 frame_pos: position.frame,
                 loop_region: region,
-                loop_period: playback.loop_period(),
+                loop_period: playback.reader_period(),
                 seek_mode: position.seek_mode,
                 selection,
                 transition,
@@ -1757,7 +1760,7 @@ impl RtMixer {
                 sample_frames: sample.frame_count(),
                 frame_pos: position.frame,
                 loop_region: region,
-                loop_period: playback.loop_period(),
+                loop_period: playback.reader_period(),
                 seek_mode: position.seek_mode,
                 selection: frozen.map_or(self.stem_render_selection(id), |view| view.selection),
                 transition: frozen.map_or(self.stem_transitions[id], |view| view.transition),
@@ -1801,13 +1804,18 @@ impl RtMixer {
             sample_frames: sample.frame_count(),
             frame_pos: playback.position().frame,
             loop_region: region,
-            loop_period: playback.loop_period(),
+            loop_period: playback.reader_period(),
             seek_mode: playback.position().seek_mode,
             selection: self.stem_render_selection(voice.sample_id),
             transition: self.stem_transitions[voice.sample_id],
         };
-        plan(previous_region, &voice.source_playback).fractional_taps(before.fraction)
-            != plan(region, &playback).fractional_taps(next.fraction)
+        match (
+            plan(previous_region, &voice.source_playback).try_fractional_taps(before.fraction),
+            plan(region, &playback).try_fractional_taps(next.fraction),
+        ) {
+            (Some(before), Some(after)) => before != after,
+            _ => true,
+        }
     }
 
     fn unchanged_normal_loop(
@@ -6085,7 +6093,7 @@ impl RtMixer {
                         sample_frames,
                         frame_pos: position.frame,
                         loop_region,
-                        loop_period: voice.source_playback.loop_period(),
+                        loop_period: voice.source_playback.reader_period(),
                         seek_mode: position.seek_mode,
                         selection: current_selection,
                         transition: source_transition,
@@ -6310,7 +6318,7 @@ impl RtMixer {
                         sample_frames: sample.frame_count(),
                         frame_pos: position.frame,
                         loop_region: region,
-                        loop_period: voice.source_playback.loop_period(),
+                        loop_period: voice.source_playback.reader_period(),
                         seek_mode: position.seek_mode,
                         selection,
                         transition: frozen

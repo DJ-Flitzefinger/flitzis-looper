@@ -174,7 +174,7 @@ fn virtual_domain_wraps_original_period_and_exact_rounded_endpoint_only() {
         FrameRange { start: 0, end: 2 },
         2.0_f64.powi(-13),
     );
-    assert_eq!(geometry.domain().musical_period, Some(2.25));
+    assert_eq!(geometry.domain().musical_period.scalar_period(), Some(2.25));
     let epoch = new_epoch(
         &geometry,
         timeline(16_000.0, 0, 0.0),
@@ -790,8 +790,8 @@ fn work_walk(
         assert!(frame >= span.start_frame() && frame < span.end_frame());
         let phase = phase_at(
             epoch,
-            span.beat_start,
-            span.quarters,
+            span.legacy_program().unwrap().beat_start,
+            span.legacy_program().unwrap().quarters,
             span.loaded_rate_hz,
             frame,
         )
@@ -813,8 +813,8 @@ fn descriptive_work_components_use_the_same_consuming_span_queries() {
         for query in &queries {
             let terms = anchor_terms(
                 epoch,
-                query.span.beat_start,
-                query.span.quarters,
+                query.span.legacy_program().unwrap().beat_start,
+                query.span.legacy_program().unwrap().quarters,
                 query.span.loaded_rate_hz,
             )
             .unwrap();
@@ -834,10 +834,10 @@ fn descriptive_work_components_use_the_same_consuming_span_queries() {
                 epoch,
                 &query.phase,
                 query.span.segment,
-                query.span.beat_start,
+                query.span.legacy_program().unwrap().beat_start,
                 query.span.loaded_rate_hz,
                 query.span.source_start,
-                query.span.source_period,
+                query.span.legacy_program().unwrap().source_period,
             )
             .unwrap();
             assert_pair(composed, actual.frame, actual.fraction.to_bits());
@@ -862,8 +862,8 @@ fn descriptive_work_components_use_the_same_consuming_span_queries() {
                 queries.iter().all(|query| match component {
                     "anchor_terms" => black_box(anchor_terms(
                         black_box(epoch),
-                        black_box(query.span.beat_start),
-                        black_box(query.span.quarters),
+                        black_box(query.span.legacy_program().unwrap().beat_start),
+                        black_box(query.span.legacy_program().unwrap().quarters),
                         black_box(query.span.loaded_rate_hz),
                     ))
                     .is_some(),
@@ -875,8 +875,8 @@ fn descriptive_work_components_use_the_same_consuming_span_queries() {
                     .is_some(),
                     "phase_at" => black_box(phase_at(
                         black_box(epoch),
-                        black_box(query.span.beat_start),
-                        black_box(query.span.quarters),
+                        black_box(query.span.legacy_program().unwrap().beat_start),
+                        black_box(query.span.legacy_program().unwrap().quarters),
                         black_box(query.span.loaded_rate_hz),
                         black_box(query.frame),
                     ))
@@ -885,10 +885,10 @@ fn descriptive_work_components_use_the_same_consuming_span_queries() {
                         black_box(epoch),
                         black_box(&query.phase),
                         black_box(query.span.segment),
-                        black_box(query.span.beat_start),
+                        black_box(query.span.legacy_program().unwrap().beat_start),
                         black_box(query.span.loaded_rate_hz),
                         black_box(query.span.source_start),
-                        black_box(query.span.source_period),
+                        black_box(query.span.legacy_program().unwrap().source_period),
                     ))
                     .is_some(),
                     "full_span_query" => {

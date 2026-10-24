@@ -217,7 +217,12 @@ fn independent_fraction_eligibility_vectors_use_actual_legacy_geometry() {
         );
         assert_eq!(original.exact_quarters().to_bits(), case.quarters_bits);
         assert_eq!(
-            original.domain().musical_period.unwrap().to_bits(),
+            original
+                .domain()
+                .musical_period
+                .scalar_period()
+                .unwrap()
+                .to_bits(),
             case.period_bits,
             "vector {} P",
             index + 1
@@ -293,7 +298,7 @@ fn qualified_reader_match_requires_complete_original_domain() {
     let different_period = SourceLoopDomain::musical(
         domain.sample_frames,
         domain.region,
-        f64::from_bits(domain.musical_period.unwrap().to_bits() + 1),
+        f64::from_bits(domain.musical_period.scalar_period().unwrap().to_bits() + 1),
     )
     .unwrap();
     let physical = SourceLoopDomain::physical(domain.sample_frames, domain.region);
@@ -340,7 +345,10 @@ fn partial_variable_loop_closes_at_exact_integer_end_without_replacing_knots() {
         2.5,
     );
     assert_eq!(original.start_beat(), 0.5);
-    assert_eq!(original.domain().musical_period, Some(28_000.0));
+    assert_eq!(
+        original.domain().musical_period.scalar_period(),
+        Some(28_000.0)
+    );
     let qualified = original.qualify_exact_continuation().unwrap();
     let proof = qualified.exact_continuation.unwrap();
     assert_eq!(proof.minimum.source_start, 0.5);
@@ -476,7 +484,7 @@ fn independent_exact_rates_refuse_when_legacy_rounding_hides_boundary_crossing()
             FrameRange { start: 0, end: 1 },
             quarters,
         );
-        assert_eq!(original.domain().musical_period, Some(1.0));
+        assert_eq!(original.domain().musical_period.scalar_period(), Some(1.0));
         let mut timeline = TransportTimeline::new(8192);
         assert!(timeline.set_master_period(f64::from_bits(period_bits)));
         let epoch = MappedClockEpoch::new(7, timeline, 0.0).unwrap();

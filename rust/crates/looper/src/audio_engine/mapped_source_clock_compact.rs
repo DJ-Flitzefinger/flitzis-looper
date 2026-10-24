@@ -70,7 +70,7 @@ impl CompactGeometryBuilder {
         Some(Self {
             source: GridStats::new()
                 .include_u64(geometry.domain.region.start as u64)?
-                .include_f64(geometry.domain.musical_period?)?,
+                .include_f64(geometry.domain.musical_period.scalar_period()?)?,
             beat: GridStats::new()
                 .include_f64(geometry.beat_start)?
                 .include_f64(geometry.quarters)?
@@ -234,6 +234,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_general_compact() {
+            return self.refresh_general_span(epoch, output_frame);
+        }
         let unavailable = MappedClockError::NumericalUnavailable;
         if output_frame == u64::MAX {
             return Err(unavailable);
@@ -277,15 +280,21 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            beat_start: self.beat_start,
-            quarters: self.quarters,
+            program: super::SpanProgram::Legacy(super::LegacySpanProgram {
+                beat_start: self.beat_start,
+                quarters: self.quarters,
+                source_period: self
+                    .domain
+                    .musical_period
+                    .scalar_period()
+                    .ok_or(unavailable)?,
+            }),
             loaded_rate_hz: self.loaded_rate_hz,
             start_frame,
             end_frame,
             endpoint_frame: endpoint.frame,
             endpoint_fraction: endpoint.fraction,
             source_start: self.domain.region.start as u64,
-            source_period: self.domain.musical_period.ok_or(unavailable)?,
         };
         let prepared = clock.core.prepared_segment(segment).ok_or(unavailable)?;
         clock
@@ -304,12 +313,17 @@ impl MappedSourceSpan {
         geometry: &MappedLoopGeometry,
     ) -> Result<CompactSpanView<'_>, MappedClockError> {
         let unavailable = MappedClockError::NumericalUnavailable;
-        if self.beat_start.to_bits() != geometry.beat_start.to_bits()
-            || self.quarters.to_bits() != geometry.quarters.to_bits()
+        let program = self.legacy_program().ok_or(unavailable)?;
+        if program.beat_start.to_bits() != geometry.beat_start.to_bits()
+            || program.quarters.to_bits() != geometry.quarters.to_bits()
             || self.loaded_rate_hz != geometry.loaded_rate_hz
             || self.source_start != geometry.domain.region.start as u64
-            || geometry.domain.musical_period.map(f64::to_bits)
-                != Some(self.source_period.to_bits())
+            || geometry
+                .domain
+                .musical_period
+                .scalar_period()
+                .map(f64::to_bits)
+                != Some(program.source_period.to_bits())
             || self.start_frame < self.epoch.first_output_frame
             || self.start_frame >= self.end_frame
             || !original_segment(geometry, self.segment)
@@ -348,17 +362,18 @@ impl MappedSourceSpan {
         {
             return Err(unavailable);
         }
+        let program = self.legacy_program().ok_or(unavailable)?;
         let anchor = self.epoch.anchor().ok_or(unavailable)?;
         let horizon = finite_horizon(self.epoch, anchor).ok_or(unavailable)?;
         let preparation = local_preparation(self, anchor, horizon).ok_or(unavailable)?;
         let core = CompactClockCore::new(
             preparation,
             self.epoch,
-            self.beat_start,
-            self.quarters,
+            program.beat_start,
+            program.quarters,
             self.loaded_rate_hz,
             self.source_start,
-            self.source_period,
+            program.source_period,
             horizon,
         )?;
         let segment = core.prepared_segment(self.segment).ok_or(unavailable)?;
@@ -428,16 +443,17 @@ fn local_preparation(
     // by SB and forward N/D by S^2 B: exact modulo, RN and raw identity agree,
     // and every checked intermediate is no larger. This cannot widen global
     // admission: only the already certified private epoch tag reaches here.
+    let program = span.legacy_program()?;
     let mut builder = CompactGeometryBuilder {
         source: GridStats::new()
             .include_u64(span.source_start)?
-            .include_f64(span.source_period)?
+            .include_f64(program.source_period)?
             .include_u64(anchor.frame)?
             .include_f64(anchor.fraction)?,
         beat: GridStats::new()
-            .include_f64(span.beat_start)?
-            .include_f64(span.quarters)?
-            .include_f64(span.beat_start + span.quarters)?
+            .include_f64(program.beat_start)?
+            .include_f64(program.quarters)?
+            .include_f64(program.beat_start + program.quarters)?
             .include_f64(anchor.original_master)?
             .include_f64(horizon.0)?
             .include_f64(horizon.1)?,
@@ -491,7 +507,11 @@ impl<'a> CompactClock<'a> {
             geometry.quarters,
             geometry.loaded_rate_hz,
             geometry.domain.region.start as u64,
-            geometry.domain.musical_period.ok_or(unavailable)?,
+            geometry
+                .domain
+                .musical_period
+                .scalar_period()
+                .ok_or(unavailable)?,
             finite_horizon(epoch, anchor).ok_or(unavailable)?,
         )?;
         geometry.validate_epoch(epoch)?;

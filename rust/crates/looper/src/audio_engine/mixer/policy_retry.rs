@@ -9,6 +9,7 @@ use crate::audio_engine::native_history_permit::NativeSourceAdmissionIdentity;
 use crate::audio_engine::runtime_policy_retry::{RetryObservationSlot, RetryToken};
 use crate::audio_engine::source_map_admission::{RuntimeMapClass, RuntimeMapPreparation};
 use crate::audio_engine::source_reader::SourceLoopDomain;
+use crate::audio_engine::source_reader_period::SourceReaderPeriod;
 use crate::audio_engine::source_sync_policy::{SourceSyncMode, SourceSyncRequest};
 use crate::audio_engine::stretch_processor::SourceLaneRetryState;
 use crate::audio_engine::transport::{TransportBeatProjection, TransportTimeline};
@@ -79,7 +80,7 @@ impl LateUnsupportedInputs {
 struct DomainIdentity {
     frames: usize,
     region: FrameRange,
-    period: Option<u64>,
+    period: SourceReaderPeriod,
 }
 
 impl From<SourceLoopDomain> for DomainIdentity {
@@ -87,7 +88,7 @@ impl From<SourceLoopDomain> for DomainIdentity {
         Self {
             frames: value.sample_frames,
             region: value.region,
-            period: value.musical_period.map(f64::to_bits),
+            period: value.musical_period,
         }
     }
 }
@@ -101,6 +102,7 @@ struct RetryVoiceShape {
     request: SourceSyncRequest,
     map: Option<super::super::input_runtime_binding::SourceSyncWitness>,
     configured: Option<DomainIdentity>,
+    original_scalar: Option<DomainIdentity>,
     region: FrameRange,
     timing_period: Option<u64>,
     selection: StemRenderSelection,
@@ -397,10 +399,9 @@ impl RtMixer {
         Some(EarlyUnsupportedInputs {
             mapped: voice.source_playback.is_mapped(),
             target_mapped: row.request.mode == SourceSyncMode::Mapped,
-            wide_anchored: voice
-                .source_playback
-                .mapped_epoch()
-                .is_some_and(|epoch| epoch.is_anchored() && !epoch.is_compact_anchored()),
+            wide_anchored: voice.source_playback.mapped_epoch().is_some_and(|epoch| {
+                epoch.is_anchored() && !epoch.is_compact_anchored() && !epoch.is_general_compact()
+            }),
             preparation: row.map_preparation,
             paused: voice.paused,
             pitch,
@@ -452,19 +453,24 @@ impl RtMixer {
         (start, end): (usize, Option<usize>),
         preparation: RuntimeMapPreparation,
     ) -> LateUnsupportedInputs {
+        let scalar_domain = playback.original_scalar_domain();
+        let timing_domain = self
+            .timing_for_voice(&self.voices[index])
+            .loop_domain(plan.sample_frames, plan.loop_region);
         LateUnsupportedInputs {
             region_matches: effective_loop_region(start, end, plan.sample_frames)
                 == Some(plan.loop_region),
             raw_domain_matches: playback.matches_domain(plan.domain()),
-            timing_domain_matches: playback.matches_domain(
-                self.timing_for_voice(&self.voices[index])
-                    .loop_domain(plan.sample_frames, plan.loop_region),
-            ),
+            // The effective rational period must not impersonate current accepted
+            // scalar timing. Retain and compare that independent original witness.
+            timing_domain_matches: scalar_domain == Some(timing_domain),
             mapped_domain_matches: preparation.class != RuntimeMapClass::Ready
                 || preparation.domain.is_some_and(|domain| {
                     domain.sample_frames == plan.sample_frames
                         && domain.region == plan.loop_region
-                        && domain.period_bits == plan.loop_period.map(f64::to_bits)
+                        && (domain.period.is_mapped()
+                            || playback.is_mapped()
+                            || domain.period == plan.loop_period)
                 }),
             transition: plan.transition.is_active(),
             actual_feed,
@@ -507,7 +513,7 @@ impl RtMixer {
             sample_frames: sample.frame_count(),
             frame_pos: position.frame,
             loop_region: region,
-            loop_period: voice.source_playback.loop_period(),
+            loop_period: voice.source_playback.reader_period(),
             seek_mode: position.seek_mode,
             selection,
             transition,
@@ -531,6 +537,10 @@ impl RtMixer {
                 owner.source_sync_witness(admission.content_key()?, identity.source_generation)
             }),
             configured: voice.source_playback.retry_domain().map(Into::into),
+            original_scalar: voice
+                .source_playback
+                .original_scalar_domain()
+                .map(Into::into),
             region,
             timing_period: timing.period_seconds().map(f64::to_bits),
             selection,

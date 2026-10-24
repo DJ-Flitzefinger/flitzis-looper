@@ -159,8 +159,15 @@ pub(crate) fn normal_loop_feed_available_with_readers(
     {
         return false;
     }
-    if let Some(period) = plan.loop_period
+    if let Some(period) = plan.loop_period.scalar_period()
         && SourceLoopDomain::musical(plan.sample_frames, plan.loop_region, period).is_none()
+    {
+        return false;
+    }
+    if plan
+        .loop_period
+        .mapped_period()
+        .is_some_and(|period| !period.validate_physical(plan.loop_region))
     {
         return false;
     }
@@ -215,7 +222,9 @@ pub(crate) fn normal_loop_feed_available_with_readers(
     else {
         return false;
     };
-    let taps = plan.fractional_taps(position.fraction);
+    let Some(taps) = plan.try_fractional_taps(position.fraction) else {
+        return false;
+    };
     taps.left >= required.start
         && taps.left < required.end
         && taps
@@ -578,7 +587,10 @@ mod tests {
                 sample_frames: full.frame_count(),
                 frame_pos: playback.position().frame,
                 loop_region: REGION,
-                loop_period: Some(period),
+                loop_period:
+                    crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                        Some(period),
+                    ),
                 seek_mode: ExplicitSeekMode::Normal,
                 selection: StemRenderSelection::from_state(
                     StemMixMode::AllStems,
@@ -1082,7 +1094,7 @@ mod tests {
             assert!(playback.advance(1));
             let plan = SourceReadPlan {
                 frame_pos: frame,
-                loop_period: None,
+                loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
                 selection: StemRenderSelection::full_mix(),
                 ..fixture.plan
             };
@@ -1123,7 +1135,10 @@ mod tests {
         assert!(capture(fixture.plan, &fixture.playback, RATE, None).is_none());
         for plan in [
             SourceReadPlan {
-                loop_period: Some(1001.01),
+                loop_period:
+                    crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                        Some(1001.01),
+                    ),
                 ..fixture.plan
             },
             SourceReadPlan {

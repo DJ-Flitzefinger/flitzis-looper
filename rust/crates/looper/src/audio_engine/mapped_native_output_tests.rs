@@ -396,10 +396,13 @@ fn captured_fixture_with_geometry(
             vec![0.0; NUM_SAMPLES],
             vec![Some(duration); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
-                sync: true,
-                ..Default::default()
-            }; NUM_SAMPLES]),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(rows),
         )
         .unwrap();
@@ -465,7 +468,7 @@ fn owned_birth_from_capture(
     let position = snapshot.playback.position();
     snapshot.plan.frame_pos = position.frame;
     snapshot.plan.seek_mode = position.seek_mode;
-    snapshot.plan.loop_period = snapshot.playback.loop_period();
+    snapshot.plan.loop_period = snapshot.playback.reader_period();
     work.freeze_launch_origin(SourceReadCheckpoint {
         playback: snapshot.playback,
         plan: snapshot.plan,

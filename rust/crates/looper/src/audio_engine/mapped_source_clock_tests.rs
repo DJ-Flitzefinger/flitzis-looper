@@ -77,7 +77,9 @@ fn epoch(phase: f64) -> MappedClockEpoch {
 fn legacy_phase(epoch: MappedClockEpoch) -> f64 {
     match epoch.mode {
         MappedClockMode::Legacy { phase_quarters, .. } => phase_quarters,
-        MappedClockMode::Anchored(_) | MappedClockMode::CompactAnchored(_) => {
+        MappedClockMode::Anchored(_)
+        | MappedClockMode::CompactAnchored(_)
+        | MappedClockMode::GeneralCompact(_) => {
             panic!("legacy fixture expected")
         }
     }
@@ -220,7 +222,7 @@ fn exact_thirty_two_quarter_cycle_preserves_unrounded_source_end() {
     let epoch = epoch(0.0);
     assert_eq!(geometry.exact_quarters(), 32.0);
     assert_eq!(geometry.unrounded_source_end(), 32.004);
-    assert!((geometry.domain().musical_period.unwrap() - 3200.4).abs() < 1e-10);
+    assert!((geometry.domain().musical_period.scalar_period().unwrap() - 3200.4).abs() < 1e-10);
     for cycle in [1, 2, 7, 100_000_001_u64] {
         let frame = cycle * 3200;
         assert_eq!(coordinate(geometry.position_at(epoch, frame).unwrap()), 0.0);

@@ -795,7 +795,7 @@ mod tests {
                 start: 19,
                 end: 1519,
             },
-            loop_period: playback.loop_period(),
+            loop_period: playback.reader_period(),
             seek_mode: position.seek_mode,
             selection: StemRenderSelection::full_mix(),
             transition,

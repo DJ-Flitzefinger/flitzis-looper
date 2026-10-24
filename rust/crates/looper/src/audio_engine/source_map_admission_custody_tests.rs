@@ -43,9 +43,11 @@ fn live_map_delivery(
         anchors.push(anchor("middle", seconds, beat));
     }
     anchors.push(anchor("end", 1.0, 4.0));
-    expected["record"]["accepted"]["intervals"] = serde_json::json!(
-        vec![expected["record"]["accepted"]["intervals"][0].clone(); anchors.len() - 1]
-    );
+    expected["record"]["accepted"]["intervals"] =
+        serde_json::json!(vec![
+            expected["record"]["accepted"]["intervals"][0].clone();
+            anchors.len() - 1
+        ]);
     expected["record"]["accepted"]["anchors"] = serde_json::json!(anchors);
     seal(&mut expected);
     let (job, event) = stored_event(fixture, &expected);
@@ -53,7 +55,11 @@ fn live_map_delivery(
         let event = event.bind(py).cast::<PyDict>().unwrap();
         let owner = event.get_item("_native_event_owner").unwrap().unwrap();
         let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
-        assert!(job.resolve_source_beatmap_artifact_completion(&delivery).unwrap().is_some());
+        assert!(
+            job.resolve_source_beatmap_artifact_completion(&delivery)
+                .unwrap()
+                .is_some()
+        );
         delivery.clone()
     });
     (job, delivery)
@@ -70,17 +76,28 @@ fn publish_live_map(fixture: &ColdCustody, delivery: &LoaderEventDelivery, revis
         delivery: Some(delivery.clone()),
         exact_quarters: None,
     };
-    fixture.engine.input_runtime.as_ref().unwrap().set_runtime_state_with_source_maps(
-        true,
-        (0..NUM_SAMPLES).map(|id| id == 0).collect(),
-        vec![0.0; NUM_SAMPLES],
-        vec![Some(1.0); NUM_SAMPLES],
-        bindings.iter().map(Option::as_ref).collect(),
-        Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
-            sync: true, key_lock: false, ..Default::default()
-        }; NUM_SAMPLES]),
-        Some(maps),
-    ).unwrap();
+    fixture
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_source_maps(
+            true,
+            (0..NUM_SAMPLES).map(|id| id == 0).collect(),
+            vec![0.0; NUM_SAMPLES],
+            vec![Some(1.0); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    key_lock: false,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            Some(maps),
+        )
+        .unwrap();
 }
 
 fn live_map_snapshot(
@@ -93,7 +110,10 @@ fn live_map_snapshot(
     // so cache reuse can be examined independently of actual callback acknowledgement.
     while let Ok(command) = fixture.consumer.pop() {
         if let crate::messages::ControlMessage::AdoptRuntimePolicy(work) = command {
-            work.finish(Err(crate::audio_engine::input_mapping::RuntimePolicyError::Unsupported), None);
+            work.finish(
+                Err(crate::audio_engine::input_mapping::RuntimePolicyError::Unsupported),
+                None,
+            );
         }
     }
     snapshot
@@ -113,8 +133,17 @@ fn runtime_map_snapshot_reuses_original_prepared_owner_without_inventing_a_launc
     assert_eq!(preparation.witness.unwrap().intent_revision, 1);
     let domain = preparation.domain.unwrap();
     assert_eq!(domain.sample_frames, 65_536);
-    assert_eq!(domain.region, crate::audio_engine::source_reader::FrameRange { start: 0, end: 48_000 });
-    assert_eq!(domain.period_bits, Some(48_000.0_f64.to_bits()));
+    assert_eq!(
+        domain.region,
+        crate::audio_engine::source_reader::FrameRange {
+            start: 0,
+            end: 48_000
+        }
+    );
+    assert_eq!(
+        domain.period.scalar_period().map(f64::to_bits),
+        Some(48_000.0_f64.to_bits())
+    );
     assert_eq!(snapshot.row(0).unwrap().map_preparation, preparation);
     assert!(snapshot.map_current(0));
     assert!(source.geometry().has_compact_continuation());
@@ -131,7 +160,10 @@ fn runtime_map_snapshot_reuses_original_prepared_owner_without_inventing_a_launc
     let next = live_map_snapshot(&mut path.source);
     let next_source = next.prepared_map(0).unwrap();
     assert!(!Arc::ptr_eq(source, next_source));
-    assert!(source.same_source(next_source), "a raw request revision is not a new map trajectory");
+    assert!(
+        source.same_source(next_source),
+        "a raw request revision is not a new map trajectory"
+    );
     assert_ne!(preparation.witness, next.map_preparation(0).witness);
     assert!(!snapshot.map_current(0));
     assert!(next.map_current(0));
@@ -150,11 +182,20 @@ fn map_job_cancel_revokes_pending_runtime_admission_but_preserves_effective_orig
     let custody = PadStartCustody::for_runtime_map(source);
     let coordinate = source.geometry().map().canonical_source_at_beat(2.0);
     job.cancel();
-    assert!(snapshot.row_current(0), "data-only cancellation keeps runtime and source intent");
-    assert!(!snapshot.map_current(0), "the original job token still fences pending admission");
+    assert!(
+        snapshot.row_current(0),
+        "data-only cancellation keeps runtime and source intent"
+    );
+    assert!(
+        !snapshot.map_current(0),
+        "the original job token still fences pending admission"
+    );
     assert!(source.belongs_to(&path.source.engine.input_runtime_ownership));
     assert!(delivery.source_map_belongs_to(&path.source.engine.input_runtime_ownership));
-    assert_eq!(source.geometry().map().canonical_source_at_beat(2.0), coordinate);
+    assert_eq!(
+        source.geometry().map().canonical_source_at_beat(2.0),
+        coordinate
+    );
     assert!(Arc::ptr_eq(custody.effective_source().unwrap(), source));
     assert!(custody.original_launch().is_none());
 }
@@ -170,16 +211,35 @@ fn unsupported_exact_runtime_derivative_keeps_original_legacy_launch_and_domain_
     let snapshot = live_map_snapshot(&mut path.source);
     let preparation = snapshot.map_preparation(0);
     assert_eq!(preparation.class, RuntimeMapClass::Unsupported);
-    assert_eq!(preparation.domain.unwrap().period_bits, Some(48_000.0_f64.to_bits()));
+    assert_eq!(
+        preparation
+            .domain
+            .unwrap()
+            .period
+            .scalar_period()
+            .map(f64::to_bits),
+        Some(48_000.0_f64.to_bits())
+    );
     assert!(preparation.witness.is_some());
     assert!(snapshot.prepared_map(0).is_none());
     assert!(snapshot.map_current(0));
     let launch = CapturedPadStart::capture_from_binding(
-        &binding(&path.source, 0), 0.0, Some(1.0), 1.0, false, 0, (48_000, 2), None,
-    ).unwrap();
+        &binding(&path.source, 0),
+        0.0,
+        Some(1.0),
+        1.0,
+        false,
+        0,
+        (48_000, 2),
+        None,
+    )
+    .unwrap();
     assert!(launch.mapped_geometry().is_some());
     assert!(!launch.mapped_geometry().unwrap().has_compact_continuation());
-    assert_eq!(launch.sync_request().mode, crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped);
+    assert_eq!(
+        launch.sync_request().mode,
+        crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped
+    );
     let cached = live_map_snapshot(&mut path.source);
     assert!(Arc::ptr_eq(&snapshot, &cached));
     assert_eq!(cached.map_preparation(0), preparation);
@@ -192,8 +252,16 @@ fn effective_map_replacement_moves_old_arc_to_retirement_and_keeps_genuine_origi
     let (_first_job, first) = live_map_delivery(&path.source, None);
     publish_live_map(&path.source, &first, 1);
     let original = CapturedPadStart::capture_from_binding(
-        &binding(&path.source, 0), 0.0, Some(1.0), 1.0, false, 0, (48_000, 2), None,
-    ).unwrap();
+        &binding(&path.source, 0),
+        0.0,
+        Some(1.0),
+        1.0,
+        false,
+        0,
+        (48_000, 2),
+        None,
+    )
+    .unwrap();
     let first_snapshot = live_map_snapshot(&mut path.source);
     let first_source = first_snapshot.prepared_map(0).unwrap().clone();
     let weak_first = Arc::downgrade(&first_source);
@@ -208,8 +276,14 @@ fn effective_map_replacement_moves_old_arc_to_retirement_and_keeps_genuine_origi
     assert!(!first_source.same_source(second_source));
     let retired = custody.replace_effective_map(second_source).unwrap();
     assert!(retired.original_launch().is_none());
-    assert!(Arc::ptr_eq(retired.effective_source().unwrap(), &first_source));
-    assert!(Arc::ptr_eq(custody.effective_source().unwrap(), second_source));
+    assert!(Arc::ptr_eq(
+        retired.effective_source().unwrap(),
+        &first_source
+    ));
+    assert!(Arc::ptr_eq(
+        custody.effective_source().unwrap(),
+        second_source
+    ));
     assert!(custody.original_launch().unwrap().same_owner(&original));
     let count = Arc::strong_count(second_source);
     assert!(custody.replace_effective_map(second_source).is_none());
@@ -217,7 +291,10 @@ fn effective_map_replacement_moves_old_arc_to_retirement_and_keeps_genuine_origi
     drop(first_source);
     drop(first_snapshot);
     assert_eq!(Arc::strong_count(retired.effective_source().unwrap()), 1);
-    assert!(weak_first.upgrade().is_some(), "the exact displaced map still belongs to retirement");
+    assert!(
+        weak_first.upgrade().is_some(),
+        "the exact displaced map still belongs to retirement"
+    );
     drop(retired); // This fixture releases the last source owner on its control/test thread.
     assert!(weak_first.upgrade().is_none());
 }
@@ -271,7 +348,13 @@ fn publish(fixture: &ColdCustody, row: SourceMapRow) -> Result<(), String> {
             vec![32.0 / 48_000.0; NUM_SAMPLES],
             vec![Some(64.0 / 48_000.0); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection { sync: true, ..Default::default() }; NUM_SAMPLES]),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(rows),
         )
 }
@@ -489,10 +572,13 @@ fn refresh_without_map_rows(fixture: &ColdCustody, loaded_zero: bool, other_star
             starts,
             vec![Some(64.0 / 48_000.0); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
-                sync: true,
-                ..Default::default()
-            }; NUM_SAMPLES]),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             None,
         )
         .unwrap();
@@ -747,7 +833,13 @@ impl ReaderDomainPath {
                 vec![READER_DOMAIN_START as f64 / f64::from(READER_DOMAIN_RATE); NUM_SAMPLES],
                 vec![Some(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE)); NUM_SAMPLES],
                 bindings.iter().map(Option::as_ref).collect(),
-                Some(vec![crate::audio_engine::input_mapping::PitchPadProjection { sync: true, ..Default::default() }; NUM_SAMPLES]),
+                Some(vec![
+                    crate::audio_engine::input_mapping::PitchPadProjection {
+                        sync: true,
+                        ..Default::default()
+                    };
+                    NUM_SAMPLES
+                ]),
                 Some(rows),
             )
             .unwrap();
@@ -936,12 +1028,24 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
     });
 
     let master_period = READER_DOMAIN_OUTPUT_FRAMES as f64 / f64::from(READER_DOMAIN_RATE);
-    path.source.engine.set_bpm_lock_with_binding(false, None).unwrap();
+    path.source
+        .engine
+        .set_bpm_lock_with_binding(false, None)
+        .unwrap();
     path.drain();
-    drain_parameter_messages(&mut path.parameters, &mut path.source.mixer, &mut path.timeline);
+    drain_parameter_messages(
+        &mut path.parameters,
+        &mut path.source.mixer,
+        &mut path.timeline,
+    );
     path.render(0);
-    let (off_revision, off) = path.source.engine.input_runtime_ownership
-        .global_rate_status.read_bpm().unwrap();
+    let (off_revision, off) = path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap();
     assert_eq!(off_revision, off.revision);
     assert!(off.applied && !off.requested && !off.effective);
     assert_eq!(off.execution_frame, Some(0));
@@ -966,7 +1070,10 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
     path.render(READER_DOMAIN_OUTPUT_FRAMES);
     let (scalar_read, scalar_taps, scalar_pcm) = path.last_actual_source_read(0);
     assert!(!scalar_read.playback.is_mapped());
-    assert_eq!(scalar_read.plan.loop_period, Some(scalar_period));
+    assert_eq!(
+        scalar_read.plan.loop_period.scalar_period(),
+        Some(scalar_period)
+    );
     assert_eq!(scalar_read.context.binding.accepted, Some(accepted));
     let scalar_position = scalar_read.playback.position();
     assert_eq!(scalar_position.frame, READER_DOMAIN_END - 1);
@@ -984,7 +1091,10 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
     path.source.engine.stop_sample(0).unwrap();
     path.drain();
     assert!(path.source.mixer.voices.iter().all(|voice| !voice.active));
-    path.source.engine.set_bpm_lock_with_binding(true, None).unwrap();
+    path.source
+        .engine
+        .set_bpm_lock_with_binding(true, None)
+        .unwrap();
     path.drain();
     drain_parameter_messages(
         &mut path.parameters,
@@ -992,11 +1102,19 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
         &mut path.timeline,
     );
     path.render(0);
-    let (bpm_revision, bpm_effect) = path.source.engine.input_runtime_ownership
-        .global_rate_status.read_bpm().unwrap();
+    let (bpm_revision, bpm_effect) = path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap();
     assert_eq!(bpm_revision, bpm_effect.revision);
     assert!(bpm_effect.applied && bpm_effect.requested && bpm_effect.effective);
-    assert_eq!(bpm_effect.execution_frame, Some(READER_DOMAIN_OUTPUT_FRAMES as u64));
+    assert_eq!(
+        bpm_effect.execution_frame,
+        Some(READER_DOMAIN_OUTPUT_FRAMES as u64)
+    );
     assert!(path.timeline.matches_clock_epoch(&master));
     assert_eq!(path.timeline.master_period_seconds(), Some(master_period));
     path.publish_map_request(&delivery, true);
@@ -1030,7 +1148,10 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
     assert_eq!(geometry.exact_quarters(), 1.0);
     assert_eq!(geometry.domain().region.start, READER_DOMAIN_START);
     assert_eq!(geometry.domain().region.end, READER_DOMAIN_END);
-    assert_eq!(geometry.domain().musical_period, Some(32_768.0));
+    assert_eq!(
+        geometry.domain().musical_period.scalar_period(),
+        Some(32_768.0)
+    );
     path.render(READER_DOMAIN_OUTPUT_FRAMES);
     let (mapped_read, mapped_taps, mapped_pcm) =
         path.last_actual_source_read(READER_DOMAIN_OUTPUT_FRAMES as u64);
@@ -1093,7 +1214,7 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
             "source_frames": pcm.len(),
             "accepted_period_seconds_bits": bits(accepted.period_seconds),
             "scalar_period_frames_bits": bits(scalar_period),
-            "mapped_period_frames_bits": bits(mapped_read.plan.loop_period.unwrap()),
+            "mapped_period_frames_bits": bits(mapped_read.plan.loop_period.scalar_period().unwrap()),
             "local_e": READER_DOMAIN_OUTPUT_FRAMES - 1,
             "scalar_active_e": scalar_read.active_start,
             "mapped_active_e": mapped_read.active_start,
@@ -1115,10 +1236,17 @@ fn genuine_new_map_delivery_cancels_original_refresh_before_admission_and_after_
     use crate::audio_engine::accepted_timing_refresh;
     for after_enqueue in [false, true] {
         let mut path = ReaderDomainPath::new(&vec![0_i16; 131_072]);
-        path.source.engine.set_pad_timing_intent(0, "automatic").unwrap();
+        path.source
+            .engine
+            .set_pad_timing_intent(0, "automatic")
+            .unwrap();
         path.drain();
         let timing = l3_constant_timing_fixture::publish_synthetic_loaded_timing(
-            &path.source.engine, &path.source.producer, 0, 0.5);
+            &path.source.engine,
+            &path.source.producer,
+            0,
+            0.5,
+        );
         path.drain();
         assert_eq!(timing.publication_status().unwrap(), "accepted");
         let (_first_job, first) = original_delivery(&path.source);
@@ -1126,34 +1254,67 @@ fn genuine_new_map_delivery_cancels_original_refresh_before_admission_and_after_
         let original = binding(&path.source, 0);
         let first_map = first.qualify_source_map(&original, None).unwrap();
         let key = original.binding.placement.unwrap().content_key().unwrap();
-        let stamp = path.source.engine.input_runtime_ownership.hierarchy_stamp.load(std::sync::atomic::Ordering::Acquire);
+        let stamp = path
+            .source
+            .engine
+            .input_runtime_ownership
+            .hierarchy_stamp
+            .load(std::sync::atomic::Ordering::Acquire);
         let launch = original.source_map_launch_snapshot().launch_revision();
         let before = path.source.mixer.loop_region_frames(0);
         let ticket = after_enqueue.then(|| {
-            accepted_timing_refresh::enqueue(&path.source.engine, &path.source.producer,
-                &original, 0.25, Some(1.0), None).unwrap()
+            accepted_timing_refresh::enqueue(
+                &path.source.engine,
+                &path.source.producer,
+                &original,
+                0.25,
+                Some(1.0),
+                None,
+            )
+            .unwrap()
         });
-        if after_enqueue { path.drain(); }
+        if after_enqueue {
+            path.drain();
+        }
 
         let mut changed = record(&path.source, 0);
-        changed["record"]["accepted"]["anchors"][1]["source_seconds_bits"] = serde_json::json!(bits(80.0 / 48_000.0));
+        changed["record"]["accepted"]["anchors"][1]["source_seconds_bits"] =
+            serde_json::json!(bits(80.0 / 48_000.0));
         seal(&mut changed);
         let (second_job, event) = stored_event(&path.source, &changed);
         let second = Python::attach(|py| {
             let event = event.bind(py).cast::<PyDict>().unwrap();
             let owner = event.get_item("_native_event_owner").unwrap().unwrap();
             let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
-            assert!(second_job.resolve_source_beatmap_artifact_completion(&delivery).unwrap().is_some());
+            assert!(
+                second_job
+                    .resolve_source_beatmap_artifact_completion(&delivery)
+                    .unwrap()
+                    .is_some()
+            );
             delivery.clone()
         });
         let current = binding(&path.source, 0);
         let second_map = second.qualify_source_map(&current, None).unwrap();
-        assert_ne!(first_map.map().map_revision(), second_map.map().map_revision());
+        assert_ne!(
+            first_map.map().map_revision(),
+            second_map.map().map_revision()
+        );
         path.publish_map_request(&second, true);
         let current = binding(&path.source, 0);
         assert_eq!(current.binding.placement.unwrap().content_key(), Some(key));
-        assert_eq!(path.source.engine.input_runtime_ownership.hierarchy_stamp.load(std::sync::atomic::Ordering::Acquire), stamp);
-        assert_ne!(current.source_map_launch_snapshot().launch_revision(), launch);
+        assert_eq!(
+            path.source
+                .engine
+                .input_runtime_ownership
+                .hierarchy_stamp
+                .load(std::sync::atomic::Ordering::Acquire),
+            stamp
+        );
+        assert_ne!(
+            current.source_map_launch_snapshot().launch_revision(),
+            launch
+        );
         if let Some(ticket) = ticket {
             path.render(2);
             assert_eq!(ticket.publication_status(), "rejected");
@@ -1164,8 +1325,17 @@ fn genuine_new_map_delivery_cancels_original_refresh_before_admission_and_after_
             let mut rebased_original = original.clone();
             rebased_original.binding = current.binding;
             assert!(rebased_original.current());
-            assert!(accepted_timing_refresh::enqueue(&path.source.engine, &path.source.producer,
-                &rebased_original, 0.25, Some(1.0), None).is_err());
+            assert!(
+                accepted_timing_refresh::enqueue(
+                    &path.source.engine,
+                    &path.source.producer,
+                    &rebased_original,
+                    0.25,
+                    Some(1.0),
+                    None
+                )
+                .is_err()
+            );
         }
         assert_eq!(path.source.mixer.loop_region_frames(0), before);
     }
@@ -1175,21 +1345,45 @@ fn genuine_new_map_delivery_cancels_original_refresh_before_admission_and_after_
 fn qualified_on_with_real_mapped_voice_noops_equal_period_and_keeps_different_period_pending() {
     use crate::audio_engine::global_rate_status::BpmReason;
     let mut path = ReaderDomainPath::new(&vec![0_i16; 131_072]);
-    path.source.engine.set_pad_timing_intent(0, "automatic").unwrap();
+    path.source
+        .engine
+        .set_pad_timing_intent(0, "automatic")
+        .unwrap();
     path.drain();
     let timing = l3_constant_timing_fixture::publish_synthetic_loaded_timing(
-        &path.source.engine, &path.source.producer, 0, 0.5);
+        &path.source.engine,
+        &path.source.producer,
+        0,
+        0.5,
+    );
     path.drain();
     assert_eq!(timing.publication_status().unwrap(), "accepted");
     let original = binding(&path.source, 0);
-    path.source.engine.set_bpm_lock_with_binding(true, Some(&original)).unwrap();
+    path.source
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
     path.drain();
-    drain_parameter_messages(&mut path.parameters, &mut path.source.mixer, &mut path.timeline);
+    drain_parameter_messages(
+        &mut path.parameters,
+        &mut path.source.mixer,
+        &mut path.timeline,
+    );
     path.render(0);
-    assert!(path.source.engine.input_runtime_ownership.global_rate_status.read_bpm().unwrap().1.applied);
+    assert!(
+        path.source
+            .engine
+            .input_runtime_ownership
+            .global_rate_status
+            .read_bpm()
+            .unwrap()
+            .1
+            .applied
+    );
     let mut map_record = record(&path.source, 0);
     map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] = serde_json::json!(
-        bits(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE)));
+        bits(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE))
+    );
     map_record["record"]["accepted"]["anchors"][1]["beat_bits"] = serde_json::json!(bits(2.0));
     seal(&mut map_record);
     let (job, event) = stored_event(&path.source, &map_record);
@@ -1197,7 +1391,11 @@ fn qualified_on_with_real_mapped_voice_noops_equal_period_and_keeps_different_pe
         let event = event.bind(py).cast::<PyDict>().unwrap();
         let owner = event.get_item("_native_event_owner").unwrap().unwrap();
         let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
-        assert!(job.resolve_source_beatmap_artifact_completion(&delivery).unwrap().is_some());
+        assert!(
+            job.resolve_source_beatmap_artifact_completion(&delivery)
+                .unwrap()
+                .is_some()
+        );
         delivery.clone()
     });
     path.publish_map_request(&delivery, true);
@@ -1205,31 +1403,86 @@ fn qualified_on_with_real_mapped_voice_noops_equal_period_and_keeps_different_pe
     assert!(start.mapped_geometry().is_some());
     path.render(3);
     assert!(path.source.mixer.has_mapped_voice());
-    let original_owner = path.source.mixer.voices.iter().find(|voice| voice.active).unwrap()
-        .mapped_start.as_ref().unwrap().original().clone();
+    let original_owner = path
+        .source
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active)
+        .unwrap()
+        .mapped_start
+        .as_ref()
+        .unwrap()
+        .original()
+        .clone();
     let before = path.timeline;
     let current = binding(&path.source, 0);
-    path.source.engine.set_bpm_lock_with_binding(true, Some(&current)).unwrap();
+    path.source
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&current))
+        .unwrap();
     path.drain();
-    drain_parameter_messages(&mut path.parameters, &mut path.source.mixer, &mut path.timeline);
+    drain_parameter_messages(
+        &mut path.parameters,
+        &mut path.source.mixer,
+        &mut path.timeline,
+    );
     path.render(0);
-    let equal = path.source.engine.input_runtime_ownership.global_rate_status.read_bpm().unwrap().1;
+    let equal = path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
     assert!(equal.applied && equal.effective);
     assert!(path.timeline.matches_clock_epoch(&before));
     let timing = l3_constant_timing_fixture::publish_synthetic_loaded_timing(
-        &path.source.engine, &path.source.producer, 0, 0.75);
+        &path.source.engine,
+        &path.source.producer,
+        0,
+        0.75,
+    );
     path.drain();
     assert_eq!(timing.publication_status().unwrap(), "accepted");
     let current = binding(&path.source, 0);
     assert!((current.binding.accepted.unwrap().period_seconds - 0.75).abs() < 1e-12);
-    path.source.engine.set_bpm_lock_with_binding(true, Some(&current)).unwrap();
+    path.source
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&current))
+        .unwrap();
     path.drain();
-    drain_parameter_messages(&mut path.parameters, &mut path.source.mixer, &mut path.timeline);
+    drain_parameter_messages(
+        &mut path.parameters,
+        &mut path.source.mixer,
+        &mut path.timeline,
+    );
     path.render(0);
-    let different = path.source.engine.input_runtime_ownership.global_rate_status.read_bpm().unwrap().1;
+    let different = path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
     assert!(!different.applied && different.effective && different.revision > equal.revision);
     assert_eq!(different.reason, BpmReason::MappedActive);
     assert!(path.timeline.matches_clock_epoch(&before));
-    let voice = path.source.mixer.voices.iter().find(|voice| voice.active).unwrap();
-    assert!(voice.mapped_start.as_ref().unwrap().original().same_owner(&original_owner));
+    let voice = path
+        .source
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.active)
+        .unwrap();
+    assert!(
+        voice
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .original()
+            .same_owner(&original_owner)
+    );
 }

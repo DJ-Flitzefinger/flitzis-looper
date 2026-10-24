@@ -775,3 +775,97 @@ General maps, genuine common-grid convergence, Native/pitch adoption, unequal
 loops and one-shot EOF remain explicit required follow-up gates. Existing paused,
 Hold, Native, pitch, Key-Lock, residency and transition adoption refusals remain;
 already converted dry voices must retain later continuation and lifecycle behavior.
+
+## Productive declared-Q general reader domains
+
+The separate general qualification interprets original binary64 seconds times
+integer loaded rate exactly. Physical start A gives rational B*=B(A), declared
+binary64 Q is exact, and Pmap=S(B*+Q)-A is independently rational. Original knots,
+integer markers H and accepted scalar P remain unchanged. The original exact
+intersection is still attempted under its preceding proof; its failure does not
+gate a declared-Q general qualification. Ordinary launch construction is unchanged.
+An exact-boundary original-segment visitor resolves trusted positive interior and
+meter metadata without a displayed inverse or endpoint. Closure uses exact positive
+nearest-integer ties away from zero; require Pmap>=.5, |Pmap-H|<=1 and A+Pmap<=2^64.
+
+SourceLoopDomain and SourceReadPlan carry an explicit period enum: Physical,
+ScalarMusical bits or an opaque reduced positive256/256-bit rational certificate.
+Full certificate identity travels through real readers, checkpoints and journals.
+SourcePlayback independently retains a16-byte Unavailable/Physical/Musical original
+scalar witness. Generic general coordinates have no original scalar permit; explicit
+continuation records a validated input domain. Refresh, projection, resume and
+replacement preserve this witness. Unavailable never implies Physical. The original
+accepted timing is compared against that witness independently of effective Pmap.
+
+At E, Root's existing cohort preflight compares the actual old reader plan with a
+new plan carrying the candidate effective domain. Both retain the same physical
+PCM/selection, raw q/f, normal mode, actual tap addresses, gain bits and all-channel
+PCM. Scalar reverse restores original P and the existing glide. Already-mapped
+replacement into a different old compact target uses a narrow numeric constructor:
+the unchanged old constructor certifies its target domain while previous captured
+mapped playback contributes only its validated retained original scalar witness.
+This remains coherent through general->old->old->scalar chains without a lineage
+flag. Scalar birth into old compact retains its preceding full-domain equality.
+Current cursor canonicality is checked in the actual conversion domains, not an
+unrelated historical scalar circle; a later reverse can legitimately refuse at a seam.
+
+The general trajectory is U=B(raw)-B*+M(n)-M0, k=floor(U/Q), and
+b=B(raw)+M(n)-M0-kQ with the unchanged actual master evaluator. B* cancels from
+the local affine query. An explicit span program stores the exact nonnegative
+dyadic cycle kQ as packed128-bit coefficient and exponent; its tagged payload
+replaces the old B/Q/P fields. The original raw/inverse/M0/current segment, output
+bounds and cached global endpoint stay copied; the full rational boundary stays
+with the original retained geometry and copied reader certificate. Local views
+receive that nonowning domain and prepare once per reader chunk. Generic endpoint,
+advance, refresh, pause, master replacement and history operations retain it.
+
+Source/beat grids [-126,0] and coefficients below2^126 are explicit admissions
+over the complete shifted actual master horizon. Rational U coefficient <2^128
+and positive integer Q coefficient bound exact dyadic kQ below2^128. Separate
+512-bit phase/forward scratch admits numerator below2^386 and denominator
+below2^380; it does not widen the old256/512 intersection theorem. Rational
+normalization needs at most753 bits and final-interval exact alpha plus binary32
+rounding at most839 bits, using bounded1024-bit ephemeral scratch. Reduction to
+the64-byte period certificate is another explicit bound, not guaranteed for all
+finite maps. No wide inverse, owning allocation or final owner drop enters realtime.
+Actual span<=240B, optional32 playback<=16KiB, explicit2MiB stack, allocations and
+complete consuming costs remain measured gates.
+
+Before rounding a query, prove exact source membership. Split whole and RN-even
+fraction once with generic raw-fraction identity. Only rounding that reaches the
+exact upper boundary carries to start/+0. A raw candidate cannot be clipped into
+the target domain. Rational seam taps use last=min(ceil(Pmap)-1,H-1), the original
+last/first physical knots and exact alpha rounded once to binary32. Exact Pmap=H
+uses the physical-equivalent tap descriptor. Shared fallible tap/sample methods
+and a complete rational-read prepass reject unavailable arithmetic or resident taps
+before output writes; there is no silent fallback or partial successful receipt.
+
+Existing runtime snapshot, source/ACK/master fences, global-before-placement
+lease, fixed32 atomic claim and reserved worker retirement own all actual effects.
+Preparation failures may be stable; raw pair/E/horizon/first-PCM/seam failures stay
+progress-retryable. Readiness, adoption and settled tempo do not certify common
+phase. Physical-marker-only rational Q, common convergence, unequal loops, finite
+EOF, Native/pitch/Key Lock and all full product/Human gates remain required next work.
+
+### Numeric span/domain association boundary
+
+A general span alone stores no rational reader certificate. Its local numeric API
+requires the EXACT domain already privately bound by the same prepared geometry.
+This precondition is maintained by SourcePlayback's private tuple, constructors,
+full-domain configure/refresh/project/resume guards and exact plan equality; direct
+numeric span APIs establish no arbitrary-domain association or source permit.
+Malformed physical/sample domains and noncanonical cached endpoints are rejected.
+A compatible but different standalone certificate is not falsely claimed detectable
+without its original binding. Wrong-cert Playback configuration and actual reader
+plan mismatches refuse without changing playback or output. This targeted boundary
+clarification and guard/tests received the same systems specialist PRE; actual
+frozen POST and independent final review still govern publication.
+### Production construction stack containment
+
+The shared fallible mixer constructor returns the existing complete mixer Box
+inside its Result. The stream factory consumes that Box directly, avoiding a large
+by-value mixer Result and caller extraction before boxing. Field initialization,
+worker startup, supplied-owner/epoch validation, error precedence, exactly-once
+policy invalidation after success and whole callback-owner retirement remain in
+place. This adds no production allocation or runtime voice representation change.
+The unchanged explicit2MiB production and consuming tests determine stack success.

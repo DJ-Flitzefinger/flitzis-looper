@@ -235,7 +235,7 @@ impl RtMixer {
             sample_frames: sample.frame_count(),
             frame_pos: position.frame,
             loop_region: region,
-            loop_period: playback.loop_period(),
+            loop_period: playback.reader_period(),
             seek_mode: position.seek_mode,
             selection,
             transition,
@@ -440,7 +440,7 @@ impl RtMixer {
                     frame_pos: position.frame,
                     seek_mode: position.seek_mode,
                     loop_region: region,
-                    loop_period: playback.loop_period(),
+                    loop_period: playback.reader_period(),
                     ..pin.plan
                 };
                 // Addressing/rate/owners stay current; the live cursor is allowed to advance.

@@ -401,3 +401,53 @@ Stable original prepared-map and reader-domain unavailability MAY suppress autom
 - **AND** source and acknowledgement fences SHALL always remain mandatory; only additional map-availability recapture MAY be skipped for completely current effective audio that already retained the immutable map
 
 This initial productive intersection SHALL NOT certify general decimal-map coverage, common-grid phase convergence, unequal-loop or one-shot EOF completion, Native/pitch adoption, arbitrary mapped history projection, device/hearing acceptance or the complete SYNC feature. Existing adoption refusals for paused/Hold, Native, pitch, Key Lock, residency conflicts and transitions SHALL remain until their actual contracts are implemented. Later pause/Hold/resume/retrigger/rate/history operations on an admitted dry voice SHALL retain their established source and continuation guards.
+
+### Requirement: Declared-Q general maps have an explicit exact reader domain
+A separate productive general mode MAY qualify the same original immutable source map for a declared positive binary64 quarter extent Q. It SHALL preserve every stored knot, the integer loaded sample rate, physical markers, source/content/lifetime/ACK custody and the original scalar reader domain. Loaded knot coordinates SHALL mean exact stored seconds multiplied by integer sample rate before rounding. With physical start A, the mode SHALL use the exact original inverse B*=B(A), exact rational B*+Q and exact Pmap=S(B*+Q)-A. It SHALL NOT replace these values with a displayed inverse, a rounded B+Q, the original scalar period or a fitted curve. The initial exact-intersection mode and ordinary legacy launch contracts SHALL retain their preceding admissions and refusals.
+
+General qualification SHALL prove trusted original coverage over the exact positive loop interior, required meter metadata, nominal and exact local-rate bounds, positive Pmap>=0.5, exact |Pmap-H|<=1 for physical length H, and physical-marker closure by nearest integer with positive ties away from zero. Exact A+Pmap SHALL be checked before a physical cast, including a virtual 2^64 endpoint. No extrapolation, clipping, marker movement or new source permission is granted. Unavailable preparation SHALL preserve preceding effective audio and ordinary launch availability.
+
+#### Scenario: A decimal map differs from legacy rounded loaded coordinates
+- **WHEN** a genuine current original map with declared Q passes the separate general qualification although its exact seconds-times-rate products or loop boundary differ from the old intersection
+- **THEN** the actual-E candidate MAY use the explicit rational mapped reader domain
+- **AND** it SHALL preserve the raw separate source pair and first actual tap addresses, gain bits and all-channel PCM against the original reader plan
+- **AND** the original scalar period SHALL remain separately retained for a later reverse conversion
+
+### Requirement: Rational mapped addressing shares checked reader semantics
+The effective reader domain SHALL explicitly distinguish Physical, scalar musical and rational mapped periods, including complete exact certificate identity in copied playback, read plans, checkpoints and source-feed journals. A rational period certificate SHALL contain a positive reduced numerator and denominator of at most256 bits each. This is an additional admission bound, not a claim that every finite map fits. An existing raw pair SHALL already be canonical in both conversion domains; it SHALL NOT be recombined through a rounded binary64 q+f. Before conversion, both actual reader plans SHALL prove coverage and bitwise first taps, gains and PCM. General-to-scalar conversion SHALL restore the retained original scalar domain, require its current fenced timing compatibility and use the existing glide from the applied local rate. An unavailable original scalar witness SHALL NOT imply a physical domain.
+
+Each general query SHALL prove its exact rational source coordinate is inside the exact loop before splitting whole and ties-to-even binary64 fraction. Exact fractional identity SHALL retain raw fraction bits, including negative zero. Only a rounding carry whose resulting pair reaches or exceeds the exact rational exclusive upper boundary MAY normalize to the original start and positive zero. Arbitrary out-of-domain input SHALL refuse. For Pmap=N/D, the final source interval SHALL use last=min(ceil(Pmap)-1,H-1), original last/first physical knots and exact alpha=(phase-last)/(Pmap-last), rounded once to binary32 with ties to even. Exact Pmap=H SHALL use the equivalent physical tap descriptor, while retaining distinct domain identity. Other intervals SHALL retain ordinary source taps and fraction conversion.
+
+#### Scenario: A different seam is temporarily ineligible
+- **WHEN** the current pair is canonical in only one domain or its actual seam taps or gain differ
+- **THEN** the complete adoption cohort SHALL remain unchanged
+- **AND** that cursor-dependent refusal SHALL receive no stable Unsupported suppression token
+- **AND** ordinary playback progress with the same immutable request SHALL remain eligible to recover
+
+#### Scenario: Repeated mapped replacements preserve the independent scalar witness
+- **WHEN** an already mapped captured voice replaces its effective map with an initial-intersection target whose reader period differs from the retained original scalar period
+- **THEN** a separate numeric replacement helper MAY construct unchanged old compact coordinates under that target's own certified domain
+- **AND** it SHALL require identical physical/sample geometry and an available valid nonrational retained original scalar witness, copying only that witness from the previous captured playback
+- **AND** original timing freshness, raw target canonicality, actual original-versus-target taps/gain/PCM and the complete final claim SHALL remain mandatory
+- **AND** later mapped replacements and reverse conversion SHALL retain that same original witness, including general-to-intersection-to-intersection chains
+- **AND** ordinary scalar birth into the old intersection SHALL retain its preceding full-domain equality; missing witnesses or changed physical geometry SHALL refuse without mutation
+
+#### Scenario: Rational arithmetic or resident taps are unavailable
+- **WHEN** a full or checked rational read cannot validate every requested coordinate and actual tap
+- **THEN** it SHALL refuse before writing reader buffers or publishing a successful source-read receipt
+- **AND** no scalar tap fallback, fabricated silent PCM, partial Native/FIFO feed or source-advance permit SHALL replace that failure
+- **AND** availability, full reads, checked reads and conversion preflight SHALL use the same checked tap and sample authority
+
+### Requirement: General compact programs preserve original master and bounded ownership
+The distinct general epoch SHALL retain the original raw pair, original inverse segment, M0 and unchanged actual master evaluator. It SHALL evaluate U=B(raw)-B*+(M(n)-M0), k=floor(U/Q) and b=B(raw)+(M(n)-M0)-kQ exactly, including the original binary64 master operation order and cast plateaus. Original geometry SHALL remain separately retained; a copied span MAY contain a tagged exact dyadic cycle product and use the copied reader certificate for local queries. Program bytes SHALL NOT be interpreted as legacy float fields. Generic endpoint, advance, refresh, pause/resume, master replacement and journal operations SHALL preserve the complete domain and original scalar witness without wide realtime inverse work or a new owner, pointer, scheduler or reader pipeline.
+
+The general class SHALL separately admit complete shifted-horizon source/beat grids in [-126,0] and coefficient magnitudes below2^126. A rational U coefficient bound below2^128 SHALL prove the nonnegative exact dyadic cycle coefficient fits128 bits. New checked512-bit phase/forward scratch SHALL enforce forward numerator below2^386 and denominator below2^380; separate checked1024-bit rational normalization and binary32 seam arithmetic SHALL enforce their own bounds. These new proofs SHALL NOT broaden the existing compact intersection's256/512-bit theorem or hide a6400-bit fallback. Mapped spans SHALL remain at most240 bytes and32 optional copied playback values at most16KiB, with Copy/no destructor. Actual compiled2MiB stack, zero observed Rust allocation requests and complete consuming2/4/6/stress20 with performance fallback10 evidence SHALL remain required, with negative extreme seam costs retained honestly.
+
+#### Scenario: A general map is adopted or replaced at the actual execution frame
+- **WHEN** the original runtime snapshot and complete fixed32 capture pass source/ACK/request/master freshness, first-reader checks and the existing global-before-placement claim
+- **THEN** the complete cohort SHALL commit atomically using existing reserved worker retirement capacity
+- **AND** an identical effective original map with new intent witness SHALL retain its complete trajectory
+- **AND** map replacement, reverse conversion and history retirement SHALL preserve any genuine original launch and retained original scalar witness
+- **AND** source cancellation, stale/ABA, lease contention, capacity pressure and failed participants SHALL retain their preceding ownership and failure contracts
+
+This declared-Q milestone SHALL NOT certify physical-marker-only rational Q, common-grid phase, unequal-loop/OneShot EOF, Native/pitch/Key Lock adoption, arbitrary mapped history projection, music/device/Human acceptance or complete SYNC. Those remain required subsequent FULL-Goal work. Existing GUI/MIDI/persistence hierarchy and requested/pending/effective/phase distinctions SHALL remain; successful map or tempo adoption SHALL NOT certify unproved common phase.

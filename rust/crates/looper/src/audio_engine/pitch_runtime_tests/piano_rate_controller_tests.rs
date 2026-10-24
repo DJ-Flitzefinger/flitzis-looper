@@ -962,7 +962,7 @@ impl RateRoute {
             .capture_pitch_voice_snapshot(index)
             .unwrap();
         assert_eq!(
-            snapshot.plan.loop_period,
+            snapshot.plan.loop_period.scalar_period(),
             Some((ENDS[original.id] - LOOP_START) as f64)
         );
         assert_eq!(

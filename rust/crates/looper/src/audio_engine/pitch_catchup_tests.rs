@@ -76,7 +76,7 @@ impl Source {
             sample_frames: full.frame_count(),
             frame_pos: playback.position().frame,
             loop_region: REGION,
-            loop_period: None,
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             seek_mode: ExplicitSeekMode::Normal,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),

@@ -112,7 +112,7 @@ impl Fixture {
                 sample_frames: SOURCE_FRAMES,
                 frame_pos: position.frame,
                 loop_region: LOOP,
-                loop_period: None,
+                loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
                 seek_mode: position.seek_mode,
                 selection: self
                     .mask

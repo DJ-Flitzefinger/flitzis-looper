@@ -141,7 +141,10 @@ impl MappedLoopGeometry {
             self.beat_start,
             self.loaded_rate_hz,
             self.domain.region.start as u64,
-            self.domain.musical_period.ok_or(unavailable)?,
+            self.domain
+                .musical_period
+                .scalar_period()
+                .ok_or(unavailable)?,
         )
         .ok_or(unavailable)
     }
@@ -211,15 +214,21 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            beat_start: self.beat_start,
-            quarters: self.quarters,
+            program: super::SpanProgram::Legacy(super::LegacySpanProgram {
+                beat_start: self.beat_start,
+                quarters: self.quarters,
+                source_period: self
+                    .domain
+                    .musical_period
+                    .scalar_period()
+                    .ok_or(unavailable)?,
+            }),
             loaded_rate_hz: self.loaded_rate_hz,
             start_frame,
             end_frame,
             endpoint_frame: endpoint.frame,
             endpoint_fraction: endpoint.fraction,
             source_start: self.domain.region.start as u64,
-            source_period: self.domain.musical_period.ok_or(unavailable)?,
         };
         span.position_at(output_frame).ok_or(unavailable)?;
         span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
@@ -235,10 +244,11 @@ pub(super) fn position_in_span(
     super::compact::observe_wide_entry_for_test();
     // Extrema and the complete horizon were admitted at span construction; never
     // repeat those wide admission scans on this per-frame reference-query path.
+    let program = span.legacy_program()?;
     let phase = phase_at(
         span.epoch,
-        span.beat_start,
-        span.quarters,
+        program.beat_start,
+        program.quarters,
         span.loaded_rate_hz,
         output_frame,
     )?;
@@ -246,10 +256,10 @@ pub(super) fn position_in_span(
         span.epoch,
         &phase,
         span.segment,
-        span.beat_start,
+        program.beat_start,
         span.loaded_rate_hz,
         span.source_start,
-        span.source_period,
+        program.source_period,
     )
 }
 

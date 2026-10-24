@@ -43,7 +43,11 @@ impl MappedLoopGeometry {
         // coordinate value grants no source, reader or historical permission.
         SourcePlayback::scalar_musical_continuation(start, self.domain, 1.0, 1.0)
             .ok_or(unavailable)?;
-        let period = self.domain.musical_period.ok_or(unavailable)?;
+        let period = self
+            .domain
+            .musical_period
+            .scalar_period()
+            .ok_or(unavailable)?;
         let end_beat = self.beat_start + self.quarters;
         let exact_end_beat = SourceInteger::from_f64_grid(self.beat_start)
             .and_then(|start| start.checked_add(SourceInteger::from_f64_grid(self.quarters)?))

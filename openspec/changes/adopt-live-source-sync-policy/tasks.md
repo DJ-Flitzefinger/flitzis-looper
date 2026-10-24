@@ -68,12 +68,29 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Extend the original fixed cohort claim for bidirectional dry conversion, exact original domain/first PCM, global-before-placement ordering and fully reserved off-realtime retirement.
 - [x] Distinguish stable preparation/domain refusal from cursor-dependent eligibility; preserve original retry, source/ACK, stale/ABA and whole-cohort atomicity.
 - [x] Verify actual public runtime/scheduler/renderer conversion and neighboring pause/Hold/resume/rate/retrigger/history, pressure/lifetime, explicit 2-MiB/allocation/layout and productive 2/4/6 plus stress20/fallback10 costs including extreme seams.
-- [ ] Complete affected integration, strict specs, private Release/import, dedicated actual systems POST, one independent actual final-diff review and checked English commit/normal-main push/fresh clean equality/guarded cleanup.
+- [x] Complete affected integration, strict specs, private Release/import, dedicated actual systems POST, one independent actual final-diff review and checked English commit/normal-main push/fresh clean equality/guarded cleanup.
 
-The final initial-dry delivery checkbox includes commit/push/cleanup and will be
-reconciled at the next coherent repository update using the actual final receipt
-in the original workspace handoff. A pending publication checkbox does not make
-the implemented and checked dry foundations missing again.
+The initial dry block was delivered as `c07318d44bbce6354404b250c427c2fb491a2e93`;
+reviewed push, fresh clean remote equality and guarded own cleanup completed.
+That bounded delivery does not close general-map or full SYNC acceptance.
+
+### Productive declared-Q general maps
+
+- [x] Define separate exact loaded-coordinate, rational reader-domain and original-scalar witness contracts; obtain concrete systems-interaction PRE before implementation.
+- [x] Prepare the original declared-Q general map off realtime without a rounded legacy inverse prerequisite; prove exact coverage, markers, certificate and rates.
+- [x] Carry tagged bounded general programs and full effective reader certificates through playback, shared checked taps, journals and continuation while preserving old modes and copied layout limits.
+- [x] Integrate actual-E bidirectional adoption and repeated map replacement with retained original scalar timing, first actual taps/gain/PCM, nonlatching seam retry and original atomic source/ACK/retirement ownership.
+- [x] Verify independent original-knot oracles, real public worker/ACK/scheduler/renderer behavior, failures/neighbors, explicit2MiB/layout/allocation and actual consuming2/4/6/stress20 with conditional10 costs.
+- [ ] Complete actual frozen systems POST, appropriate integration/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup.
+
+The generated decimal-map profile meets the nominal interval at 2/4/6 voices.
+Stress20 and its subsequent fallback10 both exceed it; their optimization/resource
+gates remain open. Functional/profile exit status does not imply throughput or
+whole-realtime acceptance. Actual measurements and limits are in results.md.
+
+Physical-marker-only rational Q remains required subsequent work in the same full
+Goal. This declared-Q milestone does not close the following general-conversion,
+common-phase, finite EOF, Native/pitch or musical/device/Human acceptance parents.
 
 ### Remaining general conversion and acceptance
 

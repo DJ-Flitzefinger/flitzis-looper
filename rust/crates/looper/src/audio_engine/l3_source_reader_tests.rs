@@ -50,7 +50,7 @@ fn plan(current: &PreparedStemSet, outgoing: &PreparedStemSet, mask: u8) -> Sour
         sample_frames: FRAMES,
         frame_pos: 9,
         loop_region: REGION,
-        loop_period: None,
+        loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
         seek_mode: ExplicitSeekMode::Normal,
         selection: StemRenderSelection::for_stems(current, mask),
         transition: StemTransition::start(

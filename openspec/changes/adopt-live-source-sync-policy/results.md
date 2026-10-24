@@ -1573,3 +1573,136 @@ intersection, live scalar/mapped conversion, continuous common phase, unequal
 loops/one-shot EOF, complete callback/DSP cost and every FULL-Goal final gate remain
 open. Numeric compatibility is not original source custody, phase ACK or Human
 acceptance. The Human's SYNC/Realtime-first, Portable-after priority is unchanged.
+
+## Productive declared-Q general maps — 2026-10-24
+
+The separate general derivative uses exact stored binary64 knot seconds times
+integer loaded rate, exact inverse at physical A, exact declared Q and a rational
+effective reader period. It does not require a successful rounded legacy inverse.
+The initial intersection and ordinary launch paths retain their previous guards.
+Tagged compact spans carry bounded cycle arithmetic; full reader certificates
+travel with playback/plans/journals. The separately retained original scalar
+domain survives general/intersection map replacement and reverse conversion.
+At actual E the original cohort claim still requires matching raw pairs, tap
+addresses, gain bits and every channel's first PCM. Seam-only refusal remains
+retryable; source/ACK/global-before-placement/retirement ownership is unchanged.
+
+Dedicated concrete systems PRE and actual frozen combined source/coverage POST
+passed. Targeted corrections below received the same specialist and independent
+reviewer; final publication review still requires the complete evidence/staged diff.
+
+### Functional and resource verification
+
+The current Release tree passes 333 selected functional tests, with four existing
+explicitly ignored tests, through the following nonempty filters:
+
+| Scope | Passed | Test time |
+| --- | ---: | ---: |
+| Production constructor and actual callback capture, explicit 2 MiB | 1 | 0.38 s |
+| General exact arithmetic | 6 | 0.00 s |
+| Entire mapped clock | 68 | 0.03 s |
+| Entire copied playback | 65 | 0.31 s |
+| Shared reader | 20 | 0.00 s |
+| Public runtime adoption, including all 15 new general cases | 86 | 42.40 s |
+| Source/map custody | 65 (3 ignored) | 42.19 s |
+| Source-feed history | 15 (1 ignored) | 0.01 s |
+| Prepared Native history | 7 | 24.34 s |
+
+The new actual runtime cases use genuine worker/admission/publication/ACK,
+actual-E claim and full dry rendering. Independent Python Fraction oracles decode
+the original stored knots and actual master values; they check rational source
+pairs, taps, gain and PCM outside the cost measurements. Cases cover large output
+frames, negative master anchors, signed zero, same-map preservation, three-map
+replacement/reverse, natural seam retry, pause/Hold/rate/history, heterogeneous
+cohorts, 32-lane atomicity and stale/cancel/lease/last-reader refusal.
+
+Current Debug general construction plus actual renderer passes on its explicit
+2-MiB child (1.24 s). The unchanged production constructor/callback Debug 2-MiB
+gate also passes (0.39 s) after the narrow boxed-constructor correction below.
+The Release runtime suite includes the same explicit general consuming gate.
+Measured layouts are epoch128, span240, Playback424, 32 optional playbacks13568,
+reader period72, source domain96 and read plan216 bytes. Tested scopes observe no
+Rust allocation/zeroed-allocation/reallocation requests and no wide entries;
+deallocation, Native allocations and peak stack remain unmeasured.
+
+Affected Debug original suites also pass: runtime51, mapped-runtime20, custody65,
+clock60, shared reader20, feed history15, prepared Native history7 and key-source25.
+The original key-source suite took 363.63 s and retains its existing negative
+quality diagnostics; this is not musical or acoustic acceptance. Playback initially
+passed63/failed2; the two unchanged failures pass after the precise witness fix.
+The whole current Release playback65 run independently confirms both corrections.
+
+### Actual consuming cost and explicit negative results
+
+Each profile includes original queue drain, due-frame preflight/claim, actual-E
+construction, the complete dry renderer/DSP, history, copied advancement, span
+refresh and exact tap preflight. Fixture/map/oracle/output/sink allocation precedes
+timing; there is one warmup and three measured repetitions, 512 frames per lane
+at 48 kHz. Fixed capacity32 is a correctness/layout bound, not a throughput claim.
+
+| Active voices | General decimal median / max ms | Initial dyadic max ms | Physical2/P2.25 max ms |
+| ---: | ---: | ---: | ---: |
+| 2 | 2.2147 / 2.3027 | 0.5052 | 1.8117 |
+| 4 | 4.4070 / 4.4186 | 1.0311 | 3.4587 |
+| 6 | 6.4714 / 6.4751 | 1.4706 | 5.1009 |
+| 20 | 22.2208 / 22.4614 | 5.0079 | 22.0098 |
+| 10 | 10.8609 / 10.9723 | 2.4593 | 8.4540 |
+
+The nominal interval is 10.6667 ms. General2/4/6 meet this measured interval;
+general20 and the subsequently measured fallback10 BOTH exceed it, including
+the10 median. The separate tiny-seam20 case also exceeds it. Preserve all three
+negative timing results as open optimization/resource gates. Passing functional
+profile assertions and process exit0 do not mean successful fallback throughput.
+One generated decimal geometry, aligned lanes and three samples establish no
+worst-case, device, musical or whole-realtime acceptance; the older dyadic/tiny10
+positives cannot substitute for the negative general10 result.
+
+### Corrected intermediate failures and remaining boundaries
+
+The first gate attempt failed at compile time (exit101), before any stack test:
+one old test needed the new enum's existing unsupported arm and one test-only
+import had the wrong relative path. The next unchanged production Debug2MiB
+attempt actually overflowed its stack (0xc00000fd). Returning the already-required
+complete Box from RtMixer::try_new removes the large by-value Result transfer;
+the stream constructor consumes that Box directly. Fields, workers, original owner,
+error/assertion precedence, exactly-once invalidation and retirement order remain
+unchanged. No new production allocation, unsafe initialization, voice-array change
+or relaxed stack threshold was introduced. Existing supplied-owner and constructor
+failure-precedence regressions each pass.
+
+The first new runtime run passed14/failed1 because the32-lane fixture queued32
+StopSample messages into the existing16 ring before draining. Test setup now drains
+the existing path after each stop without audio progress; the focused32 retry
+passes, and all15 cases pass together in Release. The original playback63/2 result
+exposed stale original-scalar metadata after successful nonmapped domain change
+or seek. Three precise metadata assignments synchronize or clear that witness;
+strict domain equality and all mapped/paired early guards remain unchanged.
+Initial Python-oracle lint findings were fixed by typed helper decomposition with
+the same independent Fraction/RN equations; no critical complexity suppression.
+
+Final workspace/all-targets/locked Clippy exits0 in20.02 s with145 library-test
+warnings (64 duplicates); this is not warning-free. The final tuple-only argument
+grouping changes no arithmetic or dispatch and has actual systems POST clearance.
+The locked stripped private Release wheel builds in40.59 s (54 production
+warnings). Its actual private-origin module is34868736 bytes, SHA256
+`65d63c0ad0e36dd66afa0be0b48dc28ac3814bb8a8a76533bb2a840009bd3532`;
+release profile, all13 bootstrap API checks, editor API4 and current controller/UI
+imports pass. No App/audio device is constructed or normal Native installed.
+The ordinary34710016-byte Native remains SHA256
+`ea821e2017e4ca9c40702a5218ce61b92de78ca3a362e972bcef37dcf3beb2c2`.
+Final Rustfmt, strict affected OpenSpec, diff whitespace, oracle Ruff/format and
+mypy pass. Final staged/evidence review and actual publication/guarded cleanup
+remain pending at this recording point. Raw positive AND negative logs, oracle
+and reproduction helpers remain in the owned general-map-domain evidence block.
+
+The copied standalone numeric span API requires the exact reader domain privately
+bound by its original geometry; it stores no independent certificate and cannot
+prove association with an arbitrary different compatible certificate. Production
+Playback's private tuple and constructors/configure/refresh enforce that binding;
+malformed domains, noncanonical endpoints and wrong actual reader plans refuse.
+Numeric compatibility alone grants no source permit or phase ACK.
+
+Physical-marker-only rational Q, broader general conversion, common static/variable
+phase and8/64-bar modulo, finite OneShot/EOF, Native/pitch/Key Lock, the actual later
+Portable repair and ALL full original/extension/Human/final gates remain required.
+This bounded declared-Q integration does not close SYNC/REALTIME or the FULL Goal.

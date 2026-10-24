@@ -9,6 +9,7 @@ use super::pitch_actions::PitchActionReject;
 use super::source_beatmap::SourceBeatmap;
 use super::source_beatmap_artifact::SourceBeatmapArtifact;
 use super::source_reader::{FrameRange, SourceLoopDomain};
+use super::source_reader_period::SourceReaderPeriod;
 use super::source_sync_policy::{GlobalTimingPolicy, SourceSyncMode, SourceSyncRequest};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -50,7 +51,7 @@ pub(crate) enum RuntimeMapClass {
 pub(crate) struct RuntimeMapDomain {
     pub(crate) sample_frames: usize,
     pub(crate) region: FrameRange,
-    pub(crate) period_bits: Option<u64>,
+    pub(crate) period: SourceReaderPeriod,
 }
 
 impl From<SourceLoopDomain> for RuntimeMapDomain {
@@ -58,7 +59,7 @@ impl From<SourceLoopDomain> for RuntimeMapDomain {
         Self {
             sample_frames: domain.sample_frames,
             region: domain.region,
-            period_bits: domain.musical_period.map(f64::to_bits),
+            period: domain.musical_period,
         }
     }
 }

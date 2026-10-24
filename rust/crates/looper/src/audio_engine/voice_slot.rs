@@ -343,13 +343,22 @@ mod loop_domain_tests {
             legacy_origin_frame: accepted.origin_seconds * 48_000.0,
             ..VoiceSourceTiming::default()
         };
-        assert_eq!(legacy.loop_domain(2000, region).musical_period, None);
+        assert_eq!(
+            legacy
+                .loop_domain(2000, region)
+                .musical_period
+                .scalar_period(),
+            None
+        );
         let current = VoiceSourceTiming {
             accepted: Some(accepted),
             ..legacy
         };
         assert_eq!(
-            current.loop_domain(2000, region).musical_period,
+            current
+                .loop_domain(2000, region)
+                .musical_period
+                .scalar_period(),
             Some(1500.25)
         );
         assert_eq!(
@@ -361,7 +370,8 @@ mod loop_domain_tests {
                         ..region
                     }
                 )
-                .musical_period,
+                .musical_period
+                .scalar_period(),
             None
         );
         let another_origin = VoiceSourceTiming {

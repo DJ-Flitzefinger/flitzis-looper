@@ -691,7 +691,7 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         sample_frames: 128,
         frame_pos: 0,
         loop_region: region,
-        loop_period: None,
+        loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
         seek_mode: ExplicitSeekMode::Normal,
         selection: StemRenderSelection::full_mix(),
         transition: StemTransition::default(),

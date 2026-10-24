@@ -198,6 +198,7 @@ mod sample_loader;
 mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
 mod compact_source_numerics;
+mod general_source_numerics;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod mapped_source_clock;
@@ -211,6 +212,7 @@ mod source_map_api;
 mod source_numerics;
 mod source_playback;
 mod source_reader;
+mod source_reader_period;
 mod source_sync_policy;
 mod stem_cache;
 mod stem_pair;

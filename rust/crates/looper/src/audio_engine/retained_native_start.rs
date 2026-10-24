@@ -426,6 +426,14 @@ impl NativeAdapterState {
         context: NativeStartHistoryContext,
         allow_owned_mapped_future: bool,
     ) -> Result<(), NativeSourcePreparationError> {
+        if request.plan.loop_period.is_mapped()
+            || request.playback.is_general_mapped()
+            || request.actual_feed.is_some_and(|checkpoint| {
+                checkpoint.plan.loop_period.is_mapped() || checkpoint.playback.is_general_mapped()
+            })
+        {
+            return Err(unavailable());
+        }
         let mapped = request.playback.is_mapped()
             || request
                 .actual_feed

@@ -973,6 +973,16 @@ impl NativeAdapterState {
         source_rebase: Option<(usize, SourceReadCheckpoint)>,
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
+        if request.plan.loop_period.is_mapped()
+            || request.playback.is_general_mapped()
+            || request.actual_feed.is_some_and(|checkpoint| {
+                checkpoint.plan.loop_period.is_mapped() || checkpoint.playback.is_general_mapped()
+            })
+        {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
         if request.playback.is_mapped()
             && request.mapped_input.is_none()
             && source_rebase.is_none()
@@ -1456,7 +1466,7 @@ pub(super) mod tests {
             sample_frames: SOURCE_FRAMES,
             frame_pos: position.frame,
             loop_region: REGION,
-            loop_period: None,
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             seek_mode: position.seek_mode,
             selection: if let Some(mask) = stem_mask {
                 StemRenderSelection::from_state(StemMixMode::AllStems, 17, mask)
@@ -1911,7 +1921,10 @@ pub(super) mod tests {
         request.plan.frame_pos = origin;
         request.plan.seek_mode = mode;
         request.plan.loop_region = MUSICAL_REGION;
-        request.plan.loop_period = Some(period);
+        request.plan.loop_period =
+            crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(Some(
+                period,
+            ));
         request
     }
 
@@ -1924,7 +1937,7 @@ pub(super) mod tests {
         output_start: usize,
         output_frames: usize,
     ) -> Vec<Vec<f32>> {
-        let period = request.plan.loop_period.unwrap();
+        let period = request.plan.loop_period.scalar_period().unwrap();
         let ratio = request.playback.tempo_ratio();
         let read = |frame: usize, channel: usize| {
             if let Some(stems) = &request.stems {
@@ -2035,7 +2048,7 @@ pub(super) mod tests {
                                 let mut playback = state.source.as_ref().unwrap().playback;
                                 let mut plan = state.source.as_ref().unwrap().plan;
                                 assert_eq!(playback.loop_period(), Some(period));
-                                assert_eq!(plan.loop_period, Some(period));
+                                assert_eq!(plan.loop_period.scalar_period(), Some(period));
                                 let mut feed = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; 2];
                                 let mut output = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; 2];
                                 let mut elapsed = 0;
@@ -2100,7 +2113,9 @@ pub(super) mod tests {
         assert_eq!(request.playback.tempo_ratio(), changed_clock.tempo_ratio());
         assert!(!request.playback.matches_exact(&changed_clock));
         let changed_plan = SourceReadPlan {
-            loop_period: Some(126.75),
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                Some(126.75),
+            ),
             ..request.plan
         };
         assert!(!request.plan.matches_exact(changed_plan));
@@ -2122,7 +2137,9 @@ pub(super) mod tests {
         assert!(!request.matches_adoption(&feed, request.epoch, request.request_id));
         // One binary64 change is still a distinct worker/source contract.
         let changed_plan = SourceReadPlan {
-            loop_period: Some(f64::from_bits(127.25_f64.to_bits() + 1)),
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                Some(f64::from_bits(127.25_f64.to_bits() + 1)),
+            ),
             ..request.plan
         };
         assert!(!request.plan.matches_source_contract(changed_plan));

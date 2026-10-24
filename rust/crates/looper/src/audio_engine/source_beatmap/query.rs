@@ -212,6 +212,61 @@ impl ValidatedMap {
         Some(())
     }
 
+    /// The exact-boundary caller proves start < end before this metadata scan.
+    /// Open exterior endpoints do not add a neighboring gap or meter interval.
+    pub(super) fn visit_canonical_segments_exact(
+        &self,
+        mut compare_start: impl FnMut(f64) -> Option<Ordering>,
+        mut compare_end: impl FnMut(f64) -> Option<Ordering>,
+        require_four_four: bool,
+        mut visitor: impl FnMut(CanonicalBeatSegment) -> Option<()>,
+    ) -> Option<()> {
+        let first_beat = self.anchors.first()?.beat;
+        let last_beat = self.anchors.last()?.beat;
+        if compare_start(first_beat)? == Ordering::Greater
+            || compare_start(last_beat)? != Ordering::Greater
+            || compare_end(first_beat)? != Ordering::Less
+            || compare_end(last_beat)? == Ordering::Less
+        {
+            return None;
+        }
+        let mut low = 0;
+        let mut high = self.anchors.len();
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if compare_start(self.anchors[middle].beat)? != Ordering::Greater {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let first = low.checked_sub(1)?.min(self.segments.len() - 1);
+        low = 0;
+        high = self.anchors.len();
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if compare_end(self.anchors[middle].beat)? == Ordering::Less {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let after = low.min(self.segments.len());
+        if first >= after
+            || self.unsupported_prefix[first] != self.unsupported_prefix[after]
+            || (require_four_four && self.meter_prefix[first] != self.meter_prefix[after])
+        {
+            return None;
+        }
+        for index in first..after {
+            visitor(CanonicalBeatSegment::from_anchors(
+                self.anchors[index],
+                self.anchors[index + 1],
+            ))?;
+        }
+        Some(())
+    }
+
     pub(super) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {
         if !beat.is_finite()
             || beat < self.anchors[0].beat

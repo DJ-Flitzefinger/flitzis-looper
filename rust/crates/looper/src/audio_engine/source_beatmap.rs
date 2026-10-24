@@ -71,6 +71,25 @@ impl SourceBeatmap {
             .visit_canonical_segments(beat_start, beat_end, visitor)
     }
 
+    /// Visit the positive interior between caller-proved ordered exact boundaries.
+    /// Comparisons return original knot beat versus the respective exact boundary.
+    /// The caller separately proves a strictly positive extent; this off-RT scan
+    /// retains original coverage and meter authority without a rounded inverse.
+    pub(crate) fn visit_canonical_segments_exact(
+        &self,
+        compare_start: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+        compare_end: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+        require_four_four: bool,
+        visitor: impl FnMut(CanonicalBeatSegment) -> Option<()>,
+    ) -> Option<()> {
+        self.inner.visit_canonical_segments_exact(
+            compare_start,
+            compare_end,
+            require_four_four,
+            visitor,
+        )
+    }
+
     pub(crate) fn canonical_source_at_beat(&self, beat: f64) -> Option<f64> {
         self.inner.at_beat(beat).source_seconds
     }

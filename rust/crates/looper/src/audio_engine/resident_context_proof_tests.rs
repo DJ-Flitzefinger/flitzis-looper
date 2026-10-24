@@ -85,7 +85,9 @@ fn plan(length: usize, period: f64, distance: f64) -> (SourceReadPlan, f64) {
                 start: START,
                 end: START + length,
             },
-            loop_period: Some(period),
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                Some(period),
+            ),
             seek_mode: ExplicitSeekMode::Normal,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),

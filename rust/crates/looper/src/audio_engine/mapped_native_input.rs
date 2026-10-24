@@ -113,7 +113,7 @@ impl MappedNativeInput {
             plan: crate::audio_engine::source_reader::SourceReadPlan {
                 frame_pos: position.frame,
                 seek_mode: position.seek_mode,
-                loop_period: playback.loop_period(),
+                loop_period: playback.reader_period(),
                 ..self.origin.plan
             },
         })

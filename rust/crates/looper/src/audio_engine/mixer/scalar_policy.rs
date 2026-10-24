@@ -10,6 +10,7 @@ use crate::audio_engine::input_mapping::{RuntimePolicyError as Error, RuntimePol
 use crate::audio_engine::input_runtime_binding::PairControlProjection;
 use crate::audio_engine::mapped_source_clock::MappedClockError;
 use crate::audio_engine::pad_start::PadStartCustody;
+use crate::audio_engine::source_reader_period::SourceReaderPeriod;
 use crate::audio_engine::source_sync_policy::{SourceSyncMode, SourceSyncRequest};
 use crate::audio_engine::transport::TransportTimeline;
 use std::cell::RefCell;
@@ -199,7 +200,9 @@ impl RtMixer {
                 .as_ref()
                 .and_then(|owner| owner.effective_source())
                 .is_some_and(|old| {
-                    old.same_source(target) && old.geometry().has_compact_continuation()
+                    old.same_source(target)
+                        && (old.geometry().has_compact_continuation()
+                            || old.geometry().has_general_continuation())
                 });
             let candidate = if raw.playback.is_compact_mapped()
                 && same_map
@@ -211,15 +214,38 @@ impl RtMixer {
                 // New raw intent alone does not restart an already adopted trajectory.
                 raw.playback
             } else {
-                SourcePlayback::mapped_anchored_compact_continuation(
-                    target.geometry(),
-                    snapshot.revision(),
-                    *timeline,
-                    raw.plan.domain(),
-                    raw.playback.position(),
-                    execution,
-                )
-                .map_err(|error| {
+                let scalar_domain = raw
+                    .playback
+                    .original_scalar_domain()
+                    .ok_or(Error::Unsupported)?;
+                let constructed = if target.geometry().has_general_continuation() {
+                    SourcePlayback::mapped_general_continuation(
+                        target.geometry(),
+                        snapshot.revision(),
+                        *timeline,
+                        scalar_domain,
+                        raw.playback.position(),
+                        execution,
+                    )
+                } else if raw.playback.is_mapped() && scalar_domain != target.geometry().domain() {
+                    SourcePlayback::mapped_compact_replacement(
+                        target.geometry(),
+                        snapshot.revision(),
+                        *timeline,
+                        &raw.playback,
+                        execution,
+                    )
+                } else {
+                    SourcePlayback::mapped_anchored_compact_continuation(
+                        target.geometry(),
+                        snapshot.revision(),
+                        *timeline,
+                        scalar_domain,
+                        raw.playback.position(),
+                        execution,
+                    )
+                };
+                constructed.map_err(|error| {
                     // Only whole-map slope limits are cursor independent. Raw
                     // inverse, fraction, epoch and horizon failures may recover
                     // through ordinary playback and receive no stable evidence.
@@ -254,9 +280,18 @@ impl RtMixer {
             if raw.playback.mapped_output_frame() != Some(execution) {
                 return Err(Error::PhaseChanged);
             }
-            SourcePlayback::scalar_musical_continuation(
+            let original_domain = raw
+                .playback
+                .original_scalar_domain()
+                .ok_or(Error::Unsupported)?;
+            let construct = match original_domain.musical_period {
+                SourceReaderPeriod::Physical => SourcePlayback::scalar_continuation,
+                SourceReaderPeriod::ScalarMusical(_) => SourcePlayback::scalar_musical_continuation,
+                SourceReaderPeriod::MappedRational(_) => return Err(Error::Unsupported),
+            };
+            construct(
                 raw.playback.position(),
-                raw.plan.domain(),
+                original_domain,
                 raw.playback.tempo_ratio(),
                 raw.playback.tempo_ratio(),
             )
@@ -317,7 +352,8 @@ impl RtMixer {
                             .is_none_or(|old| {
                                 !old.same_source(target)
                                     || old.sync_witness() != target.sync_witness()
-                                    || !old.geometry().has_compact_continuation()
+                                    || !(old.geometry().has_compact_continuation()
+                                        || old.geometry().has_general_continuation())
                             })
                     }),
         })
@@ -333,10 +369,14 @@ impl RtMixer {
         if before.frame != after.frame
             || before.fraction.to_bits() != after.fraction.to_bits()
             || before.seek_mode != after.seek_mode
-            || !candidate.matches_domain(raw.plan.domain())
         {
             return Err(Error::PhaseChanged);
         }
+        let domain = candidate.effective_domain().ok_or(Error::PhaseChanged)?;
+        let candidate_plan = raw
+            .plan
+            .with_effective_domain(domain)
+            .ok_or(Error::PhaseChanged)?;
         let readers = raw.readers().ok_or(Error::ReaderUnavailable)?;
         if !normal_loop_feed_available_with_readers(
             &raw.sample,
@@ -350,7 +390,7 @@ impl RtMixer {
             readers,
             raw.sample_rate_hz,
             raw.accepted,
-            raw.plan,
+            candidate_plan,
             candidate,
         ) {
             return Err(Error::ReaderUnavailable);
@@ -358,10 +398,15 @@ impl RtMixer {
         let candidate_plan = SourceReadPlan {
             frame_pos: after.frame,
             seek_mode: after.seek_mode,
-            ..raw.plan
+            ..candidate_plan
         };
-        let a = raw.plan.fractional_taps(before.fraction);
-        let b = candidate_plan.fractional_taps(after.fraction);
+        let a = raw
+            .plan
+            .try_fractional_taps(before.fraction)
+            .ok_or(Error::PhaseChanged)?;
+        let b = candidate_plan
+            .try_fractional_taps(after.fraction)
+            .ok_or(Error::PhaseChanged)?;
         if a.left != b.left
             || a.right != b.right
             || a.right_gain.to_bits() != b.right_gain.to_bits()
@@ -378,22 +423,24 @@ impl RtMixer {
                 })
                 || raw
                     .plan
-                    .sample_fractional_with_readers(
+                    .try_sample_fractional_with_readers(
                         &raw.sample,
                         readers,
                         before.fraction,
                         0.0,
                         channel,
                     )
+                    .ok_or(Error::ReaderUnavailable)?
                     .to_bits()
                     != candidate_plan
-                        .sample_fractional_with_readers(
+                        .try_sample_fractional_with_readers(
                             &raw.sample,
                             readers,
                             after.fraction,
                             0.0,
                             channel,
                         )
+                        .ok_or(Error::ReaderUnavailable)?
                         .to_bits()
             {
                 return Err(Error::ReaderUnavailable);
@@ -531,7 +578,8 @@ impl RtMixer {
                             .is_some_and(|old| {
                                 !old.same_source(target)
                                     || old.sync_witness() != target.sync_witness()
-                                    || !old.geometry().has_compact_continuation()
+                                    || !(old.geometry().has_compact_continuation()
+                                        || old.geometry().has_general_continuation())
                             })
                     })
             })

@@ -3387,7 +3387,7 @@ pub(super) fn create_stream_mixer(
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Box<RtMixer>, super::key_lock_preparation::KeyLockPreparationError> {
     let policy = input_runtime_ownership.key_lock_start_policy.clone();
-    let mut mixer = Box::new(RtMixer::try_new(
+    let mut mixer = RtMixer::try_new(
         channels,
         sample_rate_hz as f32,
         Some((
@@ -3395,7 +3395,7 @@ pub(super) fn create_stream_mixer(
             input_runtime_ownership,
             prepared_source_epochs,
         )),
-    )?);
+    )?;
     // Supplied owners are installed directly. Invalidate their admission policy
     // exactly once, after the complete boxed constructor has succeeded.
     policy.invalidate_admission();

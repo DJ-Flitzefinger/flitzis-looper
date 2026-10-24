@@ -181,7 +181,7 @@ impl RtMixer {
                 sample_frames: sample.frame_count(),
                 frame_pos: position.frame,
                 loop_region: region,
-                loop_period: playback.loop_period(),
+                loop_period: playback.reader_period(),
                 seek_mode: position.seek_mode,
                 selection,
                 transition,

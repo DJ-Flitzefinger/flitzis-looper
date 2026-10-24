@@ -325,7 +325,10 @@ fn compact_wrong_geometry_and_stale_cached_endpoint_refuse_without_owner_claim()
     changed_endpoint.endpoint_fraction = 0.5;
     assert!(changed_endpoint.compact_view(&geometry).is_err());
     let mut changed_period = span;
-    changed_period.source_period = f64::from_bits(span.source_period.to_bits() + 1);
+    if let super::super::SpanProgram::Legacy(ref mut program) = changed_period.program {
+        program.source_period =
+            f64::from_bits(span.legacy_program().unwrap().source_period.to_bits() + 1);
+    }
     assert!(changed_period.compact_view(&geometry).is_err());
     let mut changed_inverse = epoch;
     let MappedClockMode::Anchored(mut anchor) = epoch.mode else {
@@ -387,7 +390,7 @@ fn compact_tiny_fpb_terminal_plateau_keeps_exact_rate_original_period_and_raw_pa
         FrameRange { start: 0, end: 1 },
         2.0_f64.powi(125),
     );
-    assert_eq!(geometry.domain().musical_period, Some(0.5));
+    assert_eq!(geometry.domain().musical_period.scalar_period(), Some(0.5));
     let mut invalid = TransportTimeline::new(1);
     assert!(
         !invalid.set_master_period_and_anchor_beat_position_at_frame(
@@ -416,7 +419,10 @@ fn compact_tiny_fpb_terminal_plateau_keeps_exact_rate_original_period_and_raw_pa
         let span = compare_span(&geometry, epoch, e);
         assert_eq!(span.end_frame(), u64::MAX);
         assert_eq!(span.local_rate(), Some(2.0));
-        assert_eq!(span.source_period.to_bits(), 0.5_f64.to_bits());
+        assert_eq!(
+            span.legacy_program().unwrap().source_period.to_bits(),
+            0.5_f64.to_bits()
+        );
         assert_pair(
             span.compact_view(&geometry)
                 .unwrap()
@@ -607,9 +613,10 @@ fn actual_e_compact_constructor_preserves_static_dynamic_and_terminal_refusals()
         );
     }
     let mut changed = geometry.domain();
-    changed.musical_period = Some(f64::from_bits(
-        changed.musical_period.unwrap().to_bits() + 1,
-    ));
+    changed.musical_period =
+        crate::audio_engine::source_reader_period::SourceReaderPeriod::from_scalar_period(Some(
+            f64::from_bits(changed.musical_period.scalar_period().unwrap().to_bits() + 1),
+        ));
     assert!(MappedClockEpoch::anchored_compact(7, actual, &geometry, changed, raw, 0).is_err());
     let slow = timeline(32_000.0, 0, 0.0);
     assert!(matches!(

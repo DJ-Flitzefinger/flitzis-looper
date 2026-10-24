@@ -152,7 +152,7 @@ impl RtMixer {
             let position = snapshot.playback.position();
             snapshot.plan.frame_pos = position.frame;
             snapshot.plan.seek_mode = position.seek_mode;
-            snapshot.plan.loop_period = snapshot.playback.loop_period();
+            snapshot.plan.loop_period = snapshot.playback.reader_period();
         }
         if let Some(origin) = work.late_reprepare_snapshot() {
             if !origin.matches_exact(
@@ -220,7 +220,7 @@ impl RtMixer {
         }
         snapshot.plan.frame_pos = region.start;
         snapshot.plan.loop_region = region;
-        snapshot.plan.loop_period = snapshot.playback.loop_period();
+        snapshot.plan.loop_period = snapshot.playback.reader_period();
         snapshot.plan.seek_mode = ExplicitSeekMode::Normal;
         snapshot.plan.transition.clear();
         if !super::super::native_source_coverage::normal_loop_feed_available(

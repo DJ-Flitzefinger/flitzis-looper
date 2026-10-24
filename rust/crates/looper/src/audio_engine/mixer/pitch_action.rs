@@ -311,7 +311,7 @@ impl RtMixer {
                 return Err(PitchActionReject::MappedTimingUnavailable);
             }
             snapshot.playback = playback;
-            snapshot.plan.loop_period = playback.loop_period();
+            snapshot.plan.loop_period = playback.reader_period();
         }
         if let Some(origin) = work.normal_launch_origin {
             // A constant birth retains its physical start while the live clock

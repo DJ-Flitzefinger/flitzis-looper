@@ -50,7 +50,7 @@ fn plan(sample: &SampleBuffer, playback: &SourcePlayback) -> SourceReadPlan {
         sample_frames: SOURCE_FRAMES,
         frame_pos: position.frame,
         loop_region: REGION,
-        loop_period: None,
+        loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
         seek_mode: position.seek_mode,
         selection: StemRenderSelection::full_mix(),
         transition: StemTransition::default(),

@@ -105,6 +105,104 @@ fn read_plan(playback: SourcePlayback) -> SourceReadPlan {
     }
 }
 
+#[test]
+fn mapped_intersection_replacement_retains_scalar_witness_and_refuses_missing_or_invalid_it() {
+    let geometry = variable_geometry();
+    let clock = timeline();
+    let mut previous = SourcePlayback::mapped_anchored_compact_continuation(
+        &geometry,
+        MARKER,
+        clock,
+        geometry.domain(),
+        position(731, 0.25),
+        17,
+    )
+    .unwrap();
+    let retained = SourceLoopDomain::musical(FRAMES, geometry.domain().region, 48_000.25).unwrap();
+    // This copied state represents an already claimed map replacement lineage.
+    // It grants no PCM/source permission; the live integration fixture owns that proof.
+    previous.original_scalar_period = OriginalScalarPeriod::from_domain(retained);
+    let replacement =
+        SourcePlayback::mapped_compact_replacement(&geometry, MARKER + 1, clock, &previous, 17)
+            .unwrap();
+    assert_eq!(replacement.original_scalar_domain(), Some(retained));
+    assert_eq!(replacement.effective_domain(), Some(geometry.domain()));
+    assert_position(replacement.position(), previous.position());
+    for invalid in [
+        OriginalScalarPeriod::Unavailable,
+        OriginalScalarPeriod::Musical(f64::NAN.to_bits()),
+    ] {
+        let mut bad = previous;
+        bad.original_scalar_period = invalid;
+        assert!(
+            SourcePlayback::mapped_compact_replacement(&geometry, MARKER + 1, clock, &bad, 17,)
+                .is_err()
+        );
+    }
+    let mut wrong_physical = previous;
+    wrong_physical.domain = Some(SourceLoopDomain {
+        sample_frames: FRAMES + 1,
+        ..geometry.domain()
+    });
+    assert!(
+        SourcePlayback::mapped_compact_replacement(
+            &geometry,
+            MARKER + 1,
+            clock,
+            &wrong_physical,
+            17,
+        )
+        .is_err()
+    );
+    let mut scalar = SourcePlayback::new(731, ExplicitSeekMode::Normal, 1.0);
+    assert!(scalar.configure_domain(geometry.domain()));
+    assert!(
+        SourcePlayback::mapped_compact_replacement(&geometry, MARKER + 1, clock, &scalar, 17,)
+            .is_err()
+    );
+}
+
+#[test]
+fn mapped_reconstructions_preserve_original_scalar_circle_independently_of_effective_map() {
+    let geometry = variable_geometry();
+    let clock = timeline();
+    let retained = SourceLoopDomain::physical(FRAMES, geometry.domain().region);
+    let mut initial = SourcePlayback::mapped_anchored_compact_continuation(
+        &geometry,
+        MARKER,
+        clock,
+        geometry.domain(),
+        position(731, 0.25),
+        17,
+    )
+    .unwrap();
+    initial.original_scalar_period = OriginalScalarPeriod::from_domain(retained);
+    let mut refreshed = initial;
+    refreshed.refresh_mapped_span(&geometry).unwrap();
+    assert_eq!(refreshed.original_scalar_domain(), Some(retained));
+    refreshed.refresh_mapped_span_compact(&geometry).unwrap();
+    assert_eq!(refreshed.original_scalar_domain(), Some(retained));
+    for compact in [false, true] {
+        let mut projected = initial;
+        if compact {
+            projected.project_mapped_compact_to(&geometry, 23).unwrap();
+        } else {
+            projected.project_mapped_to(&geometry, 23).unwrap();
+        }
+        assert_eq!(projected.original_scalar_domain(), Some(retained));
+        let before = projected.position();
+        if compact {
+            projected
+                .resume_mapped_compact_at(&geometry, &clock, 47)
+                .unwrap();
+        } else {
+            projected.resume_mapped_at(&geometry, &clock, 47).unwrap();
+        }
+        assert_eq!(projected.original_scalar_domain(), Some(retained));
+        assert_position(projected.position(), before);
+    }
+}
+
 fn compare_original_reader(sample: &SampleBuffer, mapped: SourcePlayback) {
     let raw = mapped.position();
     let scalar = SourcePlayback::scalar_musical_continuation(

@@ -17,6 +17,9 @@ mod anchored;
 mod compact;
 #[path = "mapped_source_clock_exact.rs"]
 mod exact;
+#[path = "mapped_source_clock_general.rs"]
+mod general;
+pub(crate) use general::GeneralLocalSpanView;
 
 use anchored::AnchoredClock;
 #[cfg(test)]
@@ -59,6 +62,7 @@ pub(crate) struct MappedLoopGeometry {
     min_seconds_per_quarter: f64,
     max_seconds_per_quarter: f64,
     exact_continuation: Option<ExactContinuationQualification>,
+    general: Option<general::GeneralPreparation>,
 }
 
 /// Frozen actual transport epoch and caller-supplied non-owning identity marker.
@@ -82,6 +86,7 @@ enum MappedClockMode {
     // Same immutable anchor payload. Only the globally qualified compact constructor
     // creates this tag; copied spans may then prepare bounded local arithmetic.
     CompactAnchored(AnchoredClock),
+    GeneralCompact(AnchoredClock),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -223,7 +228,8 @@ impl MappedClockEpoch {
             && self.address_shift == other.address_shift
             && self.first_output_frame == other.first_output_frame
             && match (self.mode, other.mode) {
-                (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
+                (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
+                | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
                 | (
                     MappedClockMode::CompactAnchored(left),
                     MappedClockMode::CompactAnchored(right),
@@ -278,15 +284,19 @@ impl MappedClockEpoch {
         self.anchor().is_some()
     }
 
+    pub(crate) fn is_general_compact(self) -> bool {
+        matches!(self.mode, MappedClockMode::GeneralCompact(_))
+    }
+
     pub(crate) fn is_compact_anchored(self) -> bool {
         matches!(self.mode, MappedClockMode::CompactAnchored(_))
     }
 
     fn anchor(self) -> Option<AnchoredClock> {
         match self.mode {
-            MappedClockMode::Anchored(anchor) | MappedClockMode::CompactAnchored(anchor) => {
-                Some(anchor)
-            }
+            MappedClockMode::Anchored(anchor)
+            | MappedClockMode::CompactAnchored(anchor)
+            | MappedClockMode::GeneralCompact(anchor) => Some(anchor),
             MappedClockMode::Legacy { .. } => None,
         }
     }
@@ -295,7 +305,8 @@ impl MappedClockEpoch {
     pub(crate) fn replacement_anchor_matches(self, other: Self, frame: u64) -> bool {
         match (self.mode, other.mode) {
             (MappedClockMode::Legacy { .. }, MappedClockMode::Legacy { .. }) => true,
-            (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
+            (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
+            | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
             | (MappedClockMode::CompactAnchored(left), MappedClockMode::CompactAnchored(right)) => {
                 self.marker == other.marker
                     && self.address_shift == other.address_shift
@@ -336,18 +347,60 @@ impl MappedClockEpoch {
 pub(crate) struct MappedSourceSpan {
     epoch: MappedClockEpoch,
     segment: CanonicalBeatSegment,
-    beat_start: f64,
-    quarters: f64,
+    program: SpanProgram,
     loaded_rate_hz: u32,
     start_frame: u64,
     end_frame: u64,
     endpoint_frame: usize,
     endpoint_fraction: f64,
     source_start: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LegacySpanProgram {
+    beat_start: f64,
+    quarters: f64,
     source_period: f64,
+}
+#[derive(Clone, Copy, Debug)]
+enum SpanProgram {
+    Legacy(LegacySpanProgram),
+    General {
+        cycle_coefficient: [u64; 2],
+        cycle_exponent: i16,
+    },
+}
+impl SpanProgram {
+    fn matches_exact(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Legacy(a), Self::Legacy(b)) => {
+                a.beat_start.to_bits() == b.beat_start.to_bits()
+                    && a.quarters.to_bits() == b.quarters.to_bits()
+                    && a.source_period.to_bits() == b.source_period.to_bits()
+            }
+            (
+                Self::General {
+                    cycle_coefficient: a,
+                    cycle_exponent: x,
+                },
+                Self::General {
+                    cycle_coefficient: b,
+                    cycle_exponent: y,
+                },
+            ) => a == b && x == y,
+            _ => false,
+        }
+    }
 }
 
 impl MappedSourceSpan {
+    fn legacy_program(self) -> Option<LegacySpanProgram> {
+        if let SpanProgram::Legacy(p) = self.program {
+            Some(p)
+        } else {
+            None
+        }
+    }
     pub(crate) fn epoch(self) -> MappedClockEpoch {
         self.epoch
     }
@@ -365,6 +418,9 @@ impl MappedSourceSpan {
     /// Evaluates M(n), modulo and S from their original global anchors. The
     /// endpoint may be beyond several intervening knots and is never extrapolated.
     pub(crate) fn position_at(self, output_frame: u64) -> Option<FractionalSourcePosition> {
+        if self.epoch.is_general_compact() {
+            return None;
+        }
         if output_frame == self.end_frame {
             return Some(FractionalSourcePosition {
                 frame: self.endpoint_frame,
@@ -381,9 +437,10 @@ impl MappedSourceSpan {
         if self.epoch.is_anchored() {
             return anchored::position_in_span(self, output_frame);
         }
+        let program = self.legacy_program()?;
         let beat = self
             .epoch
-            .beat_at(output_frame, self.beat_start, self.quarters)?;
+            .beat_at(output_frame, program.beat_start, program.quarters)?;
         position_from_source(self.segment.source_at_beat(beat)?, self.loaded_rate_hz)
     }
 
@@ -397,15 +454,13 @@ impl MappedSourceSpan {
     pub(crate) fn matches_exact(self, other: Self) -> bool {
         self.epoch.matches_exact(other.epoch)
             && self.segment.matches_exact(other.segment)
-            && self.beat_start.to_bits() == other.beat_start.to_bits()
-            && self.quarters.to_bits() == other.quarters.to_bits()
+            && self.program.matches_exact(other.program)
             && self.loaded_rate_hz == other.loaded_rate_hz
             && self.start_frame == other.start_frame
             && self.end_frame == other.end_frame
             && self.endpoint_frame == other.endpoint_frame
             && self.endpoint_fraction.to_bits() == other.endpoint_fraction.to_bits()
             && self.source_start == other.source_start
-            && self.source_period.to_bits() == other.source_period.to_bits()
     }
 }
 
@@ -453,6 +508,7 @@ impl MappedLoopGeometry {
             min_seconds_per_quarter: interval.min_seconds_per_quarter,
             max_seconds_per_quarter: interval.max_seconds_per_quarter,
             exact_continuation: None,
+            general: None,
         })
     }
 
@@ -498,6 +554,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_general_compact() {
+            return self.position_at_general(epoch, output_frame);
+        }
         if epoch.is_compact_anchored() {
             return self.position_at_compact(epoch, output_frame);
         }
@@ -532,6 +591,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_general_compact() {
+            return self.refresh_general_span(epoch, output_frame);
+        }
         if epoch.is_compact_anchored() {
             return self.refresh_span_compact(epoch, output_frame);
         }
@@ -583,18 +645,21 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            beat_start: self.beat_start,
-            quarters: self.quarters,
+            program: SpanProgram::Legacy(LegacySpanProgram {
+                beat_start: self.beat_start,
+                quarters: self.quarters,
+                source_period: self
+                    .domain
+                    .musical_period
+                    .scalar_period()
+                    .ok_or(MappedClockError::InvalidGeometry)?,
+            }),
             loaded_rate_hz: self.loaded_rate_hz,
             start_frame,
             end_frame,
             endpoint_frame: endpoint.frame,
             endpoint_fraction: endpoint.fraction,
             source_start: self.domain.region.start as u64,
-            source_period: self
-                .domain
-                .musical_period
-                .ok_or(MappedClockError::InvalidGeometry)?,
         };
         if span.position_at(output_frame).is_none() || span.local_rate().is_none() {
             return Err(MappedClockError::NumericalUnavailable);

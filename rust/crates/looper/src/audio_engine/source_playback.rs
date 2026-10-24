@@ -6,13 +6,14 @@
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::mapped_source_clock::{
-    CompactLocalSpanView, CompactSpanView, MappedClockEpoch, MappedClockError, MappedLoopGeometry,
-    MappedSourceSpan,
+    CompactLocalSpanView, CompactSpanView, GeneralLocalSpanView, MappedClockEpoch,
+    MappedClockError, MappedLoopGeometry, MappedSourceSpan,
 };
 #[cfg(test)]
 use super::source_reader::FrameRange;
 use super::source_reader::{
-    ExplicitSeekMode, SourceLoopDomain, advance_playback_position, playhead_before_render,
+    ExplicitSeekMode, SourceLoopDomain, SourceReaderPeriod, advance_playback_position,
+    playhead_before_render,
 };
 
 const TEMPO_STEP: f64 = 0.05;
@@ -50,14 +51,41 @@ impl CompactPlaybackView<'_> {
 /// Prepared coordinates from an already admitted compact span. This contains no
 /// geometry owner and is discarded after the reader chunk or copied query.
 pub(crate) struct CompactLocalPlaybackView {
-    span: CompactLocalSpanView,
+    span: LocalMappedSpanView,
     intended_output_frame: u64,
+}
+
+enum LocalMappedSpanView {
+    Intersection(CompactLocalSpanView),
+    General(GeneralLocalSpanView),
 }
 
 impl CompactLocalPlaybackView {
     pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
-        self.span
-            .position_at(self.intended_output_frame.checked_add(offset as u64)?)
+        let frame = self.intended_output_frame.checked_add(offset as u64)?;
+        match &self.span {
+            LocalMappedSpanView::Intersection(span) => span.position_at(frame),
+            LocalMappedSpanView::General(span) => span.position_at(frame),
+        }
+    }
+}
+
+/// Physical None is a valid original scalar domain and cannot alias a missing
+/// original-domain witness on a generic mapped construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OriginalScalarPeriod {
+    Unavailable,
+    Physical,
+    Musical(u64),
+}
+
+impl OriginalScalarPeriod {
+    fn from_domain(domain: SourceLoopDomain) -> Self {
+        match domain.musical_period {
+            SourceReaderPeriod::Physical => Self::Physical,
+            SourceReaderPeriod::ScalarMusical(bits) => Self::Musical(bits),
+            SourceReaderPeriod::MappedRational(_) => Self::Unavailable,
+        }
     }
 }
 
@@ -72,6 +100,7 @@ enum ScalarProjection {
 pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
     domain: Option<SourceLoopDomain>,
+    original_scalar_period: OriginalScalarPeriod,
     elapsed_output_frames: u64,
     ratio: f64,
     target: f64,
@@ -83,6 +112,94 @@ pub(crate) struct SourcePlayback {
 }
 
 impl SourcePlayback {
+    /// An already mapped voice may move to a different prepared intersection
+    /// circle without losing its separately retained original scalar circle.
+    /// Physical/source ownership and first-PCM equality remain the caller's claim.
+    pub(crate) fn mapped_compact_replacement(
+        geometry: &MappedLoopGeometry,
+        marker: u64,
+        timeline: super::transport::TransportTimeline,
+        previous: &Self,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let effective = previous.domain.ok_or(MappedClockError::InvalidGeometry)?;
+        let original = previous
+            .original_scalar_domain()
+            .ok_or(MappedClockError::InvalidGeometry)?;
+        let target = geometry.domain();
+        // Validate historical scalar metadata at its own canonical start. The
+        // current mapped pair need not lie in that older circle until reverse.
+        let original_anchor = FractionalSourcePosition {
+            frame: original.region.start,
+            fraction: 0.0,
+            seek_mode: ExplicitSeekMode::Normal,
+        };
+        let original_valid = match original.musical_period {
+            SourceReaderPeriod::Physical => {
+                Self::scalar_continuation(original_anchor, original, 1.0, 1.0).is_some()
+            }
+            SourceReaderPeriod::ScalarMusical(_) => {
+                Self::scalar_musical_continuation(original_anchor, original, 1.0, 1.0).is_some()
+            }
+            SourceReaderPeriod::MappedRational(_) => false,
+        };
+        if !previous.is_mapped()
+            || previous.mapped_output_frame() != Some(output_frame)
+            || !effective.is_valid()
+            || !original.is_valid()
+            || !original_valid
+            || original.musical_period.is_mapped()
+            || effective.sample_frames != target.sample_frames
+            || effective.region != target.region
+            || original.sample_frames != target.sample_frames
+            || original.region != target.region
+            || target.musical_period.is_mapped()
+            || !geometry.has_compact_continuation()
+        {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let mut replacement = Self::mapped_anchored_compact_continuation(
+            geometry,
+            marker,
+            timeline,
+            target,
+            previous.position(),
+            output_frame,
+        )?;
+        replacement.original_scalar_period = previous.original_scalar_period;
+        Ok(replacement)
+    }
+
+    /// Productive general coordinates retain their original scalar circle
+    /// independently of the effective rational reader certificate.
+    pub(crate) fn mapped_general_continuation(
+        geometry: &MappedLoopGeometry,
+        marker: u64,
+        timeline: super::transport::TransportTimeline,
+        original_scalar_domain: SourceLoopDomain,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let original = OriginalScalarPeriod::from_domain(original_scalar_domain);
+        if original == OriginalScalarPeriod::Unavailable {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let epoch = MappedClockEpoch::general_compact(
+            marker,
+            timeline,
+            geometry,
+            original_scalar_domain,
+            position,
+            output_frame,
+        )?;
+        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
+        if !same_position(position, replacement.origin) {
+            return Err(MappedClockError::NumericalUnavailable);
+        }
+        replacement.original_scalar_period = original;
+        Ok(replacement)
+    }
+
     /// Bounded actual-E coordinates. Original source/map/ACK custody and the
     /// complete live cohort claim remain the caller's separate responsibility.
     pub(crate) fn mapped_anchored_compact_continuation(
@@ -101,10 +218,11 @@ impl SourcePlayback {
             position,
             output_frame,
         )?;
-        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
         if !same_position(position, replacement.origin) {
             return Err(MappedClockError::NumericalUnavailable);
         }
+        replacement.original_scalar_period = OriginalScalarPeriod::from_domain(original_domain);
         Ok(replacement)
     }
 
@@ -113,23 +231,31 @@ impl SourcePlayback {
     pub(crate) fn local_compact_view(
         &self,
     ) -> Result<Option<CompactLocalPlaybackView>, MappedClockError> {
-        let Some(state) = self
-            .mapped
-            .filter(|state| state.span.epoch().is_compact_anchored())
-        else {
+        let Some(state) = self.mapped.filter(|state| {
+            state.span.epoch().is_compact_anchored() || state.span.epoch().is_general_compact()
+        }) else {
             return Ok(None);
         };
-        let span = state.span.local_compact_view()?;
-        if !span
-            .position_at(state.intended_output_frame)
+        let span = if state.span.epoch().is_general_compact() {
+            LocalMappedSpanView::General(
+                state
+                    .span
+                    .local_general_view(self.domain.ok_or(MappedClockError::InvalidGeometry)?)?,
+            )
+        } else {
+            LocalMappedSpanView::Intersection(state.span.local_compact_view()?)
+        };
+        let view = CompactLocalPlaybackView {
+            span,
+            intended_output_frame: state.intended_output_frame,
+        };
+        if !view
+            .position_at(0)
             .is_some_and(|position| same_position(position, self.origin))
         {
             return Err(MappedClockError::InvalidGeometry);
         }
-        Ok(Some(CompactLocalPlaybackView {
-            span,
-            intended_output_frame: state.intended_output_frame,
-        }))
+        Ok(Some(view))
     }
 
     /// Reference anchored map coordinates only; no productive caller or realtime-cost permit.
@@ -150,10 +276,11 @@ impl SourcePlayback {
             position,
             output_frame,
         )?;
-        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
         if !same_position(position, replacement.origin) {
             return Err(MappedClockError::NumericalUnavailable);
         }
+        replacement.original_scalar_period = OriginalScalarPeriod::from_domain(original_domain);
         Ok(replacement)
     }
 
@@ -166,12 +293,13 @@ impl SourcePlayback {
     ) -> Result<Self, MappedClockError> {
         let span = geometry.refresh_span(epoch, intended_output_frame)?;
         let origin = span
-            .position_at(intended_output_frame)
+            .position_in_domain(geometry.domain(), intended_output_frame)
             .ok_or(MappedClockError::NumericalUnavailable)?;
         let ratio = span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
         Ok(Self {
             origin,
             domain: Some(geometry.domain()),
+            original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
             elapsed_output_frames: 0,
             ratio,
             target: ratio,
@@ -192,6 +320,9 @@ impl SourcePlayback {
         epoch: MappedClockEpoch,
         intended_output_frame: u64,
     ) -> Result<Self, MappedClockError> {
+        if epoch.is_general_compact() {
+            return Self::mapped(geometry, epoch, intended_output_frame);
+        }
         let span = geometry.refresh_span_compact(epoch, intended_output_frame)?;
         let origin = span
             .compact_view(geometry)?
@@ -201,6 +332,7 @@ impl SourcePlayback {
         Ok(Self {
             origin,
             domain: Some(geometry.domain()),
+            original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
             elapsed_output_frames: 0,
             ratio,
             target: ratio,
@@ -276,11 +408,12 @@ impl SourcePlayback {
         if self.domain != Some(geometry.domain()) {
             return Err(MappedClockError::InvalidGeometry);
         }
-        let replacement =
+        let mut replacement =
             Self::mapped_compact(geometry, state.span.epoch(), state.intended_output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidGeometry);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -294,8 +427,9 @@ impl SourcePlayback {
         if self.domain != Some(geometry.domain()) {
             return Err(MappedClockError::InvalidGeometry);
         }
-        let replacement =
+        let mut replacement =
             Self::mapped_compact(geometry, state.span.epoch(), intended_output_frame)?;
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -316,10 +450,11 @@ impl SourcePlayback {
         {
             return Err(MappedClockError::InvalidEpoch);
         }
-        let replacement = Self::mapped_compact(geometry, epoch, state.intended_output_frame)?;
+        let mut replacement = Self::mapped_compact(geometry, epoch, state.intended_output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidEpoch);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -339,10 +474,11 @@ impl SourcePlayback {
             .epoch()
             .resumed_at(actual, state.intended_output_frame, output_frame)
             .ok_or(MappedClockError::InvalidEpoch)?;
-        let replacement = Self::mapped_compact(geometry, epoch, output_frame)?;
+        let mut replacement = Self::mapped_compact(geometry, epoch, output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidEpoch);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -352,8 +488,40 @@ impl SourcePlayback {
     }
 
     pub(crate) fn is_compact_mapped(&self) -> bool {
+        self.mapped.is_some_and(|state| {
+            state.span.epoch().is_compact_anchored() || state.span.epoch().is_general_compact()
+        })
+    }
+
+    pub(crate) fn is_general_mapped(&self) -> bool {
         self.mapped
-            .is_some_and(|state| state.span.epoch().is_compact_anchored())
+            .is_some_and(|state| state.span.epoch().is_general_compact())
+    }
+
+    pub(crate) fn effective_domain(&self) -> Option<SourceLoopDomain> {
+        self.domain
+    }
+
+    /// Reconstruct the retained original scalar circle. A generic general map
+    /// without that proof cannot manufacture a Physical fallback.
+    pub(crate) fn original_scalar_domain(&self) -> Option<SourceLoopDomain> {
+        let domain = self.domain?;
+        let musical_period = if !self.is_mapped() {
+            if domain.musical_period.is_mapped() {
+                return None;
+            }
+            domain.musical_period
+        } else {
+            match self.original_scalar_period {
+                OriginalScalarPeriod::Unavailable => return None,
+                OriginalScalarPeriod::Physical => SourceReaderPeriod::Physical,
+                OriginalScalarPeriod::Musical(bits) => SourceReaderPeriod::ScalarMusical(bits),
+            }
+        };
+        Some(SourceLoopDomain {
+            musical_period,
+            ..domain
+        })
     }
 
     /// Stable renderer configuration only, never playback progress or permission.
@@ -402,10 +570,12 @@ impl SourcePlayback {
         if self.domain != Some(geometry.domain()) {
             return Err(MappedClockError::InvalidGeometry);
         }
-        let replacement = Self::mapped(geometry, state.span.epoch(), state.intended_output_frame)?;
+        let mut replacement =
+            Self::mapped(geometry, state.span.epoch(), state.intended_output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidGeometry);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -421,7 +591,8 @@ impl SourcePlayback {
         if self.domain != Some(geometry.domain()) {
             return Err(MappedClockError::InvalidGeometry);
         }
-        let replacement = Self::mapped(geometry, state.span.epoch(), intended_output_frame)?;
+        let mut replacement = Self::mapped(geometry, state.span.epoch(), intended_output_frame)?;
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -444,10 +615,11 @@ impl SourcePlayback {
         {
             return Err(MappedClockError::InvalidEpoch);
         }
-        let replacement = Self::mapped(geometry, epoch, state.intended_output_frame)?;
+        let mut replacement = Self::mapped(geometry, epoch, state.intended_output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidEpoch);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -470,10 +642,11 @@ impl SourcePlayback {
             .epoch()
             .resumed_at(actual, state.intended_output_frame, output_frame)
             .ok_or(MappedClockError::InvalidEpoch)?;
-        let replacement = Self::mapped(geometry, epoch, output_frame)?;
+        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
         if !same_position(self.origin, replacement.origin) {
             return Err(MappedClockError::InvalidEpoch);
         }
+        replacement.original_scalar_period = self.original_scalar_period;
         *self = replacement;
         Ok(())
     }
@@ -486,7 +659,8 @@ impl SourcePlayback {
         ratio: f64,
         domain: SourceLoopDomain,
     ) -> Option<Self> {
-        if !coordinate.is_finite()
+        if domain.musical_period.is_mapped()
+            || !coordinate.is_finite()
             || coordinate < domain.region.start as f64
             || coordinate >= domain.region.end as f64
             || !ratio.is_finite()
@@ -514,6 +688,7 @@ impl SourcePlayback {
                 seek_mode,
             },
             domain: None,
+            original_scalar_period: OriginalScalarPeriod::Unavailable,
             elapsed_output_frames: 0,
             ratio,
             target: ratio,
@@ -543,6 +718,7 @@ impl SourcePlayback {
         Some(Self {
             origin: position,
             domain: Some(domain),
+            original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
             ratio: initial_ratio,
             target,
@@ -573,6 +749,7 @@ impl SourcePlayback {
         Some(Self {
             origin: position,
             domain: Some(domain),
+            original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
             ratio: initial_ratio,
             target,
@@ -638,7 +815,10 @@ impl SourcePlayback {
         let missing_frames = output_frames - self.elapsed_output_frames as usize;
         let distance = missing_frames as f64 * self.ratio;
         let (coordinate, silent_prefix) = if position.seek_mode == ExplicitSeekMode::Normal {
-            let period = domain.musical_period.unwrap_or(domain.region.len() as f64);
+            let period = domain
+                .musical_period
+                .scalar_period()
+                .unwrap_or(domain.region.len() as f64);
             let phase = (position.frame.saturating_sub(domain.region.start) as f64
                 + position.fraction
                 - distance)
@@ -687,7 +867,13 @@ impl SourcePlayback {
         {
             return None;
         }
-        let period = domain.musical_period.unwrap_or(domain.region.len() as f64);
+        if domain.musical_period.is_mapped() {
+            return None;
+        }
+        let period = domain
+            .musical_period
+            .scalar_period()
+            .unwrap_or(domain.region.len() as f64);
         if !period.is_finite() || period <= 0.0 || (period - domain.region.len() as f64).abs() > 1.0
         {
             return None;
@@ -710,6 +896,7 @@ impl SourcePlayback {
         match (self.mapped, other.mapped) {
             (Some(left), Some(right)) => {
                 return self.domain == other.domain
+                    && self.original_scalar_period == other.original_scalar_period
                     && left.intended_output_frame == right.intended_output_frame
                     && left.span.matches_exact(right.span);
             }
@@ -720,6 +907,7 @@ impl SourcePlayback {
             && self.origin.fraction.to_bits() == other.origin.fraction.to_bits()
             && self.origin.seek_mode == other.origin.seek_mode
             && self.domain == other.domain
+            && self.original_scalar_period == other.original_scalar_period
             && self.elapsed_output_frames == other.elapsed_output_frames
             && self.ratio.to_bits() == other.ratio.to_bits()
             && self.target.to_bits() == other.target.to_bits()
@@ -733,6 +921,7 @@ impl SourcePlayback {
         match (self.mapped, other.mapped) {
             (Some(left), Some(right)) => {
                 return self.domain == other.domain
+                    && self.original_scalar_period == other.original_scalar_period
                     && left.span.epoch().matches_exact(right.span.epoch());
             }
             (Some(_), None) | (None, Some(_)) => return false,
@@ -749,7 +938,14 @@ impl SourcePlayback {
     }
 
     pub(crate) fn loop_period(&self) -> Option<f64> {
-        self.domain.and_then(|domain| domain.musical_period)
+        self.domain
+            .and_then(|domain| domain.musical_period.scalar_period())
+    }
+
+    /// Actual reader plans retain the complete effective period certificate.
+    pub(crate) fn reader_period(&self) -> SourceReaderPeriod {
+        self.domain
+            .map_or(SourceReaderPeriod::Physical, |domain| domain.musical_period)
     }
 
     pub(crate) fn matches_domain(&self, domain: SourceLoopDomain) -> bool {
@@ -760,6 +956,9 @@ impl SourcePlayback {
     pub(crate) fn configure_domain(&mut self, domain: SourceLoopDomain) -> bool {
         if self.domain == Some(domain) {
             return true;
+        }
+        if domain.musical_period.is_mapped() {
+            return false;
         }
         // A new domain needs its own future integration contract. An unchanged
         // pair refresh retains this exact epoch; do not clamp, wrap or rebase it.
@@ -777,7 +976,8 @@ impl SourcePlayback {
         }
         self.rebase();
         self.domain = Some(domain);
-        let outside = if let Some(period) = domain.musical_period {
+        self.original_scalar_period = OriginalScalarPeriod::from_domain(domain);
+        let outside = if let Some(period) = domain.musical_period.scalar_period() {
             let offset =
                 self.origin.frame.saturating_sub(domain.region.start) as f64 + self.origin.fraction;
             self.origin.seek_mode == ExplicitSeekMode::Normal
@@ -808,6 +1008,7 @@ impl SourcePlayback {
         // the virtual seam's fractional residue.
         if was_explicit {
             self.domain = None;
+            self.original_scalar_period = OriginalScalarPeriod::Unavailable;
             self.history_reconstructible = false;
         }
     }
@@ -837,6 +1038,7 @@ impl SourcePlayback {
             seek_mode,
         };
         self.domain = None;
+        self.original_scalar_period = OriginalScalarPeriod::Unavailable;
         self.elapsed_output_frames = 0;
         self.history_reconstructible = true;
         self.scalar_projection = ScalarProjection::Legacy;
@@ -895,7 +1097,8 @@ impl SourcePlayback {
 
     pub(crate) fn position_at(&self, output_offset: usize) -> Option<FractionalSourcePosition> {
         if let Some(state) = self.mapped {
-            return state.span.position_at(
+            return state.span.position_in_domain(
+                self.domain?,
                 state
                     .intended_output_frame
                     .checked_add(output_offset as u64)?,
@@ -950,7 +1153,12 @@ impl SourcePlayback {
 
     fn pair_musical_position_at(&self, elapsed: u64) -> FractionalSourcePosition {
         let domain = self.domain.expect("musical pair has its admitted domain");
-        let period = musical_pair_units(domain.musical_period.expect("musical pair period"));
+        let period = musical_pair_units(
+            domain
+                .musical_period
+                .scalar_period()
+                .expect("musical pair period"),
+        );
         // The fixed common grid H=2^53 exactly represents every admitted period
         // and rate. C=P*H <=2^117; D=n*rate*H <2^118 for the entire u64 epoch.
         let displacement = u128::from(elapsed) * musical_pair_units(self.ratio);
@@ -1009,7 +1217,7 @@ impl SourcePlayback {
                 .saturating_add(output_offset as u64) as f64
                 * self.ratio;
         if let Some(domain) = self.domain
-            && let Some(period) = domain.musical_period
+            && let Some(period) = domain.musical_period.scalar_period()
             && period != domain.region.len() as f64
         {
             return self.musical_position_at(distance, domain, period);
@@ -1095,7 +1303,10 @@ impl SourcePlayback {
             else {
                 return false;
             };
-            let Some(position) = state.span.position_at(next) else {
+            let Some(domain) = self.domain else {
+                return false;
+            };
+            let Some(position) = state.span.position_in_domain(domain, next) else {
                 return false;
             };
             state.intended_output_frame = next;
@@ -1125,7 +1336,7 @@ impl SourcePlayback {
 }
 
 fn valid_physical_pair(position: FractionalSourcePosition, domain: SourceLoopDomain) -> bool {
-    domain.musical_period.is_none()
+    domain.musical_period == SourceReaderPeriod::Physical
         && domain.region.start < domain.region.end
         && domain.region.end <= domain.sample_frames
         && position.seek_mode == ExplicitSeekMode::Normal
@@ -1153,7 +1364,7 @@ fn canonical_musical_phase(whole: u128, fraction: f64, period: u128) -> bool {
 }
 
 fn valid_musical_pair(position: FractionalSourcePosition, domain: SourceLoopDomain) -> bool {
-    let Some(period) = domain.musical_period else {
+    let Some(period) = domain.musical_period.scalar_period() else {
         return false;
     };
     if !period.is_finite()
@@ -1210,6 +1421,22 @@ mod compact_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_scalar_period_is_a_small_copy_witness_with_explicit_unavailability() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<OriginalScalarPeriod>();
+        assert!(std::mem::size_of::<OriginalScalarPeriod>() <= 16);
+        assert!(!std::mem::needs_drop::<OriginalScalarPeriod>());
+        assert_ne!(
+            OriginalScalarPeriod::Unavailable,
+            OriginalScalarPeriod::Physical
+        );
+        println!(
+            "original_scalar_period_layout: bytes={} unavailable_distinct_from_physical=true",
+            std::mem::size_of::<OriginalScalarPeriod>(),
+        );
+    }
 
     #[test]
     fn pitch_history_keeps_the_original_intro_or_tail_after_its_endpoint_wraps() {

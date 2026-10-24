@@ -2,6 +2,9 @@
 //! Synthetic timing labels and generated PCM do not establish device or musical acceptance.
 //! Public scalar births expose +0; raw -0 remains covered by the separate numerical fixtures.
 
+#[path = "runtime_policy_general_tests.rs"]
+mod general_tests;
+
 use super::*;
 use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
 use crate::audio_engine::mapped_source_clock::observe_compact_queries_for_test;
@@ -366,7 +369,7 @@ impl DryMappedPath {
                 }
             );
             assert_eq!(
-                domain.period_bits,
+                domain.period.scalar_period().map(f64::to_bits),
                 Some(
                     if self.tiny {
                         2.25_f64

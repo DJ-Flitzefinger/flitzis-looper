@@ -25,7 +25,9 @@ fn domain(start: usize, length: usize, sample_frames: usize, period: f64) -> Sou
             start,
             end: start + length,
         },
-        musical_period: Some(period),
+        musical_period: crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+            Some(period),
+        ),
     }
 }
 
@@ -94,7 +96,7 @@ fn musical_constructor_rejects_bad_domain_pair_mode_and_rate_without_normalizing
     }
     for invalid in [
         SourceLoopDomain {
-            musical_period: None,
+            musical_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             ..valid
         },
         domain(7, 0, 31, 0.5),
@@ -490,7 +492,10 @@ fn compatibility_is_exact_against_integer_length_including_two_to_64() {
         SourcePlayback::scalar_musical_continuation(
             position(0, 0.0),
             SourceLoopDomain {
-                musical_period: Some(f64::from_bits(MUSICAL_PAIR_MAX_PERIOD.to_bits() - 1)),
+                musical_period:
+                    crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                        Some(f64::from_bits(MUSICAL_PAIR_MAX_PERIOD.to_bits() - 1))
+                    ),
                 ..maximum
             },
             1.0,
@@ -573,8 +578,8 @@ fn unchanged_musical_reader_executes_identical_taps_gains_and_pcm_at_anchor_and_
             exact(copied.position(), anchor);
             let plan = read_plan(copied);
             assert_eq!(
-                plan.loop_period.map(f64::to_bits),
-                source.musical_period.map(f64::to_bits)
+                plan.loop_period.scalar_period().map(f64::to_bits),
+                source.musical_period.scalar_period().map(f64::to_bits)
             );
             let taps = plan.fractional_taps(copied.position().fraction);
             assert_eq!(taps.left, left);
@@ -618,7 +623,7 @@ fn musical_mode_guards_history_domains_and_cross_mode_equivalence() {
     let physical = SourcePlayback::scalar_continuation(
         anchor,
         SourceLoopDomain {
-            musical_period: None,
+            musical_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             ..source
         },
         1.0,
@@ -641,7 +646,7 @@ fn musical_mode_guards_history_domains_and_cross_mode_equivalence() {
         domain(8, 17, 31, 17.0),
         domain(7, 17, 32, 17.0),
         SourceLoopDomain {
-            musical_period: None,
+            musical_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             ..source
         },
     ] {

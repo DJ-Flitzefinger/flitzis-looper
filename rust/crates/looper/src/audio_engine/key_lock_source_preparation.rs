@@ -88,7 +88,9 @@ impl<'a> PreparedSourceStream<'a> {
         let plan = request.plan;
         let channels = plan.channels;
         let block = native.block_size();
-        if channels == 0
+        if plan.loop_period.is_mapped()
+            || request.logical.is_mapped()
+            || channels == 0
             || native.channel_count() != channels
             || block == 0
             || block > DEFAULT_BLOCK_SAMPLES
@@ -96,7 +98,7 @@ impl<'a> PreparedSourceStream<'a> {
             || sample.channels != channels
             || plan.loop_region.start >= plan.loop_region.end
             || plan.loop_region.end > plan.sample_frames
-            || plan.loop_period.is_some_and(|period| {
+            || plan.loop_period.scalar_period().is_some_and(|period| {
                 !period.is_finite()
                     || period <= 0.0
                     || (period - plan.loop_region.len() as f64).abs() > 1.0
@@ -320,13 +322,17 @@ impl<'a> PreparedSourceStream<'a> {
 fn valid_history_position(position: FractionalSourcePosition, plan: SourceReadPlan) -> bool {
     use super::source_reader::ExplicitSeekMode;
 
-    position.fraction.is_finite()
+    !plan.loop_period.is_mapped()
+        && position.fraction.is_finite()
         && (0.0..1.0).contains(&position.fraction)
         && match position.seek_mode {
             ExplicitSeekMode::Normal => {
                 position.frame >= plan.loop_region.start
                     && (position.frame - plan.loop_region.start) as f64 + position.fraction
-                        < plan.loop_period.unwrap_or(plan.loop_region.len() as f64)
+                        < plan
+                            .loop_period
+                            .scalar_period()
+                            .unwrap_or(plan.loop_region.len() as f64)
             }
             ExplicitSeekMode::BeforeLoop => position.frame < plan.loop_region.start,
             ExplicitSeekMode::AfterLoop => {
@@ -360,7 +366,7 @@ mod bounds {
             sample_frames: 64,
             frame_pos: 7,
             loop_region: FrameRange { start: 3, end: 59 },
-            loop_period: None,
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             seek_mode: ExplicitSeekMode::Normal,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),

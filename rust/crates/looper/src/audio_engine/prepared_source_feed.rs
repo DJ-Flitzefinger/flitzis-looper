@@ -266,7 +266,10 @@ impl NativeAdapterState {
         future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
         endpoint_reset: Option<EndpointResetHistory>,
     ) -> Result<(), RubberBandError> {
-        if !history.is_current()
+        if request.plan.loop_period.is_mapped()
+            || future.1.loop_period.is_mapped()
+            || history.spans().any(|span| span.plan.loop_period.is_mapped())
+            || !history.is_current()
             || request.mapped_input.is_some()
             || !request
                 .permit
@@ -706,7 +709,7 @@ mod tests {
                     start: 100,
                     end: 3100,
                 },
-                loop_period: None,
+                loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
                 seek_mode: ExplicitSeekMode::Normal,
                 selection: StemRenderSelection::full_mix(),
                 transition: StemTransition::default(),

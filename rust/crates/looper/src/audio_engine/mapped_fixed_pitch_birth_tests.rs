@@ -239,7 +239,7 @@ fn owned_birth(shift: i32) -> OwnedBirth {
     let position = snapshot.playback.position();
     snapshot.plan.frame_pos = position.frame;
     snapshot.plan.seek_mode = position.seek_mode;
-    snapshot.plan.loop_period = snapshot.playback.loop_period();
+    snapshot.plan.loop_period = snapshot.playback.reader_period();
     work.freeze_launch_origin(SourceReadCheckpoint {
         playback: snapshot.playback,
         plan: snapshot.plan,
@@ -841,7 +841,7 @@ fn internal_fixed_h_birth_keeps_native_stream_canonical_receipts_and_complete_pr
             let position = snapshot.playback.position();
             snapshot.plan.frame_pos = position.frame;
             snapshot.plan.seek_mode = position.seek_mode;
-            snapshot.plan.loop_period = snapshot.playback.loop_period();
+            snapshot.plan.loop_period = snapshot.playback.reader_period();
             let source = snapshot.sample.clone();
             let stems = snapshot.stems.clone();
             let accepted = snapshot.accepted;

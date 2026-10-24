@@ -5,6 +5,7 @@
 //! advancing transport, or changing persisted loop markers.
 
 use super::source_playback::{FractionalSourcePosition, SourcePlayback};
+pub(crate) use super::source_reader_period::SourceReaderPeriod;
 use crate::messages::{
     PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
@@ -110,18 +111,31 @@ pub(crate) fn resident_read_context_available(
 pub(crate) struct SourceLoopDomain {
     pub(crate) sample_frames: usize,
     pub(crate) region: FrameRange,
-    pub(crate) musical_period: Option<f64>,
+    pub(crate) musical_period: SourceReaderPeriod,
 }
 
 impl PartialEq for SourceLoopDomain {
     fn eq(&self, other: &Self) -> bool {
         self.sample_frames == other.sample_frames
             && self.region == other.region
-            && same_loop_period(self.musical_period, other.musical_period)
+            && self.musical_period == other.musical_period
     }
 }
 
 impl SourceLoopDomain {
+    pub(crate) fn is_valid(self) -> bool {
+        if self.region.start >= self.region.end || self.region.end > self.sample_frames {
+            return false;
+        }
+        match self.musical_period {
+            SourceReaderPeriod::Physical => true,
+            SourceReaderPeriod::ScalarMusical(bits) => {
+                Self::musical(self.sample_frames, self.region, f64::from_bits(bits)).is_some()
+            }
+            SourceReaderPeriod::MappedRational(period) => period.validate_physical(self.region),
+        }
+    }
+
     /// Canonicalize an already owned normal virtual source phase in this domain.
     /// Callers separately guard source, physical geometry and timing ownership;
     /// this projection alone never authorizes native/filter-history continuation.
@@ -129,7 +143,8 @@ impl SourceLoopDomain {
         self,
         position: FractionalSourcePosition,
     ) -> Option<FractionalSourcePosition> {
-        if position.seek_mode != ExplicitSeekMode::Normal
+        if self.musical_period.is_mapped()
+            || position.seek_mode != ExplicitSeekMode::Normal
             || !position.fraction.is_finite()
             || !(0.0..1.0).contains(&position.fraction)
             || position.frame < self.region.start
@@ -138,7 +153,10 @@ impl SourceLoopDomain {
         {
             return None;
         }
-        let period = self.musical_period.unwrap_or(self.region.len() as f64);
+        let period = self
+            .musical_period
+            .scalar_period()
+            .unwrap_or(self.region.len() as f64);
         if !period.is_finite() || period <= 0.0 || (period - self.region.len() as f64).abs() > 1.0 {
             return None;
         }
@@ -163,7 +181,7 @@ impl SourceLoopDomain {
         Self {
             sample_frames,
             region,
-            musical_period: None,
+            musical_period: SourceReaderPeriod::Physical,
         }
     }
 
@@ -181,13 +199,26 @@ impl SourceLoopDomain {
         Some(Self {
             sample_frames,
             region,
-            musical_period: Some(period),
+            musical_period: SourceReaderPeriod::from_scalar_period(Some(period)),
         })
     }
-}
 
-fn same_loop_period(left: Option<f64>, right: Option<f64>) -> bool {
-    left.map(f64::to_bits) == right.map(f64::to_bits)
+    /// Arithmetic certificate only. The owning caller separately qualifies PCM,
+    /// original map, timing, source lifetime and the complete actual-E effect.
+    pub(crate) fn mapped(
+        sample_frames: usize,
+        region: FrameRange,
+        period: super::general_source_numerics::MappedReaderPeriod,
+    ) -> Option<Self> {
+        (region.start < region.end
+            && region.end <= sample_frames
+            && period.validate_physical(region))
+        .then_some(Self {
+            sample_frames,
+            region,
+            musical_period: SourceReaderPeriod::MappedRational(period),
+        })
+    }
 }
 
 pub(crate) fn effective_loop_region(
@@ -698,10 +729,43 @@ pub(crate) struct SourceReadPlan {
     pub(crate) frame_pos: usize,
     pub(crate) loop_region: FrameRange,
     /// Virtual compatible musical duration; never an additional playback-rate ratio.
-    pub(crate) loop_period: Option<f64>,
+    pub(crate) loop_period: SourceReaderPeriod,
     pub(crate) seek_mode: ExplicitSeekMode,
     pub(crate) selection: StemRenderSelection,
     pub(crate) transition: StemTransition,
+}
+
+/// Ephemeral once-per-chunk seam constants. The copied plan remains the complete
+/// domain witness; this context holds no source, map owner or mutable voice state.
+enum PreparedSourceTapPlan {
+    Legacy,
+    Mapped(super::general_source_numerics::PreparedMappedReaderPeriod),
+}
+
+impl PreparedSourceTapPlan {
+    fn new(plan: SourceReadPlan) -> Option<Self> {
+        match plan.loop_period.mapped_period() {
+            Some(period) => Some(Self::Mapped(period.prepare(plan.loop_region)?)),
+            None => Some(Self::Legacy),
+        }
+    }
+
+    fn taps(&self, plan: SourceReadPlan, fraction: f64) -> Option<FractionalSourceTaps> {
+        match self {
+            Self::Legacy => plan.try_fractional_taps(fraction),
+            Self::Mapped(period) => {
+                if plan.seek_mode != ExplicitSeekMode::Normal {
+                    return None;
+                }
+                let taps = period.seam_taps(plan.frame_pos, fraction)?;
+                Some(FractionalSourceTaps {
+                    left: taps.left,
+                    right: taps.right,
+                    right_gain: taps.right_gain,
+                })
+            }
+        }
+    }
 }
 
 impl SourceReadPlan {
@@ -731,6 +795,18 @@ impl SourceReadPlan {
         }
     }
 
+    /// Change only the explicit reader circle, retaining the same physical PCM
+    /// and selection. Adoption still proves canonical phase and first taps.
+    pub(crate) fn with_effective_domain(self, domain: SourceLoopDomain) -> Option<Self> {
+        (self.sample_frames == domain.sample_frames
+            && self.loop_region == domain.region
+            && domain.is_valid())
+        .then_some(Self {
+            loop_period: domain.musical_period,
+            ..self
+        })
+    }
+
     /// Compare actual source addressing and selection, including an unfinished transition.
     ///
     /// Source pins and current timing authority are checked separately by the owning permit.
@@ -739,7 +815,7 @@ impl SourceReadPlan {
             && self.sample_frames == other.sample_frames
             && self.frame_pos == other.frame_pos
             && self.loop_region == other.loop_region
-            && same_loop_period(self.loop_period, other.loop_period)
+            && self.loop_period == other.loop_period
             && self.seek_mode == other.seek_mode
             && self.selection == other.selection
             && self.transition.matches_exact(other.transition)
@@ -753,7 +829,7 @@ impl SourceReadPlan {
         self.channels == other.channels
             && self.sample_frames == other.sample_frames
             && self.loop_region == other.loop_region
-            && same_loop_period(self.loop_period, other.loop_period)
+            && self.loop_period == other.loop_period
             && self.selection == other.selection
     }
 
@@ -842,6 +918,22 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        if self.loop_period.is_mapped()
+            && (!self.domain().is_valid()
+                || !playback.matches_domain(self.domain())
+                || self.channels == 0
+                || self.channels != sample.channels
+                || self.sample_frames != sample.frame_count()
+                || buffers.len() < self.channels
+                || buffers
+                    .iter()
+                    .take(self.channels)
+                    .any(|buffer| buffer.len() < output_frames))
+        {
+            return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+        }
+        let tap_plan = PreparedSourceTapPlan::new(self)
+            .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
         debug_assert!(playback.matches_domain(self.domain()));
         debug_assert_eq!(sample.frame_count(), self.sample_frames);
@@ -854,6 +946,37 @@ impl SourceReadPlan {
         if !playback.can_read_frames(output_frames) {
             return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
         }
+        // The exact mapped seam is fallible at this public copied-plan boundary.
+        // Validate the entire requested chunk before changing any output buffer.
+        // The admitted scalar path retains its preceding single-pass work.
+        if self.loop_period.is_mapped() {
+            for offset in 0..output_frames {
+                let position = position_at(offset)
+                    .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
+                let plan = Self {
+                    frame_pos: position.frame,
+                    seek_mode: position.seek_mode,
+                    ..self
+                };
+                let taps = tap_plan
+                    .taps(plan, position.fraction)
+                    .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
+                for channel in 0..self.channels {
+                    if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
+                        #[cfg(test)]
+                        observe_tap(taps.left, channel, false, false);
+                        return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+                    }
+                    if let Some(right) = taps.right
+                        && !plan.tap_available_with_readers(sample, readers, right, channel)
+                    {
+                        #[cfg(test)]
+                        observe_tap(right, channel, true, false);
+                        return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+                    }
+                }
+            }
+        }
         let tempo_ratio = playback.tempo_ratio();
         for frame in 0..output_frames {
             let position = position_at(frame)
@@ -863,12 +986,15 @@ impl SourceReadPlan {
                 seek_mode: position.seek_mode,
                 ..self
             };
+            let taps = tap_plan
+                .taps(plan, position.fraction)
+                .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             let transition_gains = self.transition.gains_at_output_offset(frame, tempo_ratio);
             for (channel, buffer) in buffers.iter_mut().enumerate().take(self.channels) {
-                buffer[frame] = plan.sample_fractional_with_gains(
+                buffer[frame] = plan.sample_at_taps_with_gains(
                     sample,
                     readers,
-                    position.fraction,
+                    taps,
                     transition_gains,
                     channel,
                 );
@@ -973,6 +1099,8 @@ impl SourceReadPlan {
         if !playback.can_read_frames(output_frames) {
             return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
         }
+        let tap_plan = PreparedSourceTapPlan::new(self)
+            .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
         for offset in 0..output_frames {
             let position = position_at(offset)
                 .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
@@ -981,7 +1109,9 @@ impl SourceReadPlan {
                 seek_mode: position.seek_mode,
                 ..self
             };
-            let taps = plan.fractional_taps(position.fraction);
+            let taps = tap_plan
+                .taps(plan, position.fraction)
+                .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             for channel in 0..self.channels {
                 if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
                     #[cfg(test)]
@@ -1160,6 +1290,27 @@ impl SourceReadPlan {
 
     /// The bounded live-policy preflight uses this same interpolation path after
     /// validating coverage. It does not record a productive source-read receipt.
+    pub(crate) fn try_sample_fractional_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        fraction: f64,
+        transition_progress: f64,
+        channel: usize,
+    ) -> Option<f32> {
+        let taps = self.try_fractional_taps(fraction)?;
+        Some(self.sample_at_taps_with_gains(
+            sample,
+            readers,
+            taps,
+            self.transition.gains_at(transition_progress),
+            channel,
+        ))
+    }
+
+    /// Historical scalar fixtures use the same checked implementation. Productive
+    /// readers and conversion preflight propagate failure explicitly instead.
+    #[cfg(test)]
     pub(crate) fn sample_fractional_with_readers(
         self,
         sample: &SampleBuffer,
@@ -1168,24 +1319,25 @@ impl SourceReadPlan {
         transition_progress: f64,
         channel: usize,
     ) -> f32 {
-        self.sample_fractional_with_gains(
+        assert!(!self.loop_period.is_mapped());
+        self.try_sample_fractional_with_readers(
             sample,
             readers,
             fraction,
-            self.transition.gains_at(transition_progress),
+            transition_progress,
             channel,
         )
+        .expect("valid legacy scalar fixture taps")
     }
 
-    fn sample_fractional_with_gains(
+    fn sample_at_taps_with_gains(
         self,
         sample: &SampleBuffer,
         readers: StemReadSets<'_>,
-        fraction: f64,
+        taps: FractionalSourceTaps,
         transition_gains: (f32, f32),
         channel: usize,
     ) -> f32 {
-        let taps = self.fractional_taps(fraction);
         #[cfg(test)]
         observe_tap(
             taps.left,
@@ -1216,8 +1368,19 @@ impl SourceReadPlan {
     }
 
     /// The single authority for both executed interpolation addresses and coverage checks.
-    pub(crate) fn fractional_taps(self, fraction: f64) -> FractionalSourceTaps {
-        if let Some(period) = self.loop_period
+    pub(crate) fn try_fractional_taps(self, fraction: f64) -> Option<FractionalSourceTaps> {
+        if let Some(period) = self.loop_period.mapped_period() {
+            if self.seek_mode != ExplicitSeekMode::Normal {
+                return None;
+            }
+            let taps = period.seam_taps(self.frame_pos, fraction, self.loop_region)?;
+            return Some(FractionalSourceTaps {
+                left: taps.left,
+                right: taps.right,
+                right_gain: taps.right_gain,
+            });
+        }
+        if let Some(period) = self.loop_period.scalar_period()
             && period != self.loop_region.len() as f64
             && self.seek_mode == ExplicitSeekMode::Normal
         {
@@ -1232,11 +1395,11 @@ impl SourceReadPlan {
                 .min(self.loop_region.len() - 1);
             if phase >= last as f64 {
                 let alpha = (phase - last as f64) / (period - last as f64);
-                return FractionalSourceTaps {
+                return Some(FractionalSourceTaps {
                     left: self.loop_region.start + last,
                     right: Some(self.loop_region.start),
                     right_gain: alpha as f32,
-                };
+                });
             }
         }
         let frame = |offset| {
@@ -1248,11 +1411,18 @@ impl SourceReadPlan {
                 self.seek_mode,
             )
         };
-        FractionalSourceTaps {
+        Some(FractionalSourceTaps {
             left: frame(0),
             right: (fraction != 0.0).then(|| frame(1)),
             right_gain: fraction as f32,
-        }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fractional_taps(self, fraction: f64) -> FractionalSourceTaps {
+        assert!(!self.loop_period.is_mapped());
+        self.try_fractional_taps(fraction)
+            .expect("valid legacy scalar fixture taps")
     }
 
     /// Fills preallocated planar buffers with integer source-frame reads, before varispeed.
@@ -1320,7 +1490,7 @@ mod tests {
             sample_frames: 6,
             frame_pos,
             loop_region: FrameRange { start: 2, end: 5 },
-            loop_period: None,
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::Physical,
             seek_mode,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
@@ -1423,7 +1593,9 @@ mod tests {
     #[test]
     fn copied_read_plan_requires_exact_virtual_period_identity() {
         let original = SourceReadPlan {
-            loop_period: Some(3.25),
+            loop_period: crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                Some(3.25),
+            ),
             ..plan(3, ExplicitSeekMode::Normal)
         };
         for period in [
@@ -1432,14 +1604,163 @@ mod tests {
             Some(f64::from_bits(3.25_f64.to_bits() + 1)),
         ] {
             let changed = SourceReadPlan {
-                loop_period: period,
+                loop_period: SourceReaderPeriod::from_scalar_period(period),
                 ..original
             };
             assert!(!original.matches_exact(changed));
             assert!(!original.matches_source_contract(changed));
         }
-        assert_eq!(original.domain().musical_period, Some(3.25));
+        assert_eq!(original.domain().musical_period.scalar_period(), Some(3.25));
         assert!(original.matches_exact(original));
+    }
+
+    fn rational_period(numerator: u128, denominator: u128) -> SourceReaderPeriod {
+        use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
+        SourceReaderPeriod::MappedRational(
+            MappedReaderPeriod::new(
+                Integer::from_u128(numerator).unwrap(),
+                Integer::from_u128(denominator).unwrap(),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn rational_reader_uses_its_exact_seam_for_full_mix_and_each_stem_selection() {
+        let sample = stereo_sample(1.0);
+        let stems = prepared_stems(&sample);
+        let rational = SourceReadPlan {
+            frame_pos: 5,
+            loop_period: rational_period(31, 10),
+            ..plan(2, ExplicitSeekMode::Normal)
+        };
+        let scalar = SourceReadPlan {
+            loop_period: SourceReaderPeriod::from_scalar_period(Some(3.25)),
+            ..rational
+        };
+        // phase=3+1/16; last=2; alpha=(17/16)/(11/10)=85/88.
+        let expected_gain = (85.0_f64 / 88.0) as f32;
+        let taps = rational.try_fractional_taps(0.0625).unwrap();
+        assert_eq!(taps.left, 4);
+        assert_eq!(taps.right, Some(2));
+        assert_eq!(taps.right_gain.to_bits(), expected_gain.to_bits());
+        assert_ne!(taps, scalar.try_fractional_taps(0.0625).unwrap());
+        assert!(!rational.matches_source_contract(scalar));
+        assert!(!rational.matches_exact(scalar));
+        for mask in [0, STEM_MASK_MELODY, full_stem_available_mask()] {
+            for selection in [
+                StemRenderSelection::full_mix(),
+                StemRenderSelection::for_stems(&stems, mask),
+            ] {
+                let selected = SourceReadPlan {
+                    selection,
+                    ..rational
+                };
+                for channel in 0..2 {
+                    let readers = StemReadSets::new(Some(&stems), None);
+                    let left = selected.sample_at_frame_with_gains(
+                        &sample,
+                        readers,
+                        4,
+                        (0.0, 1.0),
+                        channel,
+                    );
+                    let right = selected.sample_at_frame_with_gains(
+                        &sample,
+                        readers,
+                        2,
+                        (0.0, 1.0),
+                        channel,
+                    );
+                    let expected = left + (right - left) * expected_gain;
+                    assert_eq!(
+                        selected
+                            .try_sample_fractional_with_readers(
+                                &sample, readers, 0.0625, 0.0, channel,
+                            )
+                            .unwrap()
+                            .to_bits(),
+                        expected.to_bits(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rational_reader_refuses_bad_pairs_and_preserves_physical_equal_period_taps() {
+        let physical = plan(4, ExplicitSeekMode::Normal);
+        let rational = SourceReadPlan {
+            loop_period: rational_period(3, 1),
+            ..physical
+        };
+        for fraction in [0.0, -0.0, 0.25, 0.75] {
+            assert_eq!(
+                physical.try_fractional_taps(fraction),
+                rational.try_fractional_taps(fraction),
+            );
+        }
+        assert!(rational.try_fractional_taps(0.0).unwrap().right.is_none());
+        assert!(!rational.matches_exact(physical));
+        assert!(
+            rational
+                .domain()
+                .project_normal_position(FractionalSourcePosition {
+                    frame: 4,
+                    fraction: 0.0,
+                    seek_mode: ExplicitSeekMode::Normal,
+                })
+                .is_none()
+        );
+        let shorter = SourceReadPlan {
+            frame_pos: 5,
+            loop_period: rational_period(31, 10),
+            ..physical
+        };
+        assert!(shorter.try_fractional_taps(0.125).is_none());
+        assert!(shorter.try_fractional_taps(f64::NAN).is_none());
+        assert!(
+            SourceReadPlan {
+                seek_mode: ExplicitSeekMode::BeforeLoop,
+                ..shorter
+            }
+            .try_fractional_taps(0.0)
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn rational_full_and_checked_readers_reject_a_different_copied_domain_before_output() {
+        let sample = stereo_sample(1.0);
+        let read = SourceReadPlan {
+            loop_period: rational_period(31, 10),
+            ..plan(3, ExplicitSeekMode::Normal)
+        };
+        let mut scalar = SourcePlayback::new(3, ExplicitSeekMode::Normal, 1.0);
+        assert!(scalar.configure(6, read.loop_region));
+        for checked in [false, true] {
+            let mut buffers = [vec![17.0; 4], vec![19.0; 4]];
+            let original = buffers.clone();
+            let result = if checked {
+                read.fill_fractional_buffers_checked_with_readers(
+                    &sample,
+                    StemReadSets::default(),
+                    &scalar,
+                    &mut buffers,
+                    4,
+                )
+            } else {
+                read.fill_fractional_buffers_with_readers(
+                    &sample,
+                    StemReadSets::default(),
+                    &scalar,
+                    &mut buffers,
+                    4,
+                )
+            };
+            assert!(result.is_err());
+            assert_eq!(buffers, original);
+        }
     }
 
     #[test]
@@ -1460,7 +1781,10 @@ mod tests {
             ] {
                 let read_plan = SourceReadPlan {
                     frame_pos: frame,
-                    loop_period: Some(period),
+                    loop_period:
+                        crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                            Some(period),
+                        ),
                     transition,
                     ..plan(2, ExplicitSeekMode::Normal)
                 };
@@ -1494,7 +1818,10 @@ mod tests {
         for period in [0.25, 1.0, 1.75] {
             let read_plan = SourceReadPlan {
                 loop_region: FrameRange { start: 2, end: 3 },
-                loop_period: Some(period),
+                loop_period:
+                    crate::audio_engine::source_reader::SourceReaderPeriod::from_scalar_period(
+                        Some(period),
+                    ),
                 ..plan(2, ExplicitSeekMode::Normal)
             };
             for phase in [0.0, period * 0.25, period * 0.999] {
