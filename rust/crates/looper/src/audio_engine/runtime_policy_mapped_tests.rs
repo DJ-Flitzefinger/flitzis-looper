@@ -25,6 +25,9 @@ const DYADIC_PERIOD: f64 = 1.0 / 64.0;
 const BLOCK: usize = 512;
 const PCM_FRAMES: usize = 4096;
 
+#[path = "runtime_policy_variable_phase_tests.rs"]
+mod variable_phase_tests;
+
 struct DryMappedPath {
     path: Path,
     jobs: Vec<OfflineAnalysisJob>,
@@ -594,6 +597,8 @@ fn genuine_scalar_to_compact_and_reverse_preserve_actual_e_first_pcm_and_origina
         fixture.path.render(1537);
         assert_mapped_reads(&fixture.path, wide, first, 0);
         let before = fixture.path.voice(0).source_playback;
+        assert!(before.phase_reference_current(&fixture.path.timeline));
+        assert!(fixture.path.voice(0).phase_launch_qualified);
         let plan = latest_plan(&fixture.path, 0);
         let first_pcm = fixture.path.render(1);
         // A separate freshly converted path reaches the same state through public execution.
@@ -604,6 +609,14 @@ fn genuine_scalar_to_compact_and_reverse_preserve_actual_e_first_pcm_and_origina
             reverse.path.voice(0).source_playback.position(),
             before.position(),
         );
+        assert!(
+            reverse
+                .path
+                .voice(0)
+                .source_playback
+                .phase_reference_current(&reverse.path.timeline)
+        );
+        assert!(reverse.path.voice(0).phase_launch_qualified);
         let source = reverse
             .path
             .voice(0)
@@ -621,6 +634,7 @@ fn genuine_scalar_to_compact_and_reverse_preserve_actual_e_first_pcm_and_origina
             ratio,
         )
         .unwrap();
+        expected.carry_launch_reference_from(&before);
         let target = DYADIC_PERIOD / MASTER;
         if target.to_bits() != expected.rate_target().to_bits() {
             assert!(expected.set_target(target));
@@ -1001,8 +1015,7 @@ fn cancelled_pending_ready_map_recaptures_unavailable_once_then_1500_quiet_polls
 }
 
 #[test]
-fn cancellation_after_actual_adoption_keeps_effective_pin_snapshot_and_actual_pcm_without_requeue()
-{
+fn cancellation_after_mode_only_adoption_recaptures_once_and_keeps_effective_pin_and_pcm() {
     let mut fixture = DryMappedPath::new(2, 23);
     let mut reference = DryMappedPath::new(2, 23);
     let snapshot = fixture.adopt(true, 2);
@@ -1019,10 +1032,23 @@ fn cancellation_after_actual_adoption_keeps_effective_pin_snapshot_and_actual_pc
     let playback = fixture.path.voice(0).source_playback;
     fixture.jobs[0].cancel();
     assert!(!snapshot.map_current(0));
-    let observed = snapshot.observation();
+    assert!(!playback.is_mapped_phase());
+    let unavailable = automatic_mapped(&fixture.path);
+    assert!(!Arc::ptr_eq(&snapshot, &unavailable));
+    assert_eq!(unavailable.revision(), snapshot.revision() + 1);
+    assert_eq!(
+        unavailable.map_preparation(0).class,
+        RuntimeMapClass::Unavailable
+    );
+    service(&mut fixture.path);
+    let observed = unavailable.observation();
+    assert_eq!(
+        observed.unwrap().reason,
+        Some(RuntimePolicyError::Unsupported)
+    );
     for _ in 0..64 {
-        assert!(Arc::ptr_eq(&snapshot, &automatic_mapped(&fixture.path)));
-        assert_eq!(snapshot.observation(), observed);
+        assert!(Arc::ptr_eq(&unavailable, &automatic_mapped(&fixture.path)));
+        assert_eq!(unavailable.observation(), observed);
         assert!(fixture.path.source.consumer.is_empty());
         assert!(
             fixture
@@ -2107,7 +2133,7 @@ fn descriptive_productive_actual_e_full_dry_renderer_cohorts_report_median_max_a
     const REPEATS: usize = 3;
     let nominal = BLOCK as f64 / f64::from(RATE);
     for tiny in [false, true] {
-        for lanes in [2, 4, 6, 10, 20] {
+        for lanes in [2, 4, 6, 10] {
             let mut fixture = DryMappedPath::new_with_shape(lanes, 23, tiny);
             let mut seconds = [0.0_f64; REPEATS];
             let mut output = [0.0; BLOCK * 2];

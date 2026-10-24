@@ -22,7 +22,7 @@ integer/fraction source cursor through a binary64 B/S round trip.
 
 ## Non-goals
 
-The later Human hierarchy and shared-grid/unequal-loop/one-shot requirements remain binding in the full Goal. This conversion block's exclusions below do not exclude their separate implementation; existing fixed ratio or mapped creative-offset mode acknowledgement is not complete grid-phase acceptance. Performance acceptance now uses realistic2/4/6 and stress20, with10 when performance-related stress failure warrants it; historical32 timing remains diagnostic while internal32 capacity/correctness bounds remain.
+The later Human hierarchy and shared-grid/unequal-loop/one-shot requirements remain binding in the full Goal. This conversion block's exclusions below do not exclude their separate implementation; existing fixed ratio or mapped creative-offset mode acknowledgement is not complete grid-phase acceptance. Performance optimization targets realistic2/4/6 PADs, with unconditional synthetic stress10 as the maximum workload. Older20 targets and20-to-conditional10 recipes are superseded by the direct Human instruction of2026-10-24. Internal32 capacity/correctness bounds remain; no hard10 product cap is introduced.
 
 This change does not qualify automatic musical analysis, select a new stretcher,
 open Native/pitch/Key-Lock transitions, change master tempo, alter physical loop

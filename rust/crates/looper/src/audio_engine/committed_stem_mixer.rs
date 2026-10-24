@@ -118,7 +118,7 @@ impl RtMixer {
                 voice.active
                     && voice.sample_id == id
                     && (voice.source_playback.is_mapped()
-                        || voice.source_playback.is_static_phase())
+                        || voice.source_playback.has_phase_program())
             })
             || !capture.status.preparation_current()
             || !self.admitted_source_binding_current(id, capture.binding)
@@ -293,12 +293,12 @@ impl RtMixer {
                 && transaction.operation_timing_revision
                     != Some(self.global_rate_timing_revision()))
             || pin.playback.is_mapped()
-            || pin.playback.is_static_phase()
+            || pin.playback.has_phase_program()
             || self.voices.iter().any(|voice| {
                 voice.active
                     && voice.sample_id == id
                     && (voice.source_playback.is_mapped()
-                        || voice.source_playback.is_static_phase())
+                        || voice.source_playback.has_phase_program())
             })
             || !transaction.status.publication.current()
             || !transaction.status.preparation_current()

@@ -56,6 +56,9 @@ impl EndpointResetHistory {
         {
             return Err(unavailable());
         }
+        // This original request declares a new Normal birth. Carry its immutable
+        // launch coordinates through this authorized worker-only phase reset.
+        reset.carry_launch_reference_from(&request.playback);
         let mut plan = self.plan;
         plan.frame_pos = request.plan.loop_region.start;
         plan.seek_mode = ExplicitSeekMode::Normal;
@@ -267,12 +270,12 @@ impl NativeAdapterState {
         endpoint_reset: Option<EndpointResetHistory>,
     ) -> Result<(), RubberBandError> {
         if request.plan.loop_period.is_mapped()
-            || request.playback.is_static_phase()
-            || request.actual_feed.is_some_and(|checkpoint| checkpoint.playback.is_static_phase())
-            || future.0.is_static_phase()
+            || request.playback.has_phase_program()
+            || request.actual_feed.is_some_and(|checkpoint| checkpoint.playback.has_phase_program())
+            || future.0.has_phase_program()
             || future.1.loop_period.is_mapped()
             || history.spans().any(|span| {
-                span.plan.loop_period.is_mapped() || span.playback.is_static_phase()
+                span.plan.loop_period.is_mapped() || span.playback.has_phase_program()
             })
             || !history.is_current()
             || request.mapped_input.is_some()

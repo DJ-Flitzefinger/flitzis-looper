@@ -350,7 +350,7 @@ A temporary borrowed view MAY prepare constants once per reader chunk using at m
 - **AND** the original fallible bounded search, local-probe/MAX rules, endpoint normalization, nominal/exact local-rate guards and terminal refusal SHALL remain unchanged
 - **AND** a skipped endpoint SHALL be evaluated from its own original segment rather than extrapolated from the current one
 
-This prerequisite SHALL NOT add a productive mixer/Native feed/adoption caller or establish callback throughput. Evidence SHALL cover complete consuming reader/endpoint/advance/refresh workloads at 2/4/6 active lanes, stress 20 with performance-related fallback 10, unchanged exact results/first PCM, allocation/layout and explicit 2-MiB compiled-stack gates. Extreme synthetic seam costs SHALL be identified separately. All productive conversion, common-phase, Native, musical, Human and FULL-Goal gates remain required.
+This prerequisite SHALL NOT add a productive mixer/Native feed/adoption caller or establish callback throughput. Evidence SHALL cover complete consuming reader/endpoint/advance/refresh workloads at 2/4/6 active lanes, unconditional synthetic stress 10 as the maximum performance workload, unchanged exact results/first PCM, allocation/layout and explicit 2-MiB compiled-stack gates. Extreme synthetic seam costs SHALL be identified separately. All productive conversion, common-phase, Native, musical, Human and FULL-Goal gates remain required.
 
 ### Requirement: Initial dry conversion uses a complete compact callback path
 A supported running dry cohort MAY adopt the prepared original exact-intersection map at actual E through the existing runtime publication, scheduler and fixed 32-lane claim. Its compact actual-E constructor SHALL preserve the original separate source pair, inverse segment, M0, full original Some(P) domain, finite shifted master horizon, nominal and exact rate guards and first reader taps/gain/PCM. It SHALL use bounded original-map binary searches and small exact arithmetic without a wide constructor, wide validation scan or hidden wide fallback on realtime. A distinct compact anchored mode SHALL retain the original copied layouts and route generic reader, endpoint, advance, journal slice/merge/trim and continuation operations through that compact representation. Reader constants SHALL be prepared once per full or checked chunk using the same interpolation loops. Original geometry SHALL remain separately retained and borrowed for global refresh and endpoint association.
@@ -400,6 +400,14 @@ Stable original prepared-map and reader-domain unavailability MAY suppress autom
 - **AND** the resulting immutable unavailable class SHALL remain quiet until genuine recovery rather than repeat owning SourceChanged work
 - **AND** source and acknowledgement fences SHALL always remain mandatory; only additional map-availability recapture MAY be skipped for completely current effective audio that already retained the immutable map
 
+#### Scenario: Mode adoption and completed phase retain distinct cancellation behavior
+- **GIVEN** an explicit common-phase request has adopted its mapped mode but has not installed its phase programme
+- **WHEN** the original selected delivery is cancelled
+- **THEN** service SHALL recapture the newly unavailable preparation once and retain the preceding effective immutable pin and actual audio
+- **AND** it SHALL NOT certify or suppress missing phase completion from the earlier MODE acknowledgement
+- **GIVEN** the same original request instead completed the actual same-snapshot PHASE claim before cancellation
+- **THEN** complete current service SHALL retain that snapshot, programme and effective pin without redundant queued work, while source/ACK fences remain mandatory
+
 This initial productive intersection SHALL NOT certify general decimal-map coverage, common-grid phase convergence, unequal-loop or one-shot EOF completion, Native/pitch adoption, arbitrary mapped history projection, device/hearing acceptance or the complete SYNC feature. Existing adoption refusals for paused/Hold, Native, pitch, Key Lock, residency conflicts and transitions SHALL remain until their actual contracts are implemented. Later pause/Hold/resume/retrigger/rate/history operations on an admitted dry voice SHALL retain their established source and continuation guards.
 
 ### Requirement: Declared-Q general maps have an explicit exact reader domain
@@ -441,7 +449,7 @@ Each general query SHALL prove its exact rational source coordinate is inside th
 ### Requirement: General compact programs preserve original master and bounded ownership
 The distinct general epoch SHALL retain the original raw pair, original inverse segment, M0 and unchanged actual master evaluator. It SHALL evaluate U=B(raw)-B*+(M(n)-M0), k=floor(U/Q) and b=B(raw)+(M(n)-M0)-kQ exactly, including the original binary64 master operation order and cast plateaus. Original geometry SHALL remain separately retained; a copied span MAY contain a tagged exact dyadic cycle product and use the copied reader certificate for local queries. Program bytes SHALL NOT be interpreted as legacy float fields. Generic endpoint, advance, refresh, pause/resume, master replacement and journal operations SHALL preserve the complete domain and original scalar witness without wide realtime inverse work or a new owner, pointer, scheduler or reader pipeline.
 
-The general class SHALL separately admit complete shifted-horizon source/beat grids in [-126,0] and coefficient magnitudes below2^126. A rational U coefficient bound below2^128 SHALL prove the nonnegative exact dyadic cycle coefficient fits128 bits. New checked512-bit phase/forward scratch SHALL enforce forward numerator below2^386 and denominator below2^380; separate checked1024-bit rational normalization and binary32 seam arithmetic SHALL enforce their own bounds. These new proofs SHALL NOT broaden the existing compact intersection's256/512-bit theorem or hide a6400-bit fallback. Mapped spans SHALL remain at most240 bytes and32 optional copied playback values at most16KiB, with Copy/no destructor. Actual compiled2MiB stack, zero observed Rust allocation requests and complete consuming2/4/6/stress20 with performance fallback10 evidence SHALL remain required, with negative extreme seam costs retained honestly.
+The general class SHALL separately admit complete shifted-horizon source/beat grids in [-126,0] and coefficient magnitudes below2^126. A rational U coefficient bound below2^128 SHALL prove the nonnegative exact dyadic cycle coefficient fits128 bits. New checked512-bit phase/forward scratch SHALL enforce forward numerator below2^386 and denominator below2^380; separate checked1024-bit rational normalization and binary32 seam arithmetic SHALL enforce their own bounds. These new proofs SHALL NOT broaden the existing compact intersection's256/512-bit theorem or hide a6400-bit fallback. Mapped spans SHALL remain at most240 bytes and32 optional copied playback values at most16KiB, with Copy/no destructor. Actual compiled2MiB stack, zero observed Rust allocation requests and complete consuming2/4/6 plus unconditional stress10 evidence SHALL remain required, with negative extreme seam costs retained honestly.
 
 #### Scenario: A general map is adopted or replaced at the actual execution frame
 - **WHEN** the original runtime snapshot and complete fixed32 capture pass source/ACK/request/master freshness, first-reader checks and the existing global-before-placement claim
@@ -486,14 +494,14 @@ The separate physical splitter SHALL prove A*d<=n<Z*d exactly before a single RN
 - **AND** immutable preparation failure SHALL remain distinct from progress-retryable raw/seam/E/horizon failure
 - **AND** runtime Q reduction, owning allocation, final-owner destruction and unbounded callback work SHALL remain forbidden
 
-Physical spans SHALL remain at most240 bytes, epochs128 bytes and32 optional copied playbacks at most16KiB, Copy with no destructor. Actual compiled Debug/Release2MiB, observed Rust allocation requests and complete consuming2/4/6/stress20 with conditional10 evidence remain required. Negative declared20/10, tiny20 or new physical timing results SHALL remain explicit open resource gates. This physical extent branch grants no common phase/bar commensurability, finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission, musical/device/Human acceptance or complete SYNC/REALTIME acceptance. All FULL-Goal obligations remain.
+Physical spans SHALL remain at most240 bytes, epochs128 bytes and32 optional copied playbacks at most16KiB, Copy with no destructor. Actual compiled Debug/Release2MiB, observed Rust allocation requests and complete consuming2/4/6 plus unconditional stress10 evidence remain required. Earlier declared20/10, tiny20 and physical measurements SHALL remain unchanged historical evidence. The current resource gates concern2/4/6 and maximum stress10; historical20 results SHALL NOT require optimization for20. This physical extent branch grants no common phase/bar commensurability, finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission, musical/device/Human acceptance or complete SYNC/REALTIME acceptance. All FULL-Goal obligations remain.
 
 ### Requirement: Qualified dry static SYNC converges without changing its declared grid
-After the original Fixed request has adopted its ordinary rate and completed its existing active-frame glide, a later original all-participant policy claim MAY install an exact static correction. It SHALL use the effective source's existing signed scalar origin O, frames per quarter F, unchanged actual master projection M and canonical raw source pair s0 at actual E. Its target SHALL be the declared canonical source grid, not a newly invented downbeat at the loop marker. In loop-relative coordinates the target offset SHALL be minus the original beat at loop start. Arbitrary activation error SHALL NOT become an intentional musical offset.
+After the original Fixed request has adopted its ordinary rate and completed its existing active-frame glide, a later original all-participant policy claim MAY install an exact static correction. It SHALL retain the effective source's original signed scalar origin O and frames per quarter F as geometry provenance. The target SHALL preserve the actual intentional selected-A launch at original T: A+F*(M(n)-M(T)). M(T) SHALL be captured from the sole scheduler before preparation, never inferred from the activation cursor or reevaluated using a later tempo projection. This launch reference SHALL NOT certify a new grid/downbeat or turn arbitrary activation drift into an intentional offset.
 
 The admitted first class SHALL retain its actual Physical or already authorized ScalarMusical reader domain. The exact decoded product F*Q SHALL equal that domain's source-frame period P, with the existing compatible-cycle Q, P in [.5,2^64] and positive Q below2^64. A rounded compatibility product, manual/TAP metadata or ready variable map SHALL NOT manufacture accepted timing, a new reader period or bar-phase authority. Nonclosing cases SHALL keep their preceding ordinary audio and unconfirmed phase.
 
-Let u=(M(n)-M(E))*F and D be a feasible signed representative of O+M(E)*F-s0 modulo P. The copied clock SHALL evaluate s0+u+sign(D)*min(u/2^k,abs(D)) from immutable anchors before its own source modulo. It SHALL select the nearest feasible winding, positive on equal distance, and try the other winding when necessary. It SHALL require k from6 through64, exact analytic source rate and corrected rate in [.5,2], analytic correction at most.03125 source frame per output frame, and a finite capture within the admitted output horizon. Actual master cast plateaus SHALL remain plateaus. These are bounds on the analytic rate; they SHALL NOT falsely require every discrete binary64 master increment to be positive. The unwrapped phase SHALL remain continuous, with bounded rate steps; no seek, restart, stop, master rewrite or hidden phase clipping is permitted.
+Let u=(M(n)-M(E))*F and D be a feasible signed representative of A+F*(M(E)-M(T))-s0 modulo P. The copied clock SHALL evaluate s0+u+sign(D)*min(u/2^k,abs(D)) from immutable anchors before its own source modulo. It SHALL select the nearest feasible winding, positive on equal distance, and try the other winding when necessary. It SHALL require k from6 through64, exact analytic source rate and corrected rate in [.5,2], analytic correction at most.03125 source frame per output frame, and a finite capture within the admitted output horizon. Actual master cast plateaus SHALL remain plateaus. These are bounds on the analytic rate; they SHALL NOT falsely require every discrete binary64 master increment to be positive. The unwrapped phase SHALL remain continuous, with bounded rate steps; no seek, restart, stop, master rewrite or hidden phase clipping is permitted.
 
 #### Scenario: An ordinary Fixed glide precedes phase adoption
 - **WHEN** a new raw Fixed request is applied, including one whose target already matches
@@ -556,3 +564,237 @@ PHASE SHALL be considered only for the complete already-current cohort. Its orig
 - **AND** a real older Mapped voice converting to Fixed beside a newly born Fixed source SHALL follow the same separation
 
 Nominal unsettled feedback SHALL NOT alone suppress phase service: invalid static custody can also be unsettled. Without a separately proved ordinary-glide observation the original bounded Busy retry behavior SHALL remain. No elapsed-time, rate-equality or phase-pending shortcut grants service or phase acknowledgement.
+
+### Requirement: Recovery-closed dry variable common phase preserves original owners
+
+A genuinely requested variable common-phase programme SHALL use the unchanged
+actual Transport master and original trusted source map, own loop Q and reader
+domain. It SHALL preserve the actual-E source pair, raw fraction bits, first taps,
+gains and all-channel PCM. It SHALL NOT establish a new source map, read permit,
+master, source ownership, timing ACK or public phase acknowledgement.
+
+The useful initial class SHALL require exact integer1<=Q<2^48 and an off-realtime
+qualification bound to the SAME prepared compact/general/physical geometry.
+Existing compact preparation preference SHALL remain supported. Phase metadata
+failure SHALL NOT make ordinary mapped preparation unavailable. Original knots,
+P/Q, physical/musical/rational reader tags and original scalar witness SHALL remain.
+
+The intentional target SHALL be B(A)+M(n)-M(T) modulo own Q, using the original
+exact loop-start inverse and captured scheduler launch master. Canonical source
+grid origin D SHALL remain independent provenance, not an unadjusted phase target.
+Selected starts SHALL NOT thereby certify new grid/downbeat metadata. Quarter
+qualification SHALL retain integer-Q lattice closure. A bar reference SHALL require
+uniform known4/4, consistent original normalized downbeat phase and Q divisible by4.
+Labels-3 and1 SHALL describe the same modulo4 origin, never different bar zeroes.
+Original exact positive-interior metadata SHALL qualify the reference; rounded
+Evaluation or saved wishes SHALL NOT. Unknown/inconsistent bar metadata MAY retain
+quarter-only convergence and SHALL NOT claim bar proof. Arbitrary rational physical
+Q SHALL remain legal ordinary geometry without being called quarter/bar aligned.
+
+#### Scenario: Unequal loops retain one unwrapped master
+
+- **GIVEN** qualified8-bar and64-bar maps on independent PAD/voice state
+- **WHEN** their dry common-phase programmes advance
+- **THEN** both SHALL evaluate the SAME actual unwrapped M and own Q32/Q256
+- **AND** a shorter wrap SHALL NOT reset either master or longer source
+- **AND** source knots, partitions, cast plateaus and reader topology SHALL retain their exact contracts
+- **AND** numeric capture SHALL NOT itself certify actual-read or Human phase acceptance
+
+### Requirement: Variable correction remains bounded and ordinarily recoverable
+
+If a global candidate is selected, it SHALL evaluate the following exact law for
+beta0=B(raw), actual M0=M(E) and t=M(n)-M0:
+beta=beta0+t+sign(e)*min(t/2^k,abs(e)), where e is a feasible signed representative
+of B(A)+M0-M(T)-beta0 modulo own Q. Nearest feasible winding SHALL be tried first with
+positive ties, then the other direction if needed;6<=k<=64. Exact nominal and
+corrected rates SHALL remain[.5,2], additional derivative at most.03125 source
+frame/output frame, and actual finite-horizon capture SHALL be proved.
+
+Mixed saturated.5/2 maps SHALL NOT use an invalid global correction. A bounded
+candidate MAY use an original eligible dyadic seed and delayed full window of
+width(2^k+sign)*delta, delta a power of two. It SHALL wait at ordinary rate until
+its next full entry, preserve continuous unwrapped phase, and clamp cumulative
+correction exactly on capture. Practical waiting/settling quality remains an open
+acceptance gate. Legitimate map/control knots do not promise C1 continuity.
+
+Every admitted programme SHALL prove that ALL its emitted RN source pairs remain
+accepted by the SAME original ordinary mapped source-grid admission. The initial
+class SHALL certify exact dyadic forward frame slopes Fj=aj*2^fj, common odd
+G=gcd(aj) off realtime, and runtime odd_den(beta0) dividing its numerator times G.
+Exact source intercepts, actual master grid, correction/window/capture/wrap branches,
+zero cases and canonical/virtual whole bounds SHALL participate in recovery Gout.
+Require Gout>=GR=max(-126,Tsource_max-126) and actual old sourceBase.refine(GR).
+New metadata SHALL NOT substitute a different subset grid for that old proof.
+
+The recovery/rate gate SHALL precede512-bit phase evaluation and prove r+k<=74,
+forward N<2^461 and D<2^454. Source results SHALL be exactly normalized onto GR
+with coefficient below2^126 BEFORE the unchanged original reader splitter receives
+N126/D127. Old386/380,-432 and physical reader1024 contracts SHALL NOT be widened.
+No unadmitted516/509 path, floating remainder, rounded inverse, productive6400-bit
+fallback or discarded tiny residue SHALL be used. Raw-0 identity SHALL remain.
+
+#### Scenario: Saturated maps require a qualified window or truthful refusal
+
+- **GIVEN** a map with saturated nominal rates for which global correction is invalid
+- **WHEN** an original eligible window candidate is considered
+- **THEN** admission SHALL require the unchanged exact rate, ordinary recovery-grid and reader proofs for every emitted pair
+- **AND** an admitted programme SHALL wait at ordinary rate until its next full window and clamp cumulative correction exactly on capture
+- **AND** an unqualified candidate SHALL leave the original clock and ownership untouched without claiming practical settling
+
+### Requirement: Copied phase state stays bounded and temporally truthful
+
+A distinct phase64-byte payload SHALL retain the raw pair, original inverse segment,
+exact Q and checked configuration. Only its frozen projection and immutable E MAY
+reconstruct M0. ALL older anchored modes SHALL preserve their own fields and
+semantics. Phase SHALL NOT use old shifted pause/reprojection or reinterpret an
+old payload. Epoch<=128, span<=240 and32 copies<=16KiB SHALL remain. A typed
+nonowning launch-reference payload MAY extend Playback from424 to488 bytes;
+it SHALL retain original T/master, monotonic master-coordinate generation and
+the actual target map's original start inverse. Map replacement at the same A
+SHALL re-certify that inverse. Bare phase epochs/spans SHALL NOT infer a missing
+reference or canonical-zero fallback. Full copy equality SHALL include reference
+identity. Unadvanced-birth freshness SHALL belong to actual voice-effect custody,
+not copied clocks; worker rewind/replay SHALL NOT change that actual-read fact.
+Copied state SHALL NOT own a map/source/permit or allocate, lock, perform I/O/GIL,
+scan unbounded data or destroy a final owner in the callback.
+
+Discontinuous master coordinates SHALL change a checked generation without ABA;
+continuous tempo changes SHALL retain generation and captured M(T). Clear/recreate
+and direct anchor helpers SHALL preserve this rule. Only a genuinely same-T,
+unadvanced DRY scalar birth with unchanged A/domain and no active/retained Native,
+FIFO, source-lane or pending history ownership MAY bind directly to final bootstrap
+M(T). A seek/domain edit, including same-frame away/back, SHALL revoke eligibility.
+Stale pending scalar work MAY retain its ordinary attack; it SHALL NOT gain phase
+permission. Ineligible voices SHALL retain immutable audio/history references and
+truthfully unavailable phase. General reanchor and Native-owner-consistent rebinding
+remain required milestone work, not accepted exclusions or complete SYNC.
+
+The exact two-inverse debt SHALL use E=(J-mT*c)*a+M0*a*c-I*c and H=Q*a*c,
+where beta0=I/a and B(A)=J/c on the original beat grid. Uncaptured evaluation
+SHALL retain its original denominator. Saturation comparisons MAY multiply by c
+within459 bits; captured evaluation SHALL cancel a symbolically and reconstruct
+the original target with denominator c, never round a new anchor. Nonzero debt
+SHALL separately prove target-start common-odd and recovery closure. Zero debt
+SHALL retain its exact raw-based identity and closure. Original512-bit source
+normalization/reader limits and all first-pair/PCM guards remain unchanged.
+
+A safe32-byte span programme MAY store original-grid source cycle*Q128 plus window
+seed and typed control information. Local position/derivative/history SHALL use
+one programme region. Window entry is right-sided correcting, exit is outside,
+exact capture is captured; knot/wrap rules remain original. Fixed NEXT boundary
+predicates SHALL be strictly future and monotone even at actual master plateaus.
+Repeating region equality SHALL NOT substitute for those predicates. Refresh SHALL
+not emit zero-length spans or revisit the same edge indefinitely.
+
+#### Scenario: Numeric currentness does not grant actual launch qualification
+
+- **GIVEN** copied launch provenance whose numeric master reference is current but whose original T predates admission
+- **WHEN** the ordinary start applies or a worker replays copied history
+- **THEN** numeric currentness SHALL NOT make the actual voice phase-qualified or newly unadvanced
+- **AND** changed master generations and same-frame seek/domain ABA SHALL revoke eligibility without rewriting immutable Native/history copies
+- **AND** only the stated genuinely same-T unadvanced dry birth conditions MAY permit bootstrap rebinding
+
+### Requirement: Variable phase uses the original whole policy claim
+
+Common-phase eligibility SHALL be shared by stage, service and status. Fixed SHALL
+retain its existing phase requirement. Mapped SHALL require phase only when its
+real projected request has policy_sync true OR policy_realtime_bpm true. Legacy/
+Off SHALL not. Parent/local request masks, actual BPM Lock/master/source/readers
+remain separately qualified. Nullable None/None at ANY revision SHALL retain old
+creative mapped behavior. Global revision alone or bare Mapped SHALL NOT enable it.
+
+The original all32 MODE stage SHALL precede a later same-snapshot PHASE stage when
+no compatible programme exists. PHASE SHALL repeat the original full source/map/
+ACK/raw request/global-before-placement/retirement claim atomically. Mapped mode
+ACK SHALL NOT suppress required later phase service. Equal qualifying publication
+MAY retain numeric trajectory and refresh ONLY exact full-snapshot/global-fence
+service custody. A qualifying phase-Mapped to nullable Mapped request SHALL first
+ordinary-rebase at actual E; correction SHALL NOT remain hidden behind a new ACK.
+Cursor-dependent raw-grid/common-odd/debt/window/recovery/horizon failures SHALL
+remain progress-retryable with NO immutable Unsupported/MappedRate token. Existing
+whole-map nominal-rate evidence SHALL retain its distinct proof.
+
+#### Scenario: Mode acknowledgement cannot substitute for the phase claim
+
+- **GIVEN** a genuinely requested qualifying common-phase cohort whose MODE effect applied
+- **WHEN** the same snapshot is serviced for PHASE
+- **THEN** the complete original source/map/ACK/request/global/retirement claim SHALL be checked again atomically
+- **AND** a stale participant SHALL leave every preceding clock and request untouched
+- **AND** a later nullable creative Mapped request SHALL ordinary-rebase at its actual E before acknowledgement rather than retain hidden correction
+
+### Requirement: Pause and ordinary effects retain a real escape from phase
+
+An actual mapped phase pause/Hold SHALL suspend its exact copied pair/programme
+and clear service custody through original invalidation. A successful resume SHALL
+preflight ALL changed original causes/source/ACK/readers and rebase the frozen pair
+to ordinary mapping under LIVE M(R), without old virtual-M/address shifts. Failed
+resume SHALL leave the cohort paused/untouched and retain original ticket ownership.
+Duplicate/no-effect gestures SHALL not rebase unrelated lanes. Later original PHASE
+service MAY freshly converge. Real global/master/request effects SHALL similarly
+ordinary-recover on copies under their existing complete claim; true no-ops SHALL
+preserve the exact programme/projection. Failed effects SHALL preserve preceding
+clocks/owners/requests in full.
+
+Recovery SHALL preserve ANY-already-mapped scalar witness semantics. Current
+compact geometry P MAY differ from retained birth scalar P. Numerical recovery
+SHALL use CURRENT effective geometry/domain and carry the PREVIOUS independently
+validated scalar witness; it SHALL NOT fake a new scalar birth or weaken old pure
+birth constructors. Current-E and suspended-live-R APIs SHALL retain their distinct
+preconditions. Different target geometry and actual seam/domain/readers STILL
+require their original compatibility checks; this recovery theorem waives none.
+
+A genuine Legacy/Off effect MAY bypass ONLY requested pitch/Key Lock preferences
+for productive actual dry mapped/static playback. Actual pitch/Key Lock, wide-mode,
+pending/queued/Native/retained/resident/Hold/paused/source/ACK/readers/global/claim/
+retirement guards SHALL remain. This SHALL admit no Native work. Requested wishes
+SHALL remain stored and unacknowledged until their own operation applies. Fresh
+supported Native/stem actions after OFF SHALL use their original owners.
+
+#### Scenario: Pause and resume preserve the frozen source pair
+
+- **GIVEN** an admitted mapped phase voice paused through its original successful claim
+- **WHEN** output time advances while paused and an ordinary resume is requested
+- **THEN** the paused exact source pair SHALL remain frozen and successful resume SHALL use live M(R) under the full original source/ACK/reader claim
+- **AND** recovery SHALL retain the independently validated prior scalar witness even when current geometry P differs from its birth P
+- **AND** a failed resume claim SHALL leave the whole affected cohort paused and untouched, preserving ticket ownership
+
+### Requirement: This dry milestone retains broader acceptance gates
+
+Installed/captured programme custody SHALL NOT set grid_phase_confirmed. New phase
+history, including unity/post-capture, SHALL remain unavailable to unproved Native/
+pitch/stem/preparation paths. Broader decimal/noncommon-odd/fine-input and rational
+quarter contracts, unified qualified actual-read phase witness, finite OneShot/EOF,
+complete Native/pitch/stem integration, practical settling, old/new resource misses,
+device/music/Human and all original FULL-Goal gates SHALL remain explicitly open.
+
+#### Scenario: Numeric phase capture is not musical or Human acceptance
+
+- **GIVEN** a dry programme has captured its numerical target and its original policy claim has applied
+- **WHEN** runtime feedback or milestone status is reported
+- **THEN** programme custody or MODE/PHASE acknowledgements SHALL NOT set grid_phase_confirmed or certify unproved Native/history paths
+- **AND** retained BeatThis B2, music/device/Human and FULL-Goal gates SHALL remain open until their own required evidence and acceptance exist
+
+### Requirement: Productive performance targets six PADs with at most ten under stress
+
+The current optimization target SHALL be productive playback with2/4/6 concurrent
+PADs. Synthetic performance stress tests SHALL run at most10 concurrent PADs and
+SHALL test10 directly and unconditionally. No20-PAD optimization target or20-to-
+conditional10 recipe SHALL remain active. Helpers or architecture SHALL NOT be
+added to pursue the retired20-PAD target.
+
+Historical20 measurements SHALL remain unchanged as historical evidence and SHALL
+NOT be relabeled passed or treated as a current20-PAD acceptance requirement.
+Actual2/4/6 failures and relevant10 stress observations SHALL remain truthful.
+User documentation SHALL state the six-PAD optimization target and warn that more
+than10 simultaneously playing PADs may cause audio glitches or other performance
+problems. This SHALL NOT imply a guarantee for7–10, hardware/music acceptance or a
+new hard10-PAD runtime cap. Original32-voice atomicity/capacity/retirement/layout
+and all other FULL-Goal obligations SHALL remain unchanged.
+
+#### Scenario: Descriptive stress success preserves measured timing failures
+
+- **GIVEN** productive cohorts of2/4/6 PADs and the unconditional10-PAD synthetic stress cohort
+- **WHEN** the descriptive profiling process succeeds but a measured region exceeds its nominal interval
+- **THEN** that timing observation SHALL remain negative even when the test process exits successfully
+- **AND** no20-PAD workload or optimization SHALL be added, while internal32 correctness remains required
+- **AND** the report SHALL NOT infer a7–10/device guarantee, Human acceptance or a hard10-PAD app cap

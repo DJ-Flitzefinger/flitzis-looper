@@ -171,7 +171,7 @@ impl SourceReadCheckpoint {
     pub(crate) fn project_output_frames(&mut self, output_frames: u64) -> bool {
         // A copied span is not an owning map. Arbitrary mapped F-to-E requires
         // the caller's retained geometry and its direct canonical projection.
-        if (self.playback.is_mapped() || self.playback.is_static_phase()) && output_frames != 0 {
+        if (self.playback.is_mapped() || self.playback.has_phase_program()) && output_frames != 0 {
             return false;
         }
         let mut projected = *self;
@@ -974,12 +974,12 @@ impl NativeAdapterState {
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
         if request.plan.loop_period.is_mapped()
-            || request.playback.is_static_phase()
+            || request.playback.has_phase_program()
             || request.playback.is_general_mapped()
             || request.actual_feed.is_some_and(|checkpoint| {
                 checkpoint.plan.loop_period.is_mapped()
                     || checkpoint.playback.is_general_mapped()
-                    || checkpoint.playback.is_static_phase()
+                    || checkpoint.playback.has_phase_program()
             })
         {
             return Err(NativeSourcePreparationError::Unavailable(

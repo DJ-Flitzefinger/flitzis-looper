@@ -6,6 +6,7 @@
 //! refreshes borrow the original map without cloning or destroying an Arc on realtime.
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
+use super::loop_phase_reference::LoopPhaseReference;
 use super::source_beatmap::{CanonicalBeatSegment, SourceBeatmap};
 use super::source_playback::FractionalSourcePosition;
 use super::source_reader::{ExplicitSeekMode, FrameRange, SourceLoopDomain};
@@ -20,6 +21,9 @@ mod exact;
 #[path = "mapped_source_clock_general.rs"]
 mod general;
 pub(crate) use general::GeneralLocalSpanView;
+#[path = "mapped_source_clock_phase.rs"]
+mod phase;
+pub(crate) use phase::PhaseLocalSpanView;
 
 use anchored::AnchoredClock;
 #[cfg(test)]
@@ -63,6 +67,7 @@ pub(crate) struct MappedLoopGeometry {
     max_seconds_per_quarter: f64,
     exact_continuation: Option<ExactContinuationQualification>,
     general: Option<general::GeneralPreparation>,
+    common_phase: Option<phase::CommonPhasePreparation>,
 }
 
 /// Frozen actual transport epoch and caller-supplied non-owning identity marker.
@@ -87,6 +92,7 @@ enum MappedClockMode {
     // creates this tag; copied spans may then prepare bounded local arithmetic.
     CompactAnchored(AnchoredClock),
     GeneralCompact(AnchoredClock),
+    CommonPhase(phase::CommonPhaseAnchor),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,6 +102,31 @@ struct ContinuationAnchor {
 }
 
 impl MappedClockEpoch {
+    pub(crate) fn marker(self) -> u64 {
+        self.marker
+    }
+    /// Numeric recovery of an already mapped source at actual live E/R. Source,
+    /// retained scalar provenance and first-read custody remain with its claimant.
+    pub(crate) fn ordinary_mapped_recovery(
+        marker: u64,
+        timeline: TransportTimeline,
+        geometry: &MappedLoopGeometry,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        if geometry.has_general_continuation() {
+            Self::general_coordinates(marker, timeline, geometry, position, output_frame)
+        } else {
+            Self::anchored_compact(
+                marker,
+                timeline,
+                geometry,
+                geometry.domain(),
+                position,
+                output_frame,
+            )
+        }
+    }
     pub(crate) fn new(
         marker: u64,
         timeline: TransportTimeline,
@@ -155,6 +186,9 @@ impl MappedClockEpoch {
         if self.projection.matches_timeline(&timeline) {
             return Some(self);
         }
+        if self.is_common_phase() {
+            return None;
+        }
         if self.is_anchored() {
             if frame < self.first_output_frame {
                 return None;
@@ -208,6 +242,9 @@ impl MappedClockEpoch {
         paused: u64,
         resumed: u64,
     ) -> Option<Self> {
+        if self.is_common_phase() {
+            return None;
+        }
         if !self.matches_timeline(actual) || paused < self.first_output_frame {
             return None;
         }
@@ -228,6 +265,9 @@ impl MappedClockEpoch {
             && self.address_shift == other.address_shift
             && self.first_output_frame == other.first_output_frame
             && match (self.mode, other.mode) {
+                (MappedClockMode::CommonPhase(left), MappedClockMode::CommonPhase(right)) => {
+                    left.matches_exact(right)
+                }
                 (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
                 | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
                 | (
@@ -297,13 +337,16 @@ impl MappedClockEpoch {
             MappedClockMode::Anchored(anchor)
             | MappedClockMode::CompactAnchored(anchor)
             | MappedClockMode::GeneralCompact(anchor) => Some(anchor),
-            MappedClockMode::Legacy { .. } => None,
+            MappedClockMode::Legacy { .. } | MappedClockMode::CommonPhase(_) => None,
         }
     }
 
     /// A changed projection cannot replace the immutable original anchor or mode.
     pub(crate) fn replacement_anchor_matches(self, other: Self, frame: u64) -> bool {
         match (self.mode, other.mode) {
+            (MappedClockMode::CommonPhase(_), MappedClockMode::CommonPhase(_)) => {
+                frame >= self.first_output_frame && self.matches_exact(other)
+            }
             (MappedClockMode::Legacy { .. }, MappedClockMode::Legacy { .. }) => true,
             (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
             | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
@@ -363,47 +406,95 @@ struct LegacySpanProgram {
     source_period: f64,
 }
 #[derive(Clone, Copy, Debug)]
-enum SpanProgram {
-    Legacy(LegacySpanProgram),
-    General {
-        cycle_coefficient: [u64; 2],
-        cycle_exponent: i16,
-    },
-    Physical {
-        cycles: [u64; 2],
-    },
+struct SpanProgram {
+    data: [u64; 3],
+    exponent: i16,
+    kind: u8,
+    region: u8,
+    reserved: u32,
 }
 impl SpanProgram {
-    fn matches_exact(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Legacy(a), Self::Legacy(b)) => {
-                a.beat_start.to_bits() == b.beat_start.to_bits()
-                    && a.quarters.to_bits() == b.quarters.to_bits()
-                    && a.source_period.to_bits() == b.source_period.to_bits()
-            }
-            (
-                Self::General {
-                    cycle_coefficient: a,
-                    cycle_exponent: x,
-                },
-                Self::General {
-                    cycle_coefficient: b,
-                    cycle_exponent: y,
-                },
-            ) => a == b && x == y,
-            (Self::Physical { cycles: a }, Self::Physical { cycles: b }) => a == b,
-            _ => false,
+    fn legacy(value: LegacySpanProgram) -> Self {
+        Self {
+            data: [
+                value.beat_start.to_bits(),
+                value.quarters.to_bits(),
+                value.source_period.to_bits(),
+            ],
+            exponent: 0,
+            kind: 0,
+            region: 0,
+            reserved: 0,
         }
+    }
+    fn general(cycle: [u64; 2], exponent: i16) -> Self {
+        Self {
+            data: [cycle[0], cycle[1], 0],
+            exponent,
+            kind: 1,
+            region: 0,
+            reserved: 0,
+        }
+    }
+    fn physical(cycles: [u64; 2]) -> Self {
+        Self {
+            data: [cycles[0], cycles[1], 0],
+            exponent: 0,
+            kind: 2,
+            region: 0,
+            reserved: 0,
+        }
+    }
+    fn phase(cycle: u128, exponent: i16, seed: f64, region: u8) -> Self {
+        Self {
+            data: [cycle as u64, (cycle >> 64) as u64, seed.to_bits()],
+            exponent,
+            kind: 3,
+            region,
+            reserved: 0,
+        }
+    }
+    fn legacy_value(self) -> Option<LegacySpanProgram> {
+        (self.kind == 0 && self.exponent == 0 && self.region == 0 && self.reserved == 0).then_some(
+            LegacySpanProgram {
+                beat_start: f64::from_bits(self.data[0]),
+                quarters: f64::from_bits(self.data[1]),
+                source_period: f64::from_bits(self.data[2]),
+            },
+        )
+    }
+    fn general_value(self) -> Option<([u64; 2], i16)> {
+        (self.kind == 1 && self.data[2] == 0 && self.region == 0 && self.reserved == 0)
+            .then_some(([self.data[0], self.data[1]], self.exponent))
+    }
+    fn physical_value(self) -> Option<[u64; 2]> {
+        (self.kind == 2
+            && self.data[2] == 0
+            && self.exponent == 0
+            && self.region == 0
+            && self.reserved == 0)
+            .then_some([self.data[0], self.data[1]])
+    }
+    fn phase_value(self) -> Option<(u128, i16, f64, u8)> {
+        (self.kind == 3 && self.region <= 3 && self.reserved == 0).then_some((
+            u128::from(self.data[0]) | (u128::from(self.data[1]) << 64),
+            self.exponent,
+            f64::from_bits(self.data[2]),
+            self.region,
+        ))
+    }
+    fn matches_exact(self, other: Self) -> bool {
+        self.data == other.data
+            && self.exponent == other.exponent
+            && self.kind == other.kind
+            && self.region == other.region
+            && self.reserved == other.reserved
     }
 }
 
 impl MappedSourceSpan {
     fn legacy_program(self) -> Option<LegacySpanProgram> {
-        if let SpanProgram::Legacy(p) = self.program {
-            Some(p)
-        } else {
-            None
-        }
+        self.program.legacy_value()
     }
     pub(crate) fn epoch(self) -> MappedClockEpoch {
         self.epoch
@@ -422,6 +513,9 @@ impl MappedSourceSpan {
     /// Evaluates M(n), modulo and S from their original global anchors. The
     /// endpoint may be beyond several intervening knots and is never extrapolated.
     pub(crate) fn position_at(self, output_frame: u64) -> Option<FractionalSourcePosition> {
+        if self.epoch.is_common_phase() {
+            return None;
+        }
         if self.epoch.is_general_compact() {
             return None;
         }
@@ -450,6 +544,9 @@ impl MappedSourceSpan {
 
     /// Derivative of the same canonical mapping, excluding wrap discontinuity.
     pub(crate) fn local_rate(self) -> Option<f64> {
+        if self.epoch.is_common_phase() {
+            return phase::span_rate(self);
+        }
         let rate = f64::from(self.loaded_rate_hz) * self.segment.seconds_per_quarter()
             / self.epoch.projection.frames_per_beat();
         valid_rate(rate).then_some(rate)
@@ -513,6 +610,7 @@ impl MappedLoopGeometry {
             max_seconds_per_quarter: interval.max_seconds_per_quarter,
             exact_continuation: None,
             general: None,
+            common_phase: None,
         })
     }
 
@@ -540,6 +638,17 @@ impl MappedLoopGeometry {
 
     /// O(1) admission using extrema scanned during non-realtime construction.
     pub(crate) fn validate_epoch(&self, epoch: MappedClockEpoch) -> Result<(), MappedClockError> {
+        self.validate_epoch_with_reference(epoch, LoopPhaseReference::Unavailable)
+    }
+
+    pub(crate) fn validate_epoch_with_reference(
+        &self,
+        epoch: MappedClockEpoch,
+        reference: LoopPhaseReference,
+    ) -> Result<(), MappedClockError> {
+        if epoch.is_common_phase() {
+            return phase::validate(self, epoch, reference);
+        }
         let frames_per_beat = epoch.projection.frames_per_beat();
         if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
             return Err(MappedClockError::InvalidEpoch);
@@ -558,6 +667,18 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        self.position_at_with_reference(epoch, output_frame, LoopPhaseReference::Unavailable)
+    }
+
+    pub(crate) fn position_at_with_reference(
+        &self,
+        epoch: MappedClockEpoch,
+        output_frame: u64,
+        reference: LoopPhaseReference,
+    ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_common_phase() {
+            return phase::position(self, epoch, output_frame, reference);
+        }
         if epoch.is_general_compact() {
             return self.position_at_general(epoch, output_frame);
         }
@@ -595,6 +716,18 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        self.refresh_span_with_reference(epoch, output_frame, LoopPhaseReference::Unavailable)
+    }
+
+    pub(crate) fn refresh_span_with_reference(
+        &self,
+        epoch: MappedClockEpoch,
+        output_frame: u64,
+        reference: LoopPhaseReference,
+    ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_common_phase() {
+            return phase::refresh(self, epoch, output_frame, reference);
+        }
         if epoch.is_general_compact() {
             return self.refresh_general_span(epoch, output_frame);
         }
@@ -649,7 +782,7 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            program: SpanProgram::Legacy(LegacySpanProgram {
+            program: SpanProgram::legacy(LegacySpanProgram {
                 beat_start: self.beat_start,
                 quarters: self.quarters,
                 source_period: self
@@ -710,3 +843,7 @@ fn first_true(mut low: u64, mut high: u64, predicate: impl Fn(u64) -> bool) -> u
 #[cfg(test)]
 #[path = "mapped_source_clock_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "mapped_source_clock_phase_tests.rs"]
+mod phase_tests;

@@ -193,6 +193,7 @@ impl MappedStartSource {
                 && geometry.has_compact_continuation()
             {
                 source.geometry = geometry;
+                source.geometry.prepare_common_phase();
                 preparation.class = RuntimeMapClass::Ready;
                 return (preparation, Some(Arc::new(source)));
             }
@@ -224,10 +225,11 @@ impl MappedStartSource {
                 false,
             ),
         };
-        let Ok(geometry) = geometry else {
+        let Ok(mut geometry) = geometry else {
             return (preparation, None);
         };
         preparation.domain = Some(geometry.domain().into());
+        geometry.prepare_common_phase();
         preparation.class = RuntimeMapClass::Ready;
         let source = Self {
             qualified: qualified.clone(),

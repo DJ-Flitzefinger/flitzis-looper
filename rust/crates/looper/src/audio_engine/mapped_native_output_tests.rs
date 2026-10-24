@@ -454,7 +454,7 @@ fn owned_birth_from_capture(
     let duration = source_frames as f64 / f64::from(RATE);
     let intent = PitchIntent::new(shift.clamp(-23, 23), shift - shift.clamp(-23, 23)).unwrap();
     let mut work = captured.take_work(None).unwrap().unwrap();
-    work.freeze_mapped_clock(Some(path.timeline), target)
+    work.freeze_mapped_clock(Some(path.timeline), target, path.timeline.output_frame())
         .unwrap();
     work.freeze_frames(target, target).unwrap();
     let (clock, target) = work.mapped_clock().unwrap();
@@ -516,7 +516,7 @@ fn original_b5_rounded_geometry_keeps_genuine_mapped_rate_refusal() {
     let state = fixture.captured.state();
     let timeline = fixture.path.timeline;
     assert!(matches!(
-        work.freeze_mapped_clock(Some(timeline), target),
+        work.freeze_mapped_clock(Some(timeline), target, timeline.output_frame()),
         Err(PitchActionReject::MappedTimingUnavailable)
     ));
     assert!(work.mapped_clock().is_none());

@@ -136,6 +136,100 @@ fn capture_future_pitch_reference(
 }
 
 #[test]
+fn future_ordinary_birth_keeps_attack_when_prestart_tempo_invalidates_predicted_phase() {
+    for native in [false, true] {
+        let mut outputs = Vec::new();
+        for changed in [false, true] {
+            let mut fixture = Fixture::new(native);
+            if native {
+                fixture
+                    .mixer
+                    .set_pad_pitch_intent(0, PitchIntent::new(0, 7).unwrap())
+                    .unwrap();
+            }
+            fixture.render_to(17_000);
+            let original = capture(&fixture, 1.0);
+            drain_with_mode(&mut fixture, TriggerQuantization::Grid { step_64ths: 16 });
+            assert_eq!(original.original_frame(), Some(24_000));
+            assert!(
+                fixture
+                    .control
+                    .engine
+                    .publish_pad_start(&original, None)
+                    .unwrap()
+            );
+            drain_with_mode(&mut fixture, TriggerQuantization::Grid { step_64ths: 16 });
+            if native {
+                wait_ready(&mut fixture, &[original.sequence()]);
+            }
+            let generation = fixture.transport.phase_generation();
+            if changed {
+                assert!(
+                    fixture
+                        .transport
+                        .set_master_period_preserving_beat_position_at_frame(0.75, 17_000)
+                );
+                assert_eq!(fixture.transport.phase_generation(), generation);
+            }
+            let execution = original.execution_frame().unwrap();
+            assert!(
+                fixture
+                    .render_to(execution)
+                    .iter()
+                    .all(|sample| *sample == 0.0)
+            );
+            fixture.render(0);
+            assert_eq!(original.state(), "applied", "{:?}", original.reason());
+            assert_eq!(fixture.voice(0).phase_launch_qualified, !changed);
+            assert!(fixture.voice(0).phase_birth_unadvanced);
+            assert_eq!(
+                fixture.voice(0).source_playback.position().frame,
+                LOOP_START
+            );
+            outputs.push(fixture.pcm(4096));
+        }
+        assert_eq!(
+            outputs[0], outputs[1],
+            "phase qualification must not crop the ordinary attack"
+        );
+    }
+}
+
+#[test]
+fn future_piano_birth_uses_actual_projection_qualification_without_replacing_native_identity() {
+    for changed in [false, true] {
+        let mut fixture = Fixture::new(true);
+        let action = capture_future_pitch_reference(&mut fixture, "pitch.extra:7:set_retrigger");
+        fixture.publish(&action);
+        fixture.wait_worker(&[&action]);
+        let generation = fixture.transport.phase_generation();
+        if changed {
+            assert!(
+                fixture
+                    .transport
+                    .set_master_period_preserving_beat_position_at_frame(0.75, 17_000)
+            );
+            assert_eq!(fixture.transport.phase_generation(), generation);
+        }
+        assert!(
+            fixture
+                .render_to(action.execution_target())
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        fixture.render(0);
+        assert!(action.effective(), "{:?}", action.reason());
+        assert_eq!(fixture.voice(0).phase_launch_qualified, !changed);
+        assert!(fixture.voice(0).phase_birth_unadvanced);
+        let native = fixture.voice(0).stretch.native_state_address();
+        assert_ne!(native, 0);
+        let pcm = fixture.pcm(4096);
+        assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
+    }
+}
+
+#[test]
 fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initial_pcm() {
     let mut ordinary = Fixture::new(true);
     let mut reference = Fixture::new(true);

@@ -968,7 +968,7 @@ fn acknowledged_accepted_period_drives_native_bootstrap_reference_and_fractional
     assert!(state.mixer.play_sample(0, 1.0));
     state.transport.request_bootstrap(0);
     assert!(try_bootstrap_transport_from_reference(
-        &state.mixer,
+        &mut state.mixer,
         &mut state.transport,
         0
     ));
@@ -986,7 +986,7 @@ fn acknowledged_accepted_period_drives_native_bootstrap_reference_and_fractional
 
     // Explicit phase anchoring consumes the same native period as bootstrap.
     assert!(anchor_transport_phase_from_pad_at_frame(
-        &state.mixer,
+        &mut state.mixer,
         &mut state.transport,
         0,
         431

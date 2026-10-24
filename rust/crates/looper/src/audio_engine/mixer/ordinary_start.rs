@@ -154,6 +154,9 @@ impl RtMixer {
             snapshot.plan.seek_mode = position.seek_mode;
             snapshot.plan.loop_period = snapshot.playback.reader_period();
         }
+        snapshot
+            .playback
+            .install_launch_reference(work.launch_reference());
         if let Some(origin) = work.late_reprepare_snapshot() {
             if !origin.matches_exact(
                 super::super::prepared_native_history::SourceReadCheckpoint {
@@ -362,12 +365,15 @@ impl RtMixer {
             .late_reprepare_snapshot()
             .ok_or(PitchActionReject::PreparedMismatch)?;
         let (start_s, end_s) = work.loop_region();
-        let snapshot = self.normal_start_snapshot_with_policy(
+        let mut snapshot = self.normal_start_snapshot_with_policy(
             guard.id,
             start_s,
             end_s,
             work.origin().sync_request(),
         )?;
+        snapshot
+            .playback
+            .install_launch_reference(work.launch_reference());
         if !origin.matches_exact(
             super::super::prepared_native_history::SourceReadCheckpoint {
                 playback: snapshot.playback,
@@ -617,6 +623,8 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.phase_launch_qualified = work.phase_launch_qualified;
+                    voice.phase_birth_unadvanced = true;
                     voice.sync_request = work.origin().sync_request();
                     voice.mapped_start = snapshot.playback.is_mapped().then(|| {
                         super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())

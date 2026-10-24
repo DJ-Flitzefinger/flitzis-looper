@@ -1,3 +1,15 @@
+
+## Latest performance workload decision — 2026-10-24
+
+The direct Human instruction sets2/4/6 simultaneous PADs as the productive
+optimization workload and10 as the maximum synthetic stress cohort, run directly
+and unconditionally. All older20 targets/20-to-conditional10 recipes below are
+superseded. Preserve their measured positive AND negative evidence unchanged as
+history; no further20-PAD optimization is required. Current4/6 misses remain real
+until corrected evidence resolves them. Internal32 atomic/capacity/retirement and
+layout correctness stays separate and unchanged. No hard10 app cap or device/
+7–10 performance guarantee is introduced. The user-facing guidance is in README's
+Simultaneous Playback section; all other original FULL-Goal gates remain binding.
 ## Stage 0: compact existing master projection, 2026-10-23
 
 The existing mapped source clock now retains a 32-byte immutable projection
@@ -2088,3 +2100,193 @@ All own jobs are terminal. The actual final staged evidence review, English
 Conventional Commit, normal existing-main push, fresh clean remote equality and
 guarded exact owned cleanup remain pending at this recording point. No public
 phase, musical settling, variable/Native/finite-EOF or full acceptance is inferred.
+
+### Reconciled actual static publication and cleanup
+
+The preceding static recording point was followed by the same independent final
+reviewer's actual PUBLISH CLEAR, English commit64ea32a42ac1ac6a44cf64e7d0b56b5dad5670d1
+and normal existing-main push. Fresh clean HEAD=tracking=actual queried remote
+was confirmed after all cleanup at2026-10-24T09:41:26Z. Guarded regular noForce
+cleanup removed only the owned temporary tree (18,699 files;665,996,114 bytes)
+and16 proven newly created test-only Scratch roots (184 files;3,362,760 bytes).
+Original1,506 Scratch entries were unchanged;87 evidence files and the shared
+single target/environment were retained. One initial UTC-kind guard failed before
+any deletion; explicit DateTimeOffset UTC conversion corrected that guard. No
+security rejection was bypassed. This closes static delivery bookkeeping only;
+all recorded limits and open product/resource/Human gates remain.
+
+### Variable common-phase implementation awaiting actual verification
+
+A dedicated concrete FINAL PRE cleared the optional recovery-closed common-odd
+class on original binary64 seconds/beat anchors. The frozen numeric/helper/test
+authors and Root integration add a distinct64-byte phase payload, typed32-byte
+span programme, original-map exact recovery normalization, whole MODE before
+same-snapshot PHASE, shared genuine request eligibility and service custody,
+separate current-E/live-R ordinary recovery carrying the previous scalar witness,
+Native/history exclusions and requested-only dry mapped/static OFF escape.
+
+Independent retained stdlib Fraction vectors pass capture/global cases, including
+the actual binary64 master operation order. They are not project test results.
+All32 new numeric/runtime authored tests (one ignored profile) plus a genuine
+Productive stem regression are unexecuted at this point. Actual preparation-class,
+source/ACK/claim, reader/PCM, recovery, stack/layout/allocation and consuming cost
+assertions remain pending. Combined frozen systems POST must precede integrated
+checks/builds. No App, device, install or ordinary Native replacement is allowed.
+Public grid_phase_confirmed remains None. Broader source/rational/fine-input,
+finite EOF, Native/pitch/stem, settling, resource and every FULL acceptance stay
+open; SYNC/REALTIME still precedes actual Portable repair, stop Rustport/Slice8.
+# Successor independent analysis — 2026-10-24
+
+The50 inherited WIP paths match the preserved source checkpoint exactly before
+this successor's edits; main, tracking and freshly queried remote remain64ea32a4.
+This is an uncommitted bounded variable-phase foundation, not complete SYNC.
+Source analysis supports the optional exact local affine view: it caches original
+unrounded coordinates, separately decodes actual master values, retains Core512
+fallback and preserves all reader prepasses, claims and recovery guards. No
+observed evidence identifies a ringbuffer bottleneck or justifies a queue rewrite.
+
+The required broader-map gap is now explicit: seconds [0,0.37,0.91] and beat
+labels [0,1,2] at48kHz, declared Q2 and frame13 have common odd forward factor375,
+but the inverse beat retains odd denominator1249748896595312625. The optional
+phase metadata can exist while birth fails its recovery proof. The direct numeric
+regression characterizes ordinary general geometry and unchanged continuation;
+it does not claim runtime Ready, worker adoption, musical or device acceptance.
+Practical settling is also still required: Q256/2 debt at1/64 correction requires
+8192 master beats before additional window delays. Finite capture alone is weak.
+
+Next verification covers the actual current affine source,2/4/6 productive and
+unconditional10 stress cohorts, exact numeric/PCM/lifecycle/neighbor integration,
+private Release and independent review. These checks are PENDING here. Broader
+rational recovery, finite EOF, Native/pitch/stems, qualified actual-read phase,
+BeatThis interpretation and all retained Human/default-cutover gates remain open.
+
+## Intentional launch-relative phase: actual verification — 2026-10-24
+
+This recording supersedes the preceding pending verification checkpoint, without
+relabeling its historical results. Independent final review found that an
+unadjusted canonical-zero target separates genuinely aligned simultaneous starts.
+The unpublished implementation was corrected before delivery: mapped phase targets
+`B(A)+M(n)-M(T)` modulo its own Q; static phase targets `A+F*(M(n)-M(T))`.
+One typed immutable launch reference carries the original T/master coordinate,
+checked transport generation and original start inverse. Actual voice-effect
+qualification and unadvanced-birth freshness remain separate from copied clocks.
+Future-T projection changes, late admission, seek/domain ABA and discontinuous
+master relabels cannot manufacture eligibility; ordinary attacks remain available.
+Native/history copies retain their original identity. Source ownership, first
+attack, all32 atomic claims and existing exact reader admission remain unchanged.
+
+Dedicated concrete PRE and actual frozen systems POST covered the combined
+implementation. Targeted POST was repeated after each material repair; final
+source/test freeze v8 contains78 paths. The same independent final reviewer
+checked the source and the focused evidence; final staged publication review is
+still pending at this recording point. The owning evidence directory is
+`test-artifacts/variable-common-phase-20261024` in the original workspace.
+
+### Actual failures and their bounded resolutions
+
+Earlier negative runs remain retained. A future piano action omitted the same
+Work launch reference when freezing its normal launch origin; the origin now
+carries that reference before capture. Ordinary mapped Pause/Hold incorrectly
+used a bare phase-epoch validator; it now validates the copied playback reference
+while retaining every existing source/timeline/Native/reader/claim guard. Actual
+pause receipts and unchanged paused cursors are asserted before silent progress.
+
+Three static Busy fixtures lacked correction debt after the intentional-launch
+fix; they now create genuine pause debt. Local phase-stem fixtures now settle
+their ordered timing message and use real captured start T137, actual effect,
+25-frame pause and resume at162. Shared legacy Productive behavior is unchanged.
+The independent scalar musical oracle retains its exact Fraction trajectory and
+RN64 split, then follows the reader's actual binary64 topology and RN32 gain.
+Mandatory n1522 and n6024 cases cover last-knot and virtual-period rounding plus
+physical tap wrapping. Production reader code and exact tap/PCM equality were
+not weakened. Its typed external generator passes Ruff/format/strict mypy and
+regenerates65,537 points, including65,536 captured and54 seam observations.
+
+One scalar reverse expectation and seven independent public-start reference
+births omitted the new immutable provenance. The former preserves its mapped
+snapshot's reference. Each of the latter derives its own reference from the saved
+pre-admission timeline and original ticket T, configures its own snapshot domain,
+and installs provenance before Native preparation. No actual playback state,
+reader plan or PCM is copied into those independent references. Late cases
+explicitly assert T precedes admission and actual phase qualification is false.
+Strict state/PCM/raw-Native/ACK/lifetime checks remain intact.
+
+The broad committed-stem run had149 passes and25 failures in520.04s. All25 exact
+failed public cases and three positive shared-constructor baselines subsequently
+pass on v8, including the later Loader-B birth and full child assertions. The same
+reviewer verified all28 nonempty exact-name outcomes and approved reuse of the149
+compatible passes. The old149/25 log remains negative, not silently relabeled.
+
+### Current-source check coverage
+
+Release variable phase passes24 cases. Static phase has20 compatible passes plus
+the corrected exact musical retry; the static stem case passes separately.
+Eight isolated piano-glide cases preserve first-attack/EndpointResetHistory PCM
+and genuine insufficient-history refusal. Current-source Release neighbors:
+
+| Group | Passed | Limits |
+| --- | ---: | --- |
+| Mapped clocks / numerics / beat maps | 95 / 45 / 62 | Bounded software inputs |
+| Policy | 111 + 1 repaired reverse | Original111/1 failure log retained |
+| Playback / reader | 66 / 30 | Exact state and PCM assertions retained |
+| Native history / feed / epoch | 10 / 8 / 9 | No new phase-to-Native acceptance |
+| Transport / callback | 60 / 57 | Hardware-construction case excluded |
+| Pitch / stretch | 94 / 41 | One pitch diagnostic remains ignored |
+| Ordinary / global starts | 63 / 8 | Includes genuine launch provenance |
+| Committed-stem neighbors | 149 compatible + 28 focused |25 failures repaired;3 baselines repeated |
+
+Explicit2-MiB child-stack, copy/layout, internal32 atomicity and instrumented zero
+Rust-request checks pass through the relevant suites. Epoch128/span240/Playback488
+and32 optional copies within16KiB are preserved. This does not measure Native
+allocations, peak stack, device scheduling, hearing or whole-system acceptance.
+
+The current consuming variable profile includes original drains, actual-E phase
+construction/all32 claim,512-frame dry renderer, history and copied advance. It
+uses one warmup and three repeats per cohort. Correcting regions contain491
+actually correcting frames out of512. All measured regions observe zero Rust
+allocation requests. Fixture setup and output-buffer initialization precede
+measurement; consume_pending includes control draining and actual output writes.
+Post-measurement assertions and final fixture destruction are outside the timed
+region.
+
+| PADs | Waiting median / max ms | Correcting median / max ms |10.6666667-ms interval |
+| ---: | ---: | ---: | --- |
+| 2 | 2.2912 / 2.7821 | 2.7663 / 2.8632 | Within |
+| 4 | 4.5734 / 4.5798 | 5.5309 / 5.5345 | Within |
+| 6 | 7.0723 / 7.4296 | 8.1952 / 8.2261 | Within |
+| 10 | 11.3474 / 11.3583 | 13.6960 / 13.7751 | **Negative in both regions** |
+
+The descriptive test exits0; that does not turn the10-PAD timing misses into
+passes. These observations support the latest2/4/6 productive target for this
+bounded workload and machine only. No20-PAD run or optimization was added.
+Historical negatives on other inputs and all device/worst-case/Human gates remain.
+
+Locked workspace/all-targets Clippy exits0 with warnings, including165 library-
+test warnings (69 duplicates); no autofix or warning-free claim. A private locked
+stripped Release wheel builds successfully in37.07s (60 production warnings).
+Its actual private-origin Native is35,045,888 bytes, SHA256
+`604756564383a5c62a46d2481ec3be11dc222b1e2c1128a1e90b37523a812d34`.
+Release profile, all13 bootstrap API checks, editor API4, current controller/UI
+imports and535 targeted Python tests pass (16.66s). Device cases are excluded;
+these checks construct neither an App nor an audio device and install nothing.
+The ordinary Native remains protected; final freshness is checked at delivery.
+
+Rustfmt, strict affected OpenSpec and whitespace checks pass. The first strict
+attempt rejected missing scenario blocks and introductory normative wording;
+six concrete scenarios and a conditional global-law requirement resolved that
+documentation failure without changing runtime behavior. Both attempt logs remain.
+Final staged review, coherent English commit, normal existing-main push, fresh
+clean actual-remote equality and guarded owned cleanup remain pending at this
+exact recording point. Public grid_phase_confirmed
+remains unavailable. Broader ordinary decimal/rational recovery, practical
+settling, general launch/reanchor and Native/pitch/stem/history integration, finite
+OneShot/EOF, qualified actual-read phase, connected BeatThis structural/B2 work
+and all original music/device/Human/default-cutover/final gates remain required.
+This coherent dry foundation does not complete SYNC/REALTIME or the FULL Goal.
+
+The same independent final reviewer subsequently issued PUBLISH CLEAR for the
+actual staged78-path block after source-v8 equality, all compatible results and
+final documentation reconciliation. Dedicated systems documentation POST is also
+CLEAR; its measured-output wording finding was corrected before that verdict.
+No actionable publication finding remains. This verdict authorizes the coherent
+delivery step only; the listed broader milestone and Human gates stay open.

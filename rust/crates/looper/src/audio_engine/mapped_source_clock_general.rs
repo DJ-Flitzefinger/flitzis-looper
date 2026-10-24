@@ -26,6 +26,11 @@ pub(super) struct GeneralPreparation {
     minimum: CanonicalBeatSegment,
     maximum: CanonicalBeatSegment,
 }
+impl GeneralPreparation {
+    pub(super) fn original_grids(self) -> (BaseGrid, BaseGrid) {
+        (self.source, self.beat)
+    }
+}
 #[derive(Clone, Copy)]
 struct Axes {
     x0: i128,
@@ -288,6 +293,7 @@ impl MappedLoopGeometry {
                 minimum: minimum.ok_or(unavailable)?,
                 maximum: maximum.ok_or(unavailable)?,
             }),
+            common_phase: None,
         })
     }
     pub(crate) fn has_general_continuation(&self) -> bool {
@@ -378,10 +384,10 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            program: SpanProgram::General {
-                cycle_coefficient: [cycle as u64, (cycle >> 64) as u64],
-                cycle_exponent: clock.core.beat.exponent(),
-            },
+            program: SpanProgram::general(
+                [cycle as u64, (cycle >> 64) as u64],
+                clock.core.beat.exponent(),
+            ),
             loaded_rate_hz: self.loaded_rate_hz,
             start_frame,
             end_frame,
@@ -439,6 +445,23 @@ impl MappedClockEpoch {
         } else {
             SourcePlayback::scalar_continuation(scalar_probe, original_scalar_domain, 1.0, 1.0)
                 .ok_or(unavailable)?;
+        }
+        Self::general_coordinates(marker, timeline, geometry, position, output_frame)
+    }
+
+    /// Pure coordinates for an already mapped claimant. This does not fabricate
+    /// a scalar birth witness; the caller retains and checks its previous owner.
+    pub(super) fn general_coordinates(
+        marker: u64,
+        timeline: TransportTimeline,
+        geometry: &MappedLoopGeometry,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let unavailable = MappedClockError::NumericalUnavailable;
+        if marker == 0 || output_frame == u64::MAX || position.seek_mode != ExplicitSeekMode::Normal
+        {
+            return Err(MappedClockError::InvalidEpoch);
         }
         let period = geometry
             .domain
@@ -798,7 +821,24 @@ impl MappedSourceSpan {
         domain: SourceLoopDomain,
         frame: u64,
     ) -> Option<FractionalSourcePosition> {
-        if self.epoch.is_general_compact() {
+        self.position_in_domain_with_reference(
+            domain,
+            frame,
+            super::LoopPhaseReference::Unavailable,
+        )
+    }
+
+    pub(crate) fn position_in_domain_with_reference(
+        self,
+        domain: SourceLoopDomain,
+        frame: u64,
+        reference: super::LoopPhaseReference,
+    ) -> Option<FractionalSourcePosition> {
+        if self.epoch.is_common_phase() {
+            self.local_phase_view(domain, reference)
+                .ok()?
+                .position_at(frame)
+        } else if self.epoch.is_general_compact() {
             self.local_general_view(domain).ok()?.position_at(frame)
         } else {
             self.position_at(frame)
@@ -836,13 +876,8 @@ impl MappedSourceSpan {
         ) {
             return Err(unavailable);
         }
-        let SpanProgram::General {
-            cycle_coefficient,
-            cycle_exponent,
-        } = self.program
-        else {
-            return Err(unavailable);
-        };
+        let (cycle_coefficient, cycle_exponent) =
+            self.program.general_value().ok_or(unavailable)?;
         let anchor = self.epoch.anchor().ok_or(unavailable)?;
         let mut source = GridStats::new()
             .include_u64(self.source_start)

@@ -266,7 +266,7 @@ impl SourceControlEpoch {
 
 fn constant_normal(checkpoint: SourceReadCheckpoint) -> bool {
     checkpoint.is_consistent()
-        && !checkpoint.playback.is_static_phase()
+        && !checkpoint.playback.has_phase_program()
         && checkpoint.plan.seek_mode == ExplicitSeekMode::Normal
         && checkpoint.playback.position().seek_mode == ExplicitSeekMode::Normal
         && !checkpoint.plan.transition.is_active()

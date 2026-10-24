@@ -1,7 +1,12 @@
 //! Existing prepared-stem custody refuses static history and recovers after OFF.
 
+#[path = "committed_stem_variable_phase_tests.rs"]
+mod variable_phase_tests;
+
 use super::*;
-use crate::audio_engine::audio_stream::{drain_parameter_messages, render_scheduled_audio};
+use crate::audio_engine::audio_stream::{
+    drain_control_messages, drain_parameter_messages, render_scheduled_audio,
+};
 use crate::audio_engine::input_mapping::{InputRuntime, PitchPadProjection, RuntimePolicySnapshot};
 use crate::audio_engine::source_map_admission::SourceMapRow;
 use crate::audio_engine::source_sync_policy::GlobalTimingPolicy;
@@ -55,6 +60,105 @@ fn publish_policy(p: &Productive, sync: bool, revision: u64) {
         .unwrap();
 }
 
+// These two phase fixtures advance the real timeline. The shared Productive
+// harness intentionally retains its legacy frame-zero drain for unrelated tests.
+fn drain_actual(p: &mut Productive) -> usize {
+    let callback = p.h.callback.as_mut();
+    assert_eq!(callback.transport.output_frame(), p.frame);
+    drain_control_messages(
+        &mut p.h.consumer,
+        &mut callback.scheduler,
+        p.frame,
+        &mut callback.quantization,
+        &mut callback.transport,
+        &mut callback.mixer,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    )
+}
+
+fn capture_then_wait_at_actual(p: &mut Productive, ticket: &ResidentStemTicket) {
+    assert_eq!(ticket.effective_mode_status(), "waiting");
+    assert_eq!(drain_actual(p), 1);
+    wait_until(|| {
+        (p.h.consumer.peek().is_ok() || ticket.error().is_some()) && p.h.producer.try_lock().is_ok()
+    });
+    assert_eq!(ticket.residency_status(), "pending", "{:?}", ticket.error());
+    assert_eq!(ticket.effective_mode_status(), "waiting");
+}
+
+fn begin_qualified_phase_fixture(p: &mut Productive) {
+    assert_eq!(p.frame, 137);
+    assert!(matches!(
+        p.h.consumer.peek().unwrap(),
+        crate::messages::ControlMessage::SetLegacyPadTimingMetadata { id: 0, .. }
+    ));
+    assert_eq!(drain_actual(p), 1);
+    assert!(p.h.consumer.is_empty());
+    publish_policy(p, false, 1);
+    let (_feedback_producer, feedback_consumer) = rtrb::RingBuffer::new(1);
+    p.h.engine.test_control_channels = Some((
+        p.h.producer.clone(),
+        Arc::new(Mutex::new(feedback_consumer)),
+    ));
+    p.h.engine.stop_sample(0).unwrap();
+    assert_eq!(drain_actual(p), 1);
+    assert!(
+        !p.h.callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    let birth =
+        p.h.engine
+            .capture_pad_start(
+                0,
+                p.loop_region.start as f64 / f64::from(RATE),
+                Some(p.loop_region.end as f64 / f64::from(RATE)),
+                1.0,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+    drain_actual(p);
+    assert_eq!(birth.target_frame(), Some(p.frame));
+    assert!(p.h.engine.publish_pad_start(&birth, None).unwrap());
+    drain_actual(p);
+    assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
+    let started = voice(&p.h.callback.mixer);
+    assert!(started.phase_launch_qualified && started.phase_birth_unadvanced);
+    assert!(
+        started
+            .source_playback
+            .phase_reference_current(&p.h.callback.transport)
+    );
+    let raw = started.source_playback.position();
+    assert_eq!(raw.frame, p.loop_region.start);
+    assert_eq!(raw.fraction, 0.0);
+
+    // Genuine silent output creates phase debt without changing the original
+    // launch coordinate or injecting an artificial source cursor/reference.
+    let pause = p.h.engine.pause_sample(0).unwrap();
+    drain_actual(p);
+    assert!(
+        pause
+            .current_observation()
+            .unwrap()
+            .unwrap()
+            .ordinary_paused()
+    );
+    assert!(voice(&p.h.callback.mixer).paused);
+    assert!(render_actual(p, 25).iter().all(|sample| *sample == 0.0));
+    assert_eq!(voice(&p.h.callback.mixer).source_playback.position(), raw);
+    p.h.engine.resume_sample(0).unwrap();
+    drain_actual(p);
+    assert!(!voice(&p.h.callback.mixer).paused);
+    assert_eq!(voice(&p.h.callback.mixer).source_playback.position(), raw);
+    assert_eq!(p.frame, 162);
+}
+
 fn policy_effect(p: &mut Productive) -> Arc<RuntimePolicySnapshot> {
     p.h.engine
         .request_input_runtime_policy_adoption(false)
@@ -67,7 +171,7 @@ fn policy_effect(p: &mut Productive) -> Arc<RuntimePolicySnapshot> {
             .runtime_policy_snapshot()
             .unwrap()
             .unwrap();
-    p.h.callback.drain(&mut p.h.consumer);
+    drain_actual(p);
     let (_producer, mut parameters) = rtrb::RingBuffer::new(1);
     let callback = p.h.callback.as_mut();
     drain_parameter_messages(
@@ -145,6 +249,7 @@ fn static_real_committed_stem_capture_refuses_unchanged_then_same_selection_prog
         assert!(callback.transport.set_master_period(period));
         callback.transport.complete_bootstrap();
     }
+    begin_qualified_phase_fixture(&mut p);
     publish_policy(&p, true, 2);
     let original = policy_effect(&mut p);
     assert_eq!(
@@ -164,13 +269,14 @@ fn static_real_committed_stem_capture_refuses_unchanged_then_same_selection_prog
     );
     let clock = voice(&p.h.callback.mixer).source_playback;
     assert!(clock.is_static_phase());
+    assert!(!clock.static_phase_settled());
     let generation = voice(&p.h.callback.mixer).generation;
     let sample = voice(&p.h.callback.mixer).sample.clone().unwrap();
     let native = voice(&p.h.callback.mixer).stretch.native_state_address();
     let transition = p.h.callback.mixer.stem_transition_for_measurement(0);
     assert!(p.h.callback.mixer.stems_for_measurement()[0].is_none());
     let refused = p.request("all_stems", 0b1010);
-    p.h.callback.drain(&mut p.h.consumer);
+    drain_actual(&mut p);
     wait_until(|| refused.error().is_some());
     assert_eq!(refused.residency_status(), "rejected");
     assert_eq!(refused.effective_mode_status(), "rejected");
@@ -222,8 +328,8 @@ fn static_real_committed_stem_capture_refuses_unchanged_then_same_selection_prog
     assert!(!voice(&p.h.callback.mixer).source_playback.is_static_phase());
     render_actual(&mut p, 1);
     let fresh = p.request("all_stems", 0b1010);
-    p.capture_then_wait(&fresh);
-    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+    capture_then_wait_at_actual(&mut p, &fresh);
+    assert_eq!(drain_actual(&mut p), 1);
     assert_eq!(fresh.residency_status(), "accepted", "{:?}", fresh.error());
     assert!(fresh.is_current() && p.selected.is_current());
     assert_eq!(fresh.effective_mode_status(), "transitioning");

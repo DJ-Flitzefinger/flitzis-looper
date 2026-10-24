@@ -226,7 +226,7 @@ fn owned_birth(shift: i32) -> OwnedBirth {
     // The component owns genuine original Work, using the same freezing APIs as
     // the sole scheduler. It never publishes an attack or opens public admission.
     let mut work = captured.take_work(None).unwrap().unwrap();
-    work.freeze_mapped_clock(Some(path.timeline), 64).unwrap();
+    work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame()).unwrap();
     work.freeze_frames(64, 64).unwrap();
     let (clock, target) = work.mapped_clock().unwrap();
     let mut snapshot = path

@@ -6840,9 +6840,12 @@ assert audio.worker_call_count() == source_worker_calls
         0,
         &ordinary_start_from_python(locals),
     );
+    let launch_timeline = playback.callback.transport;
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     let birth = start.execution_frame().unwrap();
     let original_start = start.original_frame().unwrap();
+    assert!(original_start < launch_timeline.output_frame());
+    let launch = LoopPhaseReference::capture(Some(launch_timeline), original_start);
     while playback.frame < birth {
         let frames = (birth - playback.frame).min(257) as usize;
         let mut output = vec![0.0; frames * 2];
@@ -6884,6 +6887,12 @@ assert audio.worker_call_count() == source_worker_calls
         current.source_playback.tempo_ratio().to_bits(),
         playback.ratio.to_bits()
     );
+    assert!(
+        current
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
+    assert!(!current.phase_launch_qualified);
     assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
     expected_started.assert_message(&playback.callback.feedback.events[feedback_before]);
     assert!(
@@ -6960,6 +6969,7 @@ assert audio.worker_call_count() == source_worker_calls
             assert!(mixer.publish_prepared_stems(0, stems.clone()));
         }
         assert!(mixer.play_sample_at_output_frame(0, 1.0, birth));
+        install_public_start_reference(&mut mixer, launch, &launch_timeline);
         mixer
     };
     playback.reference = reference(0);
@@ -8435,10 +8445,13 @@ for _ in range(16):
         }
     }
     synchronize_callback_frame(&mut playback.callback, playback.frame);
+    let launch_timeline = playback.callback.transport;
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     let birth = start.execution_frame().unwrap();
     playback.scheduled = true;
     let original_start = start.original_frame().unwrap();
+    assert!(original_start < launch_timeline.output_frame());
+    let launch = LoopPhaseReference::capture(Some(launch_timeline), original_start);
     while playback.frame < birth {
         let frames = (birth - playback.frame).min(257) as usize;
         let output = if key_lock {
@@ -8465,6 +8478,12 @@ for _ in range(16):
         0.0_f64.to_bits()
     );
     assert!(
+        new_voice
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
+    assert!(!new_voice.phase_launch_qualified);
+    assert!(
         other_voice(&playback.callback.mixer)
             .source_playback
             .matches_exact(&other_clock)
@@ -8473,6 +8492,7 @@ for _ in range(16):
     // reference starts its complete selected beginning at that same birth.
     for reference in [&mut playback.reference, &mut playback.full_mix] {
         assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
+        install_public_start_reference(reference, launch, &launch_timeline);
         if key_lock {
             prepare_public_start_reference(reference, birth);
         }
@@ -9481,7 +9501,7 @@ fn stopped_candidate_play(
     key_lock: bool,
     complete_partial: bool,
     ratio: f64,
-) -> (u64, u64) {
+) -> (u64, u64, LoopPhaseReference) {
     let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
     let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
     Python::attach(|py| {
@@ -9628,9 +9648,11 @@ assert not session.stem_generation_errors, session.stem_generation_errors
             "ordinary Play either reuses its ready window or owns its new finite preparation"
         );
     });
+    let launch_timeline = callback.transport;
     let start = admit_original_public_start(callback, consumer, locals);
     let execution = start.execution_frame().unwrap();
     let original = start.original_frame().unwrap();
+    let launch = LoopPhaseReference::capture(Some(launch_timeline), original);
     assert!(execution >= original);
     while callback.transport.output_frame() < execution {
         let frame = callback.transport.output_frame();
@@ -9653,6 +9675,11 @@ assert not session.stem_generation_errors, session.stem_generation_errors
         assert!(start.effective_frame().is_none());
     }
     execute_public_start_at_frame(callback, &start);
+    assert!(
+        voice(&callback.mixer)
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
     if key_lock {
         assert_eq!(
             voice(&callback.mixer).stretch.adopted_request_id(),
@@ -9716,7 +9743,7 @@ assert audio.worker_call_count() == 1
             );
         }
     }
-    (original, execution)
+    (original, execution, launch)
 }
 
 fn public_explicit_seek(
@@ -11187,7 +11214,7 @@ persistence.flush()
                 "controller.on_frame_render()\nassert stopped.is_current() and stopped.effective_mode_status() == 'waiting'\nassert not session.active_sample_ids\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
             );
         }
-        let (original, birth) = stopped_candidate_play(
+        let (original, birth, launch) = stopped_candidate_play(
             &locals,
             &mut h.callback,
             &mut h.consumer,
@@ -11221,6 +11248,7 @@ persistence.flush()
             full_stems.source_version_hash
         ));
         assert!(reference.play_sample_at_output_frame(0, 1.0, birth));
+        install_public_start_reference(&mut reference, launch, &h.callback.transport);
         let mut full_mix = complete_reference_at_loop(
             &full,
             &full_stems,
@@ -11230,6 +11258,7 @@ persistence.flush()
             loop_region,
         );
         assert!(full_mix.play_sample_at_output_frame(0, 1.0, birth));
+        install_public_start_reference(&mut full_mix, launch, &h.callback.transport);
         if key_lock {
             prepare_public_start_reference(&mut reference, birth);
             prepare_public_start_reference(&mut full_mix, birth);

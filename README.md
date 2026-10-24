@@ -80,6 +80,13 @@ keyboard controls, and each learned mapping keeps its own Retrigger setting.
 The sidebar shows preparation or unavailable-choice feedback. With **Key Lock**
 off, changing playback speed also changes the sounding pitch.
 
+### Simultaneous Playback
+
+The performance target is up to six pads playing at the same time. Ten simultaneous
+pads is the maximum synthetic stress-test workload. Playing more than ten pads at
+once may cause audio glitches or other performance problems. Actual headroom also
+depends on the computer, audio settings and processing in use.
+
 ## How to Install
 
 For independent Windows testing, see [Portable installation](docs/portable-windows.md).

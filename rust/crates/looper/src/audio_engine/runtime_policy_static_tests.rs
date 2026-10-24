@@ -6,6 +6,7 @@ mod master_tests;
 
 use super::*;
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+use crate::audio_engine::loop_phase_reference::LoopPhaseReference;
 use crate::audio_engine::prepared_native_history::SourceReadCheckpoint;
 use crate::audio_engine::source_control_epoch::SourceControlEpoch;
 use crate::audio_engine::source_map_admission::SourceMapRow;
@@ -28,6 +29,14 @@ struct StaticPath {
 
 impl StaticPath {
     fn new(lengths: &[usize]) -> Self {
+        Self::new_with_pause(lengths, false)
+    }
+
+    fn with_pause(lengths: &[usize]) -> Self {
+        Self::new_with_pause(lengths, true)
+    }
+
+    fn new_with_pause(lengths: &[usize], pause_before_progress: bool) -> Self {
         assert!(!lengths.is_empty() && lengths.len() <= 32);
         let pcm = (0..STATIC_SOURCE_FRAMES)
             .map(|frame| ((frame * 73 % 28_001) as i32 - 14_000) as i16)
@@ -92,6 +101,36 @@ impl StaticPath {
             let birth = fixture.start(id);
             assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
             assert!(!fixture.path.voice(id).source_playback.is_static_phase());
+        }
+        if pause_before_progress {
+            assert_eq!(fixture.path.timeline.output_frame(), 0);
+            for id in 0..fixture.lanes {
+                let pause = fixture.path.source.engine.pause_sample(id).unwrap();
+                fixture.drain();
+                assert!(
+                    pause
+                        .current_observation()
+                        .unwrap()
+                        .unwrap()
+                        .ordinary_paused()
+                );
+                assert_eq!(
+                    fixture.path.voice(id).source_playback.position().frame,
+                    STATIC_START
+                );
+            }
+            let silent = fixture.path.render(25);
+            assert!(silent.iter().all(|sample| *sample == 0.0));
+            assert_eq!(fixture.path.timeline.output_frame(), 25);
+            for id in 0..fixture.lanes {
+                let raw = fixture.path.voice(id).source_playback.position();
+                assert_eq!(raw.frame, STATIC_START);
+                assert_eq!(raw.fraction, 0.0);
+                fixture.path.source.engine.resume_sample(id).unwrap();
+                fixture.drain();
+                assert!(!fixture.path.voice(id).paused);
+                assert_eq!(fixture.path.voice(id).source_playback.position(), raw);
+            }
         }
         fixture.path.render(23);
         for id in 0..fixture.lanes {
@@ -309,13 +348,14 @@ impl StaticPath {
 }
 
 /// Exact integer reference for the binary case, independently checked by the
-/// retained Fraction oracle. E=23, raw=36, O=-12, F=64: negative debt is25,
-/// correction slope63/64 until n=1623, then source slope1. No production query
+/// retained launch-relative Fraction oracle. Birth T=0, real pause25, E=48,
+/// raw=36, A=13, F=64: positive debt25, slope65/64 until n=1648, then1.
+/// O=-12 remains source-grid provenance. No production query
 /// participates in this calculation.
 fn dense_position(frame: u64, length: usize) -> (usize, f64) {
-    assert!(frame >= 23);
-    let elapsed = u128::from(frame - 23);
-    let unfolded = 36_u128 * 64 + elapsed * 64 - elapsed.min(1600);
+    assert!(frame >= 48);
+    let elapsed = u128::from(frame - 48);
+    let unfolded = 36_u128 * 64 + elapsed * 64 + elapsed.min(1600);
     let relative = (unfolded - STATIC_START as u128 * 64) % (length as u128 * 64);
     (
         STATIC_START + (relative / 64) as usize,
@@ -469,16 +509,45 @@ fn verify_first_resumed_read(fixture: &StaticPath, raw: FractionalSourcePosition
 }
 
 #[test]
-fn static_actual_e_preserves_first_pair_taps_pcm_and_requires_a_second_original_claim() {
+fn static_aligned_original_launch_ignores_off_grid_origin_without_artificial_debt() {
     let mut fixture = StaticPath::new(&[2048, 16384]);
-    let mut preceding = StaticPath::new(&[2048, 16384]);
+    let mut ordinary = StaticPath::new(&[2048, 16384]);
+    assert_eq!(fixture.path.timeline.output_frame(), 23);
+    let snapshot = fixture.install();
+    assert_eq!(snapshot.observation().unwrap().execution_frame, Some(23));
+    for id in 0..2 {
+        let playback = fixture.path.voice(id).source_playback;
+        assert_eq!(playback.position().frame, 36);
+        assert_eq!(playback.position().fraction.to_bits(), 0_f64.to_bits());
+        assert!(playback.static_phase_settled());
+        assert_eq!(playback.tempo_ratio(), 1.0);
+    }
+    for frames in [1, 31, 1993, 4096, 16384] {
+        assert_eq!(fixture.path.render(frames), ordinary.path.render(frames));
+        let output = fixture.path.timeline.output_frame() as usize;
+        for id in 0..2 {
+            let playback = fixture.path.voice(id).source_playback;
+            assert!(playback.static_phase_settled());
+            assert_eq!(
+                playback.position().frame,
+                STATIC_START + output % fixture.lengths[id]
+            );
+            assert_eq!(playback.position().fraction.to_bits(), 0_f64.to_bits());
+        }
+    }
+}
+
+#[test]
+fn static_actual_e_preserves_first_pair_taps_pcm_and_requires_a_second_original_claim() {
+    let mut fixture = StaticPath::with_pause(&[2048, 16384]);
+    let mut preceding = StaticPath::with_pause(&[2048, 16384]);
     let master = fixture.path.timeline;
     let raw = [
         fixture.path.voice(0).source_playback,
         fixture.path.voice(1).source_playback,
     ];
     let snapshot = fixture.install();
-    assert_eq!(snapshot.observation().unwrap().execution_frame, Some(23));
+    assert_eq!(snapshot.observation().unwrap().execution_frame, Some(48));
     for (id, old) in raw.iter().enumerate() {
         let actual = fixture.path.voice(id).source_playback;
         assert_eq!(
@@ -489,7 +558,7 @@ fn static_actual_e_preserves_first_pair_taps_pcm_and_requires_a_second_original_
             (old.position().frame, old.position().fraction.to_bits())
         );
         assert_eq!(actual.effective_domain(), old.effective_domain());
-        assert_eq!(actual.static_first_frame(), Some(23));
+        assert_eq!(actual.static_first_frame(), Some(48));
         assert!(!actual.static_phase_settled());
     }
     assert!(fixture.path.timeline.matches_clock_epoch(&master));
@@ -502,7 +571,7 @@ fn static_actual_e_preserves_first_pair_taps_pcm_and_requires_a_second_original_
 fn static_actual_eight_and_sixty_four_bar_loops_keep_independent_modulo_and_exact_pcm() {
     let mut results = Vec::new();
     for partitions in [&[512][..], &[31, 257, 1, 96, 777][..]] {
-        let mut fixture = StaticPath::new(&[2048, 16384]);
+        let mut fixture = StaticPath::with_pause(&[2048, 16384]);
         fixture.install();
         let master = fixture.path.timeline;
         let mut output = Vec::with_capacity(65536 * 2);
@@ -515,12 +584,12 @@ fn static_actual_eight_and_sixty_four_bar_loops_keep_independent_modulo_and_exac
             part += 1;
         }
         assert!(fixture.path.timeline.matches_clock_epoch(&master));
-        assert_eq!(fixture.path.timeline.output_frame(), 65559);
+        assert_eq!(fixture.path.timeline.output_frame(), 65584);
         for id in 0..2 {
             assert_eq!(verify_dense_actual_reads(&fixture, id), 65536);
             let voice = fixture.path.voice(id);
             assert!(voice.source_playback.static_phase_settled());
-            let (whole, fraction) = dense_position(65559, fixture.lengths[id]);
+            let (whole, fraction) = dense_position(65584, fixture.lengths[id]);
             assert_eq!(
                 (
                     voice.source_playback.position().frame,
@@ -598,8 +667,13 @@ fn static_nonclosure_refuses_the_second_claim_for_all_thirty_two_lanes_without_p
 
 #[test]
 fn static_pause_and_real_hold_resume_preserve_cursor_and_requalify_at_the_live_master() {
-    let mut fixture = StaticPath::new(&[2048]);
+    let mut fixture = StaticPath::with_pause(&[2048]);
     fixture.install();
+    assert!(!fixture.path.voice(0).source_playback.static_phase_settled());
+    assert_ne!(
+        fixture.path.voice(0).source_playback.tempo_ratio(),
+        fixture.path.voice(0).source_playback.rate_target()
+    );
     fixture.path.render(73);
     let before_failed_hold = fixture.path.voice(0).source_playback;
     assert!(fixture.path.source.consumer.is_empty());
@@ -740,7 +814,7 @@ fn static_raw_parent_away_back_before_callback_requires_a_new_claim_without_nume
         fixture
             .path
             .voice(id)
-            .static_policy_revision
+            .phase_policy_revision
             .map(|(revision, _)| revision)
             == Some(original.revision())
     }));
@@ -775,7 +849,7 @@ fn static_raw_parent_away_back_before_callback_requires_a_new_claim_without_nume
             fixture
                 .path
                 .voice(id)
-                .static_policy_revision
+                .phase_policy_revision
                 .map(|(revision, _)| revision),
             Some(current.revision())
         );
@@ -794,8 +868,13 @@ fn static_raw_parent_away_back_before_callback_requires_a_new_claim_without_nume
 
 #[test]
 fn static_same_period_origin_refresh_invalidates_only_a_real_grid_change() {
-    let mut fixture = StaticPath::new(&[2048]);
+    let mut fixture = StaticPath::with_pause(&[2048]);
     fixture.install();
+    assert!(!fixture.path.voice(0).source_playback.static_phase_settled());
+    assert_ne!(
+        fixture.path.voice(0).source_playback.tempo_ratio(),
+        fixture.path.voice(0).source_playback.rate_target()
+    );
     let before = fixture.path.voice(0).source_playback;
     fixture
         .path
@@ -861,8 +940,13 @@ fn static_same_period_origin_refresh_invalidates_only_a_real_grid_change() {
 
 #[test]
 fn static_parent_intent_aba_cannot_reuse_a_preceding_program_or_pending_capture() {
-    let mut fixture = StaticPath::new(&[2048]);
+    let mut fixture = StaticPath::with_pause(&[2048]);
     fixture.install();
+    assert!(!fixture.path.voice(0).source_playback.static_phase_settled());
+    assert_ne!(
+        fixture.path.voice(0).source_playback.tempo_ratio(),
+        fixture.path.voice(0).source_playback.rate_target()
+    );
     let old = fixture.path.voice(0).source_playback;
     let future = fixture
         .path
@@ -923,7 +1007,7 @@ fn static_parent_intent_aba_cannot_reuse_a_preceding_program_or_pending_capture(
 
 #[test]
 fn static_actual_read_history_keeps_its_clock_and_cannot_certify_constant_unity_after_capture() {
-    let mut fixture = StaticPath::new(&[2048]);
+    let mut fixture = StaticPath::with_pause(&[2048]);
     fixture.install();
     fixture.path.render(2048);
     let voice = fixture.path.voice(0);
@@ -944,14 +1028,14 @@ fn static_actual_read_history_keeps_its_clock_and_cannot_certify_constant_unity_
     };
     assert!(checkpoint.is_consistent());
     let mut epoch = SourceControlEpoch::default();
-    epoch.record(Some(23), span.frames, checkpoint, span.context, 1);
-    assert!(!epoch.covers(24, 23 + span.frames as u64, checkpoint, span.context, 1));
+    epoch.record(Some(48), span.frames, checkpoint, span.context, 1);
+    assert!(!epoch.covers(49, 48 + span.frames as u64, checkpoint, span.context, 1));
     let mut advanced = checkpoint;
     assert!(
         !advanced.project_output_frames(span.frames as u64),
         "Native constant-history projection must refuse the static clock"
     );
-    assert!(!epoch.covers(24, 23 + span.frames as u64, advanced, span.context, 1));
+    assert!(!epoch.covers(49, 48 + span.frames as u64, advanced, span.context, 1));
 }
 
 #[test]
@@ -1019,7 +1103,7 @@ fn static_full_and_checked_readers_reject_wrong_scalar_domain_or_layout_before_o
     // Neither full nor checked rendering may write the first sample first.
     let mut late_master = TransportTimeline::new(RATE);
     assert!(late_master.set_master_period(STATIC_PERIOD));
-    let raw = SourcePlayback::scalar_continuation(
+    let mut raw = SourcePlayback::scalar_continuation(
         FractionalSourcePosition {
             frame: STATIC_START,
             fraction: 0.0,
@@ -1030,9 +1114,10 @@ fn static_full_and_checked_readers_reject_wrong_scalar_domain_or_layout_before_o
         1.0,
     )
     .unwrap();
+    raw.install_launch_reference(LoopPhaseReference::capture(Some(late_master), u64::MAX - 1));
     let late = SourcePlayback::static_continuation(
         &raw,
-        late_master.beat_projection().unwrap(),
+        late_master,
         u64::MAX - 1,
         77,
         STATIC_F,
@@ -1072,7 +1157,7 @@ fn static_full_and_checked_readers_reject_wrong_scalar_domain_or_layout_before_o
 
 #[test]
 fn static_competing_original_global_lease_keeps_phase_work_pending_without_clock_mutation() {
-    let (mut fixture, snapshot) = pending_phase(2);
+    let (mut fixture, snapshot) = pending_phase(2, false);
     // Both original control/parameter drains complete before the competing
     // publisher takes its lease; otherwise the earlier Busy guard, rather than
     // final lease contention, is the actual refusal predicate.
@@ -1332,7 +1417,7 @@ fn static_terminal_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape()
 #[test]
 fn static_original_source_write_keeps_the_frozen_voice_when_new_bank_metadata_changes() {
     use std::sync::atomic::Ordering;
-    let mut fixture = StaticPath::new(&[2048]);
+    let mut fixture = StaticPath::with_pause(&[2048]);
     fixture.install();
     fixture.path.render(17);
     let old_clock = fixture.path.voice(0).source_playback;
@@ -1614,7 +1699,7 @@ fn static_blocked_pitch_set_retrigger_can_prepare_and_apply_after_real_sync_off(
     assert!(output.iter().any(|value| *value != 0.0));
 }
 
-fn accepted_musical_static() -> (StaticPath, f64, f64, f64) {
+fn accepted_musical_static() -> (StaticPath, f64, f64, f64, f64) {
     use crate::audio_engine::constant_timing::l3_constant_timing_fixture;
     let mut fixture = StaticPath::new(&[1500]);
     fixture.path.source.engine.stop_sample(0).unwrap();
@@ -1660,6 +1745,8 @@ fn accepted_musical_static() -> (StaticPath, f64, f64, f64) {
     fixture.path.source.mixer.set_master_period(period);
     assert!(fixture.path.timeline.set_master_period(period));
     fixture.publish(false, 1, 7, None);
+    assert_eq!(fixture.path.timeline.output_frame(), 23);
+    let launch_master = fixture.path.timeline.beat_position_at_frame(23).unwrap();
     let birth = fixture.start(0);
     assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
     let actual = fixture.path.voice(0).source_timing.accepted.unwrap();
@@ -1697,14 +1784,16 @@ fn accepted_musical_static() -> (StaticPath, f64, f64, f64) {
             .source_playback
             .static_grid_matches(f, o, 1.0 / 16.0)
     );
-    (fixture, f, o, p)
+    (fixture, f, o, p, launch_master)
 }
 
+#[allow(clippy::too_many_arguments)] // Keep the independent original launch and reader inputs explicit.
 fn verify_musical_static_reads(
     fixture: &StaticPath,
     f: f64,
     o: f64,
     p: f64,
+    launch_master: f64,
     initial: FractionalSourcePosition,
     first: u64,
     master: TransportTimeline,
@@ -1727,6 +1816,8 @@ fn verify_musical_static_reads(
         let m0 = master.beat_position_at_frame(first).unwrap();
         let mut read_frames = 0;
         let mut seam_frames = 0;
+        let mut rounded_knot_seen = false;
+        let mut rounded_period_seen = false;
         for span in history
             .spans()
             .filter(|span| span.playback.is_static_phase())
@@ -1750,6 +1841,7 @@ fn verify_musical_static_reads(
                     fixture.lengths[0],
                     initial.frame,
                     initial.fraction,
+                    launch_master,
                     m0,
                     1.0,
                     masters,
@@ -1777,6 +1869,36 @@ fn verify_musical_static_reads(
                     "n={}",
                     output + offset as u64
                 );
+                if output + offset as u64 == 1522 {
+                    // The exact split remains below the last knot. The existing
+                    // ScalarMusical reader rounds its binary64 phase onto it;
+                    // equal PCM at weights one/zero cannot prove tap topology.
+                    assert_eq!(position.frame, 1511);
+                    assert!(position.fraction > 0.0 && position.fraction < 1.0);
+                    assert_eq!(
+                        (position.frame - STATIC_START) as f64 + position.fraction,
+                        1499.0
+                    );
+                    assert_eq!(
+                        (left, right, gain_bits, captured),
+                        (1512, Some(13), 0, true)
+                    );
+                    rounded_knot_seen = true;
+                }
+                if output + offset as u64 == 6024 {
+                    // Rounding onto virtual P skips the seam branch; the
+                    // ordinary reader then wraps both physical integer taps.
+                    assert_eq!(position.frame, 1513);
+                    assert!(position.fraction > 0.0 && position.fraction < 0.25);
+                    let phase = (position.frame - STATIC_START) as f64 + position.fraction;
+                    assert_eq!(phase, p);
+                    assert_eq!(phase.rem_euclid(p), 0.0);
+                    assert_eq!(
+                        (left, right, gain_bits, captured),
+                        (13, Some(14), 0x3e80_0000, true)
+                    );
+                    rounded_period_seen = true;
+                }
                 if offset == span.frames {
                     let mut end = span.playback;
                     assert!(end.advance(offset));
@@ -1819,6 +1941,8 @@ fn verify_musical_static_reads(
             }
             read_frames += span.frames;
         }
+        assert!(rounded_knot_seen);
+        assert!(rounded_period_seen);
         (read_frames, seam_frames)
     })
 }
@@ -1827,7 +1951,7 @@ fn verify_musical_static_reads(
 fn static_actual_accepted_scalar_musical_period_keeps_virtual_seam_pcm_capture_and_dissolution() {
     let mut results = Vec::new();
     for partitions in [&[512][..], &[31, 257, 1, 96, 777][..]] {
-        let (mut fixture, f, o, p) = accepted_musical_static();
+        let (mut fixture, f, o, p, launch_master) = accepted_musical_static();
         let first = fixture.path.timeline.output_frame();
         let master = fixture.path.timeline;
         let initial = fixture.path.voice(0).source_playback.position();
@@ -1848,7 +1972,7 @@ fn static_actual_accepted_scalar_musical_period_keeps_virtual_seam_pcm_capture_a
             remaining -= frames;
         }
         let (reads, seam_reads) =
-            verify_musical_static_reads(&fixture, f, o, p, initial, first, master);
+            verify_musical_static_reads(&fixture, f, o, p, launch_master, initial, first, master);
         assert_eq!(reads, 65_536);
         assert!(seam_reads > 0);
         assert!(fixture.path.voice(0).source_playback.static_phase_settled());
@@ -1947,8 +2071,12 @@ impl AudioBufferRetirement for StaticRetirement {
     }
 }
 
-fn pending_phase(lanes: usize) -> (StaticPath, Arc<RuntimePolicySnapshot>) {
-    let mut fixture = StaticPath::new(&vec![2048; lanes]);
+fn pending_phase(lanes: usize, correcting: bool) -> (StaticPath, Arc<RuntimePolicySnapshot>) {
+    let mut fixture = if correcting {
+        StaticPath::with_pause(&vec![2048; lanes])
+    } else {
+        StaticPath::new(&vec![2048; lanes])
+    };
     fixture.publish(true, 2, 7, None);
     let snapshot = fixture.effect();
     assert!(!fixture.path.voice(0).source_playback.is_static_phase());
@@ -1995,7 +2123,7 @@ fn static_productive_constructor_claim_and_renderer_fit_two_mib_without_rust_req
         .name("static-productive-two-mib".into())
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
-            let (mut fixture, snapshot) = pending_phase(6);
+            let (mut fixture, snapshot) = pending_phase(6, true);
             let mut output = [0.0; 1024];
             let mut retired = StaticRetirement::new();
             let (_, allocations) = observe_current_thread(|| {
@@ -2019,14 +2147,10 @@ fn static_productive_constructor_claim_and_renderer_fit_two_mib_without_rust_req
 #[test]
 #[ignore = "descriptive productive profile; Root runs serially after the frozen systems review"]
 fn descriptive_static_actual_constructor_renderer_cohorts_report_cost_and_limits() {
-    let mut cohorts = vec![2, 4, 6, 20];
-    let mut index = 0;
-    while index < cohorts.len() {
-        let lanes = cohorts[index];
-        index += 1;
+    for lanes in [2, 4, 6, 10] {
         let mut elapsed = Vec::new();
         for repeat in 0..4 {
-            let (mut fixture, snapshot) = pending_phase(lanes);
+            let (mut fixture, snapshot) = pending_phase(lanes, true);
             let mut output = [0.0; 1024];
             let mut retired = StaticRetirement::new();
             let start = Instant::now();
@@ -2042,9 +2166,6 @@ fn descriptive_static_actual_constructor_renderer_cohorts_report_cost_and_limits
         }
         elapsed.sort_by(f64::total_cmp);
         let nominal = 512.0 / f64::from(RATE) * 1000.0;
-        if lanes == 20 && elapsed[2] > nominal {
-            cohorts.push(10);
-        }
         println!(
             "static_productive_profile active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original queue/drains, second actual-E claim, exact static construction, full dry renderer, history and copied advance; setup/output/retirement allocation precedes measurement; Rust requests observed zero; Native allocation/deallocation and device/music/worstcase acceptance unobserved; previous mapped performance negatives remain open",
             elapsed[1],
@@ -2053,17 +2174,20 @@ fn descriptive_static_actual_constructor_renderer_cohorts_report_cost_and_limits
         );
     }
 }
-// Original standard-library Fraction reference; its independently checked helper is retained in test-artifacts/static-common-phase-20261024/static_phase_fraction_oracle.py.
+// Launch-relative standard-library Fraction reference, version2. Historical
+// absolute-origin oracle and results remain unchanged in their original block.
 const MUSICAL_FRACTION_ORACLE: &str = r####""""Independent rational expectations for the declared static-phase contract.
 
-No project module or Native library is imported. All input floats are decoded by
-Fraction. The oracle uses rational arithmetic, not the production fixed-grid core.
+No project module or Native library is imported. Source coordinates use Fraction,
+not the production fixed-grid core. Physical reader topology and gains separately
+follow the existing ScalarMusical binary64 operations after the exact source split.
 Generated tuples preserve the defined binary64 Transport operation order; the Rust
 test separately verifies those master bits against the actual TransportTimeline.
 """
 
 import argparse
 import json
+import math
 import struct
 from fractions import Fraction as F
 from pathlib import Path
@@ -2077,8 +2201,8 @@ def master(frame: int, fpb: float, anchor_frame: int, anchor: float) -> float:
     return anchor + (float(frame) - float(anchor_frame)) / fpb
 
 
-def choose(initial: F, origin: F, period: F, nominal: F, m0: F, fpb: F):
-    residue = (origin + m0 * fpb - initial) % period
+def choose(initial: F, start: int, period: F, nominal: F, mt: F, m0: F, fpb: F):
+    residue = (F(start) + (m0 - mt) * fpb - initial) % period
     candidates = [residue] if residue == 0 else [residue, residue - period]
     candidates.sort(key=lambda value: (abs(value), value < 0))
     for debt in candidates:
@@ -2129,10 +2253,11 @@ def rn32(value: F) -> int:
 
 
 def musical_trace(source_fpb, origin, period, start, physical_length, raw_whole,
-                  raw_fraction, m0, nominal, masters):
-    """Exact original scalar musical circle and its physical last/first seam."""
+                  raw_fraction, launch_master, m0, nominal, masters):
+    """Exact source circle, then the existing rounded physical last/first reader."""
     initial = F(raw_whole) + F(raw_fraction)
-    debt, shift = choose(initial, F(origin), F(period), F(nominal), F(m0), F(source_fpb))
+    # Origin is source-grid provenance; the target uses original selected A/T.
+    debt, shift = choose(initial, start, F(period), F(nominal), F(launch_master), F(m0), F(source_fpb))
     last = min(-(-F(period).numerator // F(period).denominator) - 1, physical_length - 1)
     result = []
     for value in masters:
@@ -2142,12 +2267,16 @@ def musical_trace(source_fpb, origin, period, start, physical_length, raw_whole,
         exact = initial + progress + (correction if debt > 0 else -correction)
         whole, fraction_bits = split(exact, start, F(period), raw_fraction)
         fraction = struct.unpack("<d", struct.pack("<Q", fraction_bits))[0]
-        phase = F(whole - start) + F(fraction)
-        if phase >= last:
+        # Positive normal phase: fmod matches Rust f64::rem_euclid. Preserve
+        # the reader's binary64 add/rem/sub/div before its final RN32 gain.
+        phase = math.fmod(float(max(whole - start, 0)) + fraction, period)
+        if phase >= float(last):
             left, right = start + last, start
-            gain = rn32((phase - last) / (F(period) - last))
+            gain = rn32(F((phase - float(last)) / (period - float(last))))
         else:
-            left, right = whole, whole + 1 if fraction else None
+            base = max(whole - start, 0)
+            left = start + base % physical_length
+            right = start + (base + 1) % physical_length if fraction else None
             gain = rn32(F(fraction))
         captured = progress >= abs(debt) * (1 << shift)
         result.append((whole, fraction_bits, left, right, gain, captured))

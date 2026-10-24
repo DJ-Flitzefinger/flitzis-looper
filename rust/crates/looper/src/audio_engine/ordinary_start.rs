@@ -43,6 +43,9 @@ pub(crate) struct OrdinaryStartWork {
     captured_loop: Option<(f64, Option<f64>)>,
     mapped_clock: Option<super::mapped_source_clock::MappedClockEpoch>,
     mapped_origin_frame: Option<u64>,
+    launch_reference: super::loop_phase_reference::LoopPhaseReference,
+    launch_qualification: super::loop_phase_reference::LaunchQualification,
+    pub(crate) phase_launch_qualified: bool,
 }
 
 impl OrdinaryStartWork {
@@ -80,6 +83,9 @@ impl OrdinaryStartWork {
             captured_loop: None,
             mapped_clock: None,
             mapped_origin_frame: None,
+            launch_reference: super::loop_phase_reference::LoopPhaseReference::Unavailable,
+            launch_qualification: super::loop_phase_reference::LaunchQualification::default(),
+            phase_launch_qualified: false,
         }))
     }
 
@@ -93,7 +99,12 @@ impl OrdinaryStartWork {
         &mut self,
         timeline: Option<super::transport::TransportTimeline>,
         original: u64,
+        admission: u64,
     ) -> Result<(), PitchActionReject> {
+        self.launch_reference =
+            super::loop_phase_reference::LoopPhaseReference::capture(timeline, original);
+        self.launch_qualification =
+            super::loop_phase_reference::LaunchQualification::capture(timeline, admission);
         let Some(geometry) = self.origin().mapped_geometry() else {
             return Ok(());
         };
@@ -119,6 +130,19 @@ impl OrdinaryStartWork {
         &self,
     ) -> Option<(super::mapped_source_clock::MappedClockEpoch, u64)> {
         self.mapped_clock.zip(self.mapped_origin_frame)
+    }
+    pub(crate) fn launch_reference(&self) -> super::loop_phase_reference::LoopPhaseReference {
+        self.launch_reference
+    }
+
+    pub(crate) fn qualify_phase_launch_at(
+        &mut self,
+        timeline: Option<super::transport::TransportTimeline>,
+        execution: u64,
+    ) {
+        self.phase_launch_qualified =
+            self.launch_qualification
+                .at_effect(self.launch_reference, timeline, execution);
     }
     pub(crate) fn validate_mapped_timeline(
         &self,
@@ -217,7 +241,7 @@ impl OrdinaryStartWork {
     ) -> Result<(), PitchActionReject> {
         if self.launch_origin.is_some()
             || !origin.is_consistent()
-            || origin.playback.is_static_phase()
+            || origin.playback.has_phase_program()
             || origin.plan.seek_mode != super::source_reader::ExplicitSeekMode::Normal
             || origin.plan.transition.is_active()
             || origin.playback.tempo_ratio().to_bits() != origin.playback.rate_target().to_bits()

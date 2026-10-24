@@ -15,6 +15,7 @@ use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, Pe
 use crate::audio_engine::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
+use crate::audio_engine::loop_phase_reference::LoopPhaseReference;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::audio_engine::resident_relocation::{
     WindowRequest, prepare_window_with_producer, reconcile,
@@ -3958,6 +3959,37 @@ controller.shut_down()
     );
 }
 
+fn install_public_start_reference(
+    mixer: &mut RtMixer,
+    launch: LoopPhaseReference,
+    timeline: &crate::audio_engine::transport::TransportTimeline,
+) {
+    assert!(launch.current(timeline));
+    let index = mixer
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    // Use this independent mixer's own physical or ScalarMusical geometry. Native
+    // preparation and feeds must already include the original admission's M(T).
+    let domain = mixer
+        .capture_pitch_voice_snapshot(index)
+        .unwrap()
+        .plan
+        .domain();
+    let playback = &mut mixer.voices[index].source_playback;
+    let position = playback.position();
+    assert_eq!(position.frame, domain.region.start);
+    assert_eq!(position.fraction.to_bits(), 0.0_f64.to_bits());
+    assert_eq!(
+        position.seek_mode,
+        crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+    );
+    assert!(playback.configure_domain(domain));
+    playback.install_launch_reference(launch);
+    assert!(playback.phase_reference_current(timeline));
+}
+
 fn prepare_ordinary_controller_reference(mixer: &mut RtMixer, execution: u64) {
     use crate::audio_engine::native_history_permit::NativeHistoryContext;
     use crate::audio_engine::pitch_intent::PitchIntent;
@@ -4225,7 +4257,8 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
     );
 
     let ratio = 0.75;
-    let make_reference = |all: bool, execution: u64| {
+    let launch_timeline = h.callback.transport;
+    let make_reference = |all: bool, original: u64, execution: u64| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
         // Independent immutable renderer, with its own explicit KeyLock requests.
         let ownership = Arc::new(InputRuntimeOwnership::default());
@@ -4261,6 +4294,11 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         }
         assert!(mixer.play_sample_at_output_frame(0, 1.0, execution));
         if stopped_start {
+            install_public_start_reference(
+                &mut mixer,
+                LoopPhaseReference::capture(Some(launch_timeline), original),
+                &launch_timeline,
+            );
             prepare_ordinary_controller_reference(&mut mixer, execution);
         }
         mixer
@@ -4274,10 +4312,16 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         (0, 0)
     };
     assert!(execution >= original);
+    assert_eq!(
+        voice(&h.callback.mixer)
+            .source_playback
+            .phase_reference_current(&launch_timeline),
+        stopped_start
+    );
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: make_reference(stopped_start, execution),
-        full_mix: make_reference(false, execution),
+        reference: make_reference(stopped_start, original, execution),
+        full_mix: make_reference(false, original, execution),
         frame: execution,
         source_frame: 0,
         resumed_at: None,

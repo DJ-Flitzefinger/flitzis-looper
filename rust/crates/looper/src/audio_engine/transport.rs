@@ -40,6 +40,7 @@ pub(crate) struct TransportTimeline {
     beat_anchor_position: f64,
     bootstrap_reference: Option<usize>,
     bootstrap_complete: bool,
+    phase_generation: u64,
 }
 
 /// Immutable beat projection copied only from the authoritative transport.
@@ -126,11 +127,24 @@ impl TransportTimeline {
             beat_anchor_position: 0.0,
             bootstrap_reference: None,
             bootstrap_complete: false,
+            phase_generation: 1,
         }
     }
 
     pub(crate) fn output_frame(&self) -> u64 {
         self.output_frame
+    }
+
+    pub(crate) fn phase_generation(&self) -> u64 {
+        self.phase_generation
+    }
+
+    fn generation_for_anchor(&self, beat: Option<f64>, frame: u64) -> Option<u64> {
+        if self.beat_position_at_frame(frame).map(f64::to_bits) == beat.map(f64::to_bits) {
+            Some(self.phase_generation)
+        } else {
+            self.phase_generation.checked_add(1)
+        }
     }
 
     // --- Reserved getters/setters for future transport integration (UI display, scheduling) ---
@@ -160,10 +174,15 @@ impl TransportTimeline {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn set_downbeat_frame(&mut self, frame: u64) {
+    pub(crate) fn set_downbeat_frame(&mut self, frame: u64) -> bool {
+        let Some(generation) = self.generation_for_anchor(Some(0.0), frame) else {
+            return false;
+        };
         self.downbeat_frame = frame;
         self.beat_anchor_frame = frame;
         self.beat_anchor_position = 0.0;
+        self.phase_generation = generation;
+        true
     }
 
     #[allow(dead_code)]
@@ -190,6 +209,18 @@ impl TransportTimeline {
         beat_position: f64,
         output_frame: u64,
     ) -> bool {
+        let Some(generation) = self.generation_for_anchor(Some(beat_position), output_frame) else {
+            return false;
+        };
+        if !self.anchor_beat_position_raw(beat_position, output_frame) {
+            return false;
+        }
+        self.phase_generation = generation;
+        true
+    }
+
+    /// Raw mechanics used only after the outer operation qualifies provenance.
+    fn anchor_beat_position_raw(&mut self, beat_position: f64, output_frame: u64) -> bool {
         if !beat_position.is_finite() {
             return false;
         }
@@ -253,10 +284,14 @@ impl TransportTimeline {
         if !self.is_valid_period(period_seconds) {
             return false;
         }
+        let Some(generation) = self.generation_for_anchor(Some(beat_position), output_frame) else {
+            return false;
+        };
         let previous = *self;
         self.master_period_seconds = Some(period_seconds);
 
-        if self.anchor_beat_position_at_frame(beat_position, output_frame) {
+        if self.anchor_beat_position_raw(beat_position, output_frame) {
+            self.phase_generation = generation;
             return true;
         }
 
@@ -363,7 +398,15 @@ impl TransportTimeline {
         if !self.is_valid_period(period_seconds) {
             return false;
         }
-        self.master_period_seconds = Some(period_seconds);
+        let mut candidate = *self;
+        candidate.master_period_seconds = Some(period_seconds);
+        let Some(generation) =
+            self.generation_for_anchor(candidate.beat_position(), self.output_frame)
+        else {
+            return false;
+        };
+        candidate.phase_generation = generation;
+        *self = candidate;
         true
     }
 
@@ -378,8 +421,13 @@ impl TransportTimeline {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn clear_master_bpm(&mut self) {
+    pub(crate) fn clear_master_bpm(&mut self) -> bool {
+        let Some(generation) = self.generation_for_anchor(None, self.output_frame) else {
+            return false;
+        };
         self.master_period_seconds = None;
+        self.phase_generation = generation;
+        true
     }
 
     pub(crate) fn advance_by_rendered_frames(&mut self, frames: usize) {
@@ -420,6 +468,7 @@ impl TransportTimeline {
     /// A copied projection is data from this same authority, never another transport clock.
     pub(crate) fn matches_clock_epoch(&self, other: &Self) -> bool {
         self.sample_rate_hz == other.sample_rate_hz
+            && self.phase_generation == other.phase_generation
             && self.master_period_seconds.map(f64::to_bits)
                 == other.master_period_seconds.map(f64::to_bits)
             && self.beat_anchor_frame == other.beat_anchor_frame
@@ -1080,6 +1129,47 @@ mod tests {
         );
         assert!(!transport.bootstrap_from_source_period_at_frame(first_period, 0.0, frame));
         assert_eq!(transport.master_period_seconds(), Some(next_period));
+    }
+
+    #[test]
+    fn phase_generation_fences_relabel_aba_and_missing_master_but_retains_continuous_tempo() {
+        let mut transport = transport_at(96_000);
+        let generation = transport.phase_generation();
+        let beat = transport.beat_position().unwrap();
+        assert!(transport.set_master_period_preserving_beat_position_at_frame(0.75, 96_000));
+        assert_eq!(transport.phase_generation(), generation);
+        assert_eq!(transport.beat_position(), Some(beat));
+        let before = transport;
+        assert!(transport.anchor_beat_position_at_frame(beat + 64.0, 96_000));
+        assert!(transport.anchor_beat_position_at_frame(beat, 96_000));
+        assert_eq!(transport.phase_generation(), generation + 2);
+        assert!(!transport.matches_clock_epoch(&before));
+        assert!(transport.clear_master_bpm());
+        assert_eq!(transport.phase_generation(), generation + 3);
+        assert!(transport.clear_master_bpm());
+        assert_eq!(transport.phase_generation(), generation + 3);
+        assert!(transport.set_master_period(0.75));
+        assert_eq!(transport.phase_generation(), generation + 4);
+    }
+
+    #[test]
+    fn exhausted_phase_generation_refuses_discontinuous_mutations_atomically() {
+        let mut transport = transport_at(96_000);
+        transport.phase_generation = u64::MAX;
+        let beat = transport.beat_position().unwrap();
+        assert!(transport.set_master_period_preserving_beat_position_at_frame(0.75, 96_000));
+        // At the new anchor a period change is continuous. One actual frame
+        // later it changes M(F), so rejecting it genuinely needs a new generation.
+        transport.advance_by_rendered_frames(1);
+        let before = format!("{transport:?}");
+        assert!(!transport.anchor_beat_position_at_frame(beat + 1.0, 96_000));
+        assert!(
+            !transport.set_master_period_and_anchor_beat_position_at_frame(0.5, beat + 1.0, 96_000)
+        );
+        assert!(!transport.set_master_period(0.5));
+        assert!(!transport.set_downbeat_frame(96_000));
+        assert!(!transport.clear_master_bpm());
+        assert_eq!(format!("{transport:?}"), before);
     }
 
     #[test]

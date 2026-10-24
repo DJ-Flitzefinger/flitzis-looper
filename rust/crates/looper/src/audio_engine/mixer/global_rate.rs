@@ -921,6 +921,22 @@ impl RtMixer {
                 {
                     return Err(RateError::MappedTimingUnavailable);
                 }
+                if voice.source_playback.is_mapped_phase() {
+                    // This is a real tuple effect (dry_mapped excludes no-ops).
+                    // Recover ordinary mapping at the same pair/live master;
+                    // the original complete claim still owns every effect.
+                    *replacement = Some(
+                        SourcePlayback::mapped_ordinary_recovery_at(
+                            geometry,
+                            old_epoch.marker(),
+                            candidate,
+                            &voice.source_playback,
+                            frame,
+                        )
+                        .map_err(|_| RateError::MappedTimingUnavailable)?,
+                    );
+                    continue;
+                }
                 if candidate.matches_clock_epoch(transport) {
                     continue;
                 }

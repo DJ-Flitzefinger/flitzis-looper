@@ -179,6 +179,7 @@ impl MappedLoopGeometry {
                 minimum,
                 maximum,
             }),
+            common_phase: None,
         })
     }
 }
@@ -610,9 +611,7 @@ pub(super) fn refresh(
     let span = MappedSourceSpan {
         epoch,
         segment,
-        program: SpanProgram::Physical {
-            cycles: [cycles as u64, (cycles >> 64) as u64],
-        },
+        program: SpanProgram::physical([cycles as u64, (cycles >> 64) as u64]),
         loaded_rate_hz: geometry.loaded_rate_hz,
         start_frame,
         end_frame,
@@ -665,9 +664,7 @@ pub(super) fn local_view(
     {
         return Err(unavailable);
     }
-    let SpanProgram::Physical { cycles } = span.program else {
-        return Err(unavailable);
-    };
+    let cycles = span.program.physical_value().ok_or(unavailable)?;
     let cycles = u128::from(cycles[0]) | u128::from(cycles[1]) << 64;
     let anchor = span.epoch.anchor().ok_or(unavailable)?;
     let mut source = GridStats::new()
@@ -973,9 +970,7 @@ mod tests {
         assert!(terminal.position_in_domain(g.domain(), u64::MAX).is_some());
         assert!(g.refresh_span(e, u64::MAX).is_err());
         let mut span = g.refresh_span(e, 0).unwrap();
-        span.program = SpanProgram::Physical {
-            cycles: [u64::MAX, u64::MAX],
-        };
+        span.program = SpanProgram::physical([u64::MAX, u64::MAX]);
         assert!(span.local_general_view(g.domain()).is_err());
     }
 }

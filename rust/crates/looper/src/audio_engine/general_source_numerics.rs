@@ -11,7 +11,8 @@ use std::cmp::Ordering;
 
 use super::compact_source_numerics::{Grid, decode_f64_at_grid, exact_f64_parts};
 use super::source_numerics::SourceCoordinate;
-use super::source_reader::FrameRange;
+use super::source_reader::{FrameRange, SourceLoopDomain};
+use super::source_reader_period::SourceReaderPeriod;
 
 pub(super) type Magnitude = bnum::Uint<64>;
 type Wide = bnum::Uint<128>;
@@ -342,6 +343,59 @@ impl MappedReaderPeriod {
             denominator,
         })
     }
+
+    /// Temporary coordinates for the same actual scalar period, without a new
+    /// reader domain or owner. Decoding already removes every common power of
+    /// two, so this dyadic construction needs no runtime GCD or approximation.
+    pub(super) fn from_scalar_exact(period: f64) -> Option<Self> {
+        if !period.is_finite() || !(0.5..=18_446_744_073_709_551_616.0).contains(&period) {
+            return None;
+        }
+        let (coefficient, exponent) = dyadic(period)?;
+        let coefficient = u128::try_from(coefficient).ok()?;
+        let (n, d) = if exponent >= 0 {
+            (
+                shl(Magnitude::try_from(coefficient).ok()?, exponent as u32)?,
+                Magnitude::try_from(1_u8).ok()?,
+            )
+        } else {
+            (
+                Magnitude::try_from(coefficient).ok()?,
+                shl(
+                    Magnitude::try_from(1_u8).ok()?,
+                    u32::try_from(-exponent).ok()?,
+                )?,
+            )
+        };
+        if n.is_zero() || n.bit_width() > 256 || d.bit_width() > 256 {
+            return None;
+        }
+        let mut numerator = [0; 32];
+        numerator.copy_from_slice(&n.as_bytes()[..32]);
+        let mut denominator = [0; 32];
+        denominator.copy_from_slice(&d.as_bytes()[..32]);
+        Some(Self {
+            numerator,
+            denominator,
+        })
+    }
+
+    /// Largest permitted virtual raw whole, before physical tap projection.
+    /// This is exact ceil(start + P) - 1, not the rounded marker endpoint or
+    /// the deliberately physical-clamped last tap prepared below.
+    pub(super) fn max_canonical_frame(self, start: usize) -> Option<u64> {
+        let n = stored(self.numerator);
+        let d = stored(self.denominator);
+        if n.is_zero() || d.is_zero() {
+            return None;
+        }
+        let q = u128::try_from(n.checked_div(d)?).ok()?;
+        let has_remainder = !n.checked_rem(d)?.is_zero();
+        let exclusive = (start as u128)
+            .checked_add(q)?
+            .checked_add(u128::from(has_remainder))?;
+        u64::try_from(exclusive.checked_sub(1)?).ok()
+    }
     /// Display metadata only; exact admission and addressing never use this value.
     pub(super) fn approximate(self) -> f64 {
         let convert = |bytes: [u8; 32]| {
@@ -553,6 +607,133 @@ impl MappedReaderPeriod {
         (start as u128)
             .checked_add(u128::try_from(q).ok()?)?
             .checked_add(u128::from(increment))
+    }
+}
+
+/// Normalize the separately proved recovery-closed source value before using
+/// any unchanged reader splitter. No period256 cross-product sees N461/D454.
+/// The actual reader domain and its physical/rational membership stay intact.
+pub(super) fn split_recovery_coordinate(
+    numerator: Integer,
+    denominator: Integer,
+    recovery_exp: i16,
+    raw_fraction: f64,
+    domain: SourceLoopDomain,
+) -> Option<SourceCoordinate> {
+    let prepared = PreparedRecoverySplit::new(domain, recovery_exp, raw_fraction)?;
+    prepared.split(normalize_recovery_coefficient(
+        numerator,
+        denominator,
+        recovery_exp,
+    )?)
+}
+
+/// Exact unrounded coefficient on the already proved recovery lattice. This
+/// performs no binary64 source rounding and conveys no reader/domain permit.
+pub(super) fn normalize_recovery_coefficient(
+    numerator: Integer,
+    denominator: Integer,
+    recovery_exp: i16,
+) -> Option<u128> {
+    if numerator.negative
+        || denominator <= Integer::ZERO
+        || numerator.magnitude.bit_width() > 461
+        || denominator.magnitude.bit_width() > 454
+        || !(-126..=0).contains(&recovery_exp)
+    {
+        return None;
+    }
+    let powers = denominator.magnitude.trailing_zeros();
+    let odd = denominator.magnitude >> powers;
+    if !numerator.magnitude.checked_rem(odd)?.is_zero() {
+        return None;
+    }
+    let value = numerator.magnitude.checked_div(odd)?;
+    let shift = -i32::try_from(powers).ok()? - i32::from(recovery_exp);
+    let normalized = if shift >= 0 {
+        let shift = u32::try_from(shift).ok()?;
+        if value.bit_width().checked_add(shift)? > 126 {
+            return None;
+        }
+        shl(value, shift)?
+    } else {
+        let divisor = shl(Magnitude::try_from(1_u8).ok()?, u32::try_from(-shift).ok()?)?;
+        if !value.checked_rem(divisor)?.is_zero() {
+            return None;
+        }
+        value.checked_div(divisor)?
+    };
+    if normalized.bit_width() > 126 {
+        return None;
+    }
+    u128::try_from(normalized).ok()
+}
+
+/// One temporary actual-domain splitter. Only constants/validation are cached;
+/// membership, raw identity, RN-even and seam carry remain the original split.
+pub(super) struct PreparedRecoverySplit {
+    kind: RecoverySplitKind,
+    scale: Integer,
+    raw_fraction: f64,
+}
+#[derive(Clone, Copy)]
+enum RecoverySplitKind {
+    Physical(FrameRange),
+    Mapped {
+        period: MappedReaderPeriod,
+        start: usize,
+    },
+}
+impl PreparedRecoverySplit {
+    pub(super) fn new(
+        domain: SourceLoopDomain,
+        recovery_exp: i16,
+        raw_fraction: f64,
+    ) -> Option<Self> {
+        if !domain.is_valid() || !(-126..=0).contains(&recovery_exp) {
+            return None;
+        }
+        let scale = Integer::from_u128(1)?.shl(u32::try_from(-recovery_exp).ok()?)?;
+        let kind = match domain.musical_period {
+            SourceReaderPeriod::Physical | SourceReaderPeriod::MappedPhysicalQuarters(_) => {
+                RecoverySplitKind::Physical(domain.region)
+            }
+            SourceReaderPeriod::ScalarMusical(bits) => {
+                let period = MappedReaderPeriod::from_scalar_exact(f64::from_bits(bits))?;
+                period.validate_physical(domain.region).then_some(())?;
+                RecoverySplitKind::Mapped {
+                    period,
+                    start: domain.region.start,
+                }
+            }
+            SourceReaderPeriod::MappedRational(period) => RecoverySplitKind::Mapped {
+                period,
+                start: domain.region.start,
+            },
+        };
+        Some(Self {
+            kind,
+            scale,
+            raw_fraction,
+        })
+    }
+
+    pub(super) fn split(&self, coefficient: u128) -> Option<SourceCoordinate> {
+        if coefficient >= 1_u128 << 126 {
+            return None;
+        }
+        let normalized = Integer::from_u128(coefficient)?;
+        match self.kind {
+            RecoverySplitKind::Physical(region) => split_physical_coordinate(
+                PhysicalInteger::from_integer(normalized),
+                PhysicalInteger::from_integer(self.scale),
+                self.raw_fraction,
+                region,
+            ),
+            RecoverySplitKind::Mapped { period, start } => {
+                period.split(normalized, self.scale, self.raw_fraction, start)
+            }
+        }
     }
 }
 

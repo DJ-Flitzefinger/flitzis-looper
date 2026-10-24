@@ -125,7 +125,7 @@ impl RtMixer {
                 })
                 || owner.source_sync_witness(key, generation).is_none()
                 || !epoch.matches_timeline(transport)
-                || geometry.validate_epoch(epoch).is_err()
+                || !voice.source_playback.validate_mapped_reference(geometry)
                 || !voice.source_playback.matches_domain(geometry.domain())
                 || !voice.source_admission.as_ref()?.current_for_birth(
                     &self.input_runtime_ownership,

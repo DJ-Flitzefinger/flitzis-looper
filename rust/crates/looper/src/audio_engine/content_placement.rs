@@ -766,4 +766,4 @@ fn current<T>(observed: PlacementObservation<T>) -> Result<T, PlacementError> {
 
 #[cfg(test)]
 #[path = "content_placement_tests.rs"]
-mod tests;
+pub(crate) mod tests;

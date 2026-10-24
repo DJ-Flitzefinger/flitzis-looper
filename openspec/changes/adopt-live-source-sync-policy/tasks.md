@@ -25,7 +25,7 @@
 - [x] Finish affected integrated checks, needed Release/import/preflight and one independent final-diff review.
 
 - [x] Repair the reported default SYNC-OFF/REALTIME-ON missing-master loop: retain the proper mode-dependent master qualification, deduplicate a fully observed idle cohort and already-current launches, retain every genuine recovery retry, and verify Native queue/callback plus Python status/diagnostic behavior without replacing the running App.
-- [ ] Reconcile the latest Human hierarchy and actual BPM-Lock master ownership before implementing MultiLoop/SYNC/Realtime availability with retained preferences, original both-off legacy behavior, genuine static and variable phase synchronization across unequal loops/one-shots, revised control order and practical2/4/6 plus stress20/10 evidence. Earlier independent-toggle or32-throughput acceptance recipes are superseded where conflicting; this is not completed by the idle repair.
+- [ ] Reconcile the latest Human hierarchy and actual BPM-Lock master ownership before implementing MultiLoop/SYNC/Realtime availability with retained preferences, original both-off legacy behavior, genuine static and variable phase synchronization across unequal loops/one-shots, revised control order and practical2/4/6 plus unconditional stress10 evidence (latest Human ceiling2026-10-24). Earlier independent-toggle or32-throughput acceptance recipes are superseded where conflicting; this is not completed by the idle repair.
 
 ## Stage A: exact copied conversion prerequisite
 
@@ -145,6 +145,36 @@ All FULL-Goal musical/Native/B2/resource/Human/final gates remain required.
 - [x] Reconcile canonical signed-origin versus loop-relative labels, exact retained-domain closure and finite dyadic correction; obtain dedicated concrete systems PRE before writer GO.
 - [x] Implement same-snapshot after-glide all32 phase adoption, copied immutable static coordinates, reader preflights and source/master/pause/Hold invalidation.
 - [x] Verify independent exact numeric and actual simultaneous8/64 source/ACK/queue/renderer oracles, original first PCM, partitions, stale/ABA/atomic refusal, terminal Native/stem guards and recoverable OFF exit.
-- [ ] Complete actual frozen systems POST before integrated checks/builds, affected Debug/Release/resource/cost/import checks and one independent final-diff/evidence review.
-- [ ] Deliver English Conventional Commit, normal existing-main push, fresh clean HEAD/tracking/actual-remote equality and guarded own cleanup.
+- [x] Complete actual frozen systems POST before integrated checks/builds, affected Debug/Release/resource/cost/import checks and one independent final-diff/evidence review (static delivery64ea32a4).
+- [x] Deliver English Conventional Commit, normal existing-main push, fresh clean HEAD/tracking/actual-remote equality and guarded own cleanup (static64ea32a4; post-cleanup equality2026-10-24T09:41:26Z).
 - [ ] Complete later unified qualified public phase witness, variable-map phase, broader static domains, finite EOF, Native/pitch/stems, musical settling and every remaining FULL-Goal gate; do not infer them from this dry milestone.
+
+### Productive recovery-closed dry variable common phase
+
+- [x] Reconcile original seconds/beat axes, original D and own Q, actual binary64 master, common-odd cancellation, recovery closure and right-sided window boundaries; obtain concrete dedicated PRE before writer GO.
+- [x] Verify the actual combined implementation and tests through dedicated frozen systems POST before integrated checks/builds (intentional-launch frozen v8; targeted POST repeated after material repairs).
+- [x] Prove the bounded recovery-closed dry class's exact first pair/readers, real Cold/ACK/worker/all32 MODE then same-snapshot PHASE, own8/64 loops, parent/null/ABA/global and pause/Hold/live-R recovery, retained birthP distinct from currentP, Native/stem refusal and genuine OFF escape; preserve genuine launch-relative phase and reject unqualified or stale launch provenance.
+- [x] Complete affected numeric/runtime/neighbor, actual2MiB/layout/request/cost, private Release/import, strict checks and ONE independent actual final-diff/evidence review (v8 source, private535 Python passes, bounded2/4/6 positive and10 negative, final PUBLISH CLEAR).
+- [ ] Deliver an English Conventional Commit, normal existing-main push, fresh clean actual remote equality and guarded own cleanup before the next independent step.
+- [ ] Complete broader numerical/rational/fine-input classes, qualified actual-read public phase witness, finite OneShot/EOF, full Native/pitch/stem integration, practical settling, remaining resource misses, music/device/Human and ALL original FULL-Goal gates. This bounded dry milestone does not complete these parents.
+
+The independent successor analysis identified a concrete ordinary-map admission
+gap: original seconds [0,0.37,0.91], beat labels [0,1,2], declared Q2 and an actual
+frame13 cursor at48kHz retain valid ordinary general geometry, but fail the
+current common-odd phase recovery condition. A characterization regression keeps
+this required broader work visible; refusal is not the final supported behavior.
+Likewise finite capture over the u64 horizon is not practical settling evidence:
+at Q256 a half-cycle debt with correction1/64 needs8192 master beats even without
+window delays. Both gaps remain connected SYNC work, before Human acceptance.
+
+## Latest performance workload decision — 2026-10-24
+
+The direct Human instruction sets2/4/6 simultaneous PADs as the productive
+optimization workload and10 as the maximum synthetic stress cohort, run directly
+and unconditionally. All older20 targets/20-to-conditional10 recipes below are
+superseded. Preserve their measured positive AND negative evidence unchanged as
+history; no further20-PAD optimization is required. Current variable2/4/6 results
+resolve only their measured workload; other-input negatives remain. Internal32 atomic/capacity/retirement and
+layout correctness stays separate and unchanged. No hard10 app cap or device/
+7–10 performance guarantee is introduced. The user-facing guidance is in README's
+Simultaneous Playback section; all other original FULL-Goal gates remain binding.

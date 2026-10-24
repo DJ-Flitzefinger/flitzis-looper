@@ -1,3 +1,57 @@
+## Latest direct Human clarification — 2026-10-24: analysis, BeatThis and Human testing
+
+Read original-workspace codex-meta/handoff/human-astra-sync-clarification-20261024.txt,
+the updated canonical Astra handoff and goal-next-execution.txt. This later rule
+supersedes the older technical-ready-to-Sol transition below. The Human-started
+Astra lease independently analyzes architecture AND the prior method, completes
+connected SYNC/REALTIME BPM/BeatThis and justified realtime improvements, and
+delivers a safe usable test candidate. No prescribed ringbuffer/cache/rewrite.
+Human real-world stress/feedback then leads to related fixes and Human retests.
+Only positive Human acceptance AND retained milestone gates permit the later
+Human-selected Sol fresh-chat `weiter` for the FULL remainder. Real independent
+B2 references, paired sessions and default-cutover gates remain; RAW, synthetic,
+mode/map ACK or ordinary stress success are not substitutes. Narrowly necessary
+Portable/test-delivery repair may follow core under existing App-closed,
+held-Native, settings/private-data and rollback rules; unrelated rest waits.
+The FULL Goal stays incomplete, without a narrow replacement or token budget.
+No automatic model/chat/stage switch. Original systems PRE/frozen POST/final
+review, coherent checked English commit+normal-main push/fresh clean actual
+remote equality, sourceACK/retirement/RT/App/private/storage and STOP before
+full Rust-port/Slice8 remain. Capacity errors require unlimited interruptible
+20/40/max60-second same-step retries with unknown effects checked first.
+
+## Latest Human staged-model execution — 2026-10-24
+
+Follow original-workspace codex-meta/goal-next-execution.txt and the binding
+handoff/pre-rust-successor-20261024-astra-sync-engine.md. The next Human-selected
+GPT-6 Astra Ultra chat's actual `weiter` executes ONLY the COMPLETE agreed
+SYNC/REALTIME BPM milestone and necessary measured engine work. Then stop and
+handoff the FULL remainder to a later Human-selected GPT-6.1 Sol Ultra fresh-chat
+`weiter`. The FULL Goal is not narrowed/completed, setup alone waits, and no
+model/chat/stage switch or old-chat message is automatic. Several individually
+checked/reviewed/committed/normal-pushed steps may be needed; do not stop at the
+first cache commit or silently label unfinished SYNC as REST. Actual current WIP
+and positive/negative evidence must be reconciled and preserved. All other
+original/Human/final gates,6productive/10stress ceiling, quality/RT/App/private/
+storage, normalmain publication and capacity20/40/max60 unlimited effectsfirst
+rules remain. No Rust-port/Slice8 rights arise. Deferred final audit is separate.
+## Latest direct Human performance ceiling — 2026-10-24
+
+Productive performance optimization targets2/4/6 simultaneous PADs. Synthetic
+performance stress tests run at most10 PADs, directly and unconditionally.
+This direct Human instruction supersedes all older20-PAD targets and20-to-
+conditional10 recipes. Do not add helpers or architecture complexity for20.
+Retain historical20 results unchanged as historical evidence, not current gates.
+User documentation should state the six-PAD optimization target and possible
+performance problems/glitches above10. No7–10/device guarantee or hard10 app cap.
+Internal32-voice atomic/capacity/pressure/retirement/copy correctness and all other
+full original/extension/Human/final gates remain unchanged. Original source:
+codex-meta/handoff/human-performance-ceiling-20261024.txt in the original workspace.
+Carry this latest rule into every plan, writer assignment and handoff together
+with existing quality/sourceACK/RT/App/private/storage/capacity20/40/max60 unlimited
+effects-first and reviewed coherent Englishcommit+normalmainpush/freshcleanremote
+obligations. No Goal restart, extra approval, model/scope change or new Git rights.
+
 ## Next-chat full Goal handoff — direct Human instruction, 2026-10-24
 
 Finish only the current coherent productive initial-intersection dry conversion

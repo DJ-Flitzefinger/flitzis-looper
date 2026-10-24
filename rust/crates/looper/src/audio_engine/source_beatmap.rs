@@ -22,7 +22,7 @@ mod record;
 mod review_index;
 mod review_window;
 
-pub(crate) use query::{CanonicalBeatSegment, CanonicalLoopInterval};
+pub(crate) use query::{CanonicalBeatSegment, CanonicalLoopInterval, CanonicalPhaseReference};
 use query::{Evaluation, Projection};
 use record::ValidatedMap;
 
@@ -88,6 +88,18 @@ impl SourceBeatmap {
             require_four_four,
             visitor,
         )
+    }
+
+    /// Qualify the original positive interior's quarter or bar reference off realtime.
+    /// Exact boundary ordering and musical closure remain the caller's proof;
+    /// this metadata carries no source, adoption or actual-read permission.
+    pub(crate) fn canonical_phase_reference_exact(
+        &self,
+        compare_start: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+        compare_end: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+    ) -> Option<CanonicalPhaseReference> {
+        self.inner
+            .canonical_phase_reference_exact(compare_start, compare_end)
     }
 
     pub(crate) fn canonical_source_at_beat(&self, beat: f64) -> Option<f64> {

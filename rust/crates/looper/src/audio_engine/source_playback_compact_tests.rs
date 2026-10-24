@@ -1077,24 +1077,24 @@ fn descriptive_compact_consuming_cohorts_report_median_max_and_actual_work() {
         } else {
             &ordinary
         };
-        let original = prepared_lanes(geometry, shape, 20);
+        let original = prepared_lanes(geometry, shape, 10);
         for reader in [Reader::Full, Reader::Checked] {
             // One unchanged reference cohort is reused for each matching prefix, outside timing.
-            let mut reference = reference_lanes(geometry, original, 20);
-            let mut reference_scratch = buffers(20);
-            let mut reference_output = buffers(20);
-            let mut reference_work = [Work::default(); 20];
+            let mut reference = reference_lanes(geometry, original, 10);
+            let mut reference_scratch = buffers(10);
+            let mut reference_output = buffers(10);
+            let mut reference_work = [Work::default(); 10];
             render_reference(
                 geometry,
                 &sample,
-                &mut reference[..20],
+                &mut reference[..10],
                 &mut reference_scratch,
                 &mut reference_output,
                 &mut reference_work,
                 reader,
             );
-            // Ten is measured unconditionally to retain a performance fallback diagnostic.
-            for active in [2, 4, 6, 10, 20] {
+            // Ten is the unconditional synthetic stress cohort above the primary six.
+            for active in [2, 4, 6, 10] {
                 let mut scratch = buffers(active);
                 let mut output = buffers(active);
                 let mut work = [Work::default(); MAX_VOICES];
@@ -1132,11 +1132,7 @@ fn descriptive_compact_consuming_cohorts_report_median_max_and_actual_work() {
                 times.sort_unstable();
                 let median = times[REPEATS / 2].as_secs_f64();
                 let maximum = times[REPEATS - 1].as_secs_f64();
-                let cohort = match active {
-                    2 | 4 | 6 => "primary",
-                    20 => "stress",
-                    _ => "unconditional_performance_fallback_diagnostic",
-                };
+                let cohort = if active == 10 { "stress" } else { "primary" };
                 assert_eq!(
                     actual_work.reader_coordinates,
                     active * BLOCK * reader.passes()

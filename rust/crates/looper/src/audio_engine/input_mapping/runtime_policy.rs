@@ -472,7 +472,7 @@ impl RuntimePolicySnapshot {
                 || status.policy.is_none_or(|policy| {
                     policy.request != row.source_map.request()
                         || !policy.target_current
-                        || (policy.request.mode == SourceSyncMode::Fixed
+                        || (policy.request.requires_common_phase()
                             && (!policy.phase_program_current
                                 || policy.phase_program_revision != Some(self.revision)))
                 })

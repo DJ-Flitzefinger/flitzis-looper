@@ -409,8 +409,17 @@ impl PitchRuntime {
         mut work: Box<PitchActionWork>,
         scheduler: &mut FixedCapacityScheduler<CAPACITY>,
         callback: u64,
+        timeline: Option<super::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        if work.action.variant() == super::pitch_actions::PitchActionVariant::SetRetrigger {
+            work.launch_qualification =
+                super::loop_phase_reference::LaunchQualification::capture(timeline, callback);
+            work.launch_reference = super::loop_phase_reference::LoopPhaseReference::capture(
+                timeline,
+                work.action.original_due_frame(),
+            );
+        }
         let index = self.slots.iter().position(|slot| slot.sequence == 0);
         if index.is_none() || scheduler.is_full() {
             work.action.reject(PitchActionReject::Capacity);
@@ -503,7 +512,7 @@ impl PitchRuntime {
                 .origin()
                 .target_frame()
                 .ok_or(PitchActionReject::TimingUnavailable)?;
-            work.freeze_mapped_clock(timeline, original)?;
+            work.freeze_mapped_clock(timeline, original, callback)?;
             let required = mixer.requires_ordinary_start_preparation(&work)?;
             let hit = required
                 && original >= callback
@@ -584,7 +593,7 @@ impl PitchRuntime {
             }
             let mut required = false;
             for work in group.work.iter_mut().flatten() {
-                work.freeze_mapped_clock(timeline, original)?;
+                work.freeze_mapped_clock(timeline, original, callback)?;
             }
             for work in &group.work {
                 required |= mixer.requires_ordinary_start_preparation(
@@ -838,6 +847,9 @@ impl PitchRuntime {
             self.slots[index].group = Some(group);
             return false;
         }
+        for work in group.work.iter_mut().flatten() {
+            work.qualify_phase_launch_at(timeline, frame);
+        }
         let epoch_current = group
             .work
             .iter()
@@ -985,6 +997,9 @@ impl PitchRuntime {
                 if work.action.state() == "rejected" {
                     Err(PitchActionReject::PreparationFailed)
                 } else {
+                    work.phase_launch_qualified =
+                        work.launch_qualification
+                            .at_effect(work.launch_reference, timeline, frame);
                     mixer.execute_pitch_action(work, frame, messages, retirement)
                 }
             }
@@ -992,6 +1007,7 @@ impl PitchRuntime {
                 if work.origin().state() == "rejected" {
                     Err(PitchActionReject::PreparationFailed)
                 } else {
+                    work.qualify_phase_launch_at(timeline, frame);
                     work.validate_mapped_timeline(timeline).and_then(|()| {
                         mixer.execute_ordinary_start(work, frame, messages, retirement)
                     })
@@ -1031,6 +1047,7 @@ pub(super) fn accept<const CAPACITY: usize>(
     work: Box<PitchActionWork>,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback: u64,
+    timeline: Option<super::transport::TransportTimeline>,
     retirement: &mut impl AudioBufferRetirement,
 ) {
     let mut runtime = mixer
@@ -1038,7 +1055,7 @@ pub(super) fn accept<const CAPACITY: usize>(
         .take()
         .expect("one callback owns preparation lane");
     runtime.poll();
-    runtime.accept(mixer, work, scheduler, callback, retirement);
+    runtime.accept(mixer, work, scheduler, callback, timeline, retirement);
     mixer.pitch_runtime = Some(runtime);
 }
 

@@ -90,10 +90,10 @@ impl<'a> PreparedSourceStream<'a> {
         let block = native.block_size();
         if plan.loop_period.is_mapped()
             || request.logical.is_mapped()
-            || request.logical.is_static_phase()
+            || request.logical.has_phase_program()
             || request
                 .source_history
-                .is_some_and(|history| history.origin.is_static_phase())
+                .is_some_and(|history| history.origin.has_phase_program())
             || channels == 0
             || native.channel_count() != channels
             || block == 0

@@ -36,9 +36,9 @@ pub(super) struct EarlyUnsupportedInputs {
 }
 
 impl EarlyUnsupportedInputs {
-    /// A real parent/SYNC OFF may release a dry static program despite remembered
-    /// Native preferences. Admitted pending work and every actual ownership guard remain.
-    pub(super) fn blocked_for_static_exit(mut self) -> bool {
+    /// A real parent/SYNC OFF may release productive dry mapped or static playback
+    /// despite remembered Native preferences. Actual and admitted ownership stay guarded.
+    pub(super) fn blocked_for_dry_exit(mut self) -> bool {
         self.requested_pitch = self.pitch;
         self.requested_key_lock = self.key_lock;
         self.blocked()
@@ -433,6 +433,65 @@ impl RtMixer {
                 .as_ref()
                 .is_some_and(|runtime| runtime.has_pending_content(key)),
         })
+    }
+
+    /// Metadata only, on the original successful master effect. Existing Native
+    /// or pending history owners keep their immutable copied launch reference.
+    pub(crate) fn rebind_dry_phase_births(
+        &mut self,
+        previous: &TransportTimeline,
+        next: &TransportTimeline,
+        frame: u64,
+    ) {
+        if previous.phase_generation() == next.phase_generation() {
+            return;
+        }
+        for index in 0..MAX_VOICES {
+            let voice = &self.voices[index];
+            let id = voice.sample_id;
+            let Some(key) = voice
+                .source_admission
+                .as_ref()
+                .and_then(|admission| admission.content_key())
+            else {
+                continue;
+            };
+            let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            if !voice.active
+                || !voice.phase_launch_qualified
+                || !voice.phase_birth_unadvanced
+                || voice.paused
+                || voice.source_playback.has_phase_program()
+                || voice.source_playback.is_mapped()
+                || key_lock
+                || pitch.total_semitones() != 0
+                || voice.stretch.has_active_native_ownership()
+                || voice.stretch.has_retained_source_input()
+                || voice.stretch.source_lane_busy()
+                || self.pending_key_lock_tuples[id].is_some()
+                || self.queued_key_lock_tuples[id].is_some()
+                || self
+                    .input_runtime_ownership
+                    .resident_control_for_cell(key.cell())
+                    .load(Ordering::Acquire)
+                    != 0
+                || self.hold_actions[id]
+                    .as_ref()
+                    .is_some_and(|work| !work.action.state().terminal())
+                || self
+                    .pitch_runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.has_pending_content(key))
+            {
+                continue;
+            }
+            let mut replacement = voice.source_playback;
+            replacement.rebind_phase_birth(previous, next, frame);
+            if !voice.source_playback.matches_exact(&replacement) {
+                self.voices[index].invalidate_source_preparation();
+                self.voices[index].source_playback = replacement;
+            }
+        }
     }
 
     pub(super) fn scalar_policy_late_inputs(

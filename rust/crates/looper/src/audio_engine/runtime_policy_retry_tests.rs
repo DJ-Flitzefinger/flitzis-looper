@@ -277,11 +277,20 @@ fn original_qualified_map_delivery_changes_candidate_and_real_retrigger_recovers
     assert!(path.voice(0).source_playback.is_mapped());
     assert_eq!(path.feedback(0)["effective"], true);
     assert_eq!(path.feedback(0)["policy_mode"], "mapped");
-    let historical_refusal = current.observation();
-    automatic(&path);
-    assert!(path.source.consumer.is_empty());
-    assert_eq!(current.observation(), historical_refusal);
-    // A mapped start/mode fact does not assert continuous shared grid phase.
+    let historical_refusal = current.observation().unwrap();
+    let before_completion = scalar_state(&path);
+    assert!(Arc::ptr_eq(&current, &automatic(&path)));
+    let pending = current.observation().unwrap();
+    assert_eq!(pending.state, "pending");
+    assert_eq!(pending.attempt, historical_refusal.attempt + 1);
+    assert!(!path.source.consumer.is_empty());
+    assert!(Arc::ptr_eq(&current, &automatic(&path)));
+    assert_eq!(current.observation(), Some(pending));
+    unchanged(&path, &before_completion);
+    assert!(path.feedback(0)["grid_phase_confirmed"].is_null());
+    // A mapped birth still requires the original completion claim. This
+    // regression proves queued/deduplicated progress, not phase eligibility
+    // or a terminal result for this original decimal/physical launch fixture.
 }
 
 #[test]

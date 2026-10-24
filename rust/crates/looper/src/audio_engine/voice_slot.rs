@@ -95,7 +95,11 @@ pub struct VoiceSlot {
     pub(crate) mapped_start: Option<super::pad_start::PadStartCustody>,
     pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     /// Full original snapshot claim, separate from the immutable numeric epoch.
-    pub(crate) static_policy_revision: Option<(u64, u64)>,
+    pub(crate) phase_policy_revision: Option<(u64, u64)>,
+    /// Original birth effect validated the captured scheduler projection at T.
+    pub(crate) phase_launch_qualified: bool,
+    /// Only actual live rendering consumes this; copied preparation never does.
+    pub(crate) phase_birth_unadvanced: bool,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
@@ -124,7 +128,9 @@ impl VoiceSlot {
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             mapped_start: None,
             sync_request: super::source_sync_policy::SourceSyncRequest::default(),
-            static_policy_revision: None,
+            phase_policy_revision: None,
+            phase_launch_qualified: false,
+            phase_birth_unadvanced: false,
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
             frozen_stems: None,
@@ -156,8 +162,10 @@ impl VoiceSlot {
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.phase_birth_unadvanced = false;
+        self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
-        self.static_policy_revision = None;
+        self.phase_policy_revision = None;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -211,8 +219,10 @@ impl VoiceSlot {
     }
 
     fn stop_inner(&mut self) {
+        self.phase_birth_unadvanced = false;
+        self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
-        self.static_policy_revision = None;
+        self.phase_policy_revision = None;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime.store(0, Ordering::Release);
@@ -252,9 +262,11 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.phase_birth_unadvanced = false;
+        self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
         self.source_feed_history.reset();
-        self.static_policy_revision = None;
+        self.phase_policy_revision = None;
         self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);
         self.retire_mapped_start(retirement);
@@ -293,7 +305,9 @@ impl VoiceSlot {
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
         self.source_playback = playback;
+        self.phase_launch_qualified = false;
         self.stretch.reset();
+        self.phase_birth_unadvanced = false;
         true
     }
 
@@ -305,7 +319,7 @@ impl VoiceSlot {
 
     /// Source controls fence captured future reads separately from DSP-only mode preparation.
     pub(crate) fn invalidate_source_preparation(&mut self) {
-        self.static_policy_revision = None;
+        self.phase_policy_revision = None;
         self.source_control_epoch.invalidate();
         self.source_feed_history.invalidate_captures();
         self.stretch.invalidate_prepared();

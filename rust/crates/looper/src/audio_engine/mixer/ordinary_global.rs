@@ -319,6 +319,8 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
+                    voice.phase_launch_qualified = work.phase_launch_qualified;
+                    voice.phase_birth_unadvanced = true;
                     voice.sync_request = work.origin().sync_request();
                     voice.mapped_start = snapshot.playback.is_mapped().then(|| {
                         super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())

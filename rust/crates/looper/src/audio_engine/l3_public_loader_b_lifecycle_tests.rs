@@ -1139,8 +1139,11 @@ assert 0 not in session.active_sample_ids
     inactive(playback, &peer, 31);
     assert!(consumer.is_empty());
     synchronize_callback_frame(&mut playback.callback, playback.frame);
+    let launch_timeline = playback.callback.transport;
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
     assert_eq!(start.original_frame(), Some(original_target));
+    assert!(original_target < launch_timeline.output_frame());
+    let launch = LoopPhaseReference::capture(Some(launch_timeline), original_target);
     let birth = start.execution_frame().unwrap();
     assert!(birth >= original_target);
     while playback.frame < birth {
@@ -1182,6 +1185,12 @@ assert 0 not in session.active_sample_ids
     let initial_position = voice(&playback.callback.mixer).source_playback.position();
     assert_eq!(initial_position.frame, LOOP_START);
     assert_eq!(initial_position.fraction.to_bits(), 0.0_f64.to_bits());
+    assert!(
+        voice(&playback.callback.mixer)
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
+    assert!(!voice(&playback.callback.mixer).phase_launch_qualified);
     assert_eq!(
         voice(&playback.callback.mixer).stretch.adopted_request_id(),
         a_adoption
@@ -1225,6 +1234,7 @@ assert 0 not in session.active_sample_ids
         mixer.set_speed(0.75);
         assert!(mixer.publish_prepared_stems(0, stems.clone()));
         assert!(mixer.play_sample_at_output_frame(0, 1.0, birth));
+        install_public_start_reference(&mut mixer, launch, &launch_timeline);
         mixer
     };
     playback.reference = reference(0);

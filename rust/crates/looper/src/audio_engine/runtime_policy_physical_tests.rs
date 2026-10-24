@@ -742,11 +742,7 @@ fn descriptive_physical_productive_constructor_renderer_cohorts_report_actual_co
     };
     const REPEATS: usize = 3;
     let nominal = BLOCK as f64 / f64::from(RATE);
-    let mut stress_missed = false;
-    for lanes in [2, 4, 6, 20, 10] {
-        if lanes == 10 && !stress_missed {
-            continue;
-        }
+    for lanes in [2, 4, 6, 10] {
         let mut fixture = physical(lanes, 23);
         let mut seconds = [0.0_f64; REPEATS];
         let mut output = [0.0; BLOCK * 2];
@@ -803,9 +799,6 @@ fn descriptive_physical_productive_constructor_renderer_cohorts_report_actual_co
             }
         }
         seconds.sort_by(f64::total_cmp);
-        if lanes == 20 {
-            stress_missed = seconds[2] > nominal;
-        }
         println!(
             "physical_general_productive_profile: shape=physical_decimal_both_endpoint_inverses_Q110_109_H1501_original_scalar1500 active={} fixed_capacity=32 frames_per_lane={} warmups=1 repeats={} median_ms={:.4} max_ms={:.4} nominal_512_at_48k_ms={:.7} median_interval_ratio={:.3} max_interval_ratio={:.3} within_nominal={} actual_tap_reads={} wide_entries=0; includes original queue drain, due-frame preflight/claim, physical actual-E construction, full dry renderer/DSP, history, copied advance, span refresh and checked physical-equivalent taps; fixture/map/oracle/output/sink allocation precedes timing; Rust allocation/zeroed/reallocation attempts=0, Native allocation/deallocation unobserved; independent original-knot Fraction pairs/taps/gain/PCM verified outside timing; declared-Q and physical2/P2.25 negative profiles remain separate; bounded generated-PCM workload, no worstcase/device/music/whole-RT acceptance",
             lanes,

@@ -63,6 +63,7 @@ impl StaticPhaseClock {
         origin_frame: f64,
         quarters: f64,
         nominal_ratio: f64,
+        launch_master: f64,
     ) -> Result<Self, StaticClockError> {
         use StaticClockError::{
             InvalidEpoch, InvalidGeometry, NumericalUnavailable, UnsupportedRate,
@@ -96,6 +97,7 @@ impl StaticPhaseClock {
             origin_frame,
             raw.fraction,
             m0,
+            launch_master,
             last,
             output_fpb,
             nominal_ratio,
@@ -136,9 +138,13 @@ impl StaticPhaseClock {
         if raw_relative >= period {
             return Err(InvalidGeometry);
         }
-        let target = on_grid(origin_frame, grid)
-            .and_then(|origin| origin.shl((-g) as u32))
-            .and_then(|origin| on_grid(m0, grid)?.mul(source)?.add(origin))
+        let target = pair_at(domain.region.start, 0.0, 2 * g)
+            .and_then(|origin| {
+                on_grid(m0, grid)?
+                    .sub(on_grid(launch_master, grid)?)?
+                    .mul(source)?
+                    .add(origin)
+            })
             .ok_or(NumericalUnavailable)?;
         let positive = residue(
             target.sub(raw_absolute).ok_or(NumericalUnavailable)?,

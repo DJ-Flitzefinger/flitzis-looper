@@ -70,6 +70,13 @@ fn static_with_nonbinary_master() -> (StaticPath, f64) {
             )
     );
     fixture.path.timeline.complete_bootstrap();
+    // The discontinuous anchor invalidates the earlier launch generation.
+    // Start through original custody again after that actual master change.
+    fixture.path.source.engine.stop_sample(0).unwrap();
+    fixture.drain();
+    fixture.publish(false, 1, 7, None);
+    let birth = fixture.start(0);
+    assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
     fixture.publish(true, 2, 7, None);
     let first = fixture.effect();
     assert_eq!(first.observation().unwrap().state, "applied");

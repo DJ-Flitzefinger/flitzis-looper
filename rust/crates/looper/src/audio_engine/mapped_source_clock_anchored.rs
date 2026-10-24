@@ -214,7 +214,7 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            program: super::SpanProgram::Legacy(super::LegacySpanProgram {
+            program: super::SpanProgram::legacy(super::LegacySpanProgram {
                 beat_start: self.beat_start,
                 quarters: self.quarters,
                 source_period: self

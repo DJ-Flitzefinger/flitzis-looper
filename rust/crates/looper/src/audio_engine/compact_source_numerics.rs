@@ -135,6 +135,20 @@ pub(super) struct BaseGrid {
 }
 
 impl BaseGrid {
+    pub(super) fn maximum_top(self) -> i16 {
+        self.exponent + self.maximum_bits as i16
+    }
+
+    pub(super) fn recovery_exponent(self, maximum_frame: u64) -> Option<i16> {
+        let whole_top = if maximum_frame == 0 {
+            0
+        } else {
+            (64 - maximum_frame.leading_zeros()) as i16
+        };
+        let exponent = (-126).max(self.maximum_top().max(whole_top) - 126);
+        self.refine(exponent)?;
+        Some(exponent)
+    }
     /// Refine the shared static grid, retaining headroom for every observed original value.
     pub(super) fn refine(self, required_exponent: i16) -> Option<Grid> {
         let exponent = self.exponent.min(required_exponent).min(0);
@@ -154,6 +168,10 @@ pub(super) struct Grid {
 }
 
 impl Grid {
+    /// Reconstruct only an already certified original grid, never a wider class.
+    pub(super) fn from_admitted_exponent(exponent: i16) -> Option<Self> {
+        (-126..=0).contains(&exponent).then_some(Self { exponent })
+    }
     pub(super) fn exponent(self) -> i16 {
         self.exponent
     }

@@ -186,6 +186,10 @@ fn reference_with_ownership(
     key_lock: bool,
     execution: u64,
     pitch: crate::audio_engine::pitch_intent::PitchIntent,
+    launch: (
+        LoopPhaseReference,
+        &crate::audio_engine::transport::TransportTimeline,
+    ),
 ) -> (Box<RtMixer>, Arc<InputRuntimeOwnership>) {
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     // Immutable standalone PCM oracle: its unrestricted permit has no Engine source owner.
@@ -219,6 +223,7 @@ fn reference_with_ownership(
     mixer.set_pad_pitch_intent(0, pitch).unwrap();
     mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, execution));
+    install_public_start_reference(&mut mixer, launch.0, launch.1);
     if pitch.native_pitch_scale(ratio, key_lock).unwrap() != 1.0 {
         // The public ordinary attack owns prepared physical-birth context before
         // its first sample.
@@ -1149,6 +1154,7 @@ assert transport_events == [('started', 215)]
 "#,
         );
     }
+    let launch_timeline = h.callback.transport;
     controller_python(
         &locals,
         r#"
@@ -1424,10 +1430,33 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
     let source = followup
         .is_none()
         .then(|| h.callback.mixer.bank_for_measurement()[0].clone().unwrap());
-    let (reference, reference_owner) =
-        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution, pitch);
-    let (full_mix, full_mix_owner) =
-        reference_with_ownership(&full, &full_stems, ratio, key_lock, execution, pitch);
+    let launch = LoopPhaseReference::capture(
+        Some(launch_timeline),
+        ordinary_birth.original_frame().unwrap(),
+    );
+    assert!(
+        voice(&h.callback.mixer)
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
+    let (reference, reference_owner) = reference_with_ownership(
+        &full,
+        &full_stems,
+        ratio,
+        key_lock,
+        execution,
+        pitch,
+        (launch, &launch_timeline),
+    );
+    let (full_mix, full_mix_owner) = reference_with_ownership(
+        &full,
+        &full_stems,
+        ratio,
+        key_lock,
+        execution,
+        pitch,
+        (launch, &launch_timeline),
+    );
     let reference_owners = [reference_owner, full_mix_owner];
     let mut playback = ControllerPlayback {
         callback: h.callback,

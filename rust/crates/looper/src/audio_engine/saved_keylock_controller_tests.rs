@@ -315,6 +315,8 @@ fn reference(
     ratio: f64,
     execution: u64,
     pitch: PitchIntent,
+    launch: LoopPhaseReference,
+    timeline: &crate::audio_engine::transport::TransportTimeline,
 ) -> Box<RtMixer> {
     let mut reference = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
@@ -347,6 +349,7 @@ fn reference(
     );
     reference.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(reference.play_sample_at_output_frame(0, 1.0, execution));
+    install_public_start_reference(&mut reference, launch, timeline);
     // This complete-PCM comparison mixer has independent source authority. It
     // must begin at the same fresh physical origin with silent pre-origin history.
     let index = reference
@@ -812,6 +815,7 @@ assert abs(project.speed - .73) < 1e-15
             && producer.try_lock().is_ok()
     });
     callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+    let launch_timeline = callback.transport;
     controller_python(
         &locals,
         r#"
@@ -856,6 +860,10 @@ assert ordinary_start.effective_frame() is None
             .has_ready_action(ordinary_start.sequence())
     });
     assert_eq!(ordinary_start.original_frame(), Some(capture_frame));
+    let launch = LoopPhaseReference::capture(
+        Some(launch_timeline),
+        ordinary_start.original_frame().unwrap(),
+    );
     let execution = ordinary_start.execution_frame().unwrap();
     assert!(
         execution > capture_frame,
@@ -1017,11 +1025,16 @@ assert ordinary_start.effective_frame() is None
             .unwrap()
     });
     assert_eq!(published_intent.to_bits(), ratio.to_bits());
+    assert!(
+        voice(&callback.mixer)
+            .source_playback
+            .phase_reference_current(&launch_timeline)
+    );
     let raw = prepared_raw_start(ratio, extra);
     let mut playback = ControllerPlayback {
         callback,
-        reference: reference(&complete, ratio, execution, pitch),
-        full_mix: reference(&complete, ratio, execution, pitch),
+        reference: reference(&complete, ratio, execution, pitch, launch, &launch_timeline),
+        full_mix: reference(&complete, ratio, execution, pitch, launch, &launch_timeline),
         frame: execution,
         source_frame: 0,
         resumed_at: None,

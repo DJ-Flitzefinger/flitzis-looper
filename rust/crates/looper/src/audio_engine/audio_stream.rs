@@ -473,7 +473,7 @@ fn quantized_target_frame(
 }
 
 fn anchor_transport_phase_from_pad(
-    mixer: &RtMixer,
+    mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     id: usize,
 ) -> bool {
@@ -481,7 +481,7 @@ fn anchor_transport_phase_from_pad(
 }
 
 fn anchor_transport_phase_from_pad_at_frame(
-    mixer: &RtMixer,
+    mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     id: usize,
     output_frame: u64,
@@ -496,13 +496,16 @@ fn anchor_transport_phase_from_pad_at_frame(
         return false;
     };
 
-    let anchored = transport.set_master_period_and_anchor_beat_position_at_frame(
+    let mut candidate = *transport;
+    let anchored = candidate.set_master_period_and_anchor_beat_position_at_frame(
         period,
         source_beat,
         output_frame,
     );
     if anchored {
-        transport.complete_bootstrap();
+        candidate.complete_bootstrap();
+        mixer.rebind_dry_phase_births(transport, &candidate, output_frame);
+        *transport = candidate;
     }
     anchored
 }
@@ -510,7 +513,7 @@ fn anchor_transport_phase_from_pad_at_frame(
 /// Called after both command/parameter batches and at render segment boundaries.
 /// The source position and output frame therefore describe the same instant.
 fn try_bootstrap_transport_from_reference(
-    mixer: &RtMixer,
+    mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     output_frame: u64,
 ) -> bool {
@@ -527,7 +530,13 @@ fn try_bootstrap_transport_from_reference(
     let Some(period) = mixer.transport_reference_period_for_sample_id(id) else {
         return false;
     };
-    transport.bootstrap_from_source_period_at_frame(period, source_beat, output_frame)
+    let mut candidate = *transport;
+    if !candidate.bootstrap_from_source_period_at_frame(period, source_beat, output_frame) {
+        return false;
+    }
+    mixer.rebind_dry_phase_births(transport, &candidate, output_frame);
+    *transport = candidate;
+    true
 }
 
 fn drain_scheduler_due_at_callback_start<
@@ -3015,6 +3024,7 @@ pub(super) fn process_control_message<
                     work,
                     scheduler,
                     callback_start_frame,
+                    Some(*transport),
                     retirement,
                 );
             }
@@ -3663,7 +3673,7 @@ pub fn create_audio_stream(
                 );
 
                 try_bootstrap_transport_from_reference(
-                    &state.mixer,
+                    &mut state.mixer,
                     &mut state.transport,
                     buffer_start_frame,
                 );
@@ -5459,7 +5469,7 @@ mod tests {
             let mut transport = TransportTimeline::new(10);
             transport.request_bootstrap(0);
             assert!(try_bootstrap_transport_from_reference(
-                &mixer,
+                &mut mixer,
                 &mut transport,
                 0
             ));
@@ -5477,13 +5487,17 @@ mod tests {
         let mut transport = TransportTimeline::new(10);
         transport.advance_by_rendered_frames(100);
         transport.request_bootstrap(1);
-        assert!(anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+        assert!(anchor_transport_phase_from_pad(
+            &mut mixer,
+            &mut transport,
+            0
+        ));
         assert_eq!(transport.beat_position(), Some(18.5));
         assert_eq!(transport.bar_phase_beats(), Some(2.5));
         transport.request_bootstrap(0);
         assert_eq!(transport.bootstrap_reference(), None);
         assert!(!try_bootstrap_transport_from_reference(
-            &mixer,
+            &mut mixer,
             &mut transport,
             100
         ));
@@ -5518,7 +5532,7 @@ mod tests {
             mixer.set_pad_loop_region(0, 2.0, Some(6.0));
             transport.request_bootstrap(0);
             assert!(try_bootstrap_transport_from_reference(
-                &mixer,
+                &mut mixer,
                 &mut transport,
                 rendered as u64
             ));
@@ -5579,7 +5593,7 @@ mod tests {
         assert_eq!(transport.master_bpm(), Some(120.0));
         assert_eq!(transport.beat_position(), Some(20.0));
         assert!(!try_bootstrap_transport_from_reference(
-            &mixer,
+            &mut mixer,
             &mut transport,
             100
         ));
@@ -5595,7 +5609,7 @@ mod tests {
             .unwrap();
         drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
         assert!(try_bootstrap_transport_from_reference(
-            &mixer,
+            &mut mixer,
             &mut transport,
             100
         ));
@@ -5615,7 +5629,7 @@ mod tests {
         assert!(mixer.play_sample(0, 1.0));
         transport.request_bootstrap(0);
         assert!(!try_bootstrap_transport_from_reference(
-            &mixer,
+            &mut mixer,
             &mut transport,
             100
         ));
@@ -5641,7 +5655,7 @@ mod tests {
         transport.advance_by_rendered_frames(4);
         transport.request_bootstrap(0);
         assert!(!try_bootstrap_transport_from_reference(
-            &mixer,
+            &mut mixer,
             &mut transport,
             4
         ));
@@ -5752,7 +5766,11 @@ mod tests {
         assert!(transport.set_master_bpm(60.0));
         transport.advance_by_rendered_frames(100);
 
-        assert!(anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+        assert!(anchor_transport_phase_from_pad(
+            &mut mixer,
+            &mut transport,
+            0
+        ));
 
         assert_eq!(transport.downbeat_frame(), 75);
         assert_eq!(transport.bar_phase_beats(), Some(2.5));
@@ -5760,15 +5778,70 @@ mod tests {
 
     #[test]
     fn bpm_lock_phase_anchor_keeps_transport_downbeat_when_anchor_is_inactive() {
-        let mixer = RtMixer::new(1, 10.0);
+        let mut mixer = RtMixer::new(1, 10.0);
         let mut transport = TransportTimeline::new(10);
         assert!(transport.set_master_bpm(60.0));
         transport.set_downbeat_frame(12);
         transport.advance_by_rendered_frames(100);
 
-        assert!(!anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+        assert!(!anchor_transport_phase_from_pad(
+            &mut mixer,
+            &mut transport,
+            0
+        ));
 
         assert_eq!(transport.downbeat_frame(), 12);
+    }
+
+    #[test]
+    fn explicit_anchor_rebinds_only_genuine_same_frame_births_and_failed_anchor_changes_nothing() {
+        use crate::audio_engine::ordinary_global_start_tests::phase_group;
+        for advanced in [false, true] {
+            let (mut fixture, _) = phase_group(false);
+            let (mut reference, _) = phase_group(false);
+            if advanced {
+                assert_eq!(fixture.render(1), reference.render(1));
+            }
+            let frame = fixture.transport.output_frame();
+            let before = fixture.transport;
+            let copies = [0, 1].map(|id| fixture.voice(id).source_playback);
+            assert!(!anchor_transport_phase_from_pad_at_frame(
+                &mut fixture.mixer,
+                &mut fixture.transport,
+                2,
+                frame
+            ));
+            assert_eq!(format!("{:?}", fixture.transport), format!("{before:?}"));
+            for (id, copy) in copies.iter().enumerate() {
+                assert!(fixture.voice(id).source_playback.matches_exact(copy));
+                assert!(fixture.voice(id).phase_launch_qualified);
+                assert_eq!(fixture.voice(id).phase_birth_unadvanced, !advanced);
+            }
+            assert!(anchor_transport_phase_from_pad_at_frame(
+                &mut fixture.mixer,
+                &mut fixture.transport,
+                0,
+                frame
+            ));
+            assert_ne!(
+                fixture.transport.phase_generation(),
+                before.phase_generation()
+            );
+            for (id, copy) in copies.iter().enumerate() {
+                assert_eq!(
+                    fixture.voice(id).source_playback.position(),
+                    copy.position()
+                );
+                assert_eq!(
+                    fixture
+                        .voice(id)
+                        .source_playback
+                        .phase_reference_current(&fixture.transport),
+                    !advanced
+                );
+            }
+            assert_eq!(fixture.pcm(513), reference.pcm(513));
+        }
     }
 
     #[test]
@@ -5781,7 +5854,11 @@ mod tests {
         transport.clear_master_bpm();
         transport.set_downbeat_frame(12);
 
-        assert!(anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+        assert!(anchor_transport_phase_from_pad(
+            &mut mixer,
+            &mut transport,
+            0
+        ));
 
         assert_eq!(transport.master_bpm(), Some(60.0));
         assert_eq!(transport.downbeat_frame(), 0);

@@ -39,7 +39,7 @@ pub(crate) struct SourceSyncObservation {
     pub(crate) request: SourceSyncRequest,
     pub(crate) target_current: bool,
     pub(crate) settled: bool,
-    /// Exact static program custody for service suppression, never a phase/read ACK.
+    /// Exact installed phase custody for service suppression, never a phase/read ACK.
     pub(crate) phase_program_current: bool,
     pub(crate) phase_program_revision: Option<u64>,
 }
@@ -123,6 +123,14 @@ impl GlobalTimingPolicy {
 }
 
 impl SourceSyncRequest {
+    /// Nullable pre-control mapped choices retain their original creative offset.
+    /// The actual parent projection and claimant separately qualify availability.
+    pub(crate) fn requires_common_phase(self) -> bool {
+        self.mode == SourceSyncMode::Fixed
+            || (self.mode == SourceSyncMode::Mapped
+                && (self.policy_sync == Some(true) || self.policy_realtime_bpm == Some(true)))
+    }
+
     pub(crate) fn mapped_matching_enabled(self, legacy_bpm_lock: bool) -> bool {
         legacy_bpm_lock
     }

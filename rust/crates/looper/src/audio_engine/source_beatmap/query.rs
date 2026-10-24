@@ -81,6 +81,23 @@ pub(crate) struct CanonicalLoopInterval {
     pub(crate) max_seconds_per_quarter: f64,
 }
 
+/// Original metadata only. The caller separately qualifies quarter/bar closure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CanonicalPhaseReference {
+    normalized_downbeat: u8,
+    bar_qualified: bool,
+}
+
+impl CanonicalPhaseReference {
+    pub(crate) fn downbeat(self) -> u8 {
+        self.normalized_downbeat
+    }
+
+    pub(crate) fn bar_qualified(self) -> bool {
+        self.bar_qualified
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Evaluation {
     pub(super) source_seconds: Option<f64>,
@@ -216,11 +233,56 @@ impl ValidatedMap {
     /// Open exterior endpoints do not add a neighboring gap or meter interval.
     pub(super) fn visit_canonical_segments_exact(
         &self,
-        mut compare_start: impl FnMut(f64) -> Option<Ordering>,
-        mut compare_end: impl FnMut(f64) -> Option<Ordering>,
+        compare_start: impl FnMut(f64) -> Option<Ordering>,
+        compare_end: impl FnMut(f64) -> Option<Ordering>,
         require_four_four: bool,
         mut visitor: impl FnMut(CanonicalBeatSegment) -> Option<()>,
     ) -> Option<()> {
+        let (first, after) = self.canonical_interval_indices_exact(compare_start, compare_end)?;
+        if self.unsupported_prefix[first] != self.unsupported_prefix[after]
+            || (require_four_four && self.meter_prefix[first] != self.meter_prefix[after])
+        {
+            return None;
+        }
+        for index in first..after {
+            visitor(CanonicalBeatSegment::from_anchors(
+                self.anchors[index],
+                self.anchors[index + 1],
+            ))?;
+        }
+        Some(())
+    }
+
+    pub(super) fn canonical_phase_reference_exact(
+        &self,
+        compare_start: impl FnMut(f64) -> Option<Ordering>,
+        compare_end: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<CanonicalPhaseReference> {
+        let (first, after) = self.canonical_interval_indices_exact(compare_start, compare_end)?;
+        if self.unsupported_prefix[first] != self.unsupported_prefix[after] {
+            return None;
+        }
+        let bar_qualified = self.meter_prefix[first] == self.meter_prefix[after]
+            && self.unknown_phase_prefix[first] == self.unknown_phase_prefix[after]
+            && self.phase_changes[first] == self.phase_changes[after - 1];
+        let normalized_downbeat = if bar_qualified {
+            u8::try_from(self.segments[first].downbeat_label?.rem_euclid(4)).ok()?
+        } else {
+            0
+        };
+        Some(CanonicalPhaseReference {
+            normalized_downbeat,
+            bar_qualified,
+        })
+    }
+
+    /// The caller proves strictly ordered exact bounds. Both consumers retain
+    /// the same right-interior/left-exclusive-end original segment selection.
+    fn canonical_interval_indices_exact(
+        &self,
+        mut compare_start: impl FnMut(f64) -> Option<Ordering>,
+        mut compare_end: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<(usize, usize)> {
         let first_beat = self.anchors.first()?.beat;
         let last_beat = self.anchors.last()?.beat;
         if compare_start(first_beat)? == Ordering::Greater
@@ -252,19 +314,7 @@ impl ValidatedMap {
             }
         }
         let after = low.min(self.segments.len());
-        if first >= after
-            || self.unsupported_prefix[first] != self.unsupported_prefix[after]
-            || (require_four_four && self.meter_prefix[first] != self.meter_prefix[after])
-        {
-            return None;
-        }
-        for index in first..after {
-            visitor(CanonicalBeatSegment::from_anchors(
-                self.anchors[index],
-                self.anchors[index + 1],
-            ))?;
-        }
-        Some(())
+        (first < after).then_some((first, after))
     }
 
     pub(super) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {

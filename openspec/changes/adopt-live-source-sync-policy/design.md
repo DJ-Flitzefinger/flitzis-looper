@@ -728,7 +728,7 @@ Keep no-hidden-fallback refusal, atomic copied-state failure and original reader
 preflight semantics. Compare complete consuming workloads, not only arithmetic
 microbenchmarks. Require independent exact fixtures, existing reference equality,
 actual PCM/layout/allocation and explicit 2-MiB tests plus descriptive 2/4/6 and
-stress 20/performance-related 10. Productive conversion, callback throughput and
+unconditional synthetic stress10 maximum. Productive conversion, callback throughput and
 shared musical phase remain separate open gates.
 
 ## Productive initial-intersection dry conversion
@@ -966,10 +966,11 @@ preserved evidence rather than being erased by the source optimization.
 
 Fixed adoption first uses the existing ordinary scalar target/glide. A later
 same-request original all32 claim installs the admitted static law
-`s0+u+sign(D)*min(u/2^k,abs(D))`, `u=(M-M0)*F`, with canonical signed origin,
+`s0+u+sign(D)*min(u/2^k,abs(D))`, `u=(M-M0)*F`, with intentional launch
+target A+F*(M-M(T)) and original signed origin retained as geometry provenance,
 nearest feasible source-period winding and k6..64. Exact F*Q must equal the
 retained existing period; manual/TAP gets no fabricated Accepted or map owner.
-Loop start remains an editing marker, not a new downbeat. Static phase and mapped
+The launch reference preserves the selected start without certifying a new downbeat. Static phase and mapped
 phase are mutually exclusive nonowning copied-clock variants in the same storage.
 
 Aligned integer coefficients, complete actual-M horizon and the static-specific
@@ -1014,3 +1015,82 @@ atomically. Capture/final claim compare the same stage and full original map
 source/witness/domain/currentness and epoch. This adds no scheduler or source
 authority. Invalid static custody can also report unsettled, so current Busy
 retry semantics remain rather than guessing an ordinary glide from that flag.
+
+## Recovery-closed variable phase implementation
+
+Extend the existing owning geometry with optional off-realtime phase qualification,
+not another map or scheduling authority. Preserve compact-first preparation and
+all reader tags. A common-odd slope certificate and source recovery floor make
+real48k maps such as seconds/beat(0,0),(2,8),(10,24),(18,32) useful while guaranteeing
+ordinary resume/master recovery for every emitted coordinate. Generic forward
+bounds alone cannot prove this because old raw-grid admission is stricter than its
+fraction splitter. Broader numerical classes remain separate full-scope work.
+
+The existing captured all32 kernel selects whole MODE before PHASE. Both stage and
+service use requires_common_phase, preserving nullable creative Mapped and actual
+parent masks. The new64B phase payload freezes E/projection, reconstructs the exact
+same M0, and retains raw inverse/Q/config; old anchored payloads stay unchanged.
+Typed32B span data carries source cycle/window region and exact next-boundary
+semantics. Exact GR normalization feeds unchanged splitters; no reader-bound or
+callback ownership exception is introduced.
+
+The later intentional-launch correction supersedes unadjusted canonical-zero
+targets: retain genuine scheduler M(T), selected A and exact original B(A), then
+target B(A)+M-M(T) modulo own Q. Copied typed launch provenance extends Playback
+to488 while retaining epoch128/span240 and32copies<=16KiB. A transport generation
+fences discontinuous relabels; only same-T unadvanced dry births may bind directly
+to final bootstrap M(T). Native/pending copies remain immutable and unavailable
+until their required owner-consistent integration. Phase debt uses two inverses
+only in fixed512 comparisons; captured symbolic cancellation restores the original
+start denominator, so the original reader theorem remains intact. Full concrete
+plan: original-workspace quality/intentional-launch-phase-plan-20261024.md.
+
+Pause freezes actual source coordinates; resume/current-E recovery are separate
+thin wrappers over pure ordinary numeric construction, preserving a previous
+MAPPED retained scalar witness independently of current geometry P. Original
+changed-cohort and global claims remain the only control authority. Requested-
+only OFF escape covers productive dry mapped/static clocks while every actual
+Native/pending/reader/source guard remains. Captured phase is still nonconstant
+unintegrated history and grants no public phase proof.
+
+Current implementation, numerical proof, full concrete interaction plan and actual
+positive/negative checks are tracked in the original workspace quality/variable-
+common-phase-plan-20261024.md and variable-phase-numeric-proof-20261024.md plus
+owned test-artifacts/variable-common-phase-20261024. Realdevice jobs are excluded.
+Each checked coherent delivery requires independent review, English Conventional
+Commit, normal existing-main push, fresh clean actual remote equality and guarded
+own cleanup before the next independent step. Full Goal unchanged; stop Rust/Slice8.
+
+### Exact ephemeral phase-view optimization
+
+The original global512-bit phase evaluator and all source/control span boundaries
+remain authoritative. A temporary local view may cache the exact UNROUNDED source
+coefficient at the span start on the original recovery grid. It decodes the same
+actual binary64 master values separately before integer subtraction; rounded source
+pairs or floating master differences are not anchors. Whole-interval control and
+held-source membership checks qualify optional affine arithmetic, while any
+preparation/query failure falls back to the original Core512 path. Cached global
+endpoints and all reader preflight passes remain unchanged.
+
+Only immutable numeric constants, validated actual-domain splitting and exact
+scalar-period conversion are prepared once per view. The unchanged old splitters
+retain identity, RN-even, virtual membership and carry. No persistent clock,
+history, ownership, admission, scheduler or public phase witness is added. Initial
+consuming4/6-voice misses remain recorded as historical negative measurements.
+The current intentional-launch v8 implementation passes its exact regressions and
+layout/2MiB/request checks; the bounded consuming2/4/6 waiting/correcting profiles
+fit the nominal interval, while10 stress exceeds it in both regions. See results.md
+for actual measurements and compatible-source limits. A successful descriptive
+test process is not device, worst-case, musical or Human acceptance.
+
+## Latest performance workload decision — 2026-10-24
+
+The direct Human instruction sets2/4/6 simultaneous PADs as the productive
+optimization workload and10 as the maximum synthetic stress cohort, run directly
+and unconditionally. All older20 targets/20-to-conditional10 recipes below are
+superseded. Preserve their measured positive AND negative evidence unchanged as
+history; no further20-PAD optimization is required. Current variable2/4/6 results
+resolve only their measured workload; other-input negatives remain. Internal32 atomic/capacity/retirement and
+layout correctness stays separate and unchanged. No hard10 app cap or device/
+7–10 performance guarantee is introduced. The user-facing guidance is in README's
+Simultaneous Playback section; all other original FULL-Goal gates remain binding.

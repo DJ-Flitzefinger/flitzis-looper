@@ -3258,6 +3258,10 @@ impl RtMixer {
                             });
                             voice.source_loop_region = None;
                             if !unchanged {
+                                // Geometry is claimed now, even if rendering observes it later.
+                                // Keep copied Native checkpoint identity on a no-cut edit.
+                                voice.phase_launch_qualified = false;
+                                voice.phase_birth_unadvanced = false;
                                 voice.clear_explicit_seek();
                             }
                         }
@@ -4872,14 +4876,20 @@ impl RtMixer {
                         })
                 }
             };
-            let phase_program_current = request.mode
-                == super::source_sync_policy::SourceSyncMode::Fixed
+            let phase_program_current = request.requires_common_phase()
                 && target_current
                 && !voice.paused
-                && voice.static_policy_revision.is_some()
-                && self.static_phase_program_current(voice);
+                && match request.mode {
+                    super::source_sync_policy::SourceSyncMode::Fixed => {
+                        self.static_phase_program_current(voice)
+                    }
+                    super::source_sync_policy::SourceSyncMode::Mapped => {
+                        self.mapped_phase_program_current(voice)
+                    }
+                    _ => false,
+                };
             let phase_program_revision = phase_program_current
-                .then_some(voice.static_policy_revision.map(|(revision, _)| revision))
+                .then_some(voice.phase_policy_revision.map(|(revision, _)| revision))
                 .flatten();
             let settled = match request.mode {
                 super::source_sync_policy::SourceSyncMode::Legacy
@@ -4940,8 +4950,11 @@ impl RtMixer {
     /// their original successful claims; explicit phase/bootstrap anchors refuse
     /// while one is active. No returned boolean is public grid-phase acceptance.
     fn static_phase_program_current(&self, voice: &VoiceSlot) -> bool {
+        if !voice.phase_launch_qualified {
+            return false;
+        }
         let playback = &voice.source_playback;
-        if !voice.static_policy_revision.is_some_and(|(_, fence)| {
+        if !voice.phase_policy_revision.is_some_and(|(_, fence)| {
             fence == self.global_rate_timing_revision() && self.global_drains_claimed(fence)
         }) {
             return false;
@@ -4974,6 +4987,40 @@ impl RtMixer {
             && quarters.is_some_and(|quarters| {
                 playback.static_grid_matches(grid.frames_per_beat(), grid.origin_frame(), quarters)
             })
+    }
+
+    /// Current original-map programme service custody, never quarter/bar read proof.
+    fn mapped_phase_program_current(&self, voice: &VoiceSlot) -> bool {
+        if !voice.phase_launch_qualified {
+            return false;
+        }
+        if !voice.phase_policy_revision.is_some_and(|(_, fence)| {
+            fence == self.global_rate_timing_revision() && self.global_drains_claimed(fence)
+        }) || !voice.source_playback.is_mapped_phase()
+        {
+            return false;
+        }
+        let Some(geometry) = voice
+            .mapped_start
+            .as_ref()
+            .and_then(|owner| owner.mapped_geometry())
+        else {
+            return false;
+        };
+        let Some(epoch) = voice.source_playback.mapped_epoch() else {
+            return false;
+        };
+        let Some(sample) = voice.sample.as_ref() else {
+            return false;
+        };
+        let region = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(voice.sample_id, sample.frame_count()));
+        region == Some(geometry.domain().region)
+            && voice.source_playback.matches_domain(geometry.domain())
+            && voice.source_playback.validate_mapped_reference(geometry)
+            && epoch.master_period_seconds().map(f64::to_bits)
+                == self.master_period_seconds.map(f64::to_bits)
     }
 
     #[cfg(test)]
@@ -5379,6 +5426,10 @@ impl RtMixer {
                     )
                 });
                 if !unchanged {
+                    // Fence same-frame selected-region ABA before lazy domain refresh.
+                    // Copied numeric metadata alone never authorizes another phase claim.
+                    voice.phase_launch_qualified = false;
+                    voice.phase_birth_unadvanced = false;
                     voice.clear_explicit_seek();
                 }
             }
@@ -6034,6 +6085,9 @@ impl RtMixer {
                 voice.stretch.retire_prepared();
                 continue;
             }
+            // A real positive callback interval makes this an existing voice,
+            // even if its read later refuses. Virtual worker replay never does.
+            voice.phase_birth_unadvanced = false;
             pad_activity.record(voice.sample_id);
 
             let is_paused = voice.paused;

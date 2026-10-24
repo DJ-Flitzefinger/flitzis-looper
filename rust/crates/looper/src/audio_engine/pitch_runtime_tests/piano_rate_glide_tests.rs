@@ -703,6 +703,14 @@ fn apply_wet_attack_from(
     assert_eq!(attack.action.state(), "applied");
     assert_rate_clock(route, &attack, expected);
     let voice = route.voice(0);
+    assert!(voice.phase_launch_qualified);
+    assert!(voice.phase_birth_unadvanced);
+    assert!(
+        voice
+            .source_playback
+            .phase_reference_current(&route.route.transport),
+        "nonconstant EndpointResetHistory must retain this request's launch reference"
+    );
     let expected_phase = oracle.reference.clock.phase();
     let position = voice.source_playback.position();
     assert!((position.frame as f64 + position.fraction - expected_phase).abs() < 2e-7);

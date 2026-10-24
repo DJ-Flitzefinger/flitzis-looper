@@ -79,7 +79,8 @@ fn legacy_phase(epoch: MappedClockEpoch) -> f64 {
         MappedClockMode::Legacy { phase_quarters, .. } => phase_quarters,
         MappedClockMode::Anchored(_)
         | MappedClockMode::CompactAnchored(_)
-        | MappedClockMode::GeneralCompact(_) => {
+        | MappedClockMode::GeneralCompact(_)
+        | MappedClockMode::CommonPhase(_) => {
             panic!("legacy fixture expected")
         }
     }

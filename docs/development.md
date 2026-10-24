@@ -884,3 +884,15 @@ the accepted result does not keep the old Raw cancellation owner. Existing
 artifact receipts, Config-before-Selection and source-qualified restore remain
 unchanged. See `interpret-original-raw-detections` and the user flow in
 `beatmap-sync-design.md`; explicit review is not automatic musical qualification.
+
+## Latest performance workload decision — 2026-10-24
+
+The direct Human instruction sets2/4/6 simultaneous PADs as the productive
+optimization workload and10 as the maximum synthetic stress cohort, run directly
+and unconditionally. All older20 targets/20-to-conditional10 recipes below are
+superseded. Preserve their measured positive AND negative evidence unchanged as
+history; no further20-PAD optimization is required. Current4/6 misses remain real
+until corrected evidence resolves them. Internal32 atomic/capacity/retirement and
+layout correctness stays separate and unchanged. No hard10 app cap or device/
+7–10 performance guarantee is introduced. The user-facing guidance is in README's
+Simultaneous Playback section; all other original FULL-Goal gates remain binding.

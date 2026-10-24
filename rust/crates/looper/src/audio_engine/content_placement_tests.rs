@@ -12,7 +12,7 @@ pub(super) fn before_marker_compare_exchange() {
     }
 }
 
-fn with_before_marker_compare_exchange<T>(
+pub(crate) fn with_before_marker_compare_exchange<T>(
     hook: impl FnOnce() + 'static,
     action: impl FnOnce() -> T,
 ) -> T {

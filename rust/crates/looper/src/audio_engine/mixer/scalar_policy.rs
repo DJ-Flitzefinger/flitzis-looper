@@ -31,7 +31,8 @@ struct ScalarLane {
     original: RateVoice,
     control: PairControlProjection,
     old_request: SourceSyncRequest,
-    old_static_policy_revision: Option<(u64, u64)>,
+    old_phase_policy_revision: Option<(u64, u64)>,
+    old_phase_launch_qualified: bool,
     request: SourceSyncRequest,
     candidate: SourcePlayback,
     map_owner: Option<OwnerIdentity>,
@@ -177,6 +178,9 @@ impl RtMixer {
         let voice = &self.voices[index];
         let id = voice.sample_id;
         let row = snapshot.row(id).ok_or(Error::SourceChanged)?;
+        if phase_only && row.request.requires_common_phase() && !voice.phase_launch_qualified {
+            return Err(Error::Unsupported);
+        }
         if !snapshot.row_current(id) || !self.admitted_source_binding_current(id, row.binding) {
             return Err(Error::SourceChanged);
         }
@@ -189,13 +193,14 @@ impl RtMixer {
         let early_inputs = self
             .scalar_policy_early_inputs(index, row)
             .ok_or(Error::SourceChanged)?;
-        let static_exit = voice.source_playback.is_static_phase()
+        let dry_exit = (voice.source_playback.is_static_phase()
+            || voice.source_playback.is_mapped())
             && matches!(
                 row.request.mode,
                 SourceSyncMode::Legacy | SourceSyncMode::Off
             )
-            && !early_inputs.blocked_for_static_exit();
-        if early_inputs.blocked() && !static_exit {
+            && !early_inputs.blocked_for_dry_exit();
+        if early_inputs.blocked() && !dry_exit {
             *evidence = Some(UnsupportedEvidence::Early {
                 index,
                 generation: voice.generation,
@@ -256,13 +261,27 @@ impl RtMixer {
                         && (old.geometry().has_compact_continuation()
                             || old.geometry().has_general_continuation())
                 });
-            let candidate = if raw.playback.is_compact_mapped()
+            let current_projection = raw
+                .playback
+                .mapped_epoch()
+                .is_some_and(|epoch| epoch.matches_timeline(timeline))
+                && (!raw.playback.is_mapped_phase()
+                    || raw.playback.phase_reference_current(timeline));
+            let mut candidate = if raw.playback.is_mapped_phase()
                 && same_map
-                && raw
-                    .playback
-                    .mapped_epoch()
-                    .is_some_and(|epoch| epoch.matches_timeline(timeline))
+                && (!row.request.requires_common_phase() || !current_projection)
             {
+                // Ordinary request/master effects never wait for correction debt.
+                // Preserve the separately retained scalar witness, not a fake birth.
+                SourcePlayback::mapped_ordinary_recovery_at(
+                    target.geometry(),
+                    snapshot.revision(),
+                    *timeline,
+                    &raw.playback,
+                    execution,
+                )
+                .map_err(|_| Error::Unsupported)?
+            } else if raw.playback.is_compact_mapped() && same_map && current_projection {
                 // New raw intent alone does not restart an already adopted trajectory.
                 raw.playback
             } else {
@@ -314,6 +333,19 @@ impl RtMixer {
                     Error::Unsupported
                 })?
             };
+            candidate.carry_launch_reference_from(&raw.playback);
+            if phase_only && row.request.requires_common_phase() && !candidate.is_mapped_phase() {
+                // Raw-grid, common-odd, debt, recovery and horizon eligibility can
+                // change with real playback. Never borrow stable MappedRate evidence.
+                candidate = SourcePlayback::mapped_phase_continuation(
+                    target.geometry(),
+                    snapshot.revision(),
+                    *timeline,
+                    &candidate,
+                    execution,
+                )
+                .map_err(|_| Error::Unsupported)?;
+            }
             // Cursor/E/first-PCM eligibility can recover while playback advances.
             // These failures deliberately carry no stable Unsupported evidence.
             self.scalar_policy_endpoint(&raw, &candidate)?;
@@ -352,8 +384,10 @@ impl RtMixer {
         } else {
             raw.playback
         };
+        candidate.carry_launch_reference_from(&raw.playback);
         if candidate.is_static_phase() {
             let compatible = row.request.mode == SourceSyncMode::Fixed
+                && candidate.phase_reference_current(timeline)
                 && voice.sync_request == row.request
                 && candidate.static_output_frame() == Some(execution)
                 && timeline
@@ -406,6 +440,7 @@ impl RtMixer {
                 .ok_or(Error::Unsupported)?;
             let projection = timeline.beat_projection().ok_or(Error::MissingMaster)?;
             let same = candidate.is_static_phase()
+                && candidate.phase_reference_current(timeline)
                 && candidate.static_output_frame() == Some(execution)
                 && candidate.static_matches_projection(projection)
                 && candidate.static_grid_matches(
@@ -424,7 +459,7 @@ impl RtMixer {
                 }
                 candidate = SourcePlayback::static_continuation(
                     &candidate,
-                    projection,
+                    *timeline,
                     execution,
                     snapshot.revision(),
                     grid.frames_per_beat(),
@@ -462,7 +497,8 @@ impl RtMixer {
             original,
             control,
             old_request: voice.sync_request,
-            old_static_policy_revision: voice.static_policy_revision,
+            old_phase_policy_revision: voice.phase_policy_revision,
+            old_phase_launch_qualified: voice.phase_launch_qualified,
             request,
             candidate,
             map_owner: voice
@@ -611,7 +647,8 @@ impl RtMixer {
                     .input_runtime_ownership
                     .pair_control_projection_current(&expected.control, 0)
                 || self.voices[index].sync_request != expected.old_request
-                || self.voices[index].static_policy_revision != expected.old_static_policy_revision
+                || self.voices[index].phase_policy_revision != expected.old_phase_policy_revision
+                || self.voices[index].phase_launch_qualified != expected.old_phase_launch_qualified
                 || self.voices[index]
                     .mapped_start
                     .as_ref()
@@ -843,9 +880,9 @@ impl RtMixer {
                             }
                             mixer.voices[index].sync_request = lane.request;
                             mixer.voices[index].source_playback = lane.candidate;
-                            mixer.voices[index].static_policy_revision = lane
+                            mixer.voices[index].phase_policy_revision = lane
                                 .candidate
-                                .is_static_phase()
+                                .has_phase_program()
                                 .then_some((snapshot.revision(), capture.timing_fence));
                         }
                     }

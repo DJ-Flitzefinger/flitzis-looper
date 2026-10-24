@@ -932,6 +932,9 @@ pub(crate) enum PitchActionPreparationMode {
 }
 
 pub(crate) struct PitchActionWork {
+    pub(crate) launch_reference: super::loop_phase_reference::LoopPhaseReference,
+    pub(crate) launch_qualification: super::loop_phase_reference::LaunchQualification,
+    pub(crate) phase_launch_qualified: bool,
     pub(crate) action: CapturedPitchAction,
     pub(crate) candidate: Option<Box<NativeAdapterState>>,
     render_format: (u32, usize),
@@ -978,6 +981,9 @@ impl PitchActionWork {
             return Err(RubberBandError::InvalidChannelCount);
         }
         let work = Box::new(Self {
+            launch_reference: super::loop_phase_reference::LoopPhaseReference::Unavailable,
+            launch_qualification: super::loop_phase_reference::LaunchQualification::default(),
+            phase_launch_qualified: false,
             action,
             candidate: None,
             render_format: (sample_rate_hz, channels),

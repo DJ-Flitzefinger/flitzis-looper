@@ -1475,9 +1475,8 @@ fn descriptive_general_productive_constructor_renderer_cohorts_report_actual_cos
     };
     const REPEATS: usize = 3;
     let nominal = BLOCK as f64 / f64::from(RATE);
-    // Ten follows the twenty-lane stress measurement so its fallback evidence
-    // is available if the actual stress result exceeds the declared interval.
-    for lanes in [2, 4, 6, 20, 10] {
+    // Ten is the unconditional synthetic stress cohort above the primary six.
+    for lanes in [2, 4, 6, 10] {
         let mut fixture = GeneralPath::new(lanes, 23);
         let mut seconds = [0.0_f64; REPEATS];
         let mut output = [0.0; BLOCK * 2];

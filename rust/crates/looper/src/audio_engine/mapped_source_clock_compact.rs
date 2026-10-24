@@ -58,6 +58,11 @@ pub(super) struct CompactGeometryPreparation {
     source: BaseGrid,
     beat: BaseGrid,
 }
+impl CompactGeometryPreparation {
+    pub(super) fn original_grids(self) -> (BaseGrid, BaseGrid) {
+        (self.source, self.beat)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct CompactGeometryBuilder {
@@ -101,9 +106,15 @@ impl CompactGeometryBuilder {
 
 /// No owner, raw pointer or stored playback state. Borrow only for one checked query/read.
 pub(crate) struct CompactSpanView<'a> {
-    span: MappedSourceSpan,
-    clock: CompactClock<'a>,
-    segment: CompactPreparedSegment,
+    state: BorrowedCompactState<'a>,
+}
+enum BorrowedCompactState<'a> {
+    Original {
+        span: MappedSourceSpan,
+        clock: CompactClock<'a>,
+        segment: CompactPreparedSegment,
+    },
+    Phase(super::PhaseLocalSpanView),
 }
 
 /// Derived only from a tagged, globally admitted copied span. No map association,
@@ -223,6 +234,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_common_phase() {
+            return Err(MappedClockError::InvalidEpoch);
+        }
         CompactClock::new(self, epoch)?
             .position_at(output_frame)
             .ok_or(MappedClockError::NumericalUnavailable)
@@ -234,6 +248,22 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        self.refresh_span_compact_with_reference(
+            epoch,
+            output_frame,
+            super::LoopPhaseReference::Unavailable,
+        )
+    }
+
+    pub(crate) fn refresh_span_compact_with_reference(
+        &self,
+        epoch: MappedClockEpoch,
+        output_frame: u64,
+        reference: super::LoopPhaseReference,
+    ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_common_phase() {
+            return super::phase::refresh(self, epoch, output_frame, reference);
+        }
         if epoch.is_general_compact() {
             return self.refresh_general_span(epoch, output_frame);
         }
@@ -280,7 +310,7 @@ impl MappedLoopGeometry {
         let span = MappedSourceSpan {
             epoch,
             segment,
-            program: super::SpanProgram::Legacy(super::LegacySpanProgram {
+            program: super::SpanProgram::legacy(super::LegacySpanProgram {
                 beat_start: self.beat_start,
                 quarters: self.quarters,
                 source_period: self
@@ -312,7 +342,36 @@ impl MappedSourceSpan {
         self,
         geometry: &MappedLoopGeometry,
     ) -> Result<CompactSpanView<'_>, MappedClockError> {
+        self.compact_view_with_reference(geometry, super::LoopPhaseReference::Unavailable)
+    }
+
+    pub(crate) fn compact_view_with_reference(
+        self,
+        geometry: &MappedLoopGeometry,
+        reference: super::LoopPhaseReference,
+    ) -> Result<CompactSpanView<'_>, MappedClockError> {
         let unavailable = MappedClockError::NumericalUnavailable;
+        if self.epoch.is_common_phase() {
+            geometry.validate_epoch_with_reference(self.epoch, reference)?;
+            if self.loaded_rate_hz != geometry.loaded_rate_hz
+                || self.source_start != geometry.domain.region.start as u64
+                || !original_segment(geometry, self.segment)
+            {
+                return Err(unavailable);
+            }
+            let endpoint =
+                geometry.position_at_with_reference(self.epoch, self.end_frame, reference)?;
+            if endpoint.frame != self.endpoint_frame
+                || endpoint.fraction.to_bits() != self.endpoint_fraction.to_bits()
+            {
+                return Err(unavailable);
+            }
+            return Ok(CompactSpanView {
+                state: BorrowedCompactState::Phase(
+                    self.local_phase_view(geometry.domain, reference)?,
+                ),
+            });
+        }
         let program = self.legacy_program().ok_or(unavailable)?;
         if program.beat_start.to_bits() != geometry.beat_start.to_bits()
             || program.quarters.to_bits() != geometry.quarters.to_bits()
@@ -345,9 +404,11 @@ impl MappedSourceSpan {
             .ok_or(unavailable)?;
         self.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
         Ok(CompactSpanView {
-            span: self,
-            clock,
-            segment,
+            state: BorrowedCompactState::Original {
+                span: self,
+                clock,
+                segment,
+            },
         })
     }
 
@@ -393,7 +454,14 @@ impl MappedSourceSpan {
 
 impl CompactSpanView<'_> {
     pub(crate) fn position_at(&self, output_frame: u64) -> Option<FractionalSourcePosition> {
-        position_in_prepared_span(self.span, &self.clock.core, &self.segment, output_frame)
+        match &self.state {
+            BorrowedCompactState::Original {
+                span,
+                clock,
+                segment,
+            } => position_in_prepared_span(*span, &clock.core, segment, output_frame),
+            BorrowedCompactState::Phase(view) => view.position_at(output_frame),
+        }
     }
 }
 

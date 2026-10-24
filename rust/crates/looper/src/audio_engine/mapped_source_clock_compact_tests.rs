@@ -325,10 +325,10 @@ fn compact_wrong_geometry_and_stale_cached_endpoint_refuse_without_owner_claim()
     changed_endpoint.endpoint_fraction = 0.5;
     assert!(changed_endpoint.compact_view(&geometry).is_err());
     let mut changed_period = span;
-    if let super::super::SpanProgram::Legacy(ref mut program) = changed_period.program {
-        program.source_period =
-            f64::from_bits(span.legacy_program().unwrap().source_period.to_bits() + 1);
-    }
+    let mut program = changed_period.legacy_program().unwrap();
+    program.source_period =
+        f64::from_bits(span.legacy_program().unwrap().source_period.to_bits() + 1);
+    changed_period.program = super::super::SpanProgram::legacy(program);
     assert!(changed_period.compact_view(&geometry).is_err());
     let mut changed_inverse = epoch;
     let MappedClockMode::Anchored(mut anchor) = epoch.mode else {

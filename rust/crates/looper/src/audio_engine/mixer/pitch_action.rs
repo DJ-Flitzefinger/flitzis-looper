@@ -149,7 +149,7 @@ impl RtMixer {
         snapshot: &PitchSourceSnapshot,
         index: usize,
     ) -> Result<bool, PitchActionReject> {
-        if snapshot.playback.is_mapped() || snapshot.playback.is_static_phase() {
+        if snapshot.playback.is_mapped() || snapshot.playback.has_phase_program() {
             return Err(PitchActionReject::MappedTimingUnavailable);
         }
         let render = work.action.render();
@@ -194,7 +194,7 @@ impl RtMixer {
         !self.voices.iter().any(|voice| {
             voice.active
                 && voice.sample_id == id
-                && (voice.source_playback.is_mapped() || voice.source_playback.is_static_phase())
+                && (voice.source_playback.is_mapped() || voice.source_playback.has_phase_program())
         })
     }
 
@@ -314,6 +314,9 @@ impl RtMixer {
             snapshot.playback = playback;
             snapshot.plan.loop_period = playback.reader_period();
         }
+        snapshot
+            .playback
+            .install_launch_reference(work.launch_reference);
         if let Some(origin) = work.normal_launch_origin {
             // A constant birth retains its physical start while the live clock
             // validates the accepted rate. Lateness never consumes source PCM.
@@ -418,12 +421,15 @@ impl RtMixer {
                     .ok_or(PitchActionReject::PreparedMismatch)?;
                 if active.is_none() {
                     let (start, end) = work.action.loop_region();
-                    let original = self.normal_start_snapshot_with_policy(
+                    let mut original = self.normal_start_snapshot_with_policy(
                         guard.id,
                         start,
                         end,
                         work.action.sync_request(),
                     )?;
+                    original
+                        .playback
+                        .install_launch_reference(work.launch_reference);
                     if original.playback.tempo_ratio().to_bits()
                         == original.playback.rate_target().to_bits()
                     {
@@ -940,6 +946,8 @@ impl RtMixer {
                             voice.start_rt(config, retirement);
                         }
                         voice.source_playback = snapshot.playback;
+                        voice.phase_launch_qualified = work.phase_launch_qualified;
+                        voice.phase_birth_unadvanced = true;
                         voice.sync_request = work.action.sync_request();
                         if let Some(continued_controls) = continued_controls {
                             voice.source_control_epoch = continued_controls;

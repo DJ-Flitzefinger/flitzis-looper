@@ -187,6 +187,127 @@ mod tests {
     }
 
     #[test]
+    fn qualified_bpm_commit_rebinds_only_fresh_births_and_failed_final_claim_keeps_custody() {
+        use crate::audio_engine::content_placement::tests::with_before_marker_compare_exchange;
+        use crate::audio_engine::input_runtime_binding::capture;
+        use crate::audio_engine::ordinary_global_start_tests::phase_group;
+        for advanced in [false, true] {
+            let (mut fixture, _) = phase_group(false);
+            let (mut reference, _) = phase_group(false);
+            if advanced {
+                assert_eq!(fixture.render(1), reference.render(1));
+            }
+            let binding = capture(&fixture.control.engine, 0).unwrap().unwrap();
+            fixture
+                .control
+                .engine
+                .set_bpm_lock_with_binding(true, Some(&binding))
+                .unwrap();
+            let crate::messages::ControlMessage::SetBpmLockTarget(request) =
+                fixture.control.consumer.pop().unwrap()
+            else {
+                panic!("actual producer BPM target");
+            };
+            assert!(request.source_identity.is_some());
+            let (id, captured, key) = request.anchor.unwrap();
+            assert_eq!(id, 0);
+            assert_eq!(captured, binding.binding);
+            assert_eq!(
+                fixture
+                    .control
+                    .engine
+                    .input_runtime_ownership
+                    .callback_key_slot(key),
+                Some(0)
+            );
+            let frame = fixture.transport.output_frame();
+            assert_eq!(
+                fixture.mixer.bpm_target_ready(request, frame).unwrap().2,
+                Some(0)
+            );
+            fixture.mixer.stage_bpm_lock(request);
+            settle(&mut fixture.mixer);
+            let before = fixture.transport;
+            let source_revision = fixture.mixer.source_control_revision(key).unwrap();
+            let copies = [0, 1].map(|id| fixture.voice(id).source_playback);
+            let ownership = fixture.control.engine.input_runtime_ownership.clone();
+            with_before_marker_compare_exchange(
+                move || {
+                    ownership
+                        .global_timing_revision
+                        .fetch_add(1, Ordering::AcqRel);
+                },
+                || {
+                    fixture
+                        .mixer
+                        .service_bpm_lock(frame, &mut fixture.transport)
+                },
+            );
+            assert_eq!(format!("{:?}", fixture.transport), format!("{before:?}"));
+            assert_eq!(fixture.mixer.pending_bpm_lock, Some(request));
+            assert_eq!(
+                fixture.mixer.global_rate_timing_revision(),
+                request.revision + 1
+            );
+            assert!(
+                !fixture
+                    .control
+                    .engine
+                    .input_runtime_ownership
+                    .global_rate_status
+                    .read_bpm()
+                    .unwrap()
+                    .1
+                    .applied
+            );
+            assert_eq!(
+                fixture.mixer.source_control_revision(key).unwrap(),
+                source_revision
+            );
+            for (id, copy) in copies.iter().enumerate() {
+                let voice = fixture.voice(id);
+                assert!(voice.source_playback.matches_exact(copy));
+                assert!(voice.phase_launch_qualified);
+                assert_eq!(voice.phase_birth_unadvanced, !advanced);
+            }
+            settle(&mut fixture.mixer);
+            fixture
+                .mixer
+                .service_bpm_lock(frame, &mut fixture.transport);
+            assert!(fixture.mixer.pending_bpm_lock.is_none());
+            assert!(
+                fixture
+                    .control
+                    .engine
+                    .input_runtime_ownership
+                    .global_rate_status
+                    .read_bpm()
+                    .unwrap()
+                    .1
+                    .applied
+            );
+            assert_ne!(
+                fixture.transport.phase_generation(),
+                before.phase_generation()
+            );
+            for (id, copy) in copies.iter().enumerate() {
+                assert_eq!(
+                    fixture.voice(id).source_playback.position(),
+                    copy.position()
+                );
+                assert_eq!(
+                    fixture
+                        .voice(id)
+                        .source_playback
+                        .phase_reference_current(&fixture.transport),
+                    !advanced
+                );
+            }
+            assert_eq!(fixture.pcm(513), reference.pcm(513));
+        }
+    }
+
+    #[test]
     fn unqualified_off_on_keeps_the_complete_existing_nonzero_transport_epoch() {
         for completed_bootstrap in [false, true] {
             let mut mixer = RtMixer::new(1, 48_000.0);
@@ -571,6 +692,7 @@ impl RtMixer {
                 mixer.bpm_lock_enabled = target.enabled;
                 if tuple_changed {
                     mixer.master_period_seconds = period;
+                    mixer.rebind_dry_phase_births(transport, &candidate, frame);
                     *transport = candidate;
                 }
                 let provenance = if !target.enabled || period.is_none() {
