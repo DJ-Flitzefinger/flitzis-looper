@@ -1426,3 +1426,58 @@ all check receipts, including the corrected setup failures and open latest-Human
 requirements. The final checkbox records only this bounded repair. Hierarchy,
 static phase convergence, one-shot integration and revised practical throughput
 acceptance remain open; no broader completion or Human test acceptance is claimed.
+
+## Automatic live-policy retry and map readiness, 2026-10-24
+
+The requested timing hierarchy and actual master provenance from `fec51591` are
+reused. Automatic control service now passes `service=True`; deliberate callers
+retain the default `service=False`. An unchanged automatic Unsupported result keeps
+its original attempt and audio. A relevant actual callback/source/voice condition
+change permits another attempt. Unknown observations, exhaustion and comparison
+races keep recovery open through the original pending and cleanup owners.
+
+The callback compares the complete fixed voice cohort using heap storage prepared
+on control. Private observation slots belong to individual callback births; only
+successful construction or completed rebind registers a new current slot off RT.
+Unsupported evidence comes from the values actually consumed by the original
+eligibility guard. Stable before/after observations must also match that decision
+and the original source, timing and publication fences.
+
+Mapped status captures geometry, preparation and error state once after original
+source qualification. Missing/preparing/failed map guidance preserves actual old
+audio and technical refusal details. Automatic loop validation reuses the captured
+geometry and the existing meter, coverage, revision and physical interval checks.
+Manual, one-shot and inactive-parent geometry keep their existing path.
+
+Actual checks and retained limits:
+
+- Debug runtime-policy suite: initially 55 passed and one new fixture failed. Its
+  additional voice lacked the original Native source admission. The corrected
+  same-source fixture retains the genuine admission, checks its original current
+  binding and identity, and preserves every attempt, frame, queue and atomic-effect
+  assertion. An explicit missing-admission case verifies the observed recovery.
+  Current whole suite: 57 passed; separate source-sync neighbors: 13 passed.
+- The 13 new retry cases also pass in Release, including 1500 automatic polls with
+  actual reader PCM, unchanged attempts and empty queues, actual guard ABA,
+  Hold/Resume, renderer/lane recovery, original map delivery, ACK changes and close.
+- Explicit production-constructor/callback and terminal-service/render 2-MiB tests
+  pass separately in Debug and Release. Supplied-owner/rebind and failed-constructor
+  tests pass. Larger fixture harness stacks do not replace these explicit limits.
+- Private Release/API probes13, editor API4 and controller/UI imports pass. Python
+  integration completed with 1607 passed and one stale no-argument Mock assertion.
+  Updating that assertion to the required `service=True` preserves rejected
+  publication, stale-trigger, fallback and exact-once checks. Its affected file and
+  the Source Map/global timing UI consumers subsequently pass: 95 tests. These are
+  separate compatible results; the original negative runs are retained.
+- Ruff/format checks pass for all 14 affected Python/stub files; mypy passes for
+  five product/stub files. Six bootstrap OrdinaryTransport attribute-type errors
+  are also present in the exact committed baseline. Clippy completes successfully
+  with the existing warning profile. Both affected OpenSpec changes validate
+  strictly. No App, device, real installation or Human listening test was run.
+
+The fixed voice-capacity observations provide ownership/correctness coverage.
+Practical performance acceptance remains 2/4/6 PADs, stress20 and the requested
+performance-related fallback10. Production fractional conversion, live mapped
+adoption, continuous common grid phase, 8/64-bar and one-shot EOF integration,
+remaining resource/musical gates and Human acceptance remain open. Current scalar
+cursor preservation and mapped readiness cannot acknowledge these behaviors.

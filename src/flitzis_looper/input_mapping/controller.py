@@ -878,13 +878,13 @@ class InputMappingController(BaseController):
         return True
 
     def _request_runtime_policy_adoption(self) -> bool:
-        """Retry the current Native-owned request without replacing published rows."""
+        """Service the current Native-owned request without replacing published rows."""
         try:
             request = getattr(self._audio, "request_input_runtime_policy_adoption", None)
             if callable(request):
                 # Native deduplicates before owning work. Ordinary pending/refusal
                 # returns normally; only callback feedback can confirm adoption.
-                request()
+                request(service=True)
         except (RuntimeError, ValueError, TypeError) as error:
             self._last_input_runtime_state_error = str(error)
             return False

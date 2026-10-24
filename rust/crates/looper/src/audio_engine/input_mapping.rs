@@ -198,6 +198,7 @@ mod pitch;
 mod pitch_steps;
 mod runtime_policy;
 pub(crate) use runtime_policy::{RuntimePolicyError, RuntimePolicySnapshot, RuntimePolicyWork};
+pub(crate) use runtime_policy::{RuntimePolicyRetryRow, RuntimePolicyRow};
 #[cfg(test)]
 mod reserved_runtime_refresh_tests;
 #[cfg(test)]

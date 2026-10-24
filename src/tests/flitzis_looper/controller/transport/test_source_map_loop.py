@@ -159,6 +159,95 @@ def test_selection_with_available_sync_parents_uses_map_bars_without_changing_so
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
 
 
+def test_sync_status_projects_its_captured_map_without_a_second_selector_or_mutation(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    geometry = _geometry()
+    mapped_loop.effective.side_effect = AssertionError("Status already captured its geometry.")
+    previous = controller.project.model_dump(), controller.session.model_dump()
+    audio_engine_mock.reset_mock()
+
+    region = controller.transport.loop._source_sync_requested_region(0, geometry)
+
+    assert region == (1.0, 3.5)
+    assert (controller.project.model_dump(), controller.session.model_dump()) == previous
+    mapped_loop.effective.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+    audio_engine_mock.capture_pad_start.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["uncertain", "gap_unknown_count", "meter", "extent"])
+def test_sync_status_captured_map_retains_original_interval_and_meter_refusals(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, invalid: str
+) -> None:
+    geometry = _geometry(
+        middle_coverage=invalid if invalid in {"uncertain", "gap_unknown_count"} else "trusted",
+        meter="unknown" if invalid == "meter" else "quarter_note_4_4_verified",
+    )
+    controller.project.pad_loop_bars[0] = (
+        3.0 if invalid == "extent" else 1.0 if invalid == "meter" else 2.0
+    )
+    mapped_loop.effective.side_effect = AssertionError("Status must retain its captured map.")
+    previous = controller.project.model_dump(), controller.session.model_dump()
+
+    with pytest.raises(ValueError, match="supported"):
+        controller.transport.loop._source_sync_requested_region(0, geometry)
+
+    assert (controller.project.model_dump(), controller.session.model_dump()) == previous
+    mapped_loop.effective.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.capture_pad_start.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["revision", "physical", "coordinate", "end"])
+def test_sync_status_captured_map_keeps_original_result_qualification(
+    controller: AppController, mapped_loop: Mock, invalid: str
+) -> None:
+    original = _geometry()
+    geometry = Mock(wraps=original)
+    result = dict(original.source_after_beats(1.0, 4.0, require_four_four=True))
+    if invalid == "revision":
+        result["map_revision"] = "f" * 64
+    elif invalid == "physical":
+        result["physical_domain"] = "outside_source"
+    elif invalid == "coordinate":
+        result["coordinate_status"] = "unsupported"
+    else:
+        result["source_seconds"] = 1.0
+    geometry.source_after_beats.return_value = result
+    previous = _intent(controller)
+
+    with pytest.raises(ValueError, match=r"supported|no physical source interval"):
+        controller.transport.loop._source_sync_requested_region(0, geometry)
+
+    geometry.source_after_beats.assert_called_once_with(1.0, 4.0, require_four_four=True)
+    assert _intent(controller) == previous
+    mapped_loop.effective.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["manual", "one-shot", "parent-off"])
+def test_status_captured_geometry_does_not_replace_original_manual_or_inactive_path(
+    controller: AppController, mapped_loop: Mock, mode: str
+) -> None:
+    project = controller.project
+    project.pad_loop_auto[0] = mode == "parent-off"
+    project.pad_loop_end_s[0] = 4.0 if mode == "manual" else None
+    if mode == "parent-off":
+        project.multi_loop = False
+    geometry = Mock()
+    geometry.editor_info.side_effect = AssertionError("This path must not use mapped timing.")
+    mapped_loop.effective.side_effect = AssertionError("This path needs no source map.")
+    previous = project.model_dump(), controller.session.model_dump()
+
+    region = controller.transport.loop._source_sync_requested_region(0, geometry)
+
+    assert region == (1.0, 4.0 if mode == "manual" else 3.0 if mode == "parent-off" else None)
+    assert (project.model_dump(), controller.session.model_dump()) == previous
+    geometry.editor_info.assert_not_called()
+    mapped_loop.effective.assert_not_called()
+
+
 @pytest.mark.parametrize("operation", ["bars", "end", "snap", "max"])
 def test_variable_loop_operation_retains_one_captured_map(
     controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, operation: str

@@ -29,6 +29,13 @@ pub(crate) struct NativeSourceAdmission {
     source_generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeSourceAdmissionIdentity {
+    id: usize,
+    binding: InputPadBinding,
+    pub(crate) source_generation: u64,
+}
+
 /// Fresh callback capture of a retained voice's actual source and effective timing. The lifetime
 /// is preallocated with the voice, while the local preparation epoch is the existing worker fence.
 /// Selection, stems, coverage and the exact playback checkpoint are captured by the request.
@@ -225,6 +232,14 @@ impl NativeHistoryContext<'_> {
 }
 
 impl NativeSourceAdmission {
+    /// Comparison only; the original admitted voice retains the actual authority.
+    pub(crate) fn retry_identity(&self) -> NativeSourceAdmissionIdentity {
+        NativeSourceAdmissionIdentity {
+            id: self.id,
+            binding: self.binding,
+            source_generation: self.source_generation,
+        }
+    }
     pub(crate) fn content_key(&self) -> Option<super::content_placement::ContentKey> {
         self.binding
             .placement

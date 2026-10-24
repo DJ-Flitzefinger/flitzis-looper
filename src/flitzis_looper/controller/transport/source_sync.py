@@ -9,7 +9,10 @@ from flitzis_looper.timing_policy import variable_source_timing
 
 if TYPE_CHECKING:
     from flitzis_looper.control_diagnostics import ConsoleDiagnostics
-    from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
+    from flitzis_looper.controller.source_beatmap_selection import (
+        SourceBeatmapObservation,
+        SourceBeatmapSelection,
+    )
     from flitzis_looper.controller.transport import TransportController
 
 
@@ -24,6 +27,13 @@ _GUIDANCE: dict[SourceSyncGuidance, str] = {
     "restart": "Start/retrigger to apply this timing change.",
     "unconfirmed": "Audio confirmation unavailable.",
     "phase": "Timing mode applied; grid phase is unconfirmed.",
+}
+type SourceMapReadiness = Literal["unavailable", "preparing", "failed"]
+
+_MAP_GUIDANCE: dict[SourceMapReadiness, str] = {
+    "unavailable": "Variable SYNC requires a qualified source map.",
+    "preparing": "Source map is preparing; variable SYNC is waiting.",
+    "failed": "Source map preparation failed; variable SYNC is unavailable.",
 }
 # Exact wire names of Native's bounded RuntimePolicyError enum.
 _ADOPTION_REASONS = frozenset({
@@ -54,11 +64,14 @@ class SourceSyncStatus:
     policy_mode: Literal["legacy", "off", "fixed", "mapped"] | None = None
     actual_realtime_bpm: bool | None = None
     guidance: SourceSyncGuidance | None = None
+    map_readiness: SourceMapReadiness | None = None
     grid_phase_confirmed: bool | None = None
 
     @property
     def guidance_text(self) -> str | None:
         """Project only fixed human messages, never technical diagnostic detail."""
+        if self.map_readiness is not None:
+            return _MAP_GUIDANCE[self.map_readiness]
         return None if self.guidance is None else _GUIDANCE[self.guidance]
 
 
@@ -258,7 +271,7 @@ class SourceSyncController:
         return status
 
     def _status(self, sample_id: int) -> SourceSyncStatus:
-        """Compare current intent/map with actual callback feedback, never map readiness."""
+        """Compare actual callback feedback with current intent; readiness grants no ACK."""
         validate_sample_id(sample_id)
         requested = self._project.resolve_pad_source_sync(sample_id)
         try:
@@ -274,13 +287,18 @@ class SourceSyncController:
                 detail="Audio confirmation unavailable.",
                 guidance="unconfirmed",
             )
+        map_observation = (
+            self._maps._observe_state(sample_id)
+            if self.requested_mode(sample_id) == "mapped" and self._maps is not None
+            else None
+        )
         if not self._project.global_timing_policy.is_neutral or _policy_feedback_valid(feedback):
-            return self._policy_status(sample_id, feedback)
+            return self._policy_status(sample_id, feedback, map_observation)
         adoption = self._adoption_status(sample_id, feedback)
-        if adoption is not None:
-            return adoption
         active, effective = feedback["active"] is True, feedback["effective"] is True
         if not requested:
+            if adoption is not None:
+                return adoption
             return SourceSyncStatus(
                 requested=False,
                 effective=effective,
@@ -289,9 +307,19 @@ class SourceSyncController:
                 detail="Restart to apply SYNC OFF." if effective else None,
                 guidance="restart" if effective else None,
             )
-        return self._requested_status(sample_id, feedback, active=active, effective=effective)
+        return self._requested_status(
+            sample_id,
+            feedback,
+            map_observation,
+            adoption=adoption,
+        )
 
-    def _policy_status(self, sample_id: int, feedback: dict[str, object]) -> SourceSyncStatus:
+    def _policy_status(
+        self,
+        sample_id: int,
+        feedback: dict[str, object],
+        map_observation: SourceBeatmapObservation | None,
+    ) -> SourceSyncStatus:
         requested = self._project.resolve_pad_source_sync(sample_id)
         expected = self.requested_mode(sample_id)
         intent = self._project.pad_source_sync_intent[sample_id]
@@ -306,7 +334,7 @@ class SourceSyncController:
             and feedback["intent_revision"] == intent.revision
         )
         if expected == "mapped":
-            geometry = None if self._maps is None else self._maps.effective(sample_id)
+            geometry = None if map_observation is None else map_observation.geometry
             matching = (
                 matching
                 and geometry is not None
@@ -340,10 +368,10 @@ class SourceSyncController:
                 guidance="settling",
             )
         adoption = self._adoption_status(sample_id, feedback)
+        if requested and expected == "mapped":
+            return self._pending_mapped_policy(sample_id, feedback, map_observation, adoption)
         if adoption is not None:
             return adoption
-        if requested and expected == "mapped":
-            return self._pending_mapped_policy(sample_id, feedback)
         status = SourceSyncStatus(
             requested=requested,
             effective=effective,
@@ -421,13 +449,17 @@ class SourceSyncController:
         )
 
     def _pending_mapped_policy(
-        self, sample_id: int, feedback: dict[str, object]
+        self,
+        sample_id: int,
+        feedback: dict[str, object],
+        map_observation: SourceBeatmapObservation | None,
+        adoption: SourceSyncStatus | None,
     ) -> SourceSyncStatus:
         status = self._requested_status(
             sample_id,
             feedback,
-            active=feedback["active"] is True,
-            effective=feedback["effective"] is True,
+            map_observation,
+            adoption=adoption,
         )
         # Matching map/PAD metadata alone cannot acknowledge a different global revision.
         status = replace(
@@ -447,11 +479,20 @@ class SourceSyncController:
         return status
 
     def _requested_status(
-        self, sample_id: int, feedback: dict[str, object], *, active: bool, effective: bool
+        self,
+        sample_id: int,
+        feedback: dict[str, object],
+        map_observation: SourceBeatmapObservation | None,
+        *,
+        adoption: SourceSyncStatus | None,
     ) -> SourceSyncStatus:
+        active, effective = feedback["active"] is True, feedback["effective"] is True
         intent = self._project.pad_source_sync_intent[sample_id]
-        maps = self._maps
-        geometry = None if maps is None else maps.effective(sample_id)
+        geometry = None if map_observation is None else map_observation.geometry
+        if geometry is None:
+            return self._unavailable_map_status(sample_id, feedback, map_observation, adoption)
+        if adoption is not None:
+            return adoption
         matching = (
             effective
             and feedback["intent_revision"] == intent.revision
@@ -472,18 +513,8 @@ class SourceSyncController:
             return SourceSyncStatus(
                 requested=True, effective=effective, active=active, state="refused", detail=error
             )
-        if geometry is None:
-            map_status = "unavailable" if maps is None else maps.status(sample_id)
-            detail = None if maps is None else maps.errors.get(sample_id)
-            return SourceSyncStatus(
-                requested=True,
-                effective=effective,
-                active=active,
-                state="refused" if detail else "pending",
-                detail=detail or f"Source map {map_status}.",
-            )
         try:
-            self._transport.loop.requested_region(sample_id)
+            self._transport.loop._source_sync_requested_region(sample_id, geometry)
         except (RuntimeError, ValueError) as error:
             return SourceSyncStatus(
                 requested=True,
@@ -500,4 +531,53 @@ class SourceSyncController:
             state="pending" if active else "stopped",
             detail=detail,
             guidance="restart" if pending is None else None,
+        )
+
+    def _unavailable_map_status(
+        self,
+        sample_id: int,
+        feedback: dict[str, object],
+        map_observation: SourceBeatmapObservation | None,
+        adoption: SourceSyncStatus | None,
+    ) -> SourceSyncStatus:
+        """Explain one qualified map observation while preserving actual audio and refusal."""
+        map_state = "none" if map_observation is None else map_observation.status
+        map_error = None if map_observation is None else map_observation.error
+        readiness: SourceMapReadiness = (
+            "preparing"
+            if map_state in {"pending", "restoring", "settling"}
+            else "failed"
+            if map_state == "failed"
+            else "unavailable"
+        )
+        pending, playback_error = self._transport.residency.status(sample_id)
+        refused = (
+            readiness == "failed"
+            or bool(map_error or playback_error)
+            or (adoption is not None and adoption.state == "refused")
+        )
+        details = [map_error or _MAP_GUIDANCE[readiness]]
+        if playback_error:
+            details.append(playback_error)
+        elif pending:
+            details.append(f"Playback {pending}.")
+        if adoption is not None and adoption.detail is not None:
+            details.append(adoption.detail)
+        policy_valid = _policy_feedback_valid(feedback)
+        return SourceSyncStatus(
+            requested=True,
+            effective=feedback["effective"] is True,
+            active=feedback["active"] is True,
+            state="refused" if refused else "pending",
+            detail=" ".join(details),
+            policy_mode=(
+                cast("Literal['legacy', 'off', 'fixed', 'mapped'] | None", feedback["policy_mode"])
+                if policy_valid
+                else None
+            ),
+            actual_realtime_bpm=_actual_realtime_bpm(feedback) if policy_valid else None,
+            guidance=(
+                "refused" if refused else adoption.guidance if adoption is not None else "pending"
+            ),
+            map_readiness=readiness,
         )

@@ -798,6 +798,11 @@ class PadLoopController:
                 message = "Variable SYNC requires a qualified source map."
                 raise ValueError(message)
             return None
+        return self._mapped_region(geometry, start=start, bars=bars)
+
+    def _mapped_region(
+        self, geometry: SourceBeatmap, *, start: float, bars: float
+    ) -> tuple[float, float]:
         rate = geometry.editor_info()["sample_rate_hz"]
         start = physical_source_marker_s(start, sample_rate_hz=rate)
         result = geometry.source_after_beats(start, bars * 4.0, require_four_four=True)
@@ -806,6 +811,18 @@ class PadLoopController:
             message = "Mapped automatic loop has no physical source interval"
             raise ValueError(message)
         return start, end
+
+    def _source_sync_requested_region(
+        self, sample_id: int, geometry: SourceBeatmap
+    ) -> tuple[float, float | None]:
+        """Validate status against its captured map without publishing loop or start intent."""
+        if self._project.pad_loop_auto[sample_id] and self._requires_variable_map(sample_id):
+            return self._mapped_region(
+                geometry,
+                start=float(self._project.pad_loop_start_s[sample_id]),
+                bars=self._stored_bars(sample_id),
+            )
+        return self.requested_region(sample_id)
 
     def effective_region(
         self,

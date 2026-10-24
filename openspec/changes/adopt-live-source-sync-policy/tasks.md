@@ -62,6 +62,17 @@ anchored map, original geometry or reader-domain conversion contract.
 
 ## Stage B: actual live adoption
 
+### Bounded automatic retry and map feedback
+
+- [x] Distinguish automatic service from deliberate retry through the existing keyword-only Native API; reject stale capability signatures before App/device construction.
+- [x] Publish complete bounded semantic callback/voice observations through private per-birth slots and an off-realtime current registry, preserving successful/failed construction and original retirement.
+- [x] Correlate automatic Unsupported suppression with actual once-read guard inputs, original fences and stable before/after observations; preserve ABA, explicit retry, unreadable/exhausted recovery and existing pending/cleanup ownership.
+- [x] Capture map geometry/readiness/error once and show concrete map guidance while retaining original qualification, actual old audio and technical adoption details.
+- [x] Verify unchanged 1500-poll/render behavior, same-owner recovery, full cohort, callback replacement/failure/rebind, counter/observation/finalizer races, API compatibility and unchanged explicit Debug/Release 2-MiB limits.
+- [ ] Complete affected checks, private Release/import/preflight, one independent final review, coherent English commit/normal-main push/fresh clean equality and guarded own cleanup.
+
+### Remaining representation conversion and full acceptance
+
 - [ ] Retain effective immutable map custody separately from the original launch and off-RT last-reader owners.
 - [ ] Connect original Native runtime publication to idempotent retryable adoption with complete raw revision and source custody.
 - [ ] Reuse the existing fixed 32-lane capture/preflight/claim kernel at actual E, including atomic refusal.

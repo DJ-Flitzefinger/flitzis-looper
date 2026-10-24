@@ -124,7 +124,7 @@ class _SyncStatus:
         _forbidden()
 
 
-def _request_policy_adoption(self: object) -> Never:
+def _request_policy_adoption(self: object, *, service: bool = False) -> Never:
     _forbidden()
 
 
@@ -229,6 +229,7 @@ def test_timing_adoption_hook_is_required_before_activation(*, missing: bool) ->
     "parameters",
     [
         (),
+        (Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),),
         (Parameter("self", Parameter.KEYWORD_ONLY),),
         (Parameter("self", Parameter.VAR_POSITIONAL),),
         (
@@ -238,6 +239,30 @@ def test_timing_adoption_hook_is_required_before_activation(*, missing: bool) ->
         (
             Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
             Parameter("rows", Parameter.KEYWORD_ONLY, default=None),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.POSITIONAL_OR_KEYWORD, default=False),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.KEYWORD_ONLY),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.KEYWORD_ONLY, default=True),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.KEYWORD_ONLY, default=0),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.KEYWORD_ONLY, default=None),
+        ),
+        (
+            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
+            Parameter("service", Parameter.VAR_KEYWORD),
         ),
     ],
 )

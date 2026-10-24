@@ -77,7 +77,7 @@ def test_first_runtime_publication_waits_for_reserved_observers_without_caching_
     controller.transport._pair_deferred_sample_ids = frozenset()
     assert controller.input_mapping._refresh_rust_runtime_state()
     assert audio_engine_mock.set_input_runtime_state.call_args.args[1][0] is True
-    request.assert_called_once_with()
+    request.assert_called_once_with(service=True)
 
 
 def test_failed_reserved_refresh_retries_from_last_successful_rows(

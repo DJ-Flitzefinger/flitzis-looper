@@ -25,6 +25,7 @@ mod pad_copy;
 mod pad_pair;
 #[path = "mixer/pitch_action.rs"]
 mod pitch_action;
+mod policy_retry;
 mod retained_stems;
 mod scalar_policy;
 
@@ -298,6 +299,7 @@ pub struct RtMixer {
     /// Fixed accepted binary64 source projection; legacy numbers stay separate.
     pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    runtime_policy_retry: Option<Box<policy_retry::PolicyRetryPublisher>>,
 
     /// Fixed callback-owned publication epochs shared with the control resolver.
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -998,6 +1000,7 @@ impl RtMixer {
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_accepted_timing: std::array::from_fn(|_| None),
             input_runtime_ownership,
+            runtime_policy_retry: None,
             current_timing_acknowledgements,
             prepared_source_epochs,
             source_control_revisions: [0; NUM_SAMPLES],
@@ -1049,6 +1052,7 @@ impl RtMixer {
     ) {
         ownership.key_lock_start_policy.invalidate_admission();
         self.input_runtime_ownership = ownership;
+        self.register_runtime_policy_retry_publisher();
     }
 
     pub(crate) fn begin_key_lock_start_control_drain(&mut self) {

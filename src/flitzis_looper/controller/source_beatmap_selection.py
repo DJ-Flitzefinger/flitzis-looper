@@ -41,6 +41,11 @@ if TYPE_CHECKING:
     ]
 
 
+type SourceBeatmapStatus = Literal[
+    "none", "pending", "restoring", "settling", "effective", "failed"
+]
+
+
 @dataclass
 class _MapJob:
     content: str
@@ -64,6 +69,15 @@ class _Publication:
     image: AssignmentImage | None
     plan: AssignmentPublicationPlan | None
     reservation: AssetRetirementReservation
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBeatmapObservation:
+    """One fresh selector observation, without playback or acknowledgement authority."""
+
+    geometry: SourceBeatmap | None
+    status: SourceBeatmapStatus
+    error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -689,17 +703,39 @@ class SourceBeatmapSelection:
     def status(
         self,
         sample_id: int,
-    ) -> Literal["none", "pending", "restoring", "settling", "effective", "failed"]:
+    ) -> SourceBeatmapStatus:
         validate_sample_id(sample_id)
         content = self._content(sample_id)
+        preparing = self._preparation_status(content)
+        if preparing is not None:
+            return preparing
+        if self.effective(sample_id) is not None:
+            return "effective"
+        return "failed" if content in self._errors else "none"
+
+    def _observe_state(self, sample_id: int) -> SourceBeatmapObservation:
+        """Capture geometry, readiness and errors through the original qualification once."""
+        geometry = self.effective(sample_id)
+        content = self._content(sample_id)
+        error = self._errors.get(content) if content is not None else None
+        status: SourceBeatmapStatus | None = self._preparation_status(content)
+        if status is None:
+            status = (
+                "effective"
+                if geometry is not None
+                else ("failed" if content in self._errors else "none")
+            )
+        return SourceBeatmapObservation(geometry, status, error)
+
+    def _preparation_status(
+        self, content: str | None
+    ) -> Literal["pending", "restoring", "settling"] | None:
         if any(publication.content == content for publication in self._publications):
             return "settling"
         pending = None if content is None else self._pending.get(content)
         if pending is not None:
             return "restoring" if pending.restoring else "pending"
-        if self.effective(sample_id) is not None:
-            return "effective"
-        return "failed" if sample_id in self.errors else "none"
+        return None
 
     def _source_context(self, sample_id: int) -> object:
         getter = getattr(self.audio, "waveform_source_identity", None)

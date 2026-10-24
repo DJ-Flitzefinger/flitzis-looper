@@ -67,8 +67,20 @@ class AudioEngine:
     if os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-extra-target':
         def request_input_runtime_policy_adoption(self, target=None):
             raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] != 'adoption-missing':
+    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-legacy-noarg':
         def request_input_runtime_policy_adoption(self):
+            raise AssertionError('launcher must never request adoption')
+    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-positional':
+        def request_input_runtime_policy_adoption(self, service=False):
+            raise AssertionError('launcher must never request adoption')
+    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-true':
+        def request_input_runtime_policy_adoption(self, *, service=True):
+            raise AssertionError('launcher must never request adoption')
+    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-zero':
+        def request_input_runtime_policy_adoption(self, *, service=0):
+            raise AssertionError('launcher must never request adoption')
+    elif os.environ['LAUNCHER_NATIVE_MODE'] != 'adoption-missing':
+        def request_input_runtime_policy_adoption(self, *, service=False):
             raise AssertionError('launcher must never request adoption')
     def begin_source_beatmap_raw_async(self, sample_id, *, expected_source_generation):
         raise AssertionError('launcher must never analyze source audio')
@@ -556,14 +568,26 @@ def test_source_beatmap_editor_requires_current_native_before_application(
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
-@pytest.mark.parametrize("mode", ["adoption-missing", "adoption-extra-target"])
-def test_live_policy_requires_current_noarg_api_before_application(
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "adoption-missing",
+        "adoption-extra-target",
+        "adoption-legacy-noarg",
+        "adoption-service-positional",
+        "adoption-service-true",
+        "adoption-service-zero",
+    ],
+)
+def test_live_policy_requires_distinct_service_api_before_application(
     launchers: _Launchers, starter: str, mode: str
 ) -> None:
     launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
     result = launchers.run(starter)
     assert result.returncode != 0
-    assert "request_input_runtime_policy_adoption(self)" in result.stdout + result.stderr
+    assert "request_input_runtime_policy_adoption(self, *, service=False)" in (
+        result.stdout + result.stderr
+    )
     assert not launchers.app_log.exists()
     assert launchers.profile_log.exists()
 

@@ -1,6 +1,9 @@
 //! Public Native runtime publication through the real queue, scheduler and reader.
 //! Generated PCM/address/lifetime evidence only; no device or musical acceptance.
 
+#[path = "runtime_policy_retry_tests.rs"]
+mod retry_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     ScheduledExecution, drain_parameter_messages, execute_scheduled_command,
@@ -122,7 +125,7 @@ fn prepared_for_fixed_glide() -> Path {
 fn request(path: &Path) -> Arc<RuntimePolicySnapshot> {
     path.source
         .engine
-        .request_input_runtime_policy_adoption()
+        .request_input_runtime_policy_adoption(false)
         .unwrap();
     path.source
         .engine
@@ -1523,7 +1526,7 @@ fn genuine_future_pitch_work_blocks_scalar_adoption_without_key_lock_pending_arr
     fixture
         .control
         .engine
-        .request_input_runtime_policy_adoption()
+        .request_input_runtime_policy_adoption(false)
         .unwrap();
     fixture.drain();
     let (_producer, mut parameters) = rtrb::RingBuffer::new(1);
@@ -2276,7 +2279,7 @@ fn source_sync_target_current_survives_redundant_unsupported_attempt_on_native_p
     fixture
         .control
         .engine
-        .request_input_runtime_policy_adoption()
+        .request_input_runtime_policy_adoption(false)
         .unwrap();
     fixture.drain();
     fixture.render(0);

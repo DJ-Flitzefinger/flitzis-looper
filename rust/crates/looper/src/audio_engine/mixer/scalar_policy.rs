@@ -2,6 +2,7 @@
 //! No owning work, projection conversion or pending rate authority lives here.
 
 use super::global_rate::RateVoice;
+use super::policy_retry::UnsupportedEvidence;
 use super::*;
 use crate::audio_engine::global_rate_status::RateTuple;
 use crate::audio_engine::input_mapping::{RuntimePolicyError as Error, RuntimePolicySnapshot};
@@ -12,6 +13,12 @@ use std::cell::RefCell;
 
 #[cfg(test)]
 thread_local! { static BEFORE_CLAIM: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_UNSUPPORTED_INPUTS: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    static AFTER_UNSUPPORTED_DECISION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
 
 struct ScalarLane {
     original: RateVoice,
@@ -30,6 +37,25 @@ struct ScalarCapture {
 }
 
 impl RtMixer {
+    #[cfg(test)]
+    pub(crate) fn with_runtime_policy_unsupported_hooks_for_test<T>(
+        before: Option<Box<dyn FnOnce()>>,
+        after: Option<Box<dyn FnOnce()>>,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                BEFORE_UNSUPPORTED_INPUTS.with(|hook| *hook.borrow_mut() = None);
+                AFTER_UNSUPPORTED_DECISION.with(|hook| *hook.borrow_mut() = None);
+            }
+        }
+        BEFORE_UNSUPPORTED_INPUTS.with(|hook| *hook.borrow_mut() = before);
+        AFTER_UNSUPPORTED_DECISION.with(|hook| *hook.borrow_mut() = after);
+        let _reset = Reset;
+        action()
+    }
+
     #[cfg(test)]
     pub(crate) fn with_runtime_policy_before_claim_for_test<T>(
         hook: impl FnOnce() + 'static,
@@ -66,6 +92,7 @@ impl RtMixer {
         &self,
         index: usize,
         snapshot: &RuntimePolicySnapshot,
+        evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<(PitchSourceSnapshot, SourcePlayback, SourceSyncRequest), Error> {
         let voice = &self.voices[index];
         let id = voice.sample_id;
@@ -73,40 +100,21 @@ impl RtMixer {
         if !snapshot.row_current(id) || !self.admitted_source_binding_current(id, row.binding) {
             return Err(Error::SourceChanged);
         }
-        let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
-        let key = row
-            .binding
-            .placement
-            .and_then(|placement| placement.content_key())
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_UNSUPPORTED_INPUTS.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+        // These exact once-read values decide the ORIGINAL guard and supply its
+        // refusal evidence. A later re-read may not impersonate this decision.
+        let inputs = self
+            .scalar_policy_early_inputs(index, row)
             .ok_or(Error::SourceChanged)?;
-        // Use the already-qualified content cell inside the original claim too;
-        // slot_snapshot-based convenience readers are unavailable under its marker.
-        let resident_pending = self
-            .input_runtime_ownership
-            .resident_control_for_cell(key.cell())
-            .load(Ordering::Acquire)
-            != 0;
-        if voice.source_playback.is_mapped()
-            || row.request.mode == SourceSyncMode::Mapped
-            || voice.paused
-            || key_lock
-            || pitch.total_semitones() != 0
-            || row.pitch.key_lock
-            || row.pitch.intent.total_semitones() != 0
-            || resident_pending
-            || voice.stretch.has_active_native_ownership()
-            || voice.stretch.has_retained_source_input()
-            || voice.stretch.source_lane_busy()
-            || self.pending_key_lock_tuples[id].is_some()
-            || self.queued_key_lock_tuples[id].is_some()
-            || self.hold_actions[id]
-                .as_ref()
-                .is_some_and(|work| !work.action.state().terminal())
-            || self
-                .pitch_runtime
-                .as_ref()
-                .is_some_and(|runtime| runtime.has_pending_content(key))
-        {
+        if inputs.blocked() {
+            *evidence = Some(UnsupportedEvidence::Early {
+                index,
+                generation: voice.generation,
+                inputs,
+            });
             return Err(Error::Unsupported);
         }
         let raw = self
@@ -120,18 +128,22 @@ impl RtMixer {
         {
             return Err(Error::SourceChanged);
         }
-        let (start, end) = self
-            .loop_intent_frames(id, row.loop_start_s, row.loop_end_s)
-            .ok_or(Error::Unsupported)?;
-        if effective_loop_region(start, end, raw.sample.frame_count()) != Some(raw.plan.loop_region)
-            || !raw.playback.matches_domain(raw.plan.domain())
-            || !raw.playback.matches_domain(
-                self.timing_for_voice(voice)
-                    .loop_domain(raw.sample.frame_count(), raw.plan.loop_region),
-            )
-            || raw.plan.transition.is_active()
-            || raw.actual_feed.is_some()
-        {
+        let intent = self.loop_intent_frames(id, row.loop_start_s, row.loop_end_s);
+        let Some(intent) = intent else {
+            *evidence = Some(UnsupportedEvidence::Loop {
+                index,
+                generation: voice.generation,
+                intent,
+            });
+            return Err(Error::Unsupported);
+        };
+        let inputs = self.scalar_policy_late_inputs(index, &raw, intent);
+        if inputs.blocked() {
+            *evidence = Some(UnsupportedEvidence::Late {
+                index,
+                generation: voice.generation,
+                inputs,
+            });
             return Err(Error::Unsupported);
         }
         if row.request.mode == SourceSyncMode::Fixed && self.master_period_seconds.is_none() {
@@ -163,10 +175,11 @@ impl RtMixer {
         &self,
         index: usize,
         snapshot: &RuntimePolicySnapshot,
+        evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<ScalarLane, Error> {
         let voice = &self.voices[index];
         let row = snapshot.row(voice.sample_id).ok_or(Error::SourceChanged)?;
-        let (raw, candidate, request) = self.scalar_policy_candidate(index, snapshot)?;
+        let (raw, candidate, request) = self.scalar_policy_candidate(index, snapshot, evidence)?;
         let original = self
             .capture_rate_participant(index, &raw)
             .map_err(|_| Error::SourceChanged)?;
@@ -293,7 +306,8 @@ impl RtMixer {
             {
                 return false;
             }
-            let Ok((raw, candidate, request)) = self.scalar_policy_candidate(index, snapshot)
+            let Ok((raw, candidate, request)) =
+                self.scalar_policy_candidate(index, snapshot, &mut None)
             else {
                 return false;
             };
@@ -313,11 +327,47 @@ impl RtMixer {
             && self.global_rate_drains_settled()
     }
 
-    pub(crate) fn adopt_runtime_policy(
+    pub(crate) fn adopt_runtime_policy_observed(
+        &mut self,
+        snapshot: &RuntimePolicySnapshot,
+        timeline: &TransportTimeline,
+        execution: u64,
+    ) -> (
+        Result<(), Error>,
+        Option<super::super::runtime_policy_retry::RetryToken>,
+    ) {
+        self.prepare_runtime_policy_retry(snapshot);
+        let before = self.observe_runtime_policy_retry(timeline);
+        let mut evidence = None;
+        let result = self.adopt_runtime_policy(snapshot, timeline, execution, &mut evidence);
+        #[cfg(test)]
+        if result == Err(Error::Unsupported)
+            && let Some(hook) = AFTER_UNSUPPORTED_DECISION.with(|hook| hook.borrow_mut().take())
+        {
+            hook();
+        }
+        let matches_before = self.policy_retry_evidence_matches(evidence);
+        let after = self.observe_runtime_policy_retry(timeline);
+        let retry = if result == Err(Error::Unsupported)
+            && before.is_some()
+            && before == after
+            && matches_before
+            && self.policy_retry_evidence_matches(evidence)
+            && snapshot.retry_fences_current()
+        {
+            before
+        } else {
+            None
+        };
+        (result, retry)
+    }
+
+    fn adopt_runtime_policy(
         &mut self,
         snapshot: &RuntimePolicySnapshot,
         timeline: &TransportTimeline,
         _execution: u64,
+        evidence: &mut Option<UnsupportedEvidence>,
     ) -> Result<(), Error> {
         self.scalar_policy_available(snapshot)?;
         if !self.voices.iter().any(|voice| voice.active) {
@@ -351,7 +401,7 @@ impl RtMixer {
         };
         for (index, lane) in capture.lanes.iter_mut().enumerate() {
             if self.voices[index].active {
-                *lane = Some(self.scalar_policy_lane(index, snapshot)?);
+                *lane = Some(self.scalar_policy_lane(index, snapshot, evidence)?);
             }
         }
         let anchor = capture

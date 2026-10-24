@@ -24,7 +24,7 @@
 - [x] Add an explicit nonserialized timing-recovery gate for actual malformed global metadata, preserving valid settings, original bytes, save/launch holds and ordinary valid False/False/revision0 semantics.
 - [x] Reorder the five controls and apply identical GUI/MIDI/PAD availability without using playing/phase ACK as a parent prerequisite.
 - [x] Separate current mode efficacy from unknown grid-phase qualification in status/global aggregation/labels, retaining real refusals and settlement evidence.
-- [ ] Finish meaningful affected regression/integration/static/strict checks, needed private Release/API/preflight and one independent actual final-diff review; commit and normal-main push, clean fresh remote equality and guarded own cleanup.
+- [x] Finish meaningful affected regression/integration/static/strict checks, needed private Release/API/preflight and one independent actual final-diff review; commit and normal-main push, clean fresh remote equality and guarded own cleanup.
 
 ## Remaining product phase and musical acceptance
 

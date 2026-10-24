@@ -115,7 +115,57 @@ Live scalar policy adoption SHALL omit the mixer matching-master/Transport perio
 - **AND** missing, stale, overlapping or mismatched evidence SHALL conservatively allow service rather than invent inactivity
 - **AND** subsequent active callback evidence SHALL permit retry or suppress obsolete work when the complete current raw target is already callback-confirmed
 - **AND** stopped/off feedback SHALL NOT present no_active_voices as a failed live change or fabricate an applied acknowledgement
-- **AND** Busy, Unsupported, capacity, Hold, renderer-configuration and independent source-acknowledgement recovery SHALL remain retryable through the existing service
+- **AND** Busy, capacity and independent source-acknowledgement recovery SHALL remain retryable through the existing service
+- **AND** Unsupported SHALL retain deliberate retry and automatic recovery after a relevant actual condition changes, including Hold release, Resume and renderer configuration, under the qualified observation requirement below
+
+### Requirement: Automatic Unsupported service uses actual rejection evidence
+The system SHALL distinguish ordinary automatic service from deliberate retry through the existing Native adoption method. `request_input_runtime_policy_adoption(*, service=False)` SHALL retain deliberate behavior by default; ordinary Python publication and cache-hit service SHALL use `service=True`. Automatic service MAY suppress an unchanged Unsupported refusal only after the original pending, dispatch-owner, cleanup, current-target and qualified-idle checks and with a complete current observation correlated to the predicates actually used for that refusal. It SHALL NOT infer eligibility from elapsed time, cursor, render frame, transition progress or a continuously changing telemetry sequence. All original source, claim, reader, PCM and atomic cohort guards SHALL remain authoritative. Other refusal reasons SHALL retain their existing retry behavior.
+
+#### Scenario: Unchanged automatic service observes an unsupported cohort
+- **WHEN** 1500 automatic polls and ordinary rendering retain the same qualified Unsupported conditions for the complete original active voice cohort
+- **THEN** the refusal attempt SHALL remain unchanged without new owning queue or scheduler work
+- **AND** previous effective audio, cursor, readers and actual status SHALL remain unchanged
+- **AND** the observation SHALL include all actual voice slots, including older active voices sharing a PAD, rather than only the newest per-PAD feedback
+
+#### Scenario: A relevant condition changes or the caller deliberately retries
+- **WHEN** Hold release, Resume, renderer/domain configuration, lane retirement or a qualified source/map/ACK/context change makes the prior complete observation different, or the caller requests deliberate retry
+- **THEN** the original service SHALL permit a new attempt after its existing pending and cleanup guards allow it
+- **AND** deliberate retry SHALL NOT bypass source, claim, cohort, capacity, actual target or pending-owner checks
+- **AND** MissingMaster, ReaderUnavailable, PhaseChanged, Busy and pressure failures SHALL NOT be permanently latched by the Unsupported suppression mechanism
+
+#### Scenario: An asynchronous blocker changes around its actual eligibility read
+- **WHEN** a blocker becomes busy only at the actual Unsupported guard and becomes free before the following observation, or an actually busy blocker becomes free before refusal publication
+- **THEN** a mismatched refusal observation SHALL NOT suppress the next automatic attempt
+- **AND** equality of outer before/after observations alone SHALL NOT establish that the observed state was actually refused
+- **AND** the guard SHALL retain its once-read actual predicate inputs as evidence, including the original early blockers and later loop/domain/transition/feed conditions
+
+### Requirement: Retry observations preserve callback and ownership lifetimes
+Retry observations SHALL be fixed bounded data with shape storage prepared off realtime. Each callback mixer SHALL publish only to its own observation slot. The existing input-runtime ownership SHALL select the current slot off realtime using a checked nonreused birth and condition token. Successful complete mixer construction and completed explicit ownership rebinding SHALL establish a new observation birth; failed worker construction or invalid epoch-vector construction SHALL preserve the previous slot exactly. Observation registration, registry access, allocation and final destruction SHALL remain off realtime. This observation SHALL NOT own or authorize audio, source, map, Work or scheduler effects.
+
+#### Scenario: An old callback publishes after its replacement
+- **WHEN** callback B is successfully constructed after callback A and A subsequently publishes or invalidates its own retry observation
+- **THEN** A SHALL NOT overwrite, invalidate or reactivate B's current observation
+- **AND** the displaced registry reference and final mixer reference SHALL follow the existing control and CallbackOwned worker retirement paths
+
+#### Scenario: Retry evidence is unavailable or exhausted
+- **WHEN** observation identity is unknown, overlapping, stale, poisoned or exhausted, or a bounded checked token publication cannot complete
+- **THEN** Unsupported suppression SHALL be disabled and original retry SHALL remain available without wrapping a token or creating a new audio failure
+- **AND** no callback SHALL acquire a registry lock, clone or replace the registry owner, allocate shape storage or release the last observation owner
+
+### Requirement: Map readiness feedback preserves preceding actual audio
+After original source/binding and feedback qualification, requested Mapped status SHALL use one coherent existing selector observation for geometry, readiness and errors. Concrete missing, preparing or failed-map guidance SHALL precede a generic adoption refusal while retaining its technical details and the preceding actual active, effective and realtime state. Readiness SHALL NOT certify adoption or grid phase, and no scalar fallback or trigger-qualification relaxation SHALL occur.
+
+#### Scenario: A requested map is unavailable and later becomes current
+- **WHEN** requested Mapped timing has no qualified current map while preceding audio remains active
+- **THEN** feedback SHALL identify the actual map condition without hiding preceding effective audio or inventing an applied acknowledgement
+- **AND** a trigger SHALL still refuse before capture when its original map prerequisite is absent
+- **AND** a later original current delivery SHALL permit the existing qualified retrigger path without treating that start as continuous phase acceptance
+- **AND** feedback SHALL NOT obtain a second geometry snapshot through a separate readiness query
+
+#### Scenario: A stale Native API cannot distinguish service from deliberate retry
+- **WHEN** the Native method lacks the exact optional keyword-only `service=False` contract
+- **THEN** the existing capability preflight SHALL reject it before application or audio-device construction
+- **AND** automatic service SHALL NOT silently fall back to the old no-argument method
 
 ### Requirement: Physical scalar coordinates preserve the separate source pair
 A coordinates-only physical scalar continuation SHALL retain an already canonical Normal source frame and fraction separately and SHALL use an explicit projection mode distinct from legacy scalar trajectories. It SHALL derive constant-rate displacement from the exact u64 elapsed-frame and binary64 rate product, reduce integer displacement before fractional addition, and keep circular rounding error at most 2^-53 source frame for the complete u64 epoch. Generic zero fractional displacement SHALL preserve fraction bits on every exact whole-loop revisit. This construction SHALL NOT authorize live adoption, source ownership or pre-conversion history, and SHALL NOT alter legacy arithmetic or reinterpret a musical domain as physical.

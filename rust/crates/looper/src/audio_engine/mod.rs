@@ -200,6 +200,7 @@ pub(crate) use scalar_grid::ScalarSourceGrid;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod mapped_source_clock;
+mod runtime_policy_retry;
 mod scheduler;
 mod source_control_epoch;
 mod source_feed_history;
@@ -4270,7 +4271,8 @@ impl AudioEngine {
     }
 
     /// Retry one original Native runtime policy snapshot; normal refusal is feedback.
-    pub fn request_input_runtime_policy_adoption(&self) -> PyResult<()> {
+    #[pyo3(signature = (*, service=false))]
+    pub fn request_input_runtime_policy_adoption(&self, service: bool) -> PyResult<()> {
         let runtime = self
             .input_runtime
             .as_ref()
@@ -4280,7 +4282,7 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         runtime
-            .request_runtime_policy_adoption()
+            .request_runtime_policy_adoption_with_service(service)
             .map_err(PyRuntimeError::new_err)
     }
 

@@ -768,7 +768,7 @@ def test_gui_learn_and_midi_share_each_global_action_without_early_mutation(
         "action_key": action.key,
     })
     assert getattr(controller.project.global_timing_policy, control) is (control == "sync")
-    request.assert_called_once_with()
+    request.assert_called_once_with(service=True)
     getattr(ctx.audio.global_, method)()
     assert controller.project.global_timing_policy.revision == 2
     assert request.call_count == 2

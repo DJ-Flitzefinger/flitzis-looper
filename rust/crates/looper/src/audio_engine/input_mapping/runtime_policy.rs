@@ -2,7 +2,10 @@
 //! This owns requested rows, never a prepared phase, source clock or scheduler.
 
 use super::{InputRuntime, RuntimePadState};
+use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
+use crate::audio_engine::content_placement::OwnerIdentity;
 use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
+use crate::audio_engine::runtime_policy_retry::RetryToken;
 use crate::audio_engine::source_sync_policy::SourceSyncRequest;
 use crate::messages::ControlMessage;
 use std::sync::{
@@ -93,6 +96,36 @@ pub(crate) struct RuntimePolicyRow {
     pub(crate) loop_end_s: Option<f64>,
 }
 
+/// Scalar observation only. Original immutable rows retain all owning custody.
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimePolicyRetryRow {
+    pub(crate) row: RuntimePolicyRow,
+    source: SourceFence,
+    acknowledgements: OwnerIdentity,
+}
+
+impl RuntimePolicyRetryRow {
+    pub(crate) fn current(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        acknowledgements: &Arc<CurrentTimingAcknowledgements>,
+        id: usize,
+    ) -> bool {
+        let binding = self.row.binding;
+        self.acknowledgements == OwnerIdentity::of(acknowledgements)
+            && ownership.current(id, binding)
+            && ownership.binding_source_generation(id, binding) == Some(self.source.generation)
+            && ownership.binding_source_request_incarnation(id, binding)
+                == Some(self.source.incarnation)
+            && ownership.binding_timing_intent(id, binding) == Some(self.source.timing_intent)
+            && acknowledgements.current_for_binding(ownership, id, binding)
+                == self.source.acknowledgement
+            && ownership.source_timing_available_for_binding(id, binding, acknowledgements)
+            && ownership.copy_reservation(id) == 0
+            && ownership.pair_reservation(id) == 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimePolicyAttempt {
     pub(crate) attempt: u64,
@@ -113,6 +146,9 @@ pub(crate) struct RuntimePolicySnapshot {
     reason: AtomicU8,
     execution: AtomicU64,
     execution_present: AtomicBool,
+    retry_birth: AtomicU64,
+    retry_condition: AtomicU64,
+    retry_timing_revision: AtomicU64,
     // Idle is zero. An attempt counts each Work plus one cleanup reservation;
     // only its last Work releases that reservation after terminal cleanup.
     dispatch_owners: AtomicUsize,
@@ -241,6 +277,9 @@ impl RuntimePolicySnapshot {
             reason: AtomicU8::new(0),
             execution: AtomicU64::new(u64::MAX),
             execution_present: AtomicBool::new(false),
+            retry_birth: AtomicU64::new(0),
+            retry_condition: AtomicU64::new(0),
+            retry_timing_revision: AtomicU64::new(0),
             dispatch_owners: AtomicUsize::new(0),
         }
     }
@@ -266,6 +305,24 @@ impl RuntimePolicySnapshot {
             loop_start_s: row.loop_start_s,
             loop_end_s: row.loop_end_s,
         })
+    }
+
+    pub(crate) fn retry_row(&self, id: usize) -> Option<RuntimePolicyRetryRow> {
+        let row = self.rows.get(id).filter(|row| row.loaded)?;
+        Some(RuntimePolicyRetryRow {
+            row: self.row(id)?,
+            source: self.sources.get(id).copied().flatten()?,
+            acknowledgements: OwnerIdentity::of(row.acknowledgements.as_ref()?),
+        })
+    }
+
+    pub(crate) fn retry_fences_current(&self) -> bool {
+        self.current()
+            && self
+                .rows
+                .iter()
+                .enumerate()
+                .all(|(id, row)| !row.loaded || self.row_current(id))
     }
 
     /// Reads only captured rows and existing fixed Native fences, including inside
@@ -363,7 +420,12 @@ impl RuntimePolicySnapshot {
         self.current()
     }
 
+    #[cfg(test)]
     fn begin(self: &Arc<Self>) -> Option<RuntimePolicyWork> {
+        self.begin_with_service(false)
+    }
+
+    fn begin_with_service(self: &Arc<Self>, service: bool) -> Option<RuntimePolicyWork> {
         if self.dispatch_owners.load(Ordering::Acquire) != 0 {
             return None;
         }
@@ -379,6 +441,35 @@ impl RuntimePolicySnapshot {
                     && self.actual_inactive()))
         {
             return None;
+        }
+        if service
+            && state == REFUSED
+            && RuntimePolicyError::from_code(self.reason.load(Ordering::Acquire))
+                == Some(RuntimePolicyError::Unsupported)
+            && self.retry_fences_current()
+        {
+            let condition = self.retry_condition.load(Ordering::Acquire);
+            let token = RetryToken {
+                birth: self.retry_birth.load(Ordering::Acquire),
+                condition,
+                revision: self.revision,
+                timing_revision: self.retry_timing_revision.load(Ordering::Acquire),
+            };
+            if condition != 0
+                && self.ownership.runtime_policy_retry.current() == Some(token)
+                && self
+                    .ownership
+                    .global_timing_revision
+                    .load(Ordering::Acquire)
+                    == token.timing_revision
+                && !self
+                    .ownership
+                    .global_timing_publishing
+                    .load(Ordering::Acquire)
+                && self.retry_fences_current()
+            {
+                return None;
+            }
         }
         if self
             .state
@@ -398,6 +489,7 @@ impl RuntimePolicySnapshot {
         };
         self.attempt.store(attempt, Ordering::Relaxed);
         self.reason.store(0, Ordering::Relaxed);
+        self.retry_condition.store(0, Ordering::Relaxed);
         self.execution.store(u64::MAX, Ordering::Relaxed);
         self.execution_present.store(false, Ordering::Relaxed);
         // The only production clones are the scheduler argument and its stored
@@ -411,6 +503,26 @@ impl RuntimePolicySnapshot {
     }
 
     pub(crate) fn finish(&self, result: Result<(), RuntimePolicyError>, frame: Option<u64>) {
+        self.finish_with_retry(result, frame, None);
+    }
+
+    pub(crate) fn finish_with_retry(
+        &self,
+        result: Result<(), RuntimePolicyError>,
+        frame: Option<u64>,
+        retry: Option<RetryToken>,
+    ) {
+        let retry = retry.filter(|token| {
+            result == Err(RuntimePolicyError::Unsupported) && token.revision == self.revision
+        });
+        self.retry_birth
+            .store(retry.map_or(0, |token| token.birth), Ordering::Relaxed);
+        self.retry_timing_revision.store(
+            retry.map_or(0, |token| token.timing_revision),
+            Ordering::Relaxed,
+        );
+        self.retry_condition
+            .store(retry.map_or(0, |token| token.condition), Ordering::Relaxed);
         self.reason.store(
             result.err().map_or(0, |error| error as u8),
             Ordering::Relaxed,
@@ -458,7 +570,15 @@ impl RuntimePolicySnapshot {
 
 impl InputRuntime {
     /// Caller holds the engine's request mutex before this original Native mutex.
+    #[cfg(test)]
     pub(crate) fn request_runtime_policy_adoption(&self) -> Result<(), String> {
+        self.request_runtime_policy_adoption_with_service(false)
+    }
+
+    pub(crate) fn request_runtime_policy_adoption_with_service(
+        &self,
+        service: bool,
+    ) -> Result<(), String> {
         let mut state = self
             .runtime_state
             .lock()
@@ -494,7 +614,7 @@ impl InputRuntime {
             .audio_producer
             .lock()
             .map_err(|_| "audio producer lock poisoned")?;
-        let Some(work) = snapshot.begin() else {
+        let Some(work) = snapshot.begin_with_service(service) else {
             return Ok(());
         };
         if let Err(rtrb::PushError::Full(ControlMessage::AdoptRuntimePolicy(owner))) =

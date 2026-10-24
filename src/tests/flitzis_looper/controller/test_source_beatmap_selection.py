@@ -79,6 +79,69 @@ def test_original_job_delivery_commits_compact_selection_and_publishes_saved_own
     assert controller.project.sample_paths[0] == "samples/shared.wav"
 
 
+@pytest.mark.parametrize("preparing", [False, True])
+def test_selector_observation_reuses_one_original_delivery_qualification(
+    controller: AppController, audio_engine_mock: Mock, *, preparing: bool
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    job = _job(audio)
+    maps = controller.loader.source_beatmaps
+    maps.select(0, "original record")
+    event = _event(job)
+    maps.completed(0, event)
+    artifact = job.resolve_source_beatmap_artifact_completion.return_value
+    geometry = artifact.map.return_value
+    if preparing:
+        _job(audio)
+        maps.select(0, "replacement record")
+    audio._resolve_loader_event.reset_mock()
+    artifact.map.reset_mock()
+
+    observation = maps._observe_state(0)
+
+    assert observation.geometry is geometry
+    assert observation.status == ("pending" if preparing else "effective")
+    assert observation.error is None
+    audio._resolve_loader_event.assert_called_once_with(event["_native_event_owner"])
+    artifact.map.assert_called_once_with()
+    assert maps.status(0) == observation.status
+
+
+def test_selector_observation_preserves_unreadable_custody_then_qualifies_current_delivery(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    job = _job(audio)
+    maps = controller.loader.source_beatmaps
+    maps.select(0, "original record")
+    event = _event(job)
+    maps.completed(0, event)
+    original = maps._effective["e" * 32]
+    geometry = job.resolve_source_beatmap_artifact_completion.return_value.map.return_value
+    audio._resolve_loader_event.side_effect = [RuntimeError("placement busy"), (0, False)]
+
+    unreadable = maps._observe_state(0)
+
+    assert unreadable.geometry is None
+    assert unreadable.status == "none"
+    assert unreadable.error is None
+    assert maps._effective["e" * 32] is original
+    current = maps._observe_state(0)
+    assert current.geometry is geometry
+    assert current.status == "effective"
+    assert original.delivery is event["_native_event_owner"]
+    audio._resolve_loader_event.side_effect = None
+    audio._resolve_loader_event.return_value = (1, False)
+
+    changed = maps._observe_state(0)
+
+    assert changed.geometry is None
+    assert changed.status == "none"
+    assert "e" * 32 not in maps._effective
+
+
 def test_unowned_dictionary_never_resolves_or_selects_candidate(
     controller: AppController,
     audio_engine_mock: Mock,

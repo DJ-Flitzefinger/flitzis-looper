@@ -613,17 +613,21 @@ def _check_global_timing_policy_api(engine: type) -> None:
     assert timing_parameter.default is None, timing_error
     adoption = getattr(engine, "request_input_runtime_policy_adoption", None)
     adoption_error = (
-        "Native timing API requires AudioEngine.request_input_runtime_policy_adoption(self)"
+        "Native timing API requires "
+        "AudioEngine.request_input_runtime_policy_adoption(self, *, service=False)"
     )
     assert callable(adoption), adoption_error
     parameters = inspect.signature(adoption).parameters
-    assert tuple(parameters) == ("self",), adoption_error
+    assert tuple(parameters) == ("self", "service"), adoption_error
     receiver = parameters["self"]
     assert receiver.kind in {
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
     }, adoption_error
     assert receiver.default is inspect.Parameter.empty, adoption_error
+    service = parameters["service"]
+    assert service.kind == inspect.Parameter.KEYWORD_ONLY, adoption_error
+    assert service.default is False, adoption_error
 
 
 def check_source_beatmap_editor_api(native_module: object) -> None:

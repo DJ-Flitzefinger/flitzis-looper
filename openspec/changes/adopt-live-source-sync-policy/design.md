@@ -656,3 +656,36 @@ participant among 32; pause/Hold/source/window/master/Move/Swap/retirement press
 original launch and displaced map last-reader lifetimes; and feedback pressure.
 Existing scalar/global-rate, launch, Hold, ordinary transport and history neighbors
 remain required affected regressions. These are bounded software proofs only.
+
+## Condition-based automatic retry and current map guidance
+
+Ordinary Python publication/cache hits call the existing adoption method with
+`service=True`; its keyword-only default `False` preserves deliberate callers.
+Only automatic Unsupported suppression changes. Preserve all original pending,
+cleanup, current-target and qualified-idle gates and other error recovery. Exact
+reflection rejects an older Native signature before App/device construction.
+
+Capture a fixed semantic global/32-voice observation, including older active voices
+of the same PAD and all actual Unsupported blockers. Exclude cursor, output frame,
+glide/transition progress and continuously changing telemetry. Prepare previous
+shape storage on the heap off realtime and compare lanes without a large callback
+temporary. Each mixer owns a private observation slot; the existing input-runtime
+ownership selects its current slot through an off-realtime registry. Register only
+after full successful boxed construction or completed explicit owner rebinding.
+An old callback writes only its old slot. Checked nonreused birth/condition tokens,
+unreadability, overlap and exhaustion must never create false suppression or an
+audio failure. No callback registry lock, owner clone/swap or final destruction.
+
+The actual Unsupported guard consumes once-read Copy inputs and retains those
+exact inputs as refusal evidence, including later loop/domain/transition/feed
+checks. A refusal token is usable only when both qualified outer observations
+match that actual decision and original source/global fences remain current.
+Before/after equality alone misses a false/true-at-guard/false race. Unknown or
+changed evidence leaves automatic retry open. Keep original effect guards and
+cleanup reservation; observation is not another publication permit or authority.
+
+Mapped feedback captures existing selector geometry/readiness/error once after
+source qualification. Explain unavailable/preparing/failed maps before generic
+Unsupported, retaining technical details and preceding actual audio/status. Do not
+relax cold capture or infer phase/adoption from map readiness. This bounded step
+does not implement living representation conversion or shared musical grid phase.

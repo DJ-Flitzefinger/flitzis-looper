@@ -13,7 +13,7 @@ from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
 from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.context import UiContext
-from tests.flitzis_looper.controller.test_source_beatmap_selection import _assigned, _job
+from tests.flitzis_looper.controller.test_source_beatmap_selection import _assigned, _event, _job
 from tests.flitzis_looper.controller.transport.test_source_map_loop import _geometry
 
 if TYPE_CHECKING:
@@ -63,6 +63,292 @@ def _adoption(**changes: object) -> dict[str, object]:
     }
     observation.update(changes)
     return observation
+
+
+def _mapped_request_with_old_audio(
+    controller: AppController, audio: Mock, *, actual_mode: str = "legacy", state: str = "refused"
+) -> dict[str, object]:
+    """Retain qualified preceding audio independently of a newer mapped request."""
+    _assigned(controller, audio)
+    controller.project.global_timing_policy = GlobalTimingPolicy(
+        schema_version=1, sync=True, realtime_bpm=True, revision=2
+    )
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=5)
+    return _feedback(
+        audio,
+        active=True,
+        effective=actual_mode != "legacy",
+        intent_revision=4,
+        map_revision="f" * 64 if actual_mode == "mapped" else None,
+        policy_mode=actual_mode,
+        policy_revision=1,
+        policy_sync=actual_mode != "legacy",
+        policy_realtime_bpm=actual_mode == "mapped",
+        settled=True,
+        adoption=_adoption(
+            state=state,
+            reason="unsupported" if state == "refused" else None,
+            execution_frame=123 if state == "applied" else None,
+            target_mode="mapped",
+            target_policy_revision=2,
+            target_policy_sync=True,
+            target_policy_realtime_bpm=True,
+            target_intent_revision=5,
+        ),
+    )
+
+
+@pytest.mark.parametrize("actual_mode", ["legacy", "fixed", "mapped"])
+@pytest.mark.parametrize("state", ["pending", "applied", "refused"])
+@pytest.mark.parametrize("map_state", ["absent", "preparing", "failed", "changed", "unreadable"])
+def test_current_map_guidance_precedes_generic_adoption_without_hiding_actual_audio(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    actual_mode: str,
+    state: str,
+    map_state: str,
+) -> None:
+    audio = audio_engine_mock
+    _mapped_request_with_old_audio(controller, audio, actual_mode=actual_mode, state=state)
+    maps = controller.loader.source_beatmaps
+    if map_state != "absent":
+        job = _job(audio)
+        maps.select(0, "current original record")
+        if map_state in {"changed", "unreadable"}:
+            maps.completed(0, _event(job))
+            audio._resolve_loader_event.side_effect = (
+                RuntimeError("placement unreadable") if map_state == "unreadable" else None
+            )
+            audio._resolve_loader_event.return_value = None
+        elif map_state == "failed":
+            job.source_beatmap_async_status.return_value = {
+                "terminal": True,
+                "stage": "failed",
+                "detail": "Original map coverage rejected.",
+            }
+            maps.poll(frozenset())
+    effective = Mock(wraps=maps.effective)
+    monkeypatch.setattr(maps, "effective", effective)
+    monkeypatch.setattr(
+        maps, "status", Mock(side_effect=AssertionError("A second readiness query is forbidden."))
+    )
+    before = controller.project.model_dump(), controller.session.model_dump()
+    audio.reset_mock()
+
+    status = controller.transport.source_sync.status(0)
+
+    readiness = (
+        "preparing"
+        if map_state == "preparing"
+        else "failed"
+        if map_state == "failed"
+        else "unavailable"
+    )
+    refused = state == "refused" or map_state == "failed"
+    assert status.state == ("refused" if refused else "pending")
+    assert status.requested is True
+    assert status.active is True
+    assert status.effective is (actual_mode != "legacy")
+    assert status.policy_mode == actual_mode
+    assert status.actual_realtime_bpm is (actual_mode == "mapped")
+    assert status.grid_phase_confirmed is None
+    assert status.map_readiness == readiness
+    assert status.guidance == (
+        "refused" if refused else "settling" if state == "applied" else "pending"
+    )
+    assert status.guidance_text is not None
+    assert "map" in status.guidance_text
+    assert "Live timing change refused" not in status.guidance_text
+    assert status.detail is not None
+    if state == "refused":
+        assert "unsupported" in status.detail
+        assert "snapshot 11, attempt 3" in status.detail
+    if map_state == "failed":
+        assert "Original map coverage rejected." in status.detail
+    effective.assert_called_once_with(0)
+    assert (controller.project.model_dump(), controller.session.model_dump()) == before
+    audio.set_input_runtime_state.assert_not_called()
+    audio.capture_pad_start.assert_not_called()
+    audio.set_pad_loop_region.assert_not_called()
+    global_status = controller.transport.timing_policy.status("realtime_bpm")
+    assert global_status.effective is (actual_mode == "mapped")
+    assert global_status.pending is True
+    assert global_status.detail == status.guidance_text
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "assignment",
+        "binding",
+        "superseded",
+        "unreadable",
+        "generation",
+        "window",
+        "schema",
+        "policy",
+    ],
+)
+def test_map_observation_follows_complete_original_source_and_feedback_qualification(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    audio = audio_engine_mock
+    feedback = _mapped_request_with_old_audio(controller, audio)
+    observe_map = Mock(side_effect=AssertionError("Unqualified feedback must not observe a map."))
+    monkeypatch.setattr(controller.loader.source_beatmaps, "_observe_state", observe_map)
+    if failure == "assignment":
+        monkeypatch.setattr(
+            controller.transport,
+            "ensure_current_source_assignment_ready",
+            Mock(side_effect=ValueError("assignment pending")),
+        )
+    elif failure == "binding":
+        audio.current_input_runtime_pad_binding.return_value = None
+    elif failure == "superseded":
+        binding = audio.current_input_runtime_pad_binding.return_value
+        monkeypatch.setattr(binding, "is_current", Mock(side_effect=[True, False]))
+    elif failure == "unreadable":
+        audio.pad_source_sync_status.side_effect = RuntimeError("feedback unreadable")
+    elif failure == "generation":
+        feedback["source_generation"] = 2
+    elif failure == "window":
+        feedback["window_revision"] = 8
+    elif failure == "schema":
+        feedback["active"] = 1
+    else:
+        feedback["policy_revision"] = -1
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "unconfirmed"
+    assert status.active is status.effective is status.actual_realtime_bpm is None
+    assert status.map_readiness is None
+    assert status.guidance == "unconfirmed"
+    observe_map.assert_not_called()
+
+
+def test_ready_unapplied_map_status_reuses_the_first_geometry_for_original_loop_guards(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = audio_engine_mock
+    feedback = _mapped_request_with_old_audio(controller, audio)
+    del feedback["adoption"]
+    project = controller.project
+    project.manual_bpm[0] = 120.0
+    project.pad_loop_start_s[0] = 1.0
+    project.pad_loop_auto[0] = True
+    project.pad_loop_bars[0] = 1.0
+    geometry = _geometry()
+    effective = Mock(side_effect=[geometry, AssertionError("Unexpected second geometry capture.")])
+    monkeypatch.setattr(controller.loader.source_beatmaps, "effective", effective)
+    loop = controller.transport.loop
+    mapped_region = Mock(wraps=loop._mapped_region)
+    monkeypatch.setattr(loop, "_mapped_region", mapped_region)
+    before = project.model_dump(), controller.session.model_dump()
+    audio.reset_mock()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "pending"
+    assert status.active is True
+    assert status.effective is False
+    assert status.actual_realtime_bpm is False
+    assert status.guidance == "restart"
+    assert status.map_readiness is None
+    assert status.grid_phase_confirmed is None
+    effective.assert_called_once_with(0)
+    mapped_region.assert_called_once_with(geometry, start=1.0, bars=1.0)
+    assert loop._source_sync_requested_region(0, geometry) == (1.0, 3.5)
+    assert (project.model_dump(), controller.session.model_dump()) == before
+    audio.set_input_runtime_state.assert_not_called()
+    audio.capture_pad_start.assert_not_called()
+    audio.set_pad_loop_region.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["uncertain", "gap_unknown_count", "meter", "extent"])
+def test_ready_map_status_retains_loop_coverage_refusal_without_recapturing_geometry(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: str,
+) -> None:
+    audio = audio_engine_mock
+    feedback = _mapped_request_with_old_audio(controller, audio)
+    del feedback["adoption"]
+    project = controller.project
+    project.pad_loop_start_s[0] = 1.0
+    project.pad_loop_auto[0] = True
+    project.pad_loop_bars[0] = 3.0 if invalid == "extent" else 1.0 if invalid == "meter" else 2.0
+    geometry = _geometry(
+        middle_coverage=invalid if invalid in {"uncertain", "gap_unknown_count"} else "trusted",
+        meter="unknown" if invalid == "meter" else "quarter_note_4_4_verified",
+    )
+    effective = Mock(side_effect=[geometry, AssertionError("Unexpected second geometry capture.")])
+    monkeypatch.setattr(controller.loader.source_beatmaps, "effective", effective)
+    before = project.model_dump(), controller.session.model_dump()
+    audio.reset_mock()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "refused"
+    assert status.active is True
+    assert status.effective is False
+    assert status.actual_realtime_bpm is False
+    assert status.map_readiness is None
+    assert status.grid_phase_confirmed is None
+    assert status.detail is not None
+    assert "supported" in status.detail
+    effective.assert_called_once_with(0)
+    assert (project.model_dump(), controller.session.model_dump()) == before
+    audio.set_input_runtime_state.assert_not_called()
+    audio.capture_pad_start.assert_not_called()
+    audio.set_pad_loop_region.assert_not_called()
+
+
+def test_missing_map_refuses_before_capture_and_original_current_delivery_allows_retrigger(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio = audio_engine_mock
+    _mapped_request_with_old_audio(controller, audio)
+    project = controller.project
+    project.manual_bpm[0] = 120.0
+    project.sample_durations[0] = 10.0
+    project.pad_loop_start_s[0] = 1.0
+    project.pad_loop_auto[0] = True
+    project.pad_loop_bars[0] = 1.0
+    status = controller.transport.source_sync.status(0)
+    assert status.map_readiness == "unavailable"
+    audio.capture_pad_start.reset_mock()
+
+    with pytest.raises(ValueError, match="Variable SYNC requires a qualified source map"):
+        controller.transport.playback.trigger_pad(0)
+
+    audio.capture_pad_start.assert_not_called()
+    maps = controller.loader.source_beatmaps
+    job = _job(audio)
+    maps.select(0, "current original record")
+    event = _event(job)
+    job.resolve_source_beatmap_artifact_completion.return_value.map.return_value = _geometry()
+    maps.completed(0, event)
+    assert maps.playback_delivery(0) is event["_native_event_owner"]
+
+    ready = controller.transport.source_sync.status(0)
+
+    assert ready.map_readiness is None
+    assert ready.state == "refused"
+    assert ready.effective is False
+    assert ready.grid_phase_confirmed is None
+    assert "unsupported" in ready.detail
+    controller.transport.playback.trigger_pad(0)
+
+    audio.capture_pad_start.assert_called_once_with(
+        0, 1.0, 3.5, 1.0, exclusive=False, received_at_ns=None, expected_source_generation=1
+    )
+    assert controller.transport.source_sync.status(0).grid_phase_confirmed is None
 
 
 _IDLE_POLICIES = (

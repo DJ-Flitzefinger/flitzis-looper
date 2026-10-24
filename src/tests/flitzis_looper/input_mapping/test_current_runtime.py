@@ -1,7 +1,7 @@
 """Current native source and timing ownership in productive MIDI publication."""
 
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -57,7 +57,8 @@ def test_policy_adoption_follows_committed_publication_and_retries_unchanged_run
         events.append("publish")
         return original_publish(*args, **kwargs)
 
-    def request() -> None:
+    def request(*, service: bool = False) -> None:
+        assert service is True
         signature = controller.input_mapping._last_input_runtime_state_signature
         assert signature is not None
         assert signature is not previous
@@ -80,6 +81,10 @@ def test_policy_adoption_follows_committed_publication_and_retries_unchanged_run
     assert controller.input_mapping._last_input_runtime_state_signature is committed
     audio_engine_mock.set_input_runtime_state.assert_called_once()
     assert audio_engine_mock.request_input_runtime_policy_adoption.call_count == 2
+    assert audio_engine_mock.request_input_runtime_policy_adoption.call_args_list == [
+        call(service=True),
+        call(service=True),
+    ]
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, ValueError, TypeError])
@@ -101,7 +106,7 @@ def test_policy_adoption_error_retains_publication_and_recovers_on_cache_hit(
         "Native policy request unavailable"
     )
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    request.assert_called_once_with()
+    request.assert_called_once_with(service=True)
 
     audio_engine_mock.set_input_runtime_state.reset_mock()
     request.side_effect = None
@@ -112,6 +117,27 @@ def test_policy_adoption_error_retains_publication_and_recovers_on_cache_hit(
     assert controller.input_mapping._last_input_runtime_state_error is None
     audio_engine_mock.set_input_runtime_state.assert_not_called()
     assert request.call_count == 2
+    assert request.call_args_list == [call(service=True), call(service=True)]
+
+
+def test_automatic_service_does_not_fall_back_to_a_legacy_no_argument_method(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _configure_accepted_pad(controller, audio_engine_mock)
+    legacy_calls: list[None] = []
+
+    def request() -> None:
+        legacy_calls.append(None)
+
+    audio_engine_mock.request_input_runtime_policy_adoption = request
+
+    assert not controller.input_mapping._refresh_rust_runtime_state()
+    committed = controller.input_mapping._last_input_runtime_state_signature
+    assert committed is not None
+    assert not controller.input_mapping._refresh_rust_runtime_state()
+    assert controller.input_mapping._last_input_runtime_state_signature is committed
+    assert "service" in controller.input_mapping._last_input_runtime_state_error
+    assert not legacy_calls
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -357,7 +383,7 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
     audio_engine_mock.set_input_runtime_state.side_effect = None
     controller.input_mapping._sync_rust_runtime_state()
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    request.assert_called_once_with()
+    request.assert_called_once_with(service=True)
 
 
 @pytest.mark.parametrize("unavailable", [False, True])

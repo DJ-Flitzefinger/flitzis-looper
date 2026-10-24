@@ -934,8 +934,9 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             }
             // Actual E may be later than the original barrier after capacity refusal.
             // No phase was prepared or extrapolated by the owning request.
-            let result = mixer.adopt_runtime_policy(&work, transport, output_frame);
-            work.finish(result, Some(output_frame));
+            let (result, retry) =
+                mixer.adopt_runtime_policy_observed(&work, transport, output_frame);
+            work.finish_with_retry(result, Some(output_frame), retry);
             retirement.retire_runtime_policy(work);
         }
         command @ ScheduledCommand::TriggerInputPad { .. } => {
@@ -1440,6 +1441,7 @@ fn render_scheduled_audio_tracking_pads<
     if scheduler.deferred_due().is_none() {
         mixer.service_global_rate(callback_start_frame, transport, retirement);
     }
+    mixer.observe_runtime_policy_retry(transport);
 
     if channels == 0 {
         return;
@@ -1535,6 +1537,7 @@ fn render_scheduled_audio_tracking_pads<
         scheduler.peek_next_target_frame().is_none() && scheduler.deferred_due().is_none(),
     );
     mixer.service_mix_capture(scheduler, retirement);
+    mixer.observe_runtime_policy_retry(transport);
 }
 
 // Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
@@ -3379,7 +3382,7 @@ pub(super) fn create_stream_mixer(
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Box<RtMixer>, super::key_lock_preparation::KeyLockPreparationError> {
     let policy = input_runtime_ownership.key_lock_start_policy.clone();
-    let mixer = Box::new(RtMixer::try_new(
+    let mut mixer = Box::new(RtMixer::try_new(
         channels,
         sample_rate_hz as f32,
         Some((
@@ -3391,6 +3394,7 @@ pub(super) fn create_stream_mixer(
     // Supplied owners are installed directly. Invalidate their admission policy
     // exactly once, after the complete boxed constructor has succeeded.
     policy.invalidate_admission();
+    mixer.register_runtime_policy_retry_publisher();
     Ok(mixer)
 }
 
@@ -4594,7 +4598,17 @@ mod tests {
             .key_lock_start_policy
             .begin_callback_drain()
             .unwrap();
-        let mixer = create_stream_mixer(
+        let old_retry_slot = ownership.runtime_policy_retry.register().unwrap();
+        let old_retry_birth = ownership
+            .runtime_policy_retry
+            .current_birth_for_test()
+            .unwrap();
+        old_retry_slot.publish(
+            11,
+            17,
+            ownership.runtime_policy_retry.next_condition().unwrap(),
+        );
+        let mut mixer = create_stream_mixer(
             1,
             8_000,
             acknowledgements.clone(),
@@ -4602,6 +4616,19 @@ mod tests {
             epochs.clone(),
         )
         .unwrap();
+        let new_retry_birth = ownership
+            .runtime_policy_retry
+            .current_birth_for_test()
+            .unwrap();
+        assert_ne!(new_retry_birth, old_retry_birth);
+        assert!(ownership.runtime_policy_retry.current().is_none());
+        old_retry_slot.publish(
+            11,
+            17,
+            ownership.runtime_policy_retry.next_condition().unwrap(),
+        );
+        old_retry_slot.invalidate();
+        assert!(ownership.runtime_policy_retry.current().is_none());
         let (actual_ack, actual_owner, actual_epochs) = mixer.source_owners_for_test();
         assert!(Arc::ptr_eq(actual_ack, &acknowledgements));
         assert!(Arc::ptr_eq(actual_owner, &ownership));
@@ -4623,6 +4650,21 @@ mod tests {
         assert_eq!(observed.effect.effective, actual);
         assert_eq!(observed.master_provenance, proof);
         assert!(!mixer.global_rate_drains_settled());
+        mixer.set_input_runtime_ownership(ownership.clone());
+        assert_ne!(
+            ownership.runtime_policy_retry.current_birth_for_test(),
+            Some(new_retry_birth)
+        );
+        assert!(ownership.runtime_policy_retry.current().is_none());
+        let replacement = Arc::new(InputRuntimeOwnership::tracked());
+        mixer.set_input_runtime_ownership(replacement.clone());
+        assert!(
+            replacement
+                .runtime_policy_retry
+                .current_birth_for_test()
+                .is_some()
+        );
+        assert!(replacement.runtime_policy_retry.current().is_none());
     }
 
     #[test]
@@ -4657,6 +4699,13 @@ mod tests {
                 .global_timing_revision
                 .store(17, Ordering::Release);
             let revision = ownership.key_lock_start_policy.begin_callback_drain();
+            let retry_slot = ownership.runtime_policy_retry.register().unwrap();
+            let retry_birth = ownership.runtime_policy_retry.current_birth_for_test();
+            let retry = retry_slot.publish(
+                11,
+                17,
+                ownership.runtime_policy_retry.next_condition().unwrap(),
+            );
             let attempt = catch_unwind(AssertUnwindSafe(|| {
                 create_stream_mixer(
                     channels,
@@ -4684,6 +4733,11 @@ mod tests {
                 revision
             );
             assert_eq!(acknowledgements.current_epoch(0), 23);
+            assert_eq!(
+                ownership.runtime_policy_retry.current_birth_for_test(),
+                retry_birth
+            );
+            assert_eq!(ownership.runtime_policy_retry.current(), Some(retry));
             assert_eq!(ownership.global_timing_revision.load(Ordering::Acquire), 17);
             for (id, epoch) in epochs.iter().enumerate() {
                 assert_eq!(epoch.load(Ordering::Acquire), id as u64 + 41);

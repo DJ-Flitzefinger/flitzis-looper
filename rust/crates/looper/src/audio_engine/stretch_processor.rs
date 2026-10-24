@@ -20,6 +20,7 @@ use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 #[cfg(test)]
 use crate::audio_engine::rubberband_backend::pitch_scale_for_tempo_ratio;
 use crate::messages::{PreparedStemSet, SampleBuffer};
+use std::sync::atomic::Ordering;
 
 #[cfg(test)]
 #[path = "stretch_processor/coordinate_units_tests.rs"]
@@ -76,6 +77,23 @@ pub struct StretchProcessor {
 }
 
 unsafe impl Send for StretchProcessor {}
+
+/// Comparison-only input to the original source-lane busy predicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceLaneRetryState {
+    request: u64,
+    epoch: u64,
+    source_epoch: u64,
+    pending: bool,
+    prospective: Option<u64>,
+    result_pending: bool,
+}
+
+impl SourceLaneRetryState {
+    pub(crate) fn busy(self) -> bool {
+        self.pending || self.prospective.is_some() || self.result_pending
+    }
+}
 
 impl StretchProcessor {
     /// A missing mapping is the established identity; a refused mapping is never a fallback.
@@ -653,6 +671,20 @@ impl StretchProcessor {
         self.request_pending
             || self.prospective_request.is_some()
             || self.preparation.source_result_pending()
+    }
+
+    pub(crate) fn source_lane_retry_state(&self) -> SourceLaneRetryState {
+        SourceLaneRetryState {
+            request: self.request_id,
+            epoch: self.preparation_epoch,
+            source_epoch: self
+                .preparation
+                .source_epoch_owner()
+                .load(Ordering::Acquire),
+            pending: self.request_pending,
+            prospective: self.prospective_request,
+            result_pending: self.preparation.source_result_pending(),
+        }
     }
 
     /// Refusal may revoke only the exact source request this effect accepted.

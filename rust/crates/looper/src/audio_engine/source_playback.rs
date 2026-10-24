@@ -111,6 +111,11 @@ impl SourcePlayback {
         self.mapped.is_some()
     }
 
+    /// Stable renderer configuration only, never playback progress or permission.
+    pub(crate) fn retry_domain(&self) -> Option<SourceLoopDomain> {
+        self.domain
+    }
+
     fn is_pair_scalar(&self) -> bool {
         matches!(
             self.scalar_projection,

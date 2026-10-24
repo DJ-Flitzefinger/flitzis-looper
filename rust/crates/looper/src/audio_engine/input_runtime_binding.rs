@@ -241,6 +241,7 @@ pub(crate) struct InputRuntimeOwnership {
     // Desired Native runtime projection only; never an audio/rate clock. Zero is
     // sticky exhaustion. The existing runtime mutex serializes its control writers.
     runtime_policy_revision: AtomicU64,
+    pub(crate) runtime_policy_retry: super::runtime_policy_retry::RuntimePolicyRetryRegistry,
     pub(super) key_lock_start_policy: Arc<super::key_lock_start_policy::KeyLockStartPolicy>,
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
@@ -287,6 +288,8 @@ impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
             runtime_policy_revision: AtomicU64::new(1),
+            runtime_policy_retry: super::runtime_policy_retry::RuntimePolicyRetryRegistry::default(
+            ),
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
