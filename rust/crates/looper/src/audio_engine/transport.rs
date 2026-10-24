@@ -62,6 +62,11 @@ impl TransportBeatProjection {
         f64::from(self.sample_rate_hz) * self.master_period_seconds
     }
 
+    /// Original immutable addend, for exact structural grid qualification only.
+    pub(crate) fn original_beat_anchor(self) -> f64 {
+        self.beat_anchor_position
+    }
+
     pub(crate) fn beat_position_at_frame(self, output_frame: u64) -> f64 {
         self.beat_anchor_position
             + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()

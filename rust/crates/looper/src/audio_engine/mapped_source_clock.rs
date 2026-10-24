@@ -13,10 +13,13 @@ use super::transport::{TransportBeatProjection, TransportTimeline};
 
 #[path = "mapped_source_clock_anchored.rs"]
 mod anchored;
+#[path = "mapped_source_clock_compact.rs"]
+mod compact;
 #[path = "mapped_source_clock_exact.rs"]
 mod exact;
 
 use anchored::AnchoredClock;
+pub(crate) use compact::CompactSpanView;
 use exact::ExactContinuationQualification;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

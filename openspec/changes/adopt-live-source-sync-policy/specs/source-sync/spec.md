@@ -324,3 +324,30 @@ A coordinates-only anchored mapped mode SHALL be distinct from legacy mapped ari
 - **AND** unsupported paused-derived or otherwise discontinuous master changes SHALL refuse without mutation
 
 The copied mode SHALL remain Copy with no destructor, mapped spans at most 240 bytes and 32 copied SourcePlayback values at most 16 KiB. Wide scratch SHALL remain outside stored spans and lanes. Legacy projection, original SourceReadPlan/interpolation, scalar glide and source/custody/ACK authorities SHALL remain unchanged. This coordinates-only mode SHALL add no productive adoption caller or callback-cost permission: actual first-PCM/custody conversion, stack/throughput, cohort integration and all final acceptance gates SHALL remain required.
+
+### Requirement: Compact borrowed queries preserve the exact anchored reference
+An explicit compact-only anchored query MAY use lossless smaller integer grids while retaining the unchanged general exact reference and all of its admissions and refusals. Optional constant-size grid/headroom metadata SHALL be prepared during the existing off-realtime exact qualification scan, retaining both original endpoints of every used segment. An unavailable compact class SHALL NOT invalidate previously accepted exact geometry. No per-segment table, additional map owner, raw pointer or stored-span/voice expansion SHALL be introduced.
+
+At the actual original anchor and after any supported projection/address translation, the compact class SHALL require source and beat grid exponents in [-126,0] and exact coefficient magnitudes below 2^126. Source refinement SHALL include the separate raw source fraction without recombining the pair in floating point. Beat refinement SHALL include the original cached M0 and a conservative grid for EVERY evaluation of the unchanged actual master projection over the complete shifted horizon. For positive finite actual frames-per-beat F with f=floor(log2(F)), the quotient grid SHALL be no coarser than 2^max(-1074,-f-53), further refined by the exact original transport anchor beat. Finite ordered endpoints SHALL bound magnitudes only; endpoint trailing-zero observations SHALL NOT certify the interior grid. Actual master operation order and u64 cast plateaus SHALL remain unchanged.
+
+A temporary borrowed view MAY prepare constants once per reader chunk using at most 256-bit phase and 512-bit coordinate scratch. It SHALL retain the original inverse segment, source pair, M0, complete domain and exact forward segment. The compact factorization SHALL prove the original 6400-bit intermediate and 6363/5304-bit split limits, rather than rescue an excluded original intermediate through cancellation. The separate whole/fraction split, ties-to-even, generic raw-fraction identity including negative zero, fractional carry and virtual 2^64 endpoint SHALL remain exact. Newly rounded result fractions MAY need a finer grid than the raw source anchor; normalization SHALL compare them exactly against the original integer start plus original Some(P) before any physical cast.
+
+#### Scenario: A finer interior master value cannot be represented by a compact grid
+- **WHEN** finite master horizon endpoints are individually representable but the whole evaluator requires an exponent below -126 or exceeds coefficient headroom
+- **THEN** compact-only preparation SHALL refuse before mutation or reader output
+- **AND** the unchanged general reference SHALL remain available through its explicit preceding API, without hidden wide fallback in the compact path
+
+#### Scenario: A reader borrows a prepared compact context
+- **WHEN** compact copied playback, endpoint preflight, advancement, refresh or actual reader fill uses a borrowed geometry
+- **THEN** it SHALL preserve domain/B/Q/rate, original segment membership and cached endpoint association with that geometry
+- **AND** numeric equality SHALL NOT establish original source/map custody, admission, history or ACK permission
+- **AND** full and checked fills SHALL share the existing interpolation/tap loop with compact coordinate queries throughout, without a second reader pipeline or hidden wide work
+- **AND** failure SHALL preserve the preceding copied playback and checked-reader output as required by their existing contracts
+
+#### Scenario: Compact refresh crosses an original knot, wrap or distant endpoint
+- **WHEN** a compact span refresh classifies the original forward segment or computes its exclusive endpoint
+- **THEN** exact beat ordering SHALL classify unused remote search probes without requiring their representation on the loop's compact grid
+- **AND** the original fallible bounded search, local-probe/MAX rules, endpoint normalization, nominal/exact local-rate guards and terminal refusal SHALL remain unchanged
+- **AND** a skipped endpoint SHALL be evaluated from its own original segment rather than extrapolated from the current one
+
+This prerequisite SHALL NOT add a productive mixer/Native feed/adoption caller or establish callback throughput. Evidence SHALL cover complete consuming reader/endpoint/advance/refresh workloads at 2/4/6 active lanes, stress 20 with performance-related fallback 10, unchanged exact results/first PCM, allocation/layout and explicit 2-MiB compiled-stack gates. Extreme synthetic seam costs SHALL be identified separately. All productive conversion, common-phase, Native, musical, Human and FULL-Goal gates remain required.

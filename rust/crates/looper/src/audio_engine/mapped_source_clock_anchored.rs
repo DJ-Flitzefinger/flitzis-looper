@@ -16,11 +16,11 @@ use crate::audio_engine::transport::TransportTimeline;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AnchoredClock {
-    frame: u64,
-    fraction: f64,
-    original_output_frame: u64,
-    original_master: f64,
-    inverse_segment: CanonicalBeatSegment,
+    pub(super) frame: u64,
+    pub(super) fraction: f64,
+    pub(super) original_output_frame: u64,
+    pub(super) original_master: f64,
+    pub(super) inverse_segment: CanonicalBeatSegment,
 }
 
 impl AnchoredClock {
@@ -423,7 +423,7 @@ fn first_true(
 
 /// Requires a total monotone predicate and a known-true high endpoint.
 /// Only the already-admitted anchored refresh supplies this stronger contract.
-fn first_true_near_high(
+pub(super) fn first_true_near_high(
     low: u64,
     high: u64,
     mut predicate: impl FnMut(u64) -> Option<bool>,
@@ -443,7 +443,7 @@ fn first_true_near_high(
 
 /// Requires a total monotone predicate and a known-true high endpoint.
 /// Unexpected probe failures propagate; this is not a general fallible-search replacement.
-fn first_true_near_low(
+pub(super) fn first_true_near_low(
     low: u64,
     high: u64,
     mut predicate: impl FnMut(u64) -> Option<bool>,

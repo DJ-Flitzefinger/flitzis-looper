@@ -197,6 +197,7 @@ pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
+mod compact_source_numerics;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod mapped_source_clock;

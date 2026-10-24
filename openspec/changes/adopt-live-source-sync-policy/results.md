@@ -1481,3 +1481,95 @@ performance-related fallback10. Production fractional conversion, live mapped
 adoption, continuous common grid phase, 8/64-bar and one-shot EOF integration,
 remaining resource/musical gates and Human acceptance remain open. Current scalar
 cursor preservation and mapped readiness cannot acknowledge these behaviors.
+
+## Compact borrowed anchored reader prerequisite — 2026-10-24
+
+The explicit compact-only path prepares optional constant-size grid/headroom
+metadata during the original off-realtime qualification. It retains the original
+map, inverse segment, separate raw source pair, cached M0, full reader domain and
+actual transport evaluator. A borrowed context prepares phase/forward constants
+once per chunk. Checked 256/512-bit arithmetic replaces no general reference
+admission or refusal and has no hidden wide fallback. Stored playback/span fields
+are unchanged. Full and checked fills share the original interpolation/tap loops.
+No productive mixer, Native feed or live-adoption caller is added.
+
+Systems PRE resolved the whole-evaluator grid requirement before code. Actual
+combined systems POST and independent actual source/coverage review passed. The
+following current Debug checks passed using exact module filters:
+
+| Scope | Passed | Time |
+| --- | ---: | ---: |
+| New arithmetic | 11 | 4.09 s |
+| New compact clock | 8 | 0.25 s |
+| New copied playback/reader | 10 | 11.22 s |
+| Original exact arithmetic | 25 | 5.42 s |
+| Original mapped clock, excluding separate timing diagnostics | 47 | 0.20 s |
+| Original playback, excluding separate timing diagnostics | 47 | 0.20 s |
+| Original shared reader | 17 | 0.00 s |
+| Exact source-reader integration | 6 | 0.02 s |
+| Existing mapped Native birth/reader | 6 | 28.80 s |
+| Existing dry mapped rate/cohort | 8 | 7.70 s |
+
+Production construction/capture on an explicit 2-MiB thread passed Debug 0.41 s
+and Release 0.39 s. The consuming checked compact reader also passed on its own
+explicit 2-MiB thread in both profiles; original owners remain held by the parent.
+Copy/no-Drop and 240-byte-span/16-KiB-for-32-playback limits passed. Observed Rust
+allocation, zeroed allocation and reallocation requests were zero in the tested
+scopes. This observer does not measure deallocation, C++ allocations or peak stack.
+Release arithmetic (11), clock (8) and reader (10) passed in 0.10/0.01/0.23 s respectively.
+
+The explicitly run consuming Release profile passed all reference-pair, actual
+PCM, first-PCM/tap/gain, work-count and final-copy checks across 70 measurements.
+It includes endpoint preflight, copied advancement, actual full or checked two-pass
+fill, refresh and output copy, with one warmup and three measured repetitions.
+The maximum observed milliseconds across five ordinary synthetic shapes were:
+
+| Active readers | Full reader | Checked two-pass reader |
+| ---: | ---: | ---: |
+| 2 | 0.4910 | 0.9429 |
+| 4 | 0.9820 | 1.8845 |
+| 6 | 1.4673 | 2.8132 |
+| 10 | 2.4468 | 4.7000 |
+| 20 | 4.9282 | 9.4430 |
+
+The nominal 512-frame interval at 48 kHz is 10.6667 ms. These are bounded synthetic
+reader measurements, excluding Native DSP, callback/device scheduling and musical
+acceptance; three samples do not prove a worst-case bound. Ten readers were also
+measured unconditionally as the requested fallback diagnostic. Fixed internal
+capacity 32 remains a layout/correctness limit, not a throughput acceptance target.
+
+Keep the negative cost result: the separate extreme physical-two-frame/P=2.25
+seam cases required checked maxima 15.7692/28.1250/55.9938 ms at 6/10/20 readers.
+They remain functionally exact but exceed the nominal interval. These inputs do
+not establish practical 8/64-bar performance and grant no general callback permit.
+
+An initial broad test filter selected an unrelated historical long musical proof;
+its controlled interruption after 425.61 observed CPU seconds is not a suite pass or a
+product assertion failure. Exact module filters then ran the intended groups.
+An initial tiny-FPB test failed during setup because its MAX downbeat anchor was
+forbidden by the existing setter. The test-only repair retains that rejection as
+an assertion and uses a legitimate 2^63/-2^190 anchor with the same actual terminal
+master plateau, FPB 2^-127, raw fractions, original P, exact rate 2 and MAX oracles.
+The original 7-pass/1-failure result and current 8-pass retry are retained separately.
+A wrongly qualified nested Native test filter selected zero tests; the corrected
+unique registered subgroups above provide the actual Native neighboring evidence.
+
+Clippy workspace/all-targets/locked exited successfully in 41.76 s with the same
+141 library-test warnings, 63 duplicates. The library/example targets reported
+172/272 warnings, including new unused compact APIs. All 100 warning blocks naming
+the new arithmetic/clock/test paths were unused/dead-code diagnostics across
+those targets; this is not a warning-free build. No warning suppression was added. All
+Native checks/profiles precede the isolated Release wheel/import check. Raw positive
+and negative receipts are retained under the owned compact-anchored-reader block.
+The isolated Release wheel built in 45.09 s; its library build reported 109
+warnings, including unused compact APIs because this prerequisite intentionally
+adds no productive caller. The actual private module passed all 13 bootstrap API
+checks, editor API 4 and current controller/UI imports without constructing an App
+or device. Normal installed Native bytes were preserved. Final staged/evidence
+review and checked commit/push/cleanup are pending at this recording point.
+
+Actual-E bounded inverse/claim/custody, general geometry outside the original
+intersection, live scalar/mapped conversion, continuous common phase, unequal
+loops/one-shot EOF, complete callback/DSP cost and every FULL-Goal final gate remain
+open. Numeric compatibility is not original source custody, phase ACK or Human
+acceptance. The Human's SYNC/Realtime-first, Portable-after priority is unchanged.

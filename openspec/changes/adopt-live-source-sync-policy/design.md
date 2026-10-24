@@ -689,3 +689,44 @@ source qualification. Explain unavailable/preparing/failed maps before generic
 Unsupported, retaining technical details and preceding actual audio/status. Do not
 relax cold capture or infer phase/adoption from map readiness. This bounded step
 does not implement living representation conversion or shared musical grid phase.
+
+## Compact borrowed anchored query prerequisite
+
+The explicit compact-only path retains the general 6400-bit reference unchanged.
+Optional grid statistics are collected during the existing exact geometry scan;
+failure only disables this additional class. Retain constant-size exponents and
+headroom rather than a table for a possible 250000-anchor map. Actual-E source and
+master refinements must keep each coefficient strictly below 2^126 on a grid in
+[-126,0]. The master grid comes from the unchanged evaluator: integral cast/frame
+difference, actual FPB exponent, original transport anchor and cached original M0.
+Finite ordered horizon endpoints bound magnitude, not interior grid resolution.
+
+For source coefficients X, beat coefficients b, loop B/Q and original segment j,
+use dxj=X1j-X0j, dbj=b1j-b0j and Cj=X0j*dbj-(b0j-B)*dxj. For original inverse
+segment i, A=dxi, I=Xanchor*dbi-Ci, P=Q*A. Evaluate U=I+(actualM(n)-originalM0)*A
+and R=U rem_euclid P, then N=A*Cj+R*dxj and D=A*dbj*2^(-sourceGridExponent).
+Prepare I/P and forward constants once per temporary borrowed reader view. Phase
+uses 256 magnitude bits; source split/rounding/normalization uses 512. Every operation
+is checked, and the class proves the unchanged original intermediate/split bounds.
+No cancellation rescues an original overflow. Preserve raw whole-phase and generic
+fractional identity, ties-to-even/carry, and original start/Some(P) normalization.
+Output fractional bits can be finer than the raw source grid; do not newly refuse
+those exact rounded outputs merely because the anchor grid was coarser.
+
+The existing off-RT epoch supplies the original inverse segment; no new inverse
+constructor is added here. Borrowed views check geometry/domain/rate/B/Q, original
+segment membership and the cached global endpoint. Value association is no source
+ownership proof. A future retained Native reader must borrow its own original
+retained geometry, not the current logical voice's replacement map. This block
+does not wire that productive caller. Existing copied spans/playbacks keep their
+layout and no owner. Explicit playback/reader methods use the same interpolation
+and tap loops, avoiding hidden reference calls in endpoint/advance/refresh work.
+
+Use exact outside-loop beat ordering in original bounded map searches; preserve
+all fallible boundary predicates/local probes/MAX and nominal/exact rate guards.
+Keep no-hidden-fallback refusal, atomic copied-state failure and original reader
+preflight semantics. Compare complete consuming workloads, not only arithmetic
+microbenchmarks. Require independent exact fixtures, existing reference equality,
+actual PCM/layout/allocation and explicit 2-MiB tests plus descriptive 2/4/6 and
+stress 20/performance-related 10. Productive conversion, callback throughput and
+shared musical phase remain separate open gates.

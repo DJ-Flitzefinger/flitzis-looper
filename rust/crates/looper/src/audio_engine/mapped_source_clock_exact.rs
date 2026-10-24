@@ -3,6 +3,7 @@
 //! This does not implement an anchored clock or grant source, history, adoption or callback
 //! permission. Wide arithmetic and any last-owner destruction stay outside realtime.
 
+use super::compact::{CompactGeometryBuilder, CompactGeometryPreparation};
 use super::{CanonicalBeatSegment, MappedClockEpoch, MappedClockError, MappedLoopGeometry};
 use crate::audio_engine::source_numerics::{SOURCE_GRID_SHIFT, SourceInteger};
 use crate::audio_engine::source_playback::{FractionalSourcePosition, SourcePlayback};
@@ -12,8 +13,9 @@ use crate::audio_engine::source_reader::{ExplicitSeekMode, SourceLoopDomain};
 /// This immutable owner-side proof never enters a copied playback span or lane.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ExactContinuationQualification {
-    minimum: CanonicalBeatSegment,
-    maximum: CanonicalBeatSegment,
+    pub(super) minimum: CanonicalBeatSegment,
+    pub(super) maximum: CanonicalBeatSegment,
+    pub(super) compact: Option<CompactGeometryPreparation>,
 }
 
 #[derive(Clone, Copy)]
@@ -54,9 +56,14 @@ impl MappedLoopGeometry {
         let mut last = None;
         let mut minimum: Option<(CanonicalBeatSegment, ExactSlope)> = None;
         let mut maximum: Option<(CanonicalBeatSegment, ExactSlope)> = None;
+        // Compact suitability is optional metadata. Its failure must never narrow
+        // the original independently admitted wide geometry or its refusals.
+        let mut compact = CompactGeometryBuilder::new(&self);
         self.map
             .visit_canonical_segments(self.beat_start, end_beat, |segment| {
                 let slope = exact_slope(segment, self.loaded_rate_hz)?;
+                compact = compact
+                    .and_then(|builder| builder.include_segment(segment, self.loaded_rate_hz));
                 if first.is_none() {
                     first = Some(segment);
                 }
@@ -102,6 +109,7 @@ impl MappedLoopGeometry {
         self.exact_continuation = Some(ExactContinuationQualification {
             minimum: minimum.ok_or(unavailable)?.0,
             maximum: maximum.ok_or(unavailable)?.0,
+            compact: compact.and_then(CompactGeometryBuilder::finish),
         });
         Ok(self)
     }

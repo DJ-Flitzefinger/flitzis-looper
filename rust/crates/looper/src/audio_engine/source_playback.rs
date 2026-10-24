@@ -6,7 +6,7 @@
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::mapped_source_clock::{
-    MappedClockEpoch, MappedClockError, MappedLoopGeometry, MappedSourceSpan,
+    CompactSpanView, MappedClockEpoch, MappedClockError, MappedLoopGeometry, MappedSourceSpan,
 };
 #[cfg(test)]
 use super::source_reader::FrameRange;
@@ -30,6 +30,20 @@ pub(crate) struct FractionalSourcePosition {
 struct MappedCopyState {
     span: MappedSourceSpan,
     intended_output_frame: u64,
+}
+
+/// Temporary coordinates borrowing the caller's original retained geometry.
+/// This is not a source/custody permit and never enters stored copied playback.
+pub(crate) struct CompactPlaybackView<'a> {
+    span: CompactSpanView<'a>,
+    intended_output_frame: u64,
+}
+
+impl CompactPlaybackView<'_> {
+    pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
+        self.span
+            .position_at(self.intended_output_frame.checked_add(offset as u64)?)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +119,168 @@ impl SourcePlayback {
                 intended_output_frame,
             }),
         })
+    }
+
+    /// Explicit compact-only coordinates. Epoch construction and original source
+    /// qualification remain separate off-realtime prerequisites; no wide fallback.
+    pub(crate) fn mapped_compact(
+        geometry: &MappedLoopGeometry,
+        epoch: MappedClockEpoch,
+        intended_output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        let span = geometry.refresh_span_compact(epoch, intended_output_frame)?;
+        let origin = span
+            .compact_view(geometry)?
+            .position_at(intended_output_frame)
+            .ok_or(MappedClockError::NumericalUnavailable)?;
+        let ratio = span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
+        Ok(Self {
+            origin,
+            domain: Some(geometry.domain()),
+            elapsed_output_frames: 0,
+            ratio,
+            target: ratio,
+            frames_until_step: 0,
+            history_reconstructible: false,
+            scalar_projection: ScalarProjection::Legacy,
+            mapped: Some(MappedCopyState {
+                span,
+                intended_output_frame,
+            }),
+        })
+    }
+
+    /// Borrow numeric context only; equal geometry does not establish map custody.
+    pub(crate) fn compact_view<'a>(
+        &self,
+        geometry: &'a MappedLoopGeometry,
+    ) -> Result<CompactPlaybackView<'a>, MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let span = state.span.compact_view(geometry)?;
+        if !span
+            .position_at(state.intended_output_frame)
+            .is_some_and(|position| same_position(position, self.origin))
+        {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        Ok(CompactPlaybackView {
+            span,
+            intended_output_frame: state.intended_output_frame,
+        })
+    }
+
+    pub(crate) fn position_at_compact(
+        &self,
+        geometry: &MappedLoopGeometry,
+        output_offset: usize,
+    ) -> Option<FractionalSourcePosition> {
+        self.compact_view(geometry).ok()?.position_at(output_offset)
+    }
+
+    /// Refusal leaves the complete prior copied state intact.
+    pub(crate) fn advance_compact(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        output_frames: usize,
+    ) -> bool {
+        let Some(mut state) = self.mapped else {
+            return false;
+        };
+        let Some(next) = state
+            .intended_output_frame
+            .checked_add(output_frames as u64)
+        else {
+            return false;
+        };
+        let Some(position) = self.position_at_compact(geometry, output_frames) else {
+            return false;
+        };
+        state.intended_output_frame = next;
+        self.mapped = Some(state);
+        self.origin = position;
+        true
+    }
+
+    pub(crate) fn refresh_mapped_span_compact(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let replacement =
+            Self::mapped_compact(geometry, state.span.epoch(), state.intended_output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        *self = replacement;
+        Ok(())
+    }
+
+    pub(crate) fn project_mapped_compact_to(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        intended_output_frame: u64,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let replacement =
+            Self::mapped_compact(geometry, state.span.epoch(), intended_output_frame)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    pub(crate) fn replace_mapped_epoch_compact(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        epoch: MappedClockEpoch,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        if !state
+            .span
+            .epoch()
+            .replacement_anchor_matches(epoch, state.intended_output_frame)
+        {
+            return Err(MappedClockError::InvalidEpoch);
+        }
+        let replacement = Self::mapped_compact(geometry, epoch, state.intended_output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidEpoch);
+        }
+        *self = replacement;
+        Ok(())
+    }
+
+    pub(crate) fn resume_mapped_compact_at(
+        &mut self,
+        geometry: &MappedLoopGeometry,
+        actual: &super::transport::TransportTimeline,
+        output_frame: u64,
+    ) -> Result<(), MappedClockError> {
+        let state = self.mapped.ok_or(MappedClockError::InvalidEpoch)?;
+        if self.domain != Some(geometry.domain()) {
+            return Err(MappedClockError::InvalidGeometry);
+        }
+        let epoch = state
+            .span
+            .epoch()
+            .resumed_at(actual, state.intended_output_frame, output_frame)
+            .ok_or(MappedClockError::InvalidEpoch)?;
+        let replacement = Self::mapped_compact(geometry, epoch, output_frame)?;
+        if !same_position(self.origin, replacement.origin) {
+            return Err(MappedClockError::InvalidEpoch);
+        }
+        *self = replacement;
+        Ok(())
     }
 
     pub(crate) fn is_mapped(&self) -> bool {
@@ -957,6 +1133,10 @@ mod source_playback_musical_tests;
 #[cfg(test)]
 #[path = "source_playback_anchored_tests.rs"]
 mod anchored_tests;
+
+#[cfg(test)]
+#[path = "source_playback_compact_tests.rs"]
+mod compact_tests;
 
 #[cfg(test)]
 mod tests {

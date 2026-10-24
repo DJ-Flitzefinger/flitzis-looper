@@ -786,6 +786,49 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        self.fill_fractional_buffers_queried(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+            |frame| playback.position_at(frame),
+        )
+    }
+
+    /// Explicit compact coordinates through the original interpolation loop.
+    /// The caller still retains and qualifies original PCM/map reader custody.
+    pub(crate) fn fill_fractional_buffers_compact_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        playback: &SourcePlayback,
+        geometry: &super::mapped_source_clock::MappedLoopGeometry,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        let view = playback
+            .compact_view(geometry)
+            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
+        self.fill_fractional_buffers_queried(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+            |frame| view.position_at(frame),
+        )
+    }
+
+    fn fill_fractional_buffers_queried(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+        position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
         debug_assert!(playback.matches_domain(self.domain()));
         debug_assert_eq!(sample.frame_count(), self.sample_frames);
@@ -800,8 +843,7 @@ impl SourceReadPlan {
         }
         let tempo_ratio = playback.tempo_ratio();
         for frame in 0..output_frames {
-            let position = playback
-                .position_at(frame)
+            let position = position_at(frame)
                 .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             let plan = Self {
                 frame_pos: position.frame,
@@ -849,6 +891,47 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        self.fill_fractional_buffers_checked_queried(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+            |frame| playback.position_at(frame),
+        )
+    }
+
+    pub(crate) fn fill_fractional_buffers_checked_compact_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        playback: &SourcePlayback,
+        geometry: &super::mapped_source_clock::MappedLoopGeometry,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        let view = playback
+            .compact_view(geometry)
+            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
+        self.fill_fractional_buffers_checked_queried(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+            |frame| view.position_at(frame),
+        )
+    }
+
+    fn fill_fractional_buffers_checked_queried(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+        position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
         if self.channels == 0
             || sample.channels != self.channels
             || sample.frame_count() != self.sample_frames
@@ -865,8 +948,7 @@ impl SourceReadPlan {
             return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
         }
         for offset in 0..output_frames {
-            let position = playback
-                .position_at(offset)
+            let position = position_at(offset)
                 .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
             let plan = Self {
                 frame_pos: position.frame,
@@ -889,7 +971,14 @@ impl SourceReadPlan {
                 }
             }
         }
-        self.fill_fractional_buffers_with_readers(sample, readers, playback, buffers, output_frames)
+        self.fill_fractional_buffers_queried(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+            position_at,
+        )
     }
 
     pub(crate) fn tap_available_with_readers(

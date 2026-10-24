@@ -56,6 +56,10 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Extend independent exact-division low-tail, wide-quotient, sign and guard regressions; retain the unsuccessful native-denominator experiment and its real cost/stack limits without adopting it, then finish affected checks and independent final review.
 - [x] Attribute unchanged anchored query components on a consuming512-frame walk and count matched original boundary-search replays at actual refresh addresses; retain profile limits, verify original pairs/endpoints and finish affected checks plus independent final review.
 - [x] Reduce admitted anchored boundary-search work with bounded nearby probes, preserve general fallible search and all original finite/domain/endpoint/rounding guards; prove exact results/call bounds and finish affected profiles/checks, private Release and independent final review.
+- [x] Prepare an optional constant-size compact grid class during the original off-RT exact qualification without narrowing the general reference.
+- [x] Implement explicit compact-only 256/512-bit phase/query/split/normalization and borrowed reader contexts, retaining whole-horizon master proof, original raw anchors/segments/domain, exact endpoint/search/rate guards and unchanged copied layouts.
+- [x] Prove compact/reference/independent-oracle equality, class refusal and atomic failure, pause/projection/geometry/terminal neighbors, first PCM and allocation/explicit 2-MiB limits; profile complete consuming 2/4/6 and 20/fallback 10 workloads.
+- [ ] Finish affected checks, needed private Release/import, one independent actual final-diff review, checked English commit/normal-main push/fresh clean equality and guarded own cleanup for this compact prerequisite.
 - [ ] Implement production fractional scalar/mapped conversion without changing legacy projections or weakening exact guards.
 - [ ] Prove exact first cursor/PCM, original geometry, unequal partitions, knots/wraps, reverse glide and size/failure bounds.
 - [ ] Finish affected checks, needed Release/import/preflight and one independent actual final-diff review.
@@ -69,7 +73,7 @@ anchored map, original geometry or reader-domain conversion contract.
 - [x] Correlate automatic Unsupported suppression with actual once-read guard inputs, original fences and stable before/after observations; preserve ABA, explicit retry, unreadable/exhausted recovery and existing pending/cleanup ownership.
 - [x] Capture map geometry/readiness/error once and show concrete map guidance while retaining original qualification, actual old audio and technical adoption details.
 - [x] Verify unchanged 1500-poll/render behavior, same-owner recovery, full cohort, callback replacement/failure/rebind, counter/observation/finalizer races, API compatibility and unchanged explicit Debug/Release 2-MiB limits.
-- [ ] Complete affected checks, private Release/import/preflight, one independent final review, coherent English commit/normal-main push/fresh clean equality and guarded own cleanup.
+- [x] Complete affected checks, private Release/import/preflight, one independent final review, coherent English commit/normal-main push/fresh clean equality and guarded own cleanup.
 
 ### Remaining representation conversion and full acceptance
 
