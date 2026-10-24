@@ -369,6 +369,9 @@ enum SpanProgram {
         cycle_coefficient: [u64; 2],
         cycle_exponent: i16,
     },
+    Physical {
+        cycles: [u64; 2],
+    },
 }
 impl SpanProgram {
     fn matches_exact(self, other: Self) -> bool {
@@ -388,6 +391,7 @@ impl SpanProgram {
                     cycle_exponent: y,
                 },
             ) => a == b && x == y,
+            (Self::Physical { cycles: a }, Self::Physical { cycles: b }) => a == b,
             _ => false,
         }
     }

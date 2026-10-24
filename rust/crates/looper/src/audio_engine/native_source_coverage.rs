@@ -164,10 +164,12 @@ pub(crate) fn normal_loop_feed_available_with_readers(
     {
         return false;
     }
-    if plan
-        .loop_period
-        .mapped_period()
-        .is_some_and(|period| !period.validate_physical(plan.loop_region))
+    if plan.loop_period.is_mapped()
+        && (!plan.domain().is_valid()
+            || plan
+                .loop_period
+                .mapped_period(plan.loop_region)
+                .is_none_or(|period| !period.validate_physical(plan.loop_region)))
     {
         return false;
     }

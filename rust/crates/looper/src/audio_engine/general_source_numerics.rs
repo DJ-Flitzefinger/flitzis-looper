@@ -1,9 +1,12 @@
 //! Exact bounded arithmetic for the separately qualified general reader domain.
 //! Copied certificates are 64 bytes; all larger values are ephemeral non-owning scratch.
-//! General queries admit N<2^386,D<2^380 and produce fractions with LSB>=-432.
-//! Cross-products with a reduced256-bit period need at most753bits for a whole/fraction
+//! Declared-Q queries admit N<2^386,D<2^380 and produce fractions with LSB>=-432.
+//! Their cross-products with a reduced256-bit period need at most753bits for a whole/fraction
 //! pair. Final-interval alpha uses at most690/689 numerator/denominator bits; binary32
 //! subnormal RN adds at most149 numerator bits. Thus1024-bit scratch is sufficient.
+//! Physical-Q has a separate1024-bit type and642/636 splitter theorem, LSB>=-688,
+//! raw identity<=762bits, physical-boundary comparison<=700bits and RN numerator<=689bits.
+//! Its source-frame period is the integer marker length, independent of beat-Q.
 use std::cmp::Ordering;
 
 use super::compact_source_numerics::{Grid, decode_f64_at_grid, exact_f64_parts};
@@ -125,6 +128,198 @@ pub(crate) struct MappedReaderPeriod {
     denominator: [u8; 32],
 }
 
+/// Exact positive quarter extent of an original physical marker interval.
+/// These bytes are beats, not a source-frame reader period. Reduction is OFFRT.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalMapQuarters {
+    numerator: [u8; 32],
+    denominator: [u8; 32],
+}
+
+impl PhysicalMapQuarters {
+    pub(super) fn new(numerator: Integer, denominator: Integer) -> Option<Self> {
+        let reduced = MappedReaderPeriod::new(numerator, denominator)?;
+        Some(Self {
+            numerator: reduced.numerator,
+            denominator: reduced.denominator,
+        })
+    }
+
+    /// The opaque constructor already established reduction. No runtime GCD.
+    pub(crate) fn is_valid(self) -> bool {
+        self.numerator.iter().any(|v| *v != 0) && self.denominator.iter().any(|v| *v != 0)
+    }
+
+    pub(super) fn parts(self) -> (Integer, Integer) {
+        let decode = |value: [u8; 32]| {
+            let mut bytes = [0; 64];
+            bytes[..32].copy_from_slice(&value);
+            Integer::canonical(Magnitude::from_bytes(bytes), false)
+        };
+        (decode(self.numerator), decode(self.denominator))
+    }
+
+    /// Display metadata only, never a phase, reader or admission authority.
+    pub(super) fn approximate(self) -> f64 {
+        MappedReaderPeriod {
+            numerator: self.numerator,
+            denominator: self.denominator,
+        }
+        .approximate()
+    }
+}
+
+/// Separate1024-bit scratch for the physical-Q theorem. No wide value is copied
+/// into an epoch, span, playback or owner certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PhysicalInteger {
+    pub(super) negative: bool,
+    pub(super) magnitude: Wide,
+}
+
+impl PhysicalInteger {
+    pub(super) const ZERO: Self = Self {
+        negative: false,
+        magnitude: Wide::MIN,
+    };
+    fn canonical(magnitude: Wide, negative: bool) -> Self {
+        Self {
+            negative: negative && !magnitude.is_zero(),
+            magnitude,
+        }
+    }
+    pub(super) fn from_integer(value: Integer) -> Self {
+        Self::canonical(wide(value.magnitude), value.negative)
+    }
+    pub(super) fn from_i128(value: i128) -> Option<Self> {
+        Some(Self::from_integer(Integer::from_i128(value)?))
+    }
+    pub(super) fn from_u128(value: u128) -> Option<Self> {
+        Some(Self::from_integer(Integer::from_u128(value)?))
+    }
+    pub(super) fn add(self, other: Self) -> Option<Self> {
+        if self.negative == other.negative {
+            return Some(Self::canonical(
+                self.magnitude.checked_add(other.magnitude)?,
+                self.negative,
+            ));
+        }
+        let (large, small) = if self.magnitude >= other.magnitude {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        Some(Self::canonical(
+            large.magnitude.checked_sub(small.magnitude)?,
+            large.negative,
+        ))
+    }
+    pub(super) fn sub(self, other: Self) -> Option<Self> {
+        self.add(Self::canonical(other.magnitude, !other.negative))
+    }
+    pub(super) fn mul(self, other: Self) -> Option<Self> {
+        Some(Self::canonical(
+            self.magnitude.checked_mul(other.magnitude)?,
+            self.negative != other.negative,
+        ))
+    }
+    pub(super) fn shl(self, shift: u32) -> Option<Self> {
+        Some(Self::canonical(shl(self.magnitude, shift)?, self.negative))
+    }
+    pub(super) fn quotient(self, other: Self) -> Option<Self> {
+        if self.negative || other.negative || other.magnitude.is_zero() {
+            return None;
+        }
+        Some(Self::canonical(
+            self.magnitude.checked_div(other.magnitude)?,
+            false,
+        ))
+    }
+    pub(super) fn u128(self) -> Option<u128> {
+        (!self.negative).then_some(())?;
+        u128::try_from(self.magnitude).ok()
+    }
+}
+
+impl Ord for PhysicalInteger {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.negative, other.negative) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (true, true) => other.magnitude.cmp(&self.magnitude),
+            (false, false) => self.magnitude.cmp(&other.magnitude),
+        }
+    }
+}
+impl PartialOrd for PhysicalInteger {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The physical-Q forward theorem admits N<2^642,D<2^636 independently of the
+/// unchanged declared-Q386/380 splitter. Exact physical membership precedes RN.
+pub(super) fn split_physical_coordinate(
+    numerator: PhysicalInteger,
+    denominator: PhysicalInteger,
+    raw_fraction: f64,
+    region: FrameRange,
+) -> Option<SourceCoordinate> {
+    if region.start >= region.end
+        || numerator.negative
+        || denominator <= PhysicalInteger::ZERO
+        || numerator.magnitude.bit_width() > 642
+        || denominator.magnitude.bit_width() > 636
+    {
+        return None;
+    }
+    let n = numerator.magnitude;
+    let d = denominator.magnitude;
+    let start = Wide::try_from(region.start).ok()?.checked_mul(d)?;
+    let end = Wide::try_from(region.end).ok()?.checked_mul(d)?;
+    if n < start || n >= end {
+        return None;
+    }
+    let mut whole = u128::try_from(n.checked_div(d)?).ok()?;
+    if whole > 1_u128 << 64 {
+        return None;
+    }
+    let remainder = n.checked_rem(d)?;
+    let (raw, raw_exp) = dyadic(raw_fraction)?;
+    if raw < 0 || !raw_fraction.is_finite() || !(0.0..1.0).contains(&raw_fraction) || raw_exp < -126
+    {
+        return None;
+    }
+    // At most636+126=762 bits. Identity is generic, including signed zero.
+    let same = shl(remainder, u32::try_from(-raw_exp.min(0)).ok()?)?
+        == Wide::try_from(raw).ok()?.checked_mul(d)?;
+    let fraction = if same {
+        raw_fraction
+    } else if remainder.is_zero() {
+        0.0
+    } else {
+        // With remainder/d widths u,v, floor(log2(r/d)) is u-v or u-v-1.
+        // The scaled RN numerator therefore needs at most v+53<=689 bits.
+        let bits = round_fraction(remainder, d, 52, -1022, 1023)?;
+        if bits == 0x3ff0_0000_0000_0000 {
+            whole = whole.checked_add(1)?;
+            0.0
+        } else {
+            f64::from_bits(bits)
+        }
+    };
+    if whole == region.end as u128 && fraction == 0.0 {
+        return Some(SourceCoordinate {
+            whole: region.start as u128,
+            fraction: 0.0,
+        });
+    }
+    if whole < region.start as u128 || whole >= region.end as u128 {
+        return None;
+    }
+    Some(SourceCoordinate { whole, fraction })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExactMappedTaps {
     pub(crate) left: usize,
@@ -133,6 +328,20 @@ pub(crate) struct ExactMappedTaps {
 }
 
 impl MappedReaderPeriod {
+    /// Exact physical-equivalent reader topology, without owner-side reduction.
+    pub(crate) fn physical(length: usize) -> Option<Self> {
+        if length == 0 {
+            return None;
+        }
+        let mut numerator = [0; 32];
+        numerator[..8].copy_from_slice(&u64::try_from(length).ok()?.to_le_bytes());
+        let mut denominator = [0; 32];
+        denominator[0] = 1;
+        Some(Self {
+            numerator,
+            denominator,
+        })
+    }
     /// Display metadata only; exact admission and addressing never use this value.
     pub(super) fn approximate(self) -> f64 {
         let convert = |bytes: [u8; 32]| {
@@ -463,6 +672,76 @@ mod tests {
             Integer::from_u128(d).unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn physical_quarters_keep_beat_units_and_reduce_only_at_owner_construction() {
+        let n = Integer::from_u128(973596225794487503992543076417536).unwrap();
+        let d = Integer::from_u128(482883607843738976046606013087875).unwrap();
+        let quarters = PhysicalMapQuarters::new(n, d).unwrap();
+        assert_eq!(quarters.parts(), (n, d));
+        assert!(quarters.is_valid());
+        assert_eq!(std::mem::size_of::<PhysicalMapQuarters>(), 64);
+        assert!(!std::mem::needs_drop::<PhysicalMapQuarters>());
+        let one = Integer::from_u128(1).unwrap();
+        let beyond = one.shl(256).unwrap();
+        assert!(PhysicalMapQuarters::new(one, beyond).is_none());
+        assert_eq!(
+            PhysicalMapQuarters::new(beyond, beyond).unwrap().parts(),
+            (one, one)
+        );
+        assert_eq!(MappedReaderPeriod::physical(1501), Some(period(1501, 1)));
+        assert!(MappedReaderPeriod::physical(0).is_none());
+    }
+
+    #[test]
+    fn physical_split_has_separate_capacity_and_correct_normal_fraction_ties() {
+        let one = PhysicalInteger::from_u128(1).unwrap();
+        let denominator = one.shl(635).unwrap();
+        let half = one.shl(582).unwrap().add(one.shl(529).unwrap()).unwrap();
+        let region = FrameRange { start: 0, end: 1 };
+        let even = split_physical_coordinate(half, denominator, 0.0, region).unwrap();
+        assert_eq!(even.fraction.to_bits(), 2_f64.powi(-53).to_bits());
+        let above =
+            split_physical_coordinate(half.add(one).unwrap(), denominator, 0.0, region).unwrap();
+        assert_eq!(
+            above.fraction.to_bits(),
+            2_f64.powi(-53).next_up().to_bits()
+        );
+        let raw =
+            split_physical_coordinate(one.shl(509).unwrap(), denominator, 2_f64.powi(-126), region)
+                .unwrap();
+        assert_eq!(raw.fraction.to_bits(), 2_f64.powi(-126).to_bits());
+        let zero = split_physical_coordinate(PhysicalInteger::ZERO, one, -0.0, region).unwrap();
+        assert_eq!(zero.fraction.to_bits(), (-0.0_f64).to_bits());
+        assert!(split_physical_coordinate(one, one.shl(636).unwrap(), 0.0, region).is_none());
+
+        let old_large = Integer::from_u128(1).unwrap().shl(390).unwrap();
+        assert!(period(2, 1).split(old_large, old_large, 0.0, 0).is_none());
+        let new = split_physical_coordinate(
+            PhysicalInteger::from_integer(old_large),
+            PhysicalInteger::from_integer(old_large),
+            0.0,
+            FrameRange { start: 0, end: 2 },
+        )
+        .unwrap();
+        assert_eq!((new.whole, new.fraction), (1, 0.0));
+    }
+
+    #[test]
+    fn physical_rounding_carry_requires_exact_inside_before_integer_endpoint() {
+        let one = PhysicalInteger::from_u128(1).unwrap();
+        let denominator = one.shl(60).unwrap();
+        let end = denominator
+            .mul(PhysicalInteger::from_u128(4).unwrap())
+            .unwrap();
+        let region = FrameRange { start: 1, end: 4 };
+        let carried =
+            split_physical_coordinate(end.sub(one).unwrap(), denominator, 0.0, region).unwrap();
+        assert_eq!((carried.whole, carried.fraction.to_bits()), (1, 0));
+        assert!(split_physical_coordinate(end, denominator, 0.0, region).is_none());
+        assert!(
+            split_physical_coordinate(PhysicalInteger::ZERO, denominator, 0.0, region).is_none()
+        );
     }
     #[test]
     fn exact_period_reader_preserves_interior_and_computes_rational_seam() {

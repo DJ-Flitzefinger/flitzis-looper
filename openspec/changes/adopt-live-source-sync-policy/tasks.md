@@ -81,7 +81,7 @@ That bounded delivery does not close general-map or full SYNC acceptance.
 - [x] Carry tagged bounded general programs and full effective reader certificates through playback, shared checked taps, journals and continuation while preserving old modes and copied layout limits.
 - [x] Integrate actual-E bidirectional adoption and repeated map replacement with retained original scalar timing, first actual taps/gain/PCM, nonlatching seam retry and original atomic source/ACK/retirement ownership.
 - [x] Verify independent original-knot oracles, real public worker/ACK/scheduler/renderer behavior, failures/neighbors, explicit2MiB/layout/allocation and actual consuming2/4/6/stress20 with conditional10 costs.
-- [ ] Complete actual frozen systems POST, appropriate integration/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup.
+- [x] Complete actual frozen systems POST, appropriate integration/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup.
 
 The generated decimal-map profile meets the nominal interval at 2/4/6 voices.
 Stress20 and its subsequent fallback10 both exceed it; their optimization/resource
@@ -91,6 +91,18 @@ whole-realtime acceptance. Actual measurements and limits are in results.md.
 Physical-marker-only rational Q remains required subsequent work in the same full
 Goal. This declared-Q milestone does not close the following general-conversion,
 common-phase, finite EOF, Native/pitch or musical/device/Human acceptance parents.
+
+The declared-Q block was delivered as6da9883e9e3e1dd6520220b78ab4d8e110a05c2e,
+reviewed exact tree5047fcf18b3ef61c79085f71ae4241c09f38ff57, normal-main push,
+fresh clean remote equality and guarded own cleanup complete.
+
+### Productive physical-marker rational quarter extent
+
+- [x] Reconcile original manual None/meter semantics, choose useful cross-segment Q256/256 domain identity and separate bounded physical1024 arithmetic, and obtain concrete systems PRE before writer GO.
+- [x] Prepare exact original B(A), B(Z), Q=B(Z)-B(A), trusted positive interior and physical-H reader topology without legacy inverse/saved-bar prerequisites.
+- [x] Carry distinct Q identity and bounded k128 spans through all general dispatch, readers, original-scalar witnesses, history/retry/Native refusals and actual-E bidirectional atomic adoption.
+- [x] Verify actual None worker/source/ACK publication, independent original-knot Q beyond64 denominator bits, first PCM, replacements/seam recovery, lifecycle/pressure, copied layout/2MiB/allocation and consuming2/4/6/stress20 with conditional10 costs.
+- [ ] Complete actual frozen systems POST, appropriate integrated/private Release/import/strict checks, one independent final-diff review, English commit/normal-main push/fresh clean equality and guarded own cleanup.
 
 ### Remaining general conversion and acceptance
 

@@ -199,23 +199,32 @@ impl MappedStartSource {
         }
         // The old displayed inverse and rounded endpoint are not a prerequisite
         // of this separate exact original-map class. A failed legacy attempt must
-        // not narrow general declared-Q coverage.
-        let Some(quarters) = qualified.exact_quarters() else {
-            return (preparation, None);
-        };
+        // not narrow either general extent class.
         let Ok((rate, sample_frames, region)) =
             Self::loaded_region(qualified, binding, start_s, end_s)
         else {
             return (preparation, None);
         };
-        let Ok(geometry) = MappedLoopGeometry::new_general_declared(
-            qualified.map().clone(),
-            sample_frames,
-            rate,
-            region,
-            quarters,
-            true,
-        ) else {
+        let geometry = match qualified.exact_quarters() {
+            Some(quarters) => MappedLoopGeometry::new_general_declared(
+                qualified.map().clone(),
+                sample_frames,
+                rate,
+                region,
+                quarters,
+                true,
+            ),
+            // Manual physical intent retains its existing meter contract and
+            // never inherits saved bars or a displayed inverse difference.
+            None => MappedLoopGeometry::new_general_physical(
+                qualified.map().clone(),
+                sample_frames,
+                rate,
+                region,
+                false,
+            ),
+        };
+        let Ok(geometry) = geometry else {
             return (preparation, None);
         };
         preparation.domain = Some(geometry.domain().into());

@@ -31,6 +31,14 @@ fn live_map_delivery(
     fixture: &ColdCustody,
     middle: Option<(f64, f64)>,
 ) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+    live_map_delivery_with_start_beat(fixture, middle, 0.0)
+}
+
+fn live_map_delivery_with_start_beat(
+    fixture: &ColdCustody,
+    middle: Option<(f64, f64)>,
+    start_beat: f64,
+) -> (OfflineAnalysisJob, LoaderEventDelivery) {
     let mut expected = record(fixture, 0);
     let anchor = |id: &str, seconds, beat| {
         serde_json::json!({
@@ -38,7 +46,7 @@ fn live_map_delivery(
             "raw_beat_index": null, "review": "reviewed", "sample_edit": null,
         })
     };
-    let mut anchors = vec![anchor("start", 0.0, 0.0)];
+    let mut anchors = vec![anchor("start", 0.0, start_beat)];
     if let Some((seconds, beat)) = middle {
         anchors.push(anchor("middle", seconds, beat));
     }
@@ -201,12 +209,70 @@ fn map_job_cancel_revokes_pending_runtime_admission_but_preserves_effective_orig
 }
 
 #[test]
-fn unsupported_exact_runtime_derivative_keeps_original_legacy_launch_and_domain_evidence() {
+fn general_physical_runtime_derivative_keeps_original_legacy_launch_and_cache_custody() {
+    use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
     use crate::audio_engine::source_map_admission::RuntimeMapClass;
     let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
     // The original binary64 0.1 * 48000 has a rounded product which differs from its
-    // exact dyadic product. Legacy geometry is valid; the existing exact intersection refuses.
+    // exact dyadic product. The old exact intersection still refuses; the later
+    // physical-Q contract now admits this exact formerly unsupported input.
     let (_job, delivery) = live_map_delivery(&path.source, Some((0.1, 0.4)));
+    publish_live_map(&path.source, &delivery, 3);
+    let snapshot = live_map_snapshot(&mut path.source);
+    let preparation = snapshot.map_preparation(0);
+    assert_eq!(preparation.class, RuntimeMapClass::Ready);
+    let domain = preparation.domain.unwrap();
+    assert_eq!(
+        domain.period.physical_quarters().unwrap().parts(),
+        (
+            Integer::from_u128(4).unwrap(),
+            Integer::from_u128(1).unwrap()
+        )
+    );
+    assert_eq!(
+        domain.period.mapped_period(domain.region),
+        MappedReaderPeriod::physical(48_000)
+    );
+    let source = snapshot.prepared_map(0).unwrap();
+    assert!(source.geometry().has_general_continuation());
+    assert_eq!(source.geometry().domain().musical_period, domain.period);
+    assert!(preparation.witness.is_some());
+    assert!(snapshot.map_current(0));
+    let launch = CapturedPadStart::capture_from_binding(
+        &binding(&path.source, 0),
+        0.0,
+        Some(1.0),
+        1.0,
+        false,
+        0,
+        (48_000, 2),
+        None,
+    )
+    .unwrap();
+    let legacy = launch.mapped_geometry().unwrap();
+    assert!(!legacy.has_compact_continuation());
+    assert!(!legacy.has_general_continuation());
+    assert!(legacy.clone().qualify_exact_continuation().is_err());
+    assert_eq!(
+        launch.sync_request().mode,
+        crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped
+    );
+    // This helper intentionally terminates queued work without a callback. Ready
+    // preparation and cache custody are not an actual-adoption acknowledgement.
+    let cached = live_map_snapshot(&mut path.source);
+    assert!(Arc::ptr_eq(&snapshot, &cached));
+    assert_eq!(cached.map_preparation(0), preparation);
+    assert!(Arc::ptr_eq(cached.prepared_map(0).unwrap(), source));
+}
+
+#[test]
+fn unsupported_physical_grid_runtime_derivative_keeps_original_legacy_launch_and_domain_evidence() {
+    use crate::audio_engine::source_map_admission::RuntimeMapClass;
+    let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
+    // Finite increasing legacy geometry stays valid, but the exact beat grid
+    // requires -200, outside the separately documented [-126,0] compact class.
+    let (_job, delivery) =
+        live_map_delivery_with_start_beat(&path.source, Some((0.1, 0.4)), -2.0_f64.powi(-200));
     publish_live_map(&path.source, &delivery, 3);
     let snapshot = live_map_snapshot(&mut path.source);
     let preparation = snapshot.map_preparation(0);

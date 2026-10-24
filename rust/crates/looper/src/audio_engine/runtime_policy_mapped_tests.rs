@@ -165,6 +165,16 @@ impl DryMappedPath {
         id: usize,
         anchors: &[(f64, f64)],
     ) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+        self.map_anchors_with_metadata(id, anchors, None, true)
+    }
+
+    fn map_anchors_with_metadata(
+        &self,
+        id: usize,
+        anchors: &[(f64, f64)],
+        coverage: Option<&[&str]>,
+        verified_meter: bool,
+    ) -> (OfflineAnalysisJob, LoaderEventDelivery) {
         let manifest: Value = serde_json::from_str(
             &self
                 .path
@@ -198,7 +208,24 @@ impl DryMappedPath {
                 .collect(),
         );
         let interval = value["record"]["accepted"]["intervals"][0].clone();
-        value["record"]["accepted"]["intervals"] = json!(vec![interval; anchors.len() - 1]);
+        if let Some(coverage) = coverage {
+            assert_eq!(coverage.len(), anchors.len() - 1);
+        }
+        value["record"]["accepted"]["intervals"] = Value::Array(
+            (0..anchors.len() - 1)
+                .map(|index| {
+                    let mut interval = interval.clone();
+                    if let Some(coverage) = coverage {
+                        interval["coverage"] = json!(coverage[index]);
+                    }
+                    if !verified_meter {
+                        interval["meter"]["status"] = json!("unknown");
+                        interval["meter"]["downbeat_label"] = Value::Null;
+                    }
+                    interval
+                })
+                .collect(),
+        );
         let map = editor::seal(value).unwrap();
         let job = self
             .path
@@ -1517,9 +1544,65 @@ fn whole_map_rate_refusal_is_quiet_for_1500_polls_then_actual_master_or_map_edit
 }
 
 #[test]
-fn exact_unsupported_decimal_map_is_stably_quiet_without_disabling_legacy_map_availability() {
+fn original_decimal_none_map_now_adopts_at_actual_e_without_changing_first_pcm() {
     let mut fixture = DryMappedPath::new(2, 23);
+    let mut unchanged_reference = DryMappedPath::new(2, 23);
+    // This exact former unsupported input is now deliberately supported by the
+    // separate physical-Q class; its previous guard is not weakened or relabelled.
     let (job, delivery) = fixture.map(0, 0.125, 0.001);
+    fixture.jobs.push(job);
+    fixture.deliveries[0] = delivery;
+    fixture.publish(true, 2);
+    let snapshot = request(&fixture.path);
+    assert_eq!(snapshot.map_preparation(0).class, RuntimeMapClass::Ready);
+    assert!(snapshot.map_current(0));
+    let execution = fixture.path.timeline.output_frame();
+    let before = fixture.path.voice(0).source_playback;
+    let raw = before.position();
+    let plan = SourceReadPlan {
+        frame_pos: raw.frame,
+        ..latest_plan(&fixture.path, 0)
+    };
+    let taps = plan.try_fractional_taps(raw.fraction).unwrap();
+    service(&mut fixture.path);
+    assert_eq!(
+        snapshot.observation().unwrap().state,
+        "applied",
+        "{:?}",
+        snapshot.observation()
+    );
+    assert_eq!(
+        snapshot.observation().unwrap().execution_frame,
+        Some(execution)
+    );
+    let playback = fixture.path.voice(0).source_playback;
+    assert!(playback.is_general_mapped());
+    assert!(playback.reader_period().physical_quarters().is_some());
+    assert_position(playback.position(), raw);
+    assert_eq!(playback.original_scalar_domain(), before.effective_domain());
+    assert_eq!(
+        plan.with_effective_domain(playback.effective_domain().unwrap())
+            .unwrap()
+            .try_fractional_taps(raw.fraction)
+            .unwrap(),
+        taps
+    );
+    assert_eq!(fixture.path.render(1), unchanged_reference.path.render(1));
+}
+
+#[test]
+fn excluded_exact_grid_is_stably_quiet_without_disabling_legacy_map_availability() {
+    let mut fixture = DryMappedPath::new(2, 23);
+    // A finite original beat below the documented -126 grid bound excludes
+    // only exact live preparation; ordinary rounded launch remains independent.
+    let (job, delivery) = fixture.map_anchors(
+        0,
+        &[
+            (0.0, -2.0_f64.powi(-200)),
+            (0.001, 0.125),
+            (1.0 / 32.0, 2.0),
+        ],
+    );
     fixture.jobs.push(job);
     fixture.deliveries[0] = delivery;
     fixture.publish(true, 2);

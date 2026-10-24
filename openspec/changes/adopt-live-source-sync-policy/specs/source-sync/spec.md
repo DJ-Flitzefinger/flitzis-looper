@@ -451,3 +451,39 @@ The general class SHALL separately admit complete shifted-horizon source/beat gr
 - **AND** source cancellation, stale/ABA, lease contention, capacity pressure and failed participants SHALL retain their preceding ownership and failure contracts
 
 This declared-Q milestone SHALL NOT certify physical-marker-only rational Q, common-grid phase, unequal-loop/OneShot EOF, Native/pitch/Key Lock adoption, arbitrary mapped history projection, music/device/Human acceptance or complete SYNC. Those remain required subsequent FULL-Goal work. Existing GUI/MIDI/persistence hierarchy and requested/pending/effective/phase distinctions SHALL remain; successful map or tempo adoption SHALL NOT certify unproved common phase.
+
+### Requirement: Physical-marker general maps retain exact quarter extent separately from reader period
+A separate physical-marker general branch MAY qualify the original immutable map when the original requested extent is None rather than declared Q. For existing integer markers A and Z it SHALL derive exact original loaded-coordinate inverses B(A), B(Z), positive rational Q=B(Z)-B(A), and exact source-frame reader period Pmap=H=Z-A. Original stored binary64 seconds times integer loaded rate SHALL remain exact before rounding. A displayed inverse difference, saved bars, rounded Q, fitted curve, marker movement, original scalar P or scalar physical fallback SHALL NOT replace that contract. The old legacy/intersection attempt, declared-Q admissions and ordinary launch availability SHALL remain intact.
+
+Physical manual extent SHALL retain the existing require_four_four=false contract; declared auto-bars SHALL retain true. Preparation SHALL prove trusted original positive-interior coverage and original local-rate bounds without extrapolation. At an exact start knot the right interior segment SHALL apply; at an exact end knot the left interior segment SHALL apply. An unused exterior gap or meter interval SHALL NOT contaminate the interior, while a real interior gap or absent endpoint SHALL refuse. An absent physical end SHALL retain existing loaded-region interpretation; insufficient map coverage to original EOF SHALL refuse without clipping or implying finite playback.
+
+#### Scenario: Both physical endpoints have rational inverse coordinates
+- **WHEN** a genuine current source/map and physical None row pass preparation for ordinary decimal knots whose exact inverse difference has more than64 denominator bits
+- **THEN** the productive branch SHALL retain that independently derived Q within its separately admitted bounds, original markers/source custody and independent original scalar P
+- **AND** the same actual-E complete claim SHALL prove raw pair, tap addresses, gain bits and all-channel first PCM before any effect
+- **AND** no fabricated numeric permit, rewritten control row or saved-bar substitution SHALL establish that evidence
+
+### Requirement: Copied physical-map domains distinguish beat Q from source-frame H
+The physical branch SHALL carry a distinct MappedPhysicalQuarters identity with an opaque positive reduced quarter-note N/D certificate of at most256 bits per part,64 bytes total. The complete domain SHALL combine that Q identity with the existing physical/sample region. Its effective source-frame reader period SHALL be exactly H/1, constructed directly without runtime GCD. Q SHALL NOT be interpreted as source-frame period, rate, original scalar timing or a new master factor. Physical-equivalent taps SHALL NOT collapse this domain into Physical, ScalarMusical(H) or the declared mapped-period tag.
+
+Both mapped tags SHALL participate in full plan/history/retry equality, layout/domain validation, full and checked reader prepasses, Native/history refusals and continuation guards. Failure to resolve a mapped reader period SHALL be a terminal numeric refusal, never a legacy physical fallback. Actual physical taps SHALL require Normal mode and a canonical raw pair in[A,Z), and use the shared checked physical-H descriptor. Invalid raw coordinates SHALL NOT be wrapped into eligibility. Generic mapped construction SHALL retain Unavailable original scalar state; explicit continuation SHALL preserve the separately validated original scalar witness through physical/declared/intersection replacements and reverse conversion.
+
+#### Scenario: Numerically equal circles have different extent identities
+- **WHEN** a physical-Q playback is paired with a Physical, ScalarMusical(H), declared mapped-period or different-Q plan
+- **THEN** full plan/domain equality SHALL refuse before output mutation or a successful source-read receipt
+- **AND** the standalone numeric span API SHALL retain its existing private-bound-domain precondition rather than claim it can establish arbitrary certificate association
+
+### Requirement: Physical-quarter programs have a separate bounded numerical proof
+A copied physical span SHALL retain an exact nonnegative128-bit wrap count k and receive Q from its already bound copied domain, without a new owner, pointer, clock, scheduler or reader pipeline. It SHALL use unchanged actual M(n) evaluation/order/cast plateaus. With beatgrid g, B(A)=A0/a, B(raw)=R0/r, delta=M(n)-M0, u=(R0+delta*r)*a-A0*r, v=a*r, Q=N/D and qN=N<<(-g), it SHALL evaluate k=floor(u*D/(v*qN)) exactly. Complete shifted-horizon actual-E admission SHALL prove k(MAX)<2^128; subsequent relevant master/resume reconstruction SHALL requalify before mutation.
+
+Original source/beat grids SHALL remain in[-126,0] with input coefficient magnitudes below2^126. Endpoint inverses bound physical Q coefficient below2^127; canonical raw and actual master delta bound U below2^128. Local reconstruction SHALL explicitly check Cnum=k*N<<(-g) < D<<128 before relying on Cnum width below384. Separate fixed1024-bit physical scratch SHALL enforce phase numerator/denominator bounds640/636, local beat bounds513/383, affine offset514, and source numerator/denominator642/636. The declared512-bit386/380 proof and old compact intersection theorems SHALL remain unchanged, with no6400-bit fallback.
+
+The separate physical splitter SHALL prove A*d<=n<Z*d exactly before a single RN-even whole/fraction split, preserve generic raw-fraction identity including signed zero, and normalize only a rounding carry reaching integer Z to A/+0. Integer boundary products require at most700 bits, raw identity762, and the actual RN-scaled remainder689 by correlated numerator/denominator widths; produced fraction LSB SHALL be at least-688. No invalid-coordinate clipping, per-E correction or new rational f32 seam SHALL be introduced. Refresh SHALL retain bounded original-master searches and canonical global endpoints across skipped knots/cycles.
+
+#### Scenario: Physical numeric admission or actual-E conversion fails
+- **WHEN** Q reduction, complete horizon, checked scratch, canonical raw, first-reader or original source/ACK/cohort claim cannot be proved
+- **THEN** the complete cohort SHALL preserve preceding playback, plans, owners and output
+- **AND** immutable preparation failure SHALL remain distinct from progress-retryable raw/seam/E/horizon failure
+- **AND** runtime Q reduction, owning allocation, final-owner destruction and unbounded callback work SHALL remain forbidden
+
+Physical spans SHALL remain at most240 bytes, epochs128 bytes and32 optional copied playbacks at most16KiB, Copy with no destructor. Actual compiled Debug/Release2MiB, observed Rust allocation requests and complete consuming2/4/6/stress20 with conditional10 evidence remain required. Negative declared20/10, tiny20 or new physical timing results SHALL remain explicit open resource gates. This physical extent branch grants no common phase/bar commensurability, finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission, musical/device/Human acceptance or complete SYNC/REALTIME acceptance. All FULL-Goal obligations remain.

@@ -84,7 +84,8 @@ impl OriginalScalarPeriod {
         match domain.musical_period {
             SourceReaderPeriod::Physical => Self::Physical,
             SourceReaderPeriod::ScalarMusical(bits) => Self::Musical(bits),
-            SourceReaderPeriod::MappedRational(_) => Self::Unavailable,
+            SourceReaderPeriod::MappedRational(_)
+            | SourceReaderPeriod::MappedPhysicalQuarters(_) => Self::Unavailable,
         }
     }
 }
@@ -141,7 +142,8 @@ impl SourcePlayback {
             SourceReaderPeriod::ScalarMusical(_) => {
                 Self::scalar_musical_continuation(original_anchor, original, 1.0, 1.0).is_some()
             }
-            SourceReaderPeriod::MappedRational(_) => false,
+            SourceReaderPeriod::MappedRational(_)
+            | SourceReaderPeriod::MappedPhysicalQuarters(_) => false,
         };
         if !previous.is_mapped()
             || previous.mapped_output_frame() != Some(output_frame)

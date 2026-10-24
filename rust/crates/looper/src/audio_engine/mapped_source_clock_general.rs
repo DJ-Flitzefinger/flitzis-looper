@@ -1,4 +1,6 @@
-//! Productive declared-Q exact original-map coordinates. No owning state is copied.
+//! Productive exact original-map coordinates. No owning state is copied.
+#[path = "mapped_source_clock_general_physical.rs"]
+mod physical;
 use super::anchored::{AnchoredClock, first_true_near_high, first_true_near_low};
 use super::{
     CanonicalBeatSegment, MappedClockEpoch, MappedClockError, MappedClockMode, MappedLoopGeometry,
@@ -296,6 +298,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if self.domain.musical_period.physical_quarters().is_some() {
+            return physical::position(self, epoch, frame);
+        }
         let clock = Clock::new(self, epoch)?;
         clock
             .position(frame)
@@ -306,6 +311,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if self.domain.musical_period.physical_quarters().is_some() {
+            return physical::refresh(self, epoch, frame);
+        }
         let unavailable = MappedClockError::NumericalUnavailable;
         if frame == u64::MAX {
             return Err(unavailable);
@@ -403,10 +411,7 @@ impl MappedClockEpoch {
         }
         if original_scalar_domain.sample_frames != geometry.domain.sample_frames
             || original_scalar_domain.region != geometry.domain.region
-            || original_scalar_domain
-                .musical_period
-                .mapped_period()
-                .is_some()
+            || original_scalar_domain.musical_period.is_mapped()
             || position.seek_mode != ExplicitSeekMode::Normal
         {
             return Err(unavailable);
@@ -438,7 +443,7 @@ impl MappedClockEpoch {
         let period = geometry
             .domain
             .musical_period
-            .mapped_period()
+            .mapped_period(geometry.domain.region)
             .ok_or(unavailable)?;
         if !period.canonical_pair(
             position.frame,
@@ -479,7 +484,11 @@ impl MappedClockEpoch {
                 inverse_segment,
             }),
         };
-        Clock::new(geometry, epoch)?;
+        if geometry.domain.musical_period.physical_quarters().is_some() {
+            physical::validate_epoch(geometry, epoch)?;
+        } else {
+            Clock::new(geometry, epoch)?;
+        }
         let span = geometry.refresh_general_span(epoch, output_frame)?;
         let observed = span
             .position_in_domain(geometry.domain, output_frame)
@@ -609,7 +618,10 @@ impl<'a> Clock<'a> {
         epoch: MappedClockEpoch,
     ) -> Result<Self, MappedClockError> {
         let unavailable = MappedClockError::NumericalUnavailable;
-        if !epoch.is_general_compact() || epoch.marker == 0 {
+        if !epoch.is_general_compact()
+            || epoch.marker == 0
+            || geometry.domain.musical_period.physical_quarters().is_some()
+        {
             return Err(unavailable);
         }
         let p = geometry.general.ok_or(unavailable)?;
@@ -624,7 +636,7 @@ impl<'a> Clock<'a> {
         let period = geometry
             .domain
             .musical_period
-            .mapped_period()
+            .mapped_period(geometry.domain.region)
             .ok_or(unavailable)?;
         let core = Core::new(
             epoch,
@@ -753,23 +765,28 @@ impl<'a> Clock<'a> {
 
 /// Once-per-chunk local context; no map owner or per-frame inverse/modulo.
 pub(crate) struct GeneralLocalSpanView {
-    span: MappedSourceSpan,
-    core: Core,
+    state: LocalGeneralState,
+}
+enum LocalGeneralState {
+    Declared { span: MappedSourceSpan, core: Core },
+    Physical(physical::PhysicalLocalSpanView),
 }
 impl GeneralLocalSpanView {
     pub(crate) fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
-        if frame == self.span.end_frame {
-            return Some(FractionalSourcePosition {
-                frame: self.span.endpoint_frame,
-                fraction: self.span.endpoint_fraction,
-                seek_mode: ExplicitSeekMode::Normal,
-            });
+        match &self.state {
+            LocalGeneralState::Physical(view) => view.position_at(frame),
+            LocalGeneralState::Declared { span, core } => {
+                if frame == span.end_frame {
+                    return Some(FractionalSourcePosition {
+                        frame: span.endpoint_frame,
+                        fraction: span.endpoint_fraction,
+                        seek_mode: ExplicitSeekMode::Normal,
+                    });
+                }
+                span.contains(frame).then_some(())?;
+                core.position(span.segment, span.loaded_rate_hz, frame)
+            }
         }
-        if !self.span.contains(frame) {
-            return None;
-        }
-        self.core
-            .position(self.span.segment, self.span.loaded_rate_hz, frame)
     }
 }
 impl MappedSourceSpan {
@@ -794,6 +811,11 @@ impl MappedSourceSpan {
         self,
         domain: SourceLoopDomain,
     ) -> Result<GeneralLocalSpanView, MappedClockError> {
+        if domain.musical_period.physical_quarters().is_some() {
+            return physical::local_view(self, domain).map(|view| GeneralLocalSpanView {
+                state: LocalGeneralState::Physical(view),
+            });
+        }
         let unavailable = MappedClockError::NumericalUnavailable;
         if !self.epoch.is_general_compact()
             || !domain.is_valid()
@@ -803,7 +825,10 @@ impl MappedSourceSpan {
         {
             return Err(unavailable);
         }
-        let period = domain.musical_period.mapped_period().ok_or(unavailable)?;
+        let period = domain
+            .musical_period
+            .mapped_period(domain.region)
+            .ok_or(unavailable)?;
         if !period.canonical_pair(
             self.endpoint_frame,
             self.endpoint_fraction,
@@ -854,7 +879,10 @@ impl MappedSourceSpan {
             self.loaded_rate_hz,
             source.finish().ok_or(unavailable)?,
             beat.finish().ok_or(unavailable)?,
-            domain.musical_period.mapped_period().ok_or(unavailable)?,
+            domain
+                .musical_period
+                .mapped_period(domain.region)
+                .ok_or(unavailable)?,
             domain.region.start,
             (
                 Integer::from_u128(cycle).ok_or(unavailable)?,
@@ -862,7 +890,9 @@ impl MappedSourceSpan {
             ),
         )
         .ok_or(unavailable)?;
-        Ok(GeneralLocalSpanView { span: self, core })
+        Ok(GeneralLocalSpanView {
+            state: LocalGeneralState::Declared { span: self, core },
+        })
     }
 }
 

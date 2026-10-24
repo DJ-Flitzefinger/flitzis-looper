@@ -1,6 +1,9 @@
 //! Genuine dry policy publication with an independent original-knot Fraction oracle.
 //! Generated PCM and accepted fixture labels do not establish music/device acceptance.
 
+#[path = "runtime_policy_physical_tests.rs"]
+mod physical_tests;
+
 use super::*;
 use crate::audio_engine::source_reader::SourceReaderPeriod;
 use pyo3::types::PyModule;
@@ -14,19 +17,30 @@ const GENERAL_ANCHORS: &[(f64, f64)] = &[(0.0, 0.0), (0.001, 0.125), (0.03125, 2
 struct GeneralPath {
     dry: DryMappedPath,
     anchors: Vec<(f64, f64)>,
+    quarters: Vec<Option<f64>>,
 }
 
 impl GeneralPath {
     fn new(lanes: usize, initial_frames: usize) -> Self {
+        Self::with_extent(lanes, initial_frames, GENERAL_ANCHORS, Some(QUARTERS))
+    }
+
+    fn with_extent(
+        lanes: usize,
+        initial_frames: usize,
+        anchors: &[(f64, f64)],
+        quarters: Option<f64>,
+    ) -> Self {
         let mut result = Self {
             dry: DryMappedPath::new(lanes, 0),
-            anchors: GENERAL_ANCHORS.to_vec(),
+            anchors: anchors.to_vec(),
+            quarters: vec![quarters; lanes],
         };
         for id in 0..lanes {
             result.dry.path.source.engine.stop_sample(id).unwrap();
             result.dry.path.drain();
         }
-        result.replace_maps(GENERAL_ANCHORS);
+        result.replace_maps(anchors);
         result.publish(false, 2, None);
         for id in 0..lanes {
             let start = result
@@ -101,7 +115,7 @@ impl GeneralPath {
                 sync_requested: scalar_legacy != Some(id),
                 intent_revision: self.dry.intent_revision,
                 delivery: Some(self.dry.deliveries[id].clone()),
-                exact_quarters: Some(QUARTERS),
+                exact_quarters: self.quarters[id],
             };
         }
         let mut ends = vec![Some(END as f64 / f64::from(RATE)); NUM_SAMPLES];
@@ -194,18 +208,47 @@ fn verify_general_reads(fixture: &GeneralPath, anchor: OracleAnchor, id: usize) 
             c"runtime_policy_general_oracle",
         )
         .unwrap();
-        let metadata = module
-            .getattr("metadata")
-            .unwrap()
-            .call1((fixture.anchors.clone(), RATE, START, QUARTERS))
-            .unwrap()
-            .extract::<(String, String, String, String)>()
-            .unwrap();
-        assert_ne!(
-            metadata.1, "1",
-            "the exact physical-start inverse is rational"
-        );
-        assert_ne!(metadata.3, "1", "the effective mapped period is rational");
+        if let Some(quarters) = fixture.quarters[id] {
+            let metadata = module
+                .getattr("metadata")
+                .unwrap()
+                .call1((fixture.anchors.clone(), RATE, START, quarters))
+                .unwrap()
+                .extract::<(String, String, String, String)>()
+                .unwrap();
+            assert_ne!(
+                metadata.1, "1",
+                "the exact physical-start inverse is rational"
+            );
+            assert_ne!(metadata.3, "1", "the effective mapped period is rational");
+        } else {
+            let metadata = module
+                .getattr("physical_metadata")
+                .unwrap()
+                .call1((fixture.anchors.clone(), RATE, START, END))
+                .unwrap()
+                .extract::<(String, String, String, String, String, String)>()
+                .unwrap();
+            let numerator = metadata.2.parse::<u128>().unwrap();
+            let denominator = metadata.3.parse::<u128>().unwrap();
+            assert!(!denominator.is_power_of_two(), "Q is genuinely non-dyadic");
+            assert_eq!(metadata.4, (END - START).to_string());
+            assert_eq!(metadata.5, "1");
+            let quarters = voice
+                .source_playback
+                .reader_period()
+                .physical_quarters()
+                .unwrap();
+            assert_eq!(
+                quarters.parts(),
+                (
+                    crate::audio_engine::general_source_numerics::Integer::from_u128(numerator)
+                        .unwrap(),
+                    crate::audio_engine::general_source_numerics::Integer::from_u128(denominator)
+                        .unwrap(),
+                )
+            );
+        }
         let mut observed = 0;
         for span in history.spans().filter(|span| {
             span.playback.is_general_mapped()
@@ -232,7 +275,7 @@ fn verify_general_reads(fixture: &GeneralPath, anchor: OracleAnchor, id: usize) 
                     RATE,
                     START,
                     END - START,
-                    QUARTERS,
+                    fixture.quarters[id],
                     anchor.raw.frame,
                     anchor.raw.fraction,
                     anchor.master,
@@ -802,7 +845,10 @@ fn general_replacement_outside_historical_scalar_circle_succeeds_then_reverse_re
 
 #[test]
 fn scalar_to_general_first_seam_tap_refusal_retries_the_same_request_after_natural_wrap() {
-    let mut fixture = GeneralPath::new(2, 23);
+    verify_general_seam_retry(GeneralPath::new(2, 23));
+}
+
+fn verify_general_seam_retry(mut fixture: GeneralPath) {
     fixture
         .dry
         .path
@@ -1061,7 +1107,10 @@ fn heterogeneous_general_intersection_and_scalar_cohort_refuses_one_bad_member_t
 
 #[test]
 fn general_pause_hold_resume_master_change_and_journal_keep_the_effective_certificate() {
-    let mut fixture = GeneralPath::new(2, 23);
+    verify_general_pause_hold(GeneralPath::new(2, 23));
+}
+
+fn verify_general_pause_hold(mut fixture: GeneralPath) {
     fixture.adopt(true, 3);
     let scalar = fixture
         .dry
@@ -1199,7 +1248,10 @@ fn general_pause_hold_resume_master_change_and_journal_keep_the_effective_certif
 
 #[test]
 fn general_original_map_cancellation_at_final_claim_refuses_all_lanes() {
-    let mut fixture = GeneralPath::new(2, 23);
+    verify_general_claim_cancellation(GeneralPath::new(2, 23));
+}
+
+fn verify_general_claim_cancellation(mut fixture: GeneralPath) {
     fixture.publish(true, 3, None);
     let snapshot = request(&fixture.dry.path);
     fixture.dry.path.drain();
@@ -1231,7 +1283,10 @@ fn general_original_map_cancellation_at_final_claim_refuses_all_lanes() {
 
 #[test]
 fn general_competing_global_lease_retains_exact_work_then_retries_at_later_actual_e() {
-    let mut fixture = GeneralPath::new(2, 23);
+    verify_general_lease_contention(GeneralPath::new(2, 23));
+}
+
+fn verify_general_lease_contention(mut fixture: GeneralPath) {
     fixture.publish(true, 3, None);
     let snapshot = request(&fixture.dry.path);
     fixture.dry.path.drain();
@@ -1282,7 +1337,10 @@ fn general_competing_global_lease_retains_exact_work_then_retries_at_later_actua
 
 #[test]
 fn general_replacement_reserves_all_displaced_map_owners_before_effect_and_worker_retirement() {
-    let mut fixture = GeneralPath::new(2, 23);
+    verify_general_retirement_pressure(GeneralPath::new(2, 23));
+}
+
+fn verify_general_retirement_pressure(mut fixture: GeneralPath) {
     fixture.adopt(true, 3);
     let original = fixture
         .dry
@@ -1340,6 +1398,10 @@ fn general_replacement_reserves_all_displaced_map_owners_before_effect_and_worke
 
 #[test]
 fn general_productive_constructor_and_actual_renderer_fit_two_mib_without_rust_requests() {
+    verify_general_two_mib(GENERAL_ANCHORS, Some(QUARTERS));
+}
+
+fn verify_general_two_mib(anchors: &'static [(f64, f64)], quarters: Option<f64>) {
     fn assert_copy<T: Copy>() {}
     assert_copy::<SourcePlayback>();
     assert_copy::<SourceReaderPeriod>();
@@ -1363,8 +1425,8 @@ fn general_productive_constructor_and_actual_renderer_fit_two_mib_without_rust_r
     let child = std::thread::Builder::new()
         .name("general-productive-two-mib".into())
         .stack_size(2 * 1024 * 1024)
-        .spawn(|| {
-            let mut fixture = GeneralPath::new(6, 23);
+        .spawn(move || {
+            let mut fixture = GeneralPath::with_extent(6, 23, anchors, quarters);
             let anchor = oracle_anchor(&fixture, 0);
             fixture.publish(true, 3, None);
             let snapshot = request(&fixture.dry.path);

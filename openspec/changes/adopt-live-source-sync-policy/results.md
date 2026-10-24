@@ -1706,3 +1706,209 @@ Physical-marker-only rational Q, broader general conversion, common static/varia
 phase and8/64-bar modulo, finite OneShot/EOF, Native/pitch/Key Lock, the actual later
 Portable repair and ALL full original/extension/Human/final gates remain required.
 This bounded declared-Q integration does not close SYNC/REALTIME or the FULL Goal.
+
+## Productive physical-marker quarter extent — 2026-10-24
+
+The physical None branch uses exact original B(A), B(Z) and rational Q=B(Z)-B(A),
+retained in a distinct64-byte quarter certificate. Effective reader period is
+exactly integer H; the separate original scalar P survives actual-E conversion
+and physical/declared/intersection replacement/reverse. Original loaded knots,
+manual meter semantics, source/ACK/claim/retirement owners and ordinary legacy
+launch remain intact. Copied spans store only k128 and use a separate1024-bit
+physical core; declared512/386380 arithmetic is unchanged.
+
+The real worker/None/publication fixture includes both original endpoint examples:
+
+| Original seconds/beat anchors at Fs48000,A1,Z1502 | Exact Q numerator / denominator |
+| --- | --- |
+| (0,0),(.001,.125),(.03125,2),(.0625,4) | 288239383350966491 / 144115188075855875 |
+| (0,0),(.001,.125),(.031,2),(.062,4) | 973596225794487503992543076417536 / 482883607843738976046606013087875 |
+
+The second denominator has109 bits; a considered packed64-bit-denominator cycle
+would wrongly exclude this ordinary useful class. The selected full Q certificate
+admits it while preserving copied storage limits. These exact values are derived
+by the independent original-knot Fraction oracle and compared to the actual
+adopted domain, not used as fabricated source/admission permissions.
+
+### Source review and corrected boundaries
+
+Dedicated systems concrete PRE preceded coordinated math/test/Root writes.
+Actual combined POST found a real asymmetric full-reader guard: a wrong legacy
+Physical or ScalarMusical(H) plan could bypass mapped validation when paired with
+mapped playback. Root's targeted PRE-reviewed fix enters the same unchanged
+domain/layout check when EITHER the plan or playback has a mapped reader tag,
+before assertions, tap preparation or output. Existing wrong-plan tests remain
+unchanged. This was found and fixed BEFORE execution, not an invented failed run.
+The checked reader and original Native feed already validated domain unconditionally.
+
+The POST also requested explicit absent-endpoint evidence. A numeric test requires
+UnsupportedCoverage for end9/originalEOF10 beyond last trusted source8. A real
+physical None publication tests end3500 and omitted end→originalEOF4096 beyond
+trusted2976, with current original source/map/job bindings, Unsupported/no prepared
+map on both lanes, actual refusal and the entire cohort unchanged. No clipping,
+extrapolation, source failure substitute or finite-playback permission is added.
+
+Two prior None Unsupported inputs are intentionally supported under this later
+contract. Their EXACT old maps survive as new runtime actual-E/first-PCM and
+custody/preparation/cache positives. Separate valid firstbeat−2^-200 maps exceed
+the documented−126 grid bound and retain every original Unsupported,64-quiet,
+current map, unchanged cohort, empty queue, cache and real legacy-launch oracle.
+The custody helper intentionally terminates work to inspect preparation/cache;
+it does not claim actual adoption. Same systems targeted PRE/actual POST and the
+one independent reviewer cover both preserved positive/negative changes.
+
+Final frozen combined systems SOURCE/COVERAGE POST is clear. The same independent
+final reviewer restored SOURCE/COVERAGE CLEAR after the guard/endpoint deltas;
+PUBLISH remains held for actual final evidence and staged diff.
+
+### Actual Debug verification
+
+Current Debug passes355 distinct selected functional tests, with four existing
+ignored tests. Nonempty module filters separate physical/runtime and old/general
+clock groups to avoid double-counting:
+
+| Scope | Passed | Test time |
+| --- | ---: | ---: |
+| Unchanged production constructor/callback, explicit2MiB | 1 | 0.39 s |
+| General arithmetic, including physical certificate/split | 9 | 0.00 s |
+| Entire general clock, including physical endpoint/refusal | 13 | 0.17 s |
+| Original mapped clock excluding that general group | 60 | 0.45 s |
+| Shared reader | 21 | 0.01 s |
+| Copied playback | 65 | 13.39 s |
+| New physical actual runtime/renderer | 11 | 24.53 s |
+| Original runtime excluding that physical child | 87 | 77.88 s |
+| Source/map custody | 66 (3 ignored) | 56.84 s |
+| Source-feed history | 15 (1 ignored) | 0.02 s |
+| Prepared Native history | 7 | 49.26 s |
+
+The first production compilation took71 s; its complete run elapsed72.42 s.
+Production mixer/voice sizes remain233904/4544 bytes. Actual physical and declared
+consuming2MiB gates pass, including full renderer and observed zero Rust allocation,
+zeroed-allocation and reallocation requests. Measured epoch128/span240/Playback424/
+optional32=13568/readerperiod72/domain96/readplan216 bytes remain within limits.
+Native allocation/deallocation and peak stack are unmeasured. No music/device or
+whole-realtime acceptance follows from these bounded software results.
+
+No executed functional test has failed in this block at this checkpoint. Oracle
+Ruff/format/mypy, strict affected OpenSpec, Rustfmt and diff whitespace pass.
+Current Release functional batch, current physical/declared/initial renderer costs,
+Clippy, private wheel/API/import, final evidence/staged review and actual checked
+commit/push/fresh clean equality/guarded own cleanup remain pending here.
+
+Historical declared20 AND10 and tiny20 deadline misses remain open. Physical
+quarter extent is not common static/variable phase,8/64-bar independent modulo,
+finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission or
+musical/device/Human acceptance. ALL original/extension/Human/final gates remain;
+SYNC/REALTIME-first and later actual Portable repair priorities are unchanged.
+
+### First Release verification and actual initial cost limits
+
+The same frozen physical implementation also passes355 selected Release functional
+tests, four existing ignored: production1 (0.36 s), arithmetic9 (0.00 s), entire
+mapped clock73 (0.04 s), playback65 (0.31 s), reader21 (0.00 s), runtime98 (50.83 s),
+custody66 (43.07 s), feed15 (0.01 s) and prepared Native history7 (24.52 s).
+The first Release compilation took172 s, complete production gate elapsed173.64 s.
+Both physical and declared actual consuming2MiB gates pass inside runtime98.
+
+All three explicitly executed Release profiles pass their unchanged functional,
+independent-oracle, tap/work and Rust-allocation assertions. Timing flags are
+evaluated separately. Each uses one warmup plus three measured repetitions and
+512 frames per lane at48kHz, with original queue drain/actual-E claim/full dry
+renderer/history/advance/refresh included. Control/map/oracle/output allocations
+precede timing; the old6400-bit reference-entry counter stays zero. This does not
+mean the new physical1024-bit arithmetic is absent or Native allocation observed.
+
+| Voices | Physical Q110/109 median / max ms | Declared general median / max ms | Initial dyadic max ms | Tiny2/P2.25 max ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 3.6226 / 3.6230 | 2.2079 / 2.2156 | 0.5290 | 1.7304 |
+| 4 | 7.2578 / 7.2643 | 4.3417 / 4.3637 | 0.9970 | 3.2977 |
+| 6 | 10.7124 / 10.7642 | 6.4540 / 6.4602 | 1.4753 | 5.9706 |
+| 20 | 36.1070 / 36.3048 | 21.9733 / 23.3114 | 4.9363 | 16.4611 |
+| 10 | 18.4230 / 19.2866 | 11.0252 / 11.8031 | 2.4594 | 8.8358 |
+
+Physical rare6 narrowly MISSES the10.6667-ms nominal interval in BOTH median and
+maximum; physical20/10, declared20/10 and tiny20 also miss. Keep every negative
+receipt, not just successful process exit. Root is preparing a targeted exact
+once-per-span physical affine cache to reduce the actual hot-path cost before
+publication. Its concrete bounds/admission-equivalence and systems PRE must
+precede writer GO; no speed or stack improvement is claimed before actual reruns.
+Current results above remain truthful pre-correction evidence. No input, criterion,
+reader prepass, mathematical guard or source permission is relaxed to change timing.
+
+### Current affine implementation: actual compatible reruns
+
+The one-file exact affine preparation received dedicated concrete PRE and actual
+frozen POST plus the same independent reviewer's targeted SOURCE/COVERAGE CLEAR.
+Signed constants retain original epoch/address shift/grid/M0/raw fraction/region;
+each frame still checks bN513/offset514/sourceN642 and the unchanged642/636 splitter.
+The new reused initial/late-fifteen-cycle view test compares several interior
+positions and the global endpoint to an independent integer oracle, including a
+negative base, and refuses end+1. No fixture, criterion, source permit, Q admission,
+reader prepass or phase/search behavior changed.
+
+Current focused Debug passes127 cases: production1 (0.39 s,55.21 s compile),
+general clock14 (0.17 s), reader21 (0.01 s), playback65 (13.40 s) and full general
+runtime26 (34.44 s). The earlier355 Debug receipts remain pre-correction evidence;
+they are not relabeled as a fresh complete current Debug run.
+
+The entire current affected Release matrix passes356 cases, four existing ignored:
+production1 (0.37 s), arithmetic9 (0.00 s), clock74 (0.04 s), playback65 (0.31 s),
+reader21 (0.00 s), runtime98 (50.83 s), custody66 (42.78 s), feed15 (0.01 s) and
+Native history7 (24.55 s). First Release compile166 s/production elapsed167.29 s.
+Actual production and both consuming2MiB gates, zero observed Rust allocation
+requests and all copied layout bounds still pass with the temporary affine kernel.
+
+The IDENTICAL three consuming profiles then pass all original functional assertions
+and provide these current timing results, retaining the initial raw logs above:
+
+| Voices | Physical Q110/109 median / max ms | Declared general median / max ms | Initial dyadic max ms | Tiny2/P2.25 max ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 2.3496 / 2.3692 | 2.2097 / 2.2254 | 0.5210 | 1.9684 |
+| 4 | 4.6090 / 4.6476 | 4.4027 / 4.4234 | 1.0506 | 3.7516 |
+| 6 | 6.9703 / 7.0017 | 6.4760 / 6.4850 | 1.5160 | 5.1070 |
+| 20 | 23.4456 / 27.3533 | 21.7950 / 21.9789 | 5.0516 | 16.6033 |
+| 10 | 11.7542 / 14.9910 | 10.8674 / 10.9051 | 2.5367 | 8.2275 |
+
+Physical2/4/6 now meet this measured10.6667-ms interval; physical6 maximum improves
+from10.7642 to7.0017 ms without changing the input or guard. Physical20 AND10,
+declared20 AND10 and tiny20 STILL miss. Their resource/optimization gates remain
+OPEN, including the physical10 median miss. Three repetitions of generated PCM
+and aligned lanes establish no worst-case/device/music/whole-realtime acceptance.
+Old and current negative receipts both remain. Clippy, private Release/API/import,
+final actual evidence/staged review and publication/guarded cleanup remain pending
+at this recording point.
+
+### Final static and private-runtime checks for physical extent
+
+Workspace/all-targets/locked Clippy exits0 in36.65 s with147 library-test warnings,
+66 duplicates (library121, example221). It is not warning-free. The new temporary
+unboxed LocalGeneralState is1184 bytes versus656 for its smaller variant; its
+large-variant warning does not change copied span/Playback budgets. Boxing it would
+introduce forbidden callback allocation, so no warning suppression or RT boxing
+was added. Generic direct-position dead-code warnings in library/example builds
+remain documented; those original numeric query APIs and tests are preserved.
+
+One private locked stripped Release wheel builds in41.36 s (55 production warnings).
+Its actual private-origin Native is34915840 bytes, SHA256
+`6edfcc3b38f5763fae8f033874dd545372bd58e4dd01cabd32535487a180d595`.
+Release profile, all13 bootstrap API checks, editor API4 and current controller/UI
+imports pass. No App/audio device is constructed and no Native installed. Final
+Rustfmt, oracle Ruff/format/mypy, strict affected OpenSpec and diff whitespace pass.
+The ordinary34710016-byte Native remains SHA256
+`ea821e2017e4ca9c40702a5218ce61b92de78ca3a362e972bcef37dcf3beb2c2`.
+
+Dedicated actual systems source and resource/cost interpretation are clear for this
+bounded normal-load delivery. Physical2/4/rare6 meet the measured interval, while
+physical20/10, declared20/10 and tiny20 remain explicit open performance gates.
+Native allocations/deallocations, peak stack, device scheduling, worst-case timing,
+phase and Human acceptance remain unproved. Final staged/evidence PUBLISH review,
+actual commit/push/fresh clean remote equality and exact owned cleanup remain
+pending at this recording point; no complete SYNC/REALTIME or FULL-Goal claim.
+
+Final pre-cleanup inventory retains one regular compatible Rust target
+21834853546 bytes and environment3249696864 bytes, with no full copies.
+Historical/unknown/previously denied evidence is protected; all evidence roots
+total17937002193 bytes. Only this block's exact owned tmp2939 files/54701876 bytes
+is disposable after reviewed push/fresh clean equality/terminal jobs. No reparse
+points or new Scratch roots were observed. Concise original positive AND negative
+receipts remain outside tmp. Cleanup/publication success is not inferred here.

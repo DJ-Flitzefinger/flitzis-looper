@@ -73,6 +73,25 @@ def metadata(
     )
 
 
+def physical_metadata(
+    anchors: list[tuple[float, float]], rate: int, start: int, end: int
+) -> tuple[str, str, str, str, str, str]:
+    points = _axes(anchors, rate)
+    beginning = _affine(points, Fraction(start))
+    extent = _affine(points, Fraction(end)) - beginning
+    period = _affine(points, beginning + extent, inverse=True) - start
+    assert extent > 0
+    assert period == end - start
+    return (
+        str(beginning.numerator),
+        str(beginning.denominator),
+        str(extent.numerator),
+        str(extent.denominator),
+        str(period.numerator),
+        str(period.denominator),
+    )
+
+
 def _position(
     points: list[tuple[Fraction, Fraction]],
     beginning: Fraction,
@@ -121,7 +140,7 @@ def evaluate(
     rate: int,
     start: int,
     physical_length: int,
-    quarters: float,
+    quarters: float | None,
     raw_frame: int,
     raw_fraction: float,
     master0: float,
@@ -129,7 +148,11 @@ def evaluate(
 ) -> list[tuple[int, int, int, int | None, int]]:
     points = _axes(anchors, rate)
     beginning = _affine(points, Fraction(start))
-    extent = Fraction(quarters)
+    extent = (
+        _affine(points, Fraction(start + physical_length)) - beginning
+        if quarters is None
+        else Fraction(quarters)
+    )
     period = _affine(points, beginning + extent, inverse=True) - start
     initial = _affine(points, Fraction(raw_frame) + Fraction(raw_fraction))
     answers = []

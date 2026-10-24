@@ -133,6 +133,7 @@ impl SourceLoopDomain {
                 Self::musical(self.sample_frames, self.region, f64::from_bits(bits)).is_some()
             }
             SourceReaderPeriod::MappedRational(period) => period.validate_physical(self.region),
+            SourceReaderPeriod::MappedPhysicalQuarters(quarters) => quarters.is_valid(),
         }
     }
 
@@ -218,6 +219,22 @@ impl SourceLoopDomain {
             region,
             musical_period: SourceReaderPeriod::MappedRational(period),
         })
+    }
+
+    /// Physical-marker maps retain exact quarter extent Q in their identity,
+    /// while the actual reader circle is exactly the original physical H.
+    pub(crate) fn mapped_physical(
+        sample_frames: usize,
+        region: FrameRange,
+        quarters: super::general_source_numerics::PhysicalMapQuarters,
+    ) -> Option<Self> {
+        (region.start < region.end && region.end <= sample_frames && quarters.is_valid()).then_some(
+            Self {
+                sample_frames,
+                region,
+                musical_period: SourceReaderPeriod::MappedPhysicalQuarters(quarters),
+            },
+        )
     }
 }
 
@@ -728,7 +745,9 @@ pub(crate) struct SourceReadPlan {
     pub(crate) sample_frames: usize,
     pub(crate) frame_pos: usize,
     pub(crate) loop_region: FrameRange,
-    /// Virtual compatible musical duration; never an additional playback-rate ratio.
+    /// Effective reader topology and complete numeric identity. A physical-map
+    /// variant retains beat Q separately and resolves source-frame period H.
+    /// Neither certificate is an additional playback-rate ratio.
     pub(crate) loop_period: SourceReaderPeriod,
     pub(crate) seek_mode: ExplicitSeekMode,
     pub(crate) selection: StemRenderSelection,
@@ -744,9 +763,11 @@ enum PreparedSourceTapPlan {
 
 impl PreparedSourceTapPlan {
     fn new(plan: SourceReadPlan) -> Option<Self> {
-        match plan.loop_period.mapped_period() {
-            Some(period) => Some(Self::Mapped(period.prepare(plan.loop_region)?)),
-            None => Some(Self::Legacy),
+        if plan.loop_period.is_mapped() {
+            let period = plan.loop_period.mapped_period(plan.loop_region)?;
+            Some(Self::Mapped(period.prepare(plan.loop_region)?))
+        } else {
+            Some(Self::Legacy)
         }
     }
 
@@ -918,7 +939,7 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if self.loop_period.is_mapped()
+        if (self.loop_period.is_mapped() || playback.reader_period().is_mapped())
             && (!self.domain().is_valid()
                 || !playback.matches_domain(self.domain())
                 || self.channels == 0
@@ -1369,7 +1390,8 @@ impl SourceReadPlan {
 
     /// The single authority for both executed interpolation addresses and coverage checks.
     pub(crate) fn try_fractional_taps(self, fraction: f64) -> Option<FractionalSourceTaps> {
-        if let Some(period) = self.loop_period.mapped_period() {
+        if self.loop_period.is_mapped() {
+            let period = self.loop_period.mapped_period(self.loop_region)?;
             if self.seek_mode != ExplicitSeekMode::Normal {
                 return None;
             }
@@ -1612,6 +1634,85 @@ mod tests {
         }
         assert_eq!(original.domain().musical_period.scalar_period(), Some(3.25));
         assert!(original.matches_exact(original));
+    }
+
+    #[test]
+    fn physical_quarter_extent_uses_h_taps_but_keeps_its_complete_domain_identity() {
+        use crate::audio_engine::general_source_numerics::{Integer, PhysicalMapQuarters};
+
+        let quarters = PhysicalMapQuarters::new(
+            Integer::from_u128(29).unwrap(),
+            Integer::from_u128(15).unwrap(),
+        )
+        .unwrap();
+        let region = FrameRange { start: 1, end: 4 };
+        let domain = SourceLoopDomain::mapped_physical(10, region, quarters).unwrap();
+        let read = SourceReadPlan {
+            channels: 2,
+            sample_frames: 10,
+            frame_pos: 3,
+            loop_region: region,
+            loop_period: domain.musical_period,
+            seek_mode: ExplicitSeekMode::Normal,
+            selection: StemRenderSelection::full_mix(),
+            transition: StemTransition::default(),
+        };
+        let taps = read.try_fractional_taps(0.5).unwrap();
+        assert_eq!((taps.left, taps.right, taps.right_gain), (3, Some(1), 0.5));
+        let zero = read.try_fractional_taps(-0.0).unwrap();
+        assert_eq!(zero.right, None);
+        assert_eq!(zero.right_gain.to_bits(), (-0.0_f32).to_bits());
+        assert!(read.try_fractional_taps(f64::NAN).is_none());
+        assert!(domain.is_valid());
+        assert!(domain.musical_period.is_mapped());
+        assert_eq!(domain.musical_period.physical_quarters(), Some(quarters));
+        assert_eq!(domain.musical_period.scalar_period(), None);
+        for other in [
+            SourceReaderPeriod::Physical,
+            SourceReaderPeriod::from_scalar_period(Some(3.0)),
+            rational_period(3, 1),
+            SourceReaderPeriod::MappedPhysicalQuarters(
+                PhysicalMapQuarters::new(
+                    Integer::from_u128(2).unwrap(),
+                    Integer::from_u128(1).unwrap(),
+                )
+                .unwrap(),
+            ),
+        ] {
+            let other = SourceReadPlan {
+                loop_period: other,
+                ..read
+            };
+            assert!(!read.matches_exact(other));
+            assert!(!read.matches_source_contract(other));
+        }
+        assert!(
+            SourceReadPlan {
+                frame_pos: region.end,
+                ..read
+            }
+            .try_fractional_taps(0.0)
+            .is_none()
+        );
+        assert!(
+            SourceReadPlan {
+                seek_mode: ExplicitSeekMode::AfterLoop,
+                ..read
+            }
+            .try_fractional_taps(0.5)
+            .is_none()
+        );
+        let invalid_region = FrameRange { start: 4, end: 1 };
+        assert!(read.loop_period.mapped_period(invalid_region).is_none());
+        assert!(
+            SourceReadPlan {
+                loop_region: invalid_region,
+                ..read
+            }
+            .try_fractional_taps(0.0)
+            .is_none()
+        );
+        assert!(SourceLoopDomain::mapped_physical(2, region, quarters).is_none());
     }
 
     fn rational_period(numerator: u128, denominator: u128) -> SourceReaderPeriod {

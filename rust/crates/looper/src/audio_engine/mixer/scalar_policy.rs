@@ -287,7 +287,8 @@ impl RtMixer {
             let construct = match original_domain.musical_period {
                 SourceReaderPeriod::Physical => SourcePlayback::scalar_continuation,
                 SourceReaderPeriod::ScalarMusical(_) => SourcePlayback::scalar_musical_continuation,
-                SourceReaderPeriod::MappedRational(_) => return Err(Error::Unsupported),
+                SourceReaderPeriod::MappedRational(_)
+                | SourceReaderPeriod::MappedPhysicalQuarters(_) => return Err(Error::Unsupported),
             };
             construct(
                 raw.playback.position(),

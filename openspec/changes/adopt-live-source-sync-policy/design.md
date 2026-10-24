@@ -869,3 +869,95 @@ worker startup, supplied-owner/epoch validation, error precedence, exactly-once
 policy invalidation after success and whole callback-owner retirement remain in
 place. This adds no production allocation or runtime voice representation change.
 The unchanged explicit2MiB production and consuming tests determine stack success.
+
+## Physical-marker rational quarter extent
+
+The next physical general branch reuses the same qualified map, off-RT runtime
+preparation, actual-E general epoch, reader pipeline and complete atomic claim.
+An existing None extent means manual physical markers, not missing bars to fill.
+On exact stored seconds*integerFs, compute B(A), B(Z), Q=B(Z)-B(A) and H=Z-A.
+Unlike declared Q, Pmap is exactly integer H. Keep the existing manual
+require_four_four=false behavior; declared auto-bars still require true. Exact Z
+knot lookup takes the left interior interval, A the right, and only positive
+interior coverage is scanned. Missing original map coverage to EOF remains a
+refusal; this is no finite/OneShot or extrapolation permission.
+
+The small packed rational-cycle candidate was rejected because its64-bit
+denominator cap excludes ordinary decimal maps across different endpoint segments.
+For original seconds/beats (0,0),(.001,.125),(.031,2),(.062,4),Fs48000,A1,Z1502,
+the exact Q has110/109-bit numerator/denominator. The productive independent oracle
+must derive this case from actual original worker-delivered knots and None intent.
+
+Instead, a distinct MappedPhysicalQuarters variant stores opaque reduced positive
+true-quarter Q with256-bit numerator and denominator,64 bytes total. Full domain
+identity combines Q with existing physical/sample geometry; it remains separate
+from Physical, ScalarMusical(H) and declared MappedRational(H). Reader P is resolved
+from the region as H/1 through direct integer construction, with no runtime GCD.
+Q never becomes a source-frame rate/period or inferred original scalar witness.
+The period enum remains72 bytes, Playback424 and optional32 copies13568 bytes.
+
+Physical spans store k128 as two u64 words, keeping the largest existing24-byte
+payload,240-byte span and128-byte epoch. The bound copied domain supplies Q to
+an ephemeral physical1024-bit local core. GeneralPreparation needs no duplicated Q
+or endpoint owner. The private span/domain association rule remains unchanged;
+standalone numeric APIs establish no arbitrary Q association or source permission.
+Every position/refresh/epoch/local-view dispatcher explicitly selects the physical
+branch from the bound domain. Diagnostic geometry.quarters never feeds that math.
+
+With common beatgrid g, B(A)=A0/a, B(raw)=R0/r, delta=actual M(n)-M0,
+u=(R0+delta*r)*a-A0*r, v=a*r and qN=N<<(-g), compute
+k=floor(u*D/(v*qN)). Original grid/coefficient limits bound Q coefficient below127
+bits and U below128. Actual shifted-horizon k(MAX)<2^128 is a construction gate,
+repeated on relevant actual master/resume reconstruction. Local Cnum=k*N<<(-g)
+must satisfy Cnum<D<<128 before the local affine expression uses its384-bit bound.
+Separate fixed1024 scratch admits phase640/636, local beat513/383, affine offset514
+and source642/636 numerator/denominator bounds. Declared512/386380 and old compact
+proofs do not change.
+
+The physical splitter first proves exact A*d<=n<Z*d. Raw-fraction identity including
+-0 uses at most762 bits; integer boundary products700. Correlated remainder and
+denominator widths bound actual RN scaling by689 bits, with fraction LSB>=-688.
+Only a rounding carry to integer Z normalizes to A/+0. Physical-H checked taps
+require Normal and canonical[A,Z), then use the existing physical-equivalent
+descriptor. Both mapped kinds enter complete full/checked prepasses and existing
+Native/history/seek/configure refusals. A failed mapped period resolution cannot
+fall through to legacy scalar/physical handling.
+
+Full equality, retry and journal state retain Q and the independent original
+scalar witness across physical/declared/intersection replacements, pause/Hold,
+master changes and reverse. None versus Some and source/map/marker changes still
+requalify through original current-source/ACK/custody fences. Seam/raw/E refusal
+remains progress-retryable; immutable preparation failure stays separate.
+
+Concrete systems PRE covers this design before coordinated writers. Actual frozen
+combined POST, original-knot oracle and public source/ACK/renderer regressions,
+layout/2MiB/allocation and full consuming costs determine delivery. Existing
+declared20/10 and tiny20 deadline misses remain open. No common phase, bar
+commensurability, Native/pitch, finite EOF, musical/device/Human or full SYNC claim
+is established by a physical extent certificate or an adoption ACK.
+
+### Exact physical affine preparation
+
+Each private physical local span view prepares the current affine integer terms
+once for its reader chunk, binding the original epoch/address shift/grid/M0/raw
+fraction/region and current segment/cycle/Q tuple. It retains span+PhysicalAffine
+without a redundant Core or persistent cache. Constants are bd=rD (383 bits),
+signed beat0=R0D-Cnum*r (512), yterm=Y0*bd (509), unshifted_den=bd*dy (510),
+srcOrigin=X0*unshifted_den (636), shifted source den (636), and original dx.
+The source origin uses the unshifted denominator, preserving source-grid units.
+
+Every query still evaluates/decode actual addressed M(n), subtracts original M0,
+checks bN=beat0+delta*bd at513 bits, offset=bN-yterm at514 and
+n=srcOrigin+offset*dx at642, then uses the unchanged physical642/636 splitter.
+The original admitted raw255/r127/D256/Cnum/master bounds make the former repeated
+uncycled/base/cycle checks total, so exact factoring rescues no excluded overflow.
+Signed cached origins need not be in-domain at delta0 and are never reanchored to
+the current span. Cached global endpoints precede local evaluation; views rebuild
+on every relevant span/refresh/resume/master change. Phase/search, two reader
+passes, Q/domain/source ownership and all first-PCM guards remain unchanged.
+
+The reused initial and late fifteen-cycle view regression checks multiple interior
+positions plus global endpoint against an independent integer oracle, including a
+negative cached beat origin. Actual post-change stack/allocation and identical
+consuming profiles determine the benefit; initial rare6/20/10 cost failures remain
+preserved evidence rather than being erased by the source optimization.
