@@ -4,10 +4,12 @@
 //! It grants canonical input projection only; a declared raw cut is no output-alignment proof.
 
 use super::{NativeHistoryRequest, RubberBandError, SourceReadCheckpoint};
+use crate::audio_engine::content_placement::OwnerIdentity;
 use crate::audio_engine::mapped_source_clock::MappedClockEpoch;
 use crate::audio_engine::native_history_permit::NativeHistoryPermitIdentity;
 use crate::audio_engine::ordinary_start::OrdinaryStartWork;
 use crate::audio_engine::pad_start::{MappedStartPendingGuard, MappedStartSource};
+use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::audio_engine::source_playback::SourcePlayback;
 use std::sync::Arc;
 
@@ -20,6 +22,89 @@ pub(crate) struct MappedNativeInput {
     target: u64,
     request_id: u64,
     epoch: u64,
+    pitch_intent: PitchIntent,
+    key_lock: bool,
+}
+
+/// Comparison only: the worker request or adopted adapter retains all actual owners.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct MappedNativePitchOwner {
+    source: OwnerIdentity,
+    permit: NativeHistoryPermitIdentity,
+    target: u64,
+    request_id: u64,
+    epoch: u64,
+}
+
+/// Freshness of this one retained adapter, not an independently usable source clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MappedNativePitchStamp {
+    pub(super) adapter_id: u64,
+    pub(super) native: usize,
+    pub(super) incarnation: u64,
+    pub(super) input_serial: u64,
+    pub(super) actual_frame: u64,
+}
+
+impl MappedNativePitchStamp {
+    pub(super) fn checked_next(self, frames: usize, frozen_birth: bool) -> Option<Self> {
+        let count = u64::try_from(frames).ok()?;
+        Some(Self {
+            input_serial: self.input_serial.checked_add(count)?,
+            actual_frame: if frozen_birth {
+                self.actual_frame
+            } else {
+                self.actual_frame.checked_add(count)?
+            },
+            ..self
+        })
+    }
+}
+
+/// A single readable original span, or explicit silence before that source was born.
+/// Private fields prevent a numeric rate or a copied playback from granting this capability.
+pub(crate) struct MappedNativePitchChunk {
+    owner: MappedNativePitchOwner,
+    checkpoint: SourceReadCheckpoint,
+    frames: usize,
+    pitch: f64,
+    frozen_birth: bool,
+    intent: PitchIntent,
+    key_lock: bool,
+    stamp: MappedNativePitchStamp,
+    next_stamp: MappedNativePitchStamp,
+}
+
+impl MappedNativePitchChunk {
+    pub(super) fn owner(&self) -> MappedNativePitchOwner {
+        self.owner
+    }
+
+    pub(super) fn frames(&self) -> usize {
+        self.frames
+    }
+
+    pub(super) fn pitch(&self) -> f64 {
+        self.pitch
+    }
+
+    pub(super) fn is_readable(&self) -> bool {
+        self.frozen_birth || self.checkpoint.playback.can_read_frames(self.frames)
+    }
+
+    pub(super) fn matches_tuple(&self, intent: PitchIntent, key_lock: bool) -> bool {
+        self.intent == intent && self.key_lock == key_lock
+    }
+
+    pub(super) fn next_stamp(
+        &self,
+        current: MappedNativePitchStamp,
+    ) -> Option<MappedNativePitchStamp> {
+        (self.stamp == current
+            && self.checkpoint.playback.mapped_output_frame() == Some(current.actual_frame)
+            && current.checked_next(self.frames, self.frozen_birth) == Some(self.next_stamp))
+        .then_some(self.next_stamp)
+    }
 }
 
 impl MappedNativeInput {
@@ -78,6 +163,8 @@ impl MappedNativeInput {
             target,
             request_id: request.request_id,
             epoch: request.epoch,
+            pitch_intent: request.pitch_intent,
+            key_lock: request.key_lock,
         };
         // Do not normalize a copied beginning into apparent permission.
         let canonical = input.checkpoint_at(target)?;
@@ -92,6 +179,8 @@ impl MappedNativeInput {
             && request.request_id == self.request_id
             && request.epoch == self.epoch
             && request.permit.scalar_identity() == self.permit
+            && request.pitch_intent == self.pitch_intent
+            && request.key_lock == self.key_lock
             && self.origin.matches_exact(SourceReadCheckpoint {
                 playback: request.playback,
                 plan: request.plan,
@@ -102,6 +191,109 @@ impl MappedNativeInput {
     /// and use the existing NativeHistoryPermit source/OwnACK contract instead.
     pub(super) fn pending_current(&self) -> bool {
         self.pending.current(&self.source)
+    }
+
+    pub(super) fn pitch_owner(&self) -> MappedNativePitchOwner {
+        MappedNativePitchOwner {
+            source: OwnerIdentity::of(&self.source),
+            permit: self.permit,
+            target: self.target,
+            request_id: self.request_id,
+            epoch: self.epoch,
+        }
+    }
+
+    fn owns_request(&self, request: &NativeHistoryRequest) -> bool {
+        request.target_output_frame == self.target
+            && request.request_id == self.request_id
+            && request.epoch == self.epoch
+            && request.permit.scalar_identity() == self.permit
+            && request.pitch_intent == self.pitch_intent
+            && request.key_lock == self.key_lock
+            && request
+                .mapped_input
+                .as_ref()
+                .is_some_and(|input| input.pitch_owner() == self.pitch_owner())
+            && request
+                .permit
+                .current_effective_source(&request.sample, request.binding.sample_rate_hz)
+    }
+
+    /// Effective reads deliberately do not consult the pending map-job revision.
+    /// The caller additionally validates the adapter's actual endpoint and effective KL mode.
+    pub(super) fn pitch_chunk(
+        &self,
+        request: &NativeHistoryRequest,
+        checkpoint: SourceReadCheckpoint,
+        frames: usize,
+        intent: PitchIntent,
+        key_lock: bool,
+        stamp: MappedNativePitchStamp,
+    ) -> Result<MappedNativePitchChunk, RubberBandError> {
+        let canonical = self.canonicalize(checkpoint)?;
+        let mut bounded = canonical.playback;
+        if !self.owns_request(request)
+            || intent != request.pitch_intent
+            || canonical.playback.mapped_output_frame() != Some(stamp.actual_frame)
+            || !canonical.matches_exact(checkpoint)
+            || !canonical.playback.can_read_frames(frames)
+            || (frames != 0 && bounded.chunk(frames).0 != frames)
+        {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        let pitch = intent
+            .native_pitch_scale(canonical.playback.tempo_ratio(), key_lock)
+            .map_err(|_| RubberBandError::InvalidPitchScale)?;
+        let next_stamp = stamp
+            .checked_next(frames, false)
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        Ok(MappedNativePitchChunk {
+            owner: self.pitch_owner(),
+            checkpoint: canonical,
+            frames,
+            pitch,
+            frozen_birth: false,
+            intent,
+            key_lock,
+            stamp,
+            next_stamp,
+        })
+    }
+
+    /// No source frame exists in this prefix, so neither map address nor rate advances.
+    pub(super) fn frozen_birth_pitch_chunk(
+        &self,
+        request: &NativeHistoryRequest,
+        frames: usize,
+        stamp: MappedNativePitchStamp,
+    ) -> Result<MappedNativePitchChunk, RubberBandError> {
+        if !self.owns_request(request)
+            || self.origin.playback.mapped_output_frame() != Some(stamp.actual_frame)
+            || !self.origin.matches_exact(SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            })
+        {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        let pitch = request
+            .pitch_intent
+            .native_pitch_scale(self.origin.playback.tempo_ratio(), request.key_lock)
+            .map_err(|_| RubberBandError::InvalidPitchScale)?;
+        let next_stamp = stamp
+            .checked_next(frames, true)
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        Ok(MappedNativePitchChunk {
+            owner: self.pitch_owner(),
+            checkpoint: self.origin,
+            frames,
+            pitch,
+            frozen_birth: true,
+            intent: request.pitch_intent,
+            key_lock: request.key_lock,
+            stamp,
+            next_stamp,
+        })
     }
 
     fn checkpoint_at(&self, frame: u64) -> Result<SourceReadCheckpoint, RubberBandError> {

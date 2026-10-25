@@ -5,8 +5,9 @@
 //! D+B-1 adapter frames therefore leaves raw Native frame D next in the same FIFO owner.
 
 use super::{
-    MappedNativeInput, NativeAdapterState, NativeHistoryRequest, NativeSourcePreparationError,
-    NativeStartHistoryContext, RetainedNativeStartCut, RubberBandError, SourceReadCheckpoint,
+    MappedNativeInput, MappedNativePitchChunk, NativeAdapterState, NativeHistoryRequest,
+    NativeSourcePreparationError, NativeStartHistoryContext, RetainedNativeStartCut,
+    RubberBandError, SourceReadCheckpoint,
 };
 use crate::audio_engine::source_feed_history::SOURCE_FEED_HISTORY_MAX_FRAMES;
 use crate::audio_engine::source_playback::SourcePlayback;
@@ -253,6 +254,49 @@ impl NativeAdapterState {
         self.mapped_input().is_some()
     }
 
+    /// Called after the existing complete live source contract check and before rendering.
+    /// This describes the retained AHEAD input, never the independently advancing logical n.
+    pub(crate) fn live_mapped_pitch_chunk(
+        &self,
+        actual: SourceReadCheckpoint,
+        frames: usize,
+        intent: crate::audio_engine::pitch_intent::PitchIntent,
+        key_lock: bool,
+    ) -> Result<Option<MappedNativePitchChunk>, RubberBandError> {
+        let Some(mapped) = self.mapped_input() else {
+            return Ok(None);
+        };
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let timeline = self
+            .retained_start_timeline
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        if self.effective_key_lock() != Some(key_lock)
+            || source.pitch_intent != intent
+            || !mapped.canonicalize(timeline.actual)?.matches_exact(actual)
+            || !timeline.proves_endpoints(self.block_size, self.primed_output_frames, Some(mapped))
+            || self
+                .mapped_pitch
+                .as_ref()
+                .is_none_or(|state| state.owner != mapped.pitch_owner())
+        {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        mapped
+            .pitch_chunk(
+                source,
+                actual,
+                frames,
+                intent,
+                key_lock,
+                self.mapped_pitch_stamp()
+                    .ok_or(RubberBandError::UnavailableSourceHistory)?,
+            )
+            .map(Some)
+    }
+
     pub(crate) fn has_retained_feed(&self) -> bool {
         self.retained_start_timeline.is_some()
     }
@@ -458,8 +502,8 @@ impl NativeAdapterState {
         }
         if mapped
             && (context != NativeStartHistoryContext::PhysicalBirth
-                || request.key_lock
-                || request.pitch_intent.total_semitones() == 0
+                || (!owned_future
+                    && (request.key_lock || request.pitch_intent.total_semitones() == 0))
                 || (declared_cut.is_some() && !owned_future)
                 || catchup_frames != 0
                 || dsp.is_some()
@@ -488,6 +532,9 @@ impl NativeAdapterState {
             .map_err(|_| {
                 NativeSourcePreparationError::Unavailable(RubberBandError::InvalidPitchScale)
             })?;
+        if owned_future {
+            self.begin_mapped_preparation()?;
+        }
         let native = self
             .rubberband
             .as_mut()

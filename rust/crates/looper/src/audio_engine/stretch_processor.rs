@@ -2,7 +2,7 @@ use super::constant_timing::AcceptedTimingProjection;
 use super::native_history_permit::NativeHistoryPermit;
 use super::pitch_intent::PitchIntent;
 use super::prepared_native_history::{
-    NativeAdapterState, PITCH_SCALE_EPSILON, SourceReadCheckpoint,
+    NativeAdapterState, NativeSourcePreparationError, PITCH_SCALE_EPSILON, SourceReadCheckpoint,
 };
 use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
 use super::source_feed_history::{SourceFeedContext, SourceReadDomain, SourceReadReceipt};
@@ -901,6 +901,37 @@ impl StretchProcessor {
             self.wet_render_failed = true;
             return None;
         }
+        let mapped_pitch_chunk = match self.native.live_mapped_pitch_chunk(
+            SourceReadCheckpoint {
+                playback: *feed.playback,
+                plan: feed.plan,
+            },
+            frames,
+            feed.pitch_intent,
+            feed.key_lock,
+        ) {
+            Ok(chunk) => chunk,
+            Err(_) => {
+                // A refused descriptor has not touched the retained Native/FIFO owner.
+                self.silence_output(frames);
+                self.wet_render_failed = true;
+                return None;
+            }
+        };
+        if mapped_pitch_chunk.is_some() && !wet {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        }
+        if mapped_pitch_chunk.as_ref().is_some_and(|chunk| {
+            self.native
+                .validate_mapped_render(&self.varispeed, &self.output, chunk)
+                .is_err()
+        }) {
+            self.silence_output(frames);
+            self.wet_render_failed = true;
+            return None;
+        }
         let finite = !super::native_source_coverage::complete_view_available(feed.sample);
         if finite
             && ((wet
@@ -995,12 +1026,32 @@ impl StretchProcessor {
             self.wet_render_failed = wet;
             return None;
         }
-        self.process_resampled_with_pitch(
-            frames,
-            feed.playback.tempo_ratio(),
-            feed.key_lock,
-            feed.pitch_intent,
-        );
+        if let Some(chunk) = mapped_pitch_chunk {
+            match self
+                .native
+                .render_mapped(&self.varispeed, &mut self.output, chunk)
+            {
+                Ok(()) => {
+                    self.wet_rendered = true;
+                    self.wet_render_failed = false;
+                }
+                Err(error) => {
+                    if matches!(error, NativeSourcePreparationError::Backend(_)) {
+                        self.reset_rubberband_state();
+                    }
+                    self.silence_output(frames);
+                    self.wet_render_failed = true;
+                    return None;
+                }
+            }
+        } else {
+            self.process_resampled_with_pitch(
+                frames,
+                feed.playback.tempo_ratio(),
+                feed.key_lock,
+                feed.pitch_intent,
+            );
+        }
         if wet && !self.wet_rendered {
             // The source reader may have completed, but reserve starvation or Native failure
             // did not complete the render pass. Do not publish a successful history receipt.
@@ -1078,6 +1129,14 @@ impl StretchProcessor {
         }
 
         let output_samples = output_frames.min(DEFAULT_BLOCK_SAMPLES);
+        if self.native.has_owned_mapped_input() {
+            // Numeric-only callers cannot supply original mapped-input provenance.
+            // Refusal preserves the valid owner, including a partially filled FIFO.
+            self.silence_output(output_samples);
+            self.wet_rendered = false;
+            self.wet_render_failed = true;
+            return;
+        }
         let Ok(pitch_scale) = pitch_intent.native_pitch_scale(tempo_ratio, key_lock) else {
             self.silence_output(output_samples);
             self.wet_render_failed = true;
@@ -1329,6 +1388,7 @@ fn sample_rate_to_u32(sample_rate_hz: f32) -> u32 {
         .clamp(RUBBERBAND_MIN_SAMPLE_RATE_HZ, u32::MAX as f32) as u32
 }
 
+#[cfg_attr(test, derive(Clone, Debug, PartialEq))]
 pub(crate) struct FixedFifo {
     buffer: Vec<f32>,
     read_pos: usize,
@@ -1357,8 +1417,7 @@ impl FixedFifo {
         self.len = 0;
     }
 
-    #[cfg(test)]
-    fn capacity(&self) -> usize {
+    pub(super) fn capacity(&self) -> usize {
         self.buffer.len()
     }
 

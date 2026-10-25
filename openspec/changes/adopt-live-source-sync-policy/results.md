@@ -2417,3 +2417,18 @@ update remain pending at this recording point. This availability repair does not
 Key Lock/pitch/late/piano, variable history, finite EOF, emitted phase, connected
 BeatThis structural/B2/default or real Human acceptance. Those remain required
 inside the connected milestone.
+
+The subsequent native PC delivery completed on2026-10-25: commit
+`b4591c2e19910e3e5794263b93eaebe0921bb6d9`, normal existing-main push and fresh
+clean actual-remote equality. Guarded owned pending-test tmp cleanup removed
+156,392,767 bytes; evidence and shared cache remain. With no running App and a
+successful exclusive old-Native probe, the same source was installed using locked
+Release maturin develop in74.04s. Actual installed Native is35,237,888 bytes,
+SHA256 `5b610ea52a51c6ede2e8ac4ac1a94a7dcfd42e2936abd8228f21fa5a33ca48aa`.
+Its Release profile,13 API checks/editor4/ordinary-transport2 and actual
+`start.bat --check` pass. The private stripped-wheel identity above is separate.
+Exact old API1 rollback is retained; no App/device was started/stopped and no
+settings/private audio changed. Native delivery scratch was cleaned and fresh
+clean HEAD/tracking/actual-remote equality rechecked at10:16:15Z. The Human may use
+the launch-only `repo/start.bat` for this installed preview. All complete-SYNC and
+Human acceptance limits above remain open; this is restored Play availability.

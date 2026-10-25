@@ -1,4 +1,4 @@
-// Internal qualified fixed-h Native chronology; public activation stays guarded.
+// Internal qualified Native chronology; public activation stays guarded.
 // No output-phase, device or musical-onset claim.
 use super::*;
 use crate::audio_engine::pitch_intent::PitchIntent;
@@ -35,6 +35,8 @@ struct RawStereo {
     output: VecDeque<[f32; 2]>,
     history: usize,
     delay: usize,
+    pitch: f64,
+    pending_pitch: Option<f64>,
 }
 
 impl RawStereo {
@@ -53,6 +55,8 @@ impl RawStereo {
             output: std::iter::repeat_n([0.0; 2], BLOCK - 1).collect(),
             history: 4096,
             delay: 0,
+            pitch,
+            pending_pitch: None,
         };
         if pitch > 2.0 {
             raw.shift(&[[0.0; 2]; BLOCK]);
@@ -87,8 +91,20 @@ impl RawStereo {
     }
 
     fn sample(&mut self, frame: [f32; 2]) -> [f32; 2] {
+        self.sample_at_pitch(frame, self.pitch)
+    }
+
+    fn sample_at_pitch(&mut self, frame: [f32; 2], pitch: f64) -> [f32; 2] {
+        if self.input.is_empty() {
+            self.pending_pitch = Some(pitch);
+        }
         self.input.push_back(frame);
         if self.input.len() == BLOCK {
+            let head_pitch = self.pending_pitch.take().unwrap();
+            if self.pitch.to_bits() != head_pitch.to_bits() {
+                unsafe { raw_pitch(self.state, head_pitch) };
+                self.pitch = head_pitch;
+            }
             let input = std::array::from_fn(|_| self.input.pop_front().unwrap());
             self.output.extend(self.shift(&input));
         }
@@ -212,11 +228,46 @@ struct OwnedBirth {
 }
 
 fn owned_birth(shift: i32) -> OwnedBirth {
+    owned_birth_with_mode(shift, false, false)
+}
+
+fn owned_birth_with_mode(shift: i32, key_lock: bool, unity_head: bool) -> OwnedBirth {
     use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
     use crate::audio_engine::source_playback::SourcePlayback;
 
     let mut path = configured(shift);
-    let (job, delivery) = variable_original_delivery(&path);
+    let (job, delivery) = if unity_head {
+        // Independent source data: first interval r=1, second approximately 2/3 at F=64.
+        // The selected loop repeats both intervals many times inside a Native block.
+        let mut expected = record(&path.source, 0);
+        let accepted = &mut expected["record"]["accepted"];
+        let first = accepted["anchors"][0].clone();
+        let mut middle = accepted["anchors"][1].clone();
+        middle["id"] = json!("unity-then-two-thirds-rate");
+        middle["source_seconds_bits"] = json!(bits(48.0 / f64::from(RATE)));
+        middle["beat_bits"] = json!(bits(0.75));
+        let mut last = accepted["anchors"][1].clone();
+        last["beat_bits"] = json!(bits(1.125));
+        let interval = accepted["intervals"][0].clone();
+        accepted["anchors"] = json!([first, middle, last]);
+        accepted["intervals"] = json!([interval.clone(), interval]);
+        seal(&mut expected);
+        let (job, event) = stored_event(&path.source, &expected);
+        let delivery = Python::attach(|py| {
+            let event = event.bind(py).cast::<PyDict>().unwrap();
+            let owner = event.get_item("_native_event_owner").unwrap().unwrap();
+            let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
+            assert!(
+                job.resolve_source_beatmap_artifact_completion(&delivery)
+                    .unwrap()
+                    .is_some()
+            );
+            delivery.clone()
+        });
+        (job, delivery)
+    } else {
+        variable_original_delivery(&path)
+    };
     publish_original(&path, &delivery, 1);
     path.render(1);
     let captured = path.capture();
@@ -226,7 +277,8 @@ fn owned_birth(shift: i32) -> OwnedBirth {
     // The component owns genuine original Work, using the same freezing APIs as
     // the sole scheduler. It never publishes an attack or opens public admission.
     let mut work = captured.take_work(None).unwrap().unwrap();
-    work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame()).unwrap();
+    work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame())
+        .unwrap();
     work.freeze_frames(64, 64).unwrap();
     let (clock, target) = work.mapped_clock().unwrap();
     let mut snapshot = path
@@ -248,7 +300,14 @@ fn owned_birth(shift: i32) -> OwnedBirth {
     let permit = work.capture_history_permit(&snapshot.sample, RATE).unwrap();
     let pitch = PitchIntent::new(shift.clamp(-23, 23), shift - shift.clamp(-23, 23)).unwrap();
     let mut request = snapshot
-        .into_request(permit, pitch, false, target, work.sequence(), work.epoch())
+        .into_request(
+            permit,
+            pitch,
+            key_lock,
+            target,
+            work.sequence(),
+            work.epoch(),
+        )
         .unwrap();
     assert!(!crate::audio_engine::native_source_coverage::complete_view_available(&request.sample));
     assert!(request.coverage.is_some());
@@ -266,7 +325,51 @@ fn owned_birth(shift: i32) -> OwnedBirth {
 }
 
 fn independent_input(source: &crate::messages::SampleBuffer, frame: usize) -> [f32; 2] {
-    let coordinate = independent_coordinate(frame as u64);
+    independent_input_with_shape(source, frame, false)
+}
+
+fn independent_beat(frame: usize, unity_head: bool) -> f64 {
+    let middle = if unity_head { 0.75 } else { 0.6 };
+    let last = if unity_head { 1.125 } else { 1.0 };
+    let beginning = ((32.0 / f64::from(RATE)) / (48.0 / f64::from(RATE))) * middle;
+    beginning + (frame as f64 / 64.0).rem_euclid(last - beginning)
+}
+
+fn independent_coordinate_with_shape(frame: usize, unity_head: bool) -> f64 {
+    if !unity_head {
+        return independent_coordinate(frame as u64);
+    }
+    let beat = independent_beat(frame, true);
+    let seconds = if beat < 0.75 {
+        (beat / 0.75) * (48.0 / f64::from(RATE))
+    } else {
+        (48.0 / f64::from(RATE))
+            + ((beat - 0.75) / 0.375) * ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE)))
+    };
+    seconds * f64::from(RATE)
+}
+
+fn independent_pitch(frame: usize, shift: i32, key_lock: bool, unity_head: bool) -> f64 {
+    let h = 2.0_f64.powf(f64::from(shift) / 12.0);
+    if !key_lock {
+        return h;
+    }
+    let middle = if unity_head { 0.75 } else { 0.6 };
+    let last = if unity_head { 1.125 } else { 1.0 };
+    let slope = if independent_beat(frame, unity_head) < middle {
+        (48.0 / f64::from(RATE)) / middle
+    } else {
+        ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE))) / (last - middle)
+    };
+    h / (f64::from(RATE) * slope / 64.0)
+}
+
+fn independent_input_with_shape(
+    source: &crate::messages::SampleBuffer,
+    frame: usize,
+    unity_head: bool,
+) -> [f32; 2] {
+    let coordinate = independent_coordinate_with_shape(frame, unity_head);
     let left = 32 + (coordinate.floor() as usize - 32) % 32;
     let right = 32 + (left + 1 - 32) % 32;
     let fraction = coordinate.fract() as f32;
@@ -280,6 +383,820 @@ fn independent_input(source: &crate::messages::SampleBuffer, frame: usize) -> [f
 #[test]
 fn owned_mapped_future_declared_suffix_keeps_complete_raw_prefix_actual_receipts_and_three_labels()
 {
+    for shift in [7, -23, 24] {
+        for lead in [0, 137, 8329] {
+            assert_owned_mapped_stream(shift, false, false, lead, 0);
+        }
+    }
+}
+
+#[test]
+fn owned_mapped_block_head_pitch_is_partition_independent_across_knots_and_worker_handoff() {
+    for silent_tail in [0, 17] {
+        for lead in [0, 137] {
+            assert_owned_mapped_stream(0, true, true, lead, silent_tail);
+        }
+    }
+    assert_owned_mapped_stream(7, true, false, 137, 0);
+}
+
+#[test]
+fn owned_mapped_pitch_preconditions_preserve_partial_fifo_and_original_owner() {
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut, SourceReadCheckpoint,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+
+    let fixture = owned_birth_with_mode(0, true, true);
+    let playback = fixture.request.playback;
+    let plan = fixture.request.plan;
+    let intent = fixture.request.pitch_intent;
+    let cut = RetainedNativeStartCut {
+        history_output_frames: 4096,
+        discarded_raw_output_frames: 4096 - (BLOCK - 1) + 137,
+    };
+    let mut candidate =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    candidate
+        .prepare_owned_mapped_birth_future(fixture.request, cut)
+        .unwrap();
+    let (actual, actual_plan) = candidate
+        .retained_start_feed(&playback, plan)
+        .unwrap()
+        .unwrap();
+    let checkpoint = SourceReadCheckpoint {
+        playback: actual,
+        plan: actual_plan,
+    };
+    let native = candidate.rubberband.as_ref().unwrap().state_address();
+    let coordinates = candidate.retained_mapped_output_coordinates().unwrap();
+    let initial_input = candidate.input.clone();
+    let initial_output = candidate.output.clone();
+    let initial_input_fifo = candidate.input_fifo.clone();
+    let initial_output_fifo = candidate.output_fifo.clone();
+    let pending = candidate.mapped_pending_pitch_for_test();
+    assert!(pending.is_some());
+    let input_len = candidate.input_fifo[0].len();
+    let output_len = candidate.output_fifo[0].len();
+    let pitch = candidate.pitch_scale;
+    let unchanged = |state: &NativeAdapterState| {
+        assert_eq!(state.rubberband.as_ref().unwrap().state_address(), native);
+        assert_eq!(
+            state.retained_mapped_output_coordinates().unwrap(),
+            coordinates
+        );
+        assert_eq!(state.input, initial_input);
+        assert_eq!(state.output, initial_output);
+        assert_eq!(state.input_fifo, initial_input_fifo);
+        assert_eq!(state.output_fifo, initial_output_fifo);
+        assert!(state.input_fifo.iter().all(|fifo| fifo.len() == input_len));
+        assert!(
+            state
+                .output_fifo
+                .iter()
+                .all(|fifo| fifo.len() == output_len)
+        );
+        assert_eq!(state.mapped_pending_pitch_for_test(), pending);
+        assert_eq!(state.pitch_scale.to_bits(), pitch.to_bits());
+    };
+    let mut wrong = checkpoint;
+    wrong.plan.frame_pos += 1;
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(wrong, 1, intent, true)
+            .is_err()
+    );
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(checkpoint, 1, intent, false)
+            .is_err()
+    );
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(checkpoint, 1, PitchIntent::new(1, 0).unwrap(), true)
+            .is_err()
+    );
+    let mut bounded = actual;
+    let bound = bounded.chunk(1024).0;
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(checkpoint, bound + 1, intent, true)
+            .is_err()
+    );
+    unchanged(&candidate);
+
+    for (feed, mut output) in [
+        (vec![vec![0.0]], vec![vec![0.0]; 2]),
+        (vec![Vec::new(); 2], vec![vec![0.0]; 2]),
+        (vec![vec![0.0]; 2], vec![Vec::new(); 2]),
+    ] {
+        let chunk = candidate
+            .live_mapped_pitch_chunk(checkpoint, 1, intent, true)
+            .unwrap()
+            .unwrap();
+        assert!(candidate.render_mapped(&feed, &mut output, chunk).is_err());
+        unchanged(&candidate);
+    }
+    let empty = candidate
+        .live_mapped_pitch_chunk(checkpoint, 0, intent, true)
+        .unwrap()
+        .unwrap();
+    candidate
+        .render_mapped(
+            &[Vec::new(), Vec::new()],
+            &mut [Vec::new(), Vec::new()],
+            empty,
+        )
+        .unwrap();
+    unchanged(&candidate);
+    assert!(
+        candidate
+            .render(&[vec![0.0], vec![0.0]], &mut [vec![0.0], vec![0.0]], 1, 1.0)
+            .is_err()
+    );
+    unchanged(&candidate);
+
+    // Identical numeric geometry from another real original action has no custody here.
+    let foreign = owned_birth_with_mode(0, true, true);
+    let foreign_playback = foreign.request.playback;
+    let foreign_plan = foreign.request.plan;
+    let mut other = NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    other
+        .prepare_owned_mapped_birth_future(foreign.request, cut)
+        .unwrap();
+    assert_eq!(
+        other.retained_mapped_output_coordinates().unwrap(),
+        coordinates
+    );
+    let (playback, plan) = other
+        .retained_start_feed(&foreign_playback, foreign_plan)
+        .unwrap()
+        .unwrap();
+    let chunk = other
+        .live_mapped_pitch_chunk(SourceReadCheckpoint { playback, plan }, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    assert!(
+        candidate
+            .render_mapped(&[vec![0.0], vec![0.0]], &mut [vec![0.0], vec![0.0]], chunk)
+            .is_err()
+    );
+    unchanged(&candidate);
+    assert_original_current(&fixture.captured);
+    assert_original_current(&foreign.captured);
+}
+
+#[derive(Debug, PartialEq)]
+struct MappedAdapterSnapshot {
+    native: usize,
+    backend_pitch: u64,
+    flags: (bool, bool, bool),
+    pitch: u64,
+    head: Option<u64>,
+    witness: Option<(u64, usize, u64, u64, u64)>,
+    input: Vec<Vec<f32>>,
+    output: Vec<Vec<f32>>,
+    input_fifo: Vec<crate::audio_engine::stretch_processor::FixedFifo>,
+    output_fifo: Vec<crate::audio_engine::stretch_processor::FixedFifo>,
+    coordinates:
+        Option<crate::audio_engine::prepared_native_history::RetainedMappedOutputCoordinates>,
+    primed: usize,
+}
+
+impl MappedAdapterSnapshot {
+    fn capture(state: &crate::audio_engine::prepared_native_history::NativeAdapterState) -> Self {
+        Self {
+            native: state.rubberband.as_ref().unwrap().state_address(),
+            backend_pitch: state.rubberband.as_ref().unwrap().pitch_scale().to_bits(),
+            flags: (state.active, state.used, state.dirty),
+            pitch: state.pitch_scale.to_bits(),
+            head: state.mapped_pending_pitch_for_test().map(f64::to_bits),
+            witness: state.mapped_pitch_witness_for_test(),
+            input: state.input.clone(),
+            output: state.output.clone(),
+            input_fifo: state.input_fifo.clone(),
+            output_fifo: state.output_fifo.clone(),
+            coordinates: state.retained_mapped_output_coordinates().unwrap(),
+            primed: state.primed_output_frames,
+        }
+    }
+}
+
+fn actual_test_feed(
+    state: &crate::audio_engine::prepared_native_history::NativeAdapterState,
+    checkpoint: crate::audio_engine::prepared_native_history::SourceReadCheckpoint,
+    frames: usize,
+) -> Vec<Vec<f32>> {
+    let source = state.source.as_ref().unwrap();
+    let mut feed = vec![vec![0.0; frames]; 2];
+    checkpoint
+        .plan
+        .fill_fractional_buffers(
+            &source.sample,
+            source.stems.as_ref(),
+            &checkpoint.playback,
+            &mut feed,
+            frames,
+        )
+        .unwrap();
+    feed
+}
+
+#[test]
+fn owned_mapped_pitch_descriptors_expire_after_input_and_same_owner_repreparation() {
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut, SourceReadCheckpoint,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+    let fixture = owned_long_birth(1536);
+    let logical = fixture.request.playback;
+    let logical_plan = fixture.request.plan;
+    let source = fixture.request.sample.clone();
+    let intent = fixture.request.pitch_intent;
+    let cut = RetainedNativeStartCut {
+        history_output_frames: 4096,
+        discarded_raw_output_frames: 4096 - (BLOCK - 1),
+    };
+    let mut candidate =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    candidate
+        .prepare_owned_mapped_birth_future(fixture.request, cut)
+        .unwrap();
+    let (playback, plan) = candidate
+        .retained_start_feed(&logical, logical_plan)
+        .unwrap()
+        .unwrap();
+    let original = SourceReadCheckpoint { playback, plan };
+    let stale = candidate
+        .live_mapped_pitch_chunk(original, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    let current = candidate
+        .live_mapped_pitch_chunk(original, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    let feed = actual_test_feed(&candidate, original, 1);
+    let mut output = vec![vec![0.0]; 2];
+    candidate
+        .render_mapped(&feed, &mut output, current)
+        .unwrap();
+    candidate.advance_retained_start_feed(1);
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    assert!(candidate.render_mapped(&feed, &mut output, stale).is_err());
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(original, 1, intent, true)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+
+    let mut next_logical = logical;
+    assert!(next_logical.advance(1));
+    next_logical
+        .refresh_mapped_span(fixture.captured.mapped_geometry().unwrap())
+        .unwrap();
+    let mut next_plan = logical_plan;
+    next_plan.frame_pos = next_logical.position().frame;
+    next_plan.seek_mode = next_logical.position().seek_mode;
+    let (playback, plan) = candidate
+        .retained_start_feed(&next_logical, next_plan)
+        .unwrap()
+        .unwrap();
+    let actual = SourceReadCheckpoint { playback, plan };
+    let old_incarnation = candidate
+        .live_mapped_pitch_chunk(actual, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    let empty = candidate
+        .live_mapped_pitch_chunk(actual, 0, intent, true)
+        .unwrap()
+        .unwrap();
+    candidate
+        .render_mapped(
+            &[Vec::new(), Vec::new()],
+            &mut [Vec::new(), Vec::new()],
+            empty,
+        )
+        .unwrap();
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+
+    // Reuse the SAME immutable original request and Native handle. Prepare one real
+    // source frame so the new owner reaches identical serial/source coordinates.
+    let old_witness = candidate.mapped_pitch_witness_for_test().unwrap();
+    let mut request = candidate.source.take().unwrap();
+    request.actual_feed = None;
+    candidate.reset_adapter();
+    let next_cut = RetainedNativeStartCut {
+        discarded_raw_output_frames: cut.discarded_raw_output_frames + 1,
+        ..cut
+    };
+    candidate
+        .prepare_owned_mapped_birth_future(request, next_cut)
+        .unwrap();
+    let new_witness = candidate.mapped_pitch_witness_for_test().unwrap();
+    assert_eq!(
+        (old_witness.0, old_witness.1, old_witness.3, old_witness.4),
+        (new_witness.0, new_witness.1, new_witness.3, new_witness.4)
+    );
+    assert_eq!(new_witness.2, old_witness.2 + 1);
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    assert!(
+        candidate
+            .render_mapped(&feed, &mut output, old_incarnation)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+
+    // A different adapter receiving the same original request cannot consume this
+    // adapter's descriptor, independently of any allocator address reuse.
+    let (playback, plan) = candidate
+        .retained_start_feed(&logical, logical_plan)
+        .unwrap()
+        .unwrap();
+    let actual = SourceReadCheckpoint { playback, plan };
+    let foreign_adapter_chunk = candidate
+        .live_mapped_pitch_chunk(actual, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    let mut request = candidate.source.take().unwrap();
+    request.actual_feed = None;
+    let mut other = NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    other
+        .prepare_owned_mapped_birth_future(request, next_cut)
+        .unwrap();
+    let other_witness = other.mapped_pitch_witness_for_test().unwrap();
+    assert_ne!(other_witness.0, new_witness.0);
+    assert_eq!(
+        (other_witness.3, other_witness.4),
+        (new_witness.3, new_witness.4)
+    );
+    let snapshot = MappedAdapterSnapshot::capture(&other);
+    assert!(
+        other
+            .render_mapped(&feed, &mut output, foreign_adapter_chunk)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&other), snapshot);
+
+    // Continue real reads after all refusals and compare the complete next output
+    // to the independent C ABI, proving no hidden Native history was changed.
+    let mut oracle = RawStereo::new(independent_long_coordinate_and_pitch(0, 1536).1);
+    let expected: Vec<[f32; 2]> = (0..1024)
+        .map(|frame| {
+            let (coordinate, pitch) = independent_long_coordinate_and_pitch(frame, 1536);
+            let left = coordinate.floor() as usize;
+            let fraction = coordinate.fract() as f32;
+            oracle.sample_at_pitch(
+                std::array::from_fn(|channel| {
+                    let a = source.samples[left * 2 + channel];
+                    let b = source.samples[(left + 1) * 2 + channel];
+                    a + (b - a) * fraction
+                }),
+                pitch,
+            )
+        })
+        .collect();
+    let (playback, plan) = other
+        .retained_start_feed(&logical, logical_plan)
+        .unwrap()
+        .unwrap();
+    let actual = SourceReadCheckpoint { playback, plan };
+    let chunk = other
+        .live_mapped_pitch_chunk(actual, 1023, intent, true)
+        .unwrap()
+        .unwrap();
+    let feed = actual_test_feed(&other, actual, 1023);
+    let mut output = vec![vec![0.0; 1023]; 2];
+    other.render_mapped(&feed, &mut output, chunk).unwrap();
+    other.advance_retained_start_feed(1023);
+    for index in 0..1023 {
+        for channel in 0..2 {
+            assert!((output[channel][index] - expected[index + 1][channel]).abs() <= 3e-6);
+        }
+    }
+    assert_original_current(&fixture.captured);
+}
+
+#[test]
+fn owned_mapped_pitch_counter_limits_and_current_fifo_capacity_refuse_before_mutation() {
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut, SourceReadCheckpoint,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+    use crate::audio_engine::stretch_processor::FixedFifo;
+    let fixture = owned_long_birth(1536);
+    let logical = fixture.request.playback;
+    let plan = fixture.request.plan;
+    let intent = fixture.request.pitch_intent;
+    let cut = RetainedNativeStartCut {
+        history_output_frames: 4096,
+        discarded_raw_output_frames: 4096 - (BLOCK - 1),
+    };
+    let mut candidate =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    candidate
+        .prepare_owned_mapped_birth_future(fixture.request, cut)
+        .unwrap();
+    let (playback, plan) = candidate
+        .retained_start_feed(&logical, plan)
+        .unwrap()
+        .unwrap();
+    let actual = SourceReadCheckpoint { playback, plan };
+    // Keep the real queued samples in a deliberately insufficient output capacity.
+    // The rejection snapshot includes all new queue indices and storage. This is the
+    // current valid original source, not a foreign-owner failure.
+    let original_output_fifo = candidate.output_fifo.clone();
+    for fifo in &mut candidate.output_fifo {
+        let mut contents = vec![0.0; fifo.len()];
+        let mut copy = fifo.clone();
+        assert_eq!(copy.pop_into(&mut contents), contents.len());
+        let mut insufficient = FixedFifo::new(contents.len());
+        assert_eq!(insufficient.push_slice(&contents), contents.len());
+        *fifo = insufficient;
+    }
+    let chunk = candidate
+        .live_mapped_pitch_chunk(actual, BLOCK, intent, true)
+        .unwrap()
+        .unwrap();
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    let feed = actual_test_feed(&candidate, actual, BLOCK);
+    let mut output = vec![vec![0.0; BLOCK]; 2];
+    assert!(candidate.render_mapped(&feed, &mut output, chunk).is_err());
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+    assert_original_current(&fixture.captured);
+    // No input was accepted, so restore the identical pre-probe queues before
+    // independently exercising numeric limits on otherwise usable fixed storage.
+    candidate.output_fifo = original_output_fifo;
+
+    let witness = candidate.mapped_pitch_witness_for_test().unwrap();
+    let stale = candidate
+        .live_mapped_pitch_chunk(actual, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    candidate.set_mapped_counter_limits_for_test(witness.2, u64::MAX, witness.4);
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    assert!(!candidate.mapped_next_counters_fit_for_test(1, false));
+    assert!(!candidate.mapped_next_counters_fit_for_test(1, true));
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(actual, 1, intent, true)
+            .is_err()
+    );
+    assert!(candidate.render_mapped(&feed, &mut output, stale).is_err());
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+    let empty = candidate
+        .live_mapped_pitch_chunk(actual, 0, intent, true)
+        .unwrap()
+        .unwrap();
+    candidate
+        .render_mapped(
+            &[Vec::new(), Vec::new()],
+            &mut [Vec::new(), Vec::new()],
+            empty,
+        )
+        .unwrap();
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+    candidate.set_mapped_counter_limits_for_test(witness.2, 0, u64::MAX);
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    assert!(!candidate.mapped_next_counters_fit_for_test(1, false));
+    assert!(candidate.mapped_next_counters_fit_for_test(1, true));
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(actual, 1, intent, true)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+
+    candidate.set_mapped_counter_limits_for_test(u64::MAX, 0, witness.4);
+    let mut request = candidate.source.take().unwrap();
+    request.actual_feed = None;
+    let snapshot = MappedAdapterSnapshot::capture(&candidate);
+    assert!(
+        candidate
+            .prepare_owned_mapped_birth_future(request, cut)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), snapshot);
+    assert_original_current(&fixture.captured);
+
+    let unavailable = owned_long_birth(1536);
+    let mut exhausted =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    exhausted.exhaust_mapped_adapter_id_for_test();
+    let snapshot = MappedAdapterSnapshot::capture(&exhausted);
+    assert!(
+        exhausted
+            .prepare_owned_mapped_birth_future(unavailable.request, cut)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&exhausted), snapshot);
+    assert_original_current(&unavailable.captured);
+}
+
+fn owned_long_birth(knot: usize) -> OwnedBirth {
+    use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
+    use crate::audio_engine::source_playback::SourcePlayback;
+    let pcm: Vec<i16> = (0..8192)
+        .map(|index| (((index * 3251 + 173) % 20001) as i32 - 10000) as i16)
+        .collect();
+    let mut source = ColdCustody::new_selected_with_signal(None, &pcm);
+    source.engine.input_runtime = Some(
+        crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
+            source.producer.clone(),
+            crate::audio_engine::timing::InputClock::new(),
+            source.engine.input_runtime_ownership.clone(),
+        ),
+    );
+    let mut path = LaunchPath::from_source(source);
+    let mut expected = record(&path.source, 0);
+    let accepted = &mut expected["record"]["accepted"];
+    let first = accepted["anchors"][0].clone();
+    let mut middle = accepted["anchors"][1].clone();
+    middle["id"] = json!("long-block-boundary");
+    middle["source_seconds_bits"] = json!(bits(knot as f64 / f64::from(RATE)));
+    middle["beat_bits"] = json!(bits(knot as f64 / 64.0));
+    let mut last = accepted["anchors"][1].clone();
+    last["source_seconds_bits"] = json!(bits(8192.0 / f64::from(RATE)));
+    last["beat_bits"] = json!(bits(knot as f64 / 64.0 + (8192 - knot) as f64 / 48.0));
+    let interval = accepted["intervals"][0].clone();
+    accepted["anchors"] = json!([first, middle, last]);
+    accepted["intervals"] = json!([interval.clone(), interval]);
+    seal(&mut expected);
+    let (job, event) = stored_event(&path.source, &expected);
+    let delivery = Python::attach(|py| {
+        let event = event.bind(py).cast::<PyDict>().unwrap();
+        let owner = event.get_item("_native_event_owner").unwrap().unwrap();
+        let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
+        assert!(
+            job.resolve_source_beatmap_artifact_completion(&delivery)
+                .unwrap()
+                .is_some()
+        );
+        delivery.clone()
+    });
+    publish_original(&path, &delivery, 1);
+    path.render(1);
+    let captured = path
+        .source
+        .engine
+        .capture_pad_start(
+            0,
+            0.0,
+            Some(8192.0 / f64::from(RATE)),
+            1.0,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+    drain_grid(&mut path);
+    assert_eq!(captured.target_frame(), Some(64));
+    assert_original_current(&captured);
+    let mut work = captured.take_work(None).unwrap().unwrap();
+    work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame())
+        .unwrap();
+    work.freeze_frames(64, 64).unwrap();
+    let (clock, target) = work.mapped_clock().unwrap();
+    let mut snapshot = path
+        .source
+        .mixer
+        .normal_start_snapshot_for_test(0, 0.0, Some(8192.0 / f64::from(RATE)))
+        .unwrap();
+    snapshot.playback =
+        SourcePlayback::mapped(captured.mapped_geometry().unwrap(), clock, target).unwrap();
+    let position = snapshot.playback.position();
+    snapshot.plan.frame_pos = position.frame;
+    snapshot.plan.seek_mode = position.seek_mode;
+    snapshot.plan.loop_period = snapshot.playback.reader_period();
+    work.freeze_launch_origin(SourceReadCheckpoint {
+        playback: snapshot.playback,
+        plan: snapshot.plan,
+    })
+    .unwrap();
+    let permit = work.capture_history_permit(&snapshot.sample, RATE).unwrap();
+    let mut request = snapshot
+        .into_request(
+            permit,
+            PitchIntent::default(),
+            true,
+            target,
+            work.sequence(),
+            work.epoch(),
+        )
+        .unwrap();
+    request.mapped_input = Some(Box::new(
+        MappedNativeInput::capture(&work, &request).unwrap(),
+    ));
+    OwnedBirth {
+        path,
+        job,
+        delivery,
+        captured,
+        work,
+        request,
+    }
+}
+
+fn independent_long_coordinate_and_pitch(frame: usize, knot: usize) -> (f64, f64) {
+    let knot_beat = knot as f64 / 64.0;
+    let quarters = knot_beat + (8192 - knot) as f64 / 48.0;
+    let beat = (frame as f64 / 64.0).rem_euclid(quarters);
+    let knot_seconds = knot as f64 / f64::from(RATE);
+    let end_seconds = 8192.0 / f64::from(RATE);
+    let (seconds, slope) = if beat < knot_beat {
+        ((beat / knot_beat) * knot_seconds, knot_seconds / knot_beat)
+    } else {
+        (
+            knot_seconds
+                + ((beat - knot_beat) / (quarters - knot_beat)) * (end_seconds - knot_seconds),
+            (end_seconds - knot_seconds) / (quarters - knot_beat),
+        )
+    };
+    (
+        seconds * f64::from(RATE),
+        1.0 / (f64::from(RATE) * slope / 64.0),
+    )
+}
+
+#[test]
+fn owned_mapped_pitch_long_span_feeds_two_blocks_and_knots_bracket_block_heads() {
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+    use crate::audio_engine::source_feed_history::SourceReadDomain;
+    use crate::audio_engine::stretch_processor::{ProductiveSourceFeed, StretchProcessor};
+    for knot in [511, 512, 513, 1536] {
+        let mut partition_reference = None;
+        for partitions in [&[1024][..], &[127, 1, 383, 17, 256][..]] {
+            let fixture = owned_long_birth(knot);
+            let source = fixture.request.sample.clone();
+            let stems = fixture.request.stems.clone();
+            let accepted = fixture.request.binding.accepted;
+            let mut playback = fixture.request.playback;
+            let mut plan = fixture.request.plan;
+            let initial_pitch = independent_long_coordinate_and_pitch(0, knot).1;
+            let mut oracle = RawStereo::new(initial_pitch);
+            let history = oracle.history;
+            let observation = history + CONTINUATION_SUFFIX;
+            let expected: Vec<f32> = (0..observation)
+                .flat_map(|frame| {
+                    let (coordinate, pitch) = independent_long_coordinate_and_pitch(frame, knot);
+                    let left = coordinate.floor() as usize % 8192;
+                    let right = (left + 1) % 8192;
+                    let fraction = coordinate.fract() as f32;
+                    let input = std::array::from_fn(|channel| {
+                        let a = source.samples[left * 2 + channel];
+                        let b = source.samples[right * 2 + channel];
+                        a + (b - a) * fraction
+                    });
+                    oracle.sample_at_pitch(input, pitch)
+                })
+                .collect();
+            let mut candidate = Box::new(NativeAdapterState::new(
+                Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+                2,
+            ));
+            candidate
+                .prepare_owned_mapped_birth_future(
+                    fixture.request,
+                    RetainedNativeStartCut {
+                        history_output_frames: history,
+                        discarded_raw_output_frames: history - (BLOCK - 1),
+                    },
+                )
+                .unwrap();
+            let native = candidate.rubberband.as_ref().unwrap().state_address();
+            let mut processor = StretchProcessor::new(2);
+            processor.reset();
+            assert!(processor.adopt_prepared_pitch(
+                &mut candidate,
+                &ProductiveSourceFeed {
+                    pitch_intent: PitchIntent::default(),
+                    key_lock: true,
+                    sample: &source,
+                    stems: stems.as_ref(),
+                    outgoing_stems: None,
+                    sample_rate_hz: RATE,
+                    accepted,
+                    plan,
+                    playback: &playback,
+                    permit: None,
+                    output_frame: Some(64),
+                },
+                processor.preparation_epoch(),
+                fixture.captured.sequence()
+            ));
+            let mut actual = Vec::with_capacity(observation * 2);
+            let mut emitted = 0;
+            let mut caller = 0;
+            let mut whole_1024 = 0;
+            while emitted < observation {
+                let end = (emitted + partitions[caller % partitions.len()]).min(observation);
+                while emitted < end {
+                    playback
+                        .refresh_mapped_span(fixture.captured.mapped_geometry().unwrap())
+                        .unwrap();
+                    let position = playback.position();
+                    plan.frame_pos = position.frame;
+                    plan.seek_mode = position.seek_mode;
+                    let max = playback.chunk(end - emitted).0;
+                    let frames = processor.retained_source_chunk_limit(&playback, plan, max);
+                    assert!(frames > 0);
+                    whole_1024 += usize::from(frames == 1024);
+                    let receipt = processor
+                        .process_source(
+                            ProductiveSourceFeed {
+                                pitch_intent: PitchIntent::default(),
+                                key_lock: true,
+                                sample: &source,
+                                stems: stems.as_ref(),
+                                outgoing_stems: None,
+                                sample_rate_hz: RATE,
+                                accepted,
+                                plan,
+                                playback: &playback,
+                                permit: None,
+                                output_frame: Some(64 + emitted as u64),
+                            },
+                            frames,
+                            true,
+                        )
+                        .unwrap();
+                    assert_eq!(receipt.domain, SourceReadDomain::NativeInput);
+                    assert_eq!(receipt.output_frames, frames);
+                    assert_eq!(
+                        receipt.playback.mapped_output_frame(),
+                        Some(64 + emitted as u64)
+                    );
+                    assert_eq!(
+                        receipt.playback.tempo_ratio().to_bits(),
+                        playback.tempo_ratio().to_bits()
+                    );
+                    for offset in 0..frames {
+                        let position = receipt.playback.position_at(offset).unwrap();
+                        let coordinate =
+                            independent_long_coordinate_and_pitch(emitted + offset, knot).0;
+                        assert!(
+                            (position.frame as f64 + position.fraction - coordinate).abs() < 1e-8
+                        );
+                        actual.extend([
+                            processor.output_buffers()[0][offset],
+                            processor.output_buffers()[1][offset],
+                        ]);
+                    }
+                    assert!(playback.advance(frames));
+                    emitted += frames;
+                    let head = (emitted / BLOCK).checked_sub(1).map(|block| block * BLOCK);
+                    let expected_pitch = head.map_or(initial_pitch, |frame| {
+                        independent_long_coordinate_and_pitch(frame, knot).1
+                    });
+                    assert_eq!(
+                        processor.native_pitch_scale_observation(),
+                        Some(expected_pitch)
+                    );
+                    assert_eq!(processor.native_state_address(), native);
+                }
+                caller += 1;
+            }
+            if knot == 1536 && partitions.len() == 1 {
+                assert!(
+                    whole_1024 > 0,
+                    "a single qualified span must actually feed two Native blocks"
+                );
+            }
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f32::max);
+            assert!(
+                error <= 3e-6,
+                "knot={knot}, partitions={partitions:?}, error={error}"
+            );
+            if let Some(reference) = &partition_reference {
+                assert_eq!(&actual, reference);
+            } else {
+                partition_reference = Some(actual);
+            }
+            assert_eq!(
+                processor.pending_fifo_frames(),
+                (oracle.input.len(), oracle.output.len())
+            );
+            assert!(fixture.captured.effective_frame().is_none());
+            assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
+        }
+    }
+}
+
+fn assert_owned_mapped_stream(
+    shift: i32,
+    key_lock: bool,
+    unity_head: bool,
+    lead: usize,
+    silent_tail: usize,
+) {
     use crate::audio_engine::prepared_native_history::{
         NativeAdapterState, RetainedNativeStartCut,
     };
@@ -287,60 +1204,159 @@ fn owned_mapped_future_declared_suffix_keeps_complete_raw_prefix_actual_receipts
     use crate::audio_engine::source_feed_history::{SourceFeedHistory, SourceReadDomain};
     use crate::audio_engine::stretch_processor::{ProductiveSourceFeed, StretchProcessor};
 
-    for shift in [7, -23, 24] {
-        // These leads are declared before observing output, independently of Native delay.
-        for lead in [0, 137, 8329] {
-            let mut partition_reference = None;
-            for partitions in [&[512][..], &[127, 1, 383, 17, 256][..]] {
-                let fixture = owned_birth(shift);
-                let source = fixture.request.sample.clone();
-                let stems = fixture.request.stems.clone();
-                let accepted = fixture.request.binding.accepted;
-                let intent = fixture.request.pitch_intent;
-                let mut playback = fixture.request.playback;
-                let mut plan = fixture.request.plan;
-                let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
-                let mut oracle = RawStereo::new(pitch);
-                let history_frames = oracle.history;
-                let raw_cut = history_frames - (BLOCK - 1) + lead;
-                let observation = oracle.history.max(oracle.delay) + CONTINUATION_SUFFIX;
-                // Preserve ALL output before the declared cut as separate prefix evidence.
-                // In particular a nonzero early prefix must not disappear from the oracle.
-                let raw_stream: Vec<f32> = (0..lead + observation)
-                    .flat_map(|frame| oracle.sample(independent_input(&source, frame)))
-                    .collect();
-                if lead == 8329 {
-                    assert!(
-                        raw_stream[..lead * 2]
-                            .iter()
-                            .any(|sample| sample.abs() > 1e-9)
-                    );
-                }
-                let mut candidate = Box::new(NativeAdapterState::new(
-                    Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
-                    2,
-                ));
-                let native = candidate.rubberband.as_ref().unwrap().state_address();
-                candidate
-                    .prepare_owned_mapped_birth_future(
-                        fixture.request,
-                        RetainedNativeStartCut {
-                            history_output_frames: history_frames,
-                            discarded_raw_output_frames: raw_cut,
+    // These leads are declared before observing output, independently of Native delay.
+    let mut partition_reference = None;
+    for partitions in [&[512][..], &[127, 1, 383, 17, 256][..]] {
+        let fixture = owned_birth_with_mode(shift, key_lock, unity_head);
+        let source = fixture.request.sample.clone();
+        let stems = fixture.request.stems.clone();
+        let accepted = fixture.request.binding.accepted;
+        let intent = fixture.request.pitch_intent;
+        let mut playback = fixture.request.playback;
+        let mut plan = fixture.request.plan;
+        let pitch = independent_pitch(0, shift, key_lock, unity_head);
+        assert_eq!(
+            intent
+                .native_pitch_scale(fixture.request.playback.tempo_ratio(), key_lock)
+                .unwrap()
+                .to_bits(),
+            pitch.to_bits()
+        );
+        if unity_head {
+            assert_eq!(pitch, 1.0);
+            assert!((1.49..1.51).contains(&independent_pitch(20, shift, key_lock, true)));
+            assert_eq!(independent_pitch(48, shift, key_lock, true), 1.0);
+        }
+        let mut oracle = RawStereo::new(pitch);
+        let history_frames = oracle.history + silent_tail;
+        for _ in 0..silent_tail {
+            assert_eq!(oracle.sample_at_pitch([0.0; 2], pitch), [0.0; 2]);
+        }
+        let raw_cut = history_frames - (BLOCK - 1) + lead;
+        let observation = oracle.history.max(oracle.delay) + CONTINUATION_SUFFIX;
+        // Preserve ALL output before the declared cut as separate prefix evidence.
+        // In particular a nonzero early prefix must not disappear from the oracle.
+        let raw_stream: Vec<f32> = (0..lead + observation)
+            .flat_map(|frame| {
+                oracle.sample_at_pitch(
+                    independent_input_with_shape(&source, frame, unity_head),
+                    independent_pitch(frame, shift, key_lock, unity_head),
+                )
+            })
+            .collect();
+        if lead == 8329 {
+            assert!(
+                raw_stream[..lead * 2]
+                    .iter()
+                    .any(|sample| sample.abs() > 1e-9)
+            );
+        }
+        let mut candidate = Box::new(NativeAdapterState::new(
+            Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+            2,
+        ));
+        let native = candidate.rubberband.as_ref().unwrap().state_address();
+        candidate
+            .prepare_owned_mapped_birth_future(
+                fixture.request,
+                RetainedNativeStartCut {
+                    history_output_frames: history_frames,
+                    discarded_raw_output_frames: raw_cut,
+                },
+            )
+            .unwrap();
+        assert_original_current(&fixture.captured);
+        let mut processor = StretchProcessor::new(2);
+        processor.reset();
+        let epoch = processor.preparation_epoch();
+        assert_eq!(epoch, fixture.work.epoch());
+        assert!(processor.adopt_prepared_pitch(
+            &mut candidate,
+            &ProductiveSourceFeed {
+                pitch_intent: intent,
+                key_lock,
+                sample: &source,
+                stems: stems.as_ref(),
+                outgoing_stems: None,
+                sample_rate_hz: RATE,
+                accepted,
+                plan,
+                playback: &playback,
+                permit: None,
+                output_frame: Some(64),
+            },
+            epoch,
+            fixture.captured.sequence()
+        ));
+        assert_eq!(processor.native_state_address(), native);
+        // A later requested revision fences new adoption, while this already
+        // adopted component retains its immutable original map and Native stream.
+        let superseded_request = shift == 7 && lead == 137 && partitions.len() == 1;
+        if superseded_request {
+            publish_original(&fixture.path, &fixture.delivery, 2);
+            assert!(fixture.captured.callback_guard().is_err());
+            assert!(fixture.captured.preparation_guard().is_err());
+        }
+        let initial_coordinates = processor
+            .retained_mapped_output_coordinates()
+            .unwrap()
+            .unwrap();
+        let initial_fifos = processor.pending_fifo_frames();
+        if key_lock {
+            processor.process_resampled_with_pitch(1, 1.0, key_lock, intent);
+            assert!(!processor.wet_render_ready());
+            assert_eq!(processor.pending_fifo_frames(), initial_fifos);
+            assert_eq!(
+                processor.retained_mapped_output_coordinates().unwrap(),
+                Some(initial_coordinates)
+            );
+            assert_eq!(processor.native_state_address(), native);
+        }
+        let bound = processor.retained_source_chunk_limit(&playback, plan, 1024);
+        for (bad_output, bad_frames) in [(Some(65), 1), (Some(64), bound + 1)] {
+            assert!(
+                processor
+                    .process_source(
+                        ProductiveSourceFeed {
+                            pitch_intent: intent,
+                            key_lock,
+                            sample: &source,
+                            stems: stems.as_ref(),
+                            outgoing_stems: None,
+                            sample_rate_hz: RATE,
+                            accepted,
+                            plan,
+                            playback: &playback,
+                            permit: None,
+                            output_frame: bad_output,
                         },
+                        bad_frames,
+                        false
                     )
-                    .unwrap();
-                assert_original_current(&fixture.captured);
-                let mut processor = StretchProcessor::new(2);
-                processor.reset();
-                let epoch = processor.preparation_epoch();
-                assert_eq!(epoch, fixture.work.epoch());
-                assert!(processor.adopt_prepared_pitch(
-                    &mut candidate,
-                    &ProductiveSourceFeed {
+                    .is_none()
+            );
+            assert_eq!(
+                processor.retained_mapped_output_coordinates().unwrap(),
+                Some(initial_coordinates)
+            );
+            assert_eq!(processor.pending_fifo_frames(), initial_fifos);
+            assert_eq!(processor.native_state_address(), native);
+        }
+        let missing_right = source
+            .window(
+                32,
+                63,
+                77,
+                crate::messages::ResidentContext::KeyLockFiniteLoop,
+            )
+            .unwrap();
+        assert!(
+            processor
+                .process_source(
+                    ProductiveSourceFeed {
                         pitch_intent: intent,
-                        key_lock: false,
-                        sample: &source,
+                        key_lock,
+                        sample: &missing_right,
                         stems: stems.as_ref(),
                         outgoing_stems: None,
                         sample_rate_hz: RATE,
@@ -350,216 +1366,150 @@ fn owned_mapped_future_declared_suffix_keeps_complete_raw_prefix_actual_receipts
                         permit: None,
                         output_frame: Some(64),
                     },
-                    epoch,
-                    fixture.captured.sequence()
-                ));
-                assert_eq!(processor.native_state_address(), native);
-                // A later requested revision fences new adoption, while this already
-                // adopted component retains its immutable original map and Native stream.
-                let superseded_request = shift == 7 && lead == 137 && partitions.len() == 1;
-                if superseded_request {
-                    publish_original(&fixture.path, &fixture.delivery, 2);
-                    assert!(fixture.captured.callback_guard().is_err());
-                    assert!(fixture.captured.preparation_guard().is_err());
+                    1,
+                    false
+                )
+                .is_none()
+        );
+        assert_eq!(
+            processor.retained_mapped_output_coordinates().unwrap(),
+            Some(initial_coordinates)
+        );
+        assert_eq!(processor.pending_fifo_frames(), initial_fifos);
+        assert_eq!(processor.native_state_address(), native);
+        let mut history = SourceFeedHistory::new();
+        let mut actual = Vec::with_capacity(observation * 2);
+        let mut emitted = 0;
+        let mut caller = 0;
+        let mut different_boundaries = 0;
+        while emitted < observation {
+            let end = (emitted + partitions[caller % partitions.len()]).min(observation);
+            while emitted < end {
+                if !superseded_request {
+                    assert_original_current(&fixture.captured);
                 }
-                let initial_coordinates = processor
+                playback
+                    .refresh_mapped_span(fixture.captured.mapped_geometry().unwrap())
+                    .unwrap();
+                let position = playback.position();
+                plan.frame_pos = position.frame;
+                plan.seek_mode = position.seek_mode;
+                let logical_bound = playback.chunk(end - emitted).0;
+                let frames = processor.retained_source_chunk_limit(&playback, plan, logical_bound);
+                different_boundaries += usize::from(frames < logical_bound);
+                assert!(frames > 0);
+                let before = processor
                     .retained_mapped_output_coordinates()
                     .unwrap()
                     .unwrap();
-                let initial_fifos = processor.pending_fifo_frames();
-                let bound = processor.retained_source_chunk_limit(&playback, plan, 1024);
-                for (bad_output, bad_frames) in [(Some(65), 1), (Some(64), bound + 1)] {
-                    assert!(
-                        processor
-                            .process_source(
-                                ProductiveSourceFeed {
-                                    pitch_intent: intent,
-                                    key_lock: false,
-                                    sample: &source,
-                                    stems: stems.as_ref(),
-                                    outgoing_stems: None,
-                                    sample_rate_hz: RATE,
-                                    accepted,
-                                    plan,
-                                    playback: &playback,
-                                    permit: None,
-                                    output_frame: bad_output,
-                                },
-                                bad_frames,
-                                false
-                            )
-                            .is_none()
-                    );
-                    assert_eq!(
-                        processor.retained_mapped_output_coordinates().unwrap(),
-                        Some(initial_coordinates)
-                    );
-                    assert_eq!(processor.pending_fifo_frames(), initial_fifos);
-                    assert_eq!(processor.native_state_address(), native);
-                }
-                let missing_right = source
-                    .window(
-                        32,
-                        63,
-                        77,
-                        crate::messages::ResidentContext::KeyLockFiniteLoop,
+                assert_eq!(before.logical_output_frame, 64 + emitted as u64);
+                assert_eq!(before.raw_output_frame, (raw_cut + emitted) as u64);
+                assert_eq!(before.actual_input_frame, (64 + lead + emitted) as u64);
+                let receipt = processor
+                    .process_source(
+                        ProductiveSourceFeed {
+                            pitch_intent: intent,
+                            key_lock,
+                            sample: &source,
+                            stems: stems.as_ref(),
+                            outgoing_stems: None,
+                            sample_rate_hz: RATE,
+                            accepted,
+                            plan,
+                            playback: &playback,
+                            permit: None,
+                            output_frame: Some(before.logical_output_frame),
+                        },
+                        frames,
+                        false,
                     )
                     .unwrap();
-                assert!(
-                    processor
-                        .process_source(
-                            ProductiveSourceFeed {
-                                pitch_intent: intent,
-                                key_lock: false,
-                                sample: &missing_right,
-                                stems: stems.as_ref(),
-                                outgoing_stems: None,
-                                sample_rate_hz: RATE,
-                                accepted,
-                                plan,
-                                playback: &playback,
-                                permit: None,
-                                output_frame: Some(64),
-                            },
-                            1,
-                            false
-                        )
-                        .is_none()
-                );
+                assert_eq!(receipt.domain, SourceReadDomain::NativeInput);
                 assert_eq!(
-                    processor.retained_mapped_output_coordinates().unwrap(),
-                    Some(initial_coordinates)
+                    receipt.playback.mapped_output_frame(),
+                    Some(before.actual_input_frame)
                 );
-                assert_eq!(processor.pending_fifo_frames(), initial_fifos);
+                // Inspect every actual read INCLUDING its exclusive endpoint before eviction.
+                for offset in 0..=frames {
+                    let position = receipt.playback.position_at(offset).unwrap();
+                    let expected =
+                        independent_coordinate_with_shape(lead + emitted + offset, unity_head);
+                    assert!((position.frame as f64 + position.fraction - expected).abs() < 1e-9);
+                }
+                history.record_read(receipt);
+                for frame in 0..frames {
+                    actual.extend([
+                        processor.output_buffers()[0][frame],
+                        processor.output_buffers()[1][frame],
+                    ]);
+                }
+                assert!(playback.advance(frames));
+                emitted += frames;
+                let after = processor
+                    .retained_mapped_output_coordinates()
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(after.logical_output_frame, (64 + emitted) as u64);
+                assert_eq!(after.raw_output_frame, (raw_cut + emitted) as u64);
+                assert_eq!(after.actual_input_frame, (64 + lead + emitted) as u64);
                 assert_eq!(processor.native_state_address(), native);
-                let mut history = SourceFeedHistory::new();
-                let mut actual = Vec::with_capacity(observation * 2);
-                let mut emitted = 0;
-                let mut caller = 0;
-                let mut different_boundaries = 0;
-                while emitted < observation {
-                    let end = (emitted + partitions[caller % partitions.len()]).min(observation);
-                    while emitted < end {
-                        if !superseded_request {
-                            assert_original_current(&fixture.captured);
-                        }
-                        playback
-                            .refresh_mapped_span(fixture.captured.mapped_geometry().unwrap())
-                            .unwrap();
-                        let position = playback.position();
-                        plan.frame_pos = position.frame;
-                        plan.seek_mode = position.seek_mode;
-                        let logical_bound = playback.chunk(end - emitted).0;
-                        let frames =
-                            processor.retained_source_chunk_limit(&playback, plan, logical_bound);
-                        different_boundaries += usize::from(frames < logical_bound);
-                        assert!(frames > 0);
-                        let before = processor
-                            .retained_mapped_output_coordinates()
-                            .unwrap()
-                            .unwrap();
-                        assert_eq!(before.logical_output_frame, 64 + emitted as u64);
-                        assert_eq!(before.raw_output_frame, (raw_cut + emitted) as u64);
-                        assert_eq!(before.actual_input_frame, (64 + lead + emitted) as u64);
-                        let receipt = processor
-                            .process_source(
-                                ProductiveSourceFeed {
-                                    pitch_intent: intent,
-                                    key_lock: false,
-                                    sample: &source,
-                                    stems: stems.as_ref(),
-                                    outgoing_stems: None,
-                                    sample_rate_hz: RATE,
-                                    accepted,
-                                    plan,
-                                    playback: &playback,
-                                    permit: None,
-                                    output_frame: Some(before.logical_output_frame),
-                                },
-                                frames,
-                                false,
-                            )
-                            .unwrap();
-                        assert_eq!(receipt.domain, SourceReadDomain::NativeInput);
-                        assert_eq!(
-                            receipt.playback.mapped_output_frame(),
-                            Some(before.actual_input_frame)
-                        );
-                        // Inspect every actual read INCLUDING its exclusive endpoint before eviction.
-                        for offset in 0..=frames {
-                            let position = receipt.playback.position_at(offset).unwrap();
-                            let expected = independent_coordinate((lead + emitted + offset) as u64);
-                            assert!(
-                                (position.frame as f64 + position.fraction - expected).abs() < 1e-9
-                            );
-                        }
-                        history.record_read(receipt);
-                        for frame in 0..frames {
-                            actual.extend([
-                                processor.output_buffers()[0][frame],
-                                processor.output_buffers()[1][frame],
-                            ]);
-                        }
-                        assert!(playback.advance(frames));
-                        emitted += frames;
-                        let after = processor
-                            .retained_mapped_output_coordinates()
-                            .unwrap()
-                            .unwrap();
-                        assert_eq!(after.logical_output_frame, (64 + emitted) as u64);
-                        assert_eq!(after.raw_output_frame, (raw_cut + emitted) as u64);
-                        assert_eq!(after.actual_input_frame, (64 + lead + emitted) as u64);
-                        assert_eq!(processor.native_state_address(), native);
-                        assert_eq!(processor.native_pitch_scale_observation(), Some(pitch));
-                        assert!(processor.wet_render_ready());
-                    }
-                    caller += 1;
-                }
-                if lead != 0 {
-                    assert!(different_boundaries > 0);
-                }
-                assert!(actual.iter().any(|sample| sample.abs() > 0.01));
-                assert_eq!(actual.len(), observation * 2);
-                let error = actual
-                    .iter()
-                    .zip(&raw_stream[lead * 2..])
-                    .map(|(a, b)| (a - b).abs())
-                    .fold(0.0, f32::max);
-                assert!(
-                    error <= 3e-6,
-                    "shift={shift} lead={lead} partitions={partitions:?} error={error}"
-                );
-                if let Some(reference) = &partition_reference {
-                    assert_eq!(&actual, reference);
+                let last_head = ((history_frames + lead + emitted) / BLOCK - 1) * BLOCK;
+                let expected_pitch = if last_head < history_frames {
+                    pitch
                 } else {
-                    partition_reference = Some(actual);
-                }
+                    independent_pitch(last_head - history_frames, shift, key_lock, unity_head)
+                };
                 assert_eq!(
-                    processor.native_primed_output_frames(),
-                    history_frames + lead
+                    processor.native_pitch_scale_observation(),
+                    Some(expected_pitch)
                 );
-                assert_eq!(
-                    processor.productive_history().unwrap().fed_output_frames,
-                    (history_frames + lead + emitted) as u64
-                );
-                assert!(processor.has_retained_source_input());
-                assert_eq!(
-                    processor.pending_fifo_frames(),
-                    (oracle.input.len(), oracle.output.len())
-                );
-                assert!(fixture.captured.effective_frame().is_none());
-                assert!(
-                    !fixture
-                        .path
-                        .source
-                        .mixer
-                        .voices
-                        .iter()
-                        .any(|voice| voice.active)
-                );
-                assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
+                assert!(processor.wet_render_ready());
             }
+            caller += 1;
         }
+        if lead != 0 {
+            assert!(different_boundaries > 0);
+        }
+        assert!(actual.iter().any(|sample| sample.abs() > 0.01));
+        assert_eq!(actual.len(), observation * 2);
+        let error = actual
+            .iter()
+            .zip(&raw_stream[lead * 2..])
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            error <= 3e-6,
+            "shift={shift} lead={lead} partitions={partitions:?} error={error}"
+        );
+        if let Some(reference) = &partition_reference {
+            assert_eq!(&actual, reference);
+        } else {
+            partition_reference = Some(actual);
+        }
+        assert_eq!(
+            processor.native_primed_output_frames(),
+            history_frames + lead
+        );
+        assert_eq!(
+            processor.productive_history().unwrap().fed_output_frames,
+            (history_frames + lead + emitted) as u64
+        );
+        assert!(processor.has_retained_source_input());
+        assert_eq!(
+            processor.pending_fifo_frames(),
+            (oracle.input.len(), oracle.output.len())
+        );
+        assert!(fixture.captured.effective_frame().is_none());
+        assert!(
+            !fixture
+                .path
+                .source
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active)
+        );
+        assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
     }
 }
 

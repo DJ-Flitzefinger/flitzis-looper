@@ -19,6 +19,19 @@ use super::source_reader::{SourceReadPlan, StemReadSets, StemTransition};
 use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourceFeed};
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Comparison identity allocated only with the already off-realtime Native/FIFO owner.
+// Zero is unavailable; exhaustion never wraps or recycles an adapter identity.
+static NEXT_MAPPED_ADAPTER_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_mapped_adapter_id() -> u64 {
+    NEXT_MAPPED_ADAPTER_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .unwrap_or(0)
+}
 
 #[path = "retained_native_start.rs"]
 mod retained_start;
@@ -28,7 +41,8 @@ use retained_start::RetainedNativeStartTimeline;
 
 #[path = "mapped_native_input.rs"]
 mod mapped_input;
-pub(crate) use mapped_input::MappedNativeInput;
+pub(crate) use mapped_input::{MappedNativeInput, MappedNativePitchChunk};
+use mapped_input::{MappedNativePitchOwner, MappedNativePitchStamp};
 
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
 // A near-unity request remains a real request. Only actual native p=1 permits dry bypass.
@@ -711,6 +725,19 @@ pub(crate) struct NativeAdapterState {
     pub(crate) primed_output_frames: usize,
     input_history_context: Option<NativeStartHistoryContext>,
     retained_start_timeline: Option<RetainedNativeStartTimeline>,
+    mapped_pitch: Option<MappedNativePitchState>,
+    /// Never reset: re-preparing the same original action must not revive old descriptors.
+    mapped_preparation_incarnation: u64,
+    mapped_adapter_id: u64,
+}
+
+/// Fixed adapter metadata, not another source clock. The source request retains its owners.
+struct MappedNativePitchState {
+    owner: MappedNativePitchOwner,
+    intent: PitchIntent,
+    key_lock: bool,
+    pending_head_pitch: Option<f64>,
+    stamp: MappedNativePitchStamp,
 }
 
 impl NativeAdapterState {
@@ -740,6 +767,9 @@ impl NativeAdapterState {
             primed_output_frames: 0,
             input_history_context: None,
             retained_start_timeline: None,
+            mapped_pitch: None,
+            mapped_preparation_incarnation: 0,
+            mapped_adapter_id: next_mapped_adapter_id(),
         }
     }
 
@@ -758,6 +788,32 @@ impl NativeAdapterState {
         self.effective_stem_read_context = None;
         self.input_history_context = None;
         self.retained_start_timeline = None;
+        self.mapped_pitch = None;
+    }
+
+    /// Called before the first Native reset of a new owned mapped preparation.
+    /// Exhaustion refuses without mutation; entering preparation irrevocably fences old chunks.
+    fn begin_mapped_preparation(&mut self) -> Result<(), NativeSourcePreparationError> {
+        if self.mapped_adapter_id == 0 {
+            return Err(NativeSourcePreparationError::Unavailable(
+                RubberBandError::UnavailableSourceHistory,
+            ));
+        }
+        let next = self.mapped_preparation_incarnation.checked_add(1).ok_or(
+            NativeSourcePreparationError::Unavailable(RubberBandError::UnavailableSourceHistory),
+        )?;
+        self.mapped_preparation_incarnation = next;
+        Ok(())
+    }
+
+    fn mapped_pitch_stamp(&self) -> Option<MappedNativePitchStamp> {
+        let stamp = self.mapped_pitch.as_ref()?.stamp;
+        (stamp.adapter_id != 0
+            && stamp.adapter_id == self.mapped_adapter_id
+            && stamp.incarnation != 0
+            && stamp.incarnation == self.mapped_preparation_incarnation
+            && stamp.native == self.rubberband.as_ref()?.state_address())
+        .then_some(stamp)
     }
 
     pub(crate) fn has_physical_birth_context(&self) -> bool {
@@ -778,6 +834,9 @@ impl NativeAdapterState {
     /// Called only inside the mixer's complete same-pitch/source claim.
     pub(crate) fn retain_effective_mode_claimed(&mut self, enabled: bool) {
         self.effective_mode = Some(enabled);
+        if let Some(state) = &mut self.mapped_pitch {
+            state.key_lock = enabled;
+        }
     }
 
     /// Called after the complete mixer selection claim and exact retained endpoint update.
@@ -1028,6 +1087,39 @@ impl NativeAdapterState {
                 RubberBandError::InvalidBlockSize,
             ));
         }
+        let mapped_pitch = if let Some(input) = &request.mapped_input {
+            let stamp = MappedNativePitchStamp {
+                adapter_id: self.mapped_adapter_id,
+                native: self
+                    .rubberband
+                    .as_ref()
+                    .ok_or(NativeSourcePreparationError::Unavailable(
+                        RubberBandError::UnavailableSourceHistory,
+                    ))?
+                    .state_address(),
+                incarnation: self.mapped_preparation_incarnation,
+                input_serial: 0,
+                actual_frame: request.playback.mapped_output_frame().ok_or(
+                    NativeSourcePreparationError::Unavailable(
+                        RubberBandError::UnavailableSourceHistory,
+                    ),
+                )?,
+            };
+            if stamp.adapter_id == 0 || stamp.incarnation == 0 {
+                return Err(NativeSourcePreparationError::Unavailable(
+                    RubberBandError::UnavailableSourceHistory,
+                ));
+            }
+            Some(MappedNativePitchState {
+                owner: input.pitch_owner(),
+                intent: request.pitch_intent,
+                key_lock: request.key_lock,
+                pending_head_pitch: None,
+                stamp,
+            })
+        } else {
+            None
+        };
         self.source = None;
         self.reset_adapter();
         let pitch = request
@@ -1061,6 +1153,7 @@ impl NativeAdapterState {
         self.pitch_scale = pitch;
         self.dirty = false;
         self.used = false;
+        self.mapped_pitch = mapped_pitch;
         let channels = self.input.len();
         let mut feed = (0..channels)
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
@@ -1144,16 +1237,40 @@ impl NativeAdapterState {
             }
             if silent_prefix != 0 {
                 let frames = frames.min(silent_prefix);
+                let mapped_chunk = request
+                    .mapped_input
+                    .as_ref()
+                    .map(|input| {
+                        input
+                            .frozen_birth_pitch_chunk(
+                                &request,
+                                frames,
+                                self.mapped_pitch_stamp().ok_or(
+                                    NativeSourcePreparationError::Unavailable(
+                                        RubberBandError::UnavailableSourceHistory,
+                                    ),
+                                )?,
+                            )
+                            .map_err(NativeSourcePreparationError::from_history)
+                    })
+                    .transpose()?;
+                if let Some(chunk) = &mapped_chunk {
+                    self.validate_mapped_render(&feed, &output, chunk)?;
+                }
                 feed.iter_mut()
                     .for_each(|channel| channel[..frames].fill(0.0));
-                self.render(&feed, &mut output, frames, pitch)
-                    .map_err(NativeSourcePreparationError::Backend)?;
+                if let Some(chunk) = mapped_chunk {
+                    self.render_mapped(&feed, &mut output, chunk)?;
+                } else {
+                    self.render(&feed, &mut output, frames, pitch)
+                        .map_err(NativeSourcePreparationError::Backend)?;
+                }
                 silent_prefix -= frames;
                 remaining -= frames;
                 continue;
             }
-            // A trajectory reaching unity still goes through native state during preparation;
-            // adoption will reject a dry endpoint rather than changing dry playback semantics.
+            // Preparation retains the same Native stream even at unity. An already adopted
+            // owned mapped stream also keeps that history through subsequent unity intervals.
             self.render_source_history_chunk(&request, &mut feed, &mut output, frames, pitch)?;
             if let Some((start, dsp)) = &mut dsp
                 && consumed >= *start
@@ -1226,6 +1343,32 @@ impl NativeAdapterState {
                 RubberBandError::UnavailableSourceHistory,
             ));
         }
+        let mapped_chunk = request
+            .mapped_input
+            .as_ref()
+            .map(|input| {
+                input
+                    .pitch_chunk(
+                        request,
+                        SourceReadCheckpoint {
+                            playback: request.playback,
+                            plan: request.plan,
+                        },
+                        frames,
+                        request.pitch_intent,
+                        request.key_lock,
+                        self.mapped_pitch_stamp().ok_or(
+                            NativeSourcePreparationError::Unavailable(
+                                RubberBandError::UnavailableSourceHistory,
+                            ),
+                        )?,
+                    )
+                    .map_err(NativeSourcePreparationError::from_history)
+            })
+            .transpose()?;
+        if let Some(chunk) = &mapped_chunk {
+            self.validate_mapped_render(feed, output, chunk)?;
+        }
         if request.coverage.is_some() {
             if !normal_loop_feed_available(
                 &request.sample,
@@ -1270,8 +1413,216 @@ impl NativeAdapterState {
                 RubberBandError::InvalidBlockSize,
             ));
         }
-        self.render(feed, output, frames, pitch)
-            .map_err(NativeSourcePreparationError::Backend)
+        if let Some(chunk) = mapped_chunk {
+            self.render_mapped(feed, output, chunk)
+        } else {
+            self.render(feed, output, frames, pitch)
+                .map_err(NativeSourcePreparationError::Backend)
+        }
+    }
+
+    /// Validate every fixed buffer and FIFO before accepting any mapped input.
+    pub(super) fn validate_mapped_render(
+        &self,
+        feed: &[Vec<f32>],
+        output: &[Vec<f32>],
+        chunk: &MappedNativePitchChunk,
+    ) -> Result<(), NativeSourcePreparationError> {
+        let unavailable =
+            || NativeSourcePreparationError::Unavailable(RubberBandError::InvalidBlockSize);
+        let state = self.mapped_pitch.as_ref().ok_or_else(unavailable)?;
+        let stamp = self.mapped_pitch_stamp().ok_or_else(unavailable)?;
+        chunk.next_stamp(stamp).ok_or_else(unavailable)?;
+        let channels = self.input.len();
+        let frames = chunk.frames();
+        let pending = self.input_fifo.first().map_or(0, FixedFifo::len);
+        let queued = self.output_fifo.first().map_or(0, FixedFifo::len);
+        if state.owner != chunk.owner()
+            || !chunk.matches_tuple(state.intent, state.key_lock)
+            || !chunk.is_readable()
+            || !chunk.pitch().is_finite()
+            || chunk.pitch() <= 0.0
+            || self.rubberband.is_none()
+            || self.block_size == 0
+            || channels == 0
+            || frames > DEFAULT_BLOCK_SAMPLES
+            || pending >= self.block_size
+            || (pending == 0) != state.pending_head_pitch.is_none()
+            || state
+                .pending_head_pitch
+                .is_some_and(|pitch| !pitch.is_finite() || pitch <= 0.0)
+            || self.output.len() != channels
+            || self.input_fifo.len() != channels
+            || self.output_fifo.len() != channels
+            || feed.len() != channels
+            || output.len() != channels
+            || feed.iter().any(|channel| channel.len() < frames)
+            || output.iter().any(|channel| channel.len() < frames)
+            || self
+                .input
+                .iter()
+                .chain(&self.output)
+                .any(|channel| channel.len() < self.block_size)
+            || self
+                .input_fifo
+                .iter()
+                .any(|fifo| fifo.len() != pending || fifo.capacity() < self.block_size)
+            || self.output_fifo.iter().any(|fifo| fifo.len() != queued)
+            || (!self.active && (pending != 0 || queued != 0))
+        {
+            return Err(unavailable());
+        }
+        let blocks = pending.checked_add(frames).ok_or_else(unavailable)? / self.block_size;
+        let lead = if self.active { 0 } else { self.block_size - 1 };
+        let required = blocks
+            .checked_mul(self.block_size)
+            .and_then(|size| size.checked_add(queued))
+            .and_then(|size| size.checked_add(lead))
+            .ok_or_else(unavailable)?;
+        if self
+            .output_fifo
+            .iter()
+            .any(|fifo| fifo.capacity() < required)
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
+    /// Mapped input latches h/r at the FIRST actual input frame of each Native block.
+    /// A caller boundary or map knot inside a partial block cannot replace that pitch.
+    /// No map search, allocation, second timeline or per-block parameter queue is needed.
+    pub(crate) fn render_mapped(
+        &mut self,
+        feed: &[Vec<f32>],
+        output: &mut [Vec<f32>],
+        chunk: MappedNativePitchChunk,
+    ) -> Result<(), NativeSourcePreparationError> {
+        self.validate_mapped_render(feed, output, &chunk)?;
+        let next_stamp = chunk
+            .next_stamp(self.mapped_pitch_stamp().expect("validated current stamp"))
+            .expect("validated checked successor");
+        let frames = chunk.frames();
+        if frames == 0 {
+            return Ok(());
+        }
+        if !self.active {
+            for fifo in &mut self.output_fifo {
+                fifo.push_silence(self.block_size - 1);
+            }
+            self.active = true;
+        }
+        let mut consumed = 0;
+        while consumed < frames {
+            let pending = self.input_fifo[0].len();
+            if pending == 0 {
+                self.mapped_pitch
+                    .as_mut()
+                    .expect("validated mapped mode")
+                    .pending_head_pitch = Some(chunk.pitch());
+            }
+            let take = (self.block_size - pending).min(frames - consumed);
+            for (fifo, channel) in self.input_fifo.iter_mut().zip(feed) {
+                let written = fifo.push_slice(&channel[consumed..consumed + take]);
+                debug_assert_eq!(written, take);
+            }
+            consumed += take;
+            if pending + take == self.block_size {
+                let pitch = self
+                    .mapped_pitch
+                    .as_ref()
+                    .and_then(|state| state.pending_head_pitch)
+                    .expect("validated mapped block head");
+                if (pitch - self.pitch_scale).abs() > PITCH_SCALE_EPSILON {
+                    self.rubberband
+                        .as_mut()
+                        .expect("validated native owner")
+                        .set_pitch_scale(pitch)
+                        .map_err(NativeSourcePreparationError::Backend)?;
+                    self.pitch_scale = pitch;
+                }
+                for (fifo, channel) in self.input_fifo.iter_mut().zip(&mut self.input) {
+                    let read = fifo.pop_into(&mut channel[..self.block_size]);
+                    debug_assert_eq!(read, self.block_size);
+                }
+                self.rubberband
+                    .as_mut()
+                    .expect("validated native owner")
+                    .shift(&self.input, &mut self.output)
+                    .map_err(NativeSourcePreparationError::Backend)?;
+                self.used = true;
+                for (fifo, channel) in self.output_fifo.iter_mut().zip(&self.output) {
+                    let written = fifo.push_slice(&channel[..self.block_size]);
+                    debug_assert_eq!(written, self.block_size);
+                }
+                self.mapped_pitch
+                    .as_mut()
+                    .expect("validated mapped mode")
+                    .pending_head_pitch = None;
+            }
+        }
+        for (fifo, channel) in self.output_fifo.iter_mut().zip(output) {
+            let read = fifo.pop_into(&mut channel[..frames]);
+            channel[read..frames].fill(0.0);
+        }
+        self.mapped_pitch
+            .as_mut()
+            .expect("validated mapped mode")
+            .stamp = next_stamp;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mapped_pending_pitch_for_test(&self) -> Option<f64> {
+        self.mapped_pitch
+            .as_ref()
+            .and_then(|state| state.pending_head_pitch)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mapped_pitch_witness_for_test(&self) -> Option<(u64, usize, u64, u64, u64)> {
+        let stamp = self.mapped_pitch_stamp()?;
+        Some((
+            stamp.adapter_id,
+            stamp.native,
+            stamp.incarnation,
+            stamp.input_serial,
+            stamp.actual_frame,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_mapped_counter_limits_for_test(
+        &mut self,
+        incarnation: u64,
+        serial: u64,
+        actual: u64,
+    ) {
+        self.mapped_preparation_incarnation = incarnation;
+        let stamp = &mut self
+            .mapped_pitch
+            .as_mut()
+            .expect("existing qualified test owner")
+            .stamp;
+        stamp.incarnation = incarnation;
+        stamp.input_serial = serial;
+        stamp.actual_frame = actual;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mapped_next_counters_fit_for_test(
+        &self,
+        frames: usize,
+        frozen_birth: bool,
+    ) -> bool {
+        self.mapped_pitch_stamp()
+            .and_then(|stamp| stamp.checked_next(frames, frozen_birth))
+            .is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exhaust_mapped_adapter_id_for_test(&mut self) {
+        self.mapped_adapter_id = 0;
     }
 
     /// One common adapter implementation for worker catch-up and bounded callback rendering.
@@ -1282,6 +1633,9 @@ impl NativeAdapterState {
         frames: usize,
         pitch: f64,
     ) -> Result<(), RubberBandError> {
+        if self.mapped_pitch.is_some() {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
         if !self.active {
             for fifo in &mut self.output_fifo {
                 fifo.push_silence(self.block_size.saturating_sub(1));
