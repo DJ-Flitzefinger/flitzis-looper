@@ -51,8 +51,7 @@ fn live_map_delivery_with_start_beat(
         anchors.push(anchor("middle", seconds, beat));
     }
     anchors.push(anchor("end", 1.0, 4.0));
-    expected["record"]["accepted"]["intervals"] =
-        serde_json::json!(vec![
+    expected["record"]["accepted"]["intervals"] = serde_json::json!(vec![
             expected["record"]["accepted"]["intervals"][0].clone();
             anchors.len() - 1
         ]);
@@ -82,6 +81,7 @@ fn publish_live_map(fixture: &ColdCustody, delivery: &LoaderEventDelivery, revis
         sync_requested: true,
         intent_revision: revision,
         delivery: Some(delivery.clone()),
+        ordinary_pending: false,
         exact_quarters: None,
     };
     fixture
@@ -437,6 +437,7 @@ fn selected_real_map_is_data_only_until_sync_and_keeps_immutable_pin_after_clear
         sync_requested: false,
         intent_revision: 1,
         delivery: Some(delivery),
+        ordinary_pending: false,
         exact_quarters: None,
     };
     publish(&fixture, row.clone()).unwrap();
@@ -485,6 +486,7 @@ fn selected_real_map_is_data_only_until_sync_and_keeps_immutable_pin_after_clear
             sync_requested: true,
             intent_revision: 2,
             delivery: None,
+            ordinary_pending: false,
             exact_quarters: None,
         },
     )
@@ -548,6 +550,53 @@ fn original_delivery_refuses_other_content_engine_generation_and_loaded_rate() {
 }
 
 #[test]
+fn pending_flag_cannot_replace_a_selected_original_delivery_or_its_source_checks() {
+    let fixture = runtime_fixture();
+    let (_job, delivery) = original_delivery(&fixture);
+    let mut row = SourceMapRow {
+        sync_requested: true,
+        intent_revision: 1,
+        delivery: Some(delivery),
+        exact_quarters: None,
+        ordinary_pending: true,
+    };
+    let current = binding(&fixture, 0);
+    assert!(SourceMapProjection::qualify(&row, Some(&current)).is_err());
+    Python::attach(|py| {
+        let wire = PyDict::new(py);
+        wire.set_item("sync_requested", true).unwrap();
+        wire.set_item("intent_revision", 1).unwrap();
+        wire.set_item(
+            "delivery",
+            Py::new(py, row.delivery.clone().unwrap()).unwrap(),
+        )
+        .unwrap();
+        wire.set_item("exact_quarters", py.None()).unwrap();
+        wire.set_item("ordinary_pending", true).unwrap();
+        assert!(crate::audio_engine::source_map_api::parse_rows(py, vec![wire.unbind()]).is_err());
+    });
+    row.ordinary_pending = false;
+    let mut projection = SourceMapProjection::qualify(&row, Some(&current)).unwrap();
+    projection.remask_parents(true, true);
+    assert!(!projection.permits_ordinary_pending());
+    assert!(
+        projection
+            .snapshot(&fixture.engine.input_runtime_ownership, current.binding)
+            .admit(&fixture.engine.input_runtime_ownership, current.binding)
+            .unwrap()
+            .is_some()
+    );
+    assert!(SourceMapProjection::qualify(&row, Some(&binding(&fixture, 1))).is_err());
+    assert!(SourceMapProjection::qualify(&row, None).is_err());
+    row.delivery = None;
+    row.ordinary_pending = true;
+    assert!(SourceMapProjection::qualify(&row, None).is_err());
+    let mut stale = current.clone();
+    stale.source_generation += 1;
+    assert!(SourceMapProjection::qualify(&row, Some(&stale)).is_err());
+}
+
+#[test]
 fn original_job_cancel_refuses_pending_claim_without_destroying_admitted_geometry() {
     let fixture = runtime_fixture();
     let (job, delivery) = original_delivery(&fixture);
@@ -556,6 +605,7 @@ fn original_job_cancel_refuses_pending_claim_without_destroying_admitted_geometr
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery),
+        ordinary_pending: false,
         exact_quarters: None,
     };
     let mut projection = SourceMapProjection::qualify(&row, Some(&current)).unwrap();
@@ -584,6 +634,7 @@ fn real_original_capture_prepares_manual_map_geometry_and_rejects_later_token_ca
             sync_requested: true,
             intent_revision: 1,
             delivery: Some(delivery),
+            ordinary_pending: false,
             exact_quarters: None,
         },
     )
@@ -692,6 +743,7 @@ fn omitted_map_rows_drop_real_old_selection_after_unload_or_replacement_and_refr
                 sync_requested,
                 intent_revision: 37,
                 delivery: Some(delivery),
+                ordinary_pending: false,
                 exact_quarters: None,
             };
             publish(&fixture, row.clone()).unwrap();
@@ -799,6 +851,7 @@ fn omitted_map_rows_drop_cancelled_original_job_without_blocking_runtime_refresh
         sync_requested: true,
         intent_revision: 38,
         delivery: Some(delivery),
+        ordinary_pending: false,
         exact_quarters: None,
     };
     publish(&fixture, row.clone()).unwrap();
@@ -886,6 +939,7 @@ impl ReaderDomainPath {
             sync_requested: mapped,
             intent_revision: u64::from(mapped),
             delivery: Some(delivery.clone()),
+            ordinary_pending: false,
             exact_quarters: None,
         };
         self.source

@@ -79,6 +79,16 @@ impl Path {
         requested: bool,
         delivery: Option<&LoaderEventDelivery>,
     ) {
+        self.publish_with_pending(policy, requested, delivery, false);
+    }
+
+    fn publish_with_pending(
+        &self,
+        policy: Option<Value>,
+        requested: bool,
+        delivery: Option<&LoaderEventDelivery>,
+        ordinary_pending: bool,
+    ) {
         Python::attach(|py| {
             let bindings = (0..NUM_SAMPLES)
                 .map(|id| {
@@ -108,6 +118,8 @@ impl Path {
                     )
                     .unwrap();
                     row.set_item("exact_quarters", py.None()).unwrap();
+                    row.set_item("ordinary_pending", id < 2 && ordinary_pending)
+                        .unwrap();
                     row.unbind()
                 })
                 .collect();
@@ -317,6 +329,74 @@ fn requested_pitch_rows(py: Python<'_>) -> Vec<Py<PyDict>> {
 
 fn wire(sync: bool, realtime: bool, revision: u64) -> Value {
     json!({"schema_version":1,"sync":sync,"realtime_bpm":realtime,"revision":revision})
+}
+
+#[test]
+fn explicit_missing_map_gui_and_midi_keep_desired_mapped_but_report_actual_legacy() {
+    for midi in [false, true] {
+        let mut path = Path::new(true);
+        path.publish_with_pending(Some(wire(true, true, 29)), true, None, true);
+        if midi {
+            let runtime = path.source.engine.input_runtime.as_ref().unwrap();
+            runtime.replace_mappings(vec![("midi:note:1:60".into(), "pad.trigger:0".into())]);
+            runtime.set_enabled(true);
+            assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(event) = runtime.poll_event() {
+                    assert!(event.direct && event.dispatched);
+                    let trigger = event.captured_trigger.unwrap();
+                    assert_eq!(
+                        trigger.captured_start().requested_sync_request().mode,
+                        SourceSyncMode::Mapped
+                    );
+                    assert_eq!(
+                        trigger.captured_start().sync_request().mode,
+                        SourceSyncMode::Legacy
+                    );
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            path.drain();
+        } else {
+            let captured = path.start();
+            assert_eq!(captured.state(), "applied");
+            assert_eq!(
+                captured.requested_sync_request().mode,
+                SourceSyncMode::Mapped
+            );
+            assert_eq!(captured.sync_request().mode, SourceSyncMode::Legacy);
+        }
+        let pcm = path.render(37);
+        assert!(pcm.iter().any(|value| value.abs() > 0.01));
+        let voice = path.voice(0);
+        assert_eq!(voice.sync_request.mode, SourceSyncMode::Legacy);
+        assert!(voice.mapped_start.is_none());
+        assert!((voice.source_playback.tempo_ratio() - 1.25).abs() < 1e-12);
+        let observed = path.feedback(0);
+        assert_eq!(observed["policy_mode"], "legacy");
+        assert_eq!(observed["effective"], false);
+        assert!(observed["map_revision"].is_null());
+        path.source
+            .engine
+            .request_input_runtime_policy_adoption(true)
+            .unwrap();
+        let requested = path
+            .source
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .runtime_policy_snapshot()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            requested.row(0).unwrap().request.mode,
+            SourceSyncMode::Mapped
+        );
+    }
 }
 
 fn verify_reads(path: &Path, mode: SourceSyncMode, frames: usize) {

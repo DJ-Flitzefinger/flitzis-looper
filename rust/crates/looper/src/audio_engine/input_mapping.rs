@@ -719,7 +719,25 @@ impl InputRuntime {
                     Some(rows) => SourceMapProjection::qualify(&rows[idx], bindings[idx])?,
                     None => {
                         let previous = &guard.pads[idx].source_map;
-                        if previous.publication_current(&self.ownership, binding) {
+                        let same_pending_binding = !previous.permits_ordinary_pending()
+                            || (guard.pads[idx].loaded
+                                && loaded[idx]
+                                && guard.pads[idx].binding.zip(binding).is_some_and(
+                                    |(old, new)| {
+                                        self.ownership.current(idx, old)
+                                            && old.same_source_projection(&new)
+                                    },
+                                )
+                                && guard.pads[idx]
+                                    .acknowledgements
+                                    .as_ref()
+                                    .zip(bindings[idx])
+                                    .is_some_and(|(old, new)| {
+                                        Arc::ptr_eq(old, &new.acknowledgements)
+                                    }));
+                        if same_pending_binding
+                            && previous.publication_current(&self.ownership, binding)
+                        {
                             previous.clone()
                         } else {
                             // An omitted extension preserves only a still-qualified

@@ -16,10 +16,16 @@ wrapping and MUST NOT silently change other controls or cancel map preparation.
 ### Requirement: Existing runtime publication carries genuine map custody
 The existing complete input-runtime publication SHALL carry the separate SYNC
 request revision and only a current original source-qualified Native delivery.
-Requested variable-map SYNC without a usable map MUST remain requested but
-unavailable; it MUST NOT fall back to scalar launch or reconstruct authority from
+Requested variable-map SYNC without a usable map MUST remain requested and pending.
+An ordinary Play MAY be admitted through its existing ordinary audio path only
+when a fresh complete runtime projection explicitly permits an ordinary pending
+birth and no selected-map delivery is being withheld for invalid geometry or a
+stale/mismatched binding. Its actual mode SHALL remain Legacy and SHALL NOT count
+as mapped adoption or grid phase. Explicit mapped admission and live conversion
+SHALL still refuse failed source, map, ACK, reader or final-claim checks; they
+SHALL NOT recapture another route after failure or reconstruct authority from
 receipt data. Explicit fixed timing selected through the separate global tempo
-policy uses its own current constant-timing contract; it is not a missing-map fallback.
+policy retains its own current constant-timing contract.
 Same-frame GUI capture and mapped device capture SHALL observe current intent.
 Reserved arrangement rows MUST retain their whole previously published state
 until the existing actual completion/mirror permits replacement.
@@ -27,8 +33,14 @@ until the existing actual completion/mirror permits replacement.
 #### Scenario: A saved map is unavailable after Copy
 - **WHEN** copied content requests SYNC before its own fresh map restoration succeeds
 - **THEN** its runtime request SHALL contain no fabricated qualified delivery
-- **AND** mapped launch SHALL refuse without replacing preceding effective audio
+- **AND** mapped launch SHALL remain unavailable while a separately qualified ordinary pending birth MAY play without replacing or borrowing preceding mapped ownership
 - **AND** unrelated valid PAD updates SHALL remain publishable
+
+#### Scenario: Play remains available before a variable map is ready
+- **WHEN** a current loaded source requests variable SYNC and its fresh complete projection explicitly permits ordinary Play while no usable map is ready
+- **THEN** Play SHALL use the original ordinary source/ACK/start-policy path and retain the raw requested SYNC and Realtime choices
+- **AND** feedback SHALL report actual ordinary playback with synchronization pending and no mapped or phase acknowledgement
+- **AND** withheld invalid geometry, stale selection or a mismatched binding SHALL NOT inherit that permission merely because their selection is absent
 
 ### Requirement: Effective SYNC is confirmed by actual voice adoption
 The engine SHALL expose bounded callback-owned current-source observations of

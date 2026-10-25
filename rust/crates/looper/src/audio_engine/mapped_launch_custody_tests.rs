@@ -260,6 +260,7 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
             "active":true,"effective":true,"intent_revision":7,"map_revision":revision,
             "policy_mode":"mapped","policy_revision":null,"policy_sync":null,
             "policy_realtime_bpm":null,"settled":true,"target_current":true,"adoption":null,
+            "phase_program_current":false,"phase_program_revision":null,
         })
     );
     publish(
@@ -268,6 +269,7 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
             sync_requested: false,
             intent_revision: 8,
             delivery: Some(delivery),
+            ordinary_pending: false,
             exact_quarters: None,
         },
     )
@@ -684,6 +686,7 @@ fn clear_or_original_job_cancel_refuses_pending_launch_and_keeps_effective_origi
                     sync_requested: true,
                     intent_revision: 2,
                     delivery: None,
+                    ordinary_pending: false,
                     exact_quarters: None,
                 },
             )
@@ -749,6 +752,7 @@ fn publish_mixed_members(path: &LaunchPath, delivery: &LoaderEventDelivery) {
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery.clone()),
+        ordinary_pending: false,
         exact_quarters: None,
     };
     path.source
@@ -762,10 +766,13 @@ fn publish_mixed_members(path: &LaunchPath, delivery: &LoaderEventDelivery) {
             vec![32.0 / f64::from(RATE); NUM_SAMPLES],
             vec![Some(64.0 / f64::from(RATE)); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
-                sync: true,
-                ..Default::default()
-            }; NUM_SAMPLES]),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(maps),
         )
         .unwrap();

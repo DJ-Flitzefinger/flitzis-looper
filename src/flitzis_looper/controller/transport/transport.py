@@ -40,7 +40,7 @@ class TransportController(BaseController):
         if snapshot is None:
             return None
         if dependency is None:
-            start, end = self.loop.requested_region(sample_id, timing=timing)
+            start, end = self.loop.launch_region(sample_id, timing=timing)
             ticket = None
         else:
             start, end, ticket = dependency

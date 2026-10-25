@@ -26,7 +26,14 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper.models import PadContentIdentity
     from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
-    from flitzis_looper_audio import SourceBeatmap, SourceBeatmapEvaluation
+    from flitzis_looper_audio import LoaderEventDelivery, SourceBeatmap, SourceBeatmapEvaluation
+
+
+@dataclass(frozen=True, slots=True)
+class LoopLaunchRegion:
+    region: tuple[float, float | None]
+    delivery: LoaderEventDelivery | None
+    ordinary_pending: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,13 +739,27 @@ class PadLoopController:
     ) -> tuple[float, float | None]:
         """Project a saved intent without substituting pending project fields."""
         timing = self._resolve_timing(sample_id, timing)
-        start_s, end_s = start, end
-
         mapped = (
             self._auto_policy_region(sample_id, start=start, end=end, bars=bars) if auto else None
         )
         if mapped is not None:
             return mapped
+
+        return self._scalar_region_for_intent(
+            sample_id, start=start, end=end, auto=auto, bars=bars, timing=timing
+        )
+
+    def _scalar_region_for_intent(
+        self,
+        sample_id: int,
+        *,
+        start: float,
+        end: float | None,
+        auto: bool,
+        bars: float,
+        timing: CurrentPadTiming | None,
+    ) -> tuple[float, float | None]:
+        start_s, end_s = start, end
 
         sample_rate_hz = self._timing_sample_rate_hz(timing)
         one_sample_s = (
@@ -845,6 +866,50 @@ class PadLoopController:
         """Return performer intent for preparation, independently of effective audio."""
         validate_sample_id(sample_id)
         return self._effective_pad_loop_region(sample_id, timing=timing)
+
+    def _capture_launch_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> LoopLaunchRegion:
+        """Allow ordinary birth only when this observation has no effective map."""
+        validate_sample_id(sample_id)
+        timing = self._resolve_timing(sample_id, timing)
+        variable = self._project.resolve_pad_realtime_bpm(sample_id)
+        requested = self._project.resolve_pad_source_sync(sample_id)
+        geometry, delivery = (
+            self._source_maps._playback_projection(sample_id)
+            if variable and self._source_maps is not None
+            else (None, None)
+        )
+        start = float(self._project.pad_loop_start_s[sample_id])
+        bars = self._stored_bars(sample_id)
+        auto = self._project.pad_loop_auto[sample_id]
+        region = (
+            self._mapped_region(geometry, start=start, bars=bars)
+            if auto and geometry is not None
+            else self._scalar_region_for_intent(
+                sample_id,
+                start=start,
+                end=self._project.pad_loop_end_s[sample_id],
+                auto=auto,
+                bars=bars,
+                timing=timing,
+            )
+        )
+        return LoopLaunchRegion(
+            region, delivery if requested else None, requested and variable and geometry is None
+        )
+
+    def launch_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        """Resolve a new Play region without changing strict edit/seek geometry."""
+        return self._capture_launch_region(sample_id, timing=timing).region
 
     def set_auto(self, sample_id: int, *, enabled: bool) -> None:
         validate_sample_id(sample_id)

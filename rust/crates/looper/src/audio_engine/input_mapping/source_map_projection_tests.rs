@@ -163,6 +163,216 @@ fn sync_clear_cannot_reuse_a_cached_binding_with_the_new_launch_revision() {
     );
 }
 
+fn pending_rows() -> Vec<SourceMapRow> {
+    let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
+    rows[0].sync_requested = true;
+    rows[0].intent_revision = 17;
+    rows[0].ordinary_pending = true;
+    rows
+}
+
+fn publish_omitted(fixture: &LaunchFixture, loaded: bool) {
+    let bindings = bindings(fixture);
+    fixture
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_source_maps(
+            true,
+            (0..NUM_SAMPLES)
+                .map(|id| id < 2 && (id != 0 || loaded))
+                .collect(),
+            vec![16.0 / 48_000.0; NUM_SAMPLES],
+            vec![Some(96.0 / 48_000.0); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            Some(vec![
+                PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
+            None,
+        )
+        .unwrap();
+}
+
+#[test]
+fn explicit_pending_permission_preserves_raw_target_and_dispatches_direct_input() {
+    let fixture = fixture();
+    publish(&fixture, pending_rows()).unwrap();
+    let current = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    let snapshot = current.source_map_launch_snapshot();
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    let stored = runtime.runtime_state.lock().unwrap().pads[0]
+        .binding
+        .unwrap();
+    assert_eq!(current.binding.runtime_revision, 0);
+    assert_ne!(stored.runtime_revision, current.binding.runtime_revision);
+    assert!(!stored.same_projection(&current.binding));
+    assert!(stored.same_source_projection(&current.binding));
+    assert!(fixture.engine.input_runtime_ownership.current(0, stored));
+    assert_eq!(
+        snapshot.request().mode,
+        super::super::source_sync_policy::SourceSyncMode::Mapped
+    );
+    assert!(
+        snapshot
+            .admit(&fixture.engine.input_runtime_ownership, current.binding)
+            .unwrap()
+            .is_none()
+    );
+    publish_omitted(&fixture, true);
+    assert!(
+        runtime.runtime_state.lock().unwrap().pads[0]
+            .source_map
+            .permits_ordinary_pending()
+    );
+    assert!(runtime.trigger_pad(0, 0));
+    assert_eq!(fixture.consumer.slots(), 2);
+    fixture.engine.cancel_pad_launches(0).unwrap();
+    assert!(matches!(
+        snapshot.admit(&fixture.engine.input_runtime_ownership, current.binding),
+        Err(PitchActionReject::LaunchCancelled)
+    ));
+}
+
+#[test]
+fn omitted_pending_permission_rejects_a_stale_stored_runtime_revision() {
+    let fixture = fixture();
+    publish(&fixture, pending_rows()).unwrap();
+    let ownership = &fixture.engine.input_runtime_ownership;
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    let stored = runtime.runtime_state.lock().unwrap().pads[0]
+        .binding
+        .unwrap();
+    let placement = ownership.slot_snapshot(0).unwrap();
+    let revision = ownership
+        .prepare_runtime_revision_write(placement, true)
+        .unwrap();
+    let write = ownership
+        .prepare_slot_write_fixed(placement, placement.lifetime())
+        .unwrap();
+    ownership
+        .commit_slot_write_fixed(
+            &write,
+            || ownership.runtime_revision_write_current(revision),
+            |_| ownership.apply_runtime_revision_write(revision),
+        )
+        .unwrap();
+    let fresh = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(fresh.current());
+    assert!(stored.same_source_projection(&fresh.binding));
+    assert!(!ownership.current(0, stored));
+    publish_omitted(&fixture, true);
+    assert!(
+        !runtime.runtime_state.lock().unwrap().pads[0]
+            .source_map
+            .permits_ordinary_pending()
+    );
+    let refreshed = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        refreshed
+            .source_map_launch_snapshot()
+            .admit(ownership, refreshed.binding),
+        Err(PitchActionReject::TimingUnavailable)
+    ));
+    assert!(!runtime.trigger_pad(0, 0));
+    assert!(fixture.consumer.is_empty());
+}
+
+#[test]
+fn omitted_pending_permission_does_not_cross_request_aba_replacement_or_unload_return() {
+    for change in 0..3 {
+        let fixture = fixture();
+        publish(&fixture, pending_rows()).unwrap();
+        let original = input_runtime_binding::capture(&fixture.engine, 0)
+            .unwrap()
+            .unwrap();
+        let ownership = &fixture.engine.input_runtime_ownership;
+        match change {
+            0 => {
+                ownership
+                    .prepare_source_request_advance(0)
+                    .unwrap()
+                    .commit();
+                // A new logical request can retain every binding field and PCM address.
+                let again = input_runtime_binding::capture(&fixture.engine, 0)
+                    .unwrap()
+                    .unwrap();
+                assert!(original.binding.same_projection(&again.binding));
+                assert!(matches!(
+                    original
+                        .source_map_launch_snapshot()
+                        .admit(ownership, original.binding),
+                    Err(PitchActionReject::SourceChanged)
+                ));
+            }
+            1 => fixture.publish(0, 0.75, 19),
+            _ => publish_omitted(&fixture, false),
+        }
+        publish_omitted(&fixture, true);
+        let current = input_runtime_binding::capture(&fixture.engine, 0)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            current
+                .source_map_launch_snapshot()
+                .admit(ownership, current.binding),
+            Err(PitchActionReject::TimingUnavailable)
+        ));
+        assert!(
+            !fixture
+                .engine
+                .input_runtime
+                .as_ref()
+                .unwrap()
+                .trigger_pad(0, 0)
+        );
+        assert!(fixture.consumer.is_empty());
+        publish(&fixture, pending_rows()).unwrap();
+        let fresh = input_runtime_binding::capture(&fixture.engine, 0)
+            .unwrap()
+            .unwrap();
+        assert!(
+            fresh
+                .source_map_launch_snapshot()
+                .admit(ownership, fresh.binding)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn mismatched_source_snapshot_strips_pending_permission_before_launch_admission() {
+    let fixture = fixture();
+    publish(&fixture, pending_rows()).unwrap();
+    let current = input_runtime_binding::capture(&fixture.engine, 0)
+        .unwrap()
+        .unwrap();
+    let mut wrong = current.binding;
+    wrong.source_address += 1;
+    let snapshot = fixture
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .source_map_snapshot_for_input_binding(0, &fixture.engine.input_runtime_ownership, wrong)
+        .unwrap();
+    assert!(matches!(
+        snapshot.admit(&fixture.engine.input_runtime_ownership, wrong),
+        Err(PitchActionReject::TimingUnavailable)
+    ));
+}
+
 #[test]
 fn new_midi_action_gets_fresh_launch_witness_after_stop() {
     let fixture = fixture();
@@ -223,6 +433,68 @@ fn source_replacement_before_original_marker_refuses_the_whole_map_publication()
     );
     assert!(result.is_err());
     assert_eq!(runtime.runtime_state.lock().unwrap().pads, before);
+}
+
+#[test]
+fn pending_permission_precommit_source_or_request_change_has_no_publication_prefix() {
+    for source_replaced in [false, true] {
+        let fixture = fixture();
+        let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+        let ownership = &fixture.engine.input_runtime_ownership;
+        let before = runtime.runtime_state.lock().unwrap().pads.clone();
+        let bindings = bindings(&fixture);
+        let mut after_independent_change = [(0, 0); 2];
+        let result = runtime.set_runtime_state_with_source_maps_before_commit(
+            true,
+            (0..NUM_SAMPLES).map(|id| id < 2).collect(),
+            vec![16.0 / 48_000.0; NUM_SAMPLES],
+            vec![Some(96.0 / 48_000.0); NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            None,
+            Some(pending_rows()),
+            || {
+                if source_replaced {
+                    fixture.publish(0, 0.75, 19);
+                } else {
+                    ownership
+                        .prepare_source_request_advance(0)
+                        .unwrap()
+                        .commit();
+                }
+                after_independent_change = std::array::from_fn(|id| {
+                    (
+                        ownership.launch_revision(id),
+                        ownership.runtime_revision(id),
+                    )
+                });
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(runtime.runtime_state.lock().unwrap().pads, before);
+        assert_eq!(
+            std::array::from_fn::<_, 2, _>(|id| (
+                ownership.launch_revision(id),
+                ownership.runtime_revision(id)
+            )),
+            after_independent_change
+        );
+        assert!(fixture.consumer.is_empty());
+    }
+}
+
+#[test]
+fn pending_permission_without_loaded_binding_rejects_the_complete_publication() {
+    let fixture = fixture();
+    let runtime = fixture.engine.input_runtime.as_ref().unwrap();
+    let before = runtime.runtime_state.lock().unwrap().pads.clone();
+    let ownership = &fixture.engine.input_runtime_ownership;
+    let revision = ownership.launch_revision(0);
+    let mut rows = pending_rows();
+    rows[2].ordinary_pending = true;
+    assert!(publish(&fixture, rows).is_err());
+    assert_eq!(runtime.runtime_state.lock().unwrap().pads, before);
+    assert_eq!(ownership.launch_revision(0), revision);
+    assert!(fixture.consumer.is_empty());
 }
 
 #[test]

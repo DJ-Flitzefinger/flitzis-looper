@@ -39,9 +39,9 @@ class AudioEngine:
         ORDINARY_TRANSPORT_API_VERSION = {
             'ordinary-version-false': False,
             'ordinary-version-true': True,
-            'ordinary-version-old': 0,
-            'ordinary-version-future': 2,
-        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 1)
+            'ordinary-version-old': 1,
+            'ordinary-version-future': 3,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 2)
     def pause_sample(self, id):
         raise AssertionError('launcher must never pause audio')
     def resume_sample(self, id):

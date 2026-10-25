@@ -2354,3 +2354,66 @@ qualified emitted phase. The Human reports that enabling SYNC currently prevents
 PAD starts; that connected product defect is prioritized next. Practical settling,
 finite OneShot/EOF, stems/history, BeatThis structural/B2/default and actual
 device/Human gates remain open. No whole SYNC/REALTIME milestone is claimed.
+
+The FullFraction block was subsequently committed as
+`076450138bc993ebaeb0e771fcaded5cc3c20839` and normally pushed to existing main.
+Clean HEAD/tracking/fresh actual remote equality was verified after guarded own
+cleanup at2026-10-25T09:03:24Z. Only the exact owned temporary tree was removed:
+3,083 files,87,600,782 bytes; original1,506 Scratch entries, evidence and shared
+target/environment remain. This closes that block's publication bookkeeping.
+
+### Ordinary pending Play: implementation attempt
+
+The native Release start report is source-reconciled: untouched Realtime requests
+Mapped timing, normal Load has no selected-map authority, and the preceding
+Auto-loop/Native start paths deliberately refused. The latest Human direction
+prioritizes native Play usability. Concrete systems PRE cleared an explicitly
+qualified ordinary pending birth while retaining desired SYNC and exact refusal
+fences. Root's initial strict specification check rejected missing introductory
+SHALL wording; the corrected main change and publish-source-sync-intent validate.
+The actual combined attempt and material repairs passed dedicated frozen systems
+POST before integrated jobs. Current source is frozen v4. Permission retains
+source generation/request incarnation, marker-safe publication fields, current
+stored runtime revision, source projection and ACK owner. Fresh control runtime
+revision0 remains a placeholder. Contradictory permission rows reject strictly;
+genuine ordinary births retain raw desired Mapped timing and report actual Legacy.
+
+The first integrated attempts retained real failures: one ambiguous Rust test
+integer type, three Python lint findings, an unrequested snapshot in a new test,
+fresh-runtime-placeholder comparison, one wrong map-coverage fixture and an old
+strict JSON expectation. Their fixes preserve source/ACK/ABA and exact coverage
+guards. The rounded1024-frame endpoint was genuinely outside the original exact
+map coverage; the positive arrival test now uses the established exactly covered
+dyadic1500-frame geometry. No numeric admission criterion was widened.
+
+Current Debug tests pass6 missing-map cases,16 projection/cancellation cases and
+the exact corrected feedback case. They cover public GUI/MIDI/global starts,
+preselected Native pitch/Key Lock under both start policies, complete late first
+PCM, automatic service-based compatible map arrival without retoggle, and
+incompatible physical-region refusal. Five compatible strict-parser tests remain
+positive. The broader custody run retained66 compatible passes and3 intentionally
+ignored cases; its one old JSON failure was separately corrected and rerun on v4.
+This is not a fresh combined67-case result. Original admitted selected-map,
+Native/history, source/ACK and retirement behavior remains guarded.
+
+The private locked stripped Release wheel built successfully in61.96s. Its actual
+35,237,888-byte Native has SHA256
+`b0777a19aad9990930248ea7c1c4b2d012a4b75b75be15f6980ac0becc1014c9`.
+Release profile,13 bootstrap API checks, editor API4, ordinary-transport API2 and
+current controller/UI imports pass. All1,135 affected Python tests pass in109.70s.
+Changed Python lint and five production-file type checks pass; full Rustfmt,
+both affected strict OpenSpec changes and whitespace checks pass. Locked workspace
+tests Clippy exits0; its looper library-test bucket reports172 warnings
+(2 duplicates). The one new test-index-loop warning is retained without autofix
+or suppression. The actual installed API1
+Native is correctly rejected by `start.bat --check` before App construction.
+
+No App/audio-device job or installation was performed by these checks. The
+existing native file is protected and an exact rollback copy has been verified.
+The independent final actual-diff/evidence review returned PUBLISH CLEAR with no
+blocking finding; dedicated documentation POST is also CLEAR. Coherent
+commit/normal push, fresh remote equality and the subsequent App-closed native
+update remain pending at this recording point. This availability repair does not close selected-map Native
+Key Lock/pitch/late/piano, variable history, finite EOF, emitted phase, connected
+BeatThis structural/B2/default or real Human acceptance. Those remain required
+inside the connected milestone.

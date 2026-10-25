@@ -106,6 +106,7 @@ fn publish_mapped_policy(
         sync_requested: true,
         intent_revision: 7,
         delivery: Some(delivery.clone()),
+        ordinary_pending: false,
         exact_quarters: Some(32.0),
     };
     p.h.engine

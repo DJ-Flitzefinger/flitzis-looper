@@ -309,7 +309,7 @@ def test_ready_map_status_retains_loop_coverage_refusal_without_recapturing_geom
     audio.set_pad_loop_region.assert_not_called()
 
 
-def test_missing_map_refuses_before_capture_and_original_current_delivery_allows_retrigger(
+def test_missing_map_allows_pending_ordinary_play_and_current_delivery_allows_mapped_retrigger(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     audio = audio_engine_mock
@@ -324,10 +324,17 @@ def test_missing_map_refuses_before_capture_and_original_current_delivery_allows
     assert status.map_readiness == "unavailable"
     audio.capture_pad_start.reset_mock()
 
+    controller.transport.playback.trigger_pad(0)
+    audio.capture_pad_start.assert_called_once_with(
+        0, 1.0, 3.0, 1.0, exclusive=False, received_at_ns=None, expected_source_generation=1
+    )
+    row = audio.set_input_runtime_state.call_args.kwargs["source_map_rows"][0]
+    assert row["ordinary_pending"] is True
+    assert row["delivery"] is None
+    assert row["sync_requested"] is True
     with pytest.raises(ValueError, match="Variable SYNC requires a qualified source map"):
-        controller.transport.playback.trigger_pad(0)
-
-    audio.capture_pad_start.assert_not_called()
+        controller.transport.loop.requested_region(0)
+    audio.capture_pad_start.reset_mock()
     maps = controller.loader.source_beatmaps
     job = _job(audio)
     maps.select(0, "current original record")
@@ -361,6 +368,80 @@ _IDLE_POLICIES = (
         id="sync-off-realtime-on",
     ),
 )
+
+
+@pytest.mark.parametrize("action", ["pad", "global"])
+def test_no_map_launch_uses_scalar_region_without_changing_saved_request_or_markers(
+    controller: AppController, audio_engine_mock: Mock, action: str
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    project = controller.project
+    project.manual_bpm[0] = 120.0
+    project.sample_durations[0] = 10.0
+    project.pad_loop_start_s[0] = 1.0
+    project.pad_loop_bars[0] = 1.0
+    project.pad_loop_auto[0] = True
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=3)
+    before = project.model_dump()
+    if action == "pad":
+        controller.transport.playback.trigger_pad(0)
+        assert audio.capture_pad_start.call_args.args[:3] == (0, 1.0, 3.0)
+    else:
+        controller.session.active_sample_ids = {0}
+        controller.transport.playback.start_or_restart_global_start_stop()
+        audio.capture_global_start.assert_called_once()
+        entry = controller.transport.capture_global_start_entry(0)
+        assert entry is not None
+        assert entry[1:3] == (1.0, 3.0)
+    row = audio.set_input_runtime_state.call_args.kwargs["source_map_rows"][0]
+    assert row["ordinary_pending"] is True
+    assert row["sync_requested"] is True
+    assert row["delivery"] is None
+    assert project.model_dump() == before
+
+
+@pytest.mark.parametrize("condition", ["withheld", "invalid", "unready"])
+def test_pending_launch_permission_requires_absent_geometry_valid_region_and_current_binding(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    condition: str,
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    project = controller.project
+    project.manual_bpm[0] = 120.0
+    project.pad_loop_start_s[0] = 1.0
+    project.pad_loop_bars[0] = 1.0
+    project.pad_loop_auto[0] = True
+    project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=3)
+    geometry = _geometry(middle_coverage="uncertain") if condition == "invalid" else _geometry()
+    projection = Mock(return_value=(None, None) if condition == "unready" else (geometry, None))
+    monkeypatch.setattr(controller.loader.source_beatmaps, "_playback_projection", projection)
+    if condition == "unready":
+        audio.current_input_runtime_pad_binding.return_value = None
+        audio.current_input_runtime_pad_binding.side_effect = None
+    assert controller.input_mapping._refresh_rust_runtime_state()
+    row = audio.set_input_runtime_state.call_args.kwargs["source_map_rows"][0]
+    assert row["ordinary_pending"] is False
+    assert row["delivery"] is None
+    assert row["sync_requested"] is True
+    projection.assert_called_once_with(0)
+
+
+def test_launch_region_captures_selector_geometry_and_delivery_once(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=1)
+    maps = controller.loader.source_beatmaps
+    effective = Mock(return_value=None)
+    monkeypatch.setattr(maps, "effective", effective)
+    launch = controller.transport.loop._capture_launch_region(0)
+    assert launch.ordinary_pending is True
+    assert launch.delivery is None
+    effective.assert_called_once_with(0)
 
 
 def _inactive_policy_refusal(
@@ -782,6 +863,7 @@ def test_sync_during_map_preparation_persists_without_cancelling_map_or_other_co
         "intent_revision": 1,
         "delivery": None,
         "exact_quarters": None,
+        "ordinary_pending": True,
     }
 
 
@@ -948,7 +1030,7 @@ def test_runtime_publishes_requested_mapped_geometry_instead_of_old_effective_wi
     geometry, delivery = _geometry(), object()
     maps = controller.loader.source_beatmaps
     monkeypatch.setattr(maps, "effective", lambda _id: geometry)
-    monkeypatch.setattr(maps, "playback_delivery", lambda _id: delivery)
+    monkeypatch.setattr(maps, "_playback_projection", lambda _id: (geometry, delivery))
     monkeypatch.setattr(
         controller.transport.residency, "acknowledged_region", lambda _id: (1.0, 3.0)
     )
@@ -995,7 +1077,7 @@ def test_deferred_arrangement_keeps_the_whole_original_map_request_row(
     controller.transport._pair_deferred_sample_ids = frozenset({0})
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=False, revision=7)
     lookup = Mock(side_effect=AssertionError("reserved row must not be recaptured"))
-    monkeypatch.setattr(controller.loader.source_beatmaps, "playback_delivery", lookup)
+    monkeypatch.setattr(controller.loader.source_beatmaps, "_playback_projection", lookup)
 
     assert controller.input_mapping._refresh_rust_runtime_state()
 

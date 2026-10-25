@@ -826,6 +826,7 @@ class MixCaptureTicket:
 class AudioEngine:
     GLOBAL_TIMING_POLICY_API_VERSION: ClassVar[int]
     GLOBAL_RATE_PROVENANCE_API_VERSION: ClassVar[int]
+    # Version 2 includes strict optional source_map_rows ordinary_pending permission.
     ORDINARY_TRANSPORT_API_VERSION: ClassVar[int]
     def audio_stream_failed(self) -> bool: ...
     def quiesce_failed_audio_stream(self) -> bool: ...

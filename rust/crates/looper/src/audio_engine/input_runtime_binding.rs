@@ -2464,6 +2464,12 @@ impl InputPadBinding {
     /// The same complete source/runtime projection, independent of unrelated layout writes.
     /// This compares captured values only; current authority still requires its native guards.
     pub(crate) fn same_projection(&self, other: &Self) -> bool {
+        self.same_source_projection(other) && self.runtime_revision == other.runtime_revision
+    }
+
+    /// Control captures have no runtime revision. Compare their complete source
+    /// projection separately; the claimant must validate the stored runtime stamp.
+    pub(crate) fn same_source_projection(&self, other: &Self) -> bool {
         let placement_matches = match (self.placement, other.placement) {
             (Some(left), Some(right)) => left.same_projection(right),
             (None, None) => true,
@@ -2476,7 +2482,6 @@ impl InputPadBinding {
             && self.channels == other.channels
             && self.sample_rate_hz == other.sample_rate_hz
             && self.authority_revision == other.authority_revision
-            && self.runtime_revision == other.runtime_revision
             && self.accepted == other.accepted
     }
 }

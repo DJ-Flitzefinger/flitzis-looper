@@ -115,6 +115,7 @@ impl GeneralPath {
                 sync_requested: scalar_legacy != Some(id),
                 intent_revision: self.dry.intent_revision,
                 delivery: Some(self.dry.deliveries[id].clone()),
+                ordinary_pending: false,
                 exact_quarters: self.quarters[id],
             };
         }

@@ -540,6 +540,7 @@ fn physical_end_or_none_original_eof_past_last_map_anchor_refuses_original_cohor
                 sync_requested: true,
                 intent_revision: fixture.dry.intent_revision,
                 delivery: Some(fixture.dry.deliveries[id].clone()),
+                ordinary_pending: false,
                 exact_quarters: None,
             };
         }

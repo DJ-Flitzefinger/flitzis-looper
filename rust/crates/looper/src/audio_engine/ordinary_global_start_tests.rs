@@ -105,6 +105,50 @@ fn full_initial_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
     pcm
 }
 
+#[test]
+fn missing_map_global_start_keeps_two_ordinary_native_beginnings_and_pending_requests() {
+    let mut pending = Fixture::new(true);
+    let mut reference = Fixture::new(true);
+    restore_nonzero_bank(&mut pending);
+    restore_nonzero_bank(&mut reference);
+    super::ordinary_start_tests::publish_missing_map_intent(&pending);
+    let actual = public_start(&pending);
+    let expected = public_start(&reference);
+    pending.drain();
+    reference.drain();
+    wait_group(&mut pending, &actual);
+    wait_group(&mut reference, &expected);
+    let execution = pending.scheduler.peek_next_target_frame().unwrap();
+    assert_eq!(
+        reference.scheduler.peek_next_target_frame(),
+        Some(execution)
+    );
+    let pcm = full_initial_attack(&mut pending, execution);
+    assert_eq!(pcm, full_initial_attack(&mut reference, execution));
+    assert!(pcm.iter().any(|value| value.abs() > 0.01));
+    assert_eq!(actual.publication_status(), "accepted");
+    for id in 0..2 {
+        let voice = pending.voice(id);
+        assert_eq!(pending.starts(id), 1);
+        assert_eq!(
+            voice.sync_request.mode,
+            super::source_sync_policy::SourceSyncMode::Legacy
+        );
+        assert_eq!(voice.sync_request.intent_revision, 19);
+        assert!(voice.mapped_start.is_none());
+        assert!(
+            voice
+                .stretch
+                .owns_pitch_contract(PitchIntent::new(0, SHIFTS[id]).unwrap(), true)
+        );
+        assert_ne!(voice.stretch.native_state_address(), 0);
+    }
+    assert_ne!(
+        pending.voice(0).stretch.native_state_address(),
+        pending.voice(1).stretch.native_state_address()
+    );
+}
+
 fn spectral_amplitude(pcm: &[f32], frequency: f64) -> f64 {
     let (sine, cosine) =
         pcm.iter()

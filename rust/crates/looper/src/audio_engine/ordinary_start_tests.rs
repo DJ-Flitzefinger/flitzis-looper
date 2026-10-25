@@ -17,6 +17,104 @@ use std::time::{Duration, Instant};
 const PCM_FRAMES: usize = 48_000;
 const WORKER_WAIT: Duration = Duration::from_secs(2);
 
+pub(in crate::audio_engine) fn publish_missing_map_intent(fixture: &Fixture) {
+    use super::source_map_admission::SourceMapRow;
+    let bindings = (0..super::NUM_SAMPLES)
+        .map(|id| {
+            if id < 2 {
+                fixture
+                    .control
+                    .engine
+                    .current_input_runtime_pad_binding(id)
+                    .unwrap()
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut rows = vec![SourceMapRow::default(); super::NUM_SAMPLES];
+    for row in &mut rows[..2] {
+        row.sync_requested = true;
+        row.intent_revision = 19;
+        row.ordinary_pending = true;
+    }
+    fixture
+        .control
+        .engine
+        .input_runtime
+        .as_ref()
+        .unwrap()
+        .set_runtime_state_with_source_maps(
+            true,
+            (0..super::NUM_SAMPLES).map(|id| id < 2).collect(),
+            vec![LOOP_START as f64 / f64::from(RATE); super::NUM_SAMPLES],
+            vec![Some(LOOP_END as f64 / f64::from(RATE)); super::NUM_SAMPLES],
+            bindings.iter().map(Option::as_ref).collect(),
+            None,
+            Some(rows),
+        )
+        .unwrap();
+}
+
+#[test]
+fn missing_map_play_retains_preselected_native_pitch_and_complete_first_pcm_for_both_policies() {
+    use super::source_sync_policy::SourceSyncMode;
+    for policy in ["first_sound_at_grid", "attack_at_grid"] {
+        let mut pending = Fixture::new(true);
+        let mut reference = Fixture::new(true);
+        let pitch = PitchIntent::new(0, 7).unwrap();
+        for fixture in [&mut pending, &mut reference] {
+            fixture.mixer.set_pad_pitch_intent(0, pitch).unwrap();
+            fixture
+                .control
+                .engine
+                .set_key_lock_start_behavior(policy)
+                .unwrap();
+            fixture.drain();
+        }
+        publish_missing_map_intent(&pending);
+        let start = capture(&pending, 1.0);
+        let expected = capture(&reference, 1.0);
+        assert_eq!(start.requested_sync_request().mode, SourceSyncMode::Mapped);
+        assert_eq!(start.sync_request().mode, SourceSyncMode::Legacy);
+        for (fixture, action) in [(&mut pending, &start), (&mut reference, &expected)] {
+            fixture.drain();
+            assert!(
+                fixture
+                    .control
+                    .engine
+                    .publish_pad_start(action, None)
+                    .unwrap()
+            );
+            fixture.drain();
+            assert!(action.accepted(), "{:?}", action.reason());
+            wait_ready(fixture, &[action.sequence()]);
+        }
+        assert_eq!(start.original_frame(), expected.original_frame());
+        assert_eq!(start.execution_frame(), expected.execution_frame());
+        let pcm = complete_attack(&mut pending, start.execution_frame().unwrap());
+        let reference_pcm = complete_attack(&mut reference, expected.execution_frame().unwrap());
+        assert_eq!(pcm, reference_pcm);
+        assert!(pcm.iter().any(|value| value.abs() > 0.01));
+        assert_eq!(start.state(), "applied");
+        let voice = pending.voice(0);
+        assert_eq!(voice.sync_request.mode, SourceSyncMode::Legacy);
+        assert_eq!(voice.sync_request.intent_revision, 19);
+        assert!(voice.mapped_start.is_none());
+        assert!(voice.stretch.owns_pitch_contract(pitch, true));
+        assert_eq!(voice.stretch.adopted_request_id(), Some(start.sequence()));
+        assert_ne!(voice.stretch.native_state_address(), 0);
+        assert_eq!(
+            voice
+                .stretch
+                .native_tap_observation()
+                .unwrap()
+                .missing_reads,
+            0
+        );
+    }
+}
+
 #[cfg(windows)]
 #[path = "ordinary_start_tests/active_catchup_tests.rs"]
 mod active_catchup_tests;

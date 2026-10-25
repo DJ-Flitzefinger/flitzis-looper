@@ -44,6 +44,15 @@ impl DryMappedPath {
     }
 
     fn new_with_shape(lanes: usize, initial_frames: usize, tiny: bool) -> Self {
+        Self::new_with_shape_and_pending_birth(lanes, initial_frames, tiny, false)
+    }
+
+    fn new_with_shape_and_pending_birth(
+        lanes: usize,
+        initial_frames: usize,
+        tiny: bool,
+        pending_birth: bool,
+    ) -> Self {
         assert!((1..=32).contains(&lanes));
         let pcm = (0..PCM_FRAMES)
             .map(|frame| ((frame * 73 % 28001) as i32 - 14000) as i16)
@@ -129,17 +138,24 @@ impl DryMappedPath {
             fixture.jobs.push(job);
             fixture.deliveries.push(delivery);
         }
-        fixture.publish(false, 1);
+        if pending_birth {
+            fixture.publish_with_selection(true, 1, None, true, true);
+        } else {
+            fixture.publish(false, 1);
+        }
         for id in 0..lanes {
             let start = fixture.start(id);
             assert_eq!(
                 start.sync_request().mode,
-                if tiny {
+                if tiny || pending_birth {
                     SourceSyncMode::Legacy
                 } else {
                     SourceSyncMode::Fixed
                 }
             );
+            if pending_birth {
+                assert_eq!(start.requested_sync_request().mode, SourceSyncMode::Mapped);
+            }
             assert!(fixture.path.voice(id).mapped_start.is_none());
         }
         fixture.path.render(initial_frames);
@@ -302,6 +318,17 @@ impl DryMappedPath {
         bad_domain: Option<usize>,
         parent: bool,
     ) {
+        self.publish_with_selection(mapped, revision, bad_domain, parent, false);
+    }
+
+    fn publish_with_selection(
+        &self,
+        mapped: bool,
+        revision: u64,
+        bad_domain: Option<usize>,
+        parent: bool,
+        missing_map: bool,
+    ) {
         let bindings = (0..NUM_SAMPLES)
             .map(|id| {
                 (id < self.lanes).then(|| {
@@ -319,7 +346,8 @@ impl DryMappedPath {
             *row = SourceMapRow {
                 sync_requested: true,
                 intent_revision: self.intent_revision,
-                delivery: Some(self.deliveries[id].clone()),
+                delivery: (!missing_map).then(|| self.deliveries[id].clone()),
+                ordinary_pending: missing_map,
                 exact_quarters: self.tiny.then_some(1.0),
             };
         }
@@ -562,6 +590,110 @@ fn assert_mapped_reads(path: &Path, mut wide: SourcePlayback, first: u64, id: us
         checked_frames += span.frames as u64;
     }
     assert!(checked_frames > 0);
+}
+
+#[test]
+fn missing_map_birth_adopts_compatible_arrival_without_retoggle_or_region_edit() {
+    let automatic_request = |path: &Path| {
+        path.source
+            .engine
+            .request_input_runtime_policy_adoption(true)
+            .unwrap();
+        path.source
+            .engine
+            .input_runtime
+            .as_ref()
+            .unwrap()
+            .runtime_policy_snapshot()
+            .unwrap()
+            .unwrap()
+    };
+    for compatible in [true, false] {
+        // Original end=1/32s gives exactly1500 source frames; accepted P=1/64s
+        // and both original map intervals already have an exact continuation proof.
+        let mut fixture = DryMappedPath::new_with_shape_and_pending_birth(1, 17, false, true);
+        let path = &mut fixture.path;
+        assert_eq!(path.voice(0).sync_request.mode, SourceSyncMode::Legacy);
+        let unavailable = automatic_request(path);
+        assert_eq!(
+            unavailable.row(0).unwrap().request.mode,
+            SourceSyncMode::Mapped
+        );
+        assert_eq!(
+            unavailable.map_preparation(0).class,
+            RuntimeMapClass::Unavailable
+        );
+        let desired = unavailable.row(0).unwrap().request;
+        service(path);
+        assert_eq!(
+            unavailable.observation().unwrap().reason,
+            Some(RuntimePolicyError::Unsupported)
+        );
+        let original = path.voice(0).source_playback;
+        let original_domain = original.effective_domain().unwrap();
+        let original_plan = SourceReadPlan {
+            frame_pos: original.position().frame,
+            ..latest_plan(path, 0)
+        };
+        let original_taps = original_plan
+            .try_fractional_taps(original.position().fraction)
+            .unwrap();
+        let original_source = path.voice(0).sample.as_ref().unwrap().source_address();
+        let generation = path.voice(0).generation;
+        let execution = path.timeline.output_frame();
+        assert_eq!(
+            original_domain.region,
+            FrameRange {
+                start: 0,
+                end: DYADIC_END
+            }
+        );
+
+        // The map arrives under the unchanged desired request. The negative row
+        // requests750 frames while the actual original audio still owns1500.
+        fixture.publish_with_rows(true, 1, (!compatible).then_some(0));
+        let arrival = automatic_request(&fixture.path);
+        assert_eq!(arrival.row(0).unwrap().request, desired);
+        assert_eq!(arrival.map_preparation(0).class, RuntimeMapClass::Ready);
+        assert!(arrival.map_current(0));
+        service(&mut fixture.path);
+        let voice = fixture.path.voice(0);
+        assert_eq!(voice.generation, generation);
+        assert_eq!(
+            voice.sample.as_ref().unwrap().source_address(),
+            original_source
+        );
+        assert_eq!(voice.source_playback.position(), original.position());
+        let current_domain = voice.source_playback.effective_domain().unwrap();
+        assert_eq!(current_domain.sample_frames, original_domain.sample_frames);
+        assert_eq!(current_domain.region, original_domain.region);
+        let observed = arrival.observation().unwrap();
+        assert_eq!(observed.execution_frame, Some(execution));
+        if compatible {
+            assert_eq!(observed.state, "applied", "{observed:?}");
+            assert_eq!(voice.sync_request, desired);
+            assert!(voice.mapped_start.is_some());
+            assert!(
+                voice
+                    .source_playback
+                    .matches_domain(arrival.prepared_map(0).unwrap().geometry().domain())
+            );
+            assert_eq!(
+                original_plan
+                    .with_effective_domain(current_domain)
+                    .unwrap()
+                    .try_fractional_taps(voice.source_playback.position().fraction)
+                    .unwrap(),
+                original_taps
+            );
+        } else {
+            assert_eq!(observed.state, "refused");
+            assert_eq!(observed.reason, Some(RuntimePolicyError::Unsupported));
+            assert_eq!(voice.sync_request.mode, SourceSyncMode::Legacy);
+            assert!(voice.source_playback.matches_exact(&original));
+            assert!(voice.mapped_start.is_none());
+        }
+    }
 }
 
 #[test]

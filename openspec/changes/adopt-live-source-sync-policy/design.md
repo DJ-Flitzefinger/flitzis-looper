@@ -1127,3 +1127,41 @@ Physical-Q broadening is separate. Full proof, impact, systems PRE and verificat
 plan are in the original workspace goal-next-plan.md, final concrete FullFraction
 section. The frozen v4 implementation and focused checks are recorded in results;
 public Native start, actual-read phase and Human acceptance remain separate.
+
+## Ordinary Play before a variable map is ready
+
+The Human's native Release report exposes a connected availability defect:
+untouched Realtime selects variable timing, but normal Load does not publish an
+accepted variable map. Auto-loop resolution and Native capture therefore reject
+ordinary Play. A fresh complete publication can now explicitly classify a
+missing-map birth for ordinary audio while retaining desired Mapped timing.
+
+The permission is separate typed row data and defaults false for historical rows.
+It requires one coherent observation with no effective map geometry, no usable
+delivery, valid current binding and ordinary launch bounds. Existing withheld
+geometry, invalid extent and stale/mismatched selection stripping do not inherit
+it. Launch projection equality includes this permission so a changed publication
+cancels work that has not effected. Original source/ACK/final-claim checks remain.
+The permission retains the existing source generation and request incarnation;
+omitted rows compare their captured provenance as well as the original binding
+and ACK owner. Current reads of the same cell cannot prove its historical request
+identity after an ABA.
+Fresh control bindings carry runtime revision zero as a placeholder. Omitted-row
+reuse compares their complete source projection while independently requiring the
+stored published runtime revision to remain current; the placeholder is not
+runtime authority. The existing full projection comparison retains its semantics.
+
+The captured owner retains its raw requested policy. Its actual birth policy is
+Legacy only for the explicitly classified missing-map start. Original BPM Lock,
+Key Lock, selected pitch, both start policies, timestamp, residency and Native
+preparation then follow the ordinary path. Feedback reports actual ordinary audio
+and pending SYNC; it cannot report Mapped or confirmed phase. Loop extent is the
+captured ordinary physical region. Later map adoption retains original region/Q
+compatibility; different automatic ends require the existing genuine edit or a
+new launch. No map-arrival marker change is implicit.
+
+Scalar region resolution is a launch-only operation shared by GUI, direct input
+and global ordinary starts. Requested mapped editing, mode/seek transactions and
+retained mapped voices retain the original stricter region path. Native ordinary
+transport API2 and startup reflection reject older Native before the new row is
+used. Selected-map Native/pitch/late/piano integration remains required work.

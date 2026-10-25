@@ -22,16 +22,16 @@ fn required<'py>(row: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyA
 fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
     // Checking both count and every required key rejects additions and renamed
     // fields before cloning any delivery owners.
-    if row.len() != KEYS.len() {
+    if row.len() != KEYS.len() && row.len() != KEYS.len() + 1 {
         return Err(PyValueError::new_err(
-            "source map projection requires exactly sync_requested, intent_revision, delivery, exact_quarters",
+            "source map projection requires sync_requested, intent_revision, delivery, exact_quarters and optional ordinary_pending",
         ));
     }
     for (key, _) in row.iter() {
         let key = key
             .cast::<PyString>()
             .map_err(|_| PyValueError::new_err("source map projection keys must be strings"))?;
-        if !KEYS.contains(&key.to_str()?) {
+        if !KEYS.contains(&key.to_str()?) && key.to_str()? != "ordinary_pending" {
             return Err(PyValueError::new_err(
                 "source map projection has an unknown key",
             ));
@@ -40,10 +40,19 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
     for key in KEYS {
         if !row.contains(key)? {
             return Err(PyValueError::new_err(
-                "source map projection requires exactly sync_requested, intent_revision, delivery, exact_quarters",
+                "source map projection requires sync_requested, intent_revision, delivery, exact_quarters and optional ordinary_pending",
             ));
         }
     }
+    let ordinary_pending = match row.get_item("ordinary_pending")? {
+        None => false,
+        Some(value) if value.is_instance_of::<PyBool>() => value.extract::<bool>()?,
+        Some(_) => {
+            return Err(PyValueError::new_err(
+                "source map ordinary_pending must be a strict boolean",
+            ));
+        }
+    };
     let sync_requested = required(row, "sync_requested")?;
     if !sync_requested.is_instance_of::<PyBool>() {
         return Err(PyValueError::new_err(
@@ -81,6 +90,11 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
         Some(quarters)
     };
     let delivery = required(row, "delivery")?;
+    if ordinary_pending && !delivery.is_none() {
+        return Err(PyValueError::new_err(
+            "source map ordinary_pending requires delivery=None",
+        ));
+    }
     let delivery = if delivery.is_none() {
         None
     } else {
@@ -98,6 +112,7 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
         intent_revision,
         delivery,
         exact_quarters,
+        ordinary_pending,
     })
 }
 
@@ -120,6 +135,33 @@ mod tests {
 
     fn parses(py: Python<'_>, row: Bound<'_, PyDict>) -> PyResult<Vec<SourceMapRow>> {
         parse_rows(py, vec![row.unbind()])
+    }
+
+    #[test]
+    fn optional_ordinary_permission_is_strict_and_legacy_rows_never_grant_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = row(py);
+            assert!(!parses(py, value.clone()).unwrap()[0].ordinary_pending);
+            for permission in [true, false] {
+                value.set_item("ordinary_pending", permission).unwrap();
+                assert_eq!(
+                    parses(py, value.clone()).unwrap()[0].ordinary_pending,
+                    permission
+                );
+            }
+            for invalid in [
+                py.None(),
+                1_i32.into_pyobject(py).unwrap().into_any().unbind(),
+                "true".into_pyobject(py).unwrap().into_any().unbind(),
+            ] {
+                value.set_item("ordinary_pending", invalid).unwrap();
+                assert!(parses(py, value.clone()).is_err());
+            }
+            value.set_item("ordinary_pending", true).unwrap();
+            value.del_item("delivery").unwrap();
+            assert!(parses(py, value).is_err());
+        });
     }
 
     #[test]

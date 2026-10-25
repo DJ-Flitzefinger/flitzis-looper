@@ -1079,7 +1079,7 @@ def test_global_start_rejects_whole_batch_before_pending_own_project_loop_read(
     if original is not None:
         original.status = "rejected"
         original.failure = "original source generation changed"
-    with patch.object(controller.transport.loop, "requested_region") as region:
+    with patch.object(controller.transport.loop, "launch_region") as region:
         if deferred:
             global_playback.poll()
         else:

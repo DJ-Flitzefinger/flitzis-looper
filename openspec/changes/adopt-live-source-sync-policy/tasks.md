@@ -187,5 +187,17 @@ Simultaneous Playback section; all other original FULL-Goal gates remain binding
 - [x] Verify independent exact pair/tap/PCM, real source/ACK/MODE-to-PHASE and repeated Pause/Hold/live-R/tempo/nullable recovery, mixed32 atomicity, old-path equivalence, layout/2MiB/requests and new2/4/6 plus10 consuming performance (Debug16 + mapped100; Release variable26; maxima2=3.6964,4=7.3195,6=11.2481,10stress=19.1634ms; six/ten remain above nominal, six explicitly Human-accepted for first native PC test stand with optional later optimization).
 - [x] Complete affected neighbors, private Release/import and strict checks (Debug mapped100, Release variable26, private Release13API/editor4/UI and535Python, rustfmt/strict/whitespace/locked Clippy pass; warnings and timing limits retained).
 - [x] Complete one independent actual final review of the actual22-file frozen-v4 implementation, current documentation and evidence (PUBLISH CLEAR; no blocking finding).
-- [ ] Deliver coherent English commit/normal-main push/fresh clean actual-remote equality and guarded owned cleanup.
+- [x] Deliver coherent English commit/normal-main push/fresh clean actual-remote equality and guarded owned cleanup (07645013; post-cleanup equality2026-10-25T09:03:24Z).
 - [ ] Complete separately retained rational physical-Q, practical settling, Native/history/stems, finite EOF, actual-read phase, BeatThis B2/Human/default-cutover and every remaining FULL-Goal gate.
+
+### Native Play availability while a variable map is missing
+
+- [x] Reconcile the reported native Release start failure, desired/actual policy, genuine map absence versus withheld/stale selection, physical region and launch/ACK/cancel dependencies; obtain concrete systems PRE.
+- [x] Implement explicit ordinary-pending launch qualification, launch-only region resolution, raw desired versus actual Legacy policy and Native API2 preflight without broadening selected-map or editing guards (frozen v4).
+- [x] Review the frozen actual combined attempt through dedicated systems POST before integrated jobs (v4 CLEAR after targeted repairs).
+- [x] Verify GUI/direct-input/global starts, strict legacy/new row schemas, Key Lock/pitch/both start policies/late first PCM, source/launch/ACK cancellation, absence versus withheld geometry, parent/null persistence, compatible automatic map retry and incompatible extent preservation (Debug6/16/1 current, parser5/compatible custody66 reused within exact limits).
+- [x] Complete affected source/API/launcher/Python/Release/strict checks (private Release API2/13bootstrap/editor4/UI;1,135 Python; lint/type/fmt/strict/Clippy pass with retained warnings).
+- [x] Complete one independent actual final review of the current frozen source, final documentation and raw evidence (PUBLISH CLEAR; dedicated docs POST CLEAR).
+- [ ] Deliver English commit/normal-main push/fresh clean actual remote and guarded owned cleanup.
+- [ ] Safely update the native PC test checkout under App-closed/held-Native/rollback guards and verify the installed Release/API2/startup path without starting an audio device.
+- [ ] Complete genuine selected-map Native births, live history, piano/retrigger, output phase and remaining connected SYNC/REALTIME/BeatThis plus Human test delivery; restored ordinary Play alone does not complete SYNC.

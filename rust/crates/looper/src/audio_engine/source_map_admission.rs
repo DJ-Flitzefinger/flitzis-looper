@@ -36,6 +36,7 @@ pub(crate) struct SourceMapRow {
     pub(crate) intent_revision: u64,
     pub(crate) delivery: Option<LoaderEventDelivery>,
     pub(crate) exact_quarters: Option<f64>,
+    pub(crate) ordinary_pending: bool,
 }
 
 /// Stable off-realtime preparation class, never actual-E or source-adoption permission.
@@ -204,6 +205,49 @@ pub(crate) struct SourceMapProjection {
     policy: GlobalTimingPolicy,
     multi_loop: bool,
     bpm_requested: bool,
+    ordinary_pending: Option<OrdinaryPendingSource>,
+}
+
+/// Captured provenance only; admission still consults the existing source authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OrdinaryPendingSource {
+    generation: u64,
+    request_incarnation: u64,
+}
+
+impl OrdinaryPendingSource {
+    fn current(self, ownership: &InputRuntimeOwnership, binding: InputPadBinding) -> bool {
+        let Some(placement) = binding.placement else {
+            return false;
+        };
+        ownership.admission_source_current(placement.slot(), binding)
+            && ownership.binding_source_generation(placement.slot(), binding)
+                == Some(self.generation)
+            && ownership.binding_source_request_incarnation(placement.slot(), binding)
+                == Some(self.request_incarnation)
+    }
+
+    /// Runtime publication owns the placement marker and carries a future runtime
+    /// revision. Recheck the original scalar source fields without recapturing it.
+    fn publication_fields_current(
+        self,
+        ownership: &InputRuntimeOwnership,
+        binding: InputPadBinding,
+    ) -> bool {
+        let Some(placement) = binding.placement else {
+            return false;
+        };
+        placement.content_key().is_some()
+            && ownership.slot_snapshot_fields_current(placement)
+            && ownership.copy_reservation(placement.slot()) == 0
+            && ownership.pair_reservation(placement.slot()) == 0
+            && ownership.authority_current(placement.slot(), binding)
+            && ownership.binding_source_current(placement.slot(), binding)
+            && ownership.binding_source_generation(placement.slot(), binding)
+                == Some(self.generation)
+            && ownership.binding_source_request_incarnation(placement.slot(), binding)
+                == Some(self.request_incarnation)
+    }
 }
 
 impl SourceMapProjection {
@@ -239,6 +283,7 @@ impl SourceMapProjection {
             policy: self.policy,
             multi_loop: self.multi_loop,
             bpm_requested: self.bpm_requested,
+            ordinary_pending: None,
         }
     }
 
@@ -246,6 +291,27 @@ impl SourceMapProjection {
         row: &SourceMapRow,
         binding: Option<&InputRuntimePadBinding>,
     ) -> Result<Self, String> {
+        if row.ordinary_pending && row.delivery.is_some() {
+            return Err("ordinary pending permission requires no selected delivery".into());
+        }
+        let ordinary_pending = if row.ordinary_pending {
+            let binding = binding
+                .filter(|binding| binding.current())
+                .ok_or("ordinary pending permission requires current loaded binding")?;
+            let source = OrdinaryPendingSource {
+                generation: binding.source_generation,
+                request_incarnation: binding
+                    .ownership
+                    .binding_source_request_incarnation(binding.id, binding.binding)
+                    .ok_or("ordinary pending source request is unavailable")?,
+            };
+            if !source.current(&binding.ownership, binding.binding) {
+                return Err("ordinary pending source changed during qualification".into());
+            }
+            Some(source)
+        } else {
+            None
+        };
         if row
             .exact_quarters
             .is_some_and(|quarters| !quarters.is_finite() || quarters <= 0.0)
@@ -271,6 +337,7 @@ impl SourceMapProjection {
             policy: GlobalTimingPolicy::default(),
             multi_loop: false,
             bpm_requested: false,
+            ordinary_pending,
         })
     }
 
@@ -311,12 +378,16 @@ impl SourceMapProjection {
             && self.policy == other.policy
             && self.multi_loop == other.multi_loop
             && self.bpm_requested == other.bpm_requested
+            && self.ordinary_pending == other.ordinary_pending
             && self.same_selected_projection(other)
     }
 
     /// Raw request publication retains an existing map only through its exact
     /// original delivery owner, source, geometry and immutable revision.
     pub(crate) fn same_selected_projection(&self, other: &Self) -> bool {
+        if self.ordinary_pending != other.ordinary_pending {
+            return false;
+        }
         match (&self.selected, &other.selected) {
             (Some(left), Some(right)) => left.same_projection(right),
             (None, None) => true,
@@ -326,6 +397,9 @@ impl SourceMapProjection {
 
     /// Data-only selection changes never invalidate ordinary unmapped work.
     pub(crate) fn same_launch_projection(&self, other: &Self) -> bool {
+        if self.ordinary_pending != other.ordinary_pending {
+            return false;
+        }
         if self.request().mode == SourceSyncMode::Legacy
             && other.request().mode == SourceSyncMode::Legacy
             && self.request().global_revision.is_none()
@@ -346,9 +420,18 @@ impl SourceMapProjection {
         ownership: &Arc<InputRuntimeOwnership>,
         binding: Option<InputPadBinding>,
     ) -> bool {
+        if self.ordinary_pending.is_some_and(|source| {
+            !binding.is_some_and(|binding| source.publication_fields_current(ownership, binding))
+        }) {
+            return false;
+        }
         self.selected.as_ref().is_none_or(|selected| {
             binding.is_some_and(|binding| selected.current_for(ownership, binding))
         })
+    }
+
+    pub(crate) fn permits_ordinary_pending(&self) -> bool {
+        self.ordinary_pending.is_some()
     }
 
     pub(crate) fn snapshot(
@@ -414,11 +497,16 @@ impl SourceMapLaunchSnapshot {
         if self.request().mode != SourceSyncMode::Mapped {
             return Ok(None);
         }
-        let selected = self
-            .projection
-            .selected
-            .as_ref()
-            .ok_or(PitchActionReject::TimingUnavailable)?;
+        let Some(selected) = self.projection.selected.as_ref() else {
+            let Some(source) = self.projection.ordinary_pending else {
+                return Err(PitchActionReject::TimingUnavailable);
+            };
+            return if source.current(ownership, binding) {
+                Ok(None)
+            } else {
+                Err(PitchActionReject::SourceChanged)
+            };
+        };
         if !selected.current_for(ownership, binding) {
             return Err(PitchActionReject::SourceChanged);
         }

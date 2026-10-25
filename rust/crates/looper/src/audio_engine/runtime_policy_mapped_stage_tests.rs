@@ -65,6 +65,7 @@ fn static_unavailable_neighbor_phase_cannot_block_an_original_mapped_to_fixed_mo
             sync_requested: true,
             intent_revision: fixture.intent_revision,
             delivery: (id == 0).then(|| fixture.deliveries[0].clone()),
+            ordinary_pending: false,
             exact_quarters: None,
         };
     }

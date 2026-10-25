@@ -153,14 +153,81 @@ Retry observations SHALL be fixed bounded data with shape storage prepared off r
 - **AND** no callback SHALL acquire a registry lock, clone or replace the registry owner, allocate shape storage or release the last observation owner
 
 ### Requirement: Map readiness feedback preserves preceding actual audio
-After original source/binding and feedback qualification, requested Mapped status SHALL use one coherent existing selector observation for geometry, readiness and errors. Concrete missing, preparing or failed-map guidance SHALL precede a generic adoption refusal while retaining its technical details and the preceding actual active, effective and realtime state. Readiness SHALL NOT certify adoption or grid phase, and no scalar fallback or trigger-qualification relaxation SHALL occur.
+After original source/binding and feedback qualification, requested Mapped status SHALL use one coherent existing selector observation for geometry, readiness and errors. Concrete missing, preparing or failed-map guidance SHALL precede a generic adoption refusal while retaining its technical details and the preceding actual active, effective and realtime state. Readiness SHALL NOT certify adoption or grid phase. An explicitly qualified ordinary pending birth MAY preserve Play availability as specified below; admitted mapped trajectories, live conversions and failed trigger qualifications SHALL NOT silently select a replacement route.
 
 #### Scenario: A requested map is unavailable and later becomes current
 - **WHEN** requested Mapped timing has no qualified current map while preceding audio remains active
 - **THEN** feedback SHALL identify the actual map condition without hiding preceding effective audio or inventing an applied acknowledgement
-- **AND** a trigger SHALL still refuse before capture when its original map prerequisite is absent
+- **AND** a mapped trigger SHALL remain unavailable while an explicitly qualified ordinary pending birth MAY use the original ordinary path
 - **AND** a later original current delivery SHALL permit the existing qualified retrigger path without treating that start as continuous phase acceptance
 - **AND** feedback SHALL NOT obtain a second geometry snapshot through a separate readiness query
+
+### Requirement: Ordinary Play remains available while variable synchronization is pending
+
+The system SHALL distinguish ordinary Play availability from requested Mapped
+timing. A fresh complete runtime row MAY explicitly permit an ordinary pending birth
+when the same selector observation proves no effective map geometry, requested
+Mapped timing has no usable selected delivery, and the ordinary source binding
+and launch region are valid. Delivery withheld while existing geometry awaits
+assignment publication SHALL NOT alone qualify this permission. It SHALL be strict
+typed data, default false for historical rows, and SHALL be cleared by selection
+stripping after stale publication or mismatched binding. Withheld invalid mapped
+geometry SHALL NOT receive it. An explicitly supplied stale delivery or a supplied
+selected map whose Native launch-geometry preparation fails SHALL retain its
+original refusal path. A failed analysis with no effective geometry MAY recover
+ordinary Play through a new coherent explicit row while its map error remains
+visible; failure SHALL NOT be caught and recaptured within an admitted trajectory.
+Permission combined with a selected delivery or without a current source binding
+SHALL reject as contradictory input rather than silently discarding permission.
+
+Explicit qualification SHALL capture the existing source generation and source
+request incarnation as immutable permission provenance. Omitted map rows SHALL
+preserve permission only for the same loaded source projection and ACK owner,
+with the stored published runtime revision still current and both captured
+counters current. A fresh control capture's zero runtime-revision placeholder
+SHALL NOT substitute for or be compared as the published revision. Publication and launch admission
+SHALL repeat those source checks. A request-only ABA SHALL NOT inherit permission
+even when the binding and PCM address are unchanged.
+Publication under its own acquired placement marker SHALL use the existing fixed
+placement/source fields; a pending-sensitive new slot capture SHALL NOT reject
+the publication merely because its own marker is active. Source, window, ACK and
+captured counter changes SHALL still refuse atomically.
+
+The captured owner SHALL retain the raw desired SourceSyncRequest. Only an
+explicitly permitted unadmitted birth with no map owner MAY derive actual Legacy
+timing before preparation. Ordinary source/ACK, cancellation, parent, timestamp,
+residency, Native, first-attack and final-claim rules SHALL remain. Actual Legacy
+playback SHALL NOT acknowledge requested Mapped timing, effective SYNC or grid
+phase. Existing original policy service MAY later adopt a compatible current map
+without retoggling. It SHALL retain the actual physical region and own-Q guards;
+an incompatible map extent SHALL remain pending until a genuine guarded region
+edit or new launch, never silently moving loop markers or cropping audio.
+
+Missing-map scalar region resolution SHALL be confined to ordinary launch
+preparation. Requested mapped loop editing, seek/mode transactions and retained
+mapped audio SHALL retain their existing geometry and actual-mode fences. GUI,
+direct MIDI/keyboard and global ordinary starts SHALL capture the same launch
+classification. Raw nullable choices and persisted preferences SHALL not change.
+The Native ordinary-transport API SHALL identify version2 before this row contract
+is used; launch preflight SHALL reject an older Native before App construction.
+
+#### Scenario: No-map Play uses ordinary audio and keeps SYNC pending
+- **GIVEN** a current loaded source with SYNC requested, Realtime BPM on or untouched, and no usable selected map
+- **WHEN** a fresh complete row explicitly permits ordinary pending Play and the user starts the PAD
+- **THEN** the original ordinary pipeline SHALL emit its complete beginning with actual Legacy timing under the current BPM Lock, Key Lock, pitch and start policy
+- **AND** desired Mapped timing SHALL remain pending with actual playback separately observable and no phase acknowledgement
+- **AND** a later compatible current map MAY enter the original atomic policy service without a retoggle
+
+#### Scenario: Missing selection does not erase a refusal fence
+- **WHEN** a selected delivery is withheld for invalid mapped extent, or Native strips selection after source/binding mismatch or stale omitted publication
+- **THEN** that row SHALL NOT permit ordinary pending Play until a fresh coherent complete projection explicitly does so
+- **AND** existing source, ACK, cancellation and whole-cohort failure SHALL retain prior audio and owners
+
+#### Scenario: Map arrival cannot replace the actual loop extent
+- **GIVEN** an ordinary pending birth using its captured physical loop region
+- **WHEN** a later accepted map requests a different automatic musical end
+- **THEN** policy retry SHALL retain the actual region and refuse an incompatible conversion without silently changing markers, Q, source pair or first content
+- **AND** editing an actual retained mapped voice SHALL continue to require its original geometry even when the requested selector is unavailable
 
 #### Scenario: A stale Native API cannot distinguish service from deliberate retry
 - **WHEN** the Native method lacks the exact optional keyword-only `service=False` contract

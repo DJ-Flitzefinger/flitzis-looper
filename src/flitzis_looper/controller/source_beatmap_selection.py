@@ -692,13 +692,20 @@ class SourceBeatmapSelection:
 
     def playback_delivery(self, sample_id: int) -> LoaderEventDelivery | None:
         """Borrow only the original current qualification after assignment publication."""
-        if self.effective(sample_id) is None:
-            return None
+        return self._playback_projection(sample_id)[1]
+
+    def _playback_projection(
+        self, sample_id: int
+    ) -> tuple[SourceBeatmap | None, LoaderEventDelivery | None]:
+        """Observe geometry and its original playback qualification together."""
+        geometry = self.effective(sample_id)
+        if geometry is None:
+            return None, None
         content = self._content(sample_id)
         if any(publication.content == content for publication in self._publications):
-            return None
+            return geometry, None
         effective = None if content is None else self._effective.get(content)
-        return None if effective is None else effective.delivery
+        return geometry, None if effective is None else effective.delivery
 
     def status(
         self,

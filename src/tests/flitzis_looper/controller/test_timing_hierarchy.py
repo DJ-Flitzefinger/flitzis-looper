@@ -1147,7 +1147,7 @@ def test_full_parent_off_projection_retains_raw_map_wish_and_masks_every_pitch_r
     project.multi_loop = False
     project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=4)
     maps = controller.loader.source_beatmaps
-    maps.playback_delivery = Mock(side_effect=AssertionError("inactive map custody"))
+    maps._playback_projection = Mock(side_effect=AssertionError("inactive map custody"))
     assert controller.input_mapping._refresh_rust_runtime_state()
     kwargs = audio_engine_mock.set_input_runtime_state.call_args.kwargs
     assert kwargs["source_map_rows"][0] == {
@@ -1155,6 +1155,7 @@ def test_full_parent_off_projection_retains_raw_map_wish_and_masks_every_pitch_r
         "intent_revision": 4,
         "delivery": None,
         "exact_quarters": None,
+        "ordinary_pending": False,
     }
     assert all(row["sync"] is False for row in kwargs["pitch_rows"])
     project.multi_loop = True

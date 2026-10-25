@@ -111,6 +111,10 @@ def _bind_map(controller: AppController, geometry: SourceBeatmap | None) -> Mock
     selection = Mock()
     selection.is_selected.return_value = True
     selection.effective.return_value = geometry
+    selection._playback_projection.side_effect = lambda sample_id: (
+        selection.effective(sample_id),
+        None,
+    )
     controller.transport.loop.bind_source_maps(cast("SourceBeatmapSelection", selection))
     return selection
 

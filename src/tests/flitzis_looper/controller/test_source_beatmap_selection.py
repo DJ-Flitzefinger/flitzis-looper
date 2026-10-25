@@ -404,10 +404,16 @@ def test_postcommit_assignment_fault_retains_original_plan_and_settles_on_poll(
     maps.select(0, "record")
     maps.completed(0, _event(job))
     assert len(maps._publications) == 1
+    geometry, delivery = maps._playback_projection(0)
+    assert geometry is job.resolve_source_beatmap_artifact_completion.return_value.map.return_value
+    assert delivery is None
+    assert maps.playback_delivery(0) is None
     saved = ProjectPersistence.from_config_path(controller._persistence.config_path)
     assert saved.project.pad_source_beatmap_intent[0].selected == reference()
     maps.poll(frozenset())
     assert not maps._publications
+    assert maps._playback_projection(0) == (geometry, maps.playback_delivery(0))
+    assert maps.playback_delivery(0) is not None
     assert maps.status(0) == "effective"
     assert controller._assets._reserved == 0
 

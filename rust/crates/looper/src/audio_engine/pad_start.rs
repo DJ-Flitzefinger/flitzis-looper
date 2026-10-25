@@ -599,6 +599,18 @@ impl CapturedPadStart {
     }
 
     pub(crate) fn sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
+        let mut actual = self.requested_sync_request();
+        if actual.mode == super::source_sync_policy::SourceSyncMode::Mapped
+            && self.owner.mapped.is_none()
+        {
+            // Only explicit missing-map admission can create this tuple. Retain
+            // the desired request on the owner; ordinary audio confirms no map.
+            actual.mode = super::source_sync_policy::SourceSyncMode::Legacy;
+        }
+        actual
+    }
+
+    pub(crate) fn requested_sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
         self.owner.sync_request
     }
 

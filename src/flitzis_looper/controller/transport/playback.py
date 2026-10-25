@@ -113,7 +113,7 @@ class PadPlaybackController:
         self._transport.refresh_input_runtime((sample_id,))
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         options = self._transport.source_generation_options(generation)
-        start_s, end_s = self._loop.requested_region(sample_id)
+        start_s, end_s = self._loop.launch_region(sample_id)
         captured = self._audio.capture_pad_start(
             sample_id,
             start_s,

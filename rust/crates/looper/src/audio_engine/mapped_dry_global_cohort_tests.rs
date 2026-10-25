@@ -62,6 +62,7 @@ fn publish_cohort_maps(
             sync_requested: true,
             intent_revision: revisions[id],
             delivery: Some(deliveries[id].clone()),
+            ordinary_pending: false,
             exact_quarters: None,
         };
     }
@@ -76,10 +77,13 @@ fn publish_cohort_maps(
             vec![32.0 / f64::from(RATE); NUM_SAMPLES],
             vec![Some(64.0 / f64::from(RATE)); NUM_SAMPLES],
             bindings.iter().map(Option::as_ref).collect(),
-            Some(vec![crate::audio_engine::input_mapping::PitchPadProjection {
-                sync: true,
-                ..Default::default()
-            }; NUM_SAMPLES]),
+            Some(vec![
+                crate::audio_engine::input_mapping::PitchPadProjection {
+                    sync: true,
+                    ..Default::default()
+                };
+                NUM_SAMPLES
+            ]),
             Some(rows),
         )
         .unwrap();

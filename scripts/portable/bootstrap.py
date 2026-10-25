@@ -254,9 +254,9 @@ def check_ordinary_transport_api(native_module: object) -> None:
     engine = getattr(native_module, "AudioEngine", None)
     version = getattr(engine, "ORDINARY_TRANSPORT_API_VERSION", None)
     assert type(version) is int, (
-        "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=1"
+        "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=2"
     )
-    assert version == 1, "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=1"
+    assert version == 2, "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=2"
     getters = {
         "OrdinaryTransportAdmission": (
             "content_lifetime",

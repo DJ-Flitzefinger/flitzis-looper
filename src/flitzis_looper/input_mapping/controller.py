@@ -94,6 +94,7 @@ class _InputSourceMapProjection:
     revision: int = 0
     delivery: LoaderEventDelivery | None = None
     exact_quarters: float | None = None
+    ordinary_pending: bool = False
 
     def payload(self) -> dict[str, object]:
         return {
@@ -101,6 +102,7 @@ class _InputSourceMapProjection:
             "intent_revision": self.revision,
             "delivery": self.delivery,
             "exact_quarters": self.exact_quarters,
+            "ordinary_pending": self.ordinary_pending,
         }
 
 
@@ -927,15 +929,24 @@ class InputMappingController(BaseController):
             snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
             sync_intent = self._project.pad_source_sync_intent[sample_id]
             requested_sync = self._project.resolve_pad_source_sync(sample_id)
+            delivery = None
+            ordinary_pending = False
             try:
-                region = (
-                    self._app.transport.loop.requested_region
-                    if requested_sync
+                if (
+                    requested_sync
                     or sync_intent.revision > 0
                     or not self._project.global_timing_policy.is_neutral
-                    else self._app.transport.loop.effective_region
-                )
-                start_s, end_s = region(sample_id, timing=timing)
+                ):
+                    launch = self._app.transport.loop._capture_launch_region(
+                        sample_id, timing=timing
+                    )
+                    start_s, end_s = launch.region
+                    delivery = launch.delivery
+                    ordinary_pending = launch.ordinary_pending and snapshot is not None
+                else:
+                    start_s, end_s = self._app.transport.loop.effective_region(
+                        sample_id, timing=timing
+                    )
             except RuntimeError, ValueError:
                 if not requested_sync:
                     raise
@@ -954,7 +965,9 @@ class InputMappingController(BaseController):
                     source_signature=snapshot.source_signature if snapshot else None,
                     ready=snapshot is not None,
                     pitch=self._input_pitch_projection(sample_id),
-                    source_map=self._input_source_map_projection(sample_id),
+                    source_map=self._input_source_map_projection(
+                        sample_id, delivery=delivery, ordinary_pending=ordinary_pending
+                    ),
                     binding=snapshot.binding if snapshot else None,
                 )
             )
@@ -1008,26 +1021,27 @@ class InputMappingController(BaseController):
         self._app.transport.source_sync.toggle(sample_id)
         return True
 
-    def _input_source_map_projection(self, sample_id: int) -> _InputSourceMapProjection:
+    def _input_source_map_projection(
+        self,
+        sample_id: int,
+        *,
+        delivery: LoaderEventDelivery | None,
+        ordinary_pending: bool,
+    ) -> _InputSourceMapProjection:
         intent = self._project.pad_source_sync_intent[sample_id]
         requested = self._project.resolve_pad_source_sync(sample_id)
         variable = self._project.resolve_pad_realtime_bpm(sample_id)
-        maps = self._app.loader.source_beatmaps
-        delivery = maps.playback_delivery(sample_id) if variable and requested else None
-        if requested and delivery is not None:
-            try:
-                self._app.transport.loop.requested_region(sample_id)
-            except RuntimeError, ValueError:
-                # Preserve requested SYNC while withholding inadmissible geometry.
-                # Other valid PAD rows must still publish, without scalar fallback.
-                delivery = None
         exact = (
             self._project.pad_loop_bars[sample_id] * 4.0
             if requested and variable and self._project.pad_loop_auto[sample_id]
             else None
         )
         return _InputSourceMapProjection(
-            self._project.pad_source_sync_preference(sample_id), intent.revision, delivery, exact
+            self._project.pad_source_sync_preference(sample_id),
+            intent.revision,
+            delivery,
+            exact,
+            ordinary_pending,
         )
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:

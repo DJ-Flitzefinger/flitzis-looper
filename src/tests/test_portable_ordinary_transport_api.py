@@ -83,7 +83,7 @@ def ordinary_transport_native_module(engine_base: type = object) -> SimpleNamesp
             (engine_base,),
             {
                 "__init__": _forbidden,
-                "ORDINARY_TRANSPORT_API_VERSION": 1,
+                "ORDINARY_TRANSPORT_API_VERSION": 2,
                 "pause_sample": _pad,
                 "resume_sample": _pad,
                 "_resolve_ordinary_transport_feedback": _resolve,
@@ -106,7 +106,7 @@ def test_complete_ordinary_transport_interface_is_reflected_without_native_work(
     _check(ordinary_transport_native_module())
 
 
-@pytest.mark.parametrize("version", [None, False, True, 0, 2, 1.0, "1"])
+@pytest.mark.parametrize("version", [None, False, True, 0, 1, 3, 2.0, "2"])
 def test_ordinary_transport_version_requires_exact_current_integer(version: object) -> None:
     native = ordinary_transport_native_module()
     native.AudioEngine.ORDINARY_TRANSPORT_API_VERSION = version
