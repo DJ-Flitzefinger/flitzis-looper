@@ -1000,7 +1000,7 @@ fn compact_consuming_workload_runs_on_explicit_two_mib_stack_without_rust_reques
     assert_copy::<SourcePlayback>();
     assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
     assert!(std::mem::size_of::<[SourcePlayback; MAX_VOICES]>() <= 16 * 1024);
 
     // All wide qualification/epoch setup, owners and heap buffers precede thread creation.
@@ -1395,7 +1395,7 @@ fn actual_e_constructor_and_generic_consuming_reader_fit_two_mib_without_rust_al
     assert_copy::<SourcePlayback>();
     assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
     assert!(std::mem::size_of::<[SourcePlayback; MAX_VOICES]>() <= 16 * 1024);
     let geometry = variable_geometry();
     let sample = sample();

@@ -2114,10 +2114,10 @@ fn static_productive_constructor_claim_and_renderer_fit_two_mib_without_rust_req
     assert!(!std::mem::needs_drop::<SourcePlayback>());
     assert!(std::mem::size_of::<[Option<SourcePlayback>; 32]>() <= 16 * 1024);
     assert!(
-        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedClockEpoch>() <= 128
+        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedClockEpoch>() <= 152
     );
     assert!(
-        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 240
+        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 264
     );
     let child = std::thread::Builder::new()
         .name("static-productive-two-mib".into())

@@ -36,6 +36,52 @@ pub(crate) struct NativeSourceAdmissionIdentity {
     pub(crate) source_generation: u64,
 }
 
+/// Staged from an original current permit, activated only by its complete birth claim.
+/// Pending preparation epochs are deliberately not the lifetime of an admitted voice.
+pub(crate) struct EffectiveNativeVoice {
+    admission: NativeSourceAdmissionIdentity,
+    lifetime: Arc<AtomicU64>,
+    previous_generation: u64,
+    previous_active: bool,
+    generation: u64,
+}
+
+impl EffectiveNativeVoice {
+    pub(crate) fn claim_current(
+        &self,
+        admission: &NativeSourceAdmission,
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+        active: bool,
+    ) -> bool {
+        self.admission.id == admission.id
+            && self.admission.source_generation == admission.source_generation
+            && self
+                .admission
+                .binding
+                .same_source_projection(&admission.binding)
+            && Arc::ptr_eq(&self.lifetime, lifetime)
+            && self.previous_generation == generation
+            && self.previous_active == active
+            && self.lifetime.load(Ordering::Acquire) == if active { generation } else { 0 }
+    }
+
+    pub(crate) fn current(
+        &self,
+        sample: &SampleBuffer,
+        rate: u32,
+        accepted: Option<AcceptedTimingProjection>,
+    ) -> bool {
+        let binding = self.admission.binding;
+        self.lifetime.load(Ordering::Acquire) == self.generation
+            && sample.source_address() == binding.source_address
+            && sample.source_sample_count() == binding.sample_count
+            && sample.channels == binding.channels
+            && rate == binding.sample_rate_hz
+            && accepted == binding.accepted
+    }
+}
+
 /// Fresh callback capture of a retained voice's actual source and effective timing. The lifetime
 /// is preallocated with the voice, while the local preparation epoch is the existing worker fence.
 /// Selection, stems, coverage and the exact playback checkpoint are captured by the request.
@@ -307,6 +353,44 @@ impl NativeVoiceHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    pub(crate) fn stage_effective_voice(
+        &self,
+        sample: &SampleBuffer,
+        rate: u32,
+        lifetime: &Arc<AtomicU64>,
+        previous_generation: u64,
+        previous_active: bool,
+        increments: u64,
+    ) -> Option<EffectiveNativeVoice> {
+        let generation = previous_generation.checked_add(increments)?;
+        if generation == 0
+            || generation == u64::MAX
+            || !(1..=2).contains(&increments)
+            || self.source_generation == 0
+            || self.binding.placement?.content_key().is_none()
+            || lifetime.load(Ordering::Acquire)
+                != if previous_active {
+                    previous_generation
+                } else {
+                    0
+                }
+            || !self.current(sample, rate)
+        {
+            return None;
+        }
+        Some(EffectiveNativeVoice {
+            admission: NativeSourceAdmissionIdentity {
+                id: self.id,
+                binding: self.binding,
+                source_generation: self.source_generation,
+            },
+            lifetime: lifetime.clone(),
+            previous_generation,
+            previous_active,
+            generation,
+        })
+    }
+
     pub(crate) fn scalar_identity(&self) -> NativeHistoryPermitIdentity {
         let authority = match &self.authority {
             NativeHistoryAuthority::Current {
@@ -930,6 +1014,29 @@ mod tests {
             .capture_source_admission(&original, 48_000, Some(accepted))
             .unwrap();
         let old_candidate = current.capture(&original, 48_000, Some(accepted)).unwrap();
+        let birth_lifetime = Arc::new(AtomicU64::new(11));
+        let effective = old_candidate
+            .stage_effective_voice(&original, 48_000, &birth_lifetime, 11, true, 2)
+            .unwrap();
+        assert!(effective.claim_current(&admission, &birth_lifetime, 11, true));
+        assert!(!effective.claim_current(&admission, &Arc::new(AtomicU64::new(11)), 11, true));
+        assert!(!effective.claim_current(&admission, &birth_lifetime, 12, true));
+        assert!(!effective.claim_current(&admission, &birth_lifetime, 11, false));
+        assert!(!effective.current(&original, 48_000, Some(accepted)));
+        // An exclusive stop and birth consume two generations. This is the
+        // declared lifetime component; public tests exercise the actual claims.
+        birth_lifetime.store(13, Ordering::Release);
+        assert!(effective.current(&original, 48_000, Some(accepted)));
+        for (generation, increments) in [(u64::MAX - 1, 1), (u64::MAX - 2, 2), (u64::MAX, 1)] {
+            let exhausted = Arc::new(AtomicU64::new(generation));
+            assert!(
+                old_candidate
+                    .stage_effective_voice(
+                        &original, 48_000, &exhausted, generation, true, increments,
+                    )
+                    .is_none()
+            );
+        }
 
         // Control has already published B before its callback load. A's actual admitted birth,
         // effective timing and local voice lifetime remain distinct from B's new authority.
@@ -952,6 +1059,19 @@ mod tests {
         };
         assert!(!old_candidate.current(&original, 48_000));
         assert!(!old_candidate.current_effective_source(&original, 48_000));
+        assert!(effective.current(&original, 48_000, Some(accepted)));
+        assert!(!effective.current(&replacement, 48_000, Some(accepted)));
+        assert!(!effective.current(&original, 44_100, Some(accepted)));
+        assert!(!effective.current(&original, 48_000, None));
+        assert!(
+            old_candidate
+                .stage_effective_voice(&original, 48_000, &birth_lifetime, 13, true, 1,)
+                .is_none()
+        );
+        for revoked in [0, 14, u64::MAX] {
+            birth_lifetime.store(revoked, Ordering::Release);
+            assert!(!effective.current(&original, 48_000, Some(accepted)));
+        }
         assert!(current.capture(&original, 48_000, Some(accepted)).is_none());
         let fresh = retained.capture(&original, 48_000).unwrap();
         assert!(fresh.current(&original, 48_000));

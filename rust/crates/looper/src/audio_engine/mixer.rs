@@ -4269,6 +4269,20 @@ impl RtMixer {
         self.voice_pitch_intent[voice_index] = self.pad_pitch_intent[id];
         self.voice_key_lock[voice_index] = self.pad_key_lock_enabled[id];
         if self.pad_key_lock_enabled[id]
+            && self.voices[voice_index].source_playback.is_mapped()
+            && self.voices[voice_index]
+                .mapped_birth
+                .is_some_and(|birth| birth.native)
+        {
+            // The complete birth claim already installed this exact domain and Native/FIFO.
+            // Readiness still waits for its own first successful mixed interval, even at unity.
+            self.pad_key_lock_pending_on[id] = true;
+            self.pad_key_lock_rejected[id] =
+                !self.mapped_birth_key_lock_voice_available(voice_index, true);
+            self.publish_key_lock_status(id);
+            return;
+        }
+        if self.pad_key_lock_enabled[id]
             && self.pad_key_lock_request_id[id] != 0
             && self.pad_pitch_intent[id].total_semitones() == 0
         {
@@ -4463,6 +4477,62 @@ impl RtMixer {
 
     /// Recheck pending voices at the render boundary. A failed new ON never replaces the dry
     /// feed, source position, or EQ history; confirmed wet modes retain their own baseline.
+    fn mapped_birth_key_lock_voice_available(&self, index: usize, first_only: bool) -> bool {
+        let voice = &self.voices[index];
+        let id = voice.sample_id;
+        let Some(birth) = voice.mapped_birth else {
+            return false;
+        };
+        let Some(sample) = voice.sample.as_ref() else {
+            return false;
+        };
+        if !voice.active
+            || !birth.native
+            || !self.voice_key_lock[index]
+            || !voice.source_playback.is_mapped()
+            || voice.source_playback.has_phase_program()
+            || self.input_runtime_ownership.callback_key_slot(birth.key) != Some(id)
+            || self
+                .input_runtime_ownership
+                .key_source_request_incarnation(birth.key)
+                != Some(birth.source_request_incarnation)
+            || !voice.source_admission.as_ref().is_some_and(|admission| {
+                admission.content_key() == Some(birth.key)
+                    && admission.retry_identity().source_generation == birth.source_generation
+                    && admission.current_for_birth(
+                        &self.input_runtime_ownership,
+                        &self.current_timing_acknowledgements,
+                        sample,
+                        self.sample_rate_hz as u32,
+                        false,
+                    )
+            })
+            || !voice
+                .stretch
+                .owns_pitch_contract(self.voice_pitch_intent[index], true)
+            || voice.stretch.wet_mode_failed()
+        {
+            return false;
+        }
+        if !first_only && birth.status.emitted {
+            return voice.stretch.wet_render_ready();
+        }
+        if !birth.first_pending()
+            || voice.paused
+            || (first_only && birth.key_lock_request != self.pad_key_lock_request_id[id])
+        {
+            return false;
+        }
+        // Generic pitch capture intentionally refuses mapped voices. Borrow only the
+        // existing raw snapshot and require this owner's exact C0/H/D proof below.
+        self.capture_voice_snapshot(index, SnapshotKind::RawScalarPolicy)
+            .is_some_and(|snapshot| {
+                voice
+                    .stretch
+                    .mapped_birth_first_output_ready(&snapshot.playback, snapshot.plan)
+            })
+    }
+
     fn preflight_pending_key_lock(&mut self) {
         let mut pending = RtRenderPadActivity::default();
         for voice in &self.voices {
@@ -4471,6 +4541,28 @@ impl RtMixer {
             }
         }
         for id in pending.iter() {
+            if self.mapped_voice_active(id) {
+                let current = self
+                    .voices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, voice)| voice.active && voice.sample_id == id)
+                    .all(|(index, voice)| {
+                        if voice.source_playback.is_mapped() {
+                            self.mapped_birth_key_lock_voice_available(index, false)
+                        } else {
+                            self.normal_key_lock_pinned_voice_available(id, voice)
+                                && voice.stretch.wet_mode_armed()
+                                && !voice.stretch.wet_mode_failed()
+                        }
+                    });
+                if !current {
+                    // A rejected later request or unavailable member cannot destroy old actual audio.
+                    self.pad_key_lock_rejected[id] = true;
+                    self.publish_key_lock_status(id);
+                }
+                continue;
+            }
             if !self.key_lock_context_available(id)
                 || self
                     .voices
@@ -4485,6 +4577,25 @@ impl RtMixer {
 
     fn finish_pending_key_lock(&mut self, id: usize) {
         if !self.pad_key_lock_pending_on[id] {
+            return;
+        }
+        if self.mapped_voice_active(id) {
+            let ready = self
+                .voices
+                .iter()
+                .enumerate()
+                .filter(|(_, voice)| voice.active && voice.sample_id == id)
+                .all(|(index, voice)| {
+                    if voice.source_playback.is_mapped() {
+                        voice.mapped_birth.is_some_and(|birth| birth.status.emitted)
+                            && self.mapped_birth_key_lock_voice_available(index, false)
+                    } else {
+                        !voice.paused && voice.stretch.wet_output_ready()
+                    }
+                });
+            if ready {
+                self.pad_key_lock_pending_on[id] = false;
+            }
             return;
         }
         let mut ready = true;
@@ -4757,6 +4868,13 @@ impl RtMixer {
                 saw_voice = true;
                 all_paused &= voice.paused;
                 native_failed |= voice.stretch.wet_mode_failed();
+                if voice.source_playback.is_mapped() {
+                    ready &= voice.mapped_birth.is_some_and(|birth| {
+                        birth.native
+                            && birth.status.emitted
+                            && birth.key_lock_request == self.pad_key_lock_request_id[id]
+                    });
+                }
                 if voice.paused {
                     ready &= voice.stretch.wet_mode_armed();
                 } else if self.pad_pitch_intent[id]
@@ -4792,7 +4910,16 @@ impl RtMixer {
             source_address: sample.source_address(),
             window_revision: sample.window_revision(),
             request_id: self.pad_key_lock_request_id[id],
-            effective: enabled && (!self.pad_key_lock_pending_on[id] || !saw_voice || all_paused),
+            effective: enabled
+                && (!self.pad_key_lock_pending_on[id] || !saw_voice || all_paused)
+                && !self.voices.iter().any(|voice| {
+                    voice.active
+                        && voice.sample_id == id
+                        && voice.source_playback.is_mapped()
+                        && voice
+                            .mapped_birth
+                            .is_some_and(|birth| birth.native && !birth.status.emitted)
+                }),
             ready,
             state,
             error: (state == "error").then_some("Key Lock native processing is unavailable"),
@@ -4823,6 +4950,11 @@ impl RtMixer {
         let mut witness = None;
         let mut policy_coherent = true;
         let mut policy: Option<super::source_sync_policy::SourceSyncObservation> = None;
+        let birth_source_request_incarnation = self
+            .input_runtime_ownership
+            .key_source_request_incarnation(key);
+        let mut birth = None;
+        let mut birth_unknown = false;
         for voice in self
             .voices
             .iter()
@@ -4832,6 +4964,34 @@ impl RtMixer {
                 .sample
                 .as_ref()
                 .is_some_and(|held| held.same_window(sample));
+            let own_birth = voice
+                .mapped_birth
+                .filter(|birth| {
+                    current
+                        && birth.key == key
+                        && birth.source_generation == source_generation
+                        && birth_source_request_incarnation
+                            == Some(birth.source_request_incarnation)
+                        && voice.source_admission.as_ref().is_some_and(|admission| {
+                            admission.content_key() == Some(key)
+                                && admission.current_for_birth(
+                                    &self.input_runtime_ownership,
+                                    &self.current_timing_acknowledgements,
+                                    sample,
+                                    self.sample_rate_hz as u32,
+                                    false,
+                                )
+                        })
+                })
+                .map(|birth| birth.status);
+            match own_birth {
+                None => birth_unknown = true,
+                Some(next) => match birth {
+                    None => birth = Some(next),
+                    Some(previous) if previous == next => {}
+                    Some(_) => birth = Some(super::mapped_birth::BirthStatus::mixed()),
+                },
+            }
             active |= current;
             let actual = current
                 .then(|| {
@@ -4928,6 +5088,12 @@ impl RtMixer {
             .publish_callback_source_sync_status(
                 id,
                 super::input_runtime_binding::SourceSyncStatus {
+                    birth_source_request_incarnation: birth.and(birth_source_request_incarnation),
+                    birth: if birth.is_some() && birth_unknown {
+                        Some(super::mapped_birth::BirthStatus::mixed())
+                    } else {
+                        birth
+                    },
                     content_lifetime: key.lifetime(),
                     source_generation,
                     source_address: sample.source_address(),
@@ -6091,6 +6257,11 @@ impl RtMixer {
             pad_activity.record(voice.sample_id);
 
             let is_paused = voice.paused;
+            let birth_first = !is_paused
+                && voice
+                    .mapped_birth
+                    .as_mut()
+                    .is_some_and(|birth| birth.take_first_interval(output_start_frame));
             if is_paused {
                 voice.stretch.retire_prepared();
             }
@@ -6299,6 +6470,15 @@ impl RtMixer {
                         .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
                             view.outgoing.as_ref()
                         });
+                    let birth_native_ready = birth_first
+                        && rendered == 0
+                        && voice.mapped_birth.is_some_and(|birth| {
+                            birth.native
+                                && voice.stretch.mapped_birth_first_output_ready(
+                                    &voice.source_playback,
+                                    source_plan,
+                                )
+                        });
                     let source_read = voice.stretch.process_source(
                         ProductiveSourceFeed {
                             pitch_intent,
@@ -6382,6 +6562,43 @@ impl RtMixer {
                             pad_peaks[voice.sample_id] =
                                 pad_peaks[voice.sample_id].max(contribution.abs());
                         }
+                    }
+                    // Confirm only this birth's first complete output interval, after real mixing.
+                    // A failed first attempt consumed birth_first above; a later suffix cannot repair it.
+                    if birth_first
+                        && rendered == 0
+                        && let Some(birth) = voice.mapped_birth.as_mut()
+                    {
+                        let read = source_read.is_some_and(|receipt| {
+                            receipt.output_frames == chunk_frames
+                                && receipt.playback.matches_exact(&voice.source_playback)
+                                && receipt.plan.matches_exact(source_plan)
+                                && if birth.native {
+                                    birth_native_ready && receipt.domain == super::source_feed_history::SourceReadDomain::NativeInput
+                                        && !pending_dry && !voice.stretch.wet_mode_failed() && voice.stretch.wet_render_ready()
+                                } else { receipt.domain == super::source_feed_history::SourceReadDomain::DryOutput }
+                        });
+                        let current = ownership.callback_feedback_key(voice.sample_id)
+                            == Some(birth.key)
+                            && ownership.key_source_request_incarnation(birth.key)
+                                == Some(birth.source_request_incarnation)
+                            && voice.source_admission.as_ref().is_some_and(|admission| {
+                                admission.content_key() == Some(birth.key)
+                                    && admission.retry_identity().source_generation
+                                        == birth.source_generation
+                                    && admission.current_for_birth(
+                                        ownership,
+                                        acknowledgements,
+                                        &sample,
+                                        sample_rate_hz as u32,
+                                        false,
+                                    )
+                            });
+                        birth.status.emitted = read
+                            && current
+                            && position.frame == birth.source_start
+                            && position.fraction.to_bits() == 0.0_f64.to_bits()
+                            && output_frame == birth.status.execution;
                     }
                     voice.source_playback = next_playback;
                     rendered += chunk_frames;

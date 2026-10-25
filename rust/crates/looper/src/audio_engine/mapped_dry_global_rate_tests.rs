@@ -75,22 +75,9 @@ fn master_at(segments: &[MasterSegment], frame: u64) -> f64 {
 }
 
 fn coordinate(segments: &[MasterSegment], frame: u64, launch: u64, variable: bool) -> f64 {
-    let (beginning, quarters) = if variable {
-        mapped_fixed_pitch_birth_tests::independent_extent()
-    } else {
-        (0.5, 0.5)
-    };
-    let beat =
-        beginning + (master_at(segments, frame) - master_at(segments, launch)).rem_euclid(quarters);
-    let seconds = if !variable {
-        beat * (64.0 / f64::from(RATE))
-    } else if beat < 0.6 {
-        (beat / 0.6) * (48.0 / f64::from(RATE))
-    } else {
-        (48.0 / f64::from(RATE))
-            + ((beat - 0.6) / (1.0 - 0.6)) * ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE)))
-    };
-    seconds * f64::from(RATE)
+    let elapsed = OracleFraction::binary(master_at(segments, frame))
+        .sub(OracleFraction::binary(master_at(segments, launch)));
+    tiny_oracle(variable, false).coordinate_and_rate(elapsed).0
 }
 
 fn pcm_at(source: &crate::messages::SampleBuffer, coordinate: f64) -> [f32; 2] {
@@ -165,7 +152,7 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
     let (_job, delivery) = if variable {
         variable_original_delivery(&path)
     } else {
-        original_delivery(&path.source)
+        positive_constant_delivery(&path)
     };
     publish_original(&path, &delivery, 1);
     let captured = path.start();
@@ -173,7 +160,7 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
     assert!(!crate::audio_engine::native_source_coverage::complete_view_available(&sample));
     assert_eq!((sample.resident_start(), sample.resident_end()), (32, 64));
     let generation = path.voice().generation;
-    let initial_epoch = path.voice().source_playback.mapped_epoch().unwrap();
+    let mut expected_epoch = path.voice().source_playback.mapped_epoch().unwrap();
     // Later selected intent is not the authority for an already effective voice.
     publish_original(&path, &delivery, 2);
     let mut segments = vec![MasterSegment {
@@ -191,7 +178,14 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
         let position = path.voice().source_playback.position();
         let beat = master_at(&segments, execution);
         let old_period = path.timeline.master_period_seconds().unwrap();
-        let expected_epoch = initial_epoch.with_timeline(path.timeline).unwrap();
+        if !variable {
+            let source_per_beat = OracleFraction::binary(covered_terminal_seconds(64))
+                .mul(OracleFraction::integer(u64::from(RATE)));
+            let frames_per_beat = OracleFraction::binary(f64::from(RATE) * (PERIOD / rate));
+            let actual_rate = source_per_beat.div(frames_per_beat);
+            assert!(!actual_rate.less(OracleFraction::integer(1).div(OracleFraction::integer(2))));
+            assert!(!OracleFraction::integer(2).less(actual_rate));
+        }
         assert!(
             path.voice()
                 .source_playback
@@ -216,6 +210,16 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
             beat.to_bits()
         );
         assert_eq!(path.voice().source_playback.position(), position);
+        expected_epoch = expected_epoch
+            .with_timeline_at(path.timeline, execution)
+            .unwrap();
+        assert!(
+            path.voice()
+                .source_playback
+                .mapped_epoch()
+                .unwrap()
+                .matches_exact(expected_epoch)
+        );
         assert_eq!(path.voice().generation, generation);
         assert!(
             path.voice()
@@ -272,8 +276,8 @@ fn run_piecewise(variable: bool, rates: &[f64], partitions: &[usize]) -> Vec<f32
 fn dry_mapped_coupled_fader_uses_one_piecewise_master_and_each_original_actual_receipt() {
     // Representative continuous controls; these are not the separate 37 pitch obligations.
     for (variable, rates) in [
-        (true, &[0.81, 1.16, 1.0, 1.12][..]),
-        (false, &[0.80, 1.16, 0.5, 2.0][..]),
+        (true, &[0.80, 1.16, 1.0, 1.12][..]),
+        (false, &[0.80, 1.16, 0.5, 1.99][..]),
     ] {
         let single = run_piecewise(variable, rates, &[1]);
         let unequal = run_piecewise(variable, rates, &[127, 1, 383, 17, 256]);
@@ -282,6 +286,61 @@ fn dry_mapped_coupled_fader_uses_one_piecewise_master_and_each_original_actual_r
             "caller partitions cannot change dry addresses or PCM"
         );
     }
+}
+
+#[test]
+fn covered_flat_original_map_rejects_two_when_exact_source_slope_exceeds_upper_bound() {
+    let mut path = mapped_fixed_pitch_birth_tests::configured(0);
+    let (_job, delivery) = positive_constant_delivery(&path);
+    publish_original(&path, &delivery, 1);
+    let captured = path.start();
+    path.render(17);
+    let old_epoch = path.timeline;
+    let before = path.voice().source_playback;
+    let generation = path.voice().generation;
+    let sample = path.voice().sample.as_ref().unwrap().clone();
+    let source_per_beat = OracleFraction::binary(covered_terminal_seconds(64))
+        .mul(OracleFraction::integer(u64::from(RATE)));
+    let frames_per_beat = OracleFraction::binary(f64::from(RATE) * (PERIOD / 2.0));
+    assert!(
+        frames_per_beat
+            .mul(OracleFraction::integer(2))
+            .less(source_per_beat)
+    );
+    let mut parameters = Parameters::new(&mut path);
+    parameters.coupled(&mut path, 2.0, PERIOD / 2.0);
+    assert_eq!(effect(&path).state, RateState::Rejected);
+    assert_eq!(effect(&path).error, RateError::MappedTimingUnavailable);
+    assert_eq!(effect(&path).effective.speed, 1.0);
+    assert_eq!(effect(&path).effective.period, Some(PERIOD));
+    assert!(path.timeline.matches_clock_epoch(&old_epoch));
+    assert_eq!(path.voice().generation, generation);
+    assert!(path.voice().source_playback.matches_exact(&before));
+    assert!(
+        path.voice()
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .original()
+            .same_owner(&captured)
+    );
+    let segments = [MasterSegment {
+        frame: 0,
+        beat: 0.0,
+        period: PERIOD,
+        actual_epoch: old_epoch,
+    }];
+    let actual = path.render(129);
+    let expected: Vec<_> = (17..146)
+        .flat_map(|frame| pcm_at(&sample, coordinate(&segments, frame, 0, false)))
+        .collect();
+    assert_eq!(actual.len(), expected.len());
+    assert!(
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 3e-6)
+    );
 }
 
 #[test]
@@ -521,9 +580,22 @@ fn dry_mapped_whole_map_limits_and_stale_source_or_unsupported_cohort_refuse_ato
                     Ok(false)
                 );
             }
-            // Binary64 whole-map arithmetic puts this variable fixture just below
-            // the actual .5 bound at .80. The flat fixture covers supported .80.
-            _ => speed = 0.80,
+            // The covered terminal changed the former .80 boundary. This independently
+            // declared final segment is genuinely outside .5 at .79; .80 is positive above.
+            _ => {
+                speed = 0.79;
+                let source_frames = OracleFraction::binary(covered_terminal_seconds(64))
+                    .sub(OracleFraction::binary(48.0 / f64::from(RATE)))
+                    .mul(OracleFraction::integer(u64::from(RATE)));
+                let beats = OracleFraction::integer(1).sub(OracleFraction::binary(0.6));
+                let frames_per_beat = OracleFraction::binary(f64::from(RATE) * (PERIOD / speed));
+                assert!(
+                    source_frames
+                        .div(beats)
+                        .div(frames_per_beat)
+                        .less(OracleFraction::integer(1).div(OracleFraction::integer(2)))
+                );
+            }
         }
         let mut parameters = Parameters::new(&mut path);
         parameters.coupled(&mut path, speed, PERIOD / speed);
@@ -572,7 +644,7 @@ fn dry_mapped_changed_epoch_fences_old_target_then_nonunity_new_start_retrigger_
     path.render(47);
     path.render(1);
     assert_eq!(pending.state(), "rejected");
-    assert_eq!(pending.reason(), Some("mapped_timing_unavailable"));
+    assert_eq!(pending.reason(), Some("timing_changed"));
     assert_eq!(pending.target_frame(), Some(64));
     assert_eq!(path.voice().generation, generation);
     assert!(

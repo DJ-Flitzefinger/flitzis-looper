@@ -99,6 +99,9 @@ impl RtMixer {
             return Err(PitchActionReject::StaleContent);
         }
         let guard = work.origin().callback_guard()?;
+        if !self.ordinary_start_key_lock_request_current(work, guard.id) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         if !self.admitted_source_binding_current(guard.id, guard.binding) {
             return Err(PitchActionReject::SourceChanged);
         }
@@ -106,6 +109,21 @@ impl RtMixer {
             return Err(PitchActionReject::TimingChanged);
         }
         Ok(guard)
+    }
+
+    pub(super) fn ordinary_start_key_lock_request_current(
+        &self,
+        work: &OrdinaryStartWork,
+        id: usize,
+    ) -> bool {
+        work.key_lock_request.is_none_or(|request| {
+            self.pad_key_lock_request_id[id] == request
+                && self
+                    .input_runtime_ownership
+                    .key_lock_request_for_cell(work.origin().content_key().cell())
+                    .load(Ordering::Acquire)
+                    == request
+        })
     }
 
     pub(super) fn ordinary_start_render(&self, id: usize) -> FrozenPitchRender {
@@ -128,31 +146,32 @@ impl RtMixer {
             work.origin().sync_request(),
         )?;
         if let Some(geometry) = work.origin().mapped_geometry() {
-            let (epoch, original) = work
-                .mapped_clock()
+            let timeline = work
+                .mapped_timeline
                 .ok_or(PitchActionReject::MappedTimingUnavailable)?;
-            let render = self.ordinary_start_render(id);
-            // Native-input chronology alone does not prove alignment to the
-            // common output timeline. Keep public activation gated until that
-            // per-path contract (including AttackAtGrid) is actually integrated.
-            if render.key_lock
-                || render.pitch.total_semitones() != 0
-                || !work
-                    .origin()
-                    .sync_request()
-                    .mapped_matching_enabled(self.bpm_lock_enabled)
-                || epoch.master_period_seconds().map(f64::to_bits)
+            if !work
+                .origin()
+                .sync_request()
+                .mapped_matching_enabled(self.bpm_lock_enabled)
+                || timeline.master_period_seconds().map(f64::to_bits)
                     != self.master_period_seconds.map(f64::to_bits)
                 || snapshot.plan.loop_region != geometry.domain().region
             {
                 return Err(PitchActionReject::MappedTimingUnavailable);
             }
-            snapshot.playback = SourcePlayback::mapped(geometry, epoch, original)
-                .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
-            let position = snapshot.playback.position();
-            snapshot.plan.frame_pos = position.frame;
-            snapshot.plan.seek_mode = position.seek_mode;
-            snapshot.plan.loop_period = snapshot.playback.reader_period();
+            let birth = super::super::mapped_birth::playback_at_birth(
+                geometry,
+                work.sequence(),
+                timeline,
+                SourceReadCheckpoint {
+                    playback: snapshot.playback,
+                    plan: snapshot.plan,
+                },
+                work.mapped_birth_frame(),
+                work.launch_reference(),
+            )?;
+            snapshot.playback = birth.playback;
+            snapshot.plan = birth.plan;
         }
         snapshot
             .playback
@@ -269,11 +288,12 @@ impl RtMixer {
         let guard = self.ordinary_start_guard(work)?;
         let render = self.ordinary_start_render(guard.id);
         let snapshot = self.ordinary_start_snapshot(work, guard.id)?;
-        Ok(render
-            .pitch
-            .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
-            .map_err(|_| PitchActionReject::UnsupportedPitch)?
-            != 1.0)
+        Ok((snapshot.playback.is_mapped() && render.key_lock)
+            || render
+                .pitch
+                .native_pitch_scale(snapshot.playback.tempo_ratio(), render.key_lock)
+                .map_err(|_| PitchActionReject::UnsupportedPitch)?
+                != 1.0)
     }
 
     pub(crate) fn capture_ordinary_start_request(
@@ -289,6 +309,12 @@ impl RtMixer {
         let render = self.ordinary_start_render(guard.id);
         work.freeze_loop(self.ordinary_loop_region(work, guard.id));
         let snapshot = self.ordinary_start_snapshot(work, guard.id)?;
+        if snapshot.playback.is_mapped() {
+            work.key_lock_request = Some(self.pad_key_lock_request_id[guard.id]);
+            if !self.ordinary_start_key_lock_request_current(work, guard.id) {
+                return Err(PitchActionReject::PreparedMismatch);
+            }
+        }
         let launch_origin = super::super::prepared_native_history::SourceReadCheckpoint {
             playback: snapshot.playback,
             plan: snapshot.plan,
@@ -329,9 +355,15 @@ impl RtMixer {
         work: &mut OrdinaryStartWork,
         execution: u64,
         callback: u64,
+        timeline: Option<super::super::transport::TransportTimeline>,
     ) -> Result<(), PitchActionReject> {
-        let (endpoint, intent) = self.plan_ordinary_late_reprepare(work, execution, callback)?;
-        work.plan_late_reprepare(endpoint, intent, execution)
+        let (endpoint, intent) =
+            self.plan_ordinary_late_reprepare(work, execution, callback, timeline)?;
+        work.plan_late_reprepare(endpoint, intent, execution)?;
+        if work.mapped_timeline.is_some() {
+            work.mapped_timeline = timeline;
+        }
+        Ok(())
     }
 
     /// Validate the retained physical beginning before changing any original E/status.
@@ -340,6 +372,7 @@ impl RtMixer {
         work: &OrdinaryStartWork,
         execution: u64,
         callback: u64,
+        timeline: Option<super::super::transport::TransportTimeline>,
     ) -> Result<
         (
             SourceReadCheckpoint,
@@ -348,11 +381,6 @@ impl RtMixer {
         PitchActionReject,
     > {
         let guard = self.ordinary_start_guard(work)?;
-        // A delayed mapped birth needs an owning canonical replay trajectory.
-        // Refuse before the scalar endpoint comparison below can relabel it.
-        if work.mapped_clock().is_some() {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
         if work.render != Some(self.ordinary_start_render(guard.id))
             || execution <= work.execution_frame()
         {
@@ -374,6 +402,28 @@ impl RtMixer {
         snapshot
             .playback
             .install_launch_reference(work.launch_reference());
+        if let Some(geometry) = work.origin().mapped_geometry() {
+            if !work
+                .origin()
+                .sync_request()
+                .mapped_matching_enabled(self.bpm_lock_enabled)
+            {
+                return Err(PitchActionReject::MappedTimingUnavailable);
+            }
+            let endpoint = super::super::mapped_birth::playback_at_birth(
+                geometry,
+                work.sequence(),
+                timeline.ok_or(PitchActionReject::MappedTimingUnavailable)?,
+                SourceReadCheckpoint {
+                    playback: snapshot.playback,
+                    plan: snapshot.plan,
+                },
+                execution,
+                work.launch_reference(),
+            )?;
+            let intent = self.capture_ordinary_start_dsp_intent(work, guard.id, callback)?;
+            return Ok((endpoint, intent));
+        }
         if !origin.matches_exact(
             super::super::prepared_native_history::SourceReadCheckpoint {
                 playback: snapshot.playback,
@@ -421,6 +471,25 @@ impl RtMixer {
             work.epoch(),
             work.sequence(),
         )
+    }
+
+    pub(super) fn mapped_birth_witness_current(
+        &self,
+        index: usize,
+        candidate: &super::super::prepared_native_history::NativeAdapterState,
+        config: &VoiceStartConfig,
+        staged: &super::super::prepared_native_history::PreparedMappedVoice,
+    ) -> bool {
+        let voice = &self.voices[index];
+        config.source_admission.as_ref().is_some_and(|admission| {
+            candidate.staged_mapped_voice_current(
+                staged,
+                admission,
+                &voice.history_lifetime,
+                voice.generation,
+                voice.active,
+            )
+        })
     }
 
     pub(crate) fn execute_ordinary_start(
@@ -515,6 +584,24 @@ impl RtMixer {
             )
             .ok_or(PitchActionReject::SourceChanged)?;
         config.initial_frame_pos = snapshot.plan.frame_pos;
+        let staged_voice = if work.native_required() && snapshot.playback.is_mapped() {
+            let voice = &self.voices[index];
+            Some(
+                work.candidate
+                    .as_ref()
+                    .ok_or(PitchActionReject::PreparedMismatch)?
+                    .stage_mapped_voice(
+                        &voice.history_lifetime,
+                        voice.generation,
+                        voice.active,
+                        selected_increments,
+                    )
+                    .ok_or(PitchActionReject::PreparedMismatch)?,
+            )
+        } else {
+            None
+        };
+        let staged_voice = RefCell::new(staged_voice);
         let ownership = self.input_runtime_ownership.clone();
         let placement = guard
             .binding
@@ -542,13 +629,17 @@ impl RtMixer {
                         && mixer.admitted_source_binding_current(id, guard.binding)
                         && mixer.ordinary_start_continuity_current(&work)
                         && mixer.ordinary_start_render(id) == render
+                        && mixer.ordinary_start_key_lock_request_current(&work, id)
                         && mixer.ordinary_start_dsp_current(&work, id)
                         && ownership.launch_write_current(launch)
-                        && mixer.admit_prepared_source_birth(
-                            config.borrow_mut().as_mut().unwrap(),
-                            guard.binding,
-                            false,
-                        )
+                        && {
+                            let mut config = config.borrow_mut();
+                            mixer.admit_prepared_source_birth(
+                                config.as_mut().unwrap(),
+                                guard.binding,
+                                false,
+                            )
+                        }
                         && (!work.preparation_required()
                             || mixer.ordinary_start_candidate_matches(
                                 &work,
@@ -556,6 +647,14 @@ impl RtMixer {
                                 index,
                                 output_frame,
                             ))
+                        && staged_voice.borrow().as_ref().is_none_or(|staged| {
+                            mixer.mapped_birth_witness_current(
+                                index,
+                                work.candidate.as_ref().unwrap(),
+                                config.borrow().as_ref().unwrap(),
+                                staged,
+                            )
+                        })
                         && work.claim_effect()
                 },
                 |_| {
@@ -626,6 +725,15 @@ impl RtMixer {
                     voice.phase_launch_qualified = work.phase_launch_qualified;
                     voice.phase_birth_unadvanced = true;
                     voice.sync_request = work.origin().sync_request();
+                    voice.mapped_birth = snapshot.playback.is_mapped().then(|| {
+                        work.origin().birth_observation(
+                            output_frame,
+                            work.phase_launch_qualified,
+                            snapshot.plan.loop_region.start,
+                            work.native_required(),
+                            work.key_lock_request.unwrap_or(0),
+                        )
+                    });
                     voice.mapped_start = snapshot.playback.is_mapped().then(|| {
                         super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())
                     });
@@ -633,6 +741,12 @@ impl RtMixer {
                         voice.source_control_epoch = continued_controls;
                     }
                     if work.native_required() {
+                        if let Some(staged) = staged_voice.borrow_mut().take() {
+                            work.candidate
+                                .as_mut()
+                                .unwrap()
+                                .install_mapped_voice_claimed(staged);
+                        }
                         let feed = ProductiveSourceFeed {
                             sample: &snapshot.sample,
                             stems: snapshot.stems.as_ref(),

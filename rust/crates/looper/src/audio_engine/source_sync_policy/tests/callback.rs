@@ -241,10 +241,15 @@ impl Path {
                 .map(|(index, (frame, beat))| {
                     let mut anchor = template.clone();
                     anchor["id"] = json!(format!("authored-policy-{index}"));
-                    anchor["source_seconds_bits"] = json!(format!(
-                        "{:016x}",
-                        (frame as f64 / f64::from(RATE)).to_bits()
-                    ));
+                    let seconds = frame as f64 / f64::from(RATE);
+                    // Cover the persisted physical endpoint exactly; retain the
+                    // original middle knot and do not manufacture an own-Q value.
+                    let seconds = if frame == END {
+                        f64::from_bits(seconds.to_bits() + 1)
+                    } else {
+                        seconds
+                    };
+                    anchor["source_seconds_bits"] = json!(format!("{:016x}", seconds.to_bits()));
                     anchor["beat_bits"] = json!(format!("{:016x}", beat.to_bits()));
                     anchor
                 })

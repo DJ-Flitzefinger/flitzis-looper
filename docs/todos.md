@@ -48,7 +48,14 @@ No open TODO items.
 
 ## Refactors And Chores
 
-No open TODO items.
+- [ ] Optionally reduce the existing exact six-PAD consuming cost further.
+  - Type: Investigation
+  - Context: The Human accepted the measured 11.2481 ms six-PAD result for initial
+    native testing and prioritized SYNC, REALTIME BPM and BeatThis delivery.
+  - Dependencies: Usable native delivery and Human feedback.
+  - Notes: Preserve exact coordinates, rounding, source ownership and RT guards.
+    This is optional follow-up, not a current delivery gate. The accepted figure
+    does not cover additional costs introduced by new continuation paths.
 
 ## Documentation
 

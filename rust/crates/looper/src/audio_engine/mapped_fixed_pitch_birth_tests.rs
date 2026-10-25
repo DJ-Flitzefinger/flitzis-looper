@@ -29,18 +29,18 @@ unsafe extern "C" {
     );
 }
 
-struct RawStereo {
+pub(super) struct RawStereo {
     state: *mut RubberBandLiveStateOpaque,
     input: VecDeque<[f32; 2]>,
     output: VecDeque<[f32; 2]>,
-    history: usize,
+    pub(super) history: usize,
     delay: usize,
     pitch: f64,
     pending_pitch: Option<f64>,
 }
 
 impl RawStereo {
-    fn new(pitch: f64) -> Self {
+    pub(super) fn new(pitch: f64) -> Self {
         // Independent pinned C ABI/reset protocol. No DUT Native/source/history helper.
         let state = unsafe { raw_new(RATE, 2, 0x1000_0000) };
         assert!(!state.is_null());
@@ -90,7 +90,7 @@ impl RawStereo {
         std::array::from_fn(|frame| [output[0][frame], output[1][frame]])
     }
 
-    fn sample(&mut self, frame: [f32; 2]) -> [f32; 2] {
+    pub(super) fn sample(&mut self, frame: [f32; 2]) -> [f32; 2] {
         self.sample_at_pitch(frame, self.pitch)
     }
 
@@ -168,7 +168,7 @@ pub(super) fn drain_grid(path: &mut LaunchPath) {
     );
 }
 
-fn wait_prepared(path: &mut LaunchPath, start: &CapturedPadStart) {
+pub(super) fn wait_prepared(path: &mut LaunchPath, start: &CapturedPadStart) {
     let frame = path.timeline.output_frame();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -193,22 +193,12 @@ fn wait_prepared(path: &mut LaunchPath, start: &CapturedPadStart) {
 }
 
 pub(super) fn independent_extent() -> (f64, f64) {
-    // Original declared source-second/beat anchor bits, without decimal reduction:
-    // B(32/RATE) and B(64/RATE)-B(32/RATE) are the captured full-loop intent.
-    let beginning = ((32.0 / f64::from(RATE)) / (48.0 / f64::from(RATE))) * 0.6;
-    (beginning, 1.0 - beginning)
+    let oracle = tiny_oracle(true, false);
+    (oracle.beginning.rounded(), oracle.quarters.rounded())
 }
 
 fn independent_coordinate(frame: u64) -> f64 {
-    let (beginning, quarters) = independent_extent();
-    let beat = beginning + (frame as f64 / 64.0).rem_euclid(quarters);
-    let seconds = if beat < 0.6 {
-        (beat / 0.6) * (48.0 / f64::from(RATE))
-    } else {
-        (48.0 / f64::from(RATE))
-            + ((beat - 0.6) / (1.0 - 0.6)) * ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE)))
-    };
-    seconds * f64::from(RATE)
+    tiny_oracle(true, false).at_frame(frame as usize).0
 }
 
 fn assert_original_current(captured: &CapturedPadStart) {
@@ -232,14 +222,11 @@ fn owned_birth(shift: i32) -> OwnedBirth {
 }
 
 fn owned_birth_with_mode(shift: i32, key_lock: bool, unity_head: bool) -> OwnedBirth {
-    use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
-    use crate::audio_engine::source_playback::SourcePlayback;
-
-    let mut path = configured(shift);
+    let path = configured(shift);
     let (job, delivery) = if unity_head {
         // Independent source data: first interval r=1, second approximately 2/3 at F=64.
         // The selected loop repeats both intervals many times inside a Native block.
-        let mut expected = record(&path.source, 0);
+        let mut expected = positive_launch_record(&path);
         let accepted = &mut expected["record"]["accepted"];
         let first = accepted["anchors"][0].clone();
         let mut middle = accepted["anchors"][1].clone();
@@ -268,6 +255,20 @@ fn owned_birth_with_mode(shift: i32, key_lock: bool, unity_head: bool) -> OwnedB
     } else {
         variable_original_delivery(&path)
     };
+    let fixture = finish_owned_birth(path, job, delivery, shift, key_lock);
+    tiny_oracle(true, unity_head)
+        .assert_physical_quarters(fixture.captured.mapped_geometry().unwrap());
+    fixture
+}
+
+fn finish_owned_birth(
+    mut path: LaunchPath,
+    job: OfflineAnalysisJob,
+    delivery: LoaderEventDelivery,
+    shift: i32,
+    key_lock: bool,
+) -> OwnedBirth {
+    use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
     publish_original(&path, &delivery, 1);
     path.render(1);
     let captured = path.capture();
@@ -280,18 +281,15 @@ fn owned_birth_with_mode(shift: i32, key_lock: bool, unity_head: bool) -> OwnedB
     work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame())
         .unwrap();
     work.freeze_frames(64, 64).unwrap();
-    let (clock, target) = work.mapped_clock().unwrap();
+    let target = work.execution_frame();
     let mut snapshot = path
         .source
         .mixer
         .normal_start_snapshot_for_test(0, 32.0 / f64::from(RATE), Some(64.0 / f64::from(RATE)))
         .unwrap();
-    snapshot.playback =
-        SourcePlayback::mapped(captured.mapped_geometry().unwrap(), clock, target).unwrap();
-    let position = snapshot.playback.position();
-    snapshot.plan.frame_pos = position.frame;
-    snapshot.plan.seek_mode = position.seek_mode;
-    snapshot.plan.loop_period = snapshot.playback.reader_period();
+    let birth = original_birth_checkpoint(&work, &snapshot);
+    snapshot.playback = birth.playback;
+    snapshot.plan = birth.plan;
     work.freeze_launch_origin(SourceReadCheckpoint {
         playback: snapshot.playback,
         plan: snapshot.plan,
@@ -324,29 +322,165 @@ fn owned_birth_with_mode(shift: i32, key_lock: bool, unity_head: bool) -> OwnedB
     }
 }
 
+fn original_birth_checkpoint(
+    work: &crate::audio_engine::ordinary_start::OrdinaryStartWork,
+    snapshot: &crate::audio_engine::prepared_native_history::PitchSourceSnapshot,
+) -> crate::audio_engine::prepared_native_history::SourceReadCheckpoint {
+    use crate::audio_engine::prepared_native_history::SourceReadCheckpoint;
+    let original = SourceReadCheckpoint {
+        playback: snapshot.playback,
+        plan: snapshot.plan,
+    };
+    let birth = crate::audio_engine::mapped_birth::playback_at_birth(
+        work.origin().mapped_geometry().unwrap(),
+        work.sequence(),
+        work.mapped_timeline.unwrap(),
+        original,
+        work.execution_frame(),
+        work.launch_reference(),
+    )
+    .unwrap();
+    assert_eq!(birth.playback.position(), original.playback.position());
+    assert_eq!(
+        birth.playback.position().fraction.to_bits(),
+        0.0_f64.to_bits()
+    );
+    assert_eq!(
+        birth.playback.position().frame,
+        original.plan.loop_region.start
+    );
+    assert_eq!(
+        birth.playback.original_scalar_domain(),
+        Some(original.plan.domain())
+    );
+    assert_eq!(
+        birth.playback.mapped_output_frame(),
+        Some(work.execution_frame())
+    );
+    birth
+}
+
 fn independent_input(source: &crate::messages::SampleBuffer, frame: usize) -> [f32; 2] {
     independent_input_with_shape(source, frame, false)
 }
 
-fn independent_beat(frame: usize, unity_head: bool) -> f64 {
-    let middle = if unity_head { 0.75 } else { 0.6 };
-    let last = if unity_head { 1.125 } else { 1.0 };
-    let beginning = ((32.0 / f64::from(RATE)) / (48.0 / f64::from(RATE))) * middle;
-    beginning + (frame as f64 / 64.0).rem_euclid(last - beginning)
+#[test]
+fn finite_mapped_birth_coverage_replan_keeps_original_proof_and_refuses_stale_source_window_or_ack()
+{
+    use crate::audio_engine::prepared_native_history::SourceReadCheckpoint;
+
+    for invalid in 0..3 {
+        let fixture = owned_birth(7);
+        let scalar = fixture
+            .path
+            .source
+            .mixer
+            .normal_start_snapshot_for_test(0, 32.0 / f64::from(RATE), Some(64.0 / f64::from(RATE)))
+            .unwrap();
+        let mut timeline = fixture.path.timeline;
+        assert!(timeline.anchor_beat_position_at_frame(0.25, timeline.output_frame()));
+        let next = crate::audio_engine::mapped_birth::playback_at_birth(
+            fixture.captured.mapped_geometry().unwrap(),
+            fixture.work.sequence(),
+            timeline,
+            SourceReadCheckpoint {
+                playback: scalar.playback,
+                plan: scalar.plan,
+            },
+            128,
+            fixture.work.launch_reference(),
+        )
+        .unwrap();
+        let original = SourceReadCheckpoint {
+            playback: fixture.request.playback,
+            plan: fixture.request.plan,
+        };
+        let original_target = fixture.request.target_output_frame;
+        let permit = fixture.request.permit.scalar_identity();
+        assert!(fixture.request.coverage.is_some());
+        let replacement = fixture
+            .request
+            .coverage_for_replanned_mapped_birth(next)
+            .unwrap()
+            .unwrap();
+        assert!(replacement.matches_with_readers(
+            &fixture.request.sample,
+            crate::audio_engine::source_reader::StemReadSets::new(
+                fixture.request.stems.as_ref(),
+                None
+            ),
+            RATE,
+            fixture.request.binding.accepted,
+            next.plan,
+            &next.playback,
+            true,
+        ));
+        assert!(
+            !fixture
+                .request
+                .coverage
+                .as_ref()
+                .unwrap()
+                .matches_with_readers(
+                    &fixture.request.sample,
+                    crate::audio_engine::source_reader::StemReadSets::new(
+                        fixture.request.stems.as_ref(),
+                        None
+                    ),
+                    RATE,
+                    fixture.request.binding.accepted,
+                    next.plan,
+                    &next.playback,
+                    true,
+                )
+        );
+        let ownership = &fixture.path.source.engine.input_runtime_ownership;
+        // Retain this changed window until after the original proof is rejected.
+        let mut changed_window = fixture.request.sample.clone();
+        match invalid {
+            0 => ownership.revoke_source(0),
+            1 => {
+                changed_window.samples = changed_window.samples.to_vec().into();
+                ownership.publish_window(0, &changed_window);
+            }
+            _ => assert!(
+                fixture
+                    .path
+                    .source
+                    .engine
+                    .current_timing_acknowledgements
+                    .acknowledge_for_key(ownership, fixture.captured.content_key(), 1)
+            ),
+        }
+        assert!(
+            fixture
+                .request
+                .coverage_for_replanned_mapped_birth(next)
+                .is_err(),
+            "case {invalid}"
+        );
+        assert!(original.matches_exact(SourceReadCheckpoint {
+            playback: fixture.request.playback,
+            plan: fixture.request.plan,
+        }));
+        assert_eq!(fixture.request.target_output_frame, original_target);
+        assert_eq!(fixture.request.permit.scalar_identity(), permit);
+        assert!(fixture.request.coverage.is_some());
+        assert!(fixture.request.actual_feed.is_none());
+        assert!(
+            fixture
+                .path
+                .source
+                .mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active)
+        );
+    }
 }
 
 fn independent_coordinate_with_shape(frame: usize, unity_head: bool) -> f64 {
-    if !unity_head {
-        return independent_coordinate(frame as u64);
-    }
-    let beat = independent_beat(frame, true);
-    let seconds = if beat < 0.75 {
-        (beat / 0.75) * (48.0 / f64::from(RATE))
-    } else {
-        (48.0 / f64::from(RATE))
-            + ((beat - 0.75) / 0.375) * ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE)))
-    };
-    seconds * f64::from(RATE)
+    tiny_oracle(true, unity_head).at_frame(frame).0
 }
 
 fn independent_pitch(frame: usize, shift: i32, key_lock: bool, unity_head: bool) -> f64 {
@@ -354,14 +488,7 @@ fn independent_pitch(frame: usize, shift: i32, key_lock: bool, unity_head: bool)
     if !key_lock {
         return h;
     }
-    let middle = if unity_head { 0.75 } else { 0.6 };
-    let last = if unity_head { 1.125 } else { 1.0 };
-    let slope = if independent_beat(frame, unity_head) < middle {
-        (48.0 / f64::from(RATE)) / middle
-    } else {
-        ((64.0 / f64::from(RATE)) - (48.0 / f64::from(RATE))) / (last - middle)
-    };
-    h / (f64::from(RATE) * slope / 64.0)
+    h / tiny_oracle(true, unity_head).at_frame(frame).1
 }
 
 fn independent_input_with_shape(
@@ -544,6 +671,108 @@ fn owned_mapped_pitch_preconditions_preserve_partial_fifo_and_original_owner() {
     unchanged(&candidate);
     assert_original_current(&fixture.captured);
     assert_original_current(&foreign.captured);
+}
+
+#[test]
+fn installed_mapped_voice_revocation_refuses_minted_chunk_without_fifo_mutation() {
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut, SourceReadCheckpoint,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    // Isolated lifetime/adapter component. The public tests separately prove
+    // installation by the genuine Ordinary, Global and Piano birth claims.
+    let fixture = owned_birth_with_mode(0, true, true);
+    let playback = fixture.request.playback;
+    let plan = fixture.request.plan;
+    let intent = fixture.request.pitch_intent;
+    let cut = RetainedNativeStartCut {
+        history_output_frames: 4096,
+        discarded_raw_output_frames: 4096 - (BLOCK - 1),
+    };
+    let mut candidate =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    candidate
+        .prepare_owned_mapped_birth_future(fixture.request, cut)
+        .unwrap();
+    let lifetime = Arc::new(AtomicU64::new(0));
+    let staged = candidate
+        .stage_mapped_voice(&lifetime, 0, false, 1)
+        .unwrap();
+    lifetime.store(1, Ordering::Release);
+    candidate.install_mapped_voice_claimed(staged);
+    assert!(candidate.has_effective_mapped_voice_for_test());
+    assert!(
+        candidate
+            .stage_mapped_voice(&lifetime, 1, true, 1)
+            .is_none()
+    );
+    let (actual, actual_plan) = candidate
+        .retained_start_feed(&playback, plan)
+        .unwrap()
+        .unwrap();
+    let checkpoint = SourceReadCheckpoint {
+        playback: actual,
+        plan: actual_plan,
+    };
+    let chunk = candidate
+        .live_mapped_pitch_chunk(checkpoint, 1, intent, true)
+        .unwrap()
+        .unwrap();
+    let input_fifo = candidate.input_fifo.clone();
+    let output_fifo = candidate.output_fifo.clone();
+    let input = candidate.input.clone();
+    let output = candidate.output.clone();
+    let coordinates = candidate.retained_mapped_output_coordinates().unwrap();
+    let pending = candidate.mapped_pending_pitch_for_test();
+    let native = candidate.rubberband.as_ref().unwrap().state_address();
+    let mut destination = vec![vec![123.0]; 2];
+    lifetime.store(0, Ordering::Release);
+    fixture.captured.callback_guard().unwrap();
+    assert!(
+        candidate
+            .render_mapped(&vec![vec![0.25]; 2], &mut destination, chunk)
+            .is_err()
+    );
+    assert_eq!(destination, vec![vec![123.0]; 2]);
+    assert_eq!(candidate.input_fifo, input_fifo);
+    assert_eq!(candidate.output_fifo, output_fifo);
+    assert_eq!(candidate.input, input);
+    assert_eq!(candidate.output, output);
+    assert_eq!(
+        candidate.retained_mapped_output_coordinates().unwrap(),
+        coordinates
+    );
+    assert_eq!(candidate.mapped_pending_pitch_for_test(), pending);
+    assert_eq!(
+        candidate.rubberband.as_ref().unwrap().state_address(),
+        native
+    );
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(checkpoint, 1, intent, true)
+            .is_err()
+    );
+    lifetime.store(2, Ordering::Release);
+    assert!(!candidate.has_effective_mapped_voice_for_test());
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(checkpoint, 1, intent, true)
+            .is_err()
+    );
+    candidate.reset_adapter();
+    assert!(!candidate.has_effective_mapped_voice_for_test());
+    // An installed request is never a reusable worker/silent-prefix candidate.
+    let request = candidate.source.take().unwrap();
+    assert!(
+        candidate
+            .prepare_owned_mapped_birth_future(request, cut)
+            .is_err()
+    );
 }
 
 #[derive(Debug, PartialEq)]
@@ -896,8 +1125,7 @@ fn owned_mapped_pitch_counter_limits_and_current_fifo_capacity_refuse_before_mut
 
 fn owned_long_birth(knot: usize) -> OwnedBirth {
     use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
-    use crate::audio_engine::source_playback::SourcePlayback;
-    let pcm: Vec<i16> = (0..8192)
+    let pcm: Vec<i16> = (0..8193)
         .map(|index| (((index * 3251 + 173) % 20001) as i32 - 10000) as i16)
         .collect();
     let mut source = ColdCustody::new_selected_with_signal(None, &pcm);
@@ -917,7 +1145,7 @@ fn owned_long_birth(knot: usize) -> OwnedBirth {
     middle["source_seconds_bits"] = json!(bits(knot as f64 / f64::from(RATE)));
     middle["beat_bits"] = json!(bits(knot as f64 / 64.0));
     let mut last = accepted["anchors"][1].clone();
-    last["source_seconds_bits"] = json!(bits(8192.0 / f64::from(RATE)));
+    last["source_seconds_bits"] = json!(bits(covered_terminal_seconds(8192)));
     last["beat_bits"] = json!(bits(knot as f64 / 64.0 + (8192 - knot) as f64 / 48.0));
     let interval = accepted["intervals"][0].clone();
     accepted["anchors"] = json!([first, middle, last]);
@@ -957,18 +1185,18 @@ fn owned_long_birth(knot: usize) -> OwnedBirth {
     work.freeze_mapped_clock(Some(path.timeline), 64, path.timeline.output_frame())
         .unwrap();
     work.freeze_frames(64, 64).unwrap();
-    let (clock, target) = work.mapped_clock().unwrap();
+    let target = work.execution_frame();
     let mut snapshot = path
         .source
         .mixer
         .normal_start_snapshot_for_test(0, 0.0, Some(8192.0 / f64::from(RATE)))
         .unwrap();
-    snapshot.playback =
-        SourcePlayback::mapped(captured.mapped_geometry().unwrap(), clock, target).unwrap();
-    let position = snapshot.playback.position();
-    snapshot.plan.frame_pos = position.frame;
-    snapshot.plan.seek_mode = position.seek_mode;
-    snapshot.plan.loop_period = snapshot.playback.reader_period();
+    let birth = original_birth_checkpoint(&work, &snapshot);
+    snapshot.playback = birth.playback;
+    snapshot.plan = birth.plan;
+    assert_eq!(snapshot.sample.frame_count(), 8193);
+    assert_eq!(snapshot.plan.loop_region.end, 8192);
+    long_oracle(knot).assert_physical_quarters(captured.mapped_geometry().unwrap());
     work.freeze_launch_origin(SourceReadCheckpoint {
         playback: snapshot.playback,
         plan: snapshot.plan,
@@ -999,24 +1227,33 @@ fn owned_long_birth(knot: usize) -> OwnedBirth {
 }
 
 fn independent_long_coordinate_and_pitch(frame: usize, knot: usize) -> (f64, f64) {
-    let knot_beat = knot as f64 / 64.0;
-    let quarters = knot_beat + (8192 - knot) as f64 / 48.0;
-    let beat = (frame as f64 / 64.0).rem_euclid(quarters);
-    let knot_seconds = knot as f64 / f64::from(RATE);
-    let end_seconds = 8192.0 / f64::from(RATE);
-    let (seconds, slope) = if beat < knot_beat {
-        ((beat / knot_beat) * knot_seconds, knot_seconds / knot_beat)
-    } else {
-        (
-            knot_seconds
-                + ((beat - knot_beat) / (quarters - knot_beat)) * (end_seconds - knot_seconds),
-            (end_seconds - knot_seconds) / (quarters - knot_beat),
-        )
-    };
-    (
-        seconds * f64::from(RATE),
-        1.0 / (f64::from(RATE) * slope / 64.0),
-    )
+    let (source, rate) = long_oracle(knot).at_frame(frame);
+    (source, 1.0 / rate)
+}
+
+fn long_oracle(knot: usize) -> &'static OracleMap {
+    static MAPS: std::sync::OnceLock<[OracleMap; 4]> = std::sync::OnceLock::new();
+    let knots = [511, 512, 513, 1536];
+    let maps = MAPS.get_or_init(|| {
+        knots.map(|knot| {
+            OracleMap::new(
+                &[
+                    (0.0, 0.0),
+                    (knot as f64 / f64::from(RATE), knot as f64 / 64.0),
+                    (
+                        covered_terminal_seconds(8192),
+                        knot as f64 / 64.0 + (8192 - knot) as f64 / 48.0,
+                    ),
+                ],
+                0,
+                8192,
+            )
+        })
+    });
+    &maps[knots
+        .iter()
+        .position(|candidate| *candidate == knot)
+        .unwrap()]
 }
 
 #[test]
@@ -1515,13 +1752,39 @@ fn assert_owned_mapped_stream(
 
 #[test]
 fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomically() {
-    use crate::audio_engine::mapped_source_clock::{MappedClockEpoch, MappedLoopGeometry};
-    use crate::audio_engine::prepared_native_history::{MappedNativeInput, SourceReadCheckpoint};
+    use crate::audio_engine::mapped_source_clock::MappedLoopGeometry;
+    use crate::audio_engine::prepared_native_history::{
+        MappedNativeInput, NativeAdapterState, RetainedNativeStartCut, SourceReadCheckpoint,
+    };
+    use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
     use crate::audio_engine::source_beatmap::SourceBeatmap;
-    use crate::audio_engine::source_playback::SourcePlayback;
     use crate::audio_engine::source_reader::{StemRenderSelection, StemTransition};
 
-    let mut fixture = owned_birth(7);
+    // Dedicated exact dyadic axes permit a changed interior excursion which
+    // rejoins the original line before physical Z64. Both A/Z inverses stay exact.
+    let path = configured(7);
+    let points = [(0.0, 0.0), (1.0 / 1024.0, 0.5), (1.0 / 512.0, 1.5)];
+    let mut expected = positive_launch_record(&path);
+    let template = expected["record"]["accepted"]["anchors"][0].clone();
+    let anchor = |id: &str, seconds: f64, beat: f64| {
+        let mut value = template.clone();
+        value["id"] = json!(id);
+        value["source_seconds_bits"] = json!(bits(seconds));
+        value["beat_bits"] = json!(bits(beat));
+        value
+    };
+    expected["record"]["accepted"]["anchors"] = json!([
+        anchor("start", points[0].0, points[0].1),
+        anchor("middle", points[1].0, points[1].1),
+        anchor("end", points[2].0, points[2].1),
+    ]);
+    let interval = expected["record"]["accepted"]["intervals"][0].clone();
+    expected["record"]["accepted"]["intervals"] = json!([interval.clone(), interval.clone()]);
+    seal(&mut expected);
+    let (job, delivery) = positive_launch_delivery(&path, &expected);
+    let mut fixture = finish_owned_birth(path, job, delivery, 7, false);
+    let oracle = OracleMap::new(&points, 32, 64);
+    oracle.assert_physical_quarters(fixture.captured.mapped_geometry().unwrap());
     let input = fixture.request.mapped_input.take().unwrap();
     let original = SourceReadCheckpoint {
         playback: fixture.request.playback,
@@ -1530,19 +1793,37 @@ fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomica
     let mut copied = original;
     assert!(!copied.project_output_frames(1));
     assert!(copied.matches_exact(original));
+    let scalar = fixture
+        .path
+        .source
+        .mixer
+        .normal_start_snapshot_for_test(0, 32.0 / f64::from(RATE), Some(64.0 / f64::from(RATE)))
+        .unwrap();
+    let scalar = SourceReadCheckpoint {
+        playback: scalar.playback,
+        plan: scalar.plan,
+    };
+    let birth = |geometry: &MappedLoopGeometry, marker| {
+        crate::audio_engine::mapped_birth::playback_at_birth(
+            geometry,
+            marker,
+            fixture.work.mapped_timeline.unwrap(),
+            scalar,
+            64,
+            fixture.work.launch_reference(),
+        )
+        .unwrap()
+    };
     for corrupt in [0, 1, 2, 3] {
         let mut checkpoint = original;
         match corrupt {
             0 => {
-                let epoch = MappedClockEpoch::new(
+                checkpoint = birth(
+                    fixture.captured.mapped_geometry().unwrap(),
                     fixture.work.sequence() + 1,
-                    fixture.path.timeline,
-                    -fixture.path.timeline.beat_position_at_frame(64).unwrap(),
-                )
-                .unwrap();
-                checkpoint.playback =
-                    SourcePlayback::mapped(fixture.captured.mapped_geometry().unwrap(), epoch, 64)
-                        .unwrap();
+                );
+                assert_eq!(checkpoint.playback.position(), original.playback.position());
+                assert_eq!(checkpoint.plan.domain(), original.plan.domain());
             }
             1 => {
                 checkpoint.plan.transition =
@@ -1567,26 +1848,42 @@ fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomica
     let mut foreign: serde_json::Value =
         serde_json::from_str(geometry.map().canonical_record()).unwrap();
     let accepted = &mut foreign["record"]["accepted"];
-    let mut later = accepted["anchors"][1].clone();
-    later["id"] = json!("foreign-later-knot");
-    later["source_seconds_bits"] = json!(bits(56.0 / f64::from(RATE)));
-    later["beat_bits"] = json!(bits(0.78));
-    accepted["anchors"].as_array_mut().unwrap().insert(2, later);
-    let interval = accepted["intervals"][1].clone();
-    accepted["intervals"].as_array_mut().unwrap().push(interval);
+    accepted["anchors"]
+        .as_array_mut()
+        .unwrap()
+        .insert(2, anchor("foreign-excursion", 9.0 / 8192.0, 19.0 / 32.0));
+    accepted["anchors"]
+        .as_array_mut()
+        .unwrap()
+        .insert(3, anchor("original-line-return", 5.0 / 4096.0, 0.75));
+    accepted["intervals"] = json!(vec![interval; 4]);
     seal(&mut foreign);
-    let foreign = MappedLoopGeometry::new(
+    let foreign = MappedLoopGeometry::new_general_physical(
         SourceBeatmap::parse(&foreign.to_string()).unwrap(),
         geometry.domain().sample_frames,
         RATE,
         geometry.domain().region,
-        geometry.exact_quarters(),
         false,
     )
     .unwrap();
-    let (clock, _) = fixture.work.mapped_clock().unwrap();
-    let mut supplied = original;
-    supplied.playback = SourcePlayback::mapped(&foreign, clock, 64).unwrap();
+    let foreign_oracle = OracleMap::new(
+        &[
+            points[0],
+            points[1],
+            (9.0 / 8192.0, 19.0 / 32.0),
+            (5.0 / 4096.0, 0.75),
+            points[2],
+        ],
+        32,
+        64,
+    );
+    assert_eq!(oracle.inverse(32), foreign_oracle.inverse(32));
+    assert_eq!(oracle.inverse(64), foreign_oracle.inverse(64));
+    assert_eq!(geometry.domain(), foreign.domain());
+    foreign_oracle.assert_physical_quarters(&foreign);
+    let mut supplied = birth(&foreign, fixture.work.sequence());
+    assert_eq!(supplied.plan.domain(), original.plan.domain());
+    assert_eq!(supplied.playback.position(), original.playback.position());
     assert!(!supplied.matches_exact(original));
     let impostor = supplied;
     assert!(input.project(&mut supplied, 20).is_err());
@@ -1594,12 +1891,38 @@ fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomica
     supplied = original;
     input.project(&mut supplied, 20).unwrap();
     let position = supplied.playback.position();
-    assert!((position.frame as f64 + position.fraction - independent_coordinate(20)).abs() < 1e-9);
-    let wrong = SourcePlayback::mapped(&foreign, clock, 84).unwrap();
+    assert!((position.frame as f64 + position.fraction - oracle.at_frame(20).0).abs() < 1e-9);
+    let mut wrong = impostor.playback;
+    wrong.project_mapped_compact_to(&foreign, 84).unwrap();
     assert!(!supplied.playback.matches_exact(&wrong));
     fixture.request.playback = wrong;
     fixture.request.plan.frame_pos = wrong.position().frame;
     assert!(MappedNativeInput::capture(&fixture.work, &fixture.request).is_err());
+    // The same valid current owner also refuses the equal-domain foreign first
+    // checkpoint before changing any working buffer, queued FIFO or Native state.
+    fixture.request.playback = original.playback;
+    fixture.request.plan = original.plan;
+    fixture.request.mapped_input = Some(input);
+    let intent = fixture.request.pitch_intent;
+    let raw = RawStereo::new(2.0_f64.powf(7.0 / 12.0));
+    let mut candidate =
+        NativeAdapterState::new(Some(RubberBandLiveShifter::new(RATE, 2).unwrap()), 2);
+    candidate
+        .prepare_owned_mapped_birth_future(
+            fixture.request,
+            RetainedNativeStartCut {
+                history_output_frames: raw.history,
+                discarded_raw_output_frames: raw.history - (BLOCK - 1),
+            },
+        )
+        .unwrap();
+    let before = MappedAdapterSnapshot::capture(&candidate);
+    assert!(
+        candidate
+            .live_mapped_pitch_chunk(impostor, 1, intent, false)
+            .is_err()
+    );
+    assert_eq!(MappedAdapterSnapshot::capture(&candidate), before);
 }
 
 #[test]
@@ -1746,87 +2069,58 @@ fn owned_mapped_future_refuses_cancel_stale_ack_bad_coverage_and_keeps_original_
 
 #[test]
 fn internal_fixed_h_birth_keeps_native_stream_canonical_receipts_and_complete_prefix() {
-    use crate::audio_engine::mapped_source_clock::MappedClockEpoch;
-    use crate::audio_engine::native_history_permit::NativeHistoryContext;
-    use crate::audio_engine::prepared_native_history::NativeAdapterState;
+    use crate::audio_engine::prepared_native_history::{
+        NativeAdapterState, RetainedNativeStartCut,
+    };
     use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
     use crate::audio_engine::source_feed_history::{SourceFeedHistory, SourceReadDomain};
-    use crate::audio_engine::source_playback::SourcePlayback;
     use crate::audio_engine::stretch_processor::{ProductiveSourceFeed, StretchProcessor};
 
     for shift in [7, -23, 24] {
         let mut reference = None;
         for partitions in [&[512][..], &[127, 1, 383, 17, 256][..]] {
-            let mut path = configured(shift);
-            let (_job, delivery) = variable_original_delivery(&path);
-            publish_original(&path, &delivery, 1);
-            path.render(1);
+            let OwnedBirth {
+                path,
+                job: _job,
+                delivery: _delivery,
+                captured,
+                work: _work,
+                request,
+            } = owned_birth(shift);
             // This genuine capture retains the original source/artifact/geometry pins
             // until after the component's last read and off-callback destruction.
             // It is never published as a voice or reported as an effective SYNC start.
-            let captured = path.capture();
-            drain_grid(&mut path);
             assert_eq!(captured.target_frame(), Some(64));
             assert_original_current(&captured);
             let geometry = captured.mapped_geometry().unwrap();
             let (beginning, quarters) = independent_extent();
-            assert_eq!(geometry.start_beat().to_bits(), beginning.to_bits());
-            assert_eq!(geometry.exact_quarters().to_bits(), quarters.to_bits());
-            let epoch = MappedClockEpoch::new(
-                captured.sequence(),
-                path.timeline,
-                -path.timeline.beat_position_at_frame(64).unwrap(),
-            )
-            .unwrap();
-            let mut snapshot = path
-                .source
-                .mixer
-                .normal_start_snapshot_for_test(
-                    0,
-                    32.0 / f64::from(RATE),
-                    Some(64.0 / f64::from(RATE)),
-                )
-                .unwrap();
-            snapshot.playback = SourcePlayback::mapped(geometry, epoch, 64).unwrap();
-            let position = snapshot.playback.position();
-            snapshot.plan.frame_pos = position.frame;
-            snapshot.plan.seek_mode = position.seek_mode;
-            snapshot.plan.loop_period = snapshot.playback.reader_period();
-            let source = snapshot.sample.clone();
-            let stems = snapshot.stems.clone();
-            let accepted = snapshot.accepted;
-            let mut playback = snapshot.playback;
-            let mut plan = snapshot.plan;
+            tiny_oracle(true, false).assert_physical_quarters(geometry);
+            let epoch = request.playback.mapped_epoch().unwrap();
+            let source = request.sample.clone();
+            let stems = request.stems.clone();
+            let accepted = request.binding.accepted;
+            let mut playback = request.playback;
+            let mut plan = request.plan;
             let intent =
                 PitchIntent::new(shift.clamp(-23, 23), shift - shift.clamp(-23, 23)).unwrap();
             let mut processor = StretchProcessor::new(2);
-            let preparation_epoch = processor.preparation_epoch();
-            let preparation_owner = processor.source_epoch_owner().clone();
-            let binding = binding(&path.source, 0);
-            let permit = NativeHistoryContext {
-                id: 0,
-                ownership: &path.source.engine.input_runtime_ownership,
-                acknowledgements: &path.source.engine.current_timing_acknowledgements,
-                preparation_epoch: &preparation_owner,
-            }
-            .capture_admitted(&source, RATE, binding.binding)
-            .unwrap();
-            let request = snapshot
-                .into_request(
-                    permit,
-                    intent,
-                    false,
-                    64,
-                    captured.sequence(),
-                    preparation_epoch,
-                )
-                .unwrap();
+            let preparation_epoch = request.epoch;
+            let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
+            let mut oracle = RawStereo::new(pitch);
             let mut candidate = Box::new(NativeAdapterState::new(
                 Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
                 2,
             ));
             assert_original_current(&captured);
-            candidate.prepare_source_at_physical_birth(request).unwrap();
+            candidate
+                .prepare_owned_mapped_birth_future(
+                    request,
+                    RetainedNativeStartCut {
+                        history_output_frames: oracle.history,
+                        discarded_raw_output_frames: oracle.history - (BLOCK - 1),
+                    },
+                )
+                .unwrap();
             assert_original_current(&captured);
             let feed = ProductiveSourceFeed {
                 pitch_intent: intent,
@@ -1849,8 +2143,6 @@ fn internal_fixed_h_birth_keeps_native_stream_canonical_receipts_and_complete_pr
             ));
             let native = processor.native_state_address();
             assert_ne!(native, 0);
-            let pitch = 2.0_f64.powf(f64::from(shift) / 12.0);
-            let mut oracle = RawStereo::new(pitch);
             // The observed raw delay can exceed a short 4096-frame window at
             // extreme h. Retain the WHOLE prefix plus a fixed suffix, never crop
             // or fit Native latency to an apparent musical attack.
@@ -1952,7 +2244,57 @@ fn internal_fixed_h_birth_keeps_native_stream_canonical_receipts_and_complete_pr
                 Some(64 + emitted_frames as u64)
             );
             assert_eq!(processor.native_primed_output_frames(), oracle.history);
-            assert!(!processor.has_retained_source_input());
+            assert!(processor.has_retained_source_input());
+            let endpoint = playback.position();
+            plan.frame_pos = endpoint.frame;
+            plan.seek_mode = endpoint.seek_mode;
+            let actual_checkpoint = processor
+                .actual_source_checkpoint(&playback, plan)
+                .unwrap()
+                .unwrap();
+            let plain = crate::audio_engine::prepared_native_history::SourceReadCheckpoint {
+                playback,
+                plan,
+            };
+            if !actual_checkpoint.matches_exact(plain) {
+                assert!(!playback.can_read_frames(1));
+            }
+            // Native retains the canonical next span. A caller's final advance may
+            // leave an exhausted span; refresh only a copy through the original map.
+            let mut canonical = playback;
+            canonical.refresh_mapped_span(geometry).unwrap();
+            assert_eq!(canonical.position(), endpoint);
+            assert_eq!(
+                canonical.position().fraction.to_bits(),
+                endpoint.fraction.to_bits()
+            );
+            assert_eq!(
+                canonical.mapped_output_frame(),
+                playback.mapped_output_frame()
+            );
+            assert!(
+                canonical
+                    .mapped_epoch()
+                    .unwrap()
+                    .matches_exact(playback.mapped_epoch().unwrap())
+            );
+            assert_eq!(canonical.effective_domain(), playback.effective_domain());
+            assert_eq!(
+                canonical.original_scalar_domain(),
+                playback.original_scalar_domain()
+            );
+            let mut reference_check = canonical;
+            reference_check.carry_launch_reference_from(&playback);
+            assert!(reference_check.matches_exact(&canonical));
+            let mut canonical_plan = plan;
+            canonical_plan.frame_pos = canonical.position().frame;
+            canonical_plan.seek_mode = canonical.position().seek_mode;
+            assert!(actual_checkpoint.matches_exact(
+                crate::audio_engine::prepared_native_history::SourceReadCheckpoint {
+                    playback: canonical,
+                    plan: canonical_plan,
+                }
+            ));
             assert_eq!(
                 processor.pending_fifo_frames(),
                 (oracle.input.len(), oracle.output.len())
@@ -1995,7 +2337,7 @@ fn internal_fixed_h_birth_keeps_native_stream_canonical_receipts_and_complete_pr
 }
 
 #[test]
-fn public_fixed_h_future_birth_stays_refused_until_output_alignment_is_integrated() {
+fn public_fixed_h_future_birth_preserves_complete_beginning_and_requested_alignment() {
     for (shift, attack_policy) in [(7, false), (-23, false), (24, false), (7, true)] {
         let mut path = configured(shift);
         let (_job, delivery) = variable_original_delivery(&path);
@@ -2016,20 +2358,50 @@ fn public_fixed_h_future_birth_stays_refused_until_output_alignment_is_integrate
         assert_eq!(start.target_frame(), Some(64));
         assert!(path.source.engine.publish_pad_start(&start, None).unwrap());
         drain_grid(&mut path);
-        assert_eq!(start.state(), "rejected");
-        assert_eq!(start.reason(), Some("mapped_timing_unavailable"));
+        wait_prepared(&mut path, &start);
         assert!(start.effective_frame().is_none());
-        path.render(80);
+        let execution = start.execution_frame().unwrap();
+        assert!(execution >= start.target_frame().unwrap());
+        path.render((execution - path.timeline.output_frame()) as usize);
+        path.render(1);
+        assert_eq!(start.state(), "applied", "{:?}", start.reason());
+        assert_eq!(start.effective_frame(), Some(execution));
         assert!(
-            !path
-                .source
+            path.source
                 .mixer
                 .voices
                 .iter()
                 .any(|voice| voice.active && voice.sample_id == 0)
         );
         assert_eq!(scalar_generation(&path), previous);
-        assert_eq!(sync_feedback(&path).unwrap()["effective"], false);
+        let status = sync_feedback(&path).unwrap();
+        assert_eq!(status["effective"], true);
+        assert_eq!(status["birth"]["emitted"], true);
+        assert_eq!(
+            status["birth"]["requested"],
+            if attack_policy {
+                "attack_at_grid"
+            } else {
+                "first_sound_at_grid"
+            }
+        );
+        assert_eq!(
+            status["birth"]["alignment"],
+            if attack_policy {
+                "pending"
+            } else {
+                "earliest_bound_met"
+            }
+        );
+        assert_eq!(
+            status["birth"]["reason"],
+            if attack_policy {
+                json!("no_qualified_anchor")
+            } else {
+                json!(null)
+            }
+        );
+        assert_eq!(status["phase_program_current"], false);
     }
 }
 
@@ -2064,7 +2436,7 @@ fn release_retirement(retirement: &mut PausedRetirement) {
 }
 
 #[test]
-fn public_dry_mixed_group_retirement_pressure_is_atomic_and_cannot_move_frozen_birth() {
+fn public_dry_mixed_group_retirement_pressure_is_atomic_and_reprepares_original_beginning() {
     for miss_target in [false, true] {
         let mut path = configured(0);
         let (_job, delivery) = variable_original_delivery(&path);
@@ -2103,14 +2475,36 @@ fn public_dry_mixed_group_retirement_pressure_is_atomic_and_cannot_move_frozen_b
             );
             release_retirement(&mut retirement);
             path.render_with_retirement(17, retirement.owner.state_mut());
-            assert_eq!(captured.state(), "rejected", "{:?}", captured.reason());
-            assert_eq!(captured.reason(), Some("mapped_timing_unavailable"));
+            assert_ne!(captured.state(), "rejected", "{:?}", captured.reason());
             assert!(
                 members
                     .iter()
                     .all(|member| member.effective_frame().is_none())
             );
             assert_eq!(scalar_generation(&path), previous);
+            wait_prepared(&mut path, &members[0]);
+            let execution = members[0].execution_frame().unwrap();
+            assert!(execution > 64);
+            while path.timeline.output_frame() < execution {
+                let frames = (execution - path.timeline.output_frame()).min(512) as usize;
+                path.render_with_retirement(frames, retirement.owner.state_mut());
+            }
+            path.render_with_retirement(1, retirement.owner.state_mut());
+            assert_eq!(captured.state(), "applied", "{:?}", captured.reason());
+            for member in &members {
+                assert_eq!(member.target_frame(), Some(64));
+                assert_eq!(member.execution_frame(), Some(execution));
+                assert_eq!(member.effective_frame(), Some(execution));
+            }
+            let mut history = SourceFeedSnapshot::new();
+            assert!(path.voice().source_feed_history.capture_into(&mut history));
+            let first = history.spans().next().unwrap();
+            assert_eq!(first.playback.position().frame, 32);
+            assert_eq!(
+                first.playback.position().fraction.to_bits(),
+                0.0_f64.to_bits()
+            );
+            assert_eq!(sync_feedback(&path).unwrap()["birth"]["emitted"], true);
         } else {
             assert_eq!(
                 drain_control_messages(

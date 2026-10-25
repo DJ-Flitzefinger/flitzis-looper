@@ -204,6 +204,7 @@ mod general_source_numerics;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod loop_phase_reference;
+mod mapped_birth;
 mod mapped_source_clock;
 mod runtime_policy_retry;
 mod scheduler;

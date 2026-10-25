@@ -163,7 +163,46 @@ fn unavailable() -> NativeSourcePreparationError {
 }
 
 impl NativeAdapterState {
-    fn mapped_input(&self) -> Option<&MappedNativeInput> {
+    /// Borrow the exact complete-beginning witness BEFORE its first output interval.
+    /// This is not emission: the mixer must still complete the read, Native and mix.
+    pub(crate) fn mapped_birth_first_output_ready(
+        &self,
+        playback: &SourcePlayback,
+        plan: SourceReadPlan,
+    ) -> bool {
+        let (Some(mapped), Some(timeline), Some(source)) = (
+            self.mapped_input(),
+            self.retained_start_timeline,
+            self.source.as_ref(),
+        ) else {
+            return false;
+        };
+        let Some(raw) = timeline.provenance.raw else {
+            return false;
+        };
+        let logical = SourceReadCheckpoint {
+            playback: *playback,
+            plan,
+        };
+        raw.emitted_output_frames == 0
+            && timeline.provenance.continuation.is_none()
+            && raw.silent_prefix == raw.cut.history_output_frames
+            && raw.cut.history_output_frames == self.primed_output_frames
+            && raw
+                .cut
+                .discarded_raw_output_frames
+                .checked_add(self.block_size.saturating_sub(1))
+                == Some(raw.cut.history_output_frames)
+            && mapped.matches_request(source)
+            && mapped
+                .effective_adapter_current(self.active.then(|| self.mapped_pitch_stamp()).flatten())
+            && mapped.effective_source_current(source)
+            && mapped.same_checkpoint(logical, raw.input_origin)
+            && mapped.same_checkpoint(logical, timeline.logical)
+            && mapped.same_checkpoint(logical, timeline.actual)
+            && timeline.proves_endpoints(self.block_size, self.primed_output_frames, Some(mapped))
+    }
+    pub(super) fn mapped_input(&self) -> Option<&MappedNativeInput> {
         self.source
             .as_ref()
             .and_then(|source| source.mapped_input.as_deref())
@@ -461,6 +500,21 @@ impl NativeAdapterState {
         )
     }
 
+    /// Public original-qualified physical birth: the entire selected beginning survives.
+    pub(super) fn prepare_productive_mapped_birth(
+        &mut self,
+        request: NativeHistoryRequest,
+    ) -> Result<(), NativeSourcePreparationError> {
+        self.prepare_retained_source_start_context_inner(
+            request,
+            None,
+            0,
+            None,
+            NativeStartHistoryContext::PhysicalBirth,
+            true,
+        )
+    }
+
     fn prepare_retained_source_start_context_inner(
         &mut self,
         mut request: NativeHistoryRequest,
@@ -470,9 +524,15 @@ impl NativeAdapterState {
         context: NativeStartHistoryContext,
         allow_owned_mapped_future: bool,
     ) -> Result<(), NativeSourcePreparationError> {
-        if request.plan.loop_period.is_mapped()
-            || request.playback.has_phase_program()
-            || request.playback.is_general_mapped()
+        let qualified_birth = allow_owned_mapped_future
+            && context == NativeStartHistoryContext::PhysicalBirth
+            && request
+                .mapped_input
+                .as_ref()
+                .is_some_and(|input| input.matches_request(&request) && input.pending_current());
+        if request.playback.has_phase_program()
+            || (!qualified_birth
+                && (request.plan.loop_period.is_mapped() || request.playback.is_general_mapped()))
             || request.actual_feed.is_some_and(|checkpoint| {
                 checkpoint.plan.loop_period.is_mapped()
                     || checkpoint.playback.is_general_mapped()

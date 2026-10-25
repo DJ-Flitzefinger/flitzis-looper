@@ -266,7 +266,17 @@ fn genuine_retrigger_capture_before_worker_or_scheduler_blocks_policy_until_reje
         .unwrap();
     let spec = PitchActionSpec::parse("pitch.extra:2:set_retrigger").unwrap();
     let action = CapturedPitchAction::capture(PitchActionAdmission {
+        key_lock_request: fixture
+            .control
+            .engine
+            .input_runtime_ownership
+            .key_lock_request_for_cell(binding.binding.placement.unwrap().cell())
+            .load(std::sync::atomic::Ordering::Acquire),
         sync_request: Default::default(),
+        source_map: super::source_map_admission::SourceMapLaunchSnapshot::scalar(
+            &fixture.control.engine.input_runtime_ownership,
+            binding.binding,
+        ),
         key: binding.binding.placement.unwrap().content_key().unwrap(),
         binding: binding.binding,
         ownership: fixture.control.engine.input_runtime_ownership.clone(),

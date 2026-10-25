@@ -53,6 +53,105 @@ _ADOPTION_REASONS = frozenset({
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SourceBirthStatus:
+    """Source-bound emission observation; never a device or musical acceptance."""
+
+    requested: Literal["first_sound_at_grid", "attack_at_grid", "mixed"]
+    outcome: Literal["complete_beginning_at_e", "mixed"]
+    alignment: Literal["pending", "earliest_bound_met", "mixed"]
+    reason: Literal["output_unconfirmed", "no_qualified_anchor", "mixed"] | None
+    original_target_frame: int | None
+    execution_frame: int | None
+    reference_qualified_at_birth: bool
+    emitted: bool
+
+
+def _birth_labels_valid(
+    requested: object, outcome: object, alignment: object, reason: object
+) -> bool:
+    if any(type(value) is not str for value in (requested, outcome, alignment)):
+        return False
+    if reason is not None and type(reason) is not str:
+        return False
+    return (
+        requested in {"first_sound_at_grid", "attack_at_grid", "mixed"}
+        and outcome in {"complete_beginning_at_e", "mixed"}
+        and alignment in {"pending", "earliest_bound_met", "mixed"}
+        and reason in {"output_unconfirmed", "no_qualified_anchor", "mixed", None}
+    )
+
+
+def _parse_birth(value: object) -> SourceBirthStatus | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "requested",
+        "outcome",
+        "alignment",
+        "reason",
+        "original_target_frame",
+        "execution_frame",
+        "reference_qualified_at_birth",
+        "emitted",
+    }:
+        message = "Invalid source birth feedback schema."
+        raise ValueError(message)
+    requested, outcome, alignment, reason = (
+        value["requested"],
+        value["outcome"],
+        value["alignment"],
+        value["reason"],
+    )
+    original, execution = value["original_target_frame"], value["execution_frame"]
+    reference, emitted = value["reference_qualified_at_birth"], value["emitted"]
+    if (
+        not _birth_labels_valid(requested, outcome, alignment, reason)
+        or type(reference) is not bool
+        or type(emitted) is not bool
+        or any(
+            frame is not None and (type(frame) is not int or not 0 <= frame < 1 << 64)
+            for frame in (original, execution)
+        )
+    ):
+        message = "Invalid source birth feedback fields."
+        raise ValueError(message)
+    if requested == "mixed":
+        valid = (
+            outcome == alignment == reason == "mixed"
+            and original is None
+            and execution is None
+            and reference is False
+            and emitted is False
+        )
+    else:
+        valid = (
+            outcome == "complete_beginning_at_e"
+            and type(original) is int
+            and type(execution) is int
+            and execution >= original
+        )
+        if requested == "attack_at_grid":
+            valid = valid and alignment == "pending" and reason == "no_qualified_anchor"
+        elif emitted:
+            valid = valid and alignment == "earliest_bound_met" and reason is None
+        else:
+            valid = valid and alignment == "pending" and reason == "output_unconfirmed"
+    if not valid:
+        message = "Inconsistent source birth feedback."
+        raise ValueError(message)
+    return SourceBirthStatus(
+        requested=cast('Literal["first_sound_at_grid", "attack_at_grid", "mixed"]', requested),
+        outcome=cast('Literal["complete_beginning_at_e", "mixed"]', outcome),
+        alignment=cast('Literal["pending", "earliest_bound_met", "mixed"]', alignment),
+        reason=cast('Literal["output_unconfirmed", "no_qualified_anchor", "mixed"] | None', reason),
+        original_target_frame=original,
+        execution_frame=execution,
+        reference_qualified_at_birth=reference,
+        emitted=emitted,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SourceSyncStatus:
     """Requested control and callback-confirmed sound are deliberately separate."""
 
@@ -66,10 +165,18 @@ class SourceSyncStatus:
     guidance: SourceSyncGuidance | None = None
     map_readiness: SourceMapReadiness | None = None
     grid_phase_confirmed: bool | None = None
+    birth: SourceBirthStatus | None = None
 
     @property
     def guidance_text(self) -> str | None:
         """Project only fixed human messages, never technical diagnostic detail."""
+        if self.birth is not None:
+            if self.birth.reason == "no_qualified_anchor":
+                return "Attack alignment is pending; playback preserves the complete beginning."
+            if self.birth.alignment == "mixed":
+                return "Start alignment differs between active voices."
+            if not self.birth.emitted:
+                return "Start output is not yet confirmed."
         if self.map_readiness is not None:
             return _MAP_GUIDANCE[self.map_readiness]
         return None if self.guidance is None else _GUIDANCE[self.guidance]
@@ -88,6 +195,8 @@ def _valid_feedback_fields(feedback: dict[str, object], metadata: dict[str, obje
     if type(feedback.get("source_identity")) is not int:
         return False
     if type(feedback.get("active")) is not bool or type(feedback.get("effective")) is not bool:
+        return False
+    if _parse_birth(feedback.get("birth")) is not None and feedback["active"] is not True:
         return False
     target_current = feedback.get("target_current")
     if target_current is not None and type(target_current) is not bool:
@@ -287,6 +396,12 @@ class SourceSyncController:
                 detail="Audio confirmation unavailable.",
                 guidance="unconfirmed",
             )
+        return replace(
+            self._observed_status(sample_id, feedback), birth=_parse_birth(feedback.get("birth"))
+        )
+
+    def _observed_status(self, sample_id: int, feedback: dict[str, object]) -> SourceSyncStatus:
+        requested = self._project.resolve_pad_source_sync(sample_id)
         map_observation = (
             self._maps._observe_state(sample_id)
             if self.requested_mode(sample_id) == "mapped" and self._maps is not None

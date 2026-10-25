@@ -21,6 +21,8 @@ mod exact;
 #[path = "mapped_source_clock_general.rs"]
 mod general;
 pub(crate) use general::GeneralLocalSpanView;
+#[path = "mapped_source_clock_composed.rs"]
+mod composed;
 #[path = "mapped_source_clock_full_fraction.rs"]
 mod full_fraction;
 #[path = "mapped_source_clock_phase.rs"]
@@ -96,6 +98,8 @@ enum MappedClockMode {
     CompactAnchored(AnchoredClock),
     GeneralCompact(AnchoredClock),
     FullFractionGeneral(AnchoredClock),
+    ComposedOrdinary(composed::ComposedAnchor),
+    ComposedFullFraction(composed::ComposedAnchor),
     CommonPhase(phase::CommonPhaseAnchor),
 }
 
@@ -184,14 +188,23 @@ impl MappedClockEpoch {
     /// The all-dry claimant alone changes the actual master epoch. A paused-derived
     /// projection anchors its exact old total at E rather than extrapolating the
     /// new master slope backward through a previous pause's address translation.
-    /// Anchored coordinates instead require addressed M-bit continuity and keep
-    /// their original raw source anchor and cached M0; geometry admission is separate.
+    /// Productive ordinary anchors compose an exact basis at actual E, retaining
+    /// their original raw source/inverse. The reference-only wide path keeps its
+    /// existing addressed M-bit proof. Geometry admission remains separate.
     pub(crate) fn with_timeline_at(self, timeline: TransportTimeline, frame: u64) -> Option<Self> {
         if self.projection.matches_timeline(&timeline) {
             return Some(self);
         }
         if self.is_common_phase() {
             return None;
+        }
+        // With no address translation, the old immutable f64 basis already
+        // preserves the exact phase at continuous M(E). Keep that initial
+        // numeric family; this is state selection, never an error fallback.
+        if self.is_composed_ordinary()
+            || (self.address_shift != 0 && (self.is_compact_anchored() || self.is_general_family()))
+        {
+            return composed::replace(self, timeline.beat_projection()?, frame);
         }
         if self.is_anchored() {
             if frame < self.first_output_frame {
@@ -269,6 +282,11 @@ impl MappedClockEpoch {
             && self.address_shift == other.address_shift
             && self.first_output_frame == other.first_output_frame
             && match (self.mode, other.mode) {
+                (MappedClockMode::ComposedOrdinary(a), MappedClockMode::ComposedOrdinary(b))
+                | (
+                    MappedClockMode::ComposedFullFraction(a),
+                    MappedClockMode::ComposedFullFraction(b),
+                ) => a.matches_exact(b),
                 (MappedClockMode::CommonPhase(left), MappedClockMode::CommonPhase(right)) => {
                     left.matches_exact(right)
                 }
@@ -329,7 +347,7 @@ impl MappedClockEpoch {
     }
 
     pub(crate) fn is_anchored(self) -> bool {
-        self.anchor().is_some()
+        self.anchor().is_some() || self.is_composed_ordinary()
     }
 
     pub(crate) fn is_general_compact(self) -> bool {
@@ -339,7 +357,17 @@ impl MappedClockEpoch {
         matches!(self.mode, MappedClockMode::FullFractionGeneral(_))
     }
     pub(crate) fn is_general_family(self) -> bool {
-        self.is_general_compact() || self.is_full_fraction_general()
+        self.is_general_compact() || self.is_full_fraction_general() || self.is_composed_ordinary()
+    }
+    pub(crate) fn is_composed_ordinary(self) -> bool {
+        matches!(
+            self.mode,
+            MappedClockMode::ComposedOrdinary(_) | MappedClockMode::ComposedFullFraction(_)
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn is_composed_full_fraction_for_test(self) -> bool {
+        matches!(self.mode, MappedClockMode::ComposedFullFraction(_))
     }
     pub(crate) fn full_fraction_ordinary_recovery(
         marker: u64,
@@ -361,12 +389,27 @@ impl MappedClockEpoch {
             | MappedClockMode::CompactAnchored(anchor)
             | MappedClockMode::GeneralCompact(anchor)
             | MappedClockMode::FullFractionGeneral(anchor) => Some(anchor),
-            MappedClockMode::Legacy { .. } | MappedClockMode::CommonPhase(_) => None,
+            MappedClockMode::Legacy { .. }
+            | MappedClockMode::CommonPhase(_)
+            | MappedClockMode::ComposedOrdinary(_)
+            | MappedClockMode::ComposedFullFraction(_) => None,
         }
     }
 
     /// A changed projection cannot replace the immutable original anchor or mode.
     pub(crate) fn replacement_anchor_matches(self, other: Self, frame: u64) -> bool {
+        if self.matches_exact(other) {
+            return frame >= self.first_output_frame;
+        }
+        if other.is_composed_ordinary() {
+            if self.projection.matches_exact(other.projection)
+                || (!self.is_composed_ordinary() && self.address_shift == 0)
+            {
+                return false;
+            }
+            return composed::replace(self, other.projection, frame)
+                .is_some_and(|expected| expected.matches_exact(other));
+        }
         match (self.mode, other.mode) {
             (MappedClockMode::CommonPhase(_), MappedClockMode::CommonPhase(_)) => {
                 frame >= self.first_output_frame && self.matches_exact(other)
@@ -677,6 +720,9 @@ impl MappedLoopGeometry {
     ) -> Result<(), MappedClockError> {
         if epoch.is_common_phase() {
             return phase::validate(self, epoch, reference);
+        }
+        if epoch.is_composed_ordinary() {
+            return composed::validate(self, epoch);
         }
         if epoch.is_full_fraction_general() {
             return full_fraction::validate(self, epoch);

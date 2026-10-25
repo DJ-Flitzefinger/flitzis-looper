@@ -102,14 +102,9 @@ fn pcm_at(source: &crate::messages::SampleBuffer, position: f64) -> [f32; 2] {
 }
 
 fn coordinate(total: f64) -> f64 {
-    let (beginning, quarters) = mapped_fixed_pitch_birth_tests::independent_extent();
-    let beat = beginning + total.rem_euclid(quarters);
-    let seconds = if beat < 0.6 {
-        (beat / 0.6) * (48.0 / f64::from(RATE))
-    } else {
-        (48.0 / f64::from(RATE)) + ((beat - 0.6) / 0.4) * (16.0 / f64::from(RATE))
-    };
-    seconds * f64::from(RATE)
+    tiny_oracle(true, false)
+        .coordinate_and_rate(OracleFraction::binary(total))
+        .0
 }
 
 fn assert_pcm(output: &[f32], expected: impl Iterator<Item = [f32; 2]>) {
@@ -320,6 +315,13 @@ fn actual_qualified_hold_then_global_master_claim_and_second_hold_keep_pcm() {
         effect.error
     );
     exact(saved, path.voice().source_playback.position());
+    assert!(
+        path.voice()
+            .source_playback
+            .mapped_epoch()
+            .unwrap()
+            .is_composed_ordinary()
+    );
     assert_eq!(
         path.timeline
             .beat_position_at_frame(execution)

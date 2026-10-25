@@ -81,6 +81,8 @@ fn legacy_phase(epoch: MappedClockEpoch) -> f64 {
         | MappedClockMode::CompactAnchored(_)
         | MappedClockMode::GeneralCompact(_)
         | MappedClockMode::FullFractionGeneral(_)
+        | MappedClockMode::ComposedOrdinary(_)
+        | MappedClockMode::ComposedFullFraction(_)
         | MappedClockMode::CommonPhase(_) => {
             panic!("legacy fixture expected")
         }
@@ -482,7 +484,7 @@ fn bounded_copy_span_carries_no_owned_map_or_dynamic_storage() {
     assert!(!std::mem::needs_drop::<
         crate::audio_engine::source_playback::SourcePlayback,
     >());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
     let cohort_bytes = std::mem::size_of::<
         [Option<crate::audio_engine::source_playback::SourcePlayback>;
             crate::audio_engine::constants::MAX_VOICES],

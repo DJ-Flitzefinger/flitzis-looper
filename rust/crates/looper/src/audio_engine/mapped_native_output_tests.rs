@@ -492,7 +492,7 @@ fn owned_birth_from_capture(
 }
 
 #[test]
-fn original_b5_rounded_geometry_keeps_genuine_mapped_rate_refusal() {
+fn original_b5_rounded_geometry_retains_legacy_rate_refusal_separate_from_runtime_birth() {
     let authored = CanonicalFixture::new(Signal::IsolatedAttack(0));
     authored.verify_pcm();
     let pcm = authored
@@ -515,11 +515,17 @@ fn original_b5_rounded_geometry_keeps_genuine_mapped_rate_refusal() {
     let execution = fixture.captured.execution_frame();
     let state = fixture.captured.state();
     let timeline = fixture.path.timeline;
-    assert!(matches!(
-        work.freeze_mapped_clock(Some(timeline), target, timeline.output_frame()),
-        Err(PitchActionReject::MappedTimingUnavailable)
-    ));
-    assert!(work.mapped_clock().is_none());
+    work.freeze_mapped_clock(Some(timeline), target, timeline.output_frame())
+        .unwrap();
+    let (legacy, _) = work.mapped_clock().unwrap();
+    assert!(
+        fixture
+            .captured
+            .mapped_geometry()
+            .unwrap()
+            .validate_epoch(legacy)
+            .is_err()
+    );
     assert_eq!(fixture.captured.target_frame(), Some(target));
     assert_eq!(fixture.captured.execution_frame(), execution);
     assert_eq!(fixture.captured.state(), state);
@@ -541,7 +547,7 @@ fn original_b5_rounded_geometry_keeps_genuine_mapped_rate_refusal() {
             .any(|voice| voice.active && voice.sample_id == 0)
     );
     assert_eq!(sync_feedback(&fixture.path).unwrap()["effective"], false);
-    emit(json!({"stage":"original_geometry_genuine_refusal",
+    emit(json!({"stage":"original_geometry_legacy_refusal",
         "geometry_profile":GeometryProfile::OriginalB5NearestRounded.label(),
         "reason":"mapped_timing_unavailable","original_target":target,
         "effective_output_frame":null,"source_and_action_guards_current":true,

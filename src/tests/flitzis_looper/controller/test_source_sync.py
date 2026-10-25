@@ -20,6 +20,124 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def _birth(**changes: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "requested": "first_sound_at_grid",
+        "outcome": "complete_beginning_at_e",
+        "alignment": "earliest_bound_met",
+        "reason": None,
+        "original_target_frame": 64,
+        "execution_frame": 8192,
+        "reference_qualified_at_birth": True,
+        "emitted": True,
+    }
+    value.update(changes)
+    return value
+
+
+@pytest.mark.parametrize("attack", [False, True])
+def test_birth_feedback_keeps_requested_alignment_separate_from_grid_phase(
+    controller: AppController, audio_engine_mock: Mock, *, attack: bool
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    value = _birth(
+        **(
+            {
+                "requested": "attack_at_grid",
+                "alignment": "pending",
+                "reason": "no_qualified_anchor",
+            }
+            if attack
+            else {}
+        )
+    )
+    _feedback(audio, active=True, birth=value)
+    preferences = controller.project.model_dump()
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.birth is not None
+    assert status.birth.original_target_frame == 64
+    assert status.birth.execution_frame == 8192
+    assert status.birth.emitted is True
+    assert status.birth.reference_qualified_at_birth is True
+    assert status.birth.requested == ("attack_at_grid" if attack else "first_sound_at_grid")
+    assert status.birth.alignment == ("pending" if attack else "earliest_bound_met")
+    assert status.grid_phase_confirmed is None
+    if attack:
+        assert status.guidance_text == (
+            "Attack alignment is pending; playback preserves the complete beginning."
+        )
+    assert controller.project.model_dump() == preferences
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"original_target_frame": True},
+        {"execution_frame": 1 << 64},
+        {"execution_frame": 63},
+        {"emitted": 1},
+        {"emitted": False},
+        {"reference_qualified_at_birth": 1},
+        {"requested": "attack_at_grid"},
+        {"outcome": "mixed"},
+        {"requested": []},
+        {"outcome": {}},
+        {"alignment": []},
+        {"reason": {}},
+        {"extra": "unknown"},
+    ],
+)
+def test_malformed_birth_feedback_cannot_retain_previous_positive(
+    controller: AppController, audio_engine_mock: Mock, change: dict[str, object]
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    feedback = _feedback(audio, active=True, birth=_birth())
+    assert controller.transport.source_sync.status(0).birth is not None
+    feedback["birth"] = _birth(**change)
+
+    status = controller.transport.source_sync.status(0)
+
+    assert status.state == "unconfirmed"
+    assert status.birth is None
+    assert status.grid_phase_confirmed is None
+
+
+def test_birth_feedback_old_native_missing_mixed_stop_and_source_change_are_conservative(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio = audio_engine_mock
+    _assigned(controller, audio)
+    feedback = _feedback(audio, active=True)
+    assert controller.transport.source_sync.status(0).birth is None
+    feedback["birth"] = _birth(
+        requested="mixed",
+        outcome="mixed",
+        alignment="mixed",
+        reason="mixed",
+        original_target_frame=None,
+        execution_frame=None,
+        reference_qualified_at_birth=False,
+        emitted=False,
+    )
+    status = controller.transport.source_sync.status(0)
+    assert status.birth is not None
+    assert status.birth.emitted is False
+    assert status.birth.execution_frame is None
+    assert status.guidance_text == "Start alignment differs between active voices."
+    feedback["birth"] = _birth()
+    feedback["source_generation"] = 2
+    assert controller.transport.source_sync.status(0).birth is None
+    feedback["source_generation"] = 1
+    feedback["active"] = False
+    assert controller.transport.source_sync.status(0).birth is None
+    feedback["birth"] = None
+    assert controller.transport.source_sync.status(0).birth is None
+
+
 @pytest.fixture(autouse=True)
 def available_timing_parents(controller: AppController) -> None:
     """These mode/adoption tests explicitly configure their requested parents."""

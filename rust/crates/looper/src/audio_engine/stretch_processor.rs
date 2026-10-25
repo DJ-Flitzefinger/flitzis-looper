@@ -375,6 +375,11 @@ impl StretchProcessor {
             })
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_effective_mapped_voice_for_test(&self) -> bool {
+        self.native.has_effective_mapped_voice_for_test()
+    }
+
     /// Preparation may have consumed actual input ahead of the logical adoption endpoint.
     fn prepared_input_history(
         &self,
@@ -417,6 +422,13 @@ impl StretchProcessor {
             .rubberband
             .as_ref()
             .map_or(0, |native| native.state_address())
+    }
+    pub(crate) fn mapped_birth_first_output_ready(
+        &self,
+        playback: &SourcePlayback,
+        plan: SourceReadPlan,
+    ) -> bool {
+        self.native.mapped_birth_first_output_ready(playback, plan)
     }
 
     /// Numeric equality alone cannot authorize keeping a source-specific DSP owner.

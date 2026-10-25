@@ -10,7 +10,8 @@ fn qualified_cohort_map(path: &LaunchPath, id: usize) -> (OfflineAnalysisJob, Lo
     middle["id"] = json!("cohort-variable-knot");
     middle["source_seconds_bits"] = json!(bits(48.0 / f64::from(RATE)));
     middle["beat_bits"] = json!(bits(0.6));
-    let last = accepted["anchors"][1].clone();
+    let mut last = accepted["anchors"][1].clone();
+    last["source_seconds_bits"] = json!(bits(covered_terminal_seconds(64)));
     let interval = accepted["intervals"][0].clone();
     accepted["anchors"] = json!([first, middle, last]);
     accepted["intervals"] = json!([interval.clone(), interval]);
@@ -224,7 +225,7 @@ fn two_mapped_cohort(partitions: &[usize]) -> Vec<f32> {
         cohort_voice(&path, 0).generation,
         cohort_voice(&path, 1).generation,
     ];
-    let original_epochs = [
+    let mut expected_epochs = [
         cohort_voice(&path, 0)
             .source_playback
             .mapped_epoch()
@@ -234,7 +235,7 @@ fn two_mapped_cohort(partitions: &[usize]) -> Vec<f32> {
             .mapped_epoch()
             .unwrap(),
     ];
-    assert!(!original_epochs[0].matches_exact(original_epochs[1]));
+    assert!(!expected_epochs[0].matches_exact(expected_epochs[1]));
     let original_transport = path.timeline;
     let mut segments = vec![MasterSegment {
         frame: 0,
@@ -271,6 +272,9 @@ fn two_mapped_cohort(partitions: &[usize]) -> Vec<f32> {
             beat.to_bits()
         );
         for (id, captured) in [&first, &second].into_iter().enumerate() {
+            expected_epochs[id] = expected_epochs[id]
+                .with_timeline_at(path.timeline, execution)
+                .unwrap();
             let voice = cohort_voice(&path, id);
             assert_eq!(voice.generation, generations[id]);
             assert_eq!(voice.source_playback.position(), positions[id]);
@@ -288,7 +292,7 @@ fn two_mapped_cohort(partitions: &[usize]) -> Vec<f32> {
                     .source_playback
                     .mapped_epoch()
                     .unwrap()
-                    .matches_exact(original_epochs[id].with_timeline(path.timeline).unwrap())
+                    .matches_exact(expected_epochs[id])
             );
             assert!(!voice.stretch.has_active_native_ownership());
             assert!(!voice.stretch.has_retained_source_input());

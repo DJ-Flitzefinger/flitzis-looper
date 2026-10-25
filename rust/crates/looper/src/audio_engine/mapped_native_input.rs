@@ -6,11 +6,12 @@
 use super::{NativeHistoryRequest, RubberBandError, SourceReadCheckpoint};
 use crate::audio_engine::content_placement::OwnerIdentity;
 use crate::audio_engine::mapped_source_clock::MappedClockEpoch;
-use crate::audio_engine::native_history_permit::NativeHistoryPermitIdentity;
+use crate::audio_engine::native_history_permit::{
+    EffectiveNativeVoice, NativeHistoryPermitIdentity, NativeSourceAdmission,
+};
 use crate::audio_engine::ordinary_start::OrdinaryStartWork;
 use crate::audio_engine::pad_start::{MappedStartPendingGuard, MappedStartSource};
 use crate::audio_engine::pitch_intent::PitchIntent;
-use crate::audio_engine::source_playback::SourcePlayback;
 use std::sync::Arc;
 
 pub(crate) struct MappedNativeInput {
@@ -24,6 +25,27 @@ pub(crate) struct MappedNativeInput {
     epoch: u64,
     pitch_intent: PitchIntent,
     key_lock: bool,
+    effective_voice: Option<PreparedMappedVoice>,
+}
+
+/// Prequalified destination and exact candidate, moved only after the complete birth claim.
+pub(crate) struct PreparedMappedVoice {
+    voice: EffectiveNativeVoice,
+    owner: MappedNativePitchOwner,
+    stamp: MappedNativePitchStamp,
+}
+
+impl PreparedMappedVoice {
+    pub(crate) fn claim_current(
+        &self,
+        admission: &NativeSourceAdmission,
+        lifetime: &Arc<std::sync::atomic::AtomicU64>,
+        generation: u64,
+        active: bool,
+    ) -> bool {
+        self.voice
+            .claim_current(admission, lifetime, generation, active)
+    }
 }
 
 /// Comparison only: the worker request or adopted adapter retains all actual owners.
@@ -118,7 +140,8 @@ impl MappedNativeInput {
         work.origin()
             .preparation_guard()
             .map_err(|_| unavailable())?;
-        let (clock, target) = work.mapped_clock().ok_or_else(unavailable)?;
+        let clock = request.playback.mapped_epoch().ok_or_else(unavailable)?;
+        let target = work.execution_frame();
         let source = work
             .origin()
             .mapped_source_owner()
@@ -134,7 +157,10 @@ impl MappedNativeInput {
         if request.mapped_input.is_some()
             || origin.plan.transition.is_active()
             || work.execution_frame() != target
-            || work.origin().target_frame() != Some(target)
+            || work
+                .origin()
+                .target_frame()
+                .is_none_or(|original| original > target)
             || request.target_output_frame != target
             || request.request_id != work.sequence()
             || request.epoch != work.epoch()
@@ -165,6 +191,7 @@ impl MappedNativeInput {
             epoch: request.epoch,
             pitch_intent: request.pitch_intent,
             key_lock: request.key_lock,
+            effective_voice: None,
         };
         // Do not normalize a copied beginning into apparent permission.
         let canonical = input.checkpoint_at(target)?;
@@ -174,7 +201,54 @@ impl MappedNativeInput {
         Ok(input)
     }
 
-    pub(super) fn matches_request(&self, request: &NativeHistoryRequest) -> bool {
+    pub(crate) fn capture_pitch(
+        work: &crate::audio_engine::pitch_actions::PitchActionWork,
+        request: &NativeHistoryRequest,
+    ) -> Result<Self, RubberBandError> {
+        let unavailable = || RubberBandError::UnavailableSourceHistory;
+        let action = &work.action;
+        let origin = SourceReadCheckpoint {
+            playback: request.playback,
+            plan: request.plan,
+        };
+        if action.variant() != crate::audio_engine::pitch_actions::PitchActionVariant::SetRetrigger
+            || work.current_guard().is_err()
+            || request.mapped_input.is_some()
+            || request.target_output_frame != action.execution_target()
+            || request.target_output_frame < action.original_due_frame()
+            || request.request_id != action.sequence()
+            || request.epoch != action.epoch()
+            || !action.matches_history_owner(request)
+            || work
+                .normal_launch_origin
+                .is_none_or(|expected| !expected.matches_exact(origin))
+            || !request.actual_feed_checkpoint().matches_exact(origin)
+            || !request
+                .permit
+                .current(&request.sample, request.binding.sample_rate_hz)
+        {
+            return Err(unavailable());
+        }
+        let input = Self {
+            source: action.mapped_source_owner().ok_or_else(unavailable)?,
+            pending: action.mapped_pending_guard().map_err(|_| unavailable())?,
+            clock: request.playback.mapped_epoch().ok_or_else(unavailable)?,
+            origin,
+            permit: request.permit.scalar_identity(),
+            target: request.target_output_frame,
+            request_id: request.request_id,
+            epoch: request.epoch,
+            pitch_intent: request.pitch_intent,
+            key_lock: request.key_lock,
+            effective_voice: None,
+        };
+        if !origin.is_consistent() || !input.checkpoint_at(input.target)?.matches_exact(origin) {
+            return Err(unavailable());
+        }
+        Ok(input)
+    }
+
+    pub(crate) fn matches_request(&self, request: &NativeHistoryRequest) -> bool {
         request.target_output_frame == self.target
             && request.request_id == self.request_id
             && request.epoch == self.epoch
@@ -187,10 +261,83 @@ impl MappedNativeInput {
             })
     }
 
-    /// Pending preparation/adoption checks freshness. Effective reads retain immutable pins
-    /// and use the existing NativeHistoryPermit source/OwnACK contract instead.
-    pub(super) fn pending_current(&self) -> bool {
-        self.pending.current(&self.source)
+    /// Pending preparation/adoption checks freshness. An installed birth retains its
+    /// separately claimed voice lifetime; it cannot become a new pending candidate.
+    pub(crate) fn pending_current(&self) -> bool {
+        self.effective_voice.is_none() && self.pending.current(&self.source)
+    }
+
+    pub(super) fn stage_effective_voice(
+        &self,
+        request: &NativeHistoryRequest,
+        stamp: MappedNativePitchStamp,
+        lifetime: &Arc<std::sync::atomic::AtomicU64>,
+        generation: u64,
+        active: bool,
+        increments: u64,
+    ) -> Option<PreparedMappedVoice> {
+        if !self.matches_request(request) || !self.pending_current() {
+            return None;
+        }
+        Some(PreparedMappedVoice {
+            voice: request.permit.stage_effective_voice(
+                &request.sample,
+                request.binding.sample_rate_hz,
+                lifetime,
+                generation,
+                active,
+                increments,
+            )?,
+            owner: self.pitch_owner(),
+            stamp,
+        })
+    }
+
+    pub(super) fn staged_voice_matches(
+        &self,
+        staged: &PreparedMappedVoice,
+        stamp: MappedNativePitchStamp,
+    ) -> bool {
+        self.effective_voice.is_none()
+            && self.pitch_owner() == staged.owner
+            && stamp == staged.stamp
+    }
+
+    pub(super) fn install_effective_voice(&mut self, staged: PreparedMappedVoice) {
+        debug_assert!(self.effective_voice.is_none());
+        debug_assert_eq!(self.pitch_owner(), staged.owner);
+        self.effective_voice = Some(staged);
+    }
+
+    pub(super) fn effective_adapter_current(&self, stamp: Option<MappedNativePitchStamp>) -> bool {
+        self.effective_voice.as_ref().is_none_or(|installed| {
+            stamp.is_some_and(|stamp| {
+                stamp.adapter_id == installed.stamp.adapter_id
+                    && stamp.native == installed.stamp.native
+                    && stamp.incarnation == installed.stamp.incarnation
+            })
+        })
+    }
+
+    pub(super) fn has_effective_voice(&self) -> bool {
+        self.effective_voice.is_some()
+    }
+
+    pub(super) fn effective_source_current(&self, request: &NativeHistoryRequest) -> bool {
+        match &self.effective_voice {
+            None => request
+                .permit
+                .current_effective_source(&request.sample, request.binding.sample_rate_hz),
+            Some(installed) => {
+                installed.owner == self.pitch_owner()
+                    && request.permit.scalar_identity() == self.permit
+                    && installed.voice.current(
+                        &request.sample,
+                        request.binding.sample_rate_hz,
+                        request.binding.accepted,
+                    )
+            }
+        }
     }
 
     pub(super) fn pitch_owner(&self) -> MappedNativePitchOwner {
@@ -203,7 +350,7 @@ impl MappedNativeInput {
         }
     }
 
-    fn owns_request(&self, request: &NativeHistoryRequest) -> bool {
+    fn owns_request(&self, request: &NativeHistoryRequest, stamp: MappedNativePitchStamp) -> bool {
         request.target_output_frame == self.target
             && request.request_id == self.request_id
             && request.epoch == self.epoch
@@ -214,9 +361,8 @@ impl MappedNativeInput {
                 .mapped_input
                 .as_ref()
                 .is_some_and(|input| input.pitch_owner() == self.pitch_owner())
-            && request
-                .permit
-                .current_effective_source(&request.sample, request.binding.sample_rate_hz)
+            && self.effective_adapter_current(Some(stamp))
+            && self.effective_source_current(request)
     }
 
     /// Effective reads deliberately do not consult the pending map-job revision.
@@ -232,7 +378,7 @@ impl MappedNativeInput {
     ) -> Result<MappedNativePitchChunk, RubberBandError> {
         let canonical = self.canonicalize(checkpoint)?;
         let mut bounded = canonical.playback;
-        if !self.owns_request(request)
+        if !self.owns_request(request, stamp)
             || intent != request.pitch_intent
             || canonical.playback.mapped_output_frame() != Some(stamp.actual_frame)
             || !canonical.matches_exact(checkpoint)
@@ -267,7 +413,8 @@ impl MappedNativeInput {
         frames: usize,
         stamp: MappedNativePitchStamp,
     ) -> Result<MappedNativePitchChunk, RubberBandError> {
-        if !self.owns_request(request)
+        if self.effective_voice.is_some()
+            || !self.owns_request(request, stamp)
             || self.origin.playback.mapped_output_frame() != Some(stamp.actual_frame)
             || !self.origin.matches_exact(SourceReadCheckpoint {
                 playback: request.playback,
@@ -297,7 +444,12 @@ impl MappedNativeInput {
     }
 
     fn checkpoint_at(&self, frame: u64) -> Result<SourceReadCheckpoint, RubberBandError> {
-        let playback = SourcePlayback::mapped(self.source.geometry(), self.clock, frame)
+        if frame < self.target {
+            return Err(RubberBandError::UnavailableSourceHistory);
+        }
+        let mut playback = self.origin.playback;
+        playback
+            .project_mapped_compact_to(self.source.geometry(), frame)
             .map_err(|_| RubberBandError::UnavailableSourceHistory)?;
         let position = playback.position();
         Ok(SourceReadCheckpoint {

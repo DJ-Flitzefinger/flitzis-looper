@@ -162,6 +162,10 @@ mod mapped_fixed_pitch_birth_tests {
     include!("mapped_fixed_pitch_birth_tests.rs");
 }
 
+mod public_runtime_mapped_birth_tests {
+    include!("public_runtime_mapped_birth_tests.rs");
+}
+
 mod mapped_native_output_tests {
     include!("mapped_native_output_tests.rs");
 }
@@ -174,20 +178,25 @@ mod mapped_hold_continuation_tests {
     include!("mapped_hold_continuation_tests.rs");
 }
 
-fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+fn covered_terminal_seconds(frame: usize) -> f64 {
+    // The declared endpoint covers the exact integer marker, not only its
+    // rounded binary64 product. Keep the original shared negative record intact.
+    f64::from_bits((frame as f64 / f64::from(RATE)).to_bits() + 1)
+}
+
+fn positive_launch_record(path: &LaunchPath) -> serde_json::Value {
     let mut expected = record(&path.source, 0);
-    let accepted = &mut expected["record"]["accepted"];
-    let first = accepted["anchors"][0].clone();
-    let mut middle = accepted["anchors"][1].clone();
-    middle["id"] = json!("fractional-variable-knot");
-    middle["source_seconds_bits"] = json!(bits(48.0 / f64::from(RATE)));
-    middle["beat_bits"] = json!(bits(0.6));
-    let last = accepted["anchors"][1].clone();
-    let interval = accepted["intervals"][0].clone();
-    accepted["anchors"] = json!([first, middle, last]);
-    accepted["intervals"] = json!([interval.clone(), interval]);
+    expected["record"]["accepted"]["anchors"][1]["source_seconds_bits"] =
+        json!(bits(covered_terminal_seconds(64)));
     seal(&mut expected);
-    let (job, event) = stored_event(&path.source, &expected);
+    expected
+}
+
+fn positive_launch_delivery(
+    path: &LaunchPath,
+    expected: &serde_json::Value,
+) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+    let (job, event) = stored_event(&path.source, expected);
     let delivery = Python::attach(|py| {
         let event = event.bind(py).cast::<PyDict>().unwrap();
         let owner = event.get_item("_native_event_owner").unwrap().unwrap();
@@ -200,6 +209,269 @@ fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderE
         delivery.clone()
     });
     (job, delivery)
+}
+
+fn positive_constant_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+    positive_launch_delivery(path, &positive_launch_record(path))
+}
+
+fn variable_original_delivery(path: &LaunchPath) -> (OfflineAnalysisJob, LoaderEventDelivery) {
+    let mut expected = positive_launch_record(path);
+    let accepted = &mut expected["record"]["accepted"];
+    let first = accepted["anchors"][0].clone();
+    let mut middle = accepted["anchors"][1].clone();
+    middle["id"] = json!("fractional-variable-knot");
+    middle["source_seconds_bits"] = json!(bits(48.0 / f64::from(RATE)));
+    middle["beat_bits"] = json!(bits(0.6));
+    let last = accepted["anchors"][1].clone();
+    let interval = accepted["intervals"][0].clone();
+    accepted["anchors"] = json!([first, middle, last]);
+    accepted["intervals"] = json!([interval.clone(), interval]);
+    seal(&mut expected);
+    positive_launch_delivery(path, &expected)
+}
+
+// Independent test arithmetic for these bounded normal-f64 fixture coordinates.
+// No engine clock, map inverse, reader or numeric conversion supplies the oracle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OracleFraction {
+    n: bnum::Uint<64>,
+    d: bnum::Uint<64>,
+}
+
+impl OracleFraction {
+    fn new(n: bnum::Uint<64>, d: bnum::Uint<64>) -> Self {
+        assert!(!d.is_zero());
+        let (mut a, mut b) = (n, d);
+        while !b.is_zero() {
+            (a, b) = (b, a.checked_rem(b).unwrap());
+        }
+        Self {
+            n: n.checked_div(a).unwrap(),
+            d: d.checked_div(a).unwrap(),
+        }
+    }
+
+    fn integer(value: u64) -> Self {
+        Self::new(value.try_into().unwrap(), 1_u64.try_into().unwrap())
+    }
+
+    fn binary(value: f64) -> Self {
+        assert!(value.is_finite() && value >= 0.0);
+        if value == 0.0 {
+            return Self::integer(0);
+        }
+        let bits = value.to_bits();
+        let exponent = ((bits >> 52) & 0x7ff) as i32;
+        assert!(
+            exponent > 0,
+            "this fixture oracle accepts normal input axes"
+        );
+        let mantissa = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+        let shift = exponent - 1023 - 52;
+        let n = bnum::Uint::<64>::try_from(mantissa).unwrap();
+        let d = bnum::Uint::<64>::try_from(1_u64).unwrap();
+        if shift >= 0 {
+            Self::new(n.checked_shl(shift as u32).unwrap(), d)
+        } else {
+            Self::new(n, d.checked_shl((-shift) as u32).unwrap())
+        }
+    }
+
+    fn add(self, rhs: Self) -> Self {
+        Self::new(
+            self.n
+                .checked_mul(rhs.d)
+                .unwrap()
+                .checked_add(rhs.n.checked_mul(self.d).unwrap())
+                .unwrap(),
+            self.d.checked_mul(rhs.d).unwrap(),
+        )
+    }
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(
+            self.n
+                .checked_mul(rhs.d)
+                .unwrap()
+                .checked_sub(rhs.n.checked_mul(self.d).unwrap())
+                .unwrap(),
+            self.d.checked_mul(rhs.d).unwrap(),
+        )
+    }
+    fn mul(self, rhs: Self) -> Self {
+        Self::new(
+            self.n.checked_mul(rhs.n).unwrap(),
+            self.d.checked_mul(rhs.d).unwrap(),
+        )
+    }
+    fn div(self, rhs: Self) -> Self {
+        Self::new(
+            self.n.checked_mul(rhs.d).unwrap(),
+            self.d.checked_mul(rhs.n).unwrap(),
+        )
+    }
+    fn rem(self, rhs: Self) -> Self {
+        let numerator = self.n.checked_mul(rhs.d).unwrap();
+        let divisor = self.d.checked_mul(rhs.n).unwrap();
+        Self::new(
+            numerator.checked_rem(divisor).unwrap(),
+            self.d.checked_mul(rhs.d).unwrap(),
+        )
+    }
+    fn less(self, rhs: Self) -> bool {
+        self.n.checked_mul(rhs.d).unwrap() < rhs.n.checked_mul(self.d).unwrap()
+    }
+    fn rounded(self) -> f64 {
+        if self.n.is_zero() {
+            return 0.0;
+        }
+        let mut exponent = self.n.bit_width() as i32 - self.d.bit_width() as i32;
+        let below = if exponent >= 0 {
+            self.n < self.d.checked_shl(exponent as u32).unwrap()
+        } else {
+            self.n.checked_shl((-exponent) as u32).unwrap() < self.d
+        };
+        if below {
+            exponent -= 1;
+        }
+        assert!((-1022..=52).contains(&exponent));
+        let scaled = self.n.checked_shl((52 - exponent) as u32).unwrap();
+        let mut significand = u64::try_from(scaled.checked_div(self.d).unwrap()).unwrap();
+        let twice = scaled.checked_rem(self.d).unwrap().checked_shl(1).unwrap();
+        if twice > self.d || (twice == self.d && significand & 1 != 0) {
+            significand += 1;
+        }
+        significand as f64 * 2.0_f64.powi(exponent - 52)
+    }
+}
+
+struct OracleMap {
+    points: Vec<(OracleFraction, OracleFraction)>,
+    declared: Vec<(f64, f64)>,
+    beginning: OracleFraction,
+    quarters: OracleFraction,
+}
+
+impl OracleMap {
+    fn new(declared: &[(f64, f64)], start: usize, end: usize) -> Self {
+        let mut map = Self {
+            points: declared
+                .iter()
+                .map(|&(seconds, beat)| {
+                    (
+                        OracleFraction::binary(seconds)
+                            .mul(OracleFraction::integer(u64::from(RATE))),
+                        OracleFraction::binary(beat),
+                    )
+                })
+                .collect(),
+            declared: declared.to_vec(),
+            beginning: OracleFraction::integer(0),
+            quarters: OracleFraction::integer(1),
+        };
+        map.beginning = map.inverse(start);
+        map.quarters = map.inverse(end).sub(map.beginning);
+        assert!(!map.quarters.n.is_zero());
+        map
+    }
+    fn inverse(&self, frame: usize) -> OracleFraction {
+        let source = OracleFraction::integer(frame as u64);
+        let pair = self
+            .points
+            .windows(2)
+            .find(|pair| !source.less(pair[0].0) && !pair[1].0.less(source))
+            .unwrap();
+        pair[0].1.add(
+            source
+                .sub(pair[0].0)
+                .mul(pair[1].1.sub(pair[0].1))
+                .div(pair[1].0.sub(pair[0].0)),
+        )
+    }
+    fn coordinate_and_rate(&self, elapsed_beats: OracleFraction) -> (f64, f64) {
+        let beat = self.beginning.add(elapsed_beats.rem(self.quarters));
+        let index = self
+            .points
+            .windows(2)
+            .position(|pair| beat.less(pair[1].1))
+            .unwrap();
+        let (a, b) = (self.points[index], self.points[index + 1]);
+        let source = a.0.add(beat.sub(a.1).mul(b.0.sub(a.0)).div(b.1.sub(a.1)));
+        let (a, b) = (self.declared[index], self.declared[index + 1]);
+        let slope = (b.0 - a.0) / (b.1 - a.1);
+        (source.rounded(), f64::from(RATE) * slope / 64.0)
+    }
+    fn at_frame(&self, frame: usize) -> (f64, f64) {
+        self.coordinate_and_rate(
+            OracleFraction::integer(frame as u64).div(OracleFraction::integer(64)),
+        )
+    }
+    fn assert_physical_quarters(
+        &self,
+        geometry: &crate::audio_engine::mapped_source_clock::MappedLoopGeometry,
+    ) {
+        let (n, d) = geometry
+            .domain()
+            .musical_period
+            .physical_quarters()
+            .unwrap()
+            .parts();
+        assert!(!n.negative && !d.negative);
+        assert_eq!(n.magnitude, self.quarters.n);
+        assert_eq!(d.magnitude, self.quarters.d);
+    }
+}
+
+fn tiny_oracle(variable: bool, unity_head: bool) -> &'static OracleMap {
+    static MAPS: std::sync::OnceLock<[OracleMap; 3]> = std::sync::OnceLock::new();
+    let maps = MAPS.get_or_init(|| {
+        [
+            OracleMap::new(&[(0.0, 0.0), (covered_terminal_seconds(64), 1.0)], 32, 64),
+            OracleMap::new(
+                &[
+                    (0.0, 0.0),
+                    (48.0 / f64::from(RATE), 0.6),
+                    (covered_terminal_seconds(64), 1.0),
+                ],
+                32,
+                64,
+            ),
+            OracleMap::new(
+                &[
+                    (0.0, 0.0),
+                    (48.0 / f64::from(RATE), 0.75),
+                    (covered_terminal_seconds(64), 1.125),
+                ],
+                32,
+                64,
+            ),
+        ]
+    });
+    &maps[if unity_head { 2 } else { usize::from(variable) }]
+}
+
+#[test]
+fn original_undercovered_physical_launch_still_refuses_before_capture() {
+    let path = LaunchPath::new();
+    let (_job, delivery) = original_delivery(&path.source);
+    publish_original(&path, &delivery, 1);
+    let result = path.source.engine.capture_pad_start(
+        0,
+        32.0 / f64::from(RATE),
+        Some(64.0 / f64::from(RATE)),
+        1.0,
+        false,
+        None,
+        None,
+    );
+    let error = result.err().expect("uncovered physical marker must refuse");
+    Python::attach(|py| {
+        assert_eq!(
+            error.value(py).str().unwrap().to_str().unwrap(),
+            "mapped_timing_unavailable"
+        )
+    });
+    assert!(!path.source.mixer.voices.iter().any(|voice| voice.active));
 }
 
 fn publish_original(path: &LaunchPath, delivery: &LoaderEventDelivery, revision: u64) {
@@ -261,6 +533,12 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
             "policy_mode":"mapped","policy_revision":null,"policy_sync":null,
             "policy_realtime_bpm":null,"settled":true,"target_current":true,"adoption":null,
             "phase_program_current":false,"phase_program_revision":null,
+            "birth": {
+                "requested":"first_sound_at_grid","outcome":"complete_beginning_at_e",
+                "alignment":"earliest_bound_met","reason":null,
+                "original_target_frame":0,"execution_frame":0,
+                "reference_qualified_at_birth":true,"emitted":true,
+            },
         })
     );
     publish(
@@ -526,14 +804,9 @@ fn verify_actual_reads(
             let absolute = start + offset as u64;
             let position = span.playback.position_at(offset).unwrap();
             assert_eq!(position, geometry.position_at(epoch, absolute).unwrap());
-            // Independent physical inverse of the declared 0/48/64-frame map.
-            let beat = geometry.start_beat()
-                + ((absolute - origin) as f64 / 64.0).rem_euclid(geometry.exact_quarters());
-            let expected = if beat < 0.6 {
-                80.0 * beat
-            } else {
-                48.0 + 40.0 * (beat - 0.6)
-            };
+            let expected = tiny_oracle(true, false)
+                .at_frame((absolute - origin) as usize)
+                .0;
             let actual = position.frame as f64 + position.fraction;
             assert!(
                 (actual - expected).abs() < 1e-9,
@@ -1385,7 +1658,7 @@ fn real_retirement_pressure_keeps_original_before_claim_and_retries_before_its_f
 }
 
 #[test]
-fn changed_real_master_anchor_before_quantized_claim_refuses_map_and_keeps_prior_audio() {
+fn changed_real_master_anchor_reprepares_full_beginning_and_keeps_prior_audio_until_new_e() {
     let mut path = LaunchPath::new();
     let (_job, delivery) = variable_original_delivery(&path);
     publish_mixed_members(&path, &delivery);
@@ -1435,8 +1708,7 @@ fn changed_real_master_anchor_before_quantized_claim_refuses_map_and_keeps_prior
         .source_playback;
     assert!(expected.advance(1));
     let output = path.render(1);
-    assert_eq!(captured.state(), "rejected");
-    assert_eq!(captured.reason(), Some("mapped_timing_unavailable"));
+    assert_ne!(captured.state(), "rejected", "{:?}", captured.reason());
     assert_eq!(captured.target_frame(), Some(64));
     assert_eq!(captured.effective_frame(), None);
     assert!(
@@ -1457,6 +1729,26 @@ fn changed_real_master_anchor_before_quantized_claim_refuses_map_and_keeps_prior
     assert_eq!(continued.generation, generation);
     assert!(continued.source_playback.matches_exact(&expected));
     assert!(output.iter().any(|sample| sample.abs() > 0.0));
+    public_runtime_mapped_birth_tests::ready(&mut path, captured.sequence());
+    let execution = captured.execution_frame().unwrap();
+    assert!(execution > 64);
+    public_runtime_mapped_birth_tests::render_to(&mut path, execution);
+    path.render(1);
+    assert_eq!(captured.state(), "applied", "{:?}", captured.reason());
+    assert_eq!(captured.target_frame(), Some(64));
+    assert_eq!(captured.effective_frame(), Some(execution));
+    let mut history = SourceFeedSnapshot::new();
+    assert!(path.voice().source_feed_history.capture_into(&mut history));
+    let first = history.spans().next().unwrap();
+    assert_eq!(first.playback.position().frame, 32);
+    assert_eq!(
+        first.playback.position().fraction.to_bits(),
+        0.0_f64.to_bits()
+    );
+    let feedback = sync_feedback(&path).unwrap();
+    assert_eq!(feedback["birth"]["emitted"], true);
+    assert_eq!(feedback["birth"]["reference_qualified_at_birth"], false);
+    assert_eq!(feedback["phase_program_current"], false);
 }
 
 fn repeat_current_rate_through_public_parameter_drain(path: &mut LaunchPath) {

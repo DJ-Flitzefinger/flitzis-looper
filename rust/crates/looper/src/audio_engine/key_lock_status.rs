@@ -1,4 +1,6 @@
 //! Fixed callback-owned mode acknowledgement and actual wet readiness.
+use crate::audio_engine::key_lock_start_policy::KeyLockStartBehavior;
+use crate::audio_engine::mapped_birth::BirthStatus;
 use crate::audio_engine::source_sync_policy::{
     SourceSyncMode, SourceSyncObservation, SourceSyncRequest,
 };
@@ -32,6 +34,8 @@ pub(crate) struct SourceSyncStatus {
     pub(crate) active: bool,
     pub(crate) witness: Option<SourceSyncWitness>,
     pub(crate) policy: Option<SourceSyncObservation>,
+    pub(crate) birth: Option<BirthStatus>,
+    pub(crate) birth_source_request_incarnation: Option<u64>,
 }
 
 #[derive(Default)]
@@ -54,6 +58,10 @@ pub(super) struct KeyLockStatusSlot {
     sync_policy_revision: AtomicU64,
     sync_policy_choices: AtomicU8,
     sync_phase_revision: AtomicU64,
+    sync_birth_flags: AtomicU8,
+    sync_birth_original: AtomicU64,
+    sync_birth_execution: AtomicU64,
+    sync_birth_source_request: AtomicU64,
 }
 
 impl KeyLockStatusSlot {
@@ -143,6 +151,29 @@ impl KeyLockStatusSlot {
         for (word, value) in self.sync_map.iter().zip(witness.map_revision) {
             word.store(value, Ordering::SeqCst);
         }
+        self.sync_birth_source_request.store(
+            status.birth_source_request_incarnation.unwrap_or(0),
+            Ordering::SeqCst,
+        );
+        self.sync_birth_flags.store(
+            status.birth.map_or(0, |birth| {
+                1 | ((birth.requested as u8) << 1)
+                    | (u8::from(birth.mixed) << 2)
+                    | (u8::from(birth.reference_qualified) << 3)
+                    | (u8::from(birth.emitted) << 4)
+                    | (u8::from(birth.original.is_some()) << 5)
+                    | (u8::from(birth.execution.is_some()) << 6)
+            }),
+            Ordering::SeqCst,
+        );
+        self.sync_birth_original.store(
+            status.birth.and_then(|birth| birth.original).unwrap_or(0),
+            Ordering::SeqCst,
+        );
+        self.sync_birth_execution.store(
+            status.birth.and_then(|birth| birth.execution).unwrap_or(0),
+            Ordering::SeqCst,
+        );
         self.sequence
             .store(sequence.wrapping_add(2), Ordering::SeqCst);
     }
@@ -153,7 +184,24 @@ impl KeyLockStatusSlot {
             return None;
         }
         let flags = self.sync_flags.load(Ordering::SeqCst);
+        let birth_flags = self.sync_birth_flags.load(Ordering::SeqCst);
         let status = SourceSyncStatus {
+            birth_source_request_incarnation: (birth_flags & 1 != 0)
+                .then(|| self.sync_birth_source_request.load(Ordering::SeqCst)),
+            birth: (birth_flags & 1 != 0).then(|| BirthStatus {
+                requested: if birth_flags & 2 != 0 {
+                    KeyLockStartBehavior::AttackAtGrid
+                } else {
+                    KeyLockStartBehavior::FirstSoundAtGrid
+                },
+                mixed: birth_flags & 4 != 0,
+                reference_qualified: birth_flags & 8 != 0,
+                emitted: birth_flags & 16 != 0,
+                original: (birth_flags & 32 != 0)
+                    .then(|| self.sync_birth_original.load(Ordering::SeqCst)),
+                execution: (birth_flags & 64 != 0)
+                    .then(|| self.sync_birth_execution.load(Ordering::SeqCst)),
+            }),
             content_lifetime: self.sync_lifetime.load(Ordering::SeqCst),
             source_generation: self.sync_generation.load(Ordering::SeqCst),
             source_address: self.sync_address.load(Ordering::SeqCst),

@@ -657,7 +657,11 @@ fn capture_row(
         clock.output_frame
     };
     let action = CapturedPitchAction::capture(PitchActionAdmission {
+        key_lock_request: ownership
+            .key_lock_request_for_cell(key.cell())
+            .load(Ordering::Acquire),
         sync_request: pad.source_map.request(),
+        source_map: pad.source_map.snapshot(ownership, binding),
         key,
         binding,
         ownership: ownership.clone(),

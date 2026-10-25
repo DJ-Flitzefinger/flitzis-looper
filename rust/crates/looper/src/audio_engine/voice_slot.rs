@@ -93,6 +93,7 @@ pub struct VoiceSlot {
     // The exact original launch and separately shared effective immutable map retire together.
     // Stop/restart transfers the aggregate through one existing off-thread retirement slot.
     pub(crate) mapped_start: Option<super::pad_start::PadStartCustody>,
+    pub(crate) mapped_birth: Option<super::mapped_birth::MappedBirth>,
     pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     /// Full original snapshot claim, separate from the immutable numeric epoch.
     pub(crate) phase_policy_revision: Option<(u64, u64)>,
@@ -127,6 +128,7 @@ impl VoiceSlot {
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             mapped_start: None,
+            mapped_birth: None,
             sync_request: super::source_sync_policy::SourceSyncRequest::default(),
             phase_policy_revision: None,
             phase_launch_qualified: false,
@@ -162,6 +164,7 @@ impl VoiceSlot {
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
@@ -219,6 +222,7 @@ impl VoiceSlot {
     }
 
     fn stop_inner(&mut self) {
+        self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
@@ -262,6 +266,7 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
         self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
@@ -305,6 +310,7 @@ impl VoiceSlot {
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
         self.source_playback = playback;
+        self.mapped_birth = None;
         self.phase_launch_qualified = false;
         self.stretch.reset();
         self.phase_birth_unadvanced = false;

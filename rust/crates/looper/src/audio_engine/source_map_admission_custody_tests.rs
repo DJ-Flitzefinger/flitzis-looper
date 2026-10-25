@@ -209,7 +209,7 @@ fn map_job_cancel_revokes_pending_runtime_admission_but_preserves_effective_orig
 }
 
 #[test]
-fn general_physical_runtime_derivative_keeps_original_legacy_launch_and_cache_custody() {
+fn general_physical_runtime_derivative_and_fresh_launch_keep_original_cache_custody() {
     use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
     use crate::audio_engine::source_map_admission::RuntimeMapClass;
     let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
@@ -249,10 +249,14 @@ fn general_physical_runtime_derivative_keeps_original_legacy_launch_and_cache_cu
         None,
     )
     .unwrap();
-    let legacy = launch.mapped_geometry().unwrap();
-    assert!(!legacy.has_compact_continuation());
-    assert!(!legacy.has_general_continuation());
-    assert!(legacy.clone().qualify_exact_continuation().is_err());
+    let fresh = launch.mapped_geometry().unwrap();
+    assert!(!fresh.has_compact_continuation());
+    assert!(fresh.has_general_continuation());
+    assert_eq!(fresh.domain(), source.geometry().domain());
+    assert_eq!(
+        fresh.map().map_revision(),
+        source.geometry().map().map_revision()
+    );
     assert_eq!(
         launch.sync_request().mode,
         crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped
@@ -266,7 +270,7 @@ fn general_physical_runtime_derivative_keeps_original_legacy_launch_and_cache_cu
 }
 
 #[test]
-fn unsupported_physical_grid_runtime_derivative_keeps_original_legacy_launch_and_domain_evidence() {
+fn unsupported_physical_grid_runtime_derivative_refuses_fresh_launch_and_keeps_domain_evidence() {
     use crate::audio_engine::source_map_admission::RuntimeMapClass;
     let mut path = ReaderDomainPath::new(&vec![0_i16; 65_536]);
     // Finite increasing legacy geometry stays valid, but the exact beat grid
@@ -298,14 +302,13 @@ fn unsupported_physical_grid_runtime_derivative_keeps_original_legacy_launch_and
         0,
         (48_000, 2),
         None,
-    )
-    .unwrap();
-    assert!(launch.mapped_geometry().is_some());
-    assert!(!launch.mapped_geometry().unwrap().has_compact_continuation());
-    assert_eq!(
-        launch.sync_request().mode,
-        crate::audio_engine::source_sync_policy::SourceSyncMode::Mapped
     );
+    assert!(matches!(
+        launch,
+        Err(PitchActionReject::MappedTimingUnavailable)
+    ));
+    assert!(path.source.consumer.is_empty());
+    assert!(path.source.mixer.voices.iter().all(|voice| !voice.active));
     let cached = live_map_snapshot(&mut path.source);
     assert!(Arc::ptr_eq(&snapshot, &cached));
     assert_eq!(cached.map_preparation(0), preparation);
@@ -626,8 +629,27 @@ fn original_job_cancel_refuses_pending_claim_without_destroying_admitted_geometr
 
 #[test]
 fn real_original_capture_prepares_manual_map_geometry_and_rejects_later_token_cancel() {
+    use crate::audio_engine::general_source_numerics::Integer;
     let fixture = runtime_fixture();
-    let (job, delivery) = original_delivery(&fixture);
+    // Exact dyadic coverage ends at 93.75 frames, beyond marker 64, with 64 frames/beat.
+    // The shared original undercovered record remains unchanged for its negative callers.
+    let mut expected = record(&fixture, 0);
+    expected["record"]["accepted"]["anchors"][1]["source_seconds_bits"] =
+        serde_json::json!(bits(1.0 / 512.0));
+    expected["record"]["accepted"]["anchors"][1]["beat_bits"] = serde_json::json!(bits(1.46484375));
+    seal(&mut expected);
+    let (job, event) = stored_event(&fixture, &expected);
+    let delivery = Python::attach(|py| {
+        let event = event.bind(py).cast::<PyDict>().unwrap();
+        let owner = event.get_item("_native_event_owner").unwrap().unwrap();
+        let delivery = owner.extract::<PyRef<'_, LoaderEventDelivery>>().unwrap();
+        assert!(
+            job.resolve_source_beatmap_artifact_completion(&delivery)
+                .unwrap()
+                .is_some()
+        );
+        delivery.clone()
+    });
     publish(
         &fixture,
         SourceMapRow {
@@ -652,7 +674,20 @@ fn real_original_capture_prepares_manual_map_geometry_and_rejects_later_token_ca
     )
     .unwrap();
     let geometry = captured.mapped_geometry().unwrap();
+    assert!(geometry.has_general_continuation());
     assert_eq!(geometry.exact_quarters(), 0.5);
+    assert_eq!(
+        geometry
+            .domain()
+            .musical_period
+            .physical_quarters()
+            .unwrap()
+            .parts(),
+        (
+            Integer::from_u128(1).unwrap(),
+            Integer::from_u128(2).unwrap()
+        )
+    );
     assert_eq!(geometry.domain().region.start, 32);
     assert_eq!(geometry.domain().region.end, 64);
     assert!(captured.control_guard().is_ok());
@@ -1041,7 +1076,10 @@ impl ReaderDomainPath {
         assert!(!read.plan.transition.is_active());
         let readers = read.context.resolve_readers(read.plan, None).unwrap();
         assert!(readers.current.is_none() && readers.outgoing.is_none());
-        let taps = read.plan.fractional_taps(position.fraction);
+        let taps = read
+            .plan
+            .try_fractional_taps(position.fraction)
+            .expect("actual scalar or mapped reader has valid taps");
         let pcm = std::array::from_fn(|channel| {
             assert!(
                 read.plan
@@ -1052,7 +1090,14 @@ impl ReaderDomainPath {
                     .tap_available_with_readers(sample, readers, right, channel)
             }));
             read.plan
-                .sample_fractional_with_readers(sample, readers, position.fraction, 0.0, channel)
+                .try_sample_fractional_with_readers(
+                    sample,
+                    readers,
+                    position.fraction,
+                    0.0,
+                    channel,
+                )
+                .expect("actual scalar or mapped reader has valid channel PCM")
                 .to_bits()
         });
         (read, taps, pcm)
@@ -1061,6 +1106,7 @@ impl ReaderDomainPath {
 
 #[test]
 fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm() {
+    use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
     // Synthetic declared BeatThis labels exercise real acceptance/publication and ACKs.
     // They assert neither model inference, musical/hearing acceptance nor live conversion.
     let mut pcm = vec![0_i16; 131_072];
@@ -1128,10 +1174,11 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
         0.0
     );
     let mut map_record = record(&path.source, 0);
-    map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] = serde_json::json!(
-        bits(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE))
-    );
-    map_record["record"]["accepted"]["anchors"][1]["beat_bits"] = serde_json::json!(bits(2.0));
+    // Exact dyadic 72000 frames / 2.197265625 beats retains 32768 frames/beat and covers Z.
+    map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] =
+        serde_json::json!(bits(1.5));
+    map_record["record"]["accepted"]["anchors"][1]["beat_bits"] =
+        serde_json::json!(bits(2.197265625));
     seal(&mut map_record);
     let (map_job, event) = stored_event(&path.source, &map_record);
     let delivery = Python::attach(|py| {
@@ -1265,17 +1312,48 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
         Some(READER_DOMAIN_OUTPUT_FRAMES as u64)
     );
     let geometry = mapped_start.mapped_geometry().unwrap();
+    assert!(geometry.has_general_continuation());
     assert_eq!(geometry.exact_quarters(), 1.0);
     assert_eq!(geometry.domain().region.start, READER_DOMAIN_START);
     assert_eq!(geometry.domain().region.end, READER_DOMAIN_END);
     assert_eq!(
-        geometry.domain().musical_period.scalar_period(),
-        Some(32_768.0)
+        geometry
+            .domain()
+            .musical_period
+            .physical_quarters()
+            .unwrap()
+            .parts(),
+        (
+            Integer::from_u128(1).unwrap(),
+            Integer::from_u128(1).unwrap()
+        )
+    );
+    assert_eq!(
+        geometry
+            .domain()
+            .musical_period
+            .mapped_period(geometry.domain().region),
+        MappedReaderPeriod::physical(READER_DOMAIN_END - READER_DOMAIN_START)
     );
     path.render(READER_DOMAIN_OUTPUT_FRAMES);
     let (mapped_read, mapped_taps, mapped_pcm) =
         path.last_actual_source_read(READER_DOMAIN_OUTPUT_FRAMES as u64);
     assert!(mapped_read.playback.is_mapped());
+    assert!(mapped_read.playback.is_general_mapped());
+    assert_eq!(
+        mapped_read
+            .playback
+            .original_scalar_domain()
+            .unwrap()
+            .musical_period
+            .scalar_period()
+            .map(f64::to_bits),
+        Some(scalar_period.to_bits())
+    );
+    assert_eq!(
+        mapped_read.plan.loop_period,
+        geometry.domain().musical_period
+    );
     let mapped_position = mapped_read.playback.position();
     assert_eq!(mapped_position.frame, scalar_position.frame);
     assert_eq!(
@@ -1334,7 +1412,8 @@ fn accepted_scalar_and_qualified_map_same_pair_have_different_actual_reader_pcm(
             "source_frames": pcm.len(),
             "accepted_period_seconds_bits": bits(accepted.period_seconds),
             "scalar_period_frames_bits": bits(scalar_period),
-            "mapped_period_frames_bits": bits(mapped_read.plan.loop_period.scalar_period().unwrap()),
+            "mapped_reader_kind": "physical_map_quarters",
+            "mapped_period_frames_bits": bits((READER_DOMAIN_END - READER_DOMAIN_START) as f64),
             "local_e": READER_DOMAIN_OUTPUT_FRAMES - 1,
             "scalar_active_e": scalar_read.active_start,
             "mapped_active_e": mapped_read.active_start,
@@ -1501,10 +1580,10 @@ fn qualified_on_with_real_mapped_voice_noops_equal_period_and_keeps_different_pe
             .applied
     );
     let mut map_record = record(&path.source, 0);
-    map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] = serde_json::json!(
-        bits(READER_DOMAIN_END as f64 / f64::from(READER_DOMAIN_RATE))
-    );
-    map_record["record"]["accepted"]["anchors"][1]["beat_bits"] = serde_json::json!(bits(2.0));
+    map_record["record"]["accepted"]["anchors"][1]["source_seconds_bits"] =
+        serde_json::json!(bits(1.5));
+    map_record["record"]["accepted"]["anchors"][1]["beat_bits"] =
+        serde_json::json!(bits(2.197265625));
     seal(&mut map_record);
     let (job, event) = stored_event(&path.source, &map_record);
     let delivery = Python::attach(|py| {
@@ -1521,6 +1600,7 @@ fn qualified_on_with_real_mapped_voice_noops_equal_period_and_keeps_different_pe
     path.publish_map_request(&delivery, true);
     let start = path.start();
     assert!(start.mapped_geometry().is_some());
+    assert!(start.mapped_geometry().unwrap().has_general_continuation());
     path.render(3);
     assert!(path.source.mixer.has_mapped_voice());
     let original_owner = path

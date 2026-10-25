@@ -799,8 +799,8 @@ mod tests {
                 (actual.frame, actual.fraction.to_bits())
             );
         }
-        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 128);
-        assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
+        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 152);
+        assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
         assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     }
 

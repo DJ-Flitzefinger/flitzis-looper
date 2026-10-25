@@ -687,7 +687,9 @@ fn variable_terminal_native_preferences_leave_real_off_escape_and_fresh_pitch_re
             .unwrap()
     });
     assert_eq!(key_state, "error");
-    let blocked = fixture.capture_pitch("pitch.extra:1:set_retrigger");
+    // Live SET still requires unavailable mapped Native history. A fresh
+    // SetRetrigger instead owns a new physical beginning and is supported.
+    let blocked = fixture.capture_pitch("pitch.extra:1:set");
     assert!(
         fixture
             .dry
@@ -825,6 +827,222 @@ fn variable_terminal_native_preferences_leave_real_off_escape_and_fresh_pitch_re
             .stretch
             .has_active_native_ownership()
     );
+}
+
+#[test]
+fn composed_master_cutover_last_of_32_refuses_without_prefix_then_real_map_repair_and_phase_retry()
+{
+    let flat = &[(0., 0.), (1., 2.)][..];
+    let decimal = &[(0., 0.), (0.37, 1.), (0.91, 2.)][..];
+    let steep = &[(0., 0.), (2., 2.)][..];
+    let mut shapes = vec![(flat, 48000, Some(2.)); 32];
+    for id in (1..31).step_by(2) {
+        shapes[id] = (decimal, 43680, Some(2.));
+    }
+    shapes[31] = (steep, 96000, Some(2.));
+    let mut fixture = VariablePath::new(&shapes, 24000., 23);
+    fixture.mode();
+    hold_composed_fixture(&mut fixture, 29);
+    let before = scalar_state(&fixture.dry.path);
+    let old_timeline = fixture.dry.path.timeline;
+    let retained = (0..32)
+        .map(|id| {
+            let voice = fixture.dry.path.voice(id);
+            let mut history = SourceFeedSnapshot::new();
+            assert!(voice.source_feed_history.capture_into(&mut history));
+            (
+                voice
+                    .mapped_start
+                    .as_ref()
+                    .unwrap()
+                    .effective_source()
+                    .unwrap()
+                    .clone(),
+                voice.sample.as_ref().unwrap().clone(),
+                history,
+            )
+        })
+        .collect::<Vec<_>>();
+    request_composed_rate(&mut fixture, 1.01);
+    consume_pending(&mut fixture, &mut []);
+    let effect = fixture
+        .dry
+        .path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect;
+    assert_eq!(
+        effect.state,
+        crate::audio_engine::global_rate_status::RateState::Rejected
+    );
+    assert_eq!(
+        effect.error,
+        crate::audio_engine::global_rate_status::RateError::MappedTimingUnavailable
+    );
+    unchanged(&fixture.dry.path, &before);
+    assert!(fixture.dry.path.timeline.matches_clock_epoch(&old_timeline));
+    assert!(fixture.dry.path.source.consumer.is_empty());
+    assert!(fixture.dry.parameters.is_empty());
+    for (id, (owner, sample, prior)) in retained.iter().enumerate() {
+        let voice = fixture.dry.path.voice(id);
+        assert!(Arc::ptr_eq(
+            voice
+                .mapped_start
+                .as_ref()
+                .unwrap()
+                .effective_source()
+                .unwrap(),
+            owner
+        ));
+        assert!(voice.sample.as_ref().unwrap().same_window(sample));
+        let mut current = SourceFeedSnapshot::new();
+        assert!(voice.source_feed_history.capture_into(&mut current));
+        assert_eq!(
+            (
+                current.active_origin(),
+                current.active_frames(),
+                current.captured_epoch()
+            ),
+            (
+                prior.active_origin(),
+                prior.active_frames(),
+                prior.captured_epoch()
+            )
+        );
+        assert!(Arc::ptr_eq(
+            current.continuity_owner().unwrap(),
+            prior.continuity_owner().unwrap()
+        ));
+        assert_eq!(current.spans().count(), prior.spans().count());
+        for (a, b) in current.spans().zip(prior.spans()) {
+            assert!(a.playback.matches_exact(&b.playback));
+            assert!(a.plan.matches_exact(b.plan));
+            assert!(a.context.same_source(b.context));
+            assert_eq!((a.active_start, a.frames), (b.active_start, b.frames));
+        }
+    }
+    // Same content, genuine map publication/ACK, no forged voice or admission.
+    let repaired = &[(0., 0.), (2., 4.)][..];
+    let (job, delivery) = fixture.dry.map_anchors(31, repaired);
+    fixture.dry.jobs.push(job);
+    fixture.dry.deliveries[31] = delivery;
+    fixture.anchors[31] = repaired.to_vec();
+    fixture.quarters[31] = Some(4.);
+    fixture.publish(Some(wire(true, true, 3)), true, true, None, None);
+    assert_eq!(fixture.effect().observation().unwrap().state, "applied");
+    hold_composed_fixture(&mut fixture, 31);
+    let ordinary = scalar_state(&fixture.dry.path);
+    request_composed_rate(&mut fixture, 1.01);
+    consume_pending(&mut fixture, &mut []);
+    assert_composed_rate_applied(&fixture);
+    for (id, generation, previous, _) in &ordinary {
+        let voice = fixture.dry.path.voice(*id);
+        assert_eq!(voice.generation, *generation);
+        assert_position(voice.source_playback.position(), previous.position());
+        assert_eq!(
+            voice.source_playback.original_scalar_domain(),
+            previous.original_scalar_domain()
+        );
+    }
+    let composed = scalar_state(&fixture.dry.path);
+    let phase = fixture.effect();
+    assert_eq!(
+        phase.observation().unwrap().state,
+        "applied",
+        "{:?}",
+        phase.observation()
+    );
+    for (id, generation, previous, _) in &composed {
+        let voice = fixture.dry.path.voice(*id);
+        assert_eq!(voice.generation, *generation);
+        assert!(voice.source_playback.is_mapped_phase());
+        assert_position(voice.source_playback.position(), previous.position());
+        assert_eq!(
+            voice.source_playback.original_scalar_domain(),
+            previous.original_scalar_domain()
+        );
+        assert!(fixture.dry.path.feedback(*id)["grid_phase_confirmed"].is_null());
+    }
+}
+
+#[test]
+fn full_fraction_phase_escape_then_ordinary_hold_composition_keeps_first_pcm_and_later_phase_retry()
+{
+    let mut fixture = pending_composed_rate(1, true);
+    let prior = fixture.dry.path.voice(0).source_playback;
+    let owner = fixture
+        .dry
+        .path
+        .voice(0)
+        .mapped_start
+        .as_ref()
+        .unwrap()
+        .effective_source()
+        .unwrap()
+        .clone();
+    let sample = fixture.dry.path.voice(0).sample.as_ref().unwrap().clone();
+    consume_pending(&mut fixture, &mut []);
+    assert_composed_rate_applied(&fixture);
+    assert!(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .source_playback
+            .mapped_epoch()
+            .unwrap()
+            .is_composed_full_fraction_for_test()
+    );
+    assert_position(
+        fixture.dry.path.voice(0).source_playback.position(),
+        prior.position(),
+    );
+    assert_eq!(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .source_playback
+            .original_scalar_domain(),
+        prior.original_scalar_domain()
+    );
+    fixture.dry.path.render(1);
+    verify_first_read(&fixture, 0, prior.position());
+    let raw = fixture.dry.path.voice(0).source_playback.position();
+    let phase = fixture.effect();
+    assert_eq!(
+        phase.observation().unwrap().state,
+        "applied",
+        "{:?}",
+        phase.observation()
+    );
+    let voice = fixture.dry.path.voice(0);
+    assert!(voice.source_playback.is_mapped_phase());
+    assert!(
+        voice
+            .source_playback
+            .mapped_epoch()
+            .unwrap()
+            .has_full_fraction_recovery()
+    );
+    assert_position(voice.source_playback.position(), raw);
+    assert!(Arc::ptr_eq(
+        voice
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .effective_source()
+            .unwrap(),
+        &owner
+    ));
+    assert!(voice.sample.as_ref().unwrap().same_window(&sample));
+    assert!(fixture.dry.path.feedback(0)["grid_phase_confirmed"].is_null());
+    fixture.dry.path.render(1);
+    verify_first_read(&fixture, 0, raw);
 }
 
 #[test]
@@ -1243,7 +1461,7 @@ fn variable_requested_only_off_escape_keeps_a_genuine_future_native_actor_as_who
 }
 
 #[test]
-fn variable_phase_capable_but_ordinary_general_native_refusal_keeps_a_working_off_escape() {
+fn variable_phase_capable_but_ordinary_general_live_native_refusal_keeps_a_working_off_escape() {
     let general = &[(0., 0.), (0.001, 0.25), (9. / 64., 32.)][..];
     let mut fixture = VariablePath::new(&[(general, 6750, Some(32.))], 200., 23);
     fixture.publish(Some(wire(true, true, 2)), true, true, None, None);
@@ -1282,7 +1500,8 @@ fn variable_phase_capable_but_ordinary_general_native_refusal_keeps_a_working_of
         .set_pad_key_lock(0, true)
         .unwrap();
     fixture.drain();
-    let blocked = fixture.capture_pitch("pitch.extra:1:set_retrigger");
+    // Probe live conversion, not the separately admitted fresh mapped birth.
+    let blocked = fixture.capture_pitch("pitch.extra:1:set");
     assert!(
         fixture
             .dry

@@ -63,6 +63,15 @@ pub(crate) struct PitchRuntime {
     endpoint: OrdinaryEndpointReserve,
 }
 
+#[cfg(test)]
+pub(super) struct PreparedMappedBirthWitness {
+    pub(super) checkpoint: super::prepared_native_history::SourceReadCheckpoint,
+    pub(super) reference: super::loop_phase_reference::LoopPhaseReference,
+    pub(super) permit: super::native_history_permit::NativeHistoryPermitIdentity,
+    pub(super) stamp: (u64, usize, u64, u64, u64),
+    pub(super) complete_beginning: bool,
+}
+
 fn retire(work: PreparedActionWork, retirement: &mut impl AudioBufferRetirement) {
     match work {
         PreparedActionWork::Pitch(work) => retirement.retire_pitch_action(work),
@@ -232,13 +241,14 @@ impl PitchRuntime {
         work: &mut PreparedActionWork,
         execution: u64,
         callback: u64,
+        timeline: Option<super::transport::TransportTimeline>,
     ) -> Result<(), PitchActionReject> {
         match work {
             PreparedActionWork::Ordinary(work) => {
-                mixer.prepare_ordinary_late_replan(work, execution, callback)
+                mixer.prepare_ordinary_late_replan(work, execution, callback, timeline)
             }
             PreparedActionWork::Pitch(work) => {
-                mixer.prepare_pitch_late_replan(work, execution, callback)
+                mixer.prepare_pitch_late_replan(work, execution, callback, timeline)
             }
         }
     }
@@ -318,6 +328,32 @@ impl PitchRuntime {
                 .rubberband
                 .as_ref()
                 .map(|native| native.state_address())
+        })
+    }
+    #[cfg(test)]
+    pub(super) fn ready_mapped_birth_for_test(
+        &self,
+        sequence: u64,
+    ) -> Option<PreparedMappedBirthWitness> {
+        let slot = self.slots.iter().find(|slot| slot.sequence == sequence)?;
+        let work = slot.work.as_ref().filter(|work| work.is_ready())?;
+        let (candidate, reference) = match work {
+            PreparedActionWork::Ordinary(work) => {
+                (work.candidate.as_ref()?, work.launch_reference())
+            }
+            PreparedActionWork::Pitch(work) => (work.candidate.as_ref()?, work.launch_reference),
+        };
+        let request = candidate.source.as_ref()?;
+        Some(PreparedMappedBirthWitness {
+            checkpoint: super::prepared_native_history::SourceReadCheckpoint {
+                playback: request.playback,
+                plan: request.plan,
+            },
+            reference,
+            permit: request.permit.scalar_identity(),
+            stamp: candidate.mapped_pitch_witness_for_test()?,
+            complete_beginning: candidate
+                .mapped_birth_first_output_ready(&request.playback, request.plan),
         })
     }
     pub(crate) fn new() -> std::io::Result<(Self, PitchActionPreparationWorker)> {
@@ -413,6 +449,9 @@ impl PitchRuntime {
         retirement: &mut impl AudioBufferRetirement,
     ) {
         if work.action.variant() == super::pitch_actions::PitchActionVariant::SetRetrigger {
+            if work.action.mapped_geometry().is_some() {
+                work.mapped_timeline = timeline;
+            }
             work.launch_qualification =
                 super::loop_phase_reference::LaunchQualification::capture(timeline, callback);
             work.launch_reference = super::loop_phase_reference::LoopPhaseReference::capture(
@@ -756,7 +795,12 @@ impl PitchRuntime {
             self.slots[index].group = Some(group);
             return false;
         }
-        if frame > expected || preceding.is_some() {
+        let projection_changed = group
+            .work
+            .iter()
+            .flatten()
+            .any(|work| work.validate_mapped_timeline(timeline).is_err());
+        if frame > expected || preceding.is_some() || projection_changed {
             // Plans hold only the retained original physical source checkpoint.
             // No original E/status changes until all member plans have succeeded.
             let mut plans: [Option<(
@@ -790,6 +834,7 @@ impl PitchRuntime {
                         group.work[member].as_ref().unwrap(),
                         execution,
                         frame,
+                        timeline,
                     )?);
                 }
                 Ok(execution)
@@ -818,6 +863,9 @@ impl PitchRuntime {
                     work.as_mut()
                         .unwrap()
                         .plan_late_reprepare(endpoint, intent, execution)?;
+                    if work.as_ref().unwrap().mapped_timeline.is_some() {
+                        work.as_mut().unwrap().mapped_timeline = timeline;
+                    }
                 }
                 Ok(())
             })();
@@ -952,7 +1000,18 @@ impl PitchRuntime {
                 frame: expected,
             };
         }
-        if (frame > expected && slot.independent_birth) || preceding.is_some() {
+        let projection_changed = match slot.work.as_ref().unwrap() {
+            PreparedActionWork::Ordinary(work) => work.validate_mapped_timeline(timeline).is_err(),
+            PreparedActionWork::Pitch(work) => work.mapped_timeline.is_some_and(|original| {
+                timeline.is_none_or(|current| {
+                    original
+                        .beat_projection()
+                        .is_none_or(|projection| !projection.matches_timeline(&current))
+                })
+            }),
+        };
+        if (frame > expected && slot.independent_birth) || preceding.is_some() || projection_changed
+        {
             let next = Self::next_replan(slot, frame).and_then(|execution| {
                 if !self.preparation.preparation_available() {
                     return Err(PitchActionReject::Capacity);
@@ -964,7 +1023,13 @@ impl PitchRuntime {
                 {
                     return Err(PitchActionReject::PreparationFailed);
                 }
-                Self::prepare_late_work(mixer, slot.work.as_mut().unwrap(), execution, frame)?;
+                Self::prepare_late_work(
+                    mixer,
+                    slot.work.as_mut().unwrap(),
+                    execution,
+                    frame,
+                    timeline,
+                )?;
                 Ok(execution)
             });
             match next {

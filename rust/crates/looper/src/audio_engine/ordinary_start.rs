@@ -32,6 +32,7 @@ pub(crate) struct OrdinaryStartWork {
     pub(crate) attack_measurement: Option<PreparedAttackMeasurement>,
     rejected_request: Option<NativeHistoryRequest>,
     pub(crate) render: Option<FrozenPitchRender>,
+    pub(crate) key_lock_request: Option<u64>,
     pub(crate) epoch: Arc<AtomicU64>,
     frames: Option<(u64, u64)>,
     preparation_required: bool,
@@ -43,6 +44,9 @@ pub(crate) struct OrdinaryStartWork {
     captured_loop: Option<(f64, Option<f64>)>,
     mapped_clock: Option<super::mapped_source_clock::MappedClockEpoch>,
     mapped_origin_frame: Option<u64>,
+    pub(crate) mapped_timeline: Option<super::transport::TransportTimeline>,
+    mapped_admission_frame: u64,
+    mapped_ready: Option<super::mapped_birth::MappedFullBeginningReady>,
     launch_reference: super::loop_phase_reference::LoopPhaseReference,
     launch_qualification: super::loop_phase_reference::LaunchQualification,
     pub(crate) phase_launch_qualified: bool,
@@ -72,6 +76,7 @@ impl OrdinaryStartWork {
             attack_measurement: None,
             rejected_request: None,
             render: None,
+            key_lock_request: None,
             epoch: Arc::new(AtomicU64::new(1)),
             frames: None,
             preparation_required: true,
@@ -83,6 +88,9 @@ impl OrdinaryStartWork {
             captured_loop: None,
             mapped_clock: None,
             mapped_origin_frame: None,
+            mapped_timeline: None,
+            mapped_admission_frame: 0,
+            mapped_ready: None,
             launch_reference: super::loop_phase_reference::LoopPhaseReference::Unavailable,
             launch_qualification: super::loop_phase_reference::LaunchQualification::default(),
             phase_launch_qualified: false,
@@ -118,14 +126,17 @@ impl OrdinaryStartWork {
         let epoch =
             super::mapped_source_clock::MappedClockEpoch::new(self.sequence, timeline, phase)
                 .ok_or(PitchActionReject::TimingUnavailable)?;
-        geometry
-            .validate_epoch(epoch)
-            .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
+        // The productive constructor independently qualifies actual-E geometry.
+        // Retain the legacy epoch accessor for existing independent test oracles.
+        let _ = geometry;
         self.mapped_clock = Some(epoch);
         self.mapped_origin_frame = Some(original);
+        self.mapped_timeline = Some(timeline);
+        self.mapped_admission_frame = admission;
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn mapped_clock(
         &self,
     ) -> Option<(super::mapped_source_clock::MappedClockEpoch, u64)> {
@@ -133,6 +144,16 @@ impl OrdinaryStartWork {
     }
     pub(crate) fn launch_reference(&self) -> super::loop_phase_reference::LoopPhaseReference {
         self.launch_reference
+    }
+    pub(crate) fn mapped_birth_frame(&self) -> u64 {
+        self.frames.map_or_else(
+            || {
+                self.mapped_origin_frame
+                    .unwrap_or(0)
+                    .max(self.mapped_admission_frame)
+            },
+            |(_, execution)| execution,
+        )
     }
 
     pub(crate) fn qualify_phase_launch_at(
@@ -148,10 +169,13 @@ impl OrdinaryStartWork {
         &self,
         timeline: Option<super::transport::TransportTimeline>,
     ) -> Result<(), PitchActionReject> {
-        if self
-            .mapped_clock
-            .is_some_and(|epoch| timeline.is_none_or(|actual| !epoch.matches_timeline(&actual)))
-        {
+        if self.mapped_timeline.is_some_and(|original| {
+            timeline.is_none_or(|actual| {
+                original
+                    .beat_projection()
+                    .is_none_or(|projection| !projection.matches_timeline(&actual))
+            })
+        }) {
             return Err(PitchActionReject::MappedTimingUnavailable);
         }
         Ok(())
@@ -225,9 +249,6 @@ impl OrdinaryStartWork {
         }
         // Native/FIFO mapped preparation and delayed attack reconstruction are
         // separate admission gates. Never skip the first attack to catch up.
-        if self.mapped_clock.is_some() && execution != original {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
         self.origin().freeze_frames(original, execution)?;
         self.frames = Some((original, execution));
         Ok(())
@@ -262,9 +283,6 @@ impl OrdinaryStartWork {
         dsp_intent: super::late_start_dsp::DspInputIntent,
         execution: u64,
     ) -> Result<(), PitchActionReject> {
-        if self.mapped_clock.is_some() {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
         let (original, previous_execution) =
             self.frames.ok_or(PitchActionReject::PreparedMismatch)?;
         let origin = self
@@ -283,7 +301,11 @@ impl OrdinaryStartWork {
             || execution <= previous_execution
             || execution - original
                 > super::source_feed_history::SOURCE_FEED_HISTORY_MAX_FRAMES as u64
-            || !origin.matches_exact(endpoint)
+            || (self.mapped_timeline.is_none() && !origin.matches_exact(endpoint))
+            || (self.mapped_timeline.is_some()
+                && (origin.playback.position() != endpoint.playback.position()
+                    || !origin.plan.matches_source_contract(endpoint.plan)
+                    || endpoint.playback.mapped_output_frame() != Some(execution)))
             || source.request_id != self.sequence
             || source.epoch != self.epoch()
             || source.target_output_frame != previous_execution
@@ -310,6 +332,8 @@ impl OrdinaryStartWork {
             previous_execution,
         });
         self.frames = Some((original, execution));
+        self.launch_origin = Some(endpoint);
+        self.mapped_ready = None;
         self.preparation_required = true;
         Ok(())
     }
@@ -432,10 +456,11 @@ impl OrdinaryStartWork {
         self.request = request;
         self.render = Some(render);
         self.native_required = self.request.as_ref().is_some_and(|request| {
-            render
-                .pitch
-                .native_pitch_scale(request.playback.tempo_ratio(), render.key_lock)
-                .is_ok_and(|scale| scale != 1.0)
+            (request.playback.is_mapped() && render.key_lock)
+                || render
+                    .pitch
+                    .native_pitch_scale(request.playback.tempo_ratio(), render.key_lock)
+                    .is_ok_and(|scale| scale != 1.0)
         });
         self.preparation_required = self.request.is_some() && self.native_required;
         self.origin().callback_guard()?;
@@ -486,14 +511,31 @@ impl OrdinaryStartWork {
             {
                 return Err(PitchActionReject::PreparedMismatch);
             }
+            let mapped_coverage = if self.mapped_timeline.is_some() {
+                Some(
+                    request
+                        .coverage_for_replanned_mapped_birth(pending.endpoint)
+                        .map_err(|_| PitchActionReject::PreparationFailed)?,
+                )
+            } else {
+                None
+            };
             request.target_output_frame = self.execution_frame();
             request.playback = pending.endpoint.playback;
             request.plan = pending.endpoint.plan;
+            if let Some(coverage) = mapped_coverage {
+                request.coverage = coverage;
+            }
             request.actual_feed = None;
-            self.request = Some(request);
             self.attack_measurement = None;
+            if self.mapped_timeline.is_some() {
+                request.mapped_input = None;
+                // The previous candidate and its FIFO retire here, on the worker.
+                self.candidate = None;
+            }
+            self.request = Some(request);
         }
-        let request = self
+        let mut request = self
             .request
             .take()
             .ok_or(PitchActionReject::PreparedMismatch)?;
@@ -516,7 +558,14 @@ impl OrdinaryStartWork {
                 .map_err(|_| PitchActionReject::PreparationFailed)?;
             self.candidate = Some(Box::new(NativeAdapterState::new(Some(native), channels)));
         }
+        if self.native_required && request.playback.is_mapped() {
+            request.mapped_input = Some(Box::new(
+                super::prepared_native_history::MappedNativeInput::capture(self, &request)
+                    .map_err(|_| PitchActionReject::PreparationFailed)?,
+            ));
+        }
         if self.native_required
+            && !request.playback.is_mapped()
             && self.origin().start_behavior() == KeyLockStartBehavior::AttackAtGrid
         {
             self.attack_measurement = Some(measure_attack_reference_for_birth(&request));
@@ -528,6 +577,11 @@ impl OrdinaryStartWork {
                 .unwrap()
                 .prepare_source_at_physical_birth(request)
                 .map_err(|_| PitchActionReject::PreparationFailed)?;
+            self.mapped_ready = self
+                .candidate
+                .as_ref()
+                .and_then(|candidate| candidate.source.as_ref())
+                .and_then(super::mapped_birth::MappedFullBeginningReady::capture);
         } else {
             // The dry worker retains the original source pins and permit for strict
             // adoption and off-callback retirement, without constructing Native.
@@ -569,6 +623,13 @@ impl OrdinaryStartWork {
                 || source.pitch_intent != render.pitch
                 || source.key_lock != render.key_lock
                 || (self.native_required
+                    && source.playback.is_mapped()
+                    && self
+                        .mapped_ready
+                        .as_ref()
+                        .is_none_or(|ready| !ready.matches(source)))
+                || (self.native_required
+                    && !source.playback.is_mapped()
                     && self.origin().start_behavior() == KeyLockStartBehavior::AttackAtGrid
                     && self
                         .attack_measurement

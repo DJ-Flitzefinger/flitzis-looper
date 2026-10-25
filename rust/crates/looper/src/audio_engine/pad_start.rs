@@ -129,16 +129,17 @@ impl From<CapturedPadStart> for PadStartCustody {
 
 /// Scalar pending-admission witness. It holds no Work and cannot create a map owner.
 pub(crate) struct MappedStartPendingGuard {
-    status: Arc<AtomicU8>,
-    ownership: Arc<InputRuntimeOwnership>,
-    binding: InputPadBinding,
-    key: ContentKey,
-    launch_cancel_revision: u64,
+    pub(crate) status: Arc<AtomicU8>,
+    pub(crate) rejected_status: u8,
+    pub(crate) ownership: Arc<InputRuntimeOwnership>,
+    pub(crate) binding: InputPadBinding,
+    pub(crate) key: ContentKey,
+    pub(crate) launch_cancel_revision: u64,
 }
 
 impl MappedStartPendingGuard {
     pub(crate) fn current(&self, source: &MappedStartSource) -> bool {
-        self.status.load(Ordering::Acquire) != REJECTED
+        self.status.load(Ordering::Acquire) != self.rejected_status
             && self
                 .ownership
                 .launch_revision_for_cell(self.key.cell())
@@ -149,6 +150,46 @@ impl MappedStartPendingGuard {
 }
 
 impl MappedStartSource {
+    /// One control-owned admission shared by ordinary and fresh pitch births.
+    pub(crate) fn capture_launch(
+        snapshot: &SourceMapLaunchSnapshot,
+        ownership: &Arc<InputRuntimeOwnership>,
+        binding: InputPadBinding,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Result<Option<Arc<Self>>, PitchActionReject> {
+        let Some(qualified) = snapshot.admit(ownership, binding)? else {
+            return Ok(None);
+        };
+        let (preparation, source) = Self::prepare_runtime_map(&qualified, binding, start_s, end_s);
+        if preparation.class != RuntimeMapClass::Ready {
+            return Err(PitchActionReject::MappedTimingUnavailable);
+        }
+        let source = source.ok_or(PitchActionReject::MappedTimingUnavailable)?;
+        let (rate, sample_frames, region) =
+            Self::loaded_region(&qualified, binding, start_s, end_s)?;
+        let scalar_domain = super::voice_slot::VoiceSourceTiming {
+            accepted: binding.accepted,
+            ..Default::default()
+        }
+        .loop_domain(sample_frames, region);
+        if source.geometry.has_general_continuation()
+            || source
+                .geometry
+                .exact_continuation_matches_domain(scalar_domain)
+        {
+            return Ok(Some(source));
+        }
+        // A fresh physical beginning must retain its actual scalar provenance.
+        // Compact continuation requires full domain identity; selecting the
+        // existing General class here does not relax that live-continuation guard.
+        let geometry = Self::prepare_general_geometry(&qualified, rate, sample_frames, region)
+            .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
+        Ok(Some(Arc::new(Self {
+            qualified,
+            geometry,
+        })))
+    }
     pub(crate) fn geometry(&self) -> &MappedLoopGeometry {
         &self.geometry
     }
@@ -174,8 +215,8 @@ impl MappedStartSource {
             && self.geometry.domain() == other.geometry.domain()
     }
 
-    /// Prepare one optional live-policy derivative off realtime. Legacy ordinary
-    /// launch construction keeps its preceding geometry and availability contract.
+    /// Prepare the shared exact runtime/physical-birth geometry off realtime.
+    /// Numeric readiness does not replace the original source/launch admission.
     pub(crate) fn prepare_runtime_map(
         qualified: &QualifiedSourceMap,
         binding: InputPadBinding,
@@ -206,7 +247,26 @@ impl MappedStartSource {
         else {
             return (preparation, None);
         };
-        let geometry = match qualified.exact_quarters() {
+        let Ok(geometry) = Self::prepare_general_geometry(qualified, rate, sample_frames, region)
+        else {
+            return (preparation, None);
+        };
+        preparation.domain = Some(geometry.domain().into());
+        preparation.class = RuntimeMapClass::Ready;
+        let source = Self {
+            qualified: qualified.clone(),
+            geometry,
+        };
+        (preparation, Some(Arc::new(source)))
+    }
+
+    fn prepare_general_geometry(
+        qualified: &QualifiedSourceMap,
+        rate: u32,
+        sample_frames: usize,
+        region: FrameRange,
+    ) -> Result<MappedLoopGeometry, super::mapped_source_clock::MappedClockError> {
+        let mut geometry = match qualified.exact_quarters() {
             Some(quarters) => MappedLoopGeometry::new_general_declared(
                 qualified.map().clone(),
                 sample_frames,
@@ -224,18 +284,9 @@ impl MappedStartSource {
                 region,
                 false,
             ),
-        };
-        let Ok(mut geometry) = geometry else {
-            return (preparation, None);
-        };
-        preparation.domain = Some(geometry.domain().into());
+        }?;
         geometry.prepare_common_phase();
-        preparation.class = RuntimeMapClass::Ready;
-        let source = Self {
-            qualified: qualified.clone(),
-            geometry,
-        };
-        (preparation, Some(Arc::new(source)))
+        Ok(geometry)
     }
 
     /// Reuse the same persisted integer-marker interpretation for both classes.
@@ -531,12 +582,8 @@ impl CapturedPadStart {
             .launch_revision_for_cell(key.cell())
             .load(Ordering::Acquire);
         let sync_request = source_map.request();
-        let mapped = source_map
-            .admit(&ownership, binding)?
-            .map(|qualified| {
-                MappedStartSource::prepare(qualified, binding, start_s, end_s).map(Arc::new)
-            })
-            .transpose()?;
+        let mapped =
+            MappedStartSource::capture_launch(&source_map, &ownership, binding, start_s, end_s)?;
         let start_policy = ownership
             .register_key_lock_start_owner()
             .map_err(PitchActionReject::from_start_policy_admission)?;
@@ -625,11 +672,37 @@ impl CapturedPadStart {
         let guard = self.callback_guard()?;
         Ok(MappedStartPendingGuard {
             status: self.owner.status.clone(),
+            rejected_status: REJECTED,
             ownership: self.owner.ownership.clone(),
             binding: guard.binding,
             key: self.owner.key,
             launch_cancel_revision: self.owner.launch_cancel_revision,
         })
+    }
+    pub(crate) fn birth_observation(
+        &self,
+        execution: u64,
+        qualified: bool,
+        start: usize,
+        native: bool,
+        key_lock_request: u64,
+    ) -> super::mapped_birth::MappedBirth {
+        super::mapped_birth::MappedBirth::new(
+            super::mapped_birth::BirthStatus {
+                requested: self.start_behavior(),
+                mixed: false,
+                original: self.target_frame(),
+                execution: Some(execution),
+                reference_qualified: qualified,
+                emitted: false,
+            },
+            self.owner.key,
+            self.owner.source_generation,
+            self.owner.source_request_incarnation,
+            start,
+            native,
+            key_lock_request,
+        )
     }
 
     /// Actual immutable launch witness; later requested runtime/map changes do not rewrite it.

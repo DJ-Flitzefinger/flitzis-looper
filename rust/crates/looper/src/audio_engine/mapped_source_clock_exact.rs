@@ -13,6 +13,7 @@ use crate::audio_engine::source_reader::{ExplicitSeekMode, SourceLoopDomain};
 /// This immutable owner-side proof never enters a copied playback span or lane.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ExactContinuationQualification {
+    pub(super) first: CanonicalBeatSegment,
     pub(super) minimum: CanonicalBeatSegment,
     pub(super) maximum: CanonicalBeatSegment,
     pub(super) compact: Option<CompactGeometryPreparation>,
@@ -111,6 +112,7 @@ impl MappedLoopGeometry {
         )
         .ok_or(unavailable)?;
         self.exact_continuation = Some(ExactContinuationQualification {
+            first: first.ok_or(unavailable)?,
             minimum: minimum.ok_or(unavailable)?.0,
             maximum: maximum.ok_or(unavailable)?.0,
             compact: compact.and_then(CompactGeometryBuilder::finish),

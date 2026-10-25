@@ -188,7 +188,21 @@ pub(super) fn source_sync_status(
     let Some(status) = engine.input_runtime_ownership.source_sync_status(id) else {
         return Ok(None);
     };
+    let birth_current = || {
+        status.birth.is_none()
+            || binding
+                .binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                .and_then(|key| {
+                    engine
+                        .input_runtime_ownership
+                        .key_source_request_incarnation(key)
+                })
+                == status.birth_source_request_incarnation
+    };
     if !binding.current()
+        || !birth_current()
         || status.source_generation != binding.source_generation
         || status.source_address != binding.binding.source_address
         || status.window_revision != binding.binding.resident.map_or(0, |window| window.revision)
@@ -200,6 +214,27 @@ pub(super) fn source_sync_status(
     result.set_item("source_identity", status.source_address)?;
     result.set_item("window_revision", status.window_revision)?;
     result.set_item("active", status.active)?;
+    if let Some(birth) = status.birth {
+        let value = PyDict::new(py);
+        value.set_item("requested", birth.requested_name())?;
+        value.set_item(
+            "outcome",
+            if birth.mixed {
+                "mixed"
+            } else {
+                "complete_beginning_at_e"
+            },
+        )?;
+        value.set_item("alignment", birth.alignment())?;
+        value.set_item("reason", birth.reason())?;
+        value.set_item("original_target_frame", birth.original)?;
+        value.set_item("execution_frame", birth.execution)?;
+        value.set_item("reference_qualified_at_birth", birth.reference_qualified)?;
+        value.set_item("emitted", birth.emitted)?;
+        result.set_item("birth", value)?;
+    } else {
+        result.set_item("birth", py.None())?;
+    }
     let fixed_effective = status.policy.is_some_and(|policy| {
         policy.request.mode == super::source_sync_policy::SourceSyncMode::Fixed && policy.settled
     });
@@ -306,9 +341,8 @@ pub(super) fn source_sync_status(
     }
     // Dictionary allocation is control-only. A replacement during it must not
     // project the old callback witness onto a new source or content incarnation.
-    Ok(
-        (binding.current()
-            && engine.input_runtime_ownership.source_sync_status(id) == Some(status))
-        .then(|| result.unbind()),
-    )
+    Ok((binding.current()
+        && birth_current()
+        && engine.input_runtime_ownership.source_sync_status(id) == Some(status))
+    .then(|| result.unbind()))
 }

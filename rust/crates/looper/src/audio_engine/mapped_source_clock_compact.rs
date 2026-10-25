@@ -115,6 +115,7 @@ enum BorrowedCompactState<'a> {
         segment: CompactPreparedSegment,
     },
     Phase(super::PhaseLocalSpanView),
+    Composed(super::GeneralLocalSpanView),
 }
 
 /// Derived only from a tagged, globally admitted copied span. No map association,
@@ -234,6 +235,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         output_frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_composed_ordinary() {
+            return super::composed::position(self, epoch, output_frame);
+        }
         if epoch.is_common_phase() {
             return Err(MappedClockError::InvalidEpoch);
         }
@@ -351,6 +355,18 @@ impl MappedSourceSpan {
         reference: super::LoopPhaseReference,
     ) -> Result<CompactSpanView<'_>, MappedClockError> {
         let unavailable = MappedClockError::NumericalUnavailable;
+        if self.epoch.is_composed_ordinary() {
+            // The old compact API may be retained by a copied caller after a
+            // genuine master cut. Re-establish the complete original span,
+            // including its globally resolved endpoint, before borrowing it.
+            let canonical = super::composed::refresh(geometry, self.epoch, self.start_frame)?;
+            if !self.matches_exact(canonical) {
+                return Err(unavailable);
+            }
+            return Ok(CompactSpanView {
+                state: BorrowedCompactState::Composed(self.local_general_view(geometry.domain)?),
+            });
+        }
         if self.epoch.is_common_phase() {
             geometry.validate_epoch_with_reference(self.epoch, reference)?;
             if self.loaded_rate_hz != geometry.loaded_rate_hz
@@ -461,6 +477,7 @@ impl CompactSpanView<'_> {
                 segment,
             } => position_in_prepared_span(*span, &clock.core, segment, output_frame),
             BorrowedCompactState::Phase(view) => view.position_at(output_frame),
+            BorrowedCompactState::Composed(view) => view.position_at(output_frame),
         }
     }
 }

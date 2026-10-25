@@ -880,6 +880,334 @@ fn consume_pending(fixture: &mut VariablePath, output: &mut [f32]) {
         .render_into(output, &mut ImmediateAudioBufferRetirement);
 }
 
+fn request_composed_rate(fixture: &mut VariablePath, speed: f64) {
+    fixture
+        .dry
+        .path
+        .source
+        .engine
+        .set_speed_and_master_period(speed, fixture.fpb / f64::from(RATE) / speed)
+        .unwrap();
+}
+
+fn assert_composed_rate_applied(fixture: &VariablePath) {
+    let effect = fixture
+        .dry
+        .path
+        .source
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read()
+        .unwrap()
+        .effect;
+    assert_eq!(
+        effect.state,
+        crate::audio_engine::global_rate_status::RateState::Applied,
+        "{:?}",
+        effect.error
+    );
+    for id in 0..fixture.dry.lanes {
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(id)
+                .source_playback
+                .mapped_epoch()
+                .unwrap()
+                .is_composed_ordinary()
+        );
+        assert!(!fixture.dry.path.voice(id).source_playback.is_mapped_phase());
+        assert!(fixture.dry.path.feedback(id)["grid_phase_confirmed"].is_null());
+    }
+}
+
+// Public own-ACK Hold/Release, with real silent callback progress. The reference
+// copy checks the entire resumed programme, including its immutable launch ref.
+fn hold_composed_fixture(fixture: &mut VariablePath, frames: usize) {
+    let before = (0..fixture.dry.lanes)
+        .map(|id| {
+            let voice = fixture.dry.path.voice(id);
+            (
+                voice.generation,
+                voice.source_playback,
+                voice.sample.as_ref().unwrap().clone(),
+                voice
+                    .mapped_start
+                    .as_ref()
+                    .unwrap()
+                    .effective_source()
+                    .unwrap()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let paused_at = fixture.dry.path.timeline.output_frame();
+    let mut tickets = Vec::with_capacity(fixture.dry.lanes);
+    for id in 0..fixture.dry.lanes {
+        let ticket = Python::attach(|py| {
+            let press = paused_at * 32 + id as u64 + 1;
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .pause_waveform_hold(id, press.into_pyobject(py).unwrap().as_any(), None)
+                .unwrap()
+        });
+        fixture.drain();
+        assert!(ticket.is_current());
+        assert!(fixture.dry.path.voice(id).paused);
+        assert_eq!(fixture.dry.path.timeline.output_frame(), paused_at);
+        tickets.push(ticket);
+    }
+    assert_eq!(fixture.dry.path.timeline.output_frame(), paused_at);
+    assert!(tickets.iter().all(|ticket| ticket.is_current()));
+    assert!((0..fixture.dry.lanes).all(|id| fixture.dry.path.voice(id).paused));
+    assert!(
+        fixture
+            .dry
+            .path
+            .render(frames)
+            .iter()
+            .all(|sample| *sample == 0.)
+    );
+    for (id, (_, prior, _, _)) in before.iter().enumerate() {
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(id)
+                .source_playback
+                .matches_exact(prior)
+        );
+    }
+    let resumed_at = fixture.dry.path.timeline.output_frame();
+    assert_eq!(resumed_at, paused_at + frames as u64);
+    for ticket in &tickets {
+        assert!(
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .release_waveform_hold(ticket)
+                .unwrap()
+        );
+        fixture.drain();
+        assert_eq!(ticket.publication_status(), "resumed");
+        assert_eq!(fixture.dry.path.timeline.output_frame(), resumed_at);
+    }
+    assert_eq!(fixture.dry.path.timeline.output_frame(), resumed_at);
+    assert!(
+        tickets
+            .iter()
+            .all(|ticket| ticket.publication_status() == "resumed")
+    );
+    let execution = fixture.dry.path.timeline.output_frame();
+    for (id, (generation, prior, sample, owner)) in before.iter().enumerate() {
+        let voice = fixture.dry.path.voice(id);
+        assert!(!voice.paused);
+        assert_eq!(voice.generation, *generation);
+        assert!(voice.sample.as_ref().unwrap().same_window(sample));
+        assert!(Arc::ptr_eq(
+            voice
+                .mapped_start
+                .as_ref()
+                .unwrap()
+                .effective_source()
+                .unwrap(),
+            owner
+        ));
+        assert_position(voice.source_playback.position(), prior.position());
+        assert_eq!(
+            voice.source_playback.original_scalar_domain(),
+            prior.original_scalar_domain()
+        );
+        let mut expected = *prior;
+        expected
+            .resume_mapped_at(
+                voice
+                    .mapped_start
+                    .as_ref()
+                    .unwrap()
+                    .mapped_geometry()
+                    .unwrap(),
+                &fixture.dry.path.timeline,
+                execution,
+            )
+            .unwrap();
+        assert!(voice.source_playback.matches_exact(&expected));
+        assert!(
+            voice
+                .source_playback
+                .phase_reference_current(&fixture.dry.path.timeline)
+        );
+    }
+}
+
+fn pending_composed_rate(lanes: usize, full_fraction: bool) -> VariablePath {
+    let anchors = &[(0., 0.), (0.37, 1.), (0.91, 2.)][..];
+    let mut fixture = VariablePath::new(&vec![(anchors, 43680, Some(2.)); lanes], 24000., 12000);
+    fixture.mode();
+    if full_fraction {
+        let phase = fixture.effect();
+        assert_eq!(phase.observation().unwrap().state, "applied");
+        assert!((0..lanes).all(|id| fixture.dry.path.voice(id).source_playback.is_mapped_phase()));
+        // First actual Hold exits PHASE through its retained RN-pair recovery.
+        hold_composed_fixture(&mut fixture, 17);
+        assert!((0..lanes).all(|id| {
+            fixture
+                .dry
+                .path
+                .voice(id)
+                .source_playback
+                .mapped_epoch()
+                .unwrap()
+                .is_full_fraction_general()
+        }));
+    }
+    // The ordinary Hold creates the address translation that requires exact
+    // basis composition. Untranslated old classes deliberately remain old.
+    hold_composed_fixture(&mut fixture, 29);
+    request_composed_rate(&mut fixture, 0.99);
+    fixture
+}
+
+fn assert_composed_consumed(fixture: &VariablePath) {
+    assert_composed_rate_applied(fixture);
+    for id in 0..fixture.dry.lanes {
+        let voice = fixture.dry.path.voice(id);
+        let mut history = SourceFeedSnapshot::new();
+        assert!(voice.source_feed_history.capture_into(&mut history));
+        let frames: usize = history
+            .spans()
+            .filter(|span| {
+                span.playback
+                    .mapped_epoch()
+                    .is_some_and(|epoch| epoch.is_composed_ordinary())
+            })
+            .map(|span| span.frames)
+            .sum();
+        assert_eq!(frames, 512);
+    }
+}
+
+#[test]
+fn composed_ordinary_claim_reader_history_fit_two_mib_without_rust_requests() {
+    std::thread::Builder::new()
+        .name("composed-ordinary-two-mib".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for full_fraction in [false, true] {
+                let mut fixture = pending_composed_rate(6, full_fraction);
+                let mut output = [0.; 1024];
+                let (_, allocations) =
+                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                assert_eq!(allocations, ThreadAllocations::default());
+                assert_composed_consumed(&fixture);
+                assert_eq!(
+                    fixture
+                        .dry
+                        .path
+                        .voice(0)
+                        .source_playback
+                        .mapped_epoch()
+                        .unwrap()
+                        .is_composed_full_fraction_for_test(),
+                    full_fraction
+                );
+                assert!(output.iter().all(|v| v.is_finite()));
+                assert!(output.iter().any(|v| *v != 0.));
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+#[ignore = "descriptive composed ordinary consuming profile; Root runs serially after frozen POST"]
+fn descriptive_composed_actual_constructor_renderer_cohorts_report_median_max_and_limits() {
+    for full_fraction in [false, true] {
+        for lanes in [2, 4, 6, 10] {
+            let mut elapsed = Vec::new();
+            for repeat in 0..4 {
+                let mut fixture = pending_composed_rate(lanes, full_fraction);
+                let mut output = [0.; 1024];
+                let started = Instant::now();
+                let (_, allocations) =
+                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                let millis = started.elapsed().as_secs_f64() * 1000.;
+                assert_eq!(allocations, ThreadAllocations::default());
+                assert_composed_consumed(&fixture);
+                assert_eq!(
+                    fixture
+                        .dry
+                        .path
+                        .voice(0)
+                        .source_playback
+                        .mapped_epoch()
+                        .unwrap()
+                        .is_composed_full_fraction_for_test(),
+                    full_fraction
+                );
+                assert!(output.iter().any(|v| *v != 0.));
+                // Inspect the actual installed tag outside the measured region.
+                if repeat == 0 {
+                    let mut selected_widths = Vec::new();
+                    for id in 0..lanes {
+                        let voice = fixture.dry.path.voice(id);
+                        let geometry = voice
+                            .mapped_start
+                            .as_ref()
+                            .unwrap()
+                            .mapped_geometry()
+                            .unwrap();
+                        let mut history = SourceFeedSnapshot::new();
+                        assert!(voice.source_feed_history.capture_into(&mut history));
+                        for span in history.spans().filter(|span| {
+                            span.playback
+                                .mapped_epoch()
+                                .is_some_and(|e| e.is_composed_ordinary())
+                        }) {
+                            let epoch = span.playback.mapped_epoch().unwrap();
+                            let frame = span.playback.mapped_output_frame().unwrap();
+                            let canonical = geometry.refresh_span(epoch, frame).unwrap();
+                            let (small, bits) = canonical
+                                .composed_split_for_test(geometry.domain())
+                                .unwrap();
+                            selected_widths.push((id, frame, span.frames, small, bits));
+                        }
+                    }
+                    println!(
+                        "composed_profile_actual_epoch full_fraction={full_fraction} selected_history_widths_pad_frame_frames_small_bits={selected_widths:?} {:?}",
+                        fixture
+                            .dry
+                            .path
+                            .voice(0)
+                            .source_playback
+                            .mapped_epoch()
+                            .unwrap()
+                    );
+                }
+                if repeat > 0 {
+                    elapsed.push(millis);
+                }
+            }
+            elapsed.sort_by(f64::total_cmp);
+            let nominal = 512. / f64::from(RATE) * 1000.;
+            println!(
+                "composed_productive_profile full_fraction={full_fraction} active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes actual-E global claim, full dry renderer/history/copied advance; zero Rust requests asserted; setup excluded; prior6-PAD11.2481ms is not proof of this new class; no Native/device/music/Human acceptance",
+                elapsed[1],
+                elapsed[2],
+                elapsed[2] <= nominal
+            );
+        }
+    }
+}
+
 fn pending_full_fraction(lanes: usize) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
     let anchors = &[(0., 0.), (0.37, 1.), (0.91, 2.)][..];
     let mut fixture = VariablePath::new(&vec![(anchors, 43680, Some(2.)); lanes], 24000., 12000);
@@ -1020,9 +1348,9 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
     copy::<MappedClockEpoch>();
     copy::<MappedSourceSpan>();
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedClockEpoch>() <= 128);
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
-    assert!(std::mem::size_of::<SourcePlayback>() <= 488);
+    assert!(std::mem::size_of::<MappedClockEpoch>() <= 152);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    assert!(std::mem::size_of::<SourcePlayback>() <= 512);
     assert!(std::mem::size_of::<[Option<SourcePlayback>; 32]>() <= 16 * 1024);
     let phase_bytes =
         std::mem::size_of::<crate::audio_engine::mapped_source_clock::PhaseLocalSpanView>();
@@ -1033,11 +1361,14 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
     let (grid_bytes, full_phase_bytes) = MappedClockEpoch::phase_local_payload_sizes_for_test();
     let (declared_bytes, physical_bytes, full_general_bytes) =
         MappedLoopGeometry::general_local_payload_sizes_for_test();
+    let (composed_ordinary_bytes, composed_full_bytes, composed_bytes) =
+        MappedLoopGeometry::composed_local_payload_sizes_for_test();
     let affine_bytes =
         std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::RationalAffine>();
-    // Old class limits remain separate. FullFraction adds at most three signed
-    // 2048-bit integers (257 bytes each), i128 master, f64 raw fraction,
-    // <=96-byte unchanged domain, bool and 16-byte alignment/tag layers.
+    // Original numeric payloads are unchanged. One copied epoch grows24 bytes
+    // (f64 basis replaced by signed32-byte basis); allow32 including alignment.
+    // Grid stores one, declared/physical two, FullFraction one via its span.
+    // Keep historical caps explicit, not size-of-derived moving limits.
     assert!(
         std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::Integer>() <= 257
     );
@@ -1047,26 +1378,75 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
             <= 928
     );
     assert!(affine_bytes <= 944);
-    assert!(grid_bytes <= 1184 && declared_bytes <= 1184 && physical_bytes <= 1184);
-    assert!(full_phase_bytes <= 1200 && full_general_bytes <= 1200);
+    assert!(grid_bytes <= 1184 + 32);
+    assert!(declared_bytes <= 1184 + 64 && physical_bytes <= 1184 + 64);
+    assert!(full_phase_bytes <= 1200 + 32 && full_general_bytes <= 1200 + 32);
+    // The original composed wide payload keeps three signed2048 integers<=771
+    // bytes, two i128 masters32, raw8, prepared reader72 and one class byte.
+    // Small holds three signed512 integers<=195, masters32, raw8, reader72,
+    // its existing flag and two1024-bit bounds256, all aligned to16.
+    assert!(
+        std::mem::size_of::<
+            crate::audio_engine::full_fraction_source_numerics::ComposedWideAffine<256>,
+        >() <= 896
+    );
+    assert!(
+        std::mem::size_of::<
+            crate::audio_engine::full_fraction_source_numerics::ComposedWideAffine<128>,
+        >() <= 512
+    );
+    assert!(
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::SmallAffine>()
+            <= 576
+    );
+    assert!(
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::ComposedAffine<128>>(
+        ) <= 592
+    );
+    assert!(
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::ComposedAffine<256>>(
+        ) <= 912
+    );
+    // The selected enum adds at most one16-byte tag/alignment layer. The span
+    // and original grid contribute272 bytes; LocalView adds one more layer.
+    assert!(composed_ordinary_bytes <= 864);
+    assert!(composed_full_bytes <= 1184 && composed_bytes <= 1200);
     println!(
-        "variable_phase_temporary_layout grid_bytes={grid_bytes} declared_bytes={declared_bytes} physical_bytes={physical_bytes} rational_affine_bytes={affine_bytes} full_phase_bytes={full_phase_bytes} full_general_bytes={full_general_bytes} phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} historical_old_class_inner_max=1184 historical_old_outer_max=1200 new_inner_max=1216 new_outer_max=1248 phase_needs_drop={} playback_view_needs_drop={}; copied epoch/span/playback/cohort caps remain unchanged; this is layout, not measured peak stack",
+        "composed_affine_temporary_layout small_bytes={} wide1024_bytes={} wide2048_bytes={} selected_ordinary_bytes={} selected_full_bytes={}; fixed payload caps576/512/896/592/912, outer caps1280/1312 unchanged",
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::SmallAffine>(),
+        std::mem::size_of::<
+            crate::audio_engine::full_fraction_source_numerics::ComposedWideAffine<128>,
+        >(),
+        std::mem::size_of::<
+            crate::audio_engine::full_fraction_source_numerics::ComposedWideAffine<256>,
+        >(),
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::ComposedAffine<128>>(
+        ),
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::ComposedAffine<256>>(
+        )
+    );
+    println!(
+        "variable_phase_temporary_layout grid_bytes={grid_bytes} declared_bytes={declared_bytes} physical_bytes={physical_bytes} rational_affine_bytes={affine_bytes} full_phase_bytes={full_phase_bytes} full_general_bytes={full_general_bytes} composed_ordinary_bytes={composed_ordinary_bytes} composed_full_bytes={composed_full_bytes} composed_enum_bytes={composed_bytes} phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} epoch_bytes={} span_bytes={} playback_bytes={} cohort_bytes={} historical_old_class_inner_max=1184 historical_old_outer_max=1200 new_inner_max=1280 new_outer_max=1312 phase_needs_drop={} playback_view_needs_drop={}; copied fixed caps152/264/512 and unchanged16KiB cohort; this is layout, not measured peak stack",
+        std::mem::size_of::<MappedClockEpoch>(),
+        std::mem::size_of::<MappedSourceSpan>(),
+        std::mem::size_of::<SourcePlayback>(),
+        std::mem::size_of::<[Option<SourcePlayback>; 32]>(),
         std::mem::needs_drop::<crate::audio_engine::mapped_source_clock::PhaseLocalSpanView>(),
         std::mem::needs_drop::<crate::audio_engine::source_playback::CompactLocalPlaybackView>()
     );
     assert!(
-        phase_bytes <= 1216,
+        phase_bytes <= 1280,
         "PhaseLocalSpanView actual_bytes={phase_bytes} exceeds separately bounded containing enum"
     );
     assert!(
-        general_bytes <= 1216,
+        general_bytes <= 1280,
         "GeneralLocalSpanView actual_bytes={general_bytes} exceeds separately bounded containing enum"
     );
     // One additional local-span tag and the frame index each need at most one
     // 16-byte alignment layer beyond the independently bounded inner payload.
     assert!(
-        playback_view_bytes <= 1248,
-        "CompactLocalPlaybackView actual_bytes={playback_view_bytes} exceeds containing-view bound1248"
+        playback_view_bytes <= 1312,
+        "CompactLocalPlaybackView actual_bytes={playback_view_bytes} exceeds containing-view bound1312"
     );
     assert!(!std::mem::needs_drop::<
         crate::audio_engine::mapped_source_clock::PhaseLocalSpanView,

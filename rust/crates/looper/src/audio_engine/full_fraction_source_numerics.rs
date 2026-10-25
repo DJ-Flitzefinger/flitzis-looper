@@ -504,6 +504,207 @@ impl SmallAffine {
     }
 }
 
+/// Separate composed-ordinary theorem; none of the old split bounds changes.
+/// One basis join S<=2^126 is carried once, never squared. Declared N/D
+/// <=512/506, reader products<=768, RN<=559; physical N/D<=768/762,
+/// membership<=826, RN<=815. Full-fraction N/D<=1586/1580, period
+/// products<=1842/1836, raw/RN<=1633. Effective-top raw comparison and the
+/// existing post-RN pair comparison avoid shifting a tiny fraction blindly.
+#[derive(Clone, Copy)]
+pub(super) enum ComposedClass {
+    Declared,
+    Physical,
+    FullFraction,
+}
+impl ComposedClass {
+    fn bounds(self) -> (u32, u32) {
+        match self {
+            Self::Declared => (512, 506),
+            Self::Physical => (768, 762),
+            Self::FullFraction => (1586, 1580),
+        }
+    }
+    fn reader<const N: usize>(self, domain: SourceLoopDomain) -> Option<PreparedReader> {
+        if !domain.is_valid() {
+            return None;
+        }
+        let physical = domain.musical_period.physical_quarters().is_some();
+        let period = match self {
+            Self::Physical if N == 128 && physical => {
+                MappedReaderPeriod::physical(domain.region.len())?
+            }
+            Self::Declared if N == 128 && !physical => reader_period(domain)?,
+            Self::FullFraction if N == 256 && !physical => reader_period(domain)?,
+            _ => return None,
+        };
+        Some(PreparedReader {
+            period,
+            start: domain.region.start,
+        })
+    }
+}
+fn composed_split<const N: usize>(
+    n: BoundedInteger<N>,
+    d: BoundedInteger<N>,
+    raw: f64,
+    reader: PreparedReader,
+    class: ComposedClass,
+) -> Option<SourceCoordinate> {
+    if n.negative
+        || d <= BoundedInteger::<N>::ZERO
+        || !raw.is_finite()
+        || !(0.0..1.0).contains(&raw)
+    {
+        return None;
+    }
+    let (nb, db) = class.bounds();
+    let n = n.bounded(nb)?.magnitude;
+    let d = d.bounded(db)?.magnitude;
+    let start = from_u128(reader.start as u128)?.checked_mul(d)?;
+    let (pn, pd) = reader.period.full_fraction_parts();
+    if n < start || n.checked_sub(start)?.checked_mul(stored(pd))? >= d.checked_mul(stored(pn))? {
+        return None;
+    }
+    finish_split(n, d, raw, reader)
+}
+pub(super) fn split_composed<const N: usize>(
+    n: BoundedInteger<N>,
+    d: BoundedInteger<N>,
+    raw: f64,
+    domain: SourceLoopDomain,
+    class: ComposedClass,
+) -> Option<SourceCoordinate> {
+    composed_split(n, d, raw, class.reader::<N>(domain)?, class)
+}
+
+/// Prepared immutable N(m)=N0+B*(m-m0). Class/width is selected before
+/// evaluation; there is no failure fallback or per-frame inverse/search/GCD.
+pub(super) enum ComposedAffine<const N: usize> {
+    Small(SmallAffine),
+    Wide(ComposedWideAffine<N>),
+}
+pub(super) struct ComposedWideAffine<const N: usize> {
+    n: BoundedInteger<N>,
+    b: BoundedInteger<N>,
+    d: BoundedInteger<N>,
+    master: i128,
+    last: i128,
+    raw: f64,
+    reader: PreparedReader,
+    class: ComposedClass,
+}
+impl<const N: usize> ComposedAffine<N> {
+    pub(super) fn new(
+        n: BoundedInteger<N>,
+        b: BoundedInteger<N>,
+        d: BoundedInteger<N>,
+        master: i128,
+        last: i128,
+        raw: f64,
+        domain: SourceLoopDomain,
+        class: ComposedClass,
+    ) -> Option<Self> {
+        Self::new_selected::<true>(n, b, d, master, last, raw, domain, class)
+    }
+    // Only tests instantiate false to retain the original wide evaluator.
+    fn new_selected<const SELECT_SMALL: bool>(
+        n: BoundedInteger<N>,
+        b: BoundedInteger<N>,
+        d: BoundedInteger<N>,
+        master: i128,
+        last: i128,
+        raw: f64,
+        domain: SourceLoopDomain,
+        class: ComposedClass,
+    ) -> Option<Self> {
+        let delta = BoundedInteger::<N>::from_i128(last.checked_sub(master)?)?;
+        if delta.negative || b.negative {
+            return None;
+        }
+        let end = n.add(b.mul(delta)?)?;
+        let reader = class.reader::<N>(domain)?;
+        composed_split(n, d, raw, reader, class)?;
+        composed_split(end, d, raw, reader, class)?;
+        // Original class, reader and both endpoint admissions precede this
+        // representation choice. Since B>=0, every interior N is between the
+        // endpoints. A checked512-bit n/B/D/end therefore bounds the whole
+        // interval. Reuse the already-qualified reader, including physical Q;
+        // RationalAffine's different admission rules must not be applied here.
+        // start*D<=576 bits and D*Pn<=768; the ceiling and addition keep L/U
+        // within769 bits, covered by the existing1024-bit SmallBounds scratch.
+        if SELECT_SMALL
+            && let (Some(n), Some(b), Some(d), Some(_)) = (
+                n.resize::<64>(),
+                b.resize::<64>(),
+                d.resize::<64>(),
+                end.resize::<64>(),
+            )
+        {
+            return Some(Self::Small(SmallAffine {
+                bounds: SmallBounds::new(d, reader)?,
+                affine: Affine {
+                    n,
+                    b,
+                    d,
+                    master,
+                    last_master: last,
+                    raw_fraction: raw,
+                    reader,
+                    // SmallAffine uses its exact prepared bounds, not split_full.
+                    ordinary: true,
+                },
+            }));
+        }
+        Some(Self::Wide(ComposedWideAffine {
+            n,
+            b,
+            d,
+            master,
+            last,
+            raw,
+            reader,
+            class,
+        }))
+    }
+    pub(super) fn position(&self, master: i128) -> Option<FractionalSourcePosition> {
+        match self {
+            Self::Small(a) => a.position(master),
+            Self::Wide(a) => a.position(master),
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn split_bits_for_test(&self) -> usize {
+        match self {
+            Self::Small(_) => 1024,
+            Self::Wide(_) => N * 8,
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn uses_small_for_test(&self) -> bool {
+        matches!(self, Self::Small(_))
+    }
+}
+impl<const N: usize> ComposedWideAffine<N> {
+    fn position(&self, master: i128) -> Option<FractionalSourcePosition> {
+        if master < self.master || master > self.last {
+            return None;
+        }
+        let delta = BoundedInteger::<N>::from_i128(master.checked_sub(self.master)?)?;
+        let p = composed_split(
+            self.n.add(self.b.mul(delta)?)?,
+            self.d,
+            self.raw,
+            self.reader,
+            self.class,
+        )?;
+        Some(FractionalSourcePosition {
+            frame: usize::try_from(p.whole).ok()?,
+            fraction: p.fraction,
+            seek_mode: ExplicitSeekMode::Normal,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,5 +975,238 @@ mod tests {
             "a wide B cannot enter Small even on a master plateau"
         );
         assert_eq!(wide_multiplier.position(0).unwrap().frame, 1);
+    }
+
+    fn compare_composed_wide<const N: usize>(
+        n: Integer,
+        b: Integer,
+        d: Integer,
+        last: i128,
+        raw: f64,
+        domain: SourceLoopDomain,
+        class: ComposedClass,
+    ) -> Option<bool> {
+        let n = n.resize::<N>().unwrap();
+        let b = b.resize::<N>().unwrap();
+        let d = d.resize::<N>().unwrap();
+        let selected = ComposedAffine::<N>::new(n, b, d, 0, last, raw, domain, class);
+        let wide = ComposedAffine::<N>::new_selected::<false>(n, b, d, 0, last, raw, domain, class);
+        assert_eq!(selected.is_some(), wide.is_some());
+        let (selected, wide) = (selected?, wide?);
+        assert!(!wide.uses_small_for_test());
+        for master in [last, 0, 1, last / 2, -1, last + 1, last] {
+            let pair = |a: &ComposedAffine<N>| {
+                a.position(master)
+                    .map(|p| (p.frame, p.fraction.to_bits(), p.seek_mode))
+            };
+            assert_eq!(pair(&selected), pair(&wide), "master={master}");
+        }
+        Some(selected.uses_small_for_test())
+    }
+
+    #[test]
+    fn composed_small_selection_checks_each_512_bit_operand_and_original_class_admission() {
+        let one = integer(1);
+        let low = one.shl(511).unwrap(); //512 bits
+        let high = one.shl(512).unwrap(); //513 bits
+        for (n, b, d, last, small) in [
+            (low, Integer::ZERO, one.shl(510).unwrap(), 1, true),
+            (high, Integer::ZERO, one.shl(510).unwrap(), 1, false),
+            (one, low, low, 1, true),
+            (one, high, low, 0, false), // B still matters on a plateau.
+            (one, Integer::ZERO, low, 1, true),
+            (one, Integer::ZERO, high, 1, false),
+            (
+                high.sub(integer(2)).unwrap(),
+                one,
+                one.shl(510).unwrap(),
+                1,
+                true,
+            ),
+            (
+                high.sub(integer(2)).unwrap(),
+                one,
+                one.shl(510).unwrap(),
+                2,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                compare_composed_wide::<256>(
+                    n,
+                    b,
+                    d,
+                    last,
+                    0.,
+                    domain(),
+                    ComposedClass::FullFraction
+                ),
+                Some(small)
+            );
+        }
+        // The old declared bound remains506 denominator bits and512 numerator
+        // bits. Selecting Small must not turn either original refusal into admission.
+        for (n, d) in [(high, one.shl(510).unwrap()), (one, low)] {
+            assert!(
+                compare_composed_wide::<128>(
+                    n,
+                    Integer::ZERO,
+                    d,
+                    0,
+                    0.,
+                    domain(),
+                    ComposedClass::Declared
+                )
+                .is_none()
+            );
+        }
+        assert_eq!(
+            compare_composed_wide::<256>(
+                one,
+                Integer::ZERO,
+                one.shl(1074).unwrap(),
+                3,
+                f64::from_bits(1),
+                domain(),
+                ComposedClass::FullFraction
+            ),
+            Some(false),
+            "a true minimum-subnormal coordinate retains typed2048 arithmetic"
+        );
+    }
+
+    #[test]
+    fn composed_small_reuses_qualified_reader_for_classes_ties_seams_and_rejections() {
+        use crate::audio_engine::general_source_numerics::{Integer as Old, PhysicalMapQuarters};
+        let one = integer(1);
+        let physical = SourceLoopDomain::mapped_physical(
+            8,
+            FrameRange { start: 0, end: 8 },
+            PhysicalMapQuarters::new(Old::from_u128(3).unwrap(), Old::from_u128(2).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        for (n, b, d, last, raw) in [
+            (Integer::ZERO, one, one, 3, -0.),
+            (
+                integer((1_u128 << 53) + 1),
+                one,
+                one.shl(54).unwrap(),
+                1,
+                0.,
+            ),
+            (
+                one,
+                Integer::ZERO,
+                one.shl(511).unwrap(),
+                1,
+                f64::from_bits(1),
+            ),
+            (
+                integer((8_u128 << 60) - 1),
+                Integer::ZERO,
+                one.shl(60).unwrap(),
+                0,
+                0.,
+            ),
+        ] {
+            assert_eq!(
+                compare_composed_wide::<256>(
+                    n,
+                    b,
+                    d,
+                    last,
+                    raw,
+                    domain(),
+                    ComposedClass::FullFraction
+                ),
+                Some(true)
+            );
+            assert_eq!(
+                compare_composed_wide::<128>(n, b, d, last, raw, physical, ComposedClass::Physical),
+                Some(true)
+            );
+            let declared =
+                compare_composed_wide::<128>(n, b, d, last, raw, domain(), ComposedClass::Declared);
+            assert_eq!(declared, (d.magnitude.bit_width() <= 506).then_some(true));
+        }
+        let rational = SourceLoopDomain::mapped(
+            10,
+            FrameRange { start: 1, end: 4 },
+            MappedReaderPeriod::new(Old::from_u128(31).unwrap(), Old::from_u128(10).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let n = integer((41_u128 << 60) - 10);
+        let d = integer(10_u128 << 60);
+        assert_eq!(
+            compare_composed_wide::<128>(
+                n,
+                Integer::ZERO,
+                d,
+                1,
+                0.,
+                rational,
+                ComposedClass::Declared
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            compare_composed_wide::<256>(
+                n,
+                Integer::ZERO,
+                d,
+                1,
+                0.,
+                rational,
+                ComposedClass::FullFraction
+            ),
+            Some(true)
+        );
+        assert!(
+            compare_composed_wide::<128>(
+                n,
+                Integer::ZERO,
+                d,
+                1,
+                0.,
+                rational,
+                ComposedClass::Physical
+            )
+            .is_none()
+        );
+        assert!(
+            compare_composed_wide::<256>(
+                one,
+                Integer::ZERO,
+                one,
+                1,
+                0.,
+                physical,
+                ComposedClass::FullFraction
+            )
+            .is_none()
+        );
+        for (n, b, d, last, raw) in [
+            (one, one, one, -1, 0.),
+            (one, Integer::from_i128(-1).unwrap(), one, 1, 0.),
+            (Integer::from_i128(-1).unwrap(), one, one, 1, 0.),
+            (one, one, Integer::ZERO, 1, 0.),
+            (one, one, one, 1, f64::NAN),
+            (integer(7), one, one, 1, 0.), // exclusive endpoint is outside.
+        ] {
+            assert!(
+                compare_composed_wide::<256>(
+                    n,
+                    b,
+                    d,
+                    last,
+                    raw,
+                    domain(),
+                    ComposedClass::FullFraction
+                )
+                .is_none()
+            );
+        }
     }
 }

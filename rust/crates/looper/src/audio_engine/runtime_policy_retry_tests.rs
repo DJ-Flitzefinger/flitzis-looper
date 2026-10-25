@@ -255,6 +255,11 @@ fn original_qualified_map_delivery_changes_candidate_and_real_retrigger_recovers
     let old = automatic(&path);
     service(&mut path);
     let refused = old.observation();
+    assert_eq!(refused.unwrap().state, "refused");
+    assert_eq!(
+        refused.unwrap().reason,
+        Some(RuntimePolicyError::Unsupported)
+    );
     automatic(&path);
     assert_eq!(old.observation(), refused);
     let (_job, delivery) = path.map();
@@ -264,29 +269,85 @@ fn original_qualified_map_delivery_changes_candidate_and_real_retrigger_recovers
     let current = automatic(&path);
     assert!(!Arc::ptr_eq(&old, &current));
     assert_ne!(old.revision(), current.revision());
-    let before = scalar_state(&path);
-    service(&mut path);
-    assert_eq!(
-        current.observation().unwrap().reason,
-        Some(RuntimePolicyError::Unsupported)
+    assert!(current.map_current(0));
+    assert!(
+        current
+            .prepared_map(0)
+            .unwrap()
+            .geometry()
+            .has_general_continuation()
     );
-    unchanged(&path, &before);
+    let execution = path.timeline.output_frame();
+    assert_eq!(execution, 17);
+    let before = path.voice(0).source_playback;
+    let generation = path.voice(0).generation;
+    let admission = path
+        .voice(0)
+        .source_admission
+        .as_ref()
+        .unwrap()
+        .retry_identity();
+    let sample = path.voice(0).sample.as_ref().unwrap().clone();
+    let original_scalar = before.original_scalar_domain().unwrap();
+    service(&mut path);
+    let mode_effect = current.observation().unwrap();
+    assert_eq!(mode_effect.state, "applied", "{mode_effect:?}");
+    assert_eq!(mode_effect.reason, None);
+    assert_eq!(mode_effect.execution_frame, Some(execution));
+    let voice = path.voice(0);
+    assert_eq!(voice.generation, generation);
+    assert_eq!(
+        voice.source_admission.as_ref().unwrap().retry_identity(),
+        admission
+    );
+    assert!(sample.same_source(voice.sample.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(
+        &sample.samples,
+        &voice.sample.as_ref().unwrap().samples
+    ));
+    let mapped = voice.source_playback;
+    assert!(mapped.is_general_mapped());
+    assert_eq!(mapped.mapped_output_frame(), Some(execution));
+    assert_eq!(mapped.position().frame, before.position().frame);
+    assert_eq!(
+        mapped.position().fraction.to_bits(),
+        before.position().fraction.to_bits()
+    );
+    assert_eq!(mapped.position().seek_mode, before.position().seek_mode);
+    assert_eq!(mapped.original_scalar_domain(), Some(original_scalar));
+    assert_eq!(voice.sync_request, current.row(0).unwrap().request);
+    let installed = voice
+        .mapped_start
+        .as_ref()
+        .unwrap()
+        .effective_source()
+        .unwrap();
+    let target = current.prepared_map(0).unwrap();
+    assert!(installed.same_source(target));
+    assert_eq!(installed.sync_witness(), target.sync_witness());
+    assert_eq!(installed.geometry().domain(), target.geometry().domain());
+    assert!(current.map_current(0));
+    assert_eq!(path.feedback(0)["phase_program_current"], false);
+    assert!(path.feedback(0)["grid_phase_confirmed"].is_null());
     let start = path.start();
     path.render(1);
     assert_eq!(start.state(), "applied");
     assert!(path.voice(0).source_playback.is_mapped());
     assert_eq!(path.feedback(0)["effective"], true);
     assert_eq!(path.feedback(0)["policy_mode"], "mapped");
-    let historical_refusal = current.observation().unwrap();
+    assert_eq!(path.feedback(0)["phase_program_current"], false);
+    assert!(path.feedback(0)["grid_phase_confirmed"].is_null());
+    assert_eq!(current.observation(), Some(mode_effect));
     let before_completion = scalar_state(&path);
     assert!(Arc::ptr_eq(&current, &automatic(&path)));
     let pending = current.observation().unwrap();
     assert_eq!(pending.state, "pending");
-    assert_eq!(pending.attempt, historical_refusal.attempt + 1);
+    assert_eq!(pending.attempt, mode_effect.attempt + 1);
     assert!(!path.source.consumer.is_empty());
     assert!(Arc::ptr_eq(&current, &automatic(&path)));
     assert_eq!(current.observation(), Some(pending));
     unchanged(&path, &before_completion);
+    assert_eq!(path.feedback(0)["phase_program_current"], false);
     assert!(path.feedback(0)["grid_phase_confirmed"].is_null());
     // A mapped birth still requires the original completion claim. This
     // regression proves queued/deduplicated progress, not phase eligibility

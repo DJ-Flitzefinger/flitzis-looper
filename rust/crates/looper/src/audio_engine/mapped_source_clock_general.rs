@@ -113,6 +113,14 @@ impl MappedLoopGeometry {
             std::mem::size_of::<super::full_fraction::FullFractionLocalView>(),
         )
     }
+    #[cfg(test)]
+    pub(crate) fn composed_local_payload_sizes_for_test() -> (usize, usize, usize) {
+        (
+            std::mem::size_of::<super::composed::Local<128>>(),
+            std::mem::size_of::<super::composed::Local<256>>(),
+            std::mem::size_of::<super::composed::LocalView>(),
+        )
+    }
     /// Separate OFFRT admission; the legacy rounded inverse is not a prerequisite.
     pub(crate) fn new_general_declared(
         map: SourceBeatmap,
@@ -313,6 +321,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_composed_ordinary() {
+            return super::composed::position(self, epoch, frame);
+        }
         if epoch.is_full_fraction_general() {
             return super::full_fraction::position(self, epoch, frame);
         }
@@ -329,6 +340,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_composed_ordinary() {
+            return super::composed::refresh(self, epoch, frame);
+        }
         if epoch.is_full_fraction_general() {
             return super::full_fraction::refresh(self, epoch, frame);
         }
@@ -806,6 +820,7 @@ pub(crate) struct GeneralLocalSpanView {
     state: LocalGeneralState,
 }
 enum LocalGeneralState {
+    Composed(super::composed::LocalView),
     Full(super::full_fraction::FullFractionLocalView),
     Declared { span: MappedSourceSpan, core: Core },
     Physical(physical::PhysicalLocalSpanView),
@@ -813,6 +828,7 @@ enum LocalGeneralState {
 impl GeneralLocalSpanView {
     pub(crate) fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
         match &self.state {
+            LocalGeneralState::Composed(view) => view.position_at(frame),
             LocalGeneralState::Full(view) => view.position_at(frame),
             LocalGeneralState::Physical(view) => view.position_at(frame),
             LocalGeneralState::Declared { span, core } => {
@@ -868,6 +884,13 @@ impl MappedSourceSpan {
         self,
         domain: SourceLoopDomain,
     ) -> Result<GeneralLocalSpanView, MappedClockError> {
+        if self.epoch.is_composed_ordinary() {
+            return super::composed::local(self, domain)
+                .map(|view| GeneralLocalSpanView {
+                    state: LocalGeneralState::Composed(view),
+                })
+                .ok_or(MappedClockError::NumericalUnavailable);
+        }
         if self.epoch.is_full_fraction_general() {
             return super::full_fraction::local(self, domain)
                 .map(|view| GeneralLocalSpanView {
@@ -1022,8 +1045,8 @@ mod tests {
             );
             assert_eq!(span.position_at(n), None);
         }
-        assert!(std::mem::size_of::<MappedSourceSpan>() <= 240);
-        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 128);
+        assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 152);
     }
 
     #[test]

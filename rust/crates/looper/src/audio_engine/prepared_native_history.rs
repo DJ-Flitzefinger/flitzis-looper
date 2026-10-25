@@ -41,7 +41,7 @@ use retained_start::RetainedNativeStartTimeline;
 
 #[path = "mapped_native_input.rs"]
 mod mapped_input;
-pub(crate) use mapped_input::{MappedNativeInput, MappedNativePitchChunk};
+pub(crate) use mapped_input::{MappedNativeInput, MappedNativePitchChunk, PreparedMappedVoice};
 use mapped_input::{MappedNativePitchOwner, MappedNativePitchStamp};
 
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
@@ -369,6 +369,99 @@ pub(crate) struct NativeHistoryRequest {
 }
 
 impl NativeHistoryRequest {
+    /// Worker-only: requalify this same held physical beginning for a new mapped E.
+    /// The action separately validates its original source/control owner and new endpoint.
+    /// Nothing in the request changes until the complete replacement proof exists.
+    pub(crate) fn coverage_for_replanned_mapped_birth(
+        &self,
+        endpoint: SourceReadCheckpoint,
+    ) -> Result<Option<NormalLoopCoverage>, RubberBandError> {
+        let unavailable = || RubberBandError::UnavailableSourceHistory;
+        let original = SourceReadCheckpoint {
+            playback: self.playback,
+            plan: self.plan,
+        };
+        let mut reference_check = endpoint.playback;
+        // This changes only the copied reference. Exact equality then proves that
+        // the independently prepared endpoint retained the original launch reference.
+        reference_check.carry_launch_reference_from(&self.playback);
+        let position = self.playback.position();
+        if self.actual_feed.is_some()
+            || !original.is_consistent()
+            || !endpoint.is_consistent()
+            || !self.playback.is_mapped()
+            || !endpoint.playback.is_mapped()
+            || self.playback.has_phase_program()
+            || endpoint.playback.has_phase_program()
+            || self.plan.transition.is_active()
+            || endpoint.plan.transition.is_active()
+            || position.seek_mode != super::source_reader::ExplicitSeekMode::Normal
+            || position.frame != self.plan.loop_region.start
+            || position.fraction.to_bits() != 0.0_f64.to_bits()
+            || endpoint.playback.position() != position
+            || endpoint.playback.position().fraction.to_bits() != 0.0_f64.to_bits()
+            || !self.plan.matches_source_contract(endpoint.plan)
+            || self.plan.domain() != endpoint.plan.domain()
+            || self.playback.mapped_epoch().map(|epoch| epoch.marker())
+                != endpoint.playback.mapped_epoch().map(|epoch| epoch.marker())
+            || self.playback.original_scalar_domain().is_none()
+            || self.playback.original_scalar_domain() != endpoint.playback.original_scalar_domain()
+            || !reference_check.matches_exact(&endpoint.playback)
+            || self.playback.mapped_output_frame() != Some(self.target_output_frame)
+            || endpoint
+                .playback
+                .mapped_output_frame()
+                .is_none_or(|frame| frame <= self.target_output_frame)
+            || !self
+                .permit
+                .current(&self.sample, self.binding.sample_rate_hz)
+            || !self.permit.matches_projection(self.binding.accepted)
+            || self.binding
+                != ProductiveSourceBinding::new(
+                    &self.sample,
+                    self.binding.sample_rate_hz,
+                    self.binding.accepted,
+                )
+        {
+            return Err(unavailable());
+        }
+        let readers = StemReadSets::new(self.stems.as_ref(), None);
+        match &self.coverage {
+            Some(previous) => {
+                if !previous.matches_with_readers(
+                    &self.sample,
+                    readers,
+                    self.binding.sample_rate_hz,
+                    self.binding.accepted,
+                    self.plan,
+                    &self.playback,
+                    true,
+                ) {
+                    return Err(unavailable());
+                }
+                NormalLoopCoverage::capture_with_readers(
+                    &self.sample,
+                    readers,
+                    self.binding.sample_rate_hz,
+                    self.binding.accepted,
+                    endpoint.plan,
+                    &endpoint.playback,
+                )
+                .map(Some)
+                .ok_or_else(unavailable)
+            }
+            None if complete_view_available(&self.sample) => Ok(None),
+            None => Err(unavailable()),
+        }
+    }
+
+    fn effective_source_current(&self, sample: &SampleBuffer, rate: u32) -> bool {
+        self.mapped_input.as_ref().map_or_else(
+            || self.permit.current_effective_source(sample, rate),
+            |mapped| mapped.effective_source_current(self),
+        )
+    }
+
     pub(crate) fn actual_feed_checkpoint(&self) -> SourceReadCheckpoint {
         self.actual_feed.unwrap_or(SourceReadCheckpoint {
             playback: self.playback,
@@ -577,9 +670,7 @@ impl NativeHistoryRequest {
             )
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
-            && self
-                .permit
-                .current_effective_source(feed.sample, feed.sample_rate_hz)
+            && self.effective_source_current(feed.sample, feed.sample_rate_hz)
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             // Pending candidates still require their frozen exact target below. Once adopted,
@@ -600,9 +691,7 @@ impl NativeHistoryRequest {
             && effective_key_lock == feed.key_lock
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
-            && self
-                .permit
-                .current_effective_source(feed.sample, feed.sample_rate_hz)
+            && self.effective_source_current(feed.sample, feed.sample_rate_hz)
             && self.permit.matches_projection(feed.accepted)
             && SourceReadPlan {
                 selection: feed.plan.selection,
@@ -816,6 +905,66 @@ impl NativeAdapterState {
         .then_some(stamp)
     }
 
+    pub(crate) fn stage_mapped_voice(
+        &self,
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+        active: bool,
+        increments: u64,
+    ) -> Option<PreparedMappedVoice> {
+        if !self.active || self.dirty || !self.has_physical_birth_context() {
+            return None;
+        }
+        self.mapped_input()?.stage_effective_voice(
+            self.source.as_ref()?,
+            self.mapped_pitch_stamp()?,
+            lifetime,
+            generation,
+            active,
+            increments,
+        )
+    }
+
+    pub(crate) fn staged_mapped_voice_current(
+        &self,
+        staged: &PreparedMappedVoice,
+        admission: &super::native_history_permit::NativeSourceAdmission,
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+        active: bool,
+    ) -> bool {
+        self.active
+            && !self.dirty
+            && staged.claim_current(admission, lifetime, generation, active)
+            && self
+                .mapped_input()
+                .zip(self.mapped_pitch_stamp())
+                .is_some_and(|(mapped, stamp)| mapped.staged_voice_matches(staged, stamp))
+    }
+
+    /// All qualification precedes the claim. This only moves the prechecked owner.
+    pub(crate) fn install_mapped_voice_claimed(&mut self, staged: PreparedMappedVoice) {
+        self.source
+            .as_mut()
+            .expect("claimed Native source")
+            .mapped_input
+            .as_mut()
+            .expect("claimed mapped Native source")
+            .install_effective_voice(staged);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_effective_mapped_voice_for_test(&self) -> bool {
+        self.mapped_input().is_some_and(|mapped| {
+            mapped.has_effective_voice()
+                && mapped.effective_adapter_current(self.mapped_pitch_stamp())
+                && self
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| mapped.effective_source_current(source))
+        })
+    }
+
     pub(crate) fn has_physical_birth_context(&self) -> bool {
         self.input_history_context == Some(NativeStartHistoryContext::PhysicalBirth)
     }
@@ -878,6 +1027,12 @@ impl NativeAdapterState {
         epoch: u64,
         history: Option<super::productive_source_history::ProductiveSourceHistory>,
     ) -> bool {
+        if self.mapped_input().is_some_and(|mapped| {
+            !mapped
+                .effective_adapter_current(self.active.then(|| self.mapped_pitch_stamp()).flatten())
+        }) {
+            return false;
+        }
         let productive_continuity = self.has_productive_continuity(feed, history);
         if self.effective_mode.is_some() && !productive_continuity {
             return false;
@@ -982,6 +1137,11 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
+        if request.mapped_input.is_some() {
+            return self
+                .prepare_productive_mapped_birth(request)
+                .map_err(NativeSourcePreparationError::into_backend);
+        }
         self.prepare_retained_source_start_context_checked(
             request,
             None,
@@ -1032,9 +1192,17 @@ impl NativeAdapterState {
         source_rebase: Option<(usize, SourceReadCheckpoint)>,
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
-        if request.plan.loop_period.is_mapped()
-            || request.playback.has_phase_program()
-            || request.playback.is_general_mapped()
+        let owned_birth = request
+            .mapped_input
+            .as_ref()
+            .is_some_and(|input| input.matches_request(&request) && input.pending_current())
+            && native_prepared
+            && silent_prefix > 0
+            && source_rebase.is_none()
+            && dsp.is_none();
+        if request.playback.has_phase_program()
+            || (!owned_birth
+                && (request.plan.loop_period.is_mapped() || request.playback.is_general_mapped()))
             || request.actual_feed.is_some_and(|checkpoint| {
                 checkpoint.plan.loop_period.is_mapped()
                     || checkpoint.playback.is_general_mapped()
@@ -1433,6 +1601,16 @@ impl NativeAdapterState {
         let state = self.mapped_pitch.as_ref().ok_or_else(unavailable)?;
         let stamp = self.mapped_pitch_stamp().ok_or_else(unavailable)?;
         chunk.next_stamp(stamp).ok_or_else(unavailable)?;
+        if self.source.as_ref().is_some_and(|source| {
+            source.mapped_input.as_ref().is_some_and(|mapped| {
+                mapped.has_effective_voice()
+                    && (!self.active
+                        || !mapped.effective_adapter_current(Some(stamp))
+                        || !mapped.effective_source_current(source))
+            })
+        }) {
+            return Err(unavailable());
+        }
         let channels = self.input.len();
         let frames = chunk.frames();
         let pending = self.input_fifo.first().map_or(0, FixedFifo::len);

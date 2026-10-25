@@ -1409,7 +1409,7 @@ fn verify_general_two_mib(anchors: &'static [(f64, f64)], quarters: Option<f64>)
     assert!(!std::mem::needs_drop::<SourcePlayback>());
     assert!(!std::mem::needs_drop::<SourceReaderPeriod>());
     assert!(
-        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 240
+        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 264
     );
     assert!(std::mem::size_of::<[SourcePlayback; 32]>() <= 16 * 1024);
     assert!(std::mem::size_of::<[Option<SourcePlayback>; 32]>() <= 16 * 1024);
