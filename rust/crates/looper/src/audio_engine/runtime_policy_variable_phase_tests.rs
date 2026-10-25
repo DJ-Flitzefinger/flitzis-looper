@@ -9,6 +9,7 @@ use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::mapped_source_clock::{
     MappedClockEpoch, MappedLoopGeometry, MappedSourceSpan,
 };
+use crate::audio_engine::source_reader::SourceLoopDomain;
 use pyo3::types::PyModule;
 use std::ffi::CString;
 use std::sync::Mutex;
@@ -878,6 +879,103 @@ fn consume_pending(fixture: &mut VariablePath, output: &mut [f32]) {
         .render_into(output, &mut ImmediateAudioBufferRetirement);
 }
 
+fn pending_full_fraction(lanes: usize) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
+    let anchors = &[(0., 0.), (0.37, 1.), (0.91, 2.)][..];
+    let mut fixture = VariablePath::new(&vec![(anchors, 43680, Some(2.)); lanes], 24000., 12000);
+    let snapshot = fixture.mode();
+    fixture.dry.path.render(129);
+    assert!(Arc::ptr_eq(&snapshot, &request(&fixture.dry.path)));
+    (fixture, snapshot)
+}
+
+fn assert_full_fraction_consumed(fixture: &VariablePath) {
+    for id in 0..fixture.dry.lanes {
+        let voice = fixture.dry.path.voice(id);
+        assert!(voice.source_playback.is_mapped_phase());
+        assert!(
+            voice
+                .source_playback
+                .mapped_epoch()
+                .unwrap()
+                .has_full_fraction_recovery()
+        );
+        let mut history = SourceFeedSnapshot::new();
+        assert!(voice.source_feed_history.capture_into(&mut history));
+        let spans = history
+            .spans()
+            .filter(|span| span.playback.is_mapped_phase())
+            .collect::<Vec<_>>();
+        assert_eq!(spans.iter().map(|span| span.frames).sum::<usize>(), 512);
+        for span in spans {
+            assert!(
+                span.playback
+                    .mapped_epoch()
+                    .unwrap()
+                    .has_full_fraction_recovery()
+            );
+            assert!(
+                span.playback.tempo_ratio() < 0.74,
+                "the entire first segment must consume the negative global correction"
+            );
+        }
+        assert!(fixture.dry.path.feedback(id)["grid_phase_confirmed"].is_null());
+    }
+}
+
+#[test]
+fn full_fraction_claim_consuming_reader_and_copied_history_fit_two_mib_without_rust_requests() {
+    std::thread::Builder::new()
+        .name("full-fraction-two-mib".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let (mut fixture, snapshot) = pending_full_fraction(6);
+            let mut output = [0.; 1024];
+            let (_, allocations) =
+                observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+            assert_eq!(allocations, ThreadAllocations::default());
+            assert_eq!(snapshot.observation().unwrap().state, "applied");
+            assert!(output.iter().all(|v| v.is_finite()));
+            assert!(output.iter().any(|v| *v != 0.));
+            assert_full_fraction_consumed(&fixture);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+#[ignore = "descriptive FullFraction consuming profile; Root runs serially after frozen POST"]
+fn descriptive_full_fraction_actual_constructor_renderer_cohorts_report_median_max_and_limits() {
+    // This decimal map admits global correction. It has no waiting-window
+    // region; all512 measured frames must consume its actual negative correction.
+    for lanes in [2, 4, 6, 10] {
+        let mut elapsed = Vec::new();
+        for repeat in 0..4 {
+            let (mut fixture, snapshot) = pending_full_fraction(lanes);
+            let mut output = [0.; 1024];
+            let started = Instant::now();
+            let (_, allocations) =
+                observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+            let millis = started.elapsed().as_secs_f64() * 1000.;
+            assert_eq!(allocations, ThreadAllocations::default());
+            assert_eq!(snapshot.observation().unwrap().state, "applied");
+            assert_full_fraction_consumed(&fixture);
+            assert!(output.iter().any(|v| *v != 0.));
+            if repeat > 0 {
+                elapsed.push(millis);
+            }
+        }
+        elapsed.sort_by(f64::total_cmp);
+        let nominal = 512. / f64::from(RATE) * 1000.;
+        println!(
+            "full_fraction_productive_profile region=global_negative_correction active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original drains, actual-E FullFraction construction/all32 claim, consuming dry renderer/history/copied advance; zero Rust requests asserted; setup excluded; no Native/device/music/worstcase or Human acceptance",
+            elapsed[1],
+            elapsed[2],
+            elapsed[2] <= nominal
+        );
+    }
+}
+
 fn assert_consumed_region(fixture: &VariablePath, correcting: bool) -> (usize, usize) {
     let mut history = SourceFeedSnapshot::new();
     assert!(
@@ -931,24 +1029,43 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
         std::mem::size_of::<crate::audio_engine::mapped_source_clock::GeneralLocalSpanView>();
     let playback_view_bytes =
         std::mem::size_of::<crate::audio_engine::source_playback::CompactLocalPlaybackView>();
+    let (grid_bytes, full_phase_bytes) = MappedClockEpoch::phase_local_payload_sizes_for_test();
+    let (declared_bytes, physical_bytes, full_general_bytes) =
+        MappedLoopGeometry::general_local_payload_sizes_for_test();
+    let affine_bytes =
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::RationalAffine>();
+    // Old class limits remain separate. FullFraction adds at most three signed
+    // 2048-bit integers (257 bytes each), i128 master, f64 raw fraction,
+    // <=96-byte unchanged domain, bool and 16-byte alignment/tag layers.
+    assert!(
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::Integer>() <= 257
+    );
+    assert!(std::mem::size_of::<SourceLoopDomain>() <= 96);
+    assert!(
+        std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::Affine<256>>()
+            <= 928
+    );
+    assert!(affine_bytes <= 944);
+    assert!(grid_bytes <= 1184 && declared_bytes <= 1184 && physical_bytes <= 1184);
+    assert!(full_phase_bytes <= 1200 && full_general_bytes <= 1200);
     println!(
-        "variable_phase_temporary_layout phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} inner_max_bytes=1184 outer_baseline_max_bytes=1200 phase_needs_drop={} playback_view_needs_drop={}; existing copied epoch/span/playback/cohort caps remain asserted; this is layout, not measured peak stack",
+        "variable_phase_temporary_layout grid_bytes={grid_bytes} declared_bytes={declared_bytes} physical_bytes={physical_bytes} rational_affine_bytes={affine_bytes} full_phase_bytes={full_phase_bytes} full_general_bytes={full_general_bytes} phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} historical_old_class_inner_max=1184 historical_old_outer_max=1200 new_inner_max=1216 new_outer_max=1248 phase_needs_drop={} playback_view_needs_drop={}; copied epoch/span/playback/cohort caps remain unchanged; this is layout, not measured peak stack",
         std::mem::needs_drop::<crate::audio_engine::mapped_source_clock::PhaseLocalSpanView>(),
         std::mem::needs_drop::<crate::audio_engine::source_playback::CompactLocalPlaybackView>()
     );
     assert!(
-        phase_bytes <= 1184,
-        "PhaseLocalSpanView actual_bytes={phase_bytes} exceeds unchanged inner cap1184"
+        phase_bytes <= 1216,
+        "PhaseLocalSpanView actual_bytes={phase_bytes} exceeds separately bounded containing enum"
     );
     assert!(
-        general_bytes <= 1184,
-        "GeneralLocalSpanView actual_bytes={general_bytes} exceeds unchanged inner cap1184"
+        general_bytes <= 1216,
+        "GeneralLocalSpanView actual_bytes={general_bytes} exceeds separately bounded containing enum"
     );
-    // The original 1184-byte inner enum plus its frame index already rounded
-    // to1200 bytes at static baseline64ea32a4. Keep that outer bound distinct.
+    // One additional local-span tag and the frame index each need at most one
+    // 16-byte alignment layer beyond the independently bounded inner payload.
     assert!(
-        playback_view_bytes <= 1200,
-        "CompactLocalPlaybackView actual_bytes={playback_view_bytes} exceeds unchanged outer cap1200"
+        playback_view_bytes <= 1248,
+        "CompactLocalPlaybackView actual_bytes={playback_view_bytes} exceeds containing-view bound1248"
     );
     assert!(!std::mem::needs_drop::<
         crate::audio_engine::mapped_source_clock::PhaseLocalSpanView,
@@ -1169,6 +1286,80 @@ def main():
 if __name__ == "__main__":
     main()
 "####;
+
+#[test]
+#[ignore = "descriptive component attribution; Root runs only after the frozen systems review"]
+fn descriptive_full_fraction_claim_and_installed_renderer_components() {
+    let mut constructors = Vec::with_capacity(3);
+    let mut renders = Vec::with_capacity(3);
+    for repeat in 0..4 {
+        let (mut fixture, snapshot) = pending_full_fraction(6);
+        fixture.drain();
+        let actual_e = fixture.dry.path.timeline.output_frame();
+        let original_transport = fixture.dry.path.timeline;
+        let mut retirement = ImmediateAudioBufferRetirement;
+        let started = Instant::now();
+        let (_, constructor_requests) =
+            observe_current_thread(|| fixture.dry.render_into(&mut [], &mut retirement));
+        let constructor_ms = started.elapsed().as_secs_f64() * 1000.;
+        assert_eq!(constructor_requests, ThreadAllocations::default());
+        let observation = snapshot.observation().unwrap();
+        assert_eq!(observation.state, "applied", "{observation:?}");
+        assert_eq!(observation.execution_frame, Some(actual_e));
+        assert_eq!(fixture.dry.path.timeline.output_frame(), actual_e);
+        assert!(
+            fixture
+                .dry
+                .path
+                .timeline
+                .matches_clock_epoch(&original_transport)
+        );
+        let attempt = observation.attempt;
+        // Selection and view setup are inspected outside both timed callbacks.
+        let widths = (0..6)
+            .map(|id| {
+                fixture
+                    .dry
+                    .path
+                    .voice(id)
+                    .source_playback
+                    .local_compact_view()
+                    .unwrap()
+                    .unwrap()
+                    .full_fraction_phase_split_bits_for_test()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(widths.iter().all(|bits| *bits == 1024));
+        if repeat == 0 {
+            println!(
+                "full_fraction_component_split_widths active=6 selected_bits={widths:?}; inspected outside timed regions"
+            );
+        }
+        let mut output = [0.; 1024];
+        fixture.drain();
+        let started = Instant::now();
+        let (_, render_requests) =
+            observe_current_thread(|| fixture.dry.render_into(&mut output, &mut retirement));
+        let render_ms = started.elapsed().as_secs_f64() * 1000.;
+        assert_eq!(render_requests, ThreadAllocations::default());
+        assert_eq!(snapshot.observation().unwrap().state, "applied");
+        assert_eq!(snapshot.observation().unwrap().attempt, attempt);
+        assert!(output.iter().all(|v| v.is_finite()));
+        assert!(output.iter().any(|v| *v != 0.));
+        assert_full_fraction_consumed(&fixture);
+        if repeat > 0 {
+            constructors.push(constructor_ms);
+            renders.push(render_ms);
+        }
+    }
+    constructors.sort_by(f64::total_cmp);
+    renders.sort_by(f64::total_cmp);
+    println!(
+        "full_fraction_components active=6 fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 constructor_median_ms={:.4} constructor_max_ms={:.4} installed_render_median_ms={:.4} installed_render_max_ms={:.4}; empty callback executes original actual-E PHASE claim; following callback consumes512 correcting frames without re-admission; both assert zero Rust requests; setup and class inspection excluded; these component times are not summed as an exact decomposition; unchanged combined2/4/6/10 profile remains budget authority; no Native/device/music/Human acceptance",
+        constructors[1], constructors[2], renders[1], renders[2]
+    );
+}
 
 #[test]
 #[ignore = "descriptive component attribution; Root runs only after the frozen systems review"]

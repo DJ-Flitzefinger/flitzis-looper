@@ -135,9 +135,7 @@ fn assert_local(
 }
 
 #[test]
-fn phase_decimal_original_seconds_keep_ordinary_general_continuation_when_recovery_is_unavailable()
-{
-    // A required broader-admission gap, not an intended product restriction.
+fn phase_decimal_original_seconds_use_closed_full_fraction_recovery() {
     // Declared Q2 avoids confusing this with physical-marker nonintegral Q:
     // exact binary64(0.91) * 48000 is slightly greater than integer43680.
     let map = map_with_source(
@@ -177,15 +175,353 @@ fn phase_decimal_original_seconds_keep_ordinary_general_continuation_when_recove
     let later = geometry.position_at(ordinary, 1).unwrap();
     assert_eq!(later.frame, 13);
     assert!(later.fraction > 0. && later.fraction < 1.);
-    // The two original forward slopes have common odd factor375, while
-    // B(13) retains odd denominator1249748896595312625. Ordinary geometry
-    // admission does not establish the new phase programme's recovery proof.
-    assert!(matches!(
-        MappedClockEpoch::common_phase(89, actual, &geometry, first, 0, reference),
-        Err(MappedClockError::NumericalUnavailable)
-    ));
+    // Independent Fraction oracle retained in decimal_phase_fraction_oracle-v1.json.
+    let phase = MappedClockEpoch::common_phase(89, actual, &geometry, first, 0, reference).unwrap();
+    assert!(phase.has_full_fraction_recovery());
+    for (frame, whole, bits) in [
+        (0, 13, 0),
+        (1, 13, 0x3fe74f5c28f5c28f),
+        (1124, 831, 0x3fe870a3d70a3ba6),
+        (1125, 832, 0x3fdfffffffffff4c),
+        (23999, 17759, 0x3fd0a3d70a3d2200),
+        (24000, 17759, 0x3feffffffffff880),
+        (24001, 17761, 0x3fb47ae147af4c05),
+        (47999, 43678, 0x3fed70a3d70a437f),
+        (48000, 0, 0),
+        (48001, 0, 0x3fe7ae147ae16780),
+    ] {
+        assert_pair(
+            position(&geometry, phase, reference, frame).unwrap(),
+            whole,
+            f64::from_bits(bits),
+        );
+        let span = assert_local(&geometry, phase, reference, frame);
+        assert_eq!(
+            span.local_phase_view(geometry.domain(), reference)
+                .unwrap()
+                .full_fraction_split_bits_for_test(),
+            Some(1024)
+        );
+    }
+    assert!(!settled(&geometry, phase, reference, 1124).unwrap());
+    assert!(settled(&geometry, phase, reference, 1125).unwrap());
     let unchanged = geometry.position_at(ordinary, 1).unwrap();
     assert_pair(unchanged, later.frame, later.fraction);
+    // Negative GLOBAL debt, captured neighbours and the original knot/wrap.
+    phase::assert_full_refresh_equivalent_for_test(
+        &geometry,
+        phase,
+        reference,
+        &[0, 1, 1124, 1125, 1126, 23999, 24000, 48000, u64::MAX],
+        &[1124, 1125, 24000, u64::MAX],
+    );
+}
+
+#[test]
+fn full_fraction_zero_debt_refresh_keeps_the_captured_shortcut() {
+    let map = map_with_source(
+        &[(0., 0.), (0.37, 1.), (0.91, 2.), (1.47, 3.)],
+        &["trusted"; 3],
+        true,
+        RATE,
+        70561,
+    );
+    let mut g = MappedLoopGeometry::new_general_declared(
+        map,
+        70561,
+        RATE,
+        FrameRange {
+            start: 1000,
+            end: 45194,
+        },
+        2.,
+        true,
+    )
+    .unwrap();
+    g.prepare_common_phase();
+    let actual = timeline(24000., 0, 0.);
+    let reference = launch_reference(&g, actual, 0);
+    // Nonclosed B(A) selects FullFraction even though the intentional launch
+    // itself has exactly zero debt. No numeric capability is forced by the test.
+    let epoch =
+        MappedClockEpoch::common_phase(190, actual, &g, raw(1000, -0.), 0, reference).unwrap();
+    assert!(epoch.has_full_fraction_recovery());
+    assert!(settled(&g, epoch, reference, 0).unwrap());
+    assert_pair(position(&g, epoch, reference, 0).unwrap(), 1000, -0.);
+    phase::assert_full_refresh_equivalent_for_test(
+        &g,
+        epoch,
+        reference,
+        &[0, 1, 23999, 24000, 24001, 47999, 48000, 48001, u64::MAX],
+        &[0, 24000, 48000, u64::MAX],
+    );
+}
+
+#[test]
+fn full_fraction_distinct_original_inverses_keep_nonzero_start_knot_capture_and_reader() {
+    let map = map_with_source(
+        &[(0., 0.), (0.37, 1.), (0.91, 2.), (1.47, 3.)],
+        &["trusted"; 3],
+        true,
+        RATE,
+        70561,
+    );
+    let mut g = MappedLoopGeometry::new_general_declared(
+        map,
+        70561,
+        RATE,
+        FrameRange {
+            start: 1000,
+            end: 45194,
+        },
+        2.,
+        true,
+    )
+    .unwrap();
+    g.prepare_common_phase();
+    let actual = timeline(24000., 0, 0.);
+    let reference = launch_reference(&g, actual, 0);
+    let epoch =
+        MappedClockEpoch::common_phase(191, actual, &g, raw(20000, 0.), 27000, reference).unwrap();
+    assert!(epoch.has_full_fraction_recovery());
+    let raw_inverse = g.map.canonical_segment_at_beat(1.).unwrap();
+    assert!(!raw_inverse.matches_exact(reference.mapped_parts().unwrap().1));
+    // Independent Fraction records from decimal-distinct-inverse-oracle-v2.json.
+    for (frame, whole, bits) in [
+        (27000, 20000, 0),
+        (27001, 20001, 0x3fb8ccccccce4625),
+        (48588, 43679, 0x3fd59999999b6408),
+        (48589, 43680, 0x3fdcd4629b7df17f),
+        (172745, 24344, 0x3fa7ffffffe951e4),
+        (172746, 24345, 0x3fc1d9cebcc0f669),
+        (172747, 24346, 0x3fcc173f6092666c),
+    ] {
+        let point = position(&g, epoch, reference, frame).unwrap();
+        assert_pair(point, whole, f64::from_bits(bits));
+        assert_affine_shuffled(&g, epoch, reference, frame);
+        let period = g
+            .domain()
+            .musical_period
+            .mapped_period(g.domain().region)
+            .unwrap();
+        let taps = period
+            .seam_taps(point.frame, point.fraction, g.domain().region)
+            .unwrap();
+        assert_eq!(
+            (taps.left, taps.right, taps.right_gain.to_bits()),
+            (
+                whole,
+                (bits != 0).then_some(whole + 1),
+                (f64::from_bits(bits) as f32).to_bits()
+            )
+        );
+    }
+    assert!(!settled(&g, epoch, reference, 172745).unwrap());
+    assert!(settled(&g, epoch, reference, 172746).unwrap());
+    // Positive GLOBAL debt with different original raw/start inverses. The
+    // pre-epoch query must remain unavailable in both evaluators.
+    phase::assert_full_refresh_equivalent_for_test(
+        &g,
+        epoch,
+        reference,
+        &[26999, 27000, 48588, 48589, 172745, 172746, 172747, u64::MAX],
+        &[26999, 172745, 172746],
+    );
+}
+
+#[test]
+fn compact_preferred_geometry_has_closed_subnormal_phase_and_ordinary_recovery() {
+    let g = geometry(
+        &[(0., 0.), (1. / 64., 8.), (5. / 64., 24.), (9. / 64., 32.)],
+        32.,
+        6750,
+    );
+    assert!(g.general.is_none());
+    assert!(g.has_compact_continuation());
+    assert!(g.full_fraction.is_some());
+    let actual = timeline(187.5, 0, 0.);
+    let reference = launch_reference(&g, actual, 0);
+    let mut point = raw(0, f64::from_bits(1));
+    let mut execution = 0;
+    for pass in 0..4 {
+        let epoch =
+            MappedClockEpoch::common_phase(200 + pass, actual, &g, point, execution, reference)
+                .unwrap();
+        if pass == 0 {
+            assert!(epoch.has_full_fraction_recovery());
+        }
+        assert_pair(
+            position(&g, epoch, reference, execution).unwrap(),
+            point.frame,
+            point.fraction,
+        );
+        assert_affine_shuffled(&g, epoch, reference, execution);
+        // Freeze the exact emitted RN pair, then recover against live R. This
+        // numerical fixture declares a pause; it grants no live voice authority.
+        point = position(&g, epoch, reference, execution + 1).unwrap();
+        execution += 27;
+        let ordinary = MappedClockEpoch::full_fraction_ordinary_recovery(
+            300 + pass,
+            actual,
+            &g,
+            point,
+            execution,
+        )
+        .unwrap();
+        assert!(ordinary.is_full_fraction_general());
+        assert_pair(
+            g.position_at(ordinary, execution).unwrap(),
+            point.frame,
+            point.fraction,
+        );
+        let span = g.refresh_span(ordinary, execution).unwrap();
+        let local = span.local_general_view(g.domain()).unwrap();
+        for n in [execution, span.end_frame() - 1, span.end_frame()] {
+            let expected = g.position_at(ordinary, n).unwrap();
+            assert_pair(
+                local.position_at(n).unwrap(),
+                expected.frame,
+                expected.fraction,
+            );
+        }
+        point = g.position_at(ordinary, execution + 1).unwrap();
+        execution += 1;
+    }
+    // The full fractional domain is also accepted as the original ordinary raw
+    // pair; it never has to fit the original source grid or an i128 coefficient.
+    let fine = raw(13, f64::from_bits(1));
+    let epoch =
+        MappedClockEpoch::full_fraction_ordinary_recovery(400, actual, &g, fine, 0).unwrap();
+    assert_pair(g.position_at(epoch, 0).unwrap(), 13, f64::from_bits(1));
+    assert!(MappedClockEpoch::ordinary_mapped_recovery(401, actual, &g, fine, 0).is_err());
+}
+
+#[test]
+fn compact_full_fraction_window_corrects_twice_then_captures_without_rounded_reanchor() {
+    let g = geometry(
+        &[(0., 0.), (1. / 64., 8.), (5. / 64., 24.), (9. / 64., 32.)],
+        32.,
+        6750,
+    );
+    assert!(g.general.is_none());
+    let actual = timeline(187.5, 0, 0.);
+    let reference = launch_reference(&g, actual, 0);
+    let epoch =
+        MappedClockEpoch::common_phase(450, actual, &g, raw(13, f64::from_bits(1)), 0, reference)
+            .unwrap();
+    assert!(epoch.has_full_fraction_recovery());
+    // Independent stdlib Fraction oracle: compact-window-fraction-oracle-v1.json.
+    // beta0=(13+2^-1074)*4/375, seed24, h64, delta1/8, cycle257/8.
+    // The first window removes only1/8; the remaining debt needs a second window.
+    for (frame, whole, bits, region) in [
+        (0, 13, 1, 0),
+        (1, 13, 0x3fe0000000000000, 0),
+        (1499, 774, 0x3feffffffffffe04, 0),
+        (1500, 776, 2, 0),
+        (4473, 3749, 0x3d55c00000000000, 0),
+        (4474, 3750, 0x3d5b900000000000, 1),
+        (4475, 3751, 0x3fef000000000627, 1),
+        (5973, 6701, 0x3fc40000000055a4, 1),
+        (5974, 6703, 0x3fc0000000003800, 2),
+        (5975, 6705, 0x3fc0000000001900, 2),
+        (5999, 0, 0x3fe90000000001f0, 2),
+        (6000, 1, 0x3fd2000000000000, 2),
+        (10497, 3749, 0x3fe2000000000ba0, 2),
+        (10498, 3751, 0x3fbb800000007a10, 1),
+        (10499, 3753, 0x3fb3800000003d08, 1),
+        (10661, 4072, 0x3f8bfffffff8dd00, 1),
+        (10662, 4073, 0x3fefffffffffdb40, 3),
+        (10663, 4075, 0x3fefffffffffd380, 3),
+    ] {
+        assert_pair(
+            position(&g, epoch, reference, frame).unwrap(),
+            whole,
+            f64::from_bits(bits),
+        );
+        let span = assert_affine_shuffled(&g, epoch, reference, frame);
+        let (_, _, seed, actual_region) = span.program.phase_value().unwrap();
+        assert_eq!(
+            span.local_phase_view(g.domain(), reference)
+                .unwrap()
+                .full_fraction_split_bits_for_test(),
+            Some(if region == 3 { 1024 } else { 2048 })
+        );
+        assert_eq!((seed.to_bits(), actual_region), (24_f64.to_bits(), region));
+        assert_eq!(settled(&g, epoch, reference, frame).unwrap(), region == 3);
+        if region == 1 {
+            assert_eq!(
+                span.local_rate().unwrap().to_bits(),
+                (63_f64 / 32.).to_bits()
+            );
+        }
+    }
+    let first_window = refresh(&g, epoch, reference, 4474).unwrap();
+    assert_eq!(
+        (first_window.start_frame(), first_window.end_frame()),
+        (4474, 5974)
+    );
+    let second_window = refresh(&g, epoch, reference, 10498).unwrap();
+    assert_eq!(
+        (second_window.start_frame(), second_window.end_frame()),
+        (10498, 10662)
+    );
+    // Integer master checkpoints independently simplify the exact piecewise
+    // law to these fractions; the tiny initial source remains in the algebra.
+    for (frame, whole, fraction) in [
+        (4500, 3801, 3. / 16.),
+        (6000, 1, 9. / 32.),
+        (10500, 3755, 23. / 512.),
+        (10875, 4500, 0.),
+    ] {
+        assert_pair(
+            position(&g, epoch, reference, frame).unwrap(),
+            whole,
+            fraction,
+        );
+    }
+    phase::assert_full_refresh_equivalent_for_test(
+        &g,
+        epoch,
+        reference,
+        &[
+            0,
+            4473,
+            4474,
+            5973,
+            5974,
+            5999,
+            6000,
+            10497,
+            10498,
+            10661,
+            10662,
+            10663,
+            u64::MAX,
+        ],
+        &[4473, 4474, 5974, 10498, 10662],
+    );
+}
+
+#[test]
+fn grid_class_retains_512_law_and_dyadic_affine_across_both_corrections() {
+    let g = geometry(&[(0., 0.), (2., 8.), (10., 24.), (18., 32.)], 32., 864000);
+    let actual = timeline(24000., 0, 0.);
+    let reference = launch_reference(&g, actual, 0);
+    for (execution, point) in [(0, raw(13, 0.)), (24000, raw(13, 0.))] {
+        let epoch =
+            MappedClockEpoch::common_phase(490, actual, &g, point, execution, reference).unwrap();
+        assert!(!epoch.has_full_fraction_recovery());
+        for frame in [
+            execution,
+            execution + 1,
+            execution + 24000,
+            execution + 600000,
+            u64::MAX,
+        ] {
+            assert!(epoch.phase_grid_equivalent_for_test(&g, reference, frame));
+        }
+        assert_affine_shuffled(&g, epoch, reference, execution + 1);
+    }
 }
 
 #[test]
@@ -483,22 +819,32 @@ fn phase_fractional_q_has_no_false_quarter_closure_while_integer_nonbar_q_remain
 }
 
 #[test]
-fn phase_actual_cursor_failure_is_retryable_after_ordinary_source_progress() {
+fn phase_fine_cursor_uses_full_fraction_while_grid_retry_recovers_after_ordinary_progress() {
     let geometry = geometry(&[(0., 0.), (2., 8.), (10., 24.), (18., 32.)], 32., 864000);
     let actual = timeline(24000., 0, 0.);
     let reference = launch_reference(&geometry, actual, 0);
     let raw = raw(13, 2_f64.powi(-106));
+    let mut grid_only = geometry.clone();
+    grid_only.full_fraction = None;
+    assert!(
+        MappedClockEpoch::common_phase(78, actual, &grid_only, raw, 0, reference).is_err(),
+        "the original Grid class still refuses a fraction outside its recovery grid"
+    );
     let ordinary =
         MappedClockEpoch::anchored_compact(78, actual, &geometry, geometry.domain(), raw, 0)
             .unwrap();
-    assert!(
-        MappedClockEpoch::common_phase(78, actual, &geometry, raw, 0, reference).is_err(),
-        "a living fraction can be ordinary-readable yet fail the finer correction/recovery class"
+    let fine = MappedClockEpoch::common_phase(78, actual, &geometry, raw, 0, reference).unwrap();
+    assert!(fine.has_full_fraction_recovery());
+    assert_pair(
+        position(&geometry, fine, reference, 0).unwrap(),
+        13,
+        raw.fraction,
     );
     let progressed = geometry.position_at(ordinary, 1).unwrap();
     assert_ne!(progressed.fraction.to_bits(), raw.fraction.to_bits());
     let retry =
         MappedClockEpoch::common_phase(78, actual, &geometry, progressed, 1, reference).unwrap();
+    assert!(!retry.has_full_fraction_recovery());
     assert_pair(
         position(&geometry, retry, reference, 1).unwrap(),
         progressed.frame,
@@ -785,7 +1131,7 @@ fn phase_affine_integer_master_delta_preserves_the_unrounded_halfway_witness() {
 }
 
 #[test]
-fn phase_nonclosed_start_keeps_ordinary_general_rational_seam_and_refuses_phase() {
+fn phase_nonclosed_start_uses_full_fraction_and_keeps_ordinary_rational_seam() {
     use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
     let map = map_with_source(
         &[(0., 0.), (6., 8.), (34., 64.)],
@@ -823,10 +1169,10 @@ fn phase_nonclosed_start_keeps_ordinary_general_rational_seam_and_refuses_phase(
     // Raw B(39)=13/12000 meets common-odd closure, but the intentional
     // B(A)=1/36000 does not: multiplying by the second slope24000 gives2/3.
     // Its old absolute-zero phase oracle was not a valid launch-relative target.
-    assert!(matches!(
-        MappedClockEpoch::common_phase(85, actual, &geometry, raw(39, -0.), 0, reference),
-        Err(MappedClockError::NumericalUnavailable)
-    ));
+    let phase =
+        MappedClockEpoch::common_phase(85, actual, &geometry, raw(39, -0.), 0, reference).unwrap();
+    assert!(phase.has_full_fraction_recovery());
+    assert_pair(position(&geometry, phase, reference, 0).unwrap(), 39, -0.);
     let ordinary_raw =
         MappedClockEpoch::ordinary_mapped_recovery(85, actual, &geometry, raw(39, -0.), 0).unwrap();
     assert_pair(geometry.position_at(ordinary_raw, 0).unwrap(), 39, -0.);

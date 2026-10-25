@@ -21,6 +21,8 @@ mod exact;
 #[path = "mapped_source_clock_general.rs"]
 mod general;
 pub(crate) use general::GeneralLocalSpanView;
+#[path = "mapped_source_clock_full_fraction.rs"]
+mod full_fraction;
 #[path = "mapped_source_clock_phase.rs"]
 mod phase;
 pub(crate) use phase::PhaseLocalSpanView;
@@ -67,6 +69,7 @@ pub(crate) struct MappedLoopGeometry {
     max_seconds_per_quarter: f64,
     exact_continuation: Option<ExactContinuationQualification>,
     general: Option<general::GeneralPreparation>,
+    full_fraction: Option<general::GeneralPreparation>,
     common_phase: Option<phase::CommonPhasePreparation>,
 }
 
@@ -92,6 +95,7 @@ enum MappedClockMode {
     // creates this tag; copied spans may then prepare bounded local arithmetic.
     CompactAnchored(AnchoredClock),
     GeneralCompact(AnchoredClock),
+    FullFractionGeneral(AnchoredClock),
     CommonPhase(phase::CommonPhaseAnchor),
 }
 
@@ -268,7 +272,11 @@ impl MappedClockEpoch {
                 (MappedClockMode::CommonPhase(left), MappedClockMode::CommonPhase(right)) => {
                     left.matches_exact(right)
                 }
-                (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
+                (
+                    MappedClockMode::FullFractionGeneral(left),
+                    MappedClockMode::FullFractionGeneral(right),
+                )
+                | (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
                 | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
                 | (
                     MappedClockMode::CompactAnchored(left),
@@ -327,6 +335,21 @@ impl MappedClockEpoch {
     pub(crate) fn is_general_compact(self) -> bool {
         matches!(self.mode, MappedClockMode::GeneralCompact(_))
     }
+    pub(crate) fn is_full_fraction_general(self) -> bool {
+        matches!(self.mode, MappedClockMode::FullFractionGeneral(_))
+    }
+    pub(crate) fn is_general_family(self) -> bool {
+        self.is_general_compact() || self.is_full_fraction_general()
+    }
+    pub(crate) fn full_fraction_ordinary_recovery(
+        marker: u64,
+        timeline: TransportTimeline,
+        geometry: &MappedLoopGeometry,
+        position: FractionalSourcePosition,
+        output_frame: u64,
+    ) -> Result<Self, MappedClockError> {
+        full_fraction::coordinates(marker, timeline, geometry, position, output_frame)
+    }
 
     pub(crate) fn is_compact_anchored(self) -> bool {
         matches!(self.mode, MappedClockMode::CompactAnchored(_))
@@ -336,7 +359,8 @@ impl MappedClockEpoch {
         match self.mode {
             MappedClockMode::Anchored(anchor)
             | MappedClockMode::CompactAnchored(anchor)
-            | MappedClockMode::GeneralCompact(anchor) => Some(anchor),
+            | MappedClockMode::GeneralCompact(anchor)
+            | MappedClockMode::FullFractionGeneral(anchor) => Some(anchor),
             MappedClockMode::Legacy { .. } | MappedClockMode::CommonPhase(_) => None,
         }
     }
@@ -348,7 +372,11 @@ impl MappedClockEpoch {
                 frame >= self.first_output_frame && self.matches_exact(other)
             }
             (MappedClockMode::Legacy { .. }, MappedClockMode::Legacy { .. }) => true,
-            (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
+            (
+                MappedClockMode::FullFractionGeneral(left),
+                MappedClockMode::FullFractionGeneral(right),
+            )
+            | (MappedClockMode::GeneralCompact(left), MappedClockMode::GeneralCompact(right))
             | (MappedClockMode::Anchored(left), MappedClockMode::Anchored(right))
             | (MappedClockMode::CompactAnchored(left), MappedClockMode::CompactAnchored(right)) => {
                 self.marker == other.marker
@@ -516,7 +544,7 @@ impl MappedSourceSpan {
         if self.epoch.is_common_phase() {
             return None;
         }
-        if self.epoch.is_general_compact() {
+        if self.epoch.is_general_family() {
             return None;
         }
         if output_frame == self.end_frame {
@@ -610,6 +638,7 @@ impl MappedLoopGeometry {
             max_seconds_per_quarter: interval.max_seconds_per_quarter,
             exact_continuation: None,
             general: None,
+            full_fraction: None,
             common_phase: None,
         })
     }
@@ -649,6 +678,9 @@ impl MappedLoopGeometry {
         if epoch.is_common_phase() {
             return phase::validate(self, epoch, reference);
         }
+        if epoch.is_full_fraction_general() {
+            return full_fraction::validate(self, epoch);
+        }
         let frames_per_beat = epoch.projection.frames_per_beat();
         if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
             return Err(MappedClockError::InvalidEpoch);
@@ -679,7 +711,7 @@ impl MappedLoopGeometry {
         if epoch.is_common_phase() {
             return phase::position(self, epoch, output_frame, reference);
         }
-        if epoch.is_general_compact() {
+        if epoch.is_general_family() {
             return self.position_at_general(epoch, output_frame);
         }
         if epoch.is_compact_anchored() {
@@ -728,7 +760,7 @@ impl MappedLoopGeometry {
         if epoch.is_common_phase() {
             return phase::refresh(self, epoch, output_frame, reference);
         }
-        if epoch.is_general_compact() {
+        if epoch.is_general_family() {
             return self.refresh_general_span(epoch, output_frame);
         }
         if epoch.is_compact_anchored() {

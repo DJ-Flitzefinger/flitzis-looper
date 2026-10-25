@@ -20,11 +20,11 @@ use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct GeneralPreparation {
-    source: BaseGrid,
-    beat: BaseGrid,
-    start_segment: CanonicalBeatSegment,
-    minimum: CanonicalBeatSegment,
-    maximum: CanonicalBeatSegment,
+    pub(super) source: BaseGrid,
+    pub(super) beat: BaseGrid,
+    pub(super) start_segment: CanonicalBeatSegment,
+    pub(super) minimum: CanonicalBeatSegment,
+    pub(super) maximum: CanonicalBeatSegment,
 }
 impl GeneralPreparation {
     pub(super) fn original_grids(self) -> (BaseGrid, BaseGrid) {
@@ -105,6 +105,14 @@ fn slope_less(a: Axes, b: Axes) -> Option<bool> {
 }
 
 impl MappedLoopGeometry {
+    #[cfg(test)]
+    pub(crate) fn general_local_payload_sizes_for_test() -> (usize, usize, usize) {
+        (
+            std::mem::size_of::<(MappedSourceSpan, Core)>(),
+            std::mem::size_of::<physical::PhysicalLocalSpanView>(),
+            std::mem::size_of::<super::full_fraction::FullFractionLocalView>(),
+        )
+    }
     /// Separate OFFRT admission; the legacy rounded inverse is not a prerequisite.
     pub(crate) fn new_general_declared(
         map: SourceBeatmap,
@@ -293,6 +301,7 @@ impl MappedLoopGeometry {
                 minimum: minimum.ok_or(unavailable)?,
                 maximum: maximum.ok_or(unavailable)?,
             }),
+            full_fraction: None,
             common_phase: None,
         })
     }
@@ -304,6 +313,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<FractionalSourcePosition, MappedClockError> {
+        if epoch.is_full_fraction_general() {
+            return super::full_fraction::position(self, epoch, frame);
+        }
         if self.domain.musical_period.physical_quarters().is_some() {
             return physical::position(self, epoch, frame);
         }
@@ -317,6 +329,9 @@ impl MappedLoopGeometry {
         epoch: MappedClockEpoch,
         frame: u64,
     ) -> Result<MappedSourceSpan, MappedClockError> {
+        if epoch.is_full_fraction_general() {
+            return super::full_fraction::refresh(self, epoch, frame);
+        }
         if self.domain.musical_period.physical_quarters().is_some() {
             return physical::refresh(self, epoch, frame);
         }
@@ -791,12 +806,14 @@ pub(crate) struct GeneralLocalSpanView {
     state: LocalGeneralState,
 }
 enum LocalGeneralState {
+    Full(super::full_fraction::FullFractionLocalView),
     Declared { span: MappedSourceSpan, core: Core },
     Physical(physical::PhysicalLocalSpanView),
 }
 impl GeneralLocalSpanView {
     pub(crate) fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
         match &self.state {
+            LocalGeneralState::Full(view) => view.position_at(frame),
             LocalGeneralState::Physical(view) => view.position_at(frame),
             LocalGeneralState::Declared { span, core } => {
                 if frame == span.end_frame {
@@ -838,7 +855,7 @@ impl MappedSourceSpan {
             self.local_phase_view(domain, reference)
                 .ok()?
                 .position_at(frame)
-        } else if self.epoch.is_general_compact() {
+        } else if self.epoch.is_general_family() {
             self.local_general_view(domain).ok()?.position_at(frame)
         } else {
             self.position_at(frame)
@@ -851,6 +868,13 @@ impl MappedSourceSpan {
         self,
         domain: SourceLoopDomain,
     ) -> Result<GeneralLocalSpanView, MappedClockError> {
+        if self.epoch.is_full_fraction_general() {
+            return super::full_fraction::local(self, domain)
+                .map(|view| GeneralLocalSpanView {
+                    state: LocalGeneralState::Full(view),
+                })
+                .ok_or(MappedClockError::NumericalUnavailable);
+        }
         if domain.musical_period.physical_quarters().is_some() {
             return physical::local_view(self, domain).map(|view| GeneralLocalSpanView {
                 state: LocalGeneralState::Physical(view),

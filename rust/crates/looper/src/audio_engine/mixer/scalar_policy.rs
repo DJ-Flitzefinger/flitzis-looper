@@ -267,9 +267,14 @@ impl RtMixer {
                 .is_some_and(|epoch| epoch.matches_timeline(timeline))
                 && (!raw.playback.is_mapped_phase()
                     || raw.playback.phase_reference_current(timeline));
-            let mut candidate = if raw.playback.is_mapped_phase()
-                && same_map
-                && (!row.request.requires_common_phase() || !current_projection)
+            let mut candidate = if same_map
+                && ((raw.playback.is_mapped_phase()
+                    && (!row.request.requires_common_phase() || !current_projection))
+                    || (raw
+                        .playback
+                        .mapped_epoch()
+                        .is_some_and(|epoch| epoch.is_full_fraction_general())
+                        && !current_projection))
             {
                 // Ordinary request/master effects never wait for correction debt.
                 // Preserve the separately retained scalar witness, not a fake birth.

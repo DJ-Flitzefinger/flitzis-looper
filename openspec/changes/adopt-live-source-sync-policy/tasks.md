@@ -155,7 +155,7 @@ All FULL-Goal musical/Native/B2/resource/Human/final gates remain required.
 - [x] Verify the actual combined implementation and tests through dedicated frozen systems POST before integrated checks/builds (intentional-launch frozen v8; targeted POST repeated after material repairs).
 - [x] Prove the bounded recovery-closed dry class's exact first pair/readers, real Cold/ACK/worker/all32 MODE then same-snapshot PHASE, own8/64 loops, parent/null/ABA/global and pause/Hold/live-R recovery, retained birthP distinct from currentP, Native/stem refusal and genuine OFF escape; preserve genuine launch-relative phase and reject unqualified or stale launch provenance.
 - [x] Complete affected numeric/runtime/neighbor, actual2MiB/layout/request/cost, private Release/import, strict checks and ONE independent actual final-diff/evidence review (v8 source, private535 Python passes, bounded2/4/6 positive and10 negative, final PUBLISH CLEAR).
-- [ ] Deliver an English Conventional Commit, normal existing-main push, fresh clean actual remote equality and guarded own cleanup before the next independent step.
+- [x] Deliver an English Conventional Commit, normal existing-main push, fresh clean actual remote equality and guarded own cleanup before the next independent step (794f98ce; post-cleanup equality2026-10-24T18:08:09Z).
 - [ ] Complete broader numerical/rational/fine-input classes, qualified actual-read public phase witness, finite OneShot/EOF, full Native/pitch/stem integration, practical settling, remaining resource misses, music/device/Human and ALL original FULL-Goal gates. This bounded dry milestone does not complete these parents.
 
 The independent successor analysis identified a concrete ordinary-map admission
@@ -178,3 +178,14 @@ resolve only their measured workload; other-input negatives remain. Internal32 a
 layout correctness stays separate and unchanged. No hard10 app cap or device/
 7–10 performance guarantee is introduced. The user-facing guidance is in README's
 Simultaneous Playback section; all other original FULL-Goal gates remain binding.
+
+### Declared-Q full-fraction phase and ordinary recovery
+
+- [x] Reconcile full-own-Q musical intent, closed repeated-RN-pair bounds, typed dispatch and reader/claim dependencies; obtain dedicated concrete systems PRE including compact-preference recovery.
+- [x] Implement matching FullFraction recovery for declared general and compact-preferred geometry, shared phase algebra, typed reader kernels and bounded rational local views without changing old Grid/physical-Q contracts (frozen v4).
+- [x] Review the actual frozen combined attempt through dedicated systems POST before integrated checks/builds (frozen v4 scoped CLEAR).
+- [x] Verify independent exact pair/tap/PCM, real source/ACK/MODE-to-PHASE and repeated Pause/Hold/live-R/tempo/nullable recovery, mixed32 atomicity, old-path equivalence, layout/2MiB/requests and new2/4/6 plus10 consuming performance (Debug16 + mapped100; Release variable26; maxima2=3.6964,4=7.3195,6=11.2481,10stress=19.1634ms; six/ten remain above nominal, six explicitly Human-accepted for first native PC test stand with optional later optimization).
+- [x] Complete affected neighbors, private Release/import and strict checks (Debug mapped100, Release variable26, private Release13API/editor4/UI and535Python, rustfmt/strict/whitespace/locked Clippy pass; warnings and timing limits retained).
+- [x] Complete one independent actual final review of the actual22-file frozen-v4 implementation, current documentation and evidence (PUBLISH CLEAR; no blocking finding).
+- [ ] Deliver coherent English commit/normal-main push/fresh clean actual-remote equality and guarded owned cleanup.
+- [ ] Complete separately retained rational physical-Q, practical settling, Native/history/stems, finite EOF, actual-read phase, BeatThis B2/Human/default-cutover and every remaining FULL-Goal gate.

@@ -264,7 +264,7 @@ impl MappedLoopGeometry {
         if epoch.is_common_phase() {
             return super::phase::refresh(self, epoch, output_frame, reference);
         }
-        if epoch.is_general_compact() {
+        if epoch.is_general_family() {
             return self.refresh_general_span(epoch, output_frame);
         }
         let unavailable = MappedClockError::NumericalUnavailable;

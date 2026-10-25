@@ -17,90 +17,7 @@ use super::source_reader_period::SourceReaderPeriod;
 pub(super) type Magnitude = bnum::Uint<64>;
 type Wide = bnum::Uint<128>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Integer {
-    pub(super) negative: bool,
-    pub(super) magnitude: Magnitude,
-}
-
-impl Integer {
-    pub(super) const ZERO: Self = Self {
-        negative: false,
-        magnitude: Magnitude::MIN,
-    };
-    fn canonical(magnitude: Magnitude, negative: bool) -> Self {
-        Self {
-            negative: negative && !magnitude.is_zero(),
-            magnitude,
-        }
-    }
-    pub(super) fn from_i128(value: i128) -> Option<Self> {
-        Some(Self::canonical(
-            Magnitude::try_from(value.unsigned_abs()).ok()?,
-            value < 0,
-        ))
-    }
-    pub(super) fn from_u128(value: u128) -> Option<Self> {
-        Some(Self::canonical(Magnitude::try_from(value).ok()?, false))
-    }
-    pub(super) fn add(self, other: Self) -> Option<Self> {
-        if self.negative == other.negative {
-            return Some(Self::canonical(
-                self.magnitude.checked_add(other.magnitude)?,
-                self.negative,
-            ));
-        }
-        let (large, small) = if self.magnitude >= other.magnitude {
-            (self, other)
-        } else {
-            (other, self)
-        };
-        Some(Self::canonical(
-            large.magnitude.checked_sub(small.magnitude)?,
-            large.negative,
-        ))
-    }
-    pub(super) fn sub(self, other: Self) -> Option<Self> {
-        self.add(Self::canonical(other.magnitude, !other.negative))
-    }
-    pub(super) fn mul(self, other: Self) -> Option<Self> {
-        Some(Self::canonical(
-            self.magnitude.checked_mul(other.magnitude)?,
-            self.negative != other.negative,
-        ))
-    }
-    pub(super) fn shl(self, shift: u32) -> Option<Self> {
-        Some(Self::canonical(shl(self.magnitude, shift)?, self.negative))
-    }
-    pub(super) fn quotient(self, other: Self) -> Option<Self> {
-        if self.negative || other.negative || other.magnitude.is_zero() {
-            return None;
-        }
-        Some(Self::canonical(
-            self.magnitude.checked_div(other.magnitude)?,
-            false,
-        ))
-    }
-    pub(super) fn u128(self) -> Option<u128> {
-        (!self.negative).then_some(())?;
-        u128::try_from(self.magnitude).ok()
-    }
-}
-impl Ord for Integer {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.negative, other.negative) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            (true, true) => other.magnitude.cmp(&self.magnitude),
-            (false, false) => self.magnitude.cmp(&other.magnitude),
-        }
-    }
-}
-impl PartialOrd for Integer {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+pub(super) type Integer = super::bounded_source_integer::BoundedInteger<64>;
 
 fn shl<const N: usize>(v: bnum::Uint<N>, shift: u32) -> Option<bnum::Uint<N>> {
     if shift >= bnum::Uint::<N>::BITS || v.bit_width().checked_add(shift)? > bnum::Uint::<N>::BITS {
@@ -329,6 +246,17 @@ pub(crate) struct ExactMappedTaps {
 }
 
 impl MappedReaderPeriod {
+    pub(super) fn full_fraction_parts(self) -> ([u8; 32], [u8; 32]) {
+        (self.numerator, self.denominator)
+    }
+    pub(super) fn full_fraction_pair_inside(
+        self,
+        whole: u128,
+        fraction: f64,
+        start: usize,
+    ) -> bool {
+        self.pair_order(Some(whole), fraction, start) == Some(Ordering::Less)
+    }
     /// Exact physical-equivalent reader topology, without owner-side reduction.
     pub(crate) fn physical(length: usize) -> Option<Self> {
         if length == 0 {
@@ -779,7 +707,18 @@ impl PreparedMappedReaderPeriod {
         }
         let (f, exponent) = dyadic(fraction)?;
         if exponent < -432 {
-            return None;
+            let right_gain = super::full_fraction_source_numerics::seam_gain(
+                relative,
+                self.last,
+                fraction,
+                self.period.denominator,
+                *self.width.as_bytes(),
+            )?;
+            return Some(ExactMappedTaps {
+                left: self.region.start + self.last,
+                right: Some(self.region.start),
+                right_gain,
+            });
         }
         let shift = u32::try_from(-exponent.min(0)).ok()?;
         let delta = shl(Wide::try_from(relative - self.last).ok()?, shift)?
@@ -1031,5 +970,24 @@ mod tests {
             (taps.left, taps.right, taps.right_gain),
             (usize::MAX - 1, Some(0), 0.75)
         );
+    }
+
+    #[test]
+    fn fine_fraction_seam_is_shared_by_direct_and_prepared_reader() {
+        let p = period(5, 2);
+        let region = FrameRange { start: 0, end: 3 };
+        let prepared = p.prepare(region).unwrap();
+        for fraction in [2_f64.powi(-433), 2_f64.powi(-1000), f64::from_bits(1)] {
+            let direct = p.seam_taps(2, fraction, region).unwrap();
+            let cached = prepared.seam_taps(2, fraction).unwrap();
+            assert_eq!(
+                (direct.left, direct.right, direct.right_gain.to_bits()),
+                (2, Some(0), 0)
+            );
+            assert_eq!(
+                (cached.left, cached.right, cached.right_gain.to_bits()),
+                (direct.left, direct.right, direct.right_gain.to_bits())
+            );
+        }
     }
 }

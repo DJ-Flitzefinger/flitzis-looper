@@ -73,6 +73,13 @@ enum LocalMappedSpanView {
 }
 
 impl CompactLocalPlaybackView {
+    #[cfg(test)]
+    pub(crate) fn full_fraction_phase_split_bits_for_test(&self) -> Option<usize> {
+        match &self.span {
+            LocalMappedSpanView::Phase(view) => view.full_fraction_split_bits_for_test(),
+            _ => None,
+        }
+    }
     pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
         let frame = self.intended_output_frame.checked_add(offset as u64)?;
         match &self.span {
@@ -440,14 +447,25 @@ impl SourcePlayback {
         output_frame: u64,
     ) -> Result<Self, MappedClockError> {
         let original = Self::retained_scalar_for_mapped_recovery(geometry, previous)?;
-        if !previous.is_mapped_phase()
+        if !(previous.is_mapped_phase()
+            || previous
+                .mapped_epoch()
+                .is_some_and(|e| e.is_full_fraction_general()))
             || previous
                 .mapped_output_frame()
                 .is_none_or(|frozen| output_frame < frozen)
         {
             return Err(MappedClockError::InvalidEpoch);
         }
-        let epoch = MappedClockEpoch::ordinary_mapped_recovery(
+        let recover = if previous
+            .mapped_epoch()
+            .is_some_and(|e| e.has_full_fraction_recovery())
+        {
+            MappedClockEpoch::full_fraction_ordinary_recovery
+        } else {
+            MappedClockEpoch::ordinary_mapped_recovery
+        };
+        let epoch = recover(
             marker,
             timeline,
             geometry,
@@ -586,7 +604,7 @@ impl SourcePlayback {
     ) -> Result<Option<CompactLocalPlaybackView>, MappedClockError> {
         let Some(state) = self.mapped_state().filter(|state| {
             state.span.epoch().is_compact_anchored()
-                || state.span.epoch().is_general_compact()
+                || state.span.epoch().is_general_family()
                 || state.span.epoch().is_common_phase()
         }) else {
             return Ok(None);
@@ -596,7 +614,7 @@ impl SourcePlayback {
                 self.domain.ok_or(MappedClockError::InvalidGeometry)?,
                 self.phase_reference,
             )?)
-        } else if state.span.epoch().is_general_compact() {
+        } else if state.span.epoch().is_general_family() {
             LocalMappedSpanView::General(
                 state
                     .span
@@ -709,7 +727,7 @@ impl SourcePlayback {
         intended_output_frame: u64,
         reference: LoopPhaseReference,
     ) -> Result<Self, MappedClockError> {
-        if epoch.is_general_compact() || epoch.is_common_phase() {
+        if epoch.is_general_family() || epoch.is_common_phase() {
             return Self::mapped_with_reference(geometry, epoch, intended_output_frame, reference);
         }
         let span = geometry.refresh_span_compact(epoch, intended_output_frame)?;
@@ -903,14 +921,14 @@ impl SourcePlayback {
     pub(crate) fn is_compact_mapped(&self) -> bool {
         self.mapped_state().is_some_and(|state| {
             state.span.epoch().is_compact_anchored()
-                || state.span.epoch().is_general_compact()
+                || state.span.epoch().is_general_family()
                 || state.span.epoch().is_common_phase()
         })
     }
 
     pub(crate) fn is_general_mapped(&self) -> bool {
         self.mapped_state()
-            .is_some_and(|state| state.span.epoch().is_general_compact())
+            .is_some_and(|state| state.span.epoch().is_general_family())
     }
 
     pub(crate) fn effective_domain(&self) -> Option<SourceLoopDomain> {

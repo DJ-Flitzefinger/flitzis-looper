@@ -47,6 +47,91 @@ fn verify_first_read(fixture: &VariablePath, id: usize, raw: FractionalSourcePos
 }
 
 #[test]
+fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_and_pcm() {
+    let mut fixture = VariablePath::new(
+        &[(&[(0., 0.), (0.37, 1.), (0.91, 2.)], 43680, Some(2.))],
+        24000.,
+        12000,
+    );
+    fixture.install();
+    assert!(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .source_playback
+            .mapped_epoch()
+            .unwrap()
+            .has_full_fraction_recovery()
+    );
+    for pass in 0..3 {
+        fixture.dry.path.render(17);
+        let raw = fixture.dry.path.voice(0).source_playback.position();
+        assert_ne!(raw.fraction.to_bits(), 0);
+        fixture.dry.path.source.engine.pause_sample(0).unwrap();
+        fixture.drain();
+        assert!(fixture.dry.path.voice(0).paused);
+        let frozen = fixture.dry.path.voice(0).source_playback;
+        fixture.dry.path.render(29);
+        assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
+        let live = fixture.dry.path.timeline.output_frame();
+        fixture.dry.path.source.engine.resume_sample(0).unwrap();
+        fixture.drain();
+        let ordinary = fixture.dry.path.voice(0).source_playback;
+        assert!(ordinary.mapped_epoch().unwrap().is_full_fraction_general());
+        assert_eq!(ordinary.mapped_output_frame(), Some(live));
+        assert_position(ordinary.position(), raw);
+        assert_eq!(
+            ordinary.original_scalar_domain(),
+            frozen.original_scalar_domain()
+        );
+        fixture.dry.path.render(1);
+        verify_first_read(&fixture, 0, raw);
+        if pass == 0 {
+            // A genuine global tempo effect uses a continuous master anchor;
+            // it must preserve the newly rounded pair in ordinary FF mapping.
+            fixture.dry.path.render(11);
+            let raw = fixture.dry.path.voice(0).source_playback.position();
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .set_speed_and_master_period(1., 25000. / f64::from(RATE))
+                .unwrap();
+            fixture.drain();
+            fixture.dry.path.render(0);
+            assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
+            assert!(
+                fixture
+                    .dry
+                    .path
+                    .voice(0)
+                    .source_playback
+                    .mapped_epoch()
+                    .unwrap()
+                    .is_full_fraction_general()
+            );
+            assert_eq!(
+                fixture
+                    .dry
+                    .path
+                    .timeline
+                    .master_period_seconds()
+                    .unwrap()
+                    .to_bits(),
+                (25000. / f64::from(RATE)).to_bits()
+            );
+            fixture.dry.path.render(1);
+            verify_first_read(&fixture, 0, raw);
+        }
+        fixture.effect();
+        assert!(fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+        assert!(fixture.dry.path.feedback(0)["grid_phase_confirmed"].is_null());
+    }
+}
+
+#[test]
 fn variable_cancel_after_actual_phase_keeps_complete_snapshot_pin_and_pcm_without_requeue() {
     let mut fixture = VariablePath::small(2, 23);
     let mut reference = VariablePath::small(2, 23);
@@ -743,9 +828,13 @@ fn variable_terminal_native_preferences_leave_real_off_escape_and_fresh_pitch_re
 }
 
 #[test]
-fn variable_all_32_phase_claims_are_atomic_when_last_lane_has_a_nonclosing_q() {
+fn variable_all_32_mixed_grid_full_fraction_claims_are_atomic_and_retry_after_last_map_repair() {
     let nonclosing = &[(0., 0.), (0.125, 31.5)][..];
+    let full_fraction = &[(0., 0.), (0.001, 0.25), (9. / 64., 32.)][..];
     let mut shapes = vec![(SMALL_ANCHORS, 6750, Some(32.)); 32];
+    for id in (1..31).step_by(2) {
+        shapes[id] = (full_fraction, 6750, Some(32.));
+    }
     shapes[31] = (nonclosing, 6000, Some(31.5));
     let accepted_quarters = vec![32.; 32];
     let mut fixture = VariablePath::with_accepted_quarters(
@@ -788,6 +877,27 @@ fn variable_all_32_phase_claims_are_atomic_when_last_lane_has_a_nonclosing_q() {
         "the original noninteger Q has ordinary geometry but no quarter closure"
     );
     let before = scalar_state(&fixture.dry.path);
+    let retained = (0..32)
+        .map(|id| {
+            let voice = fixture.dry.path.voice(id);
+            let mut history = SourceFeedSnapshot::new();
+            assert!(voice.source_feed_history.capture_into(&mut history));
+            (
+                voice
+                    .mapped_start
+                    .as_ref()
+                    .unwrap()
+                    .effective_source()
+                    .unwrap()
+                    .clone(),
+                voice.sample.as_ref().unwrap().clone(),
+                voice.phase_policy_revision,
+                history,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(fixture.dry.path.source.consumer.is_empty());
+    assert!(fixture.dry.parameters.is_empty());
     let actual_e = fixture.dry.path.timeline.output_frame();
     let phase = fixture.effect();
     assert!(Arc::ptr_eq(&mode, &phase));
@@ -799,6 +909,88 @@ fn variable_all_32_phase_claims_are_atomic_when_last_lane_has_a_nonclosing_q() {
     assert_eq!(fixture.dry.path.timeline.output_frame(), actual_e);
     assert!((0..32).all(|id| !fixture.dry.path.voice(id).source_playback.is_mapped_phase()));
     unchanged(&fixture.dry.path, &before);
+    assert!(fixture.dry.path.source.consumer.is_empty());
+    assert!(fixture.dry.parameters.is_empty());
+    for (id, (source, sample, revision, old)) in retained.iter().enumerate() {
+        let voice = fixture.dry.path.voice(id);
+        assert!(Arc::ptr_eq(
+            voice
+                .mapped_start
+                .as_ref()
+                .unwrap()
+                .effective_source()
+                .unwrap(),
+            source
+        ));
+        assert!(voice.sample.as_ref().unwrap().same_window(sample));
+        assert_eq!(voice.phase_policy_revision, *revision);
+        let mut actual = SourceFeedSnapshot::new();
+        assert!(voice.source_feed_history.capture_into(&mut actual));
+        assert_eq!(
+            (
+                actual.active_origin(),
+                actual.active_frames(),
+                actual.captured_epoch()
+            ),
+            (
+                old.active_origin(),
+                old.active_frames(),
+                old.captured_epoch()
+            )
+        );
+        assert!(Arc::ptr_eq(
+            actual.continuity_owner().unwrap(),
+            old.continuity_owner().unwrap()
+        ));
+        assert_eq!(actual.spans().count(), old.spans().count());
+        for (a, b) in actual.spans().zip(old.spans()) {
+            assert_eq!((a.active_start, a.frames), (b.active_start, b.frames));
+            assert!(a.playback.matches_exact(&b.playback));
+            assert!(a.plan.matches_exact(b.plan));
+            assert!(a.context.same_source(b.context));
+        }
+    }
+    // Repair the genuine last map through its existing publication/ACK route;
+    // the original accepted scalar timing, T and source custody stay retained.
+    let repaired = &[(0., 0.), (0.125, 32.)][..];
+    let (job, delivery) = fixture.dry.map_anchors(31, repaired);
+    fixture.dry.jobs.push(job);
+    fixture.dry.deliveries[31] = delivery;
+    fixture.anchors[31] = repaired.to_vec();
+    fixture.quarters[31] = Some(32.);
+    fixture.publish(Some(wire(true, true, 3)), true, true, None, None);
+    let repaired_mode = fixture.effect();
+    assert_eq!(repaired_mode.observation().unwrap().state, "applied");
+    assert!((0..32).all(|id| !fixture.dry.path.voice(id).source_playback.is_mapped_phase()));
+    assert!((0..32).all(|id| repaired_mode.map_preparation(id).class == RuntimeMapClass::Ready));
+    let ordinary = scalar_state(&fixture.dry.path);
+    let retry = fixture.effect();
+    assert!(Arc::ptr_eq(&repaired_mode, &retry));
+    assert_eq!(
+        retry.observation().unwrap().state,
+        "applied",
+        "{:?}",
+        retry.observation()
+    );
+    for (id, generation, prior, _) in &ordinary {
+        let voice = fixture.dry.path.voice(*id);
+        assert_eq!(voice.generation, *generation);
+        assert!(voice.source_playback.is_mapped_phase());
+        assert_position(voice.source_playback.position(), prior.position());
+        assert_eq!(
+            voice.source_playback.original_scalar_domain(),
+            prior.original_scalar_domain()
+        );
+        assert_eq!(
+            voice
+                .source_playback
+                .mapped_epoch()
+                .unwrap()
+                .has_full_fraction_recovery(),
+            *id < 31 && id % 2 == 1
+        );
+        assert!(fixture.dry.path.feedback(*id)["grid_phase_confirmed"].is_null());
+    }
 }
 
 #[test]
@@ -1051,7 +1243,7 @@ fn variable_requested_only_off_escape_keeps_a_genuine_future_native_actor_as_who
 }
 
 #[test]
-fn variable_old_phase_ineligible_general_mapped_terminal_preferences_leave_a_working_off_escape() {
+fn variable_phase_capable_but_ordinary_general_native_refusal_keeps_a_working_off_escape() {
     let general = &[(0., 0.), (0.001, 0.25), (9. / 64., 32.)][..];
     let mut fixture = VariablePath::new(&[(general, 6750, Some(32.))], 200., 23);
     fixture.publish(Some(wire(true, true, 2)), true, true, None, None);
@@ -1065,8 +1257,22 @@ fn variable_old_phase_ineligible_general_mapped_terminal_preferences_leave_a_wor
             .source_playback
             .is_general_mapped()
     );
-    assert!(!mode.prepared_map(0).unwrap().geometry().has_common_phase());
+    assert!(mode.prepared_map(0).unwrap().geometry().has_common_phase());
+    assert!(!fixture.dry.path.voice(0).source_playback.is_mapped_phase());
     fixture.dry.path.render(71);
+    let before = fixture.dry.path.voice(0).source_playback;
+    assert!(before.is_general_mapped());
+    assert!(!before.is_mapped_phase());
+    let source = fixture
+        .dry
+        .path
+        .voice(0)
+        .mapped_start
+        .as_ref()
+        .unwrap()
+        .effective_source()
+        .unwrap()
+        .clone();
     let raw = fixture.dry.path.voice(0).source_playback.position();
     fixture
         .dry
@@ -1090,6 +1296,26 @@ fn variable_old_phase_ineligible_general_mapped_terminal_preferences_leave_a_wor
     fixture.dry.path.render(0);
     assert_eq!(blocked.state(), "rejected");
     assert_eq!(blocked.reason(), Some("mapped_timing_unavailable"));
+    assert!(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .source_playback
+            .matches_exact(&before)
+    );
+    assert!(Arc::ptr_eq(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .mapped_start
+            .as_ref()
+            .unwrap()
+            .effective_source()
+            .unwrap(),
+        &source
+    ));
     fixture.publish(Some(wire(false, false, 3)), true, true, None, Some(0));
     let off = fixture.effect();
     assert_eq!(
@@ -1100,6 +1326,8 @@ fn variable_old_phase_ineligible_general_mapped_terminal_preferences_leave_a_wor
     );
     assert!(!fixture.dry.path.voice(0).source_playback.is_mapped());
     assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
+    fixture.dry.path.render(1);
+    verify_first_read(&fixture, 0, raw);
     fixture
         .dry
         .path

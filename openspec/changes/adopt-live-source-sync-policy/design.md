@@ -1094,3 +1094,36 @@ resolve only their measured workload; other-input negatives remain. Internal32 a
 layout correctness stays separate and unchanged. No hard10 app cap or device/
 7–10 performance guarantee is introduced. The user-facing guidance is in README's
 Simultaneous Playback section; all other original FULL-Goal gates remain binding.
+
+## Closed full-fraction recovery for declared phase
+
+The next coupled block preserves the existing Grid512 path and adds one typed
+recovery capability shared by ordinary declared playback and phase. Refining every
+original axis to a newly emitted binary64 fraction is not closed under repeated
+pause/resume. Instead keep the original126-bit axes and decode the raw whole and
+fraction separately, with one binary denominator. Exact canonical/inverse checks
+qualify the pair; every recovery starts from the actual RN64 pair again, bounding
+its exponent by-1074 rather than accumulating rational history.
+
+The original phase algebra remains one shared implementation with separate
+arithmetic specializations. Original start inverse and intentional T/M(T) remain;
+captured evaluation cancels the raw denominator symbolically. Separate2048-bit
+source/split and full-fraction seam proofs preserve old512/1024 theorems. A rational
+local affine view caches only exact unrounded terms of the same source/control
+interval and separately decodes actual master values. Its own complete consuming
+profile is required; no old profile certifies it. The Human accepted the measured
+11.2481-ms six-PAD maximum for the first native PC test stand on 2026-10-24,
+despite its 10.6667-ms nominal interval. Keep that negative timing observation
+and possible glitch risk visible; further FullFraction optimization is optional
+for this test stand.
+
+An explicit FullFractionGeneral anchor and typed phase recovery descriptor keep
+dispatch auditable without enlarging copied clocks. The recovery certificate must
+also exist for compact-preferred declared geometry; phase cannot outrun its
+ordinary escape. All original map/domain/scalar/launch/source/ACK/reader/claim
+guards remain. The central prepared rational seam entry selects the finer kernel
+only after its original checks; direct and chunked rendering retain one topology.
+Physical-Q broadening is separate. Full proof, impact, systems PRE and verification
+plan are in the original workspace goal-next-plan.md, final concrete FullFraction
+section. The frozen v4 implementation and focused checks are recorded in results;
+public Native start, actual-read phase and Human acceptance remain separate.

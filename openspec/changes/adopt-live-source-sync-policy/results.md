@@ -2290,3 +2290,67 @@ final documentation reconciliation. Dedicated systems documentation POST is also
 CLEAR; its measured-output wording finding was corrected before that verdict.
 No actionable publication finding remains. This verdict authorizes the coherent
 delivery step only; the listed broader milestone and Human gates stay open.
+
+### Actual intentional-launch publication and cleanup
+
+English commit794f98ce83cfbf51a1821c4b9e8843efd2d15aa8 was normally pushed to existing
+main. Fresh clean HEAD/tracking/actual-remote equality was verified after cleanup
+at2026-10-24T18:08:09Z. Guarded regular noForce cleanup removed the exact owned
+temporary tree and17 source-proven new Scratch roots:18 roots,21,950 files and
+733,755,867 bytes. Original1,506 Scratch entries and174 evidence files were retained,
+alongside the shared compatible target/environment. An initial UTC-type precheck
+failed before deletion and was corrected without a policy rejection or bypass.
+The ordinary34,710,016-byte Native remained unchanged. This closes delivery
+bookkeeping for that bounded block; the full milestone remains incomplete.
+
+### Declared full-fraction recovery: frozen v4 candidate
+
+The implemented declared-Q path shares ordinary FullFraction recovery and phase
+capability for general and compact-preferred geometry. It keeps the original map
+axes, original and selected-start inverse, raw binary64 source pair, actual master,
+source/ACK ownership and old Grid512/physical-Q paths. Fixed2048-bit ephemeral
+arithmetic, a typed finer reader seam and width-qualified rational local views
+retain copied layout caps. Dedicated systems PRE and actual frozen-v4 POST cleared
+the specific code before integrated jobs; all22 file hashes and negative/positive
+attempts are retained under test-artifacts/full-fraction-phase-20261024 outside Git.
+
+Debug `full_fraction` passed16 tests, including exact independent Decimal and
+two-window compact oracles, cached/uncached value/span equivalence, zero-debt
+CAPTURED, first pair/PCM, genuine pause/live-master recovery, mixed32 atomic
+refusal/repair, actual2MiB stack and zero observed Rust allocation requests.
+Broader mapped-source-clock Debug passed100/100; affected Release variable-phase
+integration passed26/26, including100,000-frame unequal partitions and the same
+source/ACK/retirement guards. The separate v3 local-view proof selected Small1024
+for all six lanes; copied epoch128/span240/playback488 and32 optional copies
+within16KiB remain unchanged. These are bounded software checks, not music or
+device evidence.
+
+The unchanged Release512-frame actual-E FullFraction claim plus consuming dry
+render/history/advance profile (one warmup, three repeats, zero observed Rust
+requests) measured maxima:2 PADs3.6964ms,4 PADs7.3195ms,6 PADs11.2481ms,
+10-PAD synthetic stress19.1634ms. At48kHz/512 frames the nominal interval is
+10.6667ms, so six and ten remain **above nominal** even though the descriptive
+test process exited0. The separate six-PAD claim maximum improved from12.3536
+to5.5714ms; installed render maximum was5.1841ms. The Human explicitly accepted
+the six-PAD result for the first native PC test stand and deferred further numeric
+optimization as optional on2026-10-24. This does not make the timing observation
+a pass or guarantee glitch-free hardware playback; ten is stress only. Historical
+v1/v2/v3 timing negatives remain retained as negatives.
+
+The private locked stripped Release wheel built in42.53s. Its actual private
+35,227,648-byte Native has SHA256
+`b63e05ffabc3c5fad99aee033217b2b3d6ae8cf2a1eff5ba0fe0d43fa7a1aa1f`.
+Release profile,13 bootstrap API checks, editor API4, current UI/controller imports
+and535 targeted Python tests pass (17.85s). Nothing was installed and no App or
+audio device was constructed. Rustfmt, affected official OpenSpec strict and
+whitespace checks pass. Locked workspace/tests Clippy exits0 in45.84s with171
+warnings (2 duplicates), including bounded ephemeral enum, argument-count,
+style and unused test-helper warnings; no warning-free result or autofix is claimed.
+The independent actual22-file final review returned PUBLISH CLEAR with no blocking
+findings, including all18 frozen-v4 Rust files, current documentation and retained
+raw positive/negative evidence. Coherent commit/normal push and fresh remote
+equality remain pending at this recording point. FullFraction does not grant public mapped Native/Key Lock/pitch start or
+qualified emitted phase. The Human reports that enabling SYNC currently prevents
+PAD starts; that connected product defect is prioritized next. Practical settling,
+finite OneShot/EOF, stems/history, BeatThis structural/B2/default and actual
+device/Human gates remain open. No whole SYNC/REALTIME milestone is claimed.

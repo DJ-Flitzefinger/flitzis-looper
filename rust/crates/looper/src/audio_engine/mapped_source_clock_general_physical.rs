@@ -179,6 +179,7 @@ impl MappedLoopGeometry {
                 minimum,
                 maximum,
             }),
+            full_fraction: None,
             common_phase: None,
         })
     }

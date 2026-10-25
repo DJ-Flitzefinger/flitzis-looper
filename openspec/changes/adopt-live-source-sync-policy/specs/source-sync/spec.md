@@ -618,15 +618,16 @@ correction exactly on capture. Practical waiting/settling quality remains an ope
 acceptance gate. Legitimate map/control knots do not promise C1 continuity.
 
 Every admitted programme SHALL prove that ALL its emitted RN source pairs remain
-accepted by the SAME original ordinary mapped source-grid admission. The initial
-class SHALL certify exact dyadic forward frame slopes Fj=aj*2^fj, common odd
+accepted by the SAME original geometry's matching typed ordinary recovery
+capability. The initial Grid class SHALL retain its original source-grid admission
+and SHALL certify exact dyadic forward frame slopes Fj=aj*2^fj, common odd
 G=gcd(aj) off realtime, and runtime odd_den(beta0) dividing its numerator times G.
 Exact source intercepts, actual master grid, correction/window/capture/wrap branches,
 zero cases and canonical/virtual whole bounds SHALL participate in recovery Gout.
 Require Gout>=GR=max(-126,Tsource_max-126) and actual old sourceBase.refine(GR).
 New metadata SHALL NOT substitute a different subset grid for that old proof.
 
-The recovery/rate gate SHALL precede512-bit phase evaluation and prove r+k<=74,
+The Grid recovery/rate gate SHALL precede512-bit phase evaluation and prove r+k<=74,
 forward N<2^461 and D<2^454. Source results SHALL be exactly normalized onto GR
 with coefficient below2^126 BEFORE the unchanged original reader splitter receives
 N126/D127. Old386/380,-432 and physical reader1024 contracts SHALL NOT be widened.
@@ -798,3 +799,92 @@ and all other FULL-Goal obligations SHALL remain unchanged.
 - **THEN** that timing observation SHALL remain negative even when the test process exits successfully
 - **AND** no20-PAD workload or optimization SHALL be added, while internal32 correctness remains required
 - **AND** the report SHALL NOT infer a7–10/device guarantee, Human acceptance or a hard10-PAD app cap
+
+The Human explicitly accepted the measured FullFraction six-PAD maximum of
+11.2481 ms for the first native PC test stand on 2026-10-24. This SHALL permit
+that checked implementation to be delivered for real Human testing without
+relabelling the above-nominal observation as a timing pass. Further FullFraction
+speed work MAY be deferred as an optional optimization. The test stand SHALL
+report possible glitches, preserve the unconditional10-PAD stress observation
+and retain actual device/Human and all other functional gates.
+
+### Requirement: Declared phase and ordinary recovery share a closed full-fraction capability
+
+If selected, a separate declared-Q FullFraction capability SHALL use the
+unchanged admitted original source/beat axes, each on its126-bit grid. It SHALL
+decode each actual finite binary64 source pair separately, including fractions
+through exponent-1074, and SHALL NOT refine every original axis to that fraction
+grid. It SHALL retain the same map, semantic reader domain, original inverse,
+selected-start inverse, launch T/M(T), actual master and source/ACK/claim owners.
+It SHALL be available from BOTH declared general and compact-preferred geometry
+before FullFraction phase is admitted. Metadata failure SHALL leave ordinary
+readiness unchanged. This capability SHALL NOT broaden physical-Q admission.
+
+For fraction f*2^g and original source grid s, it SHALL use d=max(0,s-g), H=2^d,
+R=whole*2^(d-s)+f*2^(g-s+d), A=dx*H and
+I=y0*dx*H+(R-x0*H)*dy. Preliminary arithmetic SHALL be wide and checked; exact
+canonical membership and inverse containment SHALL precede the tighter valid-input
+proof I<2^(255+d), A<2^(127+d). Start inverse denominator C SHALL remain on the
+original grid. Debt and capture SHALL preserve the original whole-own-Q target
+and symbolic cancellation of A; no rounded reanchor or denominator accumulation
+across recovery SHALL be introduced.
+
+FullFraction ordinary recovery SHALL use an explicit same-size anchored mode,
+distinct from the old GeneralCompact theorem. Phase SHALL use a typed Grid or
+FullFraction recovery descriptor. All validation, local views, endpoints, copied
+advance, journal/address translation, pause/live-R resume, family/retry predicates
+and MODE-to-PHASE claims SHALL recognize the correct capability. A new tag SHALL
+NOT become permanently wide-anchored Unsupported or acquire scalar/constant
+Native history permission. Installed FullFraction phase SHALL recover through its
+matching capability even when compact preference left general preparation absent.
+Original scalar P, current mapped P and launch qualification SHALL remain separate.
+
+#### Scenario: Compact-preferred phase has a real ordinary escape
+
+- **GIVEN** a declared geometry prepared through the existing compact preference and its matching FullFraction recovery capability
+- **WHEN** FullFraction phase emits a fine source pair and a genuine Pause/Hold then live-time resume applies
+- **THEN** the original full claim SHALL preserve the paused pair and recover through the same geometry's FullFraction ordinary mode
+- **AND** successive recoveries SHALL decode the actual RN64 pair afresh without growing a hidden denominator or replacing the retained scalar witness
+- **AND** invalid source, ACK, reader or final-claim inputs SHALL leave the entire preceding cohort and ownership unchanged
+
+### Requirement: Full-fraction arithmetic and readers have separate bounded proofs
+
+The declared FullFraction class SHALL use separately typed fixed2048-bit ephemeral
+arithmetic. For d<=1074 and original window grammar r+k<=129, it SHALL enforce
+phase source numerator/denominator bounds1590/1583 bits, ordinary declared bounds
+1460/1454, source-cycle comparisons1588 and exact period256 cross-products1846/1839.
+Initial start*denominator membership MAY require1647 bits. Raw-identity checks
+SHALL handle zero and compare effective exponents before shifting; potentially
+equal operands and RN64 scaled numerators SHALL fit1636 bits. Original512/1024
+proofs and their old input guards SHALL remain intact. No6400-bit callback fallback
+or unrelated physical-Q theorem SHALL be inferred from these bounds.
+
+The shared rational reader SHALL retain its semantic period and existing finite,
+range, canonical, interior and physical-seam checks. Only a finer nonphysical seam
+fraction outside the old exponent-432 class SHALL select a separately typed
+FullFraction seam kernel, with numerator1394, denominator1330 and RN32 intermediate
+bound1543 bits. It SHALL NOT retry arbitrary old failures. Direct/preflight and
+prepared chunk readers SHALL retain identical taps, gain bits, PCM and coverage
+refusals. Exact-inside validation SHALL precede one canonical virtual-period carry;
+signed zero, RN-even subnormal ties and source first-pair identity SHALL remain.
+
+The old Grid512/u128 affine path SHALL remain available. A rational local view MAY
+evaluate [N0+B*(J(n)-J0)]/D only inside its originally checked source segment,
+cycle and control region, where J separately decodes actual binary64 master values
+and N0 is unrounded. Complete endpoint and region proofs SHALL bound every interior
+numerator. Width-qualified512-bit affine coefficients with a prepared1024-bit
+splitter, or the Full2048 specialization, SHALL be selected once. The prepared
+Small splitter SHALL retain exact cached L<=N<U containment and the original
+post-rounding canonical pair/carry checks for every output. There SHALL be no
+per-sample inverse reconstruction, GCD, map search or cycle search. Copied epoch128,
+span240, Playback488 and32 optional copies within16KiB SHALL remain; larger scratch
+SHALL stay ephemeral and satisfy actual2MiB and observed Rust-request checks.
+New complete consuming2/4/6 and unconditional10 measurements SHALL be required.
+
+#### Scenario: Decimal phase preserves exact readers and repeated recovery
+
+- **GIVEN** a qualified declared decimal map such as seconds0,0.37,0.91 with beat labels0,1,2 at48kHz and an independently captured source pair
+- **WHEN** the original MODE then same-snapshot PHASE claim qualifies the FullFraction path
+- **THEN** knots, wraps, correction, capture and later ordinary recovery SHALL preserve independent exact coordinates and actual first taps/PCM
+- **AND** nonzero selected starts, full-fraction rational seams and repeated real pause/live-R effects SHALL retain their own references and original ownership
+- **AND** successful numeric or descriptive checks SHALL NOT certify public actual-read phase, practical settling, Native/finite playback, BeatThis B2 or Human acceptance

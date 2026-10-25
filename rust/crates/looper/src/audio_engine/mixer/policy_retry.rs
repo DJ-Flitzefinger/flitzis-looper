@@ -408,7 +408,7 @@ impl RtMixer {
             mapped: voice.source_playback.is_mapped(),
             target_mapped: row.request.mode == SourceSyncMode::Mapped,
             wide_anchored: voice.source_playback.mapped_epoch().is_some_and(|epoch| {
-                epoch.is_anchored() && !epoch.is_compact_anchored() && !epoch.is_general_compact()
+                epoch.is_anchored() && !epoch.is_compact_anchored() && !epoch.is_general_family()
             }),
             preparation: row.map_preparation,
             paused: voice.paused,

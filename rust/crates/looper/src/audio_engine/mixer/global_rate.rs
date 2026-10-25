@@ -921,7 +921,7 @@ impl RtMixer {
                 {
                     return Err(RateError::MappedTimingUnavailable);
                 }
-                if voice.source_playback.is_mapped_phase() {
+                if voice.source_playback.is_mapped_phase() || old_epoch.is_full_fraction_general() {
                     // This is a real tuple effect (dry_mapped excludes no-ops).
                     // Recover ordinary mapping at the same pair/live master;
                     // the original complete claim still owns every effect.

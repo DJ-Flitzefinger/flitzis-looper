@@ -1,9 +1,10 @@
 //! Recovery-closed original-map convergence on the unchanged binary64 master.
 //!
 //! Original axes remain on admitted 126-bit grids. The recovery/rate gate proves
-//! r+k<=74 before evaluation: source N<2^461,D<2^454 and cycle products<2^459.
-//! All scratch is fixed512. Exact dyadic normalization precedes the UNCHANGED
-//! original reader splitter; this module does not enlarge its numeric theorem.
+//! Grid recovery proves r+k<=74: source N<2^461,D<2^454 and cycle products<2^459.
+//! That class retains fixed512 scratch and the original dyadic reader splitter.
+//! Declared-Q FullFraction instead proves r+k<=129, raw extension d<=1074,
+//! source N<=1590/D<=1583 bits and separate fixed2048 scratch/splitting.
 //! Intentional B(A)-M(T) debt uses two original inverses only in <=459-bit
 //! comparisons. At capture symbolic cancellation restores the start denominator;
 //! captured source N<2^388,D<2^380, within the original461/454 normalization gate.
@@ -30,23 +31,37 @@ const WINDOW: u8 = 2;
 const NEGATIVE: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum RecoveryKind {
+    Grid(i8),
+    FullFraction,
+}
+impl RecoveryKind {
+    fn grid(self) -> Option<i8> {
+        if let Self::Grid(e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PhaseConfig {
     delta_exp: i16,
     source_exp: i8,
     beat_exp: i8,
-    recovery_exp: i8,
+    recovery: RecoveryKind,
     k: u8,
     flags: u8,
-    reserved: u8,
 }
 impl PhaseConfig {
     fn valid(self) -> bool {
-        self.reserved == 0
-            && self.flags & 0xc0 == 0
+        self.flags & 0xc0 == 0
             && self.kind() <= WINDOW
             && (-126..=0).contains(&self.source_exp)
             && (-126..=0).contains(&self.beat_exp)
-            && (-126..=0).contains(&self.recovery_exp)
+            && self.recovery.grid().is_none_or(|e| (-126..=0).contains(&e))
             && if self.kind() == CAPTURED {
                 self.k == 0 && self.delta_exp == 0
             } else {
@@ -109,13 +124,17 @@ pub(super) struct CommonPhasePreparation {
     maximum: CanonicalBeatSegment,
     positive_seed: Option<Seed>,
     negative_seed: Option<Seed>,
+    dyadic: Option<DyadicRecovery>,
+    quarters: f64,
+    downbeat: u8,
+    bar: bool,
+}
+#[derive(Clone, Copy, Debug)]
+struct DyadicRecovery {
     odd_common: u128,
     minimum_slope_exp: i16,
     intercept_exp: Option<i16>,
     recovery_exp: i16,
-    quarters: f64,
-    downbeat: u8,
-    bar: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -185,12 +204,6 @@ fn negate(value: Integer) -> Option<Integer> {
 fn signed(value: Integer, negative: bool) -> Option<Integer> {
     if negative { negate(value) } else { Some(value) }
 }
-fn abs(value: Integer) -> Integer {
-    Integer {
-        negative: false,
-        ..value
-    }
-}
 fn floor_ratio(n: Integer, d: Integer) -> Option<Integer> {
     if d <= Integer::ZERO {
         return None;
@@ -205,18 +218,6 @@ fn floor_ratio(n: Integer, d: Integer) -> Option<Integer> {
     Some(Integer {
         negative: n.negative && !q.is_zero(),
         magnitude: q,
-    })
-}
-fn residue(n: Integer, d: Integer) -> Option<Integer> {
-    let rem = n.magnitude.checked_rem(d.magnitude)?;
-    let rem = if n.negative && !rem.is_zero() {
-        d.magnitude.checked_sub(rem)?
-    } else {
-        rem
-    };
-    Some(Integer {
-        negative: false,
-        magnitude: rem,
     })
 }
 fn compare_scaled(a: Integer, ae: i16, b: Integer, be: i16) -> Option<Ordering> {
@@ -235,6 +236,82 @@ fn compare_f64(value: f64, n: Integer, d: Integer, exponent: i16) -> Option<Orde
     let (c, e) = exact_f64_parts(value)?;
     compare_scaled(int(c)?.mul(d)?, e, n, exponent)
 }
+type Num<const N: usize> = crate::audio_engine::bounded_source_integer::BoundedInteger<N>;
+fn g_int<const N: usize>(value: i128) -> Option<Num<N>> {
+    Num::<N>::from_i128(value)
+}
+fn g_uint<const N: usize>(value: u128) -> Option<Num<N>> {
+    Num::<N>::from_u128(value)
+}
+fn g_power<const N: usize>(shift: u32) -> Option<Num<N>> {
+    g_uint(1)?.shl(shift)
+}
+fn g_negate<const N: usize>(value: Num<N>) -> Option<Num<N>> {
+    Num::<N>::ZERO.sub(value)
+}
+fn g_signed<const N: usize>(value: Num<N>, negative: bool) -> Option<Num<N>> {
+    if negative {
+        g_negate(value)
+    } else {
+        Some(value)
+    }
+}
+fn g_abs<const N: usize>(value: Num<N>) -> Num<N> {
+    Num {
+        negative: false,
+        ..value
+    }
+}
+fn g_floor_ratio<const N: usize>(n: Num<N>, d: Num<N>) -> Option<Num<N>> {
+    if d <= Num::<N>::ZERO {
+        return None;
+    }
+    let q = n.magnitude.checked_div(d.magnitude)?;
+    let rem = n.magnitude.checked_rem(d.magnitude)?;
+    let q = if n.negative && !rem.is_zero() {
+        q.checked_add(bnum::Uint::<N>::try_from(1_u8).ok()?)?
+    } else {
+        q
+    };
+    Some(Num {
+        negative: n.negative && !q.is_zero(),
+        magnitude: q,
+    })
+}
+fn g_residue<const N: usize>(n: Num<N>, d: Num<N>) -> Option<Num<N>> {
+    let rem = n.magnitude.checked_rem(d.magnitude)?;
+    let rem = if n.negative && !rem.is_zero() {
+        d.magnitude.checked_sub(rem)?
+    } else {
+        rem
+    };
+    Some(Num {
+        negative: false,
+        magnitude: rem,
+    })
+}
+fn g_compare_scaled<const N: usize>(a: Num<N>, ae: i16, b: Num<N>, be: i16) -> Option<Ordering> {
+    if a.negative != b.negative || a == Num::<N>::ZERO || b == Num::<N>::ZERO {
+        return Some(a.cmp(&b));
+    }
+    let at = a.magnitude.bit_width() as i32 + i32::from(ae);
+    let bt = b.magnitude.bit_width() as i32 + i32::from(be);
+    if at != bt {
+        return Some(if a.negative { bt.cmp(&at) } else { at.cmp(&bt) });
+    }
+    let e = ae.min(be);
+    Some(a.shl((ae - e) as u32)?.cmp(&b.shl((be - e) as u32)?))
+}
+fn g_compare_f64<const N: usize>(
+    value: f64,
+    n: Num<N>,
+    d: Num<N>,
+    exponent: i16,
+) -> Option<Ordering> {
+    let (c, e) = exact_f64_parts(value)?;
+    g_compare_scaled(g_int(c)?.mul(d)?, e, n, exponent)
+}
+
 fn gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
         let r = a % b;
@@ -292,6 +369,7 @@ impl MappedLoopGeometry {
 
     /// Optional OFFRT metadata. Failure never invalidates ordinary Ready geometry.
     pub(crate) fn prepare_common_phase(&mut self) {
+        self.prepare_full_fraction();
         self.common_phase = prepare(self);
     }
     pub(crate) fn has_common_phase(&self) -> bool {
@@ -307,7 +385,7 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
     };
     let period = reader_period(g.domain)?;
     let maximum = period.max_canonical_frame(g.domain.region.start)?;
-    let recovery_exp = source.recovery_exponent(maximum)?;
+    let recovery_exp = source.recovery_exponent(maximum);
     let sg = source.refine(0)?;
     let bg = beat.refine(0)?;
     let quarters = if let Some(q) = g.domain.musical_period.physical_quarters() {
@@ -345,6 +423,7 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
     let mut common = 0;
     let mut fmin = i16::MAX;
     let mut cmin = None;
+    let mut dyadic_slopes = true;
     let mut minimum: Option<(CanonicalBeatSegment, Axes, Option<Seed>)> = None;
     let mut maximum_slope: Option<(CanonicalBeatSegment, Axes, Option<Seed>)> = None;
     g.map.visit_canonical_segments_exact(
@@ -353,11 +432,14 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
         false,
         |segment| {
             let a = Axes::new(segment, g.loaded_rate_hz, sg, bg)?;
-            let (odd, exponent) = a.slope(sg.exponent(), bg.exponent())?;
-            common = gcd(common, odd);
-            fmin = fmin.min(exponent);
-            if let Some(e) = a.intercept_exp(sg.exponent())? {
-                cmin = Some(cmin.map_or(e, |old: i16| old.min(e)));
+            if let Some((odd, exponent)) = a.slope(sg.exponent(), bg.exponent()) {
+                common = gcd(common, odd);
+                fmin = fmin.min(exponent);
+                if let Some(e) = a.intercept_exp(sg.exponent())? {
+                    cmin = Some(cmin.map_or(e, |old: i16| old.min(e)));
+                }
+            } else {
+                dyadic_slopes = false;
             }
             let seed = seed(segment, begin, end, divisor, bg)?;
             let better_seed = |new: Option<Seed>, old: Option<Seed>| {
@@ -390,10 +472,14 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
         maximum,
         positive_seed,
         negative_seed,
-        odd_common: common,
-        minimum_slope_exp: fmin,
-        intercept_exp: cmin,
-        recovery_exp,
+        dyadic: recovery_exp
+            .filter(|_| dyadic_slopes)
+            .map(|recovery_exp| DyadicRecovery {
+                odd_common: common,
+                minimum_slope_exp: fmin,
+                intercept_exp: cmin,
+                recovery_exp,
+            }),
         quarters,
         downbeat,
         bar,
@@ -433,8 +519,42 @@ fn seed(
 }
 
 impl MappedClockEpoch {
+    #[cfg(test)]
+    pub(crate) fn phase_grid_equivalent_for_test(
+        self,
+        g: &MappedLoopGeometry,
+        reference: LoopPhaseReference,
+        frame: u64,
+    ) -> bool {
+        let equal = || -> Option<bool> {
+            if self.has_full_fraction_recovery() {
+                return Some(false);
+            }
+            let a = clock::<64>(g, self, reference).ok()?.value(frame)?;
+            let b = clock::<256>(g, self, reference).ok()?.value(frame)?;
+            Some(
+                a.numerator.resize::<256>()? == b.numerator
+                    && a.denominator.resize::<256>()? == b.denominator
+                    && (a.exponent, a.captured, a.region) == (b.exponent, b.captured, b.region)
+                    && a.lower.and_then(|v| v.resize::<256>()) == b.lower
+                    && a.upper.and_then(|v| v.resize::<256>()) == b.upper,
+            )
+        };
+        equal() == Some(true)
+    }
+    #[cfg(test)]
+    pub(crate) fn phase_local_payload_sizes_for_test() -> (usize, usize) {
+        (
+            std::mem::size_of::<GridPhaseLocalSpanView>(),
+            std::mem::size_of::<FullPhaseLocalView>(),
+        )
+    }
     pub(crate) fn is_common_phase(self) -> bool {
         matches!(self.mode, MappedClockMode::CommonPhase(_))
+    }
+    pub(crate) fn has_full_fraction_recovery(self) -> bool {
+        self.is_full_fraction_general()
+            || phase_anchor(self).is_some_and(|a| a.config.recovery == RecoveryKind::FullFraction)
     }
     pub(crate) fn common_phase(
         marker: u64,
@@ -444,6 +564,7 @@ impl MappedClockEpoch {
         execution: u64,
         reference: LoopPhaseReference,
     ) -> Result<Self, MappedClockError> {
+        use crate::audio_engine::full_fraction_source_numerics as full;
         let unavailable = MappedClockError::NumericalUnavailable;
         if marker == 0 || execution == u64::MAX || raw.seek_mode != ExplicitSeekMode::Normal {
             return Err(MappedClockError::InvalidEpoch);
@@ -457,22 +578,18 @@ impl MappedClockEpoch {
         if !period.canonical_pair(raw.frame, raw.fraction, geometry.domain.region.start) {
             return Err(unavailable);
         }
-        let sg = p
+        let grid_source = p
             .source
-            .refine(required_grid_f64(raw.fraction).ok_or(unavailable)?)
+            .refine(required_grid_f64(raw.fraction).ok_or(unavailable)?);
+        let sg = grid_source
+            .or_else(|| p.source.refine(0))
             .ok_or(unavailable)?;
-        p.source.refine(p.recovery_exp).ok_or(unavailable)?;
-        let source =
-            decode_source_pair_at_grid(raw.frame as u64, raw.fraction, sg).ok_or(unavailable)?;
+        let (source, shift) =
+            full::raw_pair(raw.frame as u64, raw.fraction, sg.exponent()).ok_or(unavailable)?;
         let inverse_segment = geometry
             .map
             .canonical_segment_by_source_ordering(|v| {
-                crate::audio_engine::compact_source_numerics::compare_scaled_f64_to_grid(
-                    v,
-                    geometry.loaded_rate_hz,
-                    source,
-                    sg,
-                )
+                full::compare_source(v, geometry.loaded_rate_hz, source, shift, sg)
             })
             .ok_or(unavailable)?;
         let projection = timeline
@@ -496,32 +613,40 @@ impl MappedClockEpoch {
         decode_f64_at_grid(last, bg).ok_or(unavailable)?;
         let inverse =
             Axes::new(inverse_segment, geometry.loaded_rate_hz, sg, bg).ok_or(unavailable)?;
-        let i = inverse.inverse(source).ok_or(unavailable)?;
-        let odd_a = (inverse.dx as u128) >> (inverse.dx as u128).trailing_zeros();
-        if i.mul(uint(p.odd_common).ok_or(unavailable)?)
-            .ok_or(unavailable)?
-            .magnitude
-            .checked_rem(Magnitude::try_from(odd_a).map_err(|_| unavailable)?)
-            .ok_or(unavailable)?
-            != Magnitude::MIN
-        {
-            return Err(unavailable);
-        }
-        let e0 = if i == Integer::ZERO {
+        let (i, a) = full::inverse(
+            source, shift, inverse.x0, inverse.dx, inverse.y0, inverse.dy,
+        )
+        .ok_or(unavailable)?;
+        let e0 = if i == full::Integer::ZERO {
             i16::MAX
         } else {
             bg.exponent() + i.magnitude.trailing_zeros() as i16
-                - (inverse.dx as u128).trailing_zeros() as i16
+                - a.magnitude.trailing_zeros() as i16
         };
-        let config = PhaseConfig {
-            delta_exp: 0,
-            source_exp: sg.exponent() as i8,
-            beat_exp: bg.exponent() as i8,
-            recovery_exp: p.recovery_exp as i8,
-            k: 0,
-            flags: (p.downbeat << 3) | ((p.bar as u8) << 5),
-            reserved: 0,
+        let full_ready = geometry.full_fraction.is_some()
+            && geometry.domain.musical_period.physical_quarters().is_none();
+        let closes =
+            |n: full::Integer, den: full::Integer, dyadic: DyadicRecovery| -> Option<bool> {
+                let odd = den.magnitude >> den.magnitude.trailing_zeros();
+                Some(
+                    n.mul(full::Integer::from_u128(dyadic.odd_common)?)?
+                        .magnitude
+                        .checked_rem(odd)?
+                        .is_zero(),
+                )
+            };
+        let raw_grid =
+            grid_source.is_some() && p.dyadic.is_some_and(|d| closes(i, a, d) == Some(true));
+        // A capability choice precedes evaluation. Errors in the selected numeric
+        // class are never caught and retried as a different ownership/rate path.
+        let recovery = if raw_grid {
+            RecoveryKind::Grid(p.dyadic.unwrap().recovery_exp as i8)
+        } else {
+            RecoveryKind::FullFraction
         };
+        if recovery == RecoveryKind::FullFraction && !full_ready {
+            return Err(unavailable);
+        }
         let initial = Self {
             marker,
             projection,
@@ -532,128 +657,128 @@ impl MappedClockEpoch {
                 fraction: raw.fraction,
                 inverse_segment,
                 quarters: p.quarters,
-                config,
+                config: PhaseConfig {
+                    delta_exp: 0,
+                    source_exp: sg.exponent() as i8,
+                    beat_exp: bg.exponent() as i8,
+                    recovery,
+                    k: 0,
+                    flags: (p.downbeat << 3) | ((p.bar as u8) << 5),
+                },
             }),
         };
-        let core = Core::new(
-            initial,
-            geometry.loaded_rate_hz,
-            0.0,
-            reference,
-            geometry.domain.region.start as u64,
-        )
+        let (positive, period, target_origin, start_dx) = if recovery.grid().is_some() {
+            admission_debt::<64>(initial, geometry, reference)
+        } else {
+            admission_debt::<256>(initial, geometry, reference)
+        }
         .ok_or(unavailable)?;
-        let positive = core.positive_debt().ok_or(unavailable)?;
-        let negative = core
-            .debt_period()
-            .and_then(|h| h.sub(positive))
-            .ok_or(unavailable)?;
-        if positive == Integer::ZERO {
-            if recovery_ok(
-                p,
-                p.minimum_slope_exp
-                    .checked_add(e0.min(gm).min(0))
-                    .ok_or(unavailable)?,
-            ) {
-                validate(geometry, initial, reference)?;
-                return Ok(initial);
+        let negative = period.sub(positive).ok_or(unavailable)?;
+        let choose = |grid: bool| -> Option<RecoveryKind> {
+            if grid {
+                Some(RecoveryKind::Grid(p.dyadic?.recovery_exp as i8))
+            } else {
+                full_ready.then_some(RecoveryKind::FullFraction)
             }
-            return Err(unavailable);
+        };
+        let with_recovery = |mut epoch: Self, recovery: RecoveryKind| {
+            if let MappedClockMode::CommonPhase(ref mut a) = epoch.mode {
+                a.config.recovery = recovery;
+            }
+            epoch
+        };
+        if positive == full::Integer::ZERO {
+            let grid = raw_grid
+                && p.dyadic
+                    .is_some_and(|d| recovery_ok(p, d.minimum_slope_exp + e0.min(gm).min(0)));
+            let epoch = with_recovery(initial, choose(grid).ok_or(unavailable)?);
+            validate(geometry, epoch, reference)?;
+            return Ok(epoch);
         }
-        // The target-start inverse has its OWN recovery certificate. Raw inverse
-        // closure alone cannot certify exact B(A)-M(T) on every forward segment.
-        let c = core.start.dx as u128;
-        let odd_c = c >> c.trailing_zeros();
-        if core
-            .target_origin
-            .mul(uint(p.odd_common).ok_or(unavailable)?)
-            .ok_or(unavailable)?
-            .magnitude
-            .checked_rem(Magnitude::try_from(odd_c).map_err(|_| unavailable)?)
-            .ok_or(unavailable)?
-            != Magnitude::MIN
-        {
-            return Err(unavailable);
-        }
-        let e_l = if core.target_origin == Integer::ZERO {
+        let c = full::Integer::from_i128(start_dx).ok_or(unavailable)?;
+        let el = if target_origin == full::Integer::ZERO {
             i16::MAX
         } else {
-            bg.exponent() + core.target_origin.magnitude.trailing_zeros() as i16
-                - c.trailing_zeros() as i16
+            bg.exponent() + target_origin.magnitude.trailing_zeros() as i16
+                - c.magnitude.trailing_zeros() as i16
         };
-        if !recovery_ok(
-            p,
-            p.minimum_slope_exp
-                .checked_add(e_l.min(gm).min(0))
-                .ok_or(unavailable)?,
-        ) {
-            return Err(unavailable);
-        }
-        let directions = if positive <= negative {
-            [false, true]
-        } else {
-            [true, false]
-        };
-        for negative in directions {
-            for k in 6..=64 {
-                let k = k as u8;
-                let global_exp = p
-                    .minimum_slope_exp
-                    .checked_add(e0.min(gm - k as i16))
-                    .ok_or(unavailable)?;
-                if recovery_ok(p, global_exp)
-                    && rates(geometry, initial, k, negative, true).ok_or(unavailable)?
-                {
-                    let epoch = configured(initial, GLOBAL, k, negative, 0).ok_or(unavailable)?;
-                    if Core::new(
-                        epoch,
-                        geometry.loaded_rate_hz,
-                        0.0,
-                        reference,
-                        geometry.domain.region.start as u64,
-                    )
-                    .and_then(|c| c.value(u64::MAX))
-                    .is_some_and(|v| v.captured)
-                    {
+        let target_grid = p.dyadic.is_some_and(|d| {
+            closes(target_origin, c, d) == Some(true)
+                && recovery_ok(p, d.minimum_slope_exp + el.min(gm).min(0))
+        });
+        // Preserve every admitted old Grid candidate and its ordering before
+        // considering the separately proved broader numeric capability.
+        for full_pass in [false, true] {
+            if full_pass && !full_ready || !full_pass && !(raw_grid && target_grid) {
+                continue;
+            }
+            let choose = |grid: bool| {
+                if full_pass {
+                    Some(RecoveryKind::FullFraction)
+                } else {
+                    grid.then(|| RecoveryKind::Grid(p.dyadic.unwrap().recovery_exp as i8))
+                }
+            };
+            for negative in if positive <= negative {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                for k in 6..=64_u8 {
+                    let grid = raw_grid
+                        && target_grid
+                        && p.dyadic.is_some_and(|d| {
+                            recovery_ok(p, d.minimum_slope_exp + e0.min(gm - k as i16))
+                        });
+                    if let Some(recovery) = choose(grid) {
+                        if rates(geometry, initial, k, negative, true).ok_or(unavailable)? {
+                            let epoch = with_recovery(
+                                configured(initial, GLOBAL, k, negative, 0).ok_or(unavailable)?,
+                                recovery,
+                            );
+                            if admission_captures(epoch, geometry, reference, 0.0) {
+                                validate(geometry, epoch, reference)?;
+                                return Ok(epoch);
+                            }
+                        }
+                    }
+                    let Some(seed) = (if negative {
+                        p.negative_seed
+                    } else {
+                        p.positive_seed
+                    }) else {
+                        continue;
+                    };
+                    let delta = seed.width_exp - k as i16 - if negative { 0 } else { 1 };
+                    let r = (bg.exponent() - delta).max(0);
+                    if r + k as i16 > 129 {
+                        continue;
+                    }
+                    let g = e0
+                        .min(gm)
+                        .min(required_grid_f64(seed.start).ok_or(unavailable)?)
+                        .min(delta)
+                        .min(0)
+                        - k as i16;
+                    let grid = raw_grid
+                        && target_grid
+                        && r + k as i16 <= 74
+                        && p.dyadic
+                            .is_some_and(|d| recovery_ok(p, d.minimum_slope_exp + g));
+                    let Some(recovery) = choose(grid) else {
+                        continue;
+                    };
+                    if !rates(geometry, initial, k, negative, false).ok_or(unavailable)? {
+                        continue;
+                    }
+                    let epoch = with_recovery(
+                        configured(initial, WINDOW, k, negative, delta).ok_or(unavailable)?,
+                        recovery,
+                    );
+                    if admission_captures(epoch, geometry, reference, seed.start) {
                         validate(geometry, epoch, reference)?;
                         return Ok(epoch);
                     }
-                }
-                let Some(seed) = (if negative {
-                    p.negative_seed
-                } else {
-                    p.positive_seed
-                }) else {
-                    continue;
-                };
-                let delta = seed.width_exp - k as i16 - if negative { 0 } else { 1 };
-                let g = e0
-                    .min(gm)
-                    .min(required_grid_f64(seed.start).ok_or(unavailable)?)
-                    .min(delta)
-                    .min(0)
-                    - k as i16;
-                let output = p.minimum_slope_exp.checked_add(g).ok_or(unavailable)?;
-                let r = (bg.exponent() - delta).max(0);
-                if !recovery_ok(p, output)
-                    || r + k as i16 > 74
-                    || !rates(geometry, initial, k, negative, false).ok_or(unavailable)?
-                {
-                    continue;
-                }
-                let epoch = configured(initial, WINDOW, k, negative, delta).ok_or(unavailable)?;
-                if Core::new(
-                    epoch,
-                    geometry.loaded_rate_hz,
-                    seed.start,
-                    reference,
-                    geometry.domain.region.start as u64,
-                )
-                .and_then(|c| c.value(u64::MAX))
-                .is_some_and(|v| v.captured)
-                {
-                    validate(geometry, epoch, reference)?;
-                    return Ok(epoch);
                 }
             }
         }
@@ -665,10 +790,65 @@ impl MappedClockEpoch {
         frame: u64,
         reference: LoopPhaseReference,
     ) -> Result<bool, MappedClockError> {
-        let c = clock(geometry, self, reference)?;
-        c.value(frame)
-            .map(|v| v.captured)
-            .ok_or(MappedClockError::NumericalUnavailable)
+        if self.has_full_fraction_recovery() {
+            clock::<256>(geometry, self, reference)?
+                .value(frame)
+                .map(|v| v.captured)
+                .ok_or(MappedClockError::NumericalUnavailable)
+        } else {
+            clock::<64>(geometry, self, reference)?
+                .value(frame)
+                .map(|v| v.captured)
+                .ok_or(MappedClockError::NumericalUnavailable)
+        }
+    }
+}
+
+fn admission_debt<const N: usize>(
+    epoch: MappedClockEpoch,
+    g: &MappedLoopGeometry,
+    reference: LoopPhaseReference,
+) -> Option<(Num<256>, Num<256>, Num<256>, i128)> {
+    let core = Core::<N>::new(
+        epoch,
+        g.loaded_rate_hz,
+        0.0,
+        reference,
+        g.domain.region.start as u64,
+    )?;
+    Some((
+        core.positive_debt()?.resize::<256>()?,
+        core.debt_period()?.resize::<256>()?,
+        core.target_origin.resize::<256>()?,
+        core.start.dx,
+    ))
+}
+fn admission_captures(
+    epoch: MappedClockEpoch,
+    g: &MappedLoopGeometry,
+    reference: LoopPhaseReference,
+    seed: f64,
+) -> bool {
+    if epoch.has_full_fraction_recovery() {
+        Core::<256>::new(
+            epoch,
+            g.loaded_rate_hz,
+            seed,
+            reference,
+            g.domain.region.start as u64,
+        )
+        .and_then(|c| c.value(u64::MAX))
+        .is_some_and(|v| v.captured)
+    } else {
+        Core::<64>::new(
+            epoch,
+            g.loaded_rate_hz,
+            seed,
+            reference,
+            g.domain.region.start as u64,
+        )
+        .and_then(|c| c.value(u64::MAX))
+        .is_some_and(|v| v.captured)
     }
 }
 
@@ -688,7 +868,8 @@ fn configured(
     a.config.valid().then_some(epoch)
 }
 fn recovery_ok(p: CommonPhasePreparation, source_exp: i16) -> bool {
-    source_exp.min(p.intercept_exp.unwrap_or(i16::MAX)) >= p.recovery_exp
+    p.dyadic
+        .is_some_and(|d| source_exp.min(d.intercept_exp.unwrap_or(i16::MAX)) >= d.recovery_exp)
 }
 
 fn rates(
@@ -749,29 +930,29 @@ fn phase_anchor(epoch: MappedClockEpoch) -> Option<CommonPhaseAnchor> {
 }
 
 #[derive(Clone, Copy)]
-struct Core {
+struct Core<const N: usize = 64> {
     epoch: MappedClockEpoch,
     anchor: CommonPhaseAnchor,
-    inverse: Axes,
+    inverse_den: Num<N>,
     start: Axes,
-    target_origin: Integer,
-    initial: Integer,
+    target_origin: Num<N>,
+    initial: Num<N>,
     m0: i128,
-    q: Integer,
+    q: Num<N>,
     rate: u32,
     seed: f64,
 }
 #[derive(Clone, Copy)]
-struct Value {
-    numerator: Integer,
-    denominator: Integer,
+struct Value<const N: usize = 64> {
+    numerator: Num<N>,
+    denominator: Num<N>,
     exponent: i16,
     captured: bool,
     region: u8,
-    lower: Option<Integer>,
-    upper: Option<Integer>,
+    lower: Option<Num<N>>,
+    upper: Option<Num<N>>,
 }
-impl Core {
+impl<const N: usize> Core<N> {
     fn new(
         epoch: MappedClockEpoch,
         rate: u32,
@@ -782,8 +963,24 @@ impl Core {
         let anchor = phase_anchor(epoch)?;
         let sg = Grid::from_admitted_exponent(anchor.config.source_exp as i16)?;
         let bg = Grid::from_admitted_exponent(anchor.config.beat_exp as i16)?;
-        let raw = decode_source_pair_at_grid(anchor.frame, anchor.fraction, sg)?;
         let inverse = Axes::new(anchor.inverse_segment, rate, sg, bg)?;
+        let (initial, inverse_den) = if anchor.config.recovery == RecoveryKind::FullFraction {
+            let (raw, d) = crate::audio_engine::full_fraction_source_numerics::raw_pair(
+                anchor.frame,
+                anchor.fraction,
+                sg.exponent(),
+            )?;
+            let (i, a) = crate::audio_engine::full_fraction_source_numerics::inverse(
+                raw, d, inverse.x0, inverse.dx, inverse.y0, inverse.dy,
+            )?;
+            (i.resize::<N>()?, a.resize::<N>()?)
+        } else {
+            let raw = decode_source_pair_at_grid(anchor.frame, anchor.fraction, sg)?;
+            if raw < inverse.x0 || raw > inverse.x0.checked_add(inverse.dx)? {
+                return None;
+            }
+            (inverse.inverse(raw)?.resize::<N>()?, g_int(inverse.dx)?)
+        };
         let (master, start_inverse) = reference.mapped_parts()?;
         let start = Axes::new(start_inverse, rate, sg, bg)?;
         let a = decode_source_pair_at_grid(source_start, 0.0, sg)?;
@@ -792,59 +989,56 @@ impl Core {
         }
         let target_origin = start
             .inverse(a)?
-            .sub(int(decode_f64_at_grid(master, bg)?)?.mul(int(start.dx)?)?)?;
-        if raw < inverse.x0 || raw > inverse.x0.checked_add(inverse.dx)? {
-            return None;
-        }
+            .resize::<N>()?
+            .sub(g_int(decode_f64_at_grid(master, bg)?)?.mul(g_int(start.dx)?)?)?;
         let (m0, last) = epoch
             .projection
             .finite_beats_for_horizon(epoch.first_output_frame, u64::MAX)?;
         let m0 = decode_f64_at_grid(m0, bg)?;
         decode_f64_at_grid(last, bg)?;
-        let q = int(decode_f64_at_grid(anchor.quarters, bg)?)?;
+        let q = g_int(decode_f64_at_grid(anchor.quarters, bg)?)?;
         if anchor.config.kind() == WINDOW {
             decode_f64_at_grid(seed, bg)?;
         }
         Some(Self {
             epoch,
             anchor,
-            inverse,
+            inverse_den,
             start,
             target_origin,
-            initial: inverse.inverse(raw)?,
+            initial,
             m0,
             q,
             rate,
             seed,
         })
     }
-    fn delta(self, frame: u64) -> Option<Integer> {
+    fn delta(self, frame: u64) -> Option<Num<N>> {
         if frame < self.epoch.first_output_frame {
             return None;
         }
         let grid = Grid::from_admitted_exponent(self.anchor.config.beat_exp as i16)?;
-        let d = int(decode_f64_at_grid(
-            self.epoch.projection.beat_position_at_frame(frame),
-            grid,
-        )?
-        .checked_sub(self.m0)?)?;
+        let d = g_int(
+            decode_f64_at_grid(self.epoch.projection.beat_position_at_frame(frame), grid)?
+                .checked_sub(self.m0)?,
+        )?;
         (!d.negative).then_some(d)
     }
-    fn debt_numerator(self) -> Option<Integer> {
-        let a = int(self.inverse.dx)?;
-        let c = int(self.start.dx)?;
+    fn debt_numerator(self) -> Option<Num<N>> {
+        let a = self.inverse_den;
+        let c = g_int(self.start.dx)?;
         self.target_origin
             .mul(a)?
-            .add(int(self.m0)?.mul(a)?.mul(c)?)?
+            .add(g_int(self.m0)?.mul(a)?.mul(c)?)?
             .sub(self.initial.mul(c)?)
     }
-    fn debt_period(self) -> Option<Integer> {
-        self.q.mul(int(self.inverse.dx)?)?.mul(int(self.start.dx)?)
+    fn debt_period(self) -> Option<Num<N>> {
+        self.q.mul(self.inverse_den)?.mul(g_int(self.start.dx)?)
     }
-    fn positive_debt(self) -> Option<Integer> {
-        residue(self.debt_numerator()?, self.debt_period()?)
+    fn positive_debt(self) -> Option<Num<N>> {
+        g_residue(self.debt_numerator()?, self.debt_period()?)
     }
-    fn debt(self) -> Option<Integer> {
+    fn debt(self) -> Option<Num<N>> {
         let p = self.positive_debt()?;
         if self.anchor.config.negative() {
             self.debt_period()?.sub(p)
@@ -852,13 +1046,28 @@ impl Core {
             Some(p)
         }
     }
-    fn value(self, frame: u64) -> Option<Value> {
+    fn value(self, frame: u64) -> Option<Value<N>> {
+        self.value_with_correction(
+            frame,
+            |r, h| self.debt()?.shl(r)?.mul(h),
+            || {
+                g_floor_ratio(self.debt_numerator()?, self.debt_period()?)?
+                    .add(g_uint(u128::from(self.anchor.config.negative()))?)
+            },
+        )
+    }
+    fn value_with_correction(
+        self,
+        frame: u64,
+        correction_cap: impl FnOnce(u32, Num<N>) -> Option<Num<N>>,
+        captured_winding: impl FnOnce() -> Option<Num<N>>,
+    ) -> Option<Value<N>> {
         let config = self.anchor.config;
         let b = config.beat_exp as i16;
         let exponent = config.fine();
         let r = (b - exponent) as u32;
-        let h = power(config.k as u32)?;
-        let a = int(self.inverse.dx)?;
+        let h = g_power(config.k as u32)?;
+        let a = self.inverse_den;
         let initial = self.initial.shl(r)?;
         let delta = self.delta(frame)?.shl(r)?;
         let base = initial.add(delta.mul(a)?)?.mul(h)?;
@@ -874,12 +1083,12 @@ impl Core {
                 upper: None,
             });
         }
-        let cap = self.debt()?.shl(r)?.mul(h)?;
+        let cap = correction_cap(r, h)?;
         let (uncapped, region, lower, upper) = if config.kind() == GLOBAL {
-            (signed(delta.mul(a)?, config.negative())?, 1, None, None)
+            (g_signed(delta.mul(a)?, config.negative())?, 1, None, None)
         } else {
             let bg = Grid::from_admitted_exponent(b)?;
-            let mut entry = int(decode_f64_at_grid(self.seed, bg)?)?;
+            let mut entry = g_int(decode_f64_at_grid(self.seed, bg)?)?;
             if self.initial > entry.mul(a)? {
                 entry = entry.add(self.q)?;
             }
@@ -901,28 +1110,29 @@ impl Core {
                 });
             }
             let q = self.q.shl(r)?;
-            let step = power((config.delta_exp - exponent) as u32)?;
-            let period = q.sub(signed(step, config.negative())?)?;
-            if period <= Integer::ZERO {
+            let step = g_power((config.delta_exp - exponent) as u32)?;
+            let period = q.sub(g_signed(step, config.negative())?)?;
+            if period <= Num::<N>::ZERO {
                 return None;
             }
             let divisor = period.mul(a)?;
-            let j = floor_ratio(v, divisor)?;
+            let j = g_floor_ratio(v, divisor)?;
             let j128 = j.u128()?;
-            let rem = residue(v, divisor)?;
+            let rem = g_residue(v, divisor)?;
             let width = h.mul(step)?.mul(a)?;
             let correcting = rem < width;
-            let factor = h.add(signed(uint(1)?, config.negative())?)?;
+            let factor = h.add(g_signed(g_uint(1)?, config.negative())?)?;
             let x = if correcting {
                 factor.mul(rem)?
             } else {
-                rem.add(signed(step.mul(a)?, config.negative())?)?.mul(h)?
+                rem.add(g_signed(step.mul(a)?, config.negative())?)?
+                    .mul(h)?
             };
-            let beta = entry.add(q.mul(uint(j128)?)?)?.mul(denominator)?.add(x)?;
+            let beta = entry.add(q.mul(g_uint(j128)?)?)?.mul(denominator)?.add(x)?;
             let cycle = j.mul(divisor)?;
             let lo = wait
                 .add(cycle)?
-                .add(if correcting { Integer::ZERO } else { width })?;
+                .add(if correcting { Num::<N>::ZERO } else { width })?;
             let hi = wait
                 .add(cycle)?
                 .add(if correcting { width } else { divisor })?;
@@ -933,17 +1143,16 @@ impl Core {
                 Some(hi),
             )
         };
-        if uncapped != Integer::ZERO && uncapped.negative != config.negative() {
+        if uncapped != Num::<N>::ZERO && uncapped.negative != config.negative() {
             return None;
         }
-        let captured = abs(uncapped).mul(int(self.start.dx)?)? >= cap;
+        let captured = g_abs(uncapped).mul(g_int(self.start.dx)?)? >= cap;
         if captured {
             // Cancel the raw inverse symbolically. Never round a new anchor or
             // multiply both inverse denominators into the source reader path.
-            let winding = floor_ratio(self.debt_numerator()?, self.debt_period()?)?
-                .add(uint(u128::from(config.negative()))?)?;
-            let master = int(self.m0)?.add(self.delta(frame)?)?;
-            let c = int(self.start.dx)?;
+            let winding = captured_winding()?;
+            let master = g_int(self.m0)?.add(self.delta(frame)?)?;
+            let c = g_int(self.start.dx)?;
             return Some(Value {
                 numerator: self
                     .target_origin
@@ -966,9 +1175,9 @@ impl Core {
             upper: if captured { None } else { upper },
         })
     }
-    fn at_least_time(self, frame: u64, target: Integer) -> Option<bool> {
+    fn at_least_time(self, frame: u64, target: Num<N>) -> Option<bool> {
         let r = (self.anchor.config.beat_exp as i16 - self.anchor.config.fine()) as u32;
-        Some(self.delta(frame)?.shl(r)?.mul(int(self.inverse.dx)?)? >= target)
+        Some(self.delta(frame)?.shl(r)?.mul(self.inverse_den)? >= target)
     }
     fn position(
         self,
@@ -978,13 +1187,24 @@ impl Core {
         frame: u64,
     ) -> Option<FractionalSourcePosition> {
         let (n, d) = self.source_terms(segment, cycle, frame)?;
-        let coordinate = split_recovery_coordinate(
-            n,
-            d,
-            self.anchor.config.recovery_exp as i16,
-            self.anchor.fraction,
-            domain,
-        )?;
+        let coordinate = match self.anchor.config.recovery {
+            RecoveryKind::Grid(e) => split_recovery_coordinate(
+                n.resize::<64>()?,
+                d.resize::<64>()?,
+                e as i16,
+                self.anchor.fraction,
+                domain,
+            )?,
+            RecoveryKind::FullFraction => {
+                crate::audio_engine::full_fraction_source_numerics::split(
+                    n,
+                    d,
+                    self.anchor.fraction,
+                    domain,
+                    false,
+                )?
+            }
+        };
         Some(FractionalSourcePosition {
             frame: usize::try_from(coordinate.whole).ok()?,
             fraction: coordinate.fraction,
@@ -998,31 +1218,201 @@ impl Core {
         segment: CanonicalBeatSegment,
         cycle: u128,
         frame: u64,
-    ) -> Option<(Integer, Integer)> {
+    ) -> Option<(Num<N>, Num<N>)> {
         let value = self.value(frame)?;
         let b = self.anchor.config.beat_exp as i16;
         let r = (b - value.exponent) as u32;
         let sg = Grid::from_admitted_exponent(self.anchor.config.source_exp as i16)?;
         let bg = Grid::from_admitted_exponent(b)?;
         let axes = Axes::new(segment, self.rate, sg, bg)?;
-        let cycle = uint(cycle)?.shl(r)?;
+        let cycle = g_uint(cycle)?.shl(r)?;
         let canonical = value.numerator.sub(cycle.mul(value.denominator)?)?;
-        let offset = canonical.sub(int(axes.y0)?.shl(r)?.mul(value.denominator)?)?;
-        let d = value.denominator.mul(int(axes.dy)?)?.shl(r)?;
-        let n = int(axes.x0)?.mul(d)?.add(offset.mul(int(axes.dx)?)?)?;
+        let offset = canonical.sub(g_int(axes.y0)?.shl(r)?.mul(value.denominator)?)?;
+        let d = value.denominator.mul(g_int(axes.dy)?)?.shl(r)?;
+        let n = g_int(axes.x0)?.mul(d)?.add(offset.mul(g_int(axes.dx)?)?)?;
         let d = d.shl((-sg.exponent()) as u32)?;
         Some((n, d))
     }
 }
 
-fn clock(
+/// Immutable arithmetic reuse for ONE FullFraction refresh, never a source permit.
+/// E<2^(384+d), P<2^(380+d), d<=1074 and r+k<=129 give cap<=1583
+/// bits and winding<=1460 bits. These two values stay outside every copied clock
+/// and local reader payload. Grid continues to evaluate its original512-bit law.
+struct FullRefreshEvaluator<'a> {
+    core: &'a Core<256>,
+    cap: Option<Num<256>>,
+    winding: Option<Num<256>>,
+}
+impl<'a> FullRefreshEvaluator<'a> {
+    fn new(core: &'a Core<256>) -> Self {
+        let config = core.anchor.config;
+        if config.kind() == CAPTURED {
+            // The original shortcut has no debt or winding precondition.
+            return Self {
+                core,
+                cap: None,
+                winding: None,
+            };
+        }
+        let numerator = core.debt_numerator();
+        let period = core.debt_period();
+        let positive = numerator.zip(period).and_then(|(n, p)| g_residue(n, p));
+        let debt = if config.negative() {
+            period
+                .zip(positive)
+                .and_then(|(p, positive)| p.sub(positive))
+        } else {
+            positive
+        };
+        let r = (config.beat_exp as i16 - config.fine()) as u32;
+        let cap = debt.and_then(|v| v.shl(r)?.mul(g_power(config.k as u32)?));
+        let winding = numerator
+            .zip(period)
+            .and_then(|(n, p)| g_floor_ratio(n, p)?.add(g_uint(u128::from(config.negative()))?));
+        // Keep failures as values: winding is required only after capture, and
+        // neither cache entry may reject a frame before its original use site.
+        Self { core, cap, winding }
+    }
+    fn value(&self, frame: u64) -> Option<Value<256>> {
+        self.core
+            .value_with_correction(frame, |_, _| self.cap, || self.winding)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn assert_full_refresh_equivalent_for_test(
     g: &MappedLoopGeometry,
     epoch: MappedClockEpoch,
     reference: LoopPhaseReference,
-) -> Result<Core, MappedClockError> {
+    frames: &[u64],
+    boundaries: &[u64],
+) {
+    assert!(epoch.has_full_fraction_recovery());
+    assert!(std::mem::size_of::<FullRefreshEvaluator<'_>>() <= 544);
+    assert!(!std::mem::needs_drop::<FullRefreshEvaluator<'_>>());
+    let core = clock::<256>(g, epoch, reference).unwrap();
+    let evaluator = FullRefreshEvaluator::new(&core);
+    let fields = |value: Option<Value<256>>| {
+        value.map(|v| {
+            (
+                v.numerator,
+                v.denominator,
+                v.exponent,
+                v.captured,
+                v.region,
+                v.lower,
+                v.upper,
+            )
+        })
+    };
+    if core.anchor.config.kind() == CAPTURED {
+        assert!(evaluator.cap.is_none() && evaluator.winding.is_none());
+    } else {
+        assert!(evaluator.cap.unwrap().magnitude.bit_width() <= 1583);
+        assert!(evaluator.winding.unwrap().magnitude.bit_width() <= 1460);
+    }
+    for &frame in frames {
+        let original = core.value(frame);
+        assert_eq!(
+            fields(evaluator.value(frame)),
+            fields(original),
+            "frame={frame}"
+        );
+        if core.anchor.config.kind() == CAPTURED {
+            assert_eq!(
+                fields(core.value_with_correction(
+                    frame,
+                    |_, _| panic!("CAPTURED must not require debt"),
+                    || panic!("CAPTURED must not require winding"),
+                )),
+                fields(original),
+            );
+        } else {
+            // A cached failure is consumed only at its original use site. In
+            // particular a missing winding cannot reject a still-correcting or
+            // waiting frame; it does reject the first frame that needs capture.
+            let deferred = FullRefreshEvaluator {
+                core: &core,
+                cap: evaluator.cap,
+                winding: None,
+            };
+            let expected = original.filter(|v| !v.captured);
+            assert_eq!(
+                fields(deferred.value(frame)),
+                fields(expected),
+                "frame={frame}"
+            );
+            let missing_cap = FullRefreshEvaluator {
+                core: &core,
+                cap: None,
+                winding: evaluator.winding,
+            };
+            assert!(missing_cap.value(frame).is_none());
+        }
+    }
+    for &frame in boundaries {
+        // Original search bounds/predicates, original endpoint construction and
+        // every copied span field must agree, including rejected queries.
+        match (
+            refresh_full(g, epoch, frame, reference),
+            refresh_typed::<256>(g, epoch, frame, reference),
+        ) {
+            (Ok(cached), Ok(original)) => assert!(cached.matches_exact(original), "frame={frame}"),
+            (Err(cached), Err(original)) => assert_eq!(cached, original, "frame={frame}"),
+            _ => panic!("cached/original refresh admission differs at frame={frame}"),
+        }
+    }
+}
+
+pub(super) fn validate(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    reference: LoopPhaseReference,
+) -> Result<(), MappedClockError> {
+    if epoch.has_full_fraction_recovery() {
+        validate_typed::<256>(g, epoch, reference)
+    } else {
+        validate_typed::<64>(g, epoch, reference)
+    }
+}
+pub(super) fn position(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    frame: u64,
+    reference: LoopPhaseReference,
+) -> Result<FractionalSourcePosition, MappedClockError> {
+    if epoch.has_full_fraction_recovery() {
+        position_typed::<256>(g, epoch, frame, reference)
+    } else {
+        position_typed::<64>(g, epoch, frame, reference)
+    }
+}
+pub(super) fn refresh(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    frame: u64,
+    reference: LoopPhaseReference,
+) -> Result<MappedSourceSpan, MappedClockError> {
+    if epoch.has_full_fraction_recovery() {
+        refresh_full(g, epoch, frame, reference)
+    } else {
+        refresh_typed::<64>(g, epoch, frame, reference)
+    }
+}
+fn clock<const N: usize>(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    reference: LoopPhaseReference,
+) -> Result<Core<N>, MappedClockError> {
     let unavailable = MappedClockError::NumericalUnavailable;
     let p = g.common_phase.ok_or(unavailable)?;
     let a = phase_anchor(epoch).ok_or(unavailable)?;
+    if a.config.recovery == RecoveryKind::FullFraction
+        && (g.full_fraction.is_none() || g.domain.musical_period.physical_quarters().is_some())
+    {
+        return Err(unavailable);
+    }
     if !reference
         .mapped_parts()
         .is_some_and(|(_, start)| start.matches_exact(p.start))
@@ -1032,7 +1422,10 @@ fn clock(
     if a.quarters.to_bits() != p.quarters.to_bits()
         || a.config.downbeat() != p.downbeat
         || a.config.bar_qualified() != p.bar
-        || a.config.recovery_exp as i16 != p.recovery_exp
+        || a.config
+            .recovery
+            .grid()
+            .is_some_and(|e| p.dyadic.is_none_or(|d| e as i16 != d.recovery_exp))
     {
         return Err(unavailable);
     }
@@ -1054,7 +1447,7 @@ fn clock(
     } else {
         0.0
     };
-    Core::new(
+    Core::<N>::new(
         epoch,
         g.loaded_rate_hz,
         seed,
@@ -1063,19 +1456,19 @@ fn clock(
     )
     .ok_or(unavailable)
 }
-pub(super) fn validate(
+fn validate_typed<const N: usize>(
     g: &MappedLoopGeometry,
     epoch: MappedClockEpoch,
     reference: LoopPhaseReference,
 ) -> Result<(), MappedClockError> {
-    let core = clock(g, epoch, reference)?;
+    let core = clock::<N>(g, epoch, reference)?;
     let unavailable = MappedClockError::NumericalUnavailable;
     if !rates(g, epoch, 0, false, false).ok_or(unavailable)? {
         return Err(MappedClockError::UnsupportedRate);
     }
     core.value(epoch.first_output_frame).ok_or(unavailable)?;
     core.value(u64::MAX).ok_or(unavailable)?;
-    let observed = position(g, epoch, epoch.first_output_frame, reference)?;
+    let observed = position_typed::<N>(g, epoch, epoch.first_output_frame, reference)?;
     if observed.frame != core.anchor.frame as usize
         || observed.fraction.to_bits() != core.anchor.fraction.to_bits()
     {
@@ -1085,14 +1478,13 @@ pub(super) fn validate(
 }
 
 #[derive(Clone, Copy)]
-struct Target {
-    n: Integer,
-    d: Integer,
+struct Target<const N: usize> {
+    n: Num<N>,
+    d: Num<N>,
     e: i16,
 }
-fn reached(core: Core, frame: u64, target: Target) -> Option<bool> {
-    let v = core.value(frame)?;
-    compare_scaled(
+fn reached<const N: usize>(v: Value<N>, target: Target<N>) -> Option<bool> {
+    g_compare_scaled(
         v.numerator.mul(target.d)?,
         v.exponent,
         target.n.mul(v.denominator)?,
@@ -1111,19 +1503,26 @@ fn first(mut lo: u64, mut hi: u64, predicate: impl Fn(u64) -> Option<bool>) -> O
     }
     Some(lo)
 }
-fn source_phase(
+fn source_phase<const N: usize>(
     g: &MappedLoopGeometry,
-    core: Core,
+    core: Core<N>,
     frame: u64,
-) -> Option<(Value, Integer, Integer, u128, CanonicalBeatSegment)> {
+) -> Option<(Value<N>, Num<N>, Num<N>, u128, CanonicalBeatSegment)> {
     let value = core.value(frame)?;
+    source_phase_value(g, core, value)
+}
+fn source_phase_value<const N: usize>(
+    g: &MappedLoopGeometry,
+    core: Core<N>,
+    value: Value<N>,
+) -> Option<(Value<N>, Num<N>, Num<N>, u128, CanonicalBeatSegment)> {
     let config = core.anchor.config;
     let sg = Grid::from_admitted_exponent(config.source_exp as i16)?;
     let bg = Grid::from_admitted_exponent(config.beat_exp as i16)?;
     let start = Axes::new(g.common_phase?.start, g.loaded_rate_hz, sg, bg)?;
     let raw = decode_source_pair_at_grid(g.domain.region.start as u64, 0.0, sg)?;
-    let j = start.inverse(raw)?;
-    let c = int(start.dx)?;
+    let j = start.inverse(raw)?.resize::<N>()?;
+    let c = g_int(start.dx)?;
     let r = (bg.exponent() - value.exponent) as u32;
     let unfolded = value
         .numerator
@@ -1133,25 +1532,25 @@ fn source_phase(
     let cycle = unfolded.quotient(period)?.mul(core.q)?.u128()?;
     let canonical = value
         .numerator
-        .sub(uint(cycle)?.shl(r)?.mul(value.denominator)?)?;
+        .sub(g_uint(cycle)?.shl(r)?.mul(value.denominator)?)?;
     let segment = g.map.canonical_segment_by_beat_ordering(|v| {
-        compare_f64(v, canonical, value.denominator, value.exponent)
+        g_compare_f64(v, canonical, value.denominator, value.exponent)
     })?;
     Some((value, j, c, cycle, segment))
 }
-pub(super) fn position(
+fn position_typed<const N: usize>(
     g: &MappedLoopGeometry,
     epoch: MappedClockEpoch,
     frame: u64,
     reference: LoopPhaseReference,
 ) -> Result<FractionalSourcePosition, MappedClockError> {
-    let core = clock(g, epoch, reference)?;
+    let core = clock::<N>(g, epoch, reference)?;
     let (_, _, _, cycle, segment) =
         source_phase(g, core, frame).ok_or(MappedClockError::NumericalUnavailable)?;
     core.position(segment, cycle, g.domain, frame)
         .ok_or(MappedClockError::NumericalUnavailable)
 }
-pub(super) fn refresh(
+fn refresh_typed<const N: usize>(
     g: &MappedLoopGeometry,
     epoch: MappedClockEpoch,
     frame: u64,
@@ -1161,11 +1560,36 @@ pub(super) fn refresh(
     if frame == u64::MAX {
         return Err(unavailable);
     }
-    let core = clock(g, epoch, reference)?;
-    let (value, j, c, cycle, segment) = source_phase(g, core, frame).ok_or(unavailable)?;
+    let core = clock::<N>(g, epoch, reference)?;
+    refresh_core(g, epoch, frame, reference, core, |n| core.value(n))
+}
+fn refresh_full(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    frame: u64,
+    reference: LoopPhaseReference,
+) -> Result<MappedSourceSpan, MappedClockError> {
+    if frame == u64::MAX {
+        return Err(MappedClockError::NumericalUnavailable);
+    }
+    let core = clock::<256>(g, epoch, reference)?;
+    let evaluator = FullRefreshEvaluator::new(&core);
+    refresh_core(g, epoch, frame, reference, core, |n| evaluator.value(n))
+}
+fn refresh_core<const N: usize>(
+    g: &MappedLoopGeometry,
+    epoch: MappedClockEpoch,
+    frame: u64,
+    reference: LoopPhaseReference,
+    core: Core<N>,
+    evaluate: impl Fn(u64) -> Option<Value<N>>,
+) -> Result<MappedSourceSpan, MappedClockError> {
+    let unavailable = MappedClockError::NumericalUnavailable;
+    let (value, j, c, cycle, segment) =
+        source_phase_value(g, core, evaluate(frame).ok_or(unavailable)?).ok_or(unavailable)?;
     let bg = Grid::from_admitted_exponent(core.anchor.config.beat_exp as i16).ok_or(unavailable)?;
     let loop_left = Target {
-        n: j.add(uint(cycle).and_then(|v| v.mul(c)).ok_or(unavailable)?)
+        n: j.add(g_uint(cycle).and_then(|v| v.mul(c)).ok_or(unavailable)?)
             .ok_or(unavailable)?,
         d: c,
         e: bg.exponent(),
@@ -1178,19 +1602,20 @@ pub(super) fn refresh(
         ..loop_left
     };
     let knot_left = Target {
-        n: int(decode_f64_at_grid(segment.beat_start, bg).ok_or(unavailable)?)
-            .and_then(|v| v.add(uint(cycle)?))
+        n: g_int(decode_f64_at_grid(segment.beat_start, bg).ok_or(unavailable)?)
+            .and_then(|v| v.add(g_uint(cycle)?))
             .ok_or(unavailable)?,
-        d: uint(1).ok_or(unavailable)?,
+        d: g_uint(1).ok_or(unavailable)?,
         e: bg.exponent(),
     };
     let knot_right = Target {
-        n: int(decode_f64_at_grid(segment.beat_end, bg).ok_or(unavailable)?)
-            .and_then(|v| v.add(uint(cycle)?))
+        n: g_int(decode_f64_at_grid(segment.beat_end, bg).ok_or(unavailable)?)
+            .and_then(|v| v.add(g_uint(cycle)?))
             .ok_or(unavailable)?,
         ..knot_left
     };
-    let less = |a: Target, b: Target| compare_scaled(a.n.mul(b.d)?, a.e, b.n.mul(a.d)?, b.e);
+    let less =
+        |a: Target<N>, b: Target<N>| g_compare_scaled(a.n.mul(b.d)?, a.e, b.n.mul(a.d)?, b.e);
     let left = if less(loop_left, knot_left).ok_or(unavailable)? == Ordering::Less {
         knot_left
     } else {
@@ -1201,17 +1626,19 @@ pub(super) fn refresh(
     } else {
         loop_right
     };
-    let mut start =
-        first(epoch.first_output_frame, frame, |n| reached(core, n, left)).ok_or(unavailable)?;
-    let mut end = if reached(core, u64::MAX, right).ok_or(unavailable)? {
-        first(frame + 1, u64::MAX, |n| reached(core, n, right)).ok_or(unavailable)?
+    let mut start = first(epoch.first_output_frame, frame, |n| {
+        reached(evaluate(n)?, left)
+    })
+    .ok_or(unavailable)?;
+    let mut end = if reached(evaluate(u64::MAX).ok_or(unavailable)?, right).ok_or(unavailable)? {
+        first(frame + 1, u64::MAX, |n| reached(evaluate(n)?, right)).ok_or(unavailable)?
     } else {
         u64::MAX
     };
     if value.captured {
         start = start.max(
             first(epoch.first_output_frame, frame, |n| {
-                Some(core.value(n)?.captured)
+                Some(evaluate(n)?.captured)
             })
             .ok_or(unavailable)?,
         );
@@ -1232,16 +1659,16 @@ pub(super) fn refresh(
                 );
             }
         }
-        if core.value(u64::MAX).ok_or(unavailable)?.captured {
+        if evaluate(u64::MAX).ok_or(unavailable)?.captured {
             end = end.min(
-                first(frame + 1, u64::MAX, |n| Some(core.value(n)?.captured)).ok_or(unavailable)?,
+                first(frame + 1, u64::MAX, |n| Some(evaluate(n)?.captured)).ok_or(unavailable)?,
             );
         }
     }
     if start > frame || end <= frame {
         return Err(unavailable);
     }
-    let endpoint = position(g, epoch, end, reference)?;
+    let endpoint = position_typed::<N>(g, epoch, end, reference)?;
     Ok(MappedSourceSpan {
         epoch,
         segment,
@@ -1255,8 +1682,141 @@ pub(super) fn refresh(
     })
 }
 
+pub(crate) enum PhaseLocalSpanView {
+    Grid(GridPhaseLocalSpanView),
+    Full(FullPhaseLocalView),
+}
+impl PhaseLocalSpanView {
+    #[cfg(test)]
+    pub(crate) fn full_fraction_split_bits_for_test(&self) -> Option<usize> {
+        match self {
+            Self::Grid(_) => None,
+            Self::Full(view) => Some(view.affine.split_bits_for_test()),
+        }
+    }
+    pub(crate) fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
+        match self {
+            Self::Grid(v) => v.position_at(frame),
+            Self::Full(v) => v.position_at(frame),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn uses_affine_for_test(&self) -> bool {
+        match self {
+            Self::Grid(v) => v.affine.is_some(),
+            Self::Full(_) => true,
+        }
+    }
+}
+pub(crate) struct FullPhaseLocalView {
+    span: MappedSourceSpan,
+    beat: Grid,
+    affine: crate::audio_engine::full_fraction_source_numerics::RationalAffine,
+}
+impl FullPhaseLocalView {
+    fn new(
+        span: MappedSourceSpan,
+        domain: SourceLoopDomain,
+        reference: LoopPhaseReference,
+    ) -> Option<Self> {
+        let (cycle, b, seed, region) = span.program.phase_value()?;
+        let core = Core::<256>::new(
+            span.epoch,
+            span.loaded_rate_hz,
+            seed,
+            reference,
+            span.source_start,
+        )?;
+        if core.anchor.config.recovery != RecoveryKind::FullFraction
+            || domain.musical_period.physical_quarters().is_some()
+            || !domain.is_valid()
+            || span.source_start != domain.region.start as u64
+            || span.start_frame < span.epoch.first_output_frame
+            || span.start_frame >= span.end_frame
+            || b != core.anchor.config.beat_exp as i16
+        {
+            return None;
+        }
+        let start = core.value(span.start_frame)?;
+        let last = core.value(span.end_frame - 1)?;
+        if start.region != region || start.region != last.region || start.captured != last.captured
+        {
+            return None;
+        }
+        if let Some(upper) = start.upper {
+            if core.at_least_time(span.end_frame - 1, upper)? {
+                return None;
+            }
+        }
+        if !inside_held_segment(core, span.segment, cycle, start)?
+            || !inside_held_segment(core, span.segment, cycle, last)?
+        {
+            return None;
+        }
+        let (n, d) = core.source_terms(span.segment, cycle, span.start_frame)?;
+        let sg = Grid::from_admitted_exponent(core.anchor.config.source_exp as i16)?;
+        let beat = Grid::from_admitted_exponent(b)?;
+        let axes = Axes::new(span.segment, span.loaded_rate_hz, sg, beat)?;
+        let r = (b - start.exponent) as u32;
+        let k = if start.region == 1 {
+            core.anchor.config.k
+        } else {
+            0
+        };
+        let h = g_power::<256>(k as u32)?;
+        let factor = if k == 0 {
+            g_uint(1)?
+        } else {
+            h.add(g_signed(g_uint(1)?, core.anchor.config.negative())?)?
+        };
+        let scaled = start
+            .denominator
+            .mul(factor)?
+            .shl(r)?
+            .mul(g_int(axes.dx)?)?;
+        if !scaled.magnitude.checked_rem(h.magnitude)?.is_zero() {
+            return None;
+        }
+        let multiplier = scaled.quotient(h)?;
+        let master =
+            |frame| decode_f64_at_grid(span.epoch.projection.beat_position_at_frame(frame), beat);
+        let affine = crate::audio_engine::full_fraction_source_numerics::RationalAffine::new(
+            n,
+            multiplier,
+            d,
+            master(span.start_frame)?,
+            master(span.end_frame - 1)?,
+            core.anchor.fraction,
+            domain,
+            false,
+        )?;
+        if !reader_period(domain)?.canonical_pair(
+            span.endpoint_frame,
+            span.endpoint_fraction,
+            domain.region.start,
+        ) {
+            return None;
+        }
+        Some(Self { span, beat, affine })
+    }
+    fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
+        if frame == self.span.end_frame {
+            return Some(FractionalSourcePosition {
+                frame: self.span.endpoint_frame,
+                fraction: self.span.endpoint_fraction,
+                seek_mode: ExplicitSeekMode::Normal,
+            });
+        }
+        self.span.contains(frame).then_some(())?;
+        self.affine.position(decode_f64_at_grid(
+            self.span.epoch.projection.beat_position_at_frame(frame),
+            self.beat,
+        )?)
+    }
+}
+
 /// A nonowning temporary local view; all grids are copied admitted originals.
-pub(crate) struct PhaseLocalSpanView {
+pub(crate) struct GridPhaseLocalSpanView {
     segment: CanonicalBeatSegment,
     start_frame: u64,
     end_frame: u64,
@@ -1336,7 +1896,7 @@ impl PreparedAffine {
         let shift = master_exp
             .checked_add(slope_exp)?
             .checked_sub(i16::from(k))?
-            .checked_sub(i16::from(config.recovery_exp))?;
+            .checked_sub(i16::from(config.recovery.grid()?))?;
         if !(0..=74).contains(&shift) {
             return None;
         }
@@ -1346,9 +1906,12 @@ impl PreparedAffine {
         }
         let multiplier = product.checked_shl(shift as u32)?;
         let (n, d) = core.source_terms(span.segment, cycle, span.start_frame)?;
-        let source_start = normalize_recovery_coefficient(n, d, config.recovery_exp as i16)?;
-        let split =
-            PreparedRecoverySplit::new(domain, config.recovery_exp as i16, core.anchor.fraction)?;
+        let source_start = normalize_recovery_coefficient(n, d, config.recovery.grid()? as i16)?;
+        let split = PreparedRecoverySplit::new(
+            domain,
+            config.recovery.grid()? as i16,
+            core.anchor.fraction,
+        )?;
         Some(Self {
             source_start,
             master_start,
@@ -1380,28 +1943,28 @@ impl PreparedAffine {
     }
 }
 
-fn inside_held_segment(
-    core: Core,
+fn inside_held_segment<const N: usize>(
+    core: Core<N>,
     segment: CanonicalBeatSegment,
     cycle: u128,
-    value: Value,
+    value: Value<N>,
 ) -> Option<bool> {
     let b = core.anchor.config.beat_exp as i16;
     let r = u32::try_from(b.checked_sub(value.exponent)?).ok()?;
     let grid = Grid::from_admitted_exponent(b)?;
     let canonical = value
         .numerator
-        .sub(uint(cycle)?.shl(r)?.mul(value.denominator)?)?;
-    let left = int(decode_f64_at_grid(segment.beat_start, grid)?)?
+        .sub(g_uint(cycle)?.shl(r)?.mul(value.denominator)?)?;
+    let left = g_int(decode_f64_at_grid(segment.beat_start, grid)?)?
         .shl(r)?
         .mul(value.denominator)?;
-    let right = int(decode_f64_at_grid(segment.beat_end, grid)?)?
+    let right = g_int(decode_f64_at_grid(segment.beat_end, grid)?)?
         .shl(r)?
         .mul(value.denominator)?;
     Some(canonical >= left && canonical < right)
 }
 
-impl PhaseLocalSpanView {
+impl GridPhaseLocalSpanView {
     #[cfg(test)]
     pub(crate) fn uses_affine_for_test(&self) -> bool {
         self.affine.is_some()
@@ -1434,6 +1997,11 @@ impl MappedSourceSpan {
         reference: LoopPhaseReference,
     ) -> Result<PhaseLocalSpanView, MappedClockError> {
         let unavailable = MappedClockError::NumericalUnavailable;
+        if self.epoch.has_full_fraction_recovery() {
+            return FullPhaseLocalView::new(self, domain, reference)
+                .map(PhaseLocalSpanView::Full)
+                .ok_or(unavailable);
+        }
         let (cycle, b, seed, region) = self.program.phase_value().ok_or(unavailable)?;
         let anchor = phase_anchor(self.epoch).ok_or(unavailable)?;
         if !domain.is_valid()
@@ -1463,7 +2031,7 @@ impl MappedSourceSpan {
         ) {
             return Err(unavailable);
         }
-        let view = PhaseLocalSpanView {
+        let view = GridPhaseLocalSpanView {
             segment: self.segment,
             start_frame: self.start_frame,
             end_frame: self.end_frame,
@@ -1475,7 +2043,7 @@ impl MappedSourceSpan {
             affine: PreparedAffine::new(self, core, cycle, domain),
         };
         view.position_at(self.start_frame).ok_or(unavailable)?;
-        Ok(view)
+        Ok(PhaseLocalSpanView::Grid(view))
     }
 }
 pub(super) fn span_rate(span: MappedSourceSpan) -> Option<f64> {
