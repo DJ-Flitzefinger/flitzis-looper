@@ -2332,6 +2332,177 @@ fn assert_productive_history_unchanged(
 }
 
 #[test]
+fn sync_diagnostic_public_launch_frame_is_distinct_from_phase_generation() {
+    let mut fixture = Fixture::new();
+    assert!(fixture.mixer.play_sample(0, 1.0));
+    let voice = &mut fixture.mixer.voices[0];
+    assert_eq!(voice.source_playback.position().frame, 2000);
+    assert!(
+        voice
+            .source_playback
+            .configure_domain(voice.source_timing.loop_domain(
+                voice.sample.as_ref().unwrap().frame_count(),
+                crate::audio_engine::source_reader::FrameRange {
+                    start: 2000,
+                    end: 16000
+                },
+            ))
+    );
+    fixture.mixer.voices[0]
+        .source_playback
+        .install_launch_reference(
+            crate::audio_engine::loop_phase_reference::LoopPhaseReference::Launch {
+                generation: 7,
+                frame: 1234,
+                master: 5.25,
+            },
+        );
+    let slot = fixture
+        .engine
+        .loop_acceptance
+        .diagnostics
+        .register()
+        .unwrap();
+    let request = fixture.engine.request_sync_diagnostic_snapshot().unwrap();
+    fixture.mixer.begin_sync_diagnostic_capture(request);
+    slot.observe(&fixture.mixer, &fixture.transport, 1, 0);
+    fixture.mixer.end_sync_diagnostic_capture();
+    Python::attach(|py| {
+        let response = fixture
+            .engine
+            .sync_diagnostic_snapshot(py, request)
+            .unwrap()
+            .unwrap();
+        let voices = response.bind(py).get_item("voices").unwrap().unwrap();
+        let voice = voices.get_item(0).unwrap();
+        assert_eq!(
+            voice
+                .get_item("original_launch_frame")
+                .unwrap()
+                .extract::<u64>()
+                .unwrap(),
+            1234
+        );
+        assert_eq!(
+            voice
+                .get_item("original_launch_phase_generation")
+                .unwrap()
+                .extract::<u64>()
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            voice
+                .get_item("launch_master_beat")
+                .unwrap()
+                .extract::<f64>()
+                .unwrap(),
+            5.25
+        );
+    });
+}
+
+#[test]
+fn sync_diagnostic_retained_native_receipt_preserves_real_divergence_through_public_metadata() {
+    let mut fixture = complete_native_history_refresh_fixture(true);
+    fixture.engine.resume_sample(0).unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let captured = fixture.mixer.capture_pitch_voice_snapshot(0).unwrap();
+    let logical = fixture.mixer.voices[0].source_playback;
+    assert!(captured.playback.matches_exact(&logical));
+    let actual = fixture.mixer.voices[0]
+        .stretch
+        .actual_source_checkpoint(&logical, captured.plan)
+        .unwrap()
+        .unwrap();
+    let expected_actual = actual.playback.position_at(17).unwrap();
+    let expected_logical = logical.position_at(17).unwrap();
+    assert_ne!(expected_actual, expected_logical);
+    let slot = fixture
+        .engine
+        .loop_acceptance
+        .diagnostics
+        .register()
+        .unwrap();
+    let request = fixture.engine.request_sync_diagnostic_snapshot().unwrap();
+    let start = fixture.transport.output_frame();
+    fixture.mixer.begin_sync_diagnostic_capture(request);
+    fixture.render(17);
+    slot.observe(
+        &fixture.mixer,
+        &fixture.transport,
+        fixture.engine.input_clock.capture_ns(),
+        17,
+    );
+    fixture.mixer.end_sync_diagnostic_capture();
+    assert_eq!(
+        fixture.mixer.voices[0]
+            .stretch
+            .productive_history()
+            .unwrap()
+            .next_position,
+        expected_actual
+    );
+    Python::attach(|py| {
+        let response = fixture
+            .engine
+            .sync_diagnostic_snapshot(py, request)
+            .unwrap()
+            .unwrap();
+        let response = response.bind(py);
+        let voices = response.get_item("voices").unwrap().unwrap();
+        let voice = voices.get_item(0).unwrap();
+        assert_eq!(
+            voice
+                .get_item("logical_next_source_frame")
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            expected_logical.frame
+        );
+        assert_eq!(
+            voice
+                .get_item("logical_next_source_fraction")
+                .unwrap()
+                .extract::<f64>()
+                .unwrap()
+                .to_bits(),
+            expected_logical.fraction.to_bits()
+        );
+        let read = voice.get_item("last_complete_read").unwrap();
+        assert_eq!(
+            read.get_item("domain")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "native_input"
+        );
+        assert_eq!(
+            read.get_item("output_end_frame")
+                .unwrap()
+                .extract::<u64>()
+                .unwrap(),
+            start + 17
+        );
+        assert_eq!(
+            read.get_item("next_source_frame")
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            expected_actual.frame
+        );
+        assert_eq!(
+            read.get_item("next_source_fraction")
+                .unwrap()
+                .extract::<f64>()
+                .unwrap()
+                .to_bits(),
+            expected_actual.fraction.to_bits()
+        );
+    });
+}
+
+#[test]
 fn qualified_rate_delayed_with_paused_productive_native_history_rejects_replaced_anchor_without_tuple_prefix()
  {
     let mut fixture = complete_native_history_refresh_fixture(false);

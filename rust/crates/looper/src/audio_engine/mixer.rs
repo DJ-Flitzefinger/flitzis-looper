@@ -90,6 +90,8 @@ enum SnapshotKind {
 
 #[path = "mixer_loop_acceptance.rs"]
 mod loop_acceptance_snapshot;
+#[path = "mixer_sync_diagnostics.rs"]
+mod sync_diagnostic_snapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
@@ -300,6 +302,7 @@ pub struct RtMixer {
     pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     runtime_policy_retry: Option<Box<policy_retry::PolicyRetryPublisher>>,
+    diagnostic_request_id: u64,
 
     /// Fixed callback-owned publication epochs shared with the control resolver.
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -1007,6 +1010,7 @@ impl RtMixer {
             pad_accepted_timing: std::array::from_fn(|_| None),
             input_runtime_ownership,
             runtime_policy_retry: None,
+            diagnostic_request_id: 0,
             current_timing_acknowledgements,
             prepared_source_epochs,
             source_control_revisions: [0; NUM_SAMPLES],
@@ -6274,6 +6278,7 @@ impl RtMixer {
         let prepared_source_epochs = &self.prepared_source_epochs;
         let source_control_revisions = &self.source_control_revisions;
         let mut ordinary_terminated = [None; MAX_VOICES];
+        let diagnostic_capture = self.diagnostic_request_id != 0;
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
             voice.phase_read = None;
@@ -6403,6 +6408,9 @@ impl RtMixer {
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
                 while rendered < frames {
                     voice.phase_read = None;
+                    if diagnostic_capture {
+                        voice.diagnostic_read = None;
+                    }
                     let output_frame =
                         output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
                     if voice.source_playback.is_static_phase()
@@ -6595,6 +6603,34 @@ impl RtMixer {
                             pad_peaks[voice.sample_id] =
                                 pad_peaks[voice.sample_id].max(contribution.abs());
                         }
+                    }
+                    if diagnostic_capture
+                        && chunk_frames > 0
+                        && let Some(frame) = output_frame
+                        && let Some(receipt) = source_read.filter(|receipt| {
+                            receipt.output_frames == chunk_frames
+                                && receipt.context.binding.source_address == sample.source_address()
+                        })
+                        && let Some(read_end) = receipt.playback.position_at(chunk_frames)
+                    {
+                        voice.diagnostic_read = Some(super::sync_diagnostics::DiagnosticRead {
+                            generation: voice.generation,
+                            output_start: frame,
+                            output_end: frame.saturating_add(chunk_frames as u64),
+                            source_frame: read_end.frame,
+                            source_fraction: read_end.fraction,
+                            domain: if receipt.domain
+                                == super::source_feed_history::SourceReadDomain::DryOutput
+                            {
+                                1
+                            } else {
+                                2
+                            },
+                            loop_start: receipt.plan.loop_region.start,
+                            loop_end: receipt.plan.loop_region.end,
+                            stems: receipt.plan.selection.diagnostic_fields(),
+                            transition: receipt.plan.transition.is_active(),
+                        });
                     }
                     // Confirm only this birth's first complete output interval, after real mixing.
                     // A failed first attempt consumed birth_first above; a later suffix cannot repair it.
@@ -6811,6 +6847,9 @@ mod committed_stem_mixer;
 
 #[cfg(test)]
 mod tests {
+    mod sync_diagnostic_tests {
+        include!("mixer_sync_diagnostic_tests.rs");
+    }
     mod l3_reader_lifecycle_tests {
         include!("l3_reader_lifecycle_tests.rs");
     }

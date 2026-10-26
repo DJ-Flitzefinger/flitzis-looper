@@ -107,6 +107,7 @@ pub struct VoiceSlot {
     pub(crate) phase_policy_revision: Option<(u64, u64)>,
     /// A complete settled dry interval was actually mixed under these exact owners.
     pub(crate) phase_read: Option<PhaseReadWitness>,
+    pub(crate) diagnostic_read: Option<super::sync_diagnostics::DiagnosticRead>,
     /// Original birth effect validated the captured scheduler projection at T.
     pub(crate) phase_launch_qualified: bool,
     /// Only actual live rendering consumes this; copied preparation never does.
@@ -142,6 +143,7 @@ impl VoiceSlot {
             sync_request: super::source_sync_policy::SourceSyncRequest::default(),
             phase_policy_revision: None,
             phase_read: None,
+            diagnostic_read: None,
             phase_launch_qualified: false,
             phase_birth_unadvanced: false,
             source_timing: VoiceSourceTiming::default(),

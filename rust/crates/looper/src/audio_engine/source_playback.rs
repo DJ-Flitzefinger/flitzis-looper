@@ -134,6 +134,10 @@ pub(crate) struct SourcePlayback {
 }
 
 impl SourcePlayback {
+    /// Historical (phase generation, original output frame, master beat).
+    pub(crate) fn diagnostic_launch_reference(&self) -> Option<(u64, u64, f64)> {
+        self.phase_reference.parts()
+    }
     /// Called only for the selected-A birth already owned by the launch claim.
     pub(crate) fn install_launch_reference(&mut self, reference: LoopPhaseReference) {
         self.phase_reference = if self.domain.is_some_and(|domain| {

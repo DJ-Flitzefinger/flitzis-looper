@@ -3435,6 +3435,7 @@ struct AudioCallbackState {
     callback_clock: Arc<SharedOutputClock>,
     clock_mapper: OutputClockMapper,
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+    sync_diagnostics: Option<Arc<super::sync_diagnostics::DiagnosticSlot>>,
     pad_peaks: [f32; NUM_SAMPLES],
     pad_activity: RtRenderPadActivity,
     last_pad_emit_frame: u64,
@@ -3480,6 +3481,7 @@ fn boxed_stream_callback_state(
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
     retired_buffers: RtAudioBufferRetirement,
 ) -> Box<AudioCallbackState> {
+    let sync_diagnostics = loop_acceptance.diagnostics.register();
     let (consumer_in, parameter_consumer_in, producer_out) = queues;
     let producer_out = ContentFeedbackProducer {
         producer: producer_out,
@@ -3496,6 +3498,7 @@ fn boxed_stream_callback_state(
         callback_clock,
         clock_mapper: OutputClockMapper::new(),
         loop_acceptance,
+        sync_diagnostics,
         pad_peaks: [0.0; NUM_SAMPLES],
         pad_activity: RtRenderPadActivity::default(),
         last_pad_emit_frame: 0,
@@ -3689,6 +3692,16 @@ pub fn create_audio_stream(
                     ..snapshot
                 });
 
+                // Freeze a demand for this callback only. No demand leaves the
+                // renderer's diagnostic scalar copies disabled.
+                let diagnostic_request = state
+                    .sync_diagnostics
+                    .as_ref()
+                    .and_then(|slot| slot.pending())
+                    .unwrap_or(0);
+                state
+                    .mixer
+                    .begin_sync_diagnostic_capture(diagnostic_request);
                 // Render audio + compute per-pad peaks.
                 render_scheduled_audio_tracking_pads(
                     &mut state.mixer,
@@ -3710,6 +3723,10 @@ pub fn create_audio_stream(
                 state
                     .loop_acceptance
                     .observe(&state.mixer, observed_at_ns, frame_clock, frames);
+                if let Some(slot) = state.sync_diagnostics.as_ref() {
+                    slot.observe(&state.mixer, &state.transport, observed_at_ns, frames);
+                }
+                state.mixer.end_sync_diagnostic_capture();
 
                 publish_pad_telemetry(
                     &mut state.producer_out,

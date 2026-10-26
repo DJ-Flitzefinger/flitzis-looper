@@ -67,6 +67,7 @@ impl LoopAcceptanceSnapshot {
 
 /// One outstanding pad request; a newer request supersedes an older observation.
 pub(crate) struct SharedLoopAcceptance {
+    pub(crate) diagnostics: super::sync_diagnostics::DiagnosticRegistry,
     demand: AtomicU64,
     serviced: AtomicU64,
     sequence: AtomicU64,
@@ -76,6 +77,7 @@ pub(crate) struct SharedLoopAcceptance {
 impl Default for SharedLoopAcceptance {
     fn default() -> Self {
         Self {
+            diagnostics: super::sync_diagnostics::DiagnosticRegistry::default(),
             demand: AtomicU64::new(0),
             serviced: AtomicU64::new(0),
             sequence: AtomicU64::new(0),
@@ -101,6 +103,7 @@ impl SharedLoopAcceptance {
     }
 
     pub(crate) fn reset(&self) {
+        self.diagnostics.reset();
         self.serviced
             .store(self.demand.load(Ordering::SeqCst), Ordering::SeqCst);
         self.sequence.store(0, Ordering::SeqCst);

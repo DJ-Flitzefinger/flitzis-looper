@@ -2,7 +2,8 @@
 
 ## Purpose
 
-<!-- Purpose to be updated after merge -->
+Define the Rust-owned musical clock, scheduling and source-phase observations used
+for synchronized playback while preserving callback real-time safety.
 
 ## Requirements
 
@@ -407,5 +408,33 @@ thread.
 - **THEN** stem generation occurs offline or in background workers
 - **AND** stem generation is only allowed for pads that are not currently playing
 - **AND** the audio callback only mixes already prepared audio buffers
+
+### Requirement: Opt-in timing diagnostics
+The application SHALL offer a transient, bounded timing log for reproducing audible synchronization failures without modifying playback intent.
+
+The audio callback SHALL publish demand-only fixed scalar observations for all
+active voices at the same completed output-frame boundary. Observations SHALL
+retain source identity and actual source-reader coordinates without authorizing
+new source admission, current timing, phase alignment or musical acceptance.
+Native input coordinates SHALL be identified separately from audible output phase.
+Callback replacement and superseded requests SHALL NOT publish a displaced cohort
+as the current callback's observation.
+
+The control plane SHALL keep requested settings and separately timestamped raw
+feedback distinct from callback cohorts. A bounded background writer SHALL perform
+all diagnostic file I/O, retain explicit gaps and termination limits, and exclude
+audio, song names and private source paths. A diagnostic failure SHALL leave
+playback unchanged. The user SHALL be able to start, stop and mark audible drift.
+
+#### Scenario: Short and long loops are compared
+- **WHEN** a user records a test with eight-bar and 64-bar loops, including prepared stems
+- **THEN** each completed cohort compares all active voices at one common output frame
+- **AND** missing source reads remain missing rather than reusing stale coordinates
+- **AND** software coordinate agreement does not replace the actual listening criterion
+
+#### Scenario: Placement or logging failure during playback
+- **WHEN** source placement is pending or the diagnostic writer fails
+- **THEN** available active-voice cohorts continue independently of auxiliary control observations
+- **AND** logging reports a bounded gap or stops without changing audio state
 
 

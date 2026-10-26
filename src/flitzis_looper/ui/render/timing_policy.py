@@ -59,3 +59,28 @@ def render_global_timing_policy(ctx: UiContext) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, f"{prefix} {actual}{suffix}")
         if status.detail is not None:
             imgui.text_wrapped(status.detail)
+
+    _render_timing_trace(ctx)
+
+
+def _render_timing_trace(ctx: UiContext) -> None:
+    trace = ctx.state.global_.timing_trace()
+    imgui.begin_disabled(trace.finishing or not trace.supported)
+    if imgui.button("Stop Timing Log" if trace.active else "Start Timing Log", (-1, 0)):
+        if trace.active:
+            ctx.ui.settings.stop_timing_trace()
+        else:
+            ctx.ui.settings.start_timing_trace()
+    imgui.end_disabled()
+    if trace.active:
+        imgui.text(f"Timing log: {trace.elapsed}s / 600s")
+        if imgui.button("Heard Drift##timing-log", (-1, 0)):
+            ctx.ui.settings.mark_timing_drift()
+    if not trace.supported:
+        imgui.text_wrapped("Timing logging needs the updated Native engine after restart.")
+    if trace.finishing:
+        imgui.text("Finishing timing log...")
+    if trace.path is not None:
+        imgui.text_wrapped(str(trace.path))
+    if trace.error is not None:
+        imgui.text_wrapped(trace.error)

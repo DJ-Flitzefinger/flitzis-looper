@@ -27,6 +27,7 @@ from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
 from flitzis_looper.recording_paths import hold_live_recording_spool
+from flitzis_looper.sync_diagnostics import TimingTrace
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
@@ -286,6 +287,12 @@ class AppController:
             )
         )
         self.transport.pitch.bind_diagnostics(self.diagnostics)
+        self.timing_trace = TimingTrace(
+            self._audio,
+            self._project,
+            self._session,
+            self._persistence.config_path.parent / "diagnostics",
+        )
         self.transport.source_sync.bind_diagnostics(self.diagnostics)
         self.transport.residency._bind_diagnostics(self.diagnostics)
         self.transport.waveform.bind_diagnostics(self.diagnostics)
@@ -452,6 +459,7 @@ class AppController:
             if not holds_polled:
                 self.transport.waveform.poll_holds()
             if not self._close_requested:
+                self.timing_trace.stop("shutdown")
                 self._audio.set_input_mapping_enabled(False)
                 self._close_requested = True
                 self.stem_batch.cancel()
@@ -481,6 +489,7 @@ class AppController:
                 message = "Application close is waiting for recording or arrangement settlement"
                 raise RuntimeError(message)
             self.recording.shut_down()
+            self.timing_trace.close()
             self.material_migration.shut_down()
             self.transport.pitch.shut_down()
             self.transport.residency.shut_down()
@@ -540,6 +549,7 @@ class AppController:
         self._sync_arrangement_observers()
 
         poll_control_diagnostics(self)
+        self.timing_trace.poll()
 
     def _sync_arrangement_observers(self) -> None:
         deferred = (

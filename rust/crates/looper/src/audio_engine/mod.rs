@@ -103,6 +103,7 @@ pub(crate) mod master_provenance;
 pub(crate) mod mix_capture;
 mod mix_capture_api;
 mod source_beatmap;
+mod sync_diagnostics;
 pub use source_beatmap::SourceBeatmap;
 mod source_beatmap_artifact;
 pub use source_beatmap_artifact::SourceBeatmapArtifact;
@@ -1945,6 +1946,21 @@ impl AudioEngine {
             return Err(PyRuntimeError::new_err("Audio engine not initialized"));
         }
         self.loop_acceptance.request(sample_id)
+    }
+
+    #[classattr]
+    const SYNC_DIAGNOSTIC_API_VERSION: u32 = 1;
+
+    pub fn request_sync_diagnostic_snapshot(&self) -> PyResult<u64> {
+        self.loop_acceptance.diagnostics.request()
+    }
+
+    pub fn sync_diagnostic_snapshot(
+        &self,
+        py: Python<'_>,
+        request_id: u64,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        sync_diagnostics::metadata(self, py, request_id)
     }
 
     /// One nonblocking read; None means pending, superseded or a busy writer.

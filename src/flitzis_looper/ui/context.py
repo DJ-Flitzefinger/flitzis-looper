@@ -76,6 +76,7 @@ if TYPE_CHECKING:
         TriggerQuantizationStep,
     )
     from flitzis_looper.recording_options import RecordingOptions
+    from flitzis_looper.sync_diagnostics import TimingTrace
     from flitzis_looper_audio import WaveFormRenderData
 
 T = TypeVar("T", bound=BaseModel)
@@ -336,6 +337,10 @@ class GlobalSelectors:
 
     def timing_policy_status(self, control: TimingControl) -> GlobalTimingControlStatus:
         return self._controller.transport.timing_policy.status(control)
+
+    def timing_trace(self) -> TimingTrace:
+        """Transient observer status; never changes performer intent."""
+        return self._controller.timing_trace
 
     def global_rate_status(self) -> GlobalRateStatus:
         """Return the last coherent callback rate confirmation from the runtime tick."""
@@ -1661,6 +1666,15 @@ class SettingsActions:
 
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
+
+    def start_timing_trace(self) -> None:
+        self._controller.timing_trace.start()
+
+    def stop_timing_trace(self) -> None:
+        self._controller.timing_trace.stop()
+
+    def mark_timing_drift(self) -> None:
+        self._controller.timing_trace.mark_drift()
 
     def open(self) -> None:
         self._controller.session.settings_open = True

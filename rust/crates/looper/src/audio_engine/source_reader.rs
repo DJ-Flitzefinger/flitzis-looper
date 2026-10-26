@@ -378,6 +378,14 @@ pub(crate) struct StemRenderSelection {
 }
 
 impl StemRenderSelection {
+    /// Scalar diagnostic description only; never permission to read a stem set.
+    pub(crate) fn diagnostic_fields(self) -> (u64, u64, u64) {
+        (
+            u64::from(self.mode == StemMixMode::AllStems),
+            self.source_version_hash,
+            u64::from(self.enabled_mask),
+        )
+    }
     pub(crate) fn required_stem_hash(self) -> Option<u64> {
         (self.mode == StemMixMode::AllStems).then_some(self.source_version_hash)
     }
