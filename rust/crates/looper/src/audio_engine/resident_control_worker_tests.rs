@@ -101,6 +101,29 @@ fn assert_owned_pad_feedback(engine: &AudioEngine, callback: &mut Callback, id: 
     );
 }
 
+fn install_original_fixture_reference(
+    mixer: &mut RtMixer,
+    start: usize,
+    end: usize,
+    reference: crate::audio_engine::loop_phase_reference::LoopPhaseReference,
+) {
+    let voice = mixer
+        .voices
+        .iter_mut()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    // These original WAV fixtures assign no BPM. Configure their independently
+    // specified physical extent before installing the original scheduler input.
+    // The first renderer configuration must not erase a prematurely installed reference.
+    assert!(voice.source_playback.configure_domain(
+        crate::audio_engine::source_reader::SourceLoopDomain::physical(
+            voice.sample.as_ref().unwrap().frame_count(),
+            crate::audio_engine::source_reader::FrameRange { start, end },
+        )
+    ));
+    voice.source_playback.install_launch_reference(reference);
+}
+
 struct Loaded {
     directory: tempfile::TempDir,
     engine: AudioEngine,

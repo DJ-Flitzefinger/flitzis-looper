@@ -428,8 +428,14 @@ fn start_finite(loaded: &mut Loaded) -> ResidentWindowTicket {
 fn actual_paused_storage_ack_fences_pending_work_and_preserves_adopted_native_reader_peak() {
     for adopted_before_pause in [false, true] {
         let mut loaded = Loaded::new();
+        let launch_reference =
+            crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+                Some(loaded.callback.transport),
+                0,
+            );
         let a = start_finite(&mut loaded);
         let mut reference = complete_mixer(&loaded.mono, 24, 96);
+        install_original_fixture_reference(&mut reference, 24, 96, launch_reference);
         let mut frame = 0;
         render(&mut loaded, &mut reference, &mut frame, 13);
         let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
@@ -623,8 +629,14 @@ fn actual_future_bank_window_ack_keeps_old_voice_then_guarded_legacy_retrigger_c
             Some((true, true)),
         ] {
             let mut loaded = Loaded::new();
+            let launch_reference =
+                crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+                    Some(loaded.callback.transport),
+                    0,
+                );
             start_finite(&mut loaded);
             let mut reference = complete_mixer(&loaded.mono, 24, 96);
+            install_original_fixture_reference(&mut reference, 24, 96, launch_reference);
             let mut frame = 0;
             render(&mut loaded, &mut reference, &mut frame, 13);
             let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
@@ -1253,8 +1265,14 @@ fn actual_window_history_saturation_rejects_before_superseding_ticket_or_effecti
     pyo3::Python::initialize();
     for already_pending in [false, true] {
         let mut loaded = Loaded::new();
+        let launch_reference =
+            crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+                Some(loaded.callback.transport),
+                0,
+            );
         let acknowledged = start_finite(&mut loaded);
         let mut reference = complete_mixer(&loaded.mono, 24, 96);
+        install_original_fixture_reference(&mut reference, 24, 96, launch_reference);
         let mut frame = 0;
         render(&mut loaded, &mut reference, &mut frame, 13);
         let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);

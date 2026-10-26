@@ -205,6 +205,11 @@ impl ModeOracle {
         } else {
             0
         };
+        let launch_reference =
+            crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+                Some(loaded.callback.transport),
+                original,
+            );
         assert!(launch_with_producer(&loaded.engine, &ready, false, 1, &loaded.producer).unwrap());
         let ControlMessage::CapturePadStartTarget(start) = loaded.consumer.peek().unwrap() else {
             panic!("ordinary launch must retain its original target before PreparedStart");
@@ -341,6 +346,8 @@ impl ModeOracle {
         complete.set_pad_loop_region(0, 24.0 / 48_000.0, Some(96.0 / 48_000.0));
         complete.set_speed(ratio);
         assert!(complete.play_sample_at_output_frame(0, 1.0, execution));
+        // Both independent readers share the original scheduler inputs, not each other's clock.
+        install_original_fixture_reference(&mut complete, 24, 96, launch_reference);
         complete.set_pad_key_lock(0, initial);
         if initial {
             prepare_complete_physical_birth(&mut complete, &ownership, execution);

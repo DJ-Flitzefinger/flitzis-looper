@@ -1874,6 +1874,7 @@ struct ResidentControlWrite {
     original_request: u64,
     next_intent: u64,
     next_request: Option<u64>,
+    predecessor: Option<PreparedSourcePermit>,
 }
 
 impl ResidentControlWrite {
@@ -1910,7 +1911,39 @@ impl ResidentControlWrite {
             original_request,
             next_intent,
             next_request,
+            predecessor: None,
         })
+    }
+
+    fn with_predecessor(mut self, predecessor: Option<PreparedSourcePermit>) -> Self {
+        self.predecessor = predecessor;
+        self
+    }
+
+    fn original_control_current(&self, ownership: &InputRuntimeOwnership) -> bool {
+        let actual = ownership
+            .resident_control_for_cell(self.placement.cell())
+            .load(Ordering::Acquire);
+        actual == self.original_control
+            || (actual == 0
+                && self.original_control != 0
+                && self.predecessor.as_ref().is_some_and(|previous| {
+                    previous.expected == self.original_control
+                        && matches!(previous.status(), "accepted" | "rejected")
+                }))
+    }
+
+    /// Only the captured predecessor may cancel. A completed callback keeps its ACK;
+    /// it may have cleared its own control counter just before this mutation marker.
+    fn claim_predecessor(&self, cancelled: &mut bool) -> bool {
+        let Some(previous) = self.predecessor.as_ref() else {
+            return true;
+        };
+        if previous.cancel_unclaimed() {
+            *cancelled = true;
+            return true;
+        }
+        matches!(previous.status(), "accepted" | "rejected")
     }
 
     fn commit(
@@ -1951,10 +1984,7 @@ impl ResidentControlWrite {
             || {
                 binding.admitted_publication_current(resolved)
                     && intent_epoch.load(Ordering::Acquire) == self.original_intent
-                    && ownership
-                        .resident_control_for_cell(self.placement.cell())
-                        .load(Ordering::Acquire)
-                        == self.original_control
+                    && self.original_control_current(ownership)
                     && ownership
                         .key_lock_request_for_cell(self.placement.cell())
                         .load(Ordering::Acquire)
@@ -2457,7 +2487,6 @@ impl WindowWork {
             },
         )));
         let mut pending = None;
-        let mut predecessor = None;
         let mut queue_attempts = 0;
         loop {
             if !self.current() {
@@ -2549,10 +2578,6 @@ impl WindowWork {
                     state: proposed.state.clone(),
                     admitted: proposed.admitted,
                 });
-                predecessor = owners[slot]
-                    .relocation
-                    .as_ref()
-                    .map(|previous| previous.publication.clone());
                 self.publication.mark_pending()?;
                 self.proposal.arm()?;
             }
@@ -2563,6 +2588,7 @@ impl WindowWork {
                 .map_err(|_| "resident binding lock poisoned")?;
             let mut displaced = None;
             let mut proposal_owner = None;
+            let mut predecessor_cancelled = false;
             pending.as_mut().expect("held window payload").admitted = Instant::now();
             let outcome = self.control.commit_at(
                 &self.binding,
@@ -2572,9 +2598,7 @@ impl WindowWork {
                     !self.cancelled.load(Ordering::Acquire)
                         && self.proposal.current()
                         && self.publication.status() == "pending"
-                        && predecessor
-                            .as_ref()
-                            .is_none_or(|previous| previous.cancel_unclaimed())
+                        && self.control.claim_predecessor(&mut predecessor_cancelled)
                 },
                 || {
                     displaced = owners[slot]
@@ -2593,7 +2617,7 @@ impl WindowWork {
             drop(producer);
             drop(cache);
             drop(requests);
-            if let Some(previous) = displaced.as_ref() {
+            if predecessor_cancelled && let Some(previous) = displaced.as_ref() {
                 previous.state.fail(
                     &self.binding.ownership,
                     slot,
@@ -3142,7 +3166,13 @@ fn prepare_window_with_producer_and_trigger(
         next_intent,
         request.key_lock.is_some(),
     )
-    .map_err(PyRuntimeError::new_err)?;
+    .map_err(PyRuntimeError::new_err)?
+    .with_predecessor(
+        owners[id]
+            .relocation
+            .as_ref()
+            .map(|previous| previous.publication.clone()),
+    );
     let key_lock_request_id = control.next_request;
     let proposal = if reuse_window {
         None
@@ -3261,21 +3291,14 @@ fn prepare_window_with_producer_and_trigger(
                 intent,
                 seek_pin: None,
             }));
-        let predecessor = owners[id]
-            .relocation
-            .as_ref()
-            .map(|previous| previous.publication.clone());
         let intent_epoch = owners[id].intent_epoch.clone();
         let mut displaced = None;
+        let mut predecessor_cancelled = false;
         control
             .commit(
                 &binding,
                 &intent_epoch,
-                || {
-                    predecessor
-                        .as_ref()
-                        .is_none_or(|previous| previous.cancel_unclaimed())
-                },
+                || control.claim_predecessor(&mut predecessor_cancelled),
                 || {
                     displaced = owners[id].relocation.replace(pending);
                     owners[id].start_readiness = Some(Arc::downgrade(&state));
@@ -3286,7 +3309,7 @@ fn prepare_window_with_producer_and_trigger(
                 },
             )
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        if let Some(previous) = displaced.as_ref() {
+        if predecessor_cancelled && let Some(previous) = displaced.as_ref() {
             previous.state.fail(
                 &engine.input_runtime_ownership,
                 id,

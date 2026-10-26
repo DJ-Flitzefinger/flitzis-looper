@@ -13,6 +13,66 @@ fn same_window() -> WindowRequest {
     }
 }
 
+#[test]
+fn real_completed_predecessor_between_capture_and_claim_allows_same_window_successor() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let Loaded {
+        directory: _directory,
+        engine,
+        callback,
+        mono: _mono,
+        producer,
+        consumer,
+    } = Loaded::new();
+    let predecessor =
+        Rc::new(prepare_window_with_producer(&engine, 0, same_window(), producer.clone()).unwrap());
+    assert_eq!(predecessor.publication_status(), "pending");
+    let original = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    let key = engine
+        .input_runtime_ownership
+        .slot_snapshot(0)
+        .unwrap()
+        .content_key();
+    let driver = Rc::new(RefCell::new((callback, consumer)));
+    let hook_driver = driver.clone();
+    let prior = predecessor.clone();
+    let result = with_before_commit(
+        move || {
+            let mut held = hook_driver.borrow_mut();
+            let (callback, consumer) = &mut *held;
+            assert_eq!(callback.drain(consumer), 1);
+            assert_eq!(prior.publication_status(), "accepted");
+        },
+        || prepare_window_with_producer(&engine, 0, same_window(), producer.clone()),
+    );
+    let successor = result.expect("same source/window must survive actual predecessor completion");
+    assert_eq!(predecessor.publication_status(), "accepted");
+    assert!(predecessor.error().unwrap().is_none());
+    let mut held = driver.borrow_mut();
+    let (callback, consumer) = &mut *held;
+    assert_eq!(callback.drain(consumer), 1);
+    assert_eq!(successor.publication_status(), "accepted");
+    reconcile(&engine).unwrap();
+    assert!(!engine.input_runtime_ownership.resident_control_pending(0));
+    assert!(consumer.is_empty());
+    assert!(
+        engine.sample_cache.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .same_window(&original)
+    );
+    assert_eq!(
+        engine
+            .input_runtime_ownership
+            .slot_snapshot(0)
+            .unwrap()
+            .content_key(),
+        key
+    );
+}
+
 struct Before {
     placement: crate::audio_engine::content_placement::SlotSnapshot,
     epoch: Arc<AtomicU64>,

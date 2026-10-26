@@ -55,6 +55,11 @@ impl SeekOracle {
         // This cut/seek fixture starts with live OFF-to-ON preparation at frame zero.
         loaded.callback.mixer.set_pad_key_lock(0, false);
         assert!(!loaded.callback.mixer.key_lock_for_measurement(0));
+        let launch_reference =
+            crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+                Some(loaded.callback.transport),
+                0,
+            );
         assert!(launch_with_producer(&loaded.engine, &ticket, false, 1, &loaded.producer).unwrap());
         let start = match loaded.consumer.peek().unwrap() {
             ControlMessage::CapturePadStartTarget(start) => start.clone(),
@@ -105,6 +110,7 @@ impl SeekOracle {
         complete.set_pad_loop_region(0, START as f64 / 48_000.0, Some(END as f64 / 48_000.0));
         complete.set_speed(ratio);
         assert!(complete.play_sample_at_output_frame(0, 1.0, 0));
+        install_original_fixture_reference(&mut complete, START, END, launch_reference);
         complete.set_pad_key_lock(0, true);
         for mixer in [complete.as_mut(), &mut loaded.callback.mixer] {
             mixer.set_pad_eq(0, -12.0, -3.0, 4.0);

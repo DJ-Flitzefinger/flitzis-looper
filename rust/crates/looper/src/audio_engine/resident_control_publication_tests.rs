@@ -323,6 +323,96 @@ fn resident_control_rejected_final_claim_preserves_cell_intent_and_layout() {
 }
 
 #[test]
+fn resident_control_completed_counter_requires_exact_terminal_predecessor() {
+    for state in [
+        "accepted",
+        "preserved",
+        "rejected",
+        "adopting",
+        "pending",
+        "wrong",
+        "missing",
+    ] {
+        let fixture = Fixture::new();
+        let expected = if state == "wrong" { 7 } else { 6 };
+        let previous =
+            PreparedSourcePermit::for_epoch(Arc::new(AtomicU64::new(expected)), expected);
+        previous.mark_pending().unwrap();
+        match state {
+            "accepted" | "wrong" | "missing" => previous.mark_accepted(),
+            "preserved" => previous.mark_accepted_preserved_window(),
+            "rejected" => previous.mark_rejected(),
+            "adopting" => assert!(previous.claim_resident()),
+            _ => {}
+        }
+        let captured = fixture
+            .prepared()
+            .with_predecessor((state != "missing").then(|| previous.clone()));
+        fixture
+            .engine
+            .input_runtime_ownership
+            .resident_control_for_cell(fixture.placement.cell())
+            .store(0, Ordering::Release);
+        let mut cancelled = false;
+        let applied = Cell::new(false);
+        let result = captured.commit(
+            &fixture.binding,
+            &fixture.epoch,
+            || captured.claim_predecessor(&mut cancelled),
+            || applied.set(true),
+        );
+        let allowed = matches!(state, "accepted" | "preserved" | "rejected");
+        assert_eq!(result.is_ok(), allowed, "{state}");
+        assert_eq!(applied.get(), allowed, "{state}");
+        assert!(
+            !cancelled,
+            "terminal or unrelated work must not be cancelled: {state}"
+        );
+        assert_eq!(
+            fixture.counters(),
+            if allowed { (10, 10, 5) } else { (9, 0, 4) }
+        );
+        assert_eq!(
+            previous.status(),
+            match state {
+                "preserved" | "wrong" | "missing" => "accepted",
+                other => other,
+            }
+        );
+    }
+}
+
+#[test]
+fn resident_control_cancels_only_its_still_unclaimed_predecessor() {
+    for adopting in [false, true] {
+        let fixture = Fixture::new();
+        let previous = PreparedSourcePermit::for_epoch(Arc::new(AtomicU64::new(6)), 6);
+        previous.mark_pending().unwrap();
+        if adopting {
+            assert!(previous.claim_resident());
+        }
+        let captured = fixture.prepared().with_predecessor(Some(previous.clone()));
+        let mut cancelled = false;
+        let result = captured.commit(
+            &fixture.binding,
+            &fixture.epoch,
+            || captured.claim_predecessor(&mut cancelled),
+            || {},
+        );
+        assert_eq!(result.is_ok(), !adopting);
+        assert_eq!(cancelled, !adopting);
+        assert_eq!(
+            previous.status(),
+            if adopting { "adopting" } else { "rejected" }
+        );
+        assert_eq!(
+            fixture.counters(),
+            if adopting { (9, 6, 4) } else { (10, 10, 5) }
+        );
+    }
+}
+
+#[test]
 fn resident_failure_pending_retains_terminal_until_retry_preserving_replacement_owner() {
     for replacement in [false, true] {
         let fixture = Fixture::new();

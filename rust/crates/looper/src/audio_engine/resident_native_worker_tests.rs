@@ -33,7 +33,12 @@ fn render(loaded: &mut Loaded, frame: u64, frames: usize) -> Vec<f32> {
     output
 }
 
-fn full_oracle(loaded: &Loaded, start: usize, end: usize) -> RtMixer {
+fn full_oracle(
+    loaded: &Loaded,
+    start: usize,
+    end: usize,
+    launch_reference: crate::audio_engine::loop_phase_reference::LoopPhaseReference,
+) -> RtMixer {
     // Construct complete PCM independently from the generated original WAV integers.
     // No productive range reader or finite sample supplies the control's samples.
     let sample = SampleBuffer {
@@ -56,6 +61,7 @@ fn full_oracle(loaded: &Loaded, start: usize, end: usize) -> RtMixer {
     mixer.set_pad_loop_region(0, start as f64 / 48_000.0, Some(end as f64 / 48_000.0));
     mixer.set_speed(0.73);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    install_original_fixture_reference(&mut mixer, start, end, launch_reference);
     // Stage the complete reader's first wet handover just like the owned stopped ON.
     mixer.set_pad_key_lock(0, true);
     mixer
@@ -101,6 +107,10 @@ fn actual_finite_keylock_window_worker_ack_feeds_native_and_continues_full_pcm_o
     // A wet ordinary attack now owns a separately prepared T-to-E Native before
     // it starts; keep this explicit OFF-to-ON chronology on both references.
     loaded.callback.mixer.set_pad_key_lock(0, false);
+    let launch_reference = crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(
+        Some(loaded.callback.transport),
+        0,
+    );
     assert!(launch_with_producer(&loaded.engine, &ticket, false, 1, &loaded.producer).unwrap());
     let start = match loaded.consumer.peek().unwrap() {
         ControlMessage::CapturePadStartTarget(start) => start.clone(),
@@ -118,7 +128,7 @@ fn actual_finite_keylock_window_worker_ack_feeds_native_and_continues_full_pcm_o
         (0, 0)
     );
     loaded.callback.mixer.set_pad_key_lock(0, true);
-    let mut reference = full_oracle(&loaded, 24, 96);
+    let mut reference = full_oracle(&loaded, 24, 96, launch_reference);
     let mut peaks = [0.0; NUM_SAMPLES];
     let mut expected = vec![0.0; 26];
     reference.render_at_output_frame(0, &mut expected, &mut peaks);
