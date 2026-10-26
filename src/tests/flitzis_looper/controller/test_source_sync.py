@@ -646,31 +646,42 @@ def test_inactive_no_active_voice_attempt_stays_off_and_quiet_across_pad_and_glo
 
 
 @pytest.mark.parametrize("policy", _IDLE_POLICIES)
-@pytest.mark.parametrize("reason", ["missing_master", "unsupported"])
-def test_inactive_real_live_timing_refusals_remain_visible(
+@pytest.mark.parametrize("reason", ["missing_master", "unsupported", "source_changed"])
+@pytest.mark.parametrize("active", [False, True])
+def test_live_cohort_refusal_is_only_attributed_to_active_pads(
     controller: AppController,
     audio_engine_mock: Mock,
     capsys: pytest.CaptureFixture[str],
     policy: GlobalTimingPolicy,
     reason: str,
+    *,
+    active: bool,
 ) -> None:
-    _inactive_policy_refusal(controller, audio_engine_mock, policy, reason=reason)
+    feedback, adoption = _inactive_policy_refusal(
+        controller, audio_engine_mock, policy, reason=reason
+    )
+    feedback["active"] = active
     controller.transport.source_sync.bind_diagnostics(ConsoleDiagnostics())
     capsys.readouterr()
 
-    status = controller.transport.source_sync.status(0)
-
-    assert status.state == "refused"
-    assert status.guidance == "refused"
-    assert status.active is False
+    before = controller.project.model_dump()
+    for attempt in (640, 642, 643):
+        adoption["attempt"] = attempt
+        status = controller.transport.source_sync.status(0)
+        assert status.state == ("refused" if active else "off")
+        assert status.guidance == ("refused" if active else None)
+        assert status.active is active
+        assert (status.detail is not None) is active
+    assert controller.project.model_dump() == before
     assert status.effective is False
-    assert status.detail is not None
-    assert reason in status.detail
-    assert controller.transport.timing_policy.status("sync").pending is True
-    assert controller.transport.timing_policy.status("realtime_bpm").pending is True
+    assert controller.transport.timing_policy.status("sync").pending is active
+    assert controller.transport.timing_policy.status("realtime_bpm").pending is active
     diagnostic = capsys.readouterr().err
-    assert "operation=source_sync" in diagnostic
-    assert reason in diagnostic
+    if active:
+        assert "operation=source_sync" in diagnostic
+        assert reason in diagnostic
+    else:
+        assert not diagnostic
 
 
 @pytest.mark.parametrize("policy", _IDLE_POLICIES)
@@ -690,11 +701,17 @@ def test_active_no_active_voice_refusal_is_not_projected_as_idle(
     assert "no_active_voices" in status.detail
 
 
+@pytest.mark.parametrize("reason", ["no_active_voices", "unsupported", "missing_master"])
 def test_requested_fixed_idle_attempt_is_stopped_without_an_applied_acknowledgement(
-    controller: AppController, audio_engine_mock: Mock, capsys: pytest.CaptureFixture[str]
+    controller: AppController,
+    audio_engine_mock: Mock,
+    capsys: pytest.CaptureFixture[str],
+    reason: str,
 ) -> None:
     policy = GlobalTimingPolicy(schema_version=1, sync=True, realtime_bpm=False, revision=2)
-    feedback, adoption = _inactive_policy_refusal(controller, audio_engine_mock, policy)
+    feedback, adoption = _inactive_policy_refusal(
+        controller, audio_engine_mock, policy, reason=reason
+    )
     controller.transport.source_sync.bind_diagnostics(ConsoleDiagnostics())
     capsys.readouterr()
 
@@ -714,6 +731,20 @@ def test_requested_fixed_idle_attempt_is_stopped_without_an_applied_acknowledgem
     assert adoption["execution_frame"] is None
     assert feedback["settled"] is None
     assert not capsys.readouterr().err
+
+
+def test_inactive_pad_keeps_its_own_resident_error_without_inheriting_cohort_refusal(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    policy = GlobalTimingPolicy(schema_version=1, sync=True, realtime_bpm=True, revision=2)
+    _inactive_policy_refusal(controller, audio_engine_mock, policy, reason="unsupported")
+    controller.transport.residency.report_launch_error(0, "PAD-owned resident preparation failed")
+    status = controller.transport.source_sync.status(0)
+    assert status.state == "refused"
+    assert status.active is False
+    assert status.detail is not None
+    assert "PAD-owned resident preparation failed" in status.detail
+    assert "Live timing adoption refused" not in status.detail
 
 
 @pytest.mark.parametrize("policy", _IDLE_POLICIES)
@@ -974,7 +1005,11 @@ def test_target_current_cannot_bypass_source_fences_or_confirm_a_stopped_glide(
     feedback["source_generation"] = 2
     assert controller.transport.source_sync.status(0).state == "unconfirmed"
     feedback.update(source_generation=1, active=False)
-    assert controller.transport.source_sync.status(0).guidance == "refused"
+    stopped = controller.transport.source_sync.status(0)
+    assert stopped.state == "off"
+    assert stopped.guidance is None
+    assert stopped.grid_phase_confirmed is None
+    assert stopped.effective is False
 
 
 def test_mapped_target_current_does_not_enter_scalar_settling_precedence(

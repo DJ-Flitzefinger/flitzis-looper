@@ -685,6 +685,31 @@ pub(super) fn admit_incoming(
     .map(|admitted| admitted.request_id)
 }
 
+#[cfg(test)]
+pub(super) fn admit_incoming_for_format_test(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    key_lock: bool,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+) -> PyResult<u64> {
+    admit_selected_material_incoming(
+        engine,
+        id,
+        path,
+        (true, false, true, None),
+        producer,
+        output,
+        "import",
+        None,
+        Some(super::incoming_load::IncomingIntent::initial(key_lock)),
+        SourcePitchInitialization::FreshNeutral,
+        None,
+    )
+    .map(|admitted| admitted.request_id)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn admit_selected_material_incoming(
     engine: &AudioEngine,

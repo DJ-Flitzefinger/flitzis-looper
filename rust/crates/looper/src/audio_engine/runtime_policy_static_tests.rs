@@ -520,6 +520,152 @@ fn verify_first_resumed_read(fixture: &StaticPath, raw: FractionalSourcePosition
 }
 
 #[test]
+fn static_loading_third_stopped_pad_does_not_flood_live_policy_attempts() {
+    third_stopped_pad_service_case(false);
+}
+
+#[test]
+fn static_loading_third_after_real_loop_edit_does_not_repeat_unchanged_refusal() {
+    third_stopped_pad_service_case(true);
+}
+
+fn third_stopped_pad_service_case(edit: bool) {
+    let mut fixture = StaticPath::new(&[2048, 16384]);
+    let mut reference = StaticPath::new(&[2048, 16384]);
+    fixture.install();
+    reference.install();
+    assert_eq!(fixture.path.render(1), reference.path.render(1));
+    for id in 0..2 {
+        assert_eq!(fixture.path.feedback(id)["phase_read_confirmed"], true);
+    }
+    if edit {
+        for path in [&mut fixture, &mut reference] {
+            path.lengths[0] += 256;
+            path.path
+                .source
+                .engine
+                .set_pad_loop_region(
+                    0,
+                    STATIC_START as f64 / f64::from(RATE),
+                    Some((STATIC_START + path.lengths[0]) as f64 / f64::from(RATE)),
+                )
+                .unwrap();
+            path.drain();
+            assert!(!path.path.voice(0).phase_launch_qualified);
+        }
+        // Let the actual renderer observe the changed loop domain before the
+        // independent incoming load. That real condition change merits a retry.
+        assert_eq!(fixture.path.render(1), reference.path.render(1));
+    }
+    let source = &fixture.path.source;
+    let request = crate::audio_engine::cold_load::admit_incoming_for_format_test(
+        &source.engine,
+        2,
+        source
+            .directory
+            .path()
+            .join("external.wav")
+            .to_string_lossy()
+            .into_owned(),
+        false,
+        source.producer.clone(),
+        (2, RATE, source.directory.path().join("samples")),
+    )
+    .unwrap();
+    wait_for(|| {
+        fixture
+            .path
+            .source
+            .engine
+            .input_runtime_ownership
+            .cold_status(2, request)
+            == Some(0)
+            && !fixture.path.source.consumer.is_empty()
+    });
+    fixture.drain();
+    assert_eq!(
+        fixture
+            .path
+            .source
+            .engine
+            .input_runtime_ownership
+            .cold_status(2, request),
+        Some(2)
+    );
+    wait_for(|| {
+        fixture.path.source.engine.cold_loading[2].load(std::sync::atomic::Ordering::Acquire) == 0
+    });
+    fixture.lanes = 3;
+    fixture.lengths.push(STATIC_SOURCE_FRAMES);
+    fixture.starts.push(0);
+    fixture.publish(true, 2, 7, None);
+    let snapshot = fixture.effect();
+    let initial = snapshot.observation().unwrap();
+    if edit {
+        assert_eq!(initial.reason, Some(RuntimePolicyError::Unsupported));
+        assert!(
+            fixture
+                .path
+                .source
+                .engine
+                .input_runtime_ownership
+                .runtime_policy_retry
+                .current()
+                .is_some(),
+            "stable launch refusal needs an original retry token; fences_current={}",
+            snapshot.retry_fences_current()
+        );
+    }
+    for _ in 0..64 {
+        fixture
+            .path
+            .source
+            .engine
+            .request_input_runtime_policy_adoption(true)
+            .unwrap();
+        fixture.drain();
+        assert_eq!(fixture.path.render(1), reference.path.render(1));
+        assert!(
+            !fixture
+                .path
+                .source
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 2)
+        );
+        assert_eq!(snapshot.observation().unwrap().attempt, initial.attempt);
+        assert!(fixture.path.source.consumer.is_empty());
+    }
+    if edit {
+        let previous_generation = fixture.path.voice(0).generation;
+        assert_eq!(fixture.start(0).state(), "applied");
+        assert_ne!(fixture.path.voice(0).generation, previous_generation);
+        assert!(fixture.path.voice(0).phase_launch_qualified);
+        fixture.path.render(1);
+        fixture
+            .path
+            .source
+            .engine
+            .request_input_runtime_policy_adoption(true)
+            .unwrap();
+        fixture.drain();
+        fixture.path.render(0);
+        assert_eq!(snapshot.observation().unwrap().attempt, initial.attempt + 1);
+        assert_eq!(snapshot.observation().unwrap().state, "applied");
+        assert!(
+            !fixture
+                .path
+                .source
+                .mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 2)
+        );
+    }
+}
+
+#[test]
 fn static_aligned_original_launch_ignores_off_grid_origin_without_artificial_debt() {
     let mut fixture = StaticPath::new(&[2048, 16384]);
     let mut ordinary = StaticPath::new(&[2048, 16384]);

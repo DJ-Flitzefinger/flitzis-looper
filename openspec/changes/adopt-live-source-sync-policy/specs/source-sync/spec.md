@@ -1,5 +1,32 @@
 ## ADDED Requirements
 
+### Requirement: Stable scalar launch refusals do not create automatic retry work
+An unchanged scalar-cohort launch refusal SHALL retain its exact bounded retry
+observation when original launch qualification remains unavailable.
+Automatic service SHALL NOT enqueue another attempt until a captured condition
+changes. This observation SHALL NOT qualify a launch, mapped source or grid phase,
+or relax the complete actual-effect source/ACK/ownership claim. Any actual or
+target mapped participant SHALL retain its separate eligibility/retry guards.
+
+#### Scenario: Load a stopped third PAD after a live loop edit
+- **GIVEN** two running scalar SYNC PADs and a real loop edit that revokes original launch qualification
+- **WHEN** a third PAD finishes incoming loading without starting
+- **THEN** repeated automatic polls and renders SHALL keep the unchanged refusal attempt stable
+- **AND** the third PAD SHALL remain inactive and the running PCM/clock SHALL remain unchanged
+- **AND** a fresh qualified original start SHALL invalidate the observation and permit recovery
+
+### Requirement: Live cohort feedback belongs only to active PAD participants
+The shared live-policy attempt SHALL NOT be presented as a stopped PAD's own live
+refusal, pending change or acknowledgement. Validated inactive feedback SHALL
+retain that PAD's own stopped/off, map/residency readiness and source errors.
+Active participants SHALL retain truthful live-cohort errors and source fences.
+
+#### Scenario: An idle PAD cannot inherit another voice's unsupported attempt
+- **WHEN** the live cohort reports repeated unsupported attempts while a loaded PAD is inactive
+- **THEN** that PAD SHALL NOT emit a live-adoption refusal diagnostic for those attempts
+- **AND** its saved preference and effective state SHALL NOT be rewritten
+- **AND** an active participant's genuine error and the inactive PAD's own preparation failure SHALL remain visible
+
 ### Requirement: Live policy adoption preserves exact source phase and established master
 The system SHALL adopt a supported changed SYNC/Realtime BPM policy or qualified map for living voices through the existing Native runtime and atomic audio claim. It SHALL preserve the exact integer/fraction source cursor at actual execution E, original physical loop intent, content lifetime, voice generation and launch target. It SHALL leave the actual master clock and requested BPM Lock/Key Lock controls unchanged. Unsupported transitions SHALL retain preceding effective audio with truthful pending/refusal state rather than a fabricated adoption ACK.
 

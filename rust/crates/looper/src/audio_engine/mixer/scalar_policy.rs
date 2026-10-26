@@ -178,7 +178,13 @@ impl RtMixer {
         let voice = &self.voices[index];
         let id = voice.sample_id;
         let row = snapshot.row(id).ok_or(Error::SourceChanged)?;
-        if phase_only && row.request.requires_common_phase() && !voice.phase_launch_qualified {
+        let launch_qualified = voice.phase_launch_qualified;
+        if phase_only && row.request.requires_common_phase() && !launch_qualified {
+            *evidence = Some(UnsupportedEvidence::Launch {
+                index,
+                generation: voice.generation,
+                qualified: launch_qualified,
+            });
             return Err(Error::Unsupported);
         }
         if !snapshot.row_current(id) || !self.admitted_source_binding_current(id, row.binding) {

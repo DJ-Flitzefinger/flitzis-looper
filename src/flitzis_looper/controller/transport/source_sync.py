@@ -554,12 +554,9 @@ class SourceSyncController:
         if adoption is None:
             return None
         active = feedback["active"] is True
-        if not active and (
-            adoption["state"] == "applied"
-            or (adoption["state"] == "refused" and adoption["reason"] == "no_active_voices")
-        ):
-            # Idle service has no live change to apply. Keep the ordinary stopped/
-            # off projection; neither this refusal nor an old applied result is ACK.
+        if not active:
+            # The attempt describes the entire live cohort. A stopped PAD is
+            # not its participant; retain that PAD's own readiness and errors.
             return None
         refused = adoption["state"] == "refused"
         policy_valid = _policy_feedback_valid(feedback)

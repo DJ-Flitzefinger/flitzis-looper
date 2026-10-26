@@ -105,6 +105,7 @@ impl From<SourceLoopDomain> for DomainIdentity {
 struct RetryVoiceShape {
     id: usize,
     generation: u64,
+    phase_launch_qualified: bool,
     admission: NativeSourceAdmissionIdentity,
     source: ProductiveSourceBinding,
     request: SourceSyncRequest,
@@ -153,6 +154,11 @@ impl PartialEq for RetryGlobalShape {
 /// The actual once-read decision, not a later reconstruction of its reason.
 #[derive(Clone, Copy)]
 pub(super) enum UnsupportedEvidence {
+    Launch {
+        index: usize,
+        generation: u64,
+        qualified: bool,
+    },
     Early {
         index: usize,
         generation: u64,
@@ -220,7 +226,10 @@ impl PolicyRetryPublisher {
 
     fn evidence_matches(&self, evidence: UnsupportedEvidence) -> bool {
         let (index, generation) = match evidence {
-            UnsupportedEvidence::Early {
+            UnsupportedEvidence::Launch {
+                index, generation, ..
+            }
+            | UnsupportedEvidence::Early {
                 index, generation, ..
             }
             | UnsupportedEvidence::Loop {
@@ -240,6 +249,19 @@ impl PolicyRetryPublisher {
             .is_some_and(|shape| {
                 shape.generation == generation
                     && match evidence {
+                        UnsupportedEvidence::Launch { qualified, .. } => {
+                            !qualified
+                                && shape.phase_launch_qualified == qualified
+                                && shape.request.requires_common_phase()
+                                // Mapped phase-stage eligibility can change with
+                                // relative output position. Keep its existing retry
+                                // path; scalar cohorts depend only on captured requests.
+                                && self.shapes.iter().flatten().all(|peer| {
+                                    peer.request.mode != SourceSyncMode::Mapped
+                                        && !peer.early.mapped
+                                        && !peer.early.target_mapped
+                                })
+                        }
                         UnsupportedEvidence::Early { inputs, .. } => shape.early == inputs,
                         UnsupportedEvidence::Loop { intent, .. } => shape.loop_intent == intent,
                         UnsupportedEvidence::Late { inputs, .. } => shape.late == Some(inputs),
@@ -593,6 +615,7 @@ impl RtMixer {
         Some(RetryVoiceShape {
             id: voice.sample_id,
             generation: voice.generation,
+            phase_launch_qualified: voice.phase_launch_qualified,
             admission: identity,
             source: ProductiveSourceBinding::new(
                 sample,
