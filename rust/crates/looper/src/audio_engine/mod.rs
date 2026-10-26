@@ -32,6 +32,8 @@ pub use accepted_timing_refresh::AcceptedTimingRefreshTicket;
 mod analysis_jobs;
 mod analysis_pcm;
 mod analysis_predictions;
+mod app_analysis;
+mod app_tempo;
 mod audio_stream;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
@@ -688,7 +690,29 @@ fn admit_sample_analysis(
     if generation == 0 || rate == 0 {
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
-    admit_complete_analysis(&reader, rate).map_err(PyValueError::new_err)?;
+    if engine
+        .primary_beat_installation
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?
+        .is_some()
+    {
+        let sample = &reader.reference;
+        let finite = sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
+        app_analysis::admission_peak(
+            sample.frame_count(),
+            sample.channels,
+            rate,
+            if finite {
+                reader.held_bytes().map_err(PyValueError::new_err)?
+            } else {
+                0
+            },
+            false,
+        )
+        .map_err(PyValueError::new_err)?;
+    } else {
+        admit_complete_analysis(&reader, rate).map_err(PyValueError::new_err)?;
+    }
     let source_guard = reader
         .guard
         .clone()
@@ -1123,6 +1147,7 @@ pub struct AudioEngine {
     cold_jobs: cold_jobs::ColdJobs,
     waveform_requests: waveform::WaveformRequests,
     cold_cancelled: Arc<AtomicBool>,
+    primary_beat_installation: Mutex<Option<String>>,
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
     resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
@@ -1807,6 +1832,7 @@ impl AudioEngine {
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
             waveform_requests: waveform::WaveformRequests::default(),
             cold_cancelled: Arc::new(AtomicBool::new(false)),
+            primary_beat_installation: Mutex::new(None),
             cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
             resident_stem_cache: Arc::new(Mutex::new(
@@ -2436,9 +2462,26 @@ impl AudioEngine {
         Ok(runtime.inject_midi_message(&message))
     }
 
+    /// Select an already installed primary backend; never installs or downloads.
+    pub fn configure_primary_beat_analysis(&self, installation_root: String) -> PyResult<()> {
+        if installation_root.len() > 32768
+            || !std::path::Path::new(&installation_root).is_absolute()
+        {
+            return Err(PyValueError::new_err(
+                "primary beat installation must be an absolute path",
+            ));
+        }
+        *self
+            .primary_beat_installation
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))? =
+            Some(installation_root);
+        Ok(())
+    }
+
     /// Admit copy-first complete cold preparation in the fixed worker lane.
     #[allow(clippy::too_many_arguments)] // Fixed public source/load options preserve the existing API.
-    #[pyo3(name = "load_sample_async", signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto", initial_base_shift=None, initial_extra_shift=None, initial_key_lock=None, initial_gain_db=None, initial_eq_db=None))]
+    #[pyo3(name = "load_sample_async", signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto", initial_base_shift=None, initial_extra_shift=None, initial_key_lock=None, initial_gain_db=None, initial_eq_db=None, refine_tempo_only=false))]
     pub fn load_sample_async_with_pitch(
         &self,
         id: usize,
@@ -2455,6 +2498,7 @@ impl AudioEngine {
         initial_key_lock: Option<&Bound<'_, PyAny>>,
         initial_gain_db: Option<&Bound<'_, PyAny>>,
         initial_eq_db: Option<&Bound<'_, PyAny>>,
+        refine_tempo_only: bool,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -2483,6 +2527,7 @@ impl AudioEngine {
             source_intent,
             initial_pitch,
             initial_mix,
+            refine_tempo_only,
         )
     }
 
@@ -5253,6 +5298,7 @@ mod tests {
                         cached_path: "samples/new.wav".to_owned(),
                         analysis: None,
                         analysis_error: None,
+                        analysis_tempo_only: false,
                         incoming_defaults: None,
                     })
                     .unwrap();
@@ -5306,6 +5352,7 @@ mod tests {
                             cached_path: "samples/long.wav".to_owned(),
                             analysis: None,
                             analysis_error: None,
+                            analysis_tempo_only: false,
                             incoming_defaults: None,
                         })
                         .unwrap();
@@ -5345,6 +5392,7 @@ mod tests {
                         cached_path: "samples/long.wav".into(),
                         analysis: None,
                         analysis_error: Some("automatic analysis budget exceeded".into()),
+                        analysis_tempo_only: false,
                         incoming_defaults: None,
                     })
                     .unwrap();

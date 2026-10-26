@@ -1082,7 +1082,9 @@ class AudioEngine:
         initial_key_lock: bool | None = None,
         initial_gain_db: float | None = None,
         initial_eq_db: tuple[float, float, float] | None = None,
+        refine_tempo_only: bool = False,
     ) -> int: ...
+    def configure_primary_beat_analysis(self, installation_root: str) -> None: ...
     def load_incoming_sample_async(self, sample_id: int, path: str, key_lock: bool) -> int: ...
     def update_incoming_load_intent(
         self,

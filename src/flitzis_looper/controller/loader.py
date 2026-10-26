@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.constants import PAD_LOOP_BARS_DEFAULT
 from flitzis_looper.controller.accepted_restore import AcceptedTimingRestore
 from flitzis_looper.controller.asset_lifecycle import (
@@ -23,6 +24,7 @@ from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.material_migration_model import MaterialCreationReceipt
 from flitzis_looper.models import (
+    BeatGrid,
     PadContentIdentity,
     ProjectState,
     SampleAnalysis,
@@ -144,6 +146,7 @@ class _RestoredLoadOptions(TypedDict):
     resident_loop_start_s: NotRequired[float]
     resident_loop_end_s: NotRequired[float]
     resident_key_lock: NotRequired[bool]
+    refine_tempo_only: NotRequired[bool]
 
 
 def _reset_pad_value(values: list[_PadValue], sample_id: int, default: _PadValue) -> bool:
@@ -480,6 +483,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._deferred_restores: dict[int, Path] = {}
         self._deferred_restore_content: dict[int, str | None] = {}
         self._analysis_request_ids: dict[int, int] = {}
+        self._primary_beat_analysis_configured = False
         self._diagnostics: ConsoleDiagnostics | None = None
         self._key_analysis = KeyMetadataAnalysis(project, audio)
         self._accepted_restore = AcceptedTimingRestore(
@@ -550,10 +554,16 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._on_loaded_key_lock = key_lock_callback
         self._on_incoming_sample_loaded = incoming_callback
 
-    def bind_asset_lifecycle(self, lifecycle: ProjectAssetLifecycle) -> None:
+    def bind_asset_lifecycle(
+        self, lifecycle: ProjectAssetLifecycle, *, beat_this_installation_root: Path | None = None
+    ) -> None:
         """Share assignment and separator owners with the application controller."""
         self._assets = lifecycle
         self.source_beatmaps.assets = lifecycle
+        configure = getattr(self._audio, "configure_primary_beat_analysis", None)
+        if beat_this_installation_root is not None and callable(configure):
+            configure(str(beat_this_installation_root.absolute()))
+            self._primary_beat_analysis_configured = True
 
     def set_restored_sample_loaded_callback(self, callback: Callable[[int], bool]) -> None:
         """Register behavior that runs after a restored sample finishes loading."""
@@ -1342,7 +1352,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             return
         # A successful ordinary load owns its timing again. Passive refresh
         # cannot clear Automatic authority while acceptance is still pending.
-        self._restore_legacy_timing_authority(sample_id, None, timing_stale=timing_stale)
+        tempo_only = event.get("analysis_kind") == "tempo_only"
+        if not tempo_only:
+            self._restore_legacy_timing_authority(sample_id, None, timing_stale=timing_stale)
         if new_assignment and not timing_stale:
             self._on_pad_bpm_changed(sample_id)
         # The source still belongs to this load, but a newer native request owns timing.
@@ -1358,8 +1370,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 sample_id,
                 event.get("analysis"),
                 key_request_id=event.get("request_id") if new_assignment else None,
+                tempo_only=tempo_only,
             )
-            self._clear_analysis_task_state(sample_id)
+            if not tempo_only:
+                self._clear_analysis_task_state(sample_id)
         analysis_error = event.get("analysis_error")
         if isinstance(analysis_error, str):
             self._session.sample_analysis_errors[sample_id] = analysis_error
@@ -1405,8 +1419,16 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._clear_stem_generation_state(sample_id)
 
     def _apply_loaded_analysis(
-        self, sample_id: int, analysis: object, *, key_request_id: object = None
+        self,
+        sample_id: int,
+        analysis: object,
+        *,
+        key_request_id: object = None,
+        tempo_only: bool = False,
     ) -> None:
+        if tempo_only:
+            self._apply_tempo_only_analysis(sample_id, analysis)
+            return
         if analysis is not None:
             parsed = self._store_sample_analysis(sample_id, analysis)
             if parsed is not None and self._key_analysis.loaded(
@@ -1421,6 +1443,42 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
         ):
             self._on_pad_bpm_changed(sample_id)
+
+    def _apply_tempo_only_analysis(self, sample_id: int, analysis: object) -> None:
+        """Merge an optional current estimate without changing key or manual intent."""
+        previous = self._project.sample_analysis[sample_id]
+        if (
+            previous is None
+            or not isinstance(analysis, dict)
+            or self._project.manual_bpm[sample_id] is not None
+            or self._project.pad_timing_intent[sample_id] != "legacy"
+            or self._audio.pad_timing_intent(sample_id) != "legacy"
+        ):
+            return
+        raw = analysis.get("bpm_method")
+        try:
+            method = (
+                AppTempoMethod.model_validate_json(raw)
+                if isinstance(raw, str)
+                else AppTempoMethod.model_validate(raw)
+            )
+        except ValueError, TypeError:
+            return
+        if method.status not in {"estimated", "single_region_estimate"} or method.bpm is None:
+            return
+        self._project.sample_analysis[sample_id] = previous.model_copy(
+            update={
+                "bpm": method.bpm,
+                "beat_grid": BeatGrid(
+                    beats=method.raw_beats,
+                    downbeats=method.raw_downbeats,
+                    bars=method.raw_downbeats,
+                ),
+                "bpm_method": method,
+            }
+        )
+        self._mark_project_changed()
+        self._on_pad_bpm_changed(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
         reservation = self._take_load_retirement(sample_id, event)
@@ -1524,23 +1582,34 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         analysis = event.get("analysis")
         parsed = _parse_sample_analysis(analysis)
         key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))
+        key_completed = False
         try:
             if (
                 parsed is not None
                 and key_error is None
                 and self._key_analysis.complete(sample_id, event.get("request_id"), parsed.key)
             ):
+                key_completed = True
                 self._mark_project_changed()
         except (RuntimeError, ValueError) as error:
             key_error = f"Analysis key metadata completion failed: {error}"
         control_error: str | None = None
         try:
             if event.get("timing_stale") is not True:
-                self._store_sample_analysis(sample_id, analysis)
+                self._store_analysis_completion(sample_id, analysis, key_completed=key_completed)
         except (RuntimeError, ValueError) as error:
             control_error = f"Analysis control refresh failed: {error}"
         self._clear_analysis_task_state(sample_id)
-        errors = [message for message in (key_error, control_error) if message is not None]
+        beat_error = event.get("analysis_error")
+        errors = [
+            message
+            for message in (
+                key_error,
+                control_error,
+                beat_error if isinstance(beat_error, str) else None,
+            )
+            if message is not None
+        ]
         if errors:
             self._session.sample_analysis_errors[sample_id] = "\n".join(errors)
 
@@ -1592,6 +1661,23 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         msg = event.get("msg")
         if isinstance(msg, str):
             self._session.sample_analysis_errors[sample_id] = msg
+
+    def _store_analysis_completion(
+        self, sample_id: int, analysis: object, *, key_completed: bool
+    ) -> None:
+        """A failed beat component may complete key data without clearing valid tempo."""
+        parsed = _parse_sample_analysis(analysis)
+        if parsed is not None and (not math.isfinite(parsed.bpm) or parsed.bpm <= 0):
+            if key_completed:
+                previous = self._project.sample_analysis[sample_id]
+                self._project.sample_analysis[sample_id] = (
+                    previous.model_copy(update={"key": parsed.key})
+                    if previous is not None
+                    else parsed
+                )
+                self._mark_project_changed()
+            return
+        self._store_sample_analysis(sample_id, analysis)
 
     def _store_sample_analysis(self, sample_id: int, analysis: object) -> SampleAnalysis | None:
         parsed = _parse_sample_analysis(analysis)
@@ -1662,6 +1748,15 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         except OSError, ValueError:
             return None
 
+    def _needs_tempo_refinement(self, sample_id: int) -> bool:
+        previous = self._project.sample_analysis[sample_id]
+        return (
+            previous is not None
+            and previous.bpm_method is None
+            and self._project.manual_bpm[sample_id] is None
+            and self._project.pad_timing_intent[sample_id] == "legacy"
+        )
+
     def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
         reservation = None
         try:
@@ -1685,6 +1780,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             }
             if self._wants_accepted_restore(sample_id):
                 options["restore_automatic"] = True
+            if (
+                self._primary_beat_analysis_configured
+                and not run_analysis
+                and self._needs_tempo_refinement(sample_id)
+            ):
+                options["refine_tempo_only"] = True
             sample_rate_hz = self._output_sample_rate_hz()
             if sample_rate_hz is not None:
                 resident = saved_resident_loop(

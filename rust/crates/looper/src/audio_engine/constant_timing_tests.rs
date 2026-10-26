@@ -1104,8 +1104,9 @@ fn constant_timing_loader_delivery_strips_retired_timing_preserves_source_bookke
             duration_s: 32.0,
             detected_loop_start_s: Some(0.125),
             cached_path: "samples/current.wav".into(),
-            analysis: Some(analysis.clone()),
+            analysis: Some(analysis.clone().into()),
             analysis_error: None,
+            analysis_tempo_only: false,
             incoming_defaults: None,
         })
         .unwrap();
@@ -1115,7 +1116,7 @@ fn constant_timing_loader_delivery_strips_retired_timing_preserves_source_bookke
             id: 0,
             request_id: 7,
             task: crate::messages::BackgroundTaskKind::Analysis,
-            analysis: Some(analysis),
+            analysis: Some(analysis.into()),
         })
         .unwrap();
     super::super::next_pad_request_id(
@@ -1192,6 +1193,7 @@ fn constant_timing_loader_delivery_discards_old_success_after_source_clear_and_c
                 cached_path: "samples/retired.wav".into(),
                 analysis: None,
                 analysis_error: None,
+                analysis_tempo_only: false,
                 incoming_defaults: None,
             })
             .unwrap();

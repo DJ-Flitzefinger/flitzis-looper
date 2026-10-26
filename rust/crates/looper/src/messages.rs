@@ -947,6 +947,28 @@ impl ControlMessage {
 /// Re-export from the analysis crate.
 pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 
+/// Ordinary App estimate. No accepted timing/map or current Native authority.
+#[derive(Clone, Debug)]
+pub struct LoadedAnalysis {
+    pub bpm: f64,
+    pub key: Option<String>,
+    pub beat_grid: flitzis_looper_analysis::BeatGrid,
+    pub bpm_method_json: Option<String>,
+    pub beat_error: Option<String>,
+}
+
+impl From<SampleAnalysis> for LoadedAnalysis {
+    fn from(value: SampleAnalysis) -> Self {
+        Self {
+            bpm: f64::from(value.bpm),
+            key: Some(value.key),
+            beat_grid: value.beat_grid,
+            bpm_method_json: None,
+            beat_error: None,
+        }
+    }
+}
+
 /// Validated request-owned scalar defaults, installed with its source before ACK.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IncomingLoadDefaults {
@@ -1032,10 +1054,12 @@ pub enum LoaderEvent {
         cached_path: String,
         /// Pre-adoption owner reservation, promoted only by matching metadata.
         original_lease: Option<crate::audio_engine::ProjectAssetLease>,
-        analysis: Option<SampleAnalysis>,
+        analysis: Option<LoadedAnalysis>,
         /// Automatic analysis failed independently of successful source adoption.
         /// Delivered only for the matching source and timing request.
         analysis_error: Option<String>,
+        /// Survives stale optional metadata stripping; never completes key work.
+        analysis_tempo_only: bool,
         incoming_defaults: Option<IncomingLoadDefaults>,
     },
 
@@ -1067,7 +1091,7 @@ pub enum LoaderEvent {
         id: usize,
         request_id: u64,
         task: BackgroundTaskKind,
-        analysis: Option<SampleAnalysis>,
+        analysis: Option<LoadedAnalysis>,
     },
 
     /// A per-pad task failed.

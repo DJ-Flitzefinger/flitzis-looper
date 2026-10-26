@@ -7,6 +7,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
+from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.constants import (
     NUM_SAMPLES,
     PAD_EQ_DB_MAX,
@@ -151,6 +152,11 @@ class MusicalSnapshotData(BaseModel):
             if "beat_grid" in data:
                 data["beat_grid"] = grid
             accepted = _model_data(data.get("accepted_timing"))
+            method = _model_data(data.get("bpm_method"))
+            if method is not None:
+                data["bpm_method"] = AppTempoMethod.model_validate(method, strict=True).model_dump(
+                    mode="python", warnings="error"
+                )
             if accepted is not None:
                 # Snapshot capture must reject evidence that legacy loading would discard.
                 data["accepted_timing"] = PersistedAcceptedTiming.model_validate(

@@ -226,6 +226,7 @@ impl Fixture {
                 cached_path: "samples/queued-current.wav".into(),
                 analysis: None,
                 analysis_error: Some(error.into()),
+                analysis_tempo_only: false,
                 incoming_defaults: None,
             })
             .unwrap();
@@ -299,8 +300,19 @@ fn original_native_source_event_survives_timing_advance_without_stale_analysis()
             detected_loop_start_s: Some(1.0 / f64::from(RATE)),
             cached_path: "samples/queued-current.wav".into(),
             original_lease: None,
-            analysis: None,
+            analysis: Some(crate::messages::LoadedAnalysis {
+                bpm: 119.75,
+                key: None,
+                beat_grid: flitzis_looper_analysis::BeatGrid {
+                    beats: vec![0.0],
+                    downbeats: vec![],
+                    bars: vec![],
+                },
+                bpm_method_json: Some("original optional metadata, must be stripped".into()),
+                beat_error: None,
+            }),
             analysis_error: Some("original timing diagnostic".into()),
+            analysis_tempo_only: true,
             incoming_defaults: None,
         }))
         .unwrap();
@@ -313,6 +325,16 @@ fn original_native_source_event_survives_timing_advance_without_stale_analysis()
     assert!(owner.current());
     Python::attach(|py| {
         let event = fixture.engine.poll_loader_events(py).unwrap().unwrap();
+        let dict = event.bind(py).cast::<PyDict>().unwrap();
+        assert_eq!(
+            dict.get_item("analysis_kind")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "tempo_only"
+        );
+        assert!(dict.get_item("analysis").unwrap().is_none());
         assert_success(py, event, None, true);
         assert!(fixture.engine.poll_loader_events(py).unwrap().is_none());
     });

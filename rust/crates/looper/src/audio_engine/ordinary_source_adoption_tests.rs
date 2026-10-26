@@ -21,6 +21,7 @@ fn public_load(fixture: &Fixture, replace: bool) -> u64 {
             None,
             None,
             None,
+            false,
         )
         .unwrap()
 }

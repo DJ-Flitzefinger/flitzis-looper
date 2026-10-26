@@ -21,6 +21,7 @@ from pydantic import (
 
 from flitzis_looper import source_beatmap_intent, stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
+from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
@@ -176,6 +177,23 @@ class SampleAnalysis(BaseModel):
     beat_grid: BeatGrid
     accepted_timing: PersistedAcceptedTiming | None = None
     """Complete historical native evidence; never a current runtime timing claim."""
+
+    bpm_method: AppTempoMethod | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @field_validator("bpm_method", mode="before")
+    @classmethod
+    def _load_optional_tempo_method(cls, value: object) -> AppTempoMethod | None:
+        if value is None:
+            return None
+        try:
+            return (
+                AppTempoMethod.model_validate_json(value)
+                if isinstance(value, str)
+                else AppTempoMethod.model_validate(value)
+            )
+        except ValueError, TypeError:
+            # Invalid optional provenance must not erase valid historical analysis.
+            return None
 
     @field_validator("accepted_timing", mode="before")
     @classmethod

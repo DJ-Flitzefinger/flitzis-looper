@@ -3,7 +3,7 @@
 
 use super::cold_residency::ResidentLoadHint;
 use super::source_grid::SourceGrid;
-use crate::messages::{IncomingLoadDefaults, SampleAnalysis, SampleBuffer};
+use crate::messages::{IncomingLoadDefaults, LoadedAnalysis, SampleBuffer};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -137,7 +137,7 @@ impl IncomingIntent {
         rate: u32,
         frames: usize,
         activity: Option<f64>,
-        analysis: Option<&SampleAnalysis>,
+        analysis: Option<&LoadedAnalysis>,
     ) -> Result<IncomingLoadDefaults, String> {
         self.validate_for_rate(rate)?;
         if rate == 0 || frames == 0 {
@@ -160,7 +160,7 @@ impl IncomingIntent {
             self.period_seconds
         } else {
             analysis.and_then(|result| {
-                let bpm = f64::from(result.bpm);
+                let bpm = result.bpm;
                 (bpm.is_finite() && bpm > 0.0).then(|| 60.0 / bpm)
             })
         };

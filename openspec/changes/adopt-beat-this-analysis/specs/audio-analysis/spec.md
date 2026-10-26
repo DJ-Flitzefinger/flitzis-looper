@@ -733,3 +733,59 @@ versioned reader without requiring the retired PCM file or optional model instal
 - **WHEN** the versioned reader reads the snapshot or exported envelope without model files
 - **THEN** all prediction values and component provenance are recovered exactly
 - **AND** no scratch artifact, inference or reanalysis is required
+
+### Requirement: Primary App Tempo Estimates Use Stable Neural Regions
+The focused native test delivery selected by the Human on 2026-10-27 SHALL use the
+configured pinned Beat This worker as the regular App beat-analysis backend.
+QM APIs and scientific reports SHALL remain compatible comparison/legacy paths;
+a missing selected neural installation SHALL NOT silently invoke QM. This App
+estimate SHALL NOT constitute B2 acceptance, a verified quarter count, accepted
+constant timing, a reviewed source map, or an effective audio/phase ACK.
+
+The versioned `neural-stable-regions-v1` policy SHALL retain complete original-mix
+beat/downbeat observations and source/model/frontend provenance. Long-region
+candidates SHALL include source middle20-80% and temporal thirds, require24
+retained points,30seconds span and60% coverage with support near both edges.
+Centered binary64 fits MAY exclude at most5% isolated observations under a residual allowance of
+min(25ms,5%of the fitted beat period), without moving or renumbering retained observations. A
+preferred middle estimate SHALL have compatible extending-region support within
+0.025%; a wholly contained central third SHALL NOT count as extending support.
+If long-region corroboration is unavailable, a complete-source fit with at least
+8points and4seconds span MAY provide explicitly `single_region_estimate` metadata,
+without claiming that independent corroboration. Failure SHALL remain explicit.
+No proximity to an integer SHALL cause BPM rounding. Original scientific
+lattice/error/status rules SHALL remain unchanged.
+
+Ordinary load and explicit analysis-only requests SHALL use this same primary
+policy on genuine full-source PCM, even when a short finite loop is resident.
+Both beat and KeyNet inputs SHALL derive from the same complete staged mono;
+KeyNet SHALL keep its own44100Hz frontend. Existing worker admission, source/edit
+fences, bounded preparation and actual process/reader retirement SHALL remain.
+The single Human RAW-review slot SHALL NOT be acquired by ordinary estimation.
+
+The preceding no-reanalysis-on-restore rule SHALL continue for current neural
+metadata, manual/TAP and Automatic timing. The focused delivery MAY refresh old
+unmarked Legacy tempo during restore, without KeyNet work. It SHALL merge only
+BPM/beat observations/method metadata, preserving key/history, A/GridOffset,
+manual performance intent and accepted evidence. A later edit SHALL strip stale
+optional tempo without rejecting an already-armed ordinary source claim or
+cancelling newer key work. Auto-loop changes SHALL use the existing residency
+refresh and genuine fresh OwnACK before effective readiness.
+
+#### Scenario: Current analysis replaces a biased historical Legacy estimate
+- **GIVEN** a matching original source has old unmarked analysis and no manual override
+- **WHEN** its optional source-owned neural tempo refresh succeeds
+- **THEN** the new binary64 App estimate and provenance are stored through existing analysis persistence
+- **AND** the original key, chosen start/GridOffset and current source ownership are preserved
+- **AND** changed automatic geometry retains actual pending/readiness checks
+
+#### Scenario: Neural inference is unavailable or a newer edit wins
+- **WHEN** selected inference fails, is unavailable or its optional metadata becomes stale
+- **THEN** valid source loading and cached performer intent remain usable
+- **AND** no QM substitution, accepted map, key completion or phase ACK is fabricated
+
+The complete optional Mixxx-style SYNC consolidation, automatic variable maps,
+removal of the separate REALTIME prerequisite, and actual64-bar Human listening
+remain separate open work after this estimator step. Constant digital tracks
+SHALL be evaluated for inaudible drift over that interval; this requirement
+SHALL NOT claim an unattainable universal100% detector guarantee.

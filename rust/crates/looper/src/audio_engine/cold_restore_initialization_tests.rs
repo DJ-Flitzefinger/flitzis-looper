@@ -77,6 +77,10 @@ impl Fixture {
     }
 
     fn admit(&self, mix: Option<SourceMixInitialization>) -> u64 {
+        self.admit_with_tempo(mix, false)
+    }
+
+    fn admit_with_tempo(&self, mix: Option<SourceMixInitialization>, tempo_only: bool) -> u64 {
         admit_for_format_selected_intent_with_pitch(
             &self.engine,
             0,
@@ -90,6 +94,7 @@ impl Fixture {
                 key_lock: Some(false),
             },
             mix,
+            tempo_only,
         )
         .unwrap()
     }
@@ -136,6 +141,36 @@ impl Fixture {
         mixer.set_input_runtime_ownership(self.engine.input_runtime_ownership.clone());
         mixer
     }
+}
+
+#[test]
+fn optional_neural_failure_and_later_timing_edit_do_not_cancel_armed_restore() {
+    let mut fixture = Fixture::new();
+    fixture
+        .engine
+        .configure_primary_beat_analysis(
+            fixture
+                ._directory
+                .path()
+                .join("missing-worker")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .unwrap();
+    let request = fixture.admit_with_tempo(None, true);
+    fixture.wait_published();
+    fixture.engine.set_pad_bpm(0, Some(119.75)).unwrap();
+    let mut mixer = fixture.mixer();
+    let mut transport = TransportTimeline::new(48_000);
+    fixture.drain(&mut mixer, &mut transport);
+    assert!(matches!(
+        fixture.terminal(request),
+        LoaderEvent::Success {
+            analysis_tempo_only: true,
+            ..
+        }
+    ));
+    assert!(mixer.play_sample(0, 1.0));
 }
 
 #[test]
@@ -320,6 +355,7 @@ fn malformed_public_initial_mixing_rejects_before_admission_or_source_mutation()
                     None,
                     Some(&gain),
                     Some(&eq),
+                    false,
                 )
                 .unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));

@@ -395,6 +395,26 @@ impl ColdJobs {
 
     pub(super) fn shutdown(&mut self) {
         self.close_admission();
+        if self.workers.is_empty() {
+            return;
+        }
+        // Joined cold work may still need Python for bridge cancellation and
+        // reader/process retirement. Never wait while retaining its caller's
+        // interpreter attachment. try_attach does not initialize an interpreter.
+        // SAFETY: these are nonblocking C-API state queries. The supported App
+        // uses standard-GIL CPython in one interpreter. Never attach a detached
+        // Rust caller: its GIL-owning coordinator may already be waiting for it.
+        let caller_holds_gil =
+            unsafe { pyo3::ffi::Py_IsInitialized() != 0 && pyo3::ffi::PyGILState_Check() != 0 };
+        if caller_holds_gil
+            && pyo3::Python::try_attach(|py| py.detach(|| self.join_workers())).is_some()
+        {
+            return;
+        }
+        self.join_workers();
+    }
+
+    fn join_workers(&mut self) {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
@@ -413,6 +433,97 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn shutdown_and_drop_release_python_for_live_worker_retirement() {
+        const CHILD: &str = "FLITZI_COLD_GIL_JOIN_CHILD";
+        const TEST: &str = "audio_engine::cold_jobs::tests::shutdown_and_drop_release_python_for_live_worker_retirement";
+        let Ok(mode) = std::env::var(CHILD) else {
+            for mode in ["shutdown", "drop", "detached"] {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                    .env(CHILD, mode)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                while child.try_wait().unwrap().is_none() {
+                    if std::time::Instant::now() >= deadline {
+                        child.kill().unwrap();
+                        let output = child.wait_with_output().unwrap();
+                        panic!(
+                            "owned {mode} child hung joining Python work: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let output = child.wait_with_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+        pyo3::Python::initialize();
+        if mode == "detached" {
+            let (made_tx, made_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let mut engine = crate::audio_engine::AudioEngine::new().unwrap();
+                made_tx.send(()).unwrap();
+                go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                engine.shut_down().unwrap();
+                drop(engine);
+            });
+            made_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            pyo3::Python::attach(|_| {
+                go_tx.send(()).unwrap();
+                worker.join().unwrap();
+            });
+            return;
+        }
+        let mut engine = crate::audio_engine::AudioEngine::new().unwrap();
+        let (go_tx, go_rx) = mpsc::channel();
+        let (before_tx, before_rx) = mpsc::channel();
+        let retired = Arc::new(AtomicBool::new(false));
+        let attached = Arc::new(AtomicBool::new(false));
+        let worker_retired = retired.clone();
+        let worker_attached = attached.clone();
+        let reservation = engine.cold_jobs.reserve().unwrap();
+        engine
+            .cold_jobs
+            .submit(reservation, move || {
+                struct Retired(Arc<AtomicBool>);
+                impl Drop for Retired {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::Release);
+                    }
+                }
+                let _retired = Retired(worker_retired);
+                go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                before_tx.send(()).unwrap();
+                pyo3::Python::attach(|_| worker_attached.store(true, Ordering::Release));
+            })
+            .unwrap();
+        pyo3::Python::attach(|_| {
+            go_tx.send(()).unwrap();
+            before_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            if mode == "shutdown" {
+                engine.shut_down().unwrap();
+                engine.shut_down().unwrap();
+                assert_eq!(engine.cold_jobs.counts_for_test(), (0, 0, 0));
+                assert!(engine.cold_jobs.reserve().is_err());
+            } else {
+                drop(engine);
+            }
+            assert!(attached.load(Ordering::Acquire));
+            assert!(retired.load(Ordering::Acquire));
+        });
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum OwnedEvent {

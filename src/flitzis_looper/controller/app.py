@@ -215,7 +215,9 @@ class AppController:
                 if beat_this_installation_root is None
                 else beat_this_installation_root.absolute()
             )
-        self.loader.bind_asset_lifecycle(self._assets)
+        self.loader.bind_asset_lifecycle(
+            self._assets, beat_this_installation_root=self._beat_this_installation_root
+        )
         self.loader.source_beatmaps.bind(
             self._persistence.commit_source_beatmap_selection,
             blocked=lambda: (

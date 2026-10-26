@@ -44,10 +44,10 @@ impl SourceMapCancellation {
     }
 }
 
-struct MonoWriter<'a> {
-    file: &'a mut File,
-    digest: Sha256,
-    bytes: usize,
+pub(in crate::audio_engine) struct MonoWriter<'a> {
+    pub(in crate::audio_engine) file: &'a mut File,
+    pub(in crate::audio_engine) digest: Sha256,
+    pub(in crate::audio_engine) bytes: usize,
 }
 
 impl Write for MonoWriter<'_> {
@@ -66,7 +66,7 @@ impl Write for MonoWriter<'_> {
     }
 }
 
-fn verify_staged(
+pub(in crate::audio_engine) fn verify_staged(
     file: &mut File,
     expected_bytes: usize,
     expected_digest: &str,
@@ -97,6 +97,54 @@ fn verify_staged(
         return Err("Beat This staged input identity changed".into());
     }
     Ok(())
+}
+
+/// Borrow the installed worker without granting map admission. The caller keeps
+/// genuine source/request custody and all staging readers until this returns.
+pub(in crate::audio_engine) fn invoke_worker(
+    source: BeatThisSourceInput,
+    identity: serde_json::Value,
+    path: &str,
+    installation_root: &str,
+    probe: Py<PyAny>,
+) -> Result<(BeatThisRawData, usize), String> {
+    let expected = json!({"schema_version":1,"identity":identity,
+        "pcm":{"path":path,"sample_rate_hz":source.source_sample_rate_hz,
+            "frame_count":source.source_frame_count,"origin_seconds":0.0,
+            "dtype":"float32-le","channels":1},"model":pinned_model()})
+    .to_string();
+    if expected.len() > 32 * 1024 {
+        return Err("Beat This request byte limit exceeded".into());
+    }
+    Python::attach(|py| {
+        let module = py
+            .import("flitzis_looper.analysis.source_map_worker")
+            .map_err(|e| e.to_string())?;
+        let result = module
+            .getattr("run_source_map_beat_this")
+            .and_then(|entry| {
+                entry.call1((
+                    path,
+                    source.source_sample_rate_hz,
+                    source.source_frame_count,
+                    &source.mono_sha256,
+                    identity.to_string(),
+                    installation_root,
+                    probe,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let encoded = result
+            .cast::<PyString>()
+            .map_err(|e| e.to_string())?
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        if encoded.len() > BRIDGE_LIMIT {
+            return Err("Beat This bridge response byte limit exceeded".into());
+        }
+        let length = encoded.len();
+        BeatThisRawData::from_worker(source, &expected, encoded).map(|raw| (raw, length))
+    })
 }
 
 impl JobState {
@@ -169,14 +217,6 @@ impl JobState {
             file.sync_all().map_err(|error| error.to_string())?;
             let identity = json!({"pad_id":self.identity.pad_id,"request_id":self.identity.request_id,
             "source_id":self.identity.source_id,"source_generation":self.identity.source_generation});
-            let identity_json = identity.to_string();
-            let expected_request = json!({"schema_version":1,"identity":identity,
-            "pcm":{"path":path_text,"sample_rate_hz":guard.rate,"frame_count":frames,
-                "origin_seconds":0.0,"dtype":"float32-le","channels":1},"model":pinned_model()})
-            .to_string();
-            if expected_request.len() > 32 * 1024 {
-                return Err("Beat This request byte limit exceeded".into());
-            }
             let probe = SourceMapCancellation {
                 cancelled: self.cancelled.clone(),
                 shutdown: self
@@ -201,40 +241,13 @@ impl JobState {
             };
             // Python orchestration runs only on this already-admitted cold worker.
             // The bridge returns only after its actual process/readers have retired.
-            let raw = Python::attach(|py| -> Result<RawCapture, String> {
-                let module = py
-                    .import("flitzis_looper.analysis.source_map_worker")
-                    .map_err(|error| error.to_string())?;
-                let probe = Py::new(py, probe).map_err(|error| error.to_string())?;
-                let result = module
-                    .getattr("run_source_map_beat_this")
-                    .and_then(|entry| {
-                        entry.call1((
-                            path_text,
-                            guard.rate,
-                            frames,
-                            &mono_sha256,
-                            identity_json,
-                            installation_root,
-                            probe,
-                        ))
-                    })
-                    .map_err(|error| error.to_string())?;
-                let result = result
-                    .cast::<PyString>()
-                    .map_err(|error| error.to_string())?;
-                let encoded = result.to_str().map_err(|error| error.to_string())?;
-                if encoded.len() > BRIDGE_LIMIT {
-                    return Err("Beat This bridge response byte limit exceeded".into());
-                }
-                let raw = RawCapture::from(BeatThisRawData::from_worker(
-                    source,
-                    &expected_request,
-                    encoded,
-                )?);
-                raw.publication_peak_bytes(held, encoded.len())?;
-                Ok(raw)
-            })?;
+            let probe = Python::attach(|py| Py::new(py, probe))
+                .map_err(|e| e.to_string())?
+                .into_any();
+            let (data, wire_bytes) =
+                invoke_worker(source, identity, path_text, installation_root, probe)?;
+            let raw = RawCapture::from(data);
+            raw.publication_peak_bytes(held, wire_bytes)?;
             if cancelled() {
                 return Err("Beat This original acquisition cancelled".into());
             }

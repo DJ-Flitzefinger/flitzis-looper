@@ -86,12 +86,12 @@ struct Input {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Predictions {
+pub(in crate::audio_engine) struct Predictions {
     encoding: String,
     #[serde(with = "codec::binary64")]
-    pub(super) beat_seconds: Vec<f64>,
+    pub(in crate::audio_engine) beat_seconds: Vec<f64>,
     #[serde(with = "codec::binary64")]
-    pub(super) downbeat_seconds: Vec<f64>,
+    pub(in crate::audio_engine) downbeat_seconds: Vec<f64>,
     #[serde(with = "codec::binary64")]
     pub(super) beat_logits: Vec<f64>,
     #[serde(with = "codec::binary64")]
@@ -204,7 +204,7 @@ impl BeatThisRawData {
         Ok(data)
     }
 
-    pub(super) fn predictions(&self) -> &Predictions {
+    pub(in crate::audio_engine) fn predictions(&self) -> &Predictions {
         self.result
             .predictions
             .as_ref()

@@ -43,7 +43,11 @@ fn owned_directory() -> (tempfile::TempDir, CurrentDirectory) {
         .ancestors()
         .nth(4)
         .unwrap();
-    let directory = tempfile::tempdir_in(workspace.join("scratch")).unwrap();
+    owned_directory_at(&workspace.join("scratch"))
+}
+
+fn owned_directory_at(root: &Path) -> (tempfile::TempDir, CurrentDirectory) {
+    let directory = tempfile::tempdir_in(root).unwrap();
     let previous = CurrentDirectory(std::env::current_dir().unwrap());
     std::env::set_current_dir(crate::audio_engine::material_paths::ordinary_windows_path(
         directory.path(),
@@ -69,7 +73,11 @@ fn hash_file(path: &Path) -> String {
 // Independently encoded eighteen-second stereo attack train, as in the existing
 // productive incoming history. No productive audio decoder generates this input.
 fn pulse_track(path: &Path, rate: u32) {
-    let frames = 18 * rate as usize;
+    pulse_track_seconds(path, rate, 18);
+}
+
+fn pulse_track_seconds(path: &Path, rate: u32, seconds: usize) {
+    let frames = seconds * rate as usize;
     let data = u32::try_from(frames * 4).unwrap();
     let mut bytes = Vec::with_capacity(data as usize + 44);
     bytes.extend_from_slice(b"RIFF");
@@ -116,8 +124,22 @@ fn assert_grid(values: &[f32], duration: f64, name: &str) {
 }
 
 fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Value {
+    import_and_ack_with_backend(source, output_rate, public_incoming, None)
+}
+
+fn import_and_ack_with_backend(
+    source: &Path,
+    output_rate: u32,
+    public_incoming: bool,
+    backend: Option<String>,
+) -> Value {
     Python::initialize();
     let mut engine = AudioEngine::new().unwrap();
+    if let Some(backend) = &backend {
+        engine
+            .configure_primary_beat_analysis(backend.clone())
+            .unwrap();
+    }
     assert!(engine.stream_handle.is_none());
     let previous = old(&engine);
     let mut callback = Callback::new(&engine, &previous);
@@ -183,7 +205,7 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
             true,
             false,
             true,
-            producer,
+            producer.clone(),
             2,
             output_rate,
             std::env::current_dir().unwrap().join("samples"),
@@ -258,7 +280,7 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
     let analysis = analysis.expect("complete automatic analysis result");
     assert!(analysis.bpm.is_finite() && analysis.bpm > 0.0);
     assert!(
-        !analysis.key.is_empty(),
+        analysis.key.as_ref().is_some_and(|key| !key.is_empty()),
         "key result must retain truthful unknown"
     );
     assert_grid(&analysis.beat_grid.beats, duration_s, "beats");
@@ -273,6 +295,102 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
         engine.loaded_source_generations.lock().unwrap()[0],
         (request, output_rate)
     );
+    if backend.is_some() {
+        let method: Value = serde_json::from_str(
+            analysis
+                .bpm_method_json
+                .as_ref()
+                .expect("primary neural provenance"),
+        )
+        .unwrap();
+        assert_eq!(method["status"], "estimated", "{method}");
+        assert!(analysis.beat_error.is_none(), "{:?}", analysis.beat_error);
+        // A subsequent analysis-only request must see the same complete source,
+        // even though this incoming 8-bar loop owns only a finite resident view.
+        // The public wrapper requires a real audio stream. Exercise its exact
+        // productive source-owned worker path without opening a device.
+        let reanalysis = crate::audio_engine::complete_context::start_analysis(&engine, 0).unwrap();
+        let mut repeated = None;
+        wait_until_for(Duration::from_secs(120), || {
+            while let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+                match event.into_test_payload() {
+                    LoaderEvent::TaskSuccess {
+                        request_id,
+                        analysis,
+                        ..
+                    } if request_id == reanalysis => repeated = analysis,
+                    LoaderEvent::TaskError { error, .. } => {
+                        panic!("neural reanalysis failed: {error}")
+                    }
+                    _ => {}
+                }
+            }
+            repeated.is_some()
+        });
+        let repeated = repeated.unwrap();
+        assert_eq!(repeated.bpm.to_bits(), analysis.bpm.to_bits());
+        assert_eq!(repeated.beat_grid.beats, analysis.beat_grid.beats);
+        assert_eq!(repeated.bpm_method_json, analysis.bpm_method_json);
+        assert_eq!(
+            engine.loaded_source_generations.lock().unwrap()[0],
+            (request, output_rate)
+        );
+        let restore_path = engine.cold_leases.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .original_path
+            .to_string_lossy()
+            .into_owned();
+        let restored_request = admit_for_format_selected_intent_with_pitch(
+            &engine,
+            0,
+            restore_path,
+            (
+                false,
+                false,
+                true,
+                Some(ResidentLoadHint {
+                    start_s: 0.0,
+                    end_s: 16.0,
+                    key_lock: false,
+                }),
+            ),
+            producer.clone(),
+            (
+                2,
+                output_rate,
+                std::env::current_dir().unwrap().join("samples"),
+            ),
+            "restore",
+            SourcePitchInitialization::RestoredTuple {
+                pitch: crate::audio_engine::pitch_intent::PitchIntent::default(),
+                key_lock: Some(false),
+            },
+            None,
+            true,
+        )
+        .unwrap();
+        wait_until_for(Duration::from_secs(120), || consumer.peek().is_ok());
+        assert_eq!(callback.drain(&mut consumer), 1);
+        let restored = terminal(&engine, restored_request);
+        let LoaderEvent::Success {
+            analysis: Some(restored),
+            analysis_tempo_only: true,
+            analysis_error: None,
+            ..
+        } = restored
+        else {
+            panic!("tempo-only finite restore failed: {restored:?}");
+        };
+        assert!(restored.key.is_none());
+        assert_eq!(restored.bpm.to_bits(), analysis.bpm.to_bits());
+        assert_eq!(restored.bpm_method_json, analysis.bpm_method_json);
+        assert_eq!(
+            engine.loaded_source_generations.lock().unwrap()[0],
+            (restored_request, output_rate)
+        );
+        wait_until(|| engine.cold_loading[0].load(Ordering::Acquire) == 0);
+    }
     let after = process::snapshot();
     stop.store(true, Ordering::Release);
     let sampled_peak_private = sampler.join().unwrap();
@@ -301,6 +419,7 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
         "elapsed_seconds":started.elapsed().as_secs_f64(), "duration_seconds":duration_s,
         "actual_symphonia_decoder_pcm":decoder, "actual_playback_pcm":playback,
         "bpm":analysis.bpm, "key":analysis.key,
+        "bpm_method":analysis.bpm_method_json,
         "key_scope":"actual result; unknown remains unknown; no model substitution or musical label acceptance",
         "beats":analysis.beat_grid.beats, "downbeats":analysis.beat_grid.downbeats,
         "bars":analysis.beat_grid.bars, "runtime":runtime,
@@ -312,6 +431,27 @@ fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Val
     drop(leases);
     engine.shut_down().unwrap();
     result
+}
+
+#[test]
+#[ignore = "explicit installed pinned neural runtime, no App or audio device"]
+fn primary_neural_import_and_reanalysis_share_original_estimate_and_own_ack() {
+    const TEST: &str = "audio_engine::cold_load::tests::automatic_analysis_tests::primary_neural_import_and_reanalysis_share_original_estimate_and_own_ack";
+    if std::env::var_os(CHILD).is_none() {
+        child(TEST, 48_000, true);
+        return;
+    }
+    let backend =
+        std::env::var("FLITZI_PRIMARY_BEAT_INSTALLATION").expect("explicit installed backend");
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_NEURAL_TEST_ROOT").expect("explicit owned test root"),
+    );
+    assert!(root.is_absolute());
+    let (directory, _cwd) = owned_directory_at(&root);
+    let source = directory.path().join("neural-constant.wav");
+    pulse_track_seconds(&source, 48_000, 120);
+    let result = import_and_ack_with_backend(&source, 48_000, true, Some(backend));
+    println!("PRIMARY_NEURAL {}", result);
 }
 
 #[test]

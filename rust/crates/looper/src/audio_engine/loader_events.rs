@@ -508,6 +508,7 @@ pub(super) fn poll(
             cached_path,
             analysis,
             analysis_error,
+            analysis_tempo_only,
             timing_epoch: _,
             original_lease,
             incoming_defaults,
@@ -518,6 +519,9 @@ pub(super) fn poll(
             dict.set_item("duration_s", duration_s)?;
             dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
             dict.set_item("cached_path", cached_path)?;
+            if analysis_tempo_only {
+                dict.set_item("analysis_kind", "tempo_only")?;
+            }
             if let Some(defaults) = incoming_defaults {
                 let rate = defaults.sample_rate_hz;
                 if rate == 0 {
@@ -547,7 +551,15 @@ pub(super) fn poll(
             if let Some(analysis) = analysis {
                 let analysis_dict = PyDict::new(py);
                 analysis_dict.set_item("bpm", analysis.bpm)?;
-                analysis_dict.set_item("key", analysis.key)?;
+                if let Some(key) = analysis.key {
+                    analysis_dict.set_item("key", key)?;
+                }
+                if let Some(method) = analysis.bpm_method_json {
+                    analysis_dict.set_item("bpm_method", method)?;
+                }
+                if let Some(error) = analysis.beat_error {
+                    dict.set_item("analysis_error", error)?;
+                }
 
                 let beat_grid_dict = PyDict::new(py);
                 beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
@@ -606,7 +618,15 @@ pub(super) fn poll(
             if let Some(analysis) = analysis {
                 let analysis_dict = PyDict::new(py);
                 analysis_dict.set_item("bpm", analysis.bpm)?;
-                analysis_dict.set_item("key", analysis.key)?;
+                if let Some(key) = analysis.key {
+                    analysis_dict.set_item("key", key)?;
+                }
+                if let Some(method) = analysis.bpm_method_json {
+                    analysis_dict.set_item("bpm_method", method)?;
+                }
+                if let Some(error) = analysis.beat_error {
+                    dict.set_item("analysis_error", error)?;
+                }
 
                 let beat_grid_dict = PyDict::new(py);
                 beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;

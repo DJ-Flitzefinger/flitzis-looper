@@ -9,7 +9,7 @@ use super::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, SourcePublication,
 };
 use super::progress::LoadProgressStage;
-use super::{AudioEngine, PadTaskGuard, admit_sample_analysis, analyze_sample};
+use super::{AudioEngine, PadTaskGuard, admit_sample_analysis};
 use crate::messages::SampleBuffer;
 use crate::messages::{BackgroundTaskKind, LoaderEvent};
 use pyo3::exceptions::PyRuntimeError;
@@ -632,6 +632,11 @@ fn start_analysis_with(
         .reserve()
         .map_err(PyRuntimeError::new_err)?;
     let (reader, request_id, output_sample_rate) = admit_sample_analysis(engine, id)?;
+    let installation = engine
+        .primary_beat_installation
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?
+        .clone();
     let owner = reader
         .analysis_owner
         .clone()
@@ -695,7 +700,47 @@ fn start_analysis_with(
                         if cancelled() {
                             return Err("Analysis superseded by another pad request".into());
                         }
-                        analyze_sample(&sample, output_sample_rate)
+                        let context = if let Some(installation) = installation {
+                            let generation = reader
+                                .guard
+                                .as_ref()
+                                .ok_or("analysis source generation unavailable")?
+                                .generation;
+                            let (descriptor, _) =
+                                reader.raw_source_descriptor(generation, &cancelled)?;
+                            let (root, _) = reader.map_artifact_paths()?;
+                            let source_id = descriptor["original"]["sha256"]
+                                .as_str()
+                                .ok_or("analysis original digest missing")?
+                                .to_owned();
+                            let owner = owner.clone();
+                            let shutdown = shutdown.clone();
+                            Some(super::app_analysis::NeuralContext {
+                                installation,
+                                staging_root: root.to_owned(),
+                                descriptor,
+                                identity: super::analysis_pcm::PcmIdentity {
+                                    pad_id: id,
+                                    request_id,
+                                    source_id,
+                                    source_generation: generation,
+                                },
+                                cancelled: Arc::new(move || {
+                                    shutdown.load(Ordering::Acquire) || !owner.current()
+                                }),
+                                additional_held_bytes: if reader.reference.resident_start() == 0
+                                    && reader.reference.resident_end()
+                                        == reader.reference.frame_count()
+                                {
+                                    0
+                                } else {
+                                    reader.reference.samples.len() * 4
+                                },
+                            })
+                        } else {
+                            None
+                        };
+                        super::app_analysis::analyze(&sample, output_sample_rate, context, false)
                     })
             }))
             .unwrap_or_else(|_| Err("Analysis worker failed".into()));

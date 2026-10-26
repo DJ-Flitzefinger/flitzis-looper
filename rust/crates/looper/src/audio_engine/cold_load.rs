@@ -10,7 +10,7 @@ use super::input_runtime_binding::{
 use super::progress::{LoadProgressStage, ProgressReporter};
 use super::sample_loader::{SampleLoadProgress, SampleLoadSubtask};
 use super::{
-    AudioEngine, LoadedSourcePublication, PadRequestAdvance, analyze_sample, pad_request_matches,
+    AudioEngine, LoadedSourcePublication, PadRequestAdvance, pad_request_matches,
     try_publish_loaded_sample_with_arm,
 };
 use crate::messages::{ControlMessage, LoaderEvent, SampleBuffer};
@@ -30,7 +30,7 @@ use std::sync::{
 type PreparedColdSample = (
     CommittedColdLease,
     SampleBuffer,
-    Option<crate::messages::SampleAnalysis>,
+    Option<crate::messages::LoadedAnalysis>,
     Option<f64>,
     Option<String>,
     Option<crate::messages::IncomingLoadDefaults>,
@@ -359,6 +359,8 @@ struct ColdLoad {
     replace_assignment: bool,
     resident_hint: Option<ResidentLoadHint>,
     resident_guard: Option<Arc<ResidentLoadGuard>>,
+    refine_tempo_only: bool,
+    analysis_installation: Option<String>,
     incoming: Option<Arc<super::incoming_load::IncomingLoad>>,
     intents: Arc<Mutex<Vec<TimingIntent>>>,
     initial_source: Option<SampleBuffer>,
@@ -401,6 +403,7 @@ pub(super) fn admit(
         source_intent,
         SourcePitchInitialization::FreshNeutral,
         None,
+        false,
     )
 }
 
@@ -416,6 +419,7 @@ pub(super) fn admit_with_initial_pitch(
     source_intent: &str,
     initial_pitch: SourcePitchInitialization,
     initial_mix: Option<SourceMixInitialization>,
+    refine_tempo_only: bool,
 ) -> PyResult<u64> {
     // The saved source tuple owns the actual mode. The residency hint still
     // describes the same range, and its cancellation guard tracks that mode.
@@ -451,6 +455,7 @@ pub(super) fn admit_with_initial_pitch(
             source_intent,
             initial_pitch,
             initial_mix,
+            refine_tempo_only,
         );
     }
     let handle = engine
@@ -478,6 +483,7 @@ pub(super) fn admit_with_initial_pitch(
         source_intent,
         initial_pitch,
         initial_mix,
+        refine_tempo_only,
     )
 }
 
@@ -539,6 +545,7 @@ fn admit_for_format_selected_intent(
         source_intent,
         SourcePitchInitialization::FreshNeutral,
         None,
+        false,
     )
 }
 
@@ -553,6 +560,7 @@ fn admit_for_format_selected_intent_with_pitch(
     source_intent: &str,
     initial_pitch: SourcePitchInitialization,
     initial_mix: Option<SourceMixInitialization>,
+    refine_tempo_only: bool,
 ) -> PyResult<u64> {
     admit_selected_material_incoming(
         engine,
@@ -566,6 +574,7 @@ fn admit_for_format_selected_intent_with_pitch(
         None,
         initial_pitch,
         initial_mix,
+        refine_tempo_only,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -638,6 +647,7 @@ pub(super) fn admit_selected_material(
         None,
         initial_pitch,
         None,
+        false,
     )
 }
 
@@ -681,6 +691,7 @@ pub(super) fn admit_incoming(
         Some(super::incoming_load::IncomingIntent::initial(key_lock)),
         SourcePitchInitialization::FreshNeutral,
         None,
+        false,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -706,6 +717,7 @@ pub(super) fn admit_incoming_for_format_test(
         Some(super::incoming_load::IncomingIntent::initial(key_lock)),
         SourcePitchInitialization::FreshNeutral,
         None,
+        false,
     )
     .map(|admitted| admitted.request_id)
 }
@@ -723,9 +735,15 @@ fn admit_selected_material_incoming(
     incoming_intent: Option<super::incoming_load::IncomingIntent>,
     initial_pitch: SourcePitchInitialization,
     initial_mix: Option<SourceMixInitialization>,
+    refine_tempo_only: bool,
 ) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
+    if refine_tempo_only && (source_intent != "restore" || restore_automatic || run_analysis) {
+        return Err(PyValueError::new_err(
+            "tempo-only refinement requires an ordinary restored source",
+        ));
+    }
     if id >= super::constants::NUM_SAMPLES {
         return Err(PyValueError::new_err("id out of range"));
     }
@@ -962,6 +980,12 @@ fn admit_selected_material_incoming(
         replace_assignment,
         resident_hint,
         resident_guard: resident_guard.clone(),
+        refine_tempo_only,
+        analysis_installation: engine
+            .primary_beat_installation
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?
+            .clone(),
         incoming: incoming.clone(),
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
@@ -1235,6 +1259,61 @@ impl ColdLoad {
                     })
     }
 
+    fn analyze_prepared(
+        &self,
+        sample: &SampleBuffer,
+        descriptor: &serde_json::Value,
+        held: usize,
+    ) -> Result<crate::messages::LoadedAnalysis, String> {
+        if self.refine_tempo_only
+            && self
+                .intents
+                .lock()
+                .map_err(|_| "timing intent lock poisoned")?[self.id]
+                != TimingIntent::Legacy
+        {
+            return Err("tempo refinement superseded by non-Legacy timing".into());
+        }
+        let context = self.analysis_installation.as_ref().map(|installation| {
+            let shutdown = self.cancelled.clone();
+            let requests = self.requests.clone();
+            let epoch = self.epoch.clone();
+            let ownership = self.ownership.clone();
+            let placement = self.placement;
+            let id = self.id;
+            let request = self.base_request;
+            let expected_epoch = self.base_epoch;
+            super::app_analysis::NeuralContext {
+                installation: installation.clone(),
+                staging_root: self.samples_root.clone(),
+                descriptor: descriptor.clone(),
+                additional_held_bytes: held,
+                identity: super::analysis_pcm::PcmIdentity {
+                    pad_id: id,
+                    request_id: self.request_id,
+                    source_id: descriptor["original"]["sha256"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                    source_generation: self.request_id,
+                },
+                cancelled: Arc::new(move || {
+                    shutdown.load(Ordering::Acquire)
+                        || !pad_request_matches(&requests, id, request)
+                        || epoch.load(Ordering::Acquire) != expected_epoch
+                        || matches!(
+                            ownership.observe_slot_snapshot(placement),
+                            PlacementObservation::Stale | PlacementObservation::Retired
+                        )
+                }),
+            }
+        });
+        if self.refine_tempo_only && context.is_none() {
+            return Err("primary neural analysis is not configured".into());
+        }
+        super::app_analysis::analyze(sample, self.output_rate, context, self.refine_tempo_only)
+    }
+
     fn prepare(&self) -> Result<PreparedColdSample, String> {
         let cancelled = || self.is_cancelled();
         if let Some(prepared) = &self.prepared_material {
@@ -1273,7 +1352,53 @@ impl ColdLoad {
             lease
                 .bind_sample(&sample)
                 .map_err(|error| error.to_string())?;
-            return Ok((lease, sample, None, None, None, None, None));
+            let (analysis, analysis_error) = if self.run_analysis || self.refine_tempo_only {
+                let result = (|| {
+                    let finite = sample.resident_start() != 0
+                        || sample.resident_end() != sample.frame_count();
+                    let held = if finite { sample.samples.len() * 4 } else { 0 };
+                    let read = || {
+                        lease
+                            .read_complete_cancellable(
+                                &sample,
+                                super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
+                                &cancelled,
+                            )
+                            .map_err(|e| e.to_string())
+                    };
+                    let complete = if self.analysis_installation.is_some() {
+                        super::app_analysis::prepare_input(
+                            sample.frame_count(),
+                            sample.channels,
+                            self.output_rate,
+                            held,
+                            self.refine_tempo_only,
+                            read,
+                        )?
+                    } else {
+                        super::analysis_pcm::default_analysis_peak(
+                            sample.frame_count(),
+                            sample.channels,
+                            self.output_rate,
+                            held,
+                            super::constant_timing::MAX_PCM_BYTES,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        read()?
+                    };
+                    self.analyze_prepared(&complete, &lease.manifest.descriptor["decoder"], held)
+                })();
+                if cancelled() {
+                    return Err("material analysis superseded".into());
+                }
+                match result {
+                    Ok(analysis) => (Some(analysis), None),
+                    Err(error) => (None, Some(error)),
+                }
+            } else {
+                (None, None)
+            };
+            return Ok((lease, sample, analysis, None, analysis_error, None, None));
         }
 
         if self.incoming.is_some() {
@@ -1345,11 +1470,11 @@ impl ColdLoad {
         } else {
             super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate)
         };
-        let (analysis, analysis_error) = if self.run_analysis {
+        let (analysis, analysis_error) = if self.run_analysis || self.refine_tempo_only {
             // Automatic analysis is still requested. Its existing complete-input
             // kernels have a separate genuine RAM budget; they cannot force a
             // selected loop to own complete source PCM or veto durable import.
-            let analysis_result = (|| -> Result<crate::messages::SampleAnalysis, String> {
+            let analysis_result = (|| -> Result<crate::messages::LoadedAnalysis, String> {
                 let finite =
                     sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
                 let held = if finite {
@@ -1361,34 +1486,57 @@ impl ColdLoad {
                 } else {
                     0
                 };
-                super::analysis_pcm::default_analysis_peak(
-                    sample.frame_count(),
-                    sample.channels,
-                    self.output_rate,
-                    held,
-                    super::constant_timing::MAX_PCM_BYTES,
-                )
-                .map_err(|error| {
-                    format!("automatic analysis exceeds its PCM preparation budget: {error}")
-                })?;
+                if self.analysis_installation.is_none() {
+                    super::analysis_pcm::default_analysis_peak(
+                        sample.frame_count(),
+                        sample.channels,
+                        self.output_rate,
+                        held,
+                        super::constant_timing::MAX_PCM_BYTES,
+                    )
+                    .map_err(|error| {
+                        format!("automatic analysis exceeds its PCM preparation budget: {error}")
+                    })?;
+                }
                 if cancelled() {
                     return Err("cold load cancelled".into());
                 }
                 progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-                let complete = if finite {
-                    transaction
-                        .read_prepared_selection(
-                            None,
-                            super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
-                            &cancelled,
-                        )
-                        .map_err(|error| {
-                            format!("automatic analysis PCM preparation failed: {error}")
-                        })?
-                } else {
-                    sample.clone()
+                let mut read = || {
+                    if finite {
+                        transaction
+                            .read_prepared_selection(
+                                None,
+                                super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
+                                &cancelled,
+                            )
+                            .map_err(|error| {
+                                format!("automatic analysis PCM preparation failed: {error}")
+                            })
+                    } else {
+                        Ok(sample.clone())
+                    }
                 };
-                analyze_sample(&complete, self.output_rate)
+                let complete = if self.analysis_installation.is_some() {
+                    super::app_analysis::prepare_input(
+                        sample.frame_count(),
+                        sample.channels,
+                        self.output_rate,
+                        held,
+                        self.refine_tempo_only,
+                        read,
+                    )?
+                } else {
+                    read()?
+                };
+                self.analyze_prepared(
+                    &complete,
+                    &transaction
+                        .manifest()
+                        .map_err(|e| e.to_string())?
+                        .descriptor["decoder"],
+                    held,
+                )
             })();
             // Cancel/stale source can never become a successful load carrying an
             // incidental analysis warning. It still rolls back the transaction.
@@ -1472,22 +1620,49 @@ impl ColdLoad {
             != u64::from(self.output_rate);
         // This separate bounded complete-input analysis is retired before any
         // selected live allocation. An analysis failure cannot invent an end.
-        let analysis_result = (|| -> Result<crate::messages::SampleAnalysis, String> {
-            super::analysis_pcm::default_analysis_peak(
-                source.frame_count,
-                source.channels,
-                self.output_rate,
-                0,
-                super::constant_timing::MAX_PCM_BYTES,
-            )
-            .map_err(|error| {
-                format!("automatic analysis exceeds its PCM preparation budget: {error}")
-            })?;
+        let analysis_result = (|| -> Result<crate::messages::LoadedAnalysis, String> {
+            if self.analysis_installation.is_none() {
+                super::analysis_pcm::default_analysis_peak(
+                    source.frame_count,
+                    source.channels,
+                    self.output_rate,
+                    0,
+                    super::constant_timing::MAX_PCM_BYTES,
+                )
+                .map_err(|error| {
+                    format!("automatic analysis exceeds its PCM preparation budget: {error}")
+                })?;
+            }
             progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-            let complete = transaction
-                .read_prepared_selection(None, super::constant_timing::MAX_PCM_BYTES, &cancelled)
-                .map_err(|error| format!("automatic analysis PCM preparation failed: {error}"))?;
-            analyze_sample(&complete, self.output_rate)
+            let mut read = || {
+                transaction
+                    .read_prepared_selection(
+                        None,
+                        super::constant_timing::MAX_PCM_BYTES,
+                        &cancelled,
+                    )
+                    .map_err(|error| format!("automatic analysis PCM preparation failed: {error}"))
+            };
+            let complete = if self.analysis_installation.is_some() {
+                super::app_analysis::prepare_input(
+                    source.frame_count,
+                    source.channels,
+                    self.output_rate,
+                    0,
+                    false,
+                    read,
+                )?
+            } else {
+                read()?
+            };
+            self.analyze_prepared(
+                &complete,
+                &transaction
+                    .manifest()
+                    .map_err(|e| e.to_string())?
+                    .descriptor["decoder"],
+                0,
+            )
         })();
         if cancelled() {
             return Err("cold load cancelled".into());
@@ -2037,6 +2212,7 @@ impl ColdLoad {
                         original_lease: Some(original_lease),
                         analysis,
                         analysis_error,
+                        analysis_tempo_only: self.refine_tempo_only,
                         incoming_defaults,
                     }),
                 )
@@ -2137,6 +2313,7 @@ mod source_pitch_initialization_tests {
                         Some(&lock),
                         None,
                         None,
+                        false,
                     )
                     .unwrap_err();
                 assert!(error.is_instance_of::<PyValueError>(py));

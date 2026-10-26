@@ -40,7 +40,7 @@ mod source_beatmap_async;
 use source_beatmap_async::AsyncMapStatus;
 
 #[path = "source_beatmap_neural.rs"]
-mod source_beatmap_neural;
+pub(super) mod source_beatmap_neural;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OfflinePurpose {
@@ -810,7 +810,7 @@ impl JobState {
     }
 }
 
-fn create_staged_pcm(path: &str) -> std::io::Result<File> {
+pub(super) fn create_staged_pcm(path: &str) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.create_new(true).read(true).write(true);
     #[cfg(windows)]
