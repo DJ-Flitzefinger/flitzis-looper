@@ -1325,11 +1325,22 @@ fn static_failed_global_master_admission_preserves_the_complete_original_clock()
 }
 
 #[test]
-fn static_terminal_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape() {
+fn static_terminal_live_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape() {
     let mut fixture = StaticPath::new(&[2048]);
     fixture.install();
     fixture.path.render(2048);
     let before = fixture.path.voice(0).source_playback;
+    let generation = fixture.path.voice(0).generation;
+    let admission = fixture
+        .path
+        .voice(0)
+        .source_admission
+        .as_ref()
+        .unwrap()
+        .retry_identity();
+    let source = fixture.path.voice(0).sample.as_ref().unwrap().clone();
+    let native = fixture.path.voice(0).stretch.native_state_address();
+    let timeline = fixture.path.timeline;
     let revision = fixture
         .path
         .source
@@ -1369,8 +1380,10 @@ fn static_terminal_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape()
     });
     assert_eq!(status, (revision, "error".into(), false));
     assert!(fixture.path.voice(0).source_playback.matches_exact(&before));
-    for action in ["pitch.extra:1:set", "pitch.extra:0:set_retrigger"] {
-        let captured = fixture.capture_pitch(action);
+    // Live SET still requires the unsupported static-trajectory Native transition.
+    // A fresh neutral SET+Retrigger is a separate supported physical birth below.
+    {
+        let captured = fixture.capture_pitch("pitch.extra:1:set");
         assert!(
             fixture
                 .path
@@ -1385,6 +1398,32 @@ fn static_terminal_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape()
         assert_eq!(captured.reason(), Some("mapped_timing_unavailable"));
         assert!(fixture.path.voice(0).source_playback.matches_exact(&before));
     }
+    assert_eq!(fixture.path.voice(0).generation, generation);
+    assert_eq!(
+        fixture
+            .path
+            .voice(0)
+            .source_admission
+            .as_ref()
+            .unwrap()
+            .retry_identity(),
+        admission
+    );
+    assert!(
+        fixture
+            .path
+            .voice(0)
+            .sample
+            .as_ref()
+            .unwrap()
+            .same_window(&source)
+    );
+    assert_eq!(fixture.path.voice(0).stretch.native_state_address(), native);
+    assert!(fixture.path.timeline.matches_clock_epoch(&timeline));
+    assert_eq!(
+        fixture.path.timeline.output_frame(),
+        timeline.output_frame()
+    );
     // The requested Key Lock preference remains on, but its actual unsupported
     // operation has already terminally refused through the existing owner.
     fixture.publish(false, 3, 8, Some(0));
@@ -1412,6 +1451,102 @@ fn static_terminal_key_lock_and_pitch_refusals_leave_a_working_sync_off_escape()
     let birth = fixture.start(0);
     assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
     assert!(!fixture.path.voice(0).source_playback.is_static_phase());
+}
+
+#[test]
+fn static_fresh_neutral_pitch_retrigger_starts_full_physical_beginning_without_old_phase() {
+    let mut fixture = StaticPath::new(&[2048]);
+    let mut ordinary = StaticPath::new(&[2048]);
+    fixture.install();
+    assert_eq!(fixture.path.render(2048), ordinary.path.render(2048));
+    let generation = fixture.path.voice(0).generation;
+    let admission = fixture
+        .path
+        .voice(0)
+        .source_admission
+        .as_ref()
+        .unwrap()
+        .retry_identity();
+    let content = fixture
+        .path
+        .voice(0)
+        .source_admission
+        .as_ref()
+        .unwrap()
+        .content_key();
+    let source = fixture.path.voice(0).sample.as_ref().unwrap().clone();
+    let action = fixture.capture_pitch("pitch.extra:0:set_retrigger");
+    assert!(
+        fixture
+            .path
+            .source
+            .engine
+            .publish_pitch_action(&action)
+            .unwrap()
+    );
+    fixture.drain();
+    assert_ne!(action.state(), "rejected", "{:?}", action.reason());
+    while fixture.path.timeline.output_frame() < action.execution_target() {
+        let frames =
+            (action.execution_target() - fixture.path.timeline.output_frame()).min(512) as usize;
+        assert_eq!(fixture.path.render(frames), ordinary.path.render(frames));
+    }
+    let execution = fixture.path.timeline.output_frame();
+    let master = fixture.path.timeline;
+    fixture.path.render(0);
+    assert_eq!(action.state(), "applied", "{:?}", action.reason());
+    assert!(action.effective());
+    assert_eq!(action.execution_target(), execution);
+    assert!(fixture.path.timeline.matches_clock_epoch(&master));
+    assert_eq!(fixture.path.timeline.output_frame(), execution);
+    let voice = fixture.path.voice(0);
+    assert_ne!(voice.generation, generation);
+    assert_eq!(
+        voice
+            .source_admission
+            .as_ref()
+            .unwrap()
+            .retry_identity()
+            .source_generation,
+        admission.source_generation
+    );
+    assert_eq!(
+        voice.source_admission.as_ref().unwrap().content_key(),
+        content
+    );
+    assert!(voice.sample.as_ref().unwrap().same_window(&source));
+    assert_eq!(voice.source_playback.position().frame, STATIC_START);
+    assert_eq!(
+        voice.source_playback.position().fraction.to_bits(),
+        0_f64.to_bits()
+    );
+    assert_eq!(
+        voice.source_playback.position().seek_mode,
+        ExplicitSeekMode::Normal
+    );
+    assert!(!voice.source_playback.is_static_phase());
+    assert!(!voice.source_playback.has_phase_program());
+    assert!(!voice.stretch.has_active_native_ownership());
+    assert!(!voice.stretch.has_retained_source_input());
+    // Independent public ordinary birth over the same declared generated PCM.
+    // Its own source/clock is retained; no expected playback is copied from the DUT.
+    assert_eq!(ordinary.path.timeline.output_frame(), execution);
+    let ordinary_birth = ordinary.start(0);
+    assert_eq!(
+        ordinary_birth.state(),
+        "applied",
+        "{:?}",
+        ordinary_birth.reason()
+    );
+    assert_eq!(
+        ordinary.path.voice(0).source_playback.position().frame,
+        STATIC_START
+    );
+    for frames in [1, 17, 511, 1537, 2048] {
+        assert_eq!(fixture.path.render(frames), ordinary.path.render(frames));
+        assert!(!fixture.path.voice(0).source_playback.has_phase_program());
+        assert!(!fixture.path.voice(0).stretch.has_active_native_ownership());
+    }
 }
 
 #[test]
@@ -1634,6 +1769,17 @@ fn static_blocked_pitch_set_retrigger_can_prepare_and_apply_after_real_sync_off(
     fixture.install();
     fixture.path.render(2048);
     let before = fixture.path.voice(0).source_playback;
+    let generation = fixture.path.voice(0).generation;
+    let admission = fixture
+        .path
+        .voice(0)
+        .source_admission
+        .as_ref()
+        .unwrap()
+        .retry_identity();
+    let source = fixture.path.voice(0).sample.as_ref().unwrap().clone();
+    let native = fixture.path.voice(0).stretch.native_state_address();
+    let timeline = fixture.path.timeline;
     let blocked = fixture.capture_pitch("pitch.extra:1:set_retrigger");
     assert!(
         fixture
@@ -1645,8 +1791,45 @@ fn static_blocked_pitch_set_retrigger_can_prepare_and_apply_after_real_sync_off(
     );
     fixture.drain();
     fixture.path.render(0);
-    assert_eq!(blocked.reason(), Some("mapped_timing_unavailable"));
+    assert_eq!(blocked.state(), "rejected");
+    assert_eq!(blocked.reason(), Some("preparation_failed"));
     assert!(fixture.path.voice(0).source_playback.matches_exact(&before));
+    assert_eq!(fixture.path.voice(0).generation, generation);
+    assert_eq!(
+        fixture
+            .path
+            .voice(0)
+            .source_admission
+            .as_ref()
+            .unwrap()
+            .retry_identity(),
+        admission
+    );
+    assert!(
+        fixture
+            .path
+            .voice(0)
+            .sample
+            .as_ref()
+            .unwrap()
+            .same_window(&source)
+    );
+    assert_eq!(fixture.path.voice(0).stretch.native_state_address(), native);
+    assert!(fixture.path.timeline.matches_clock_epoch(&timeline));
+    assert_eq!(
+        fixture.path.timeline.output_frame(),
+        timeline.output_frame()
+    );
+    assert!(
+        !fixture
+            .path
+            .source
+            .mixer
+            .pitch_runtime
+            .as_ref()
+            .unwrap()
+            .has_pending_content(blocked.content_key())
+    );
     fixture.publish(false, 3, 8, None);
     assert_eq!(fixture.effect().observation().unwrap().state, "applied");
     assert!(!fixture.path.voice(0).source_playback.is_static_phase());

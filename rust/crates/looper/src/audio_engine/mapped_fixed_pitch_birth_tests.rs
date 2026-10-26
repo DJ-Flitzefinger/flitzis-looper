@@ -94,7 +94,7 @@ impl RawStereo {
         self.sample_at_pitch(frame, self.pitch)
     }
 
-    fn sample_at_pitch(&mut self, frame: [f32; 2], pitch: f64) -> [f32; 2] {
+    pub(super) fn sample_at_pitch(&mut self, frame: [f32; 2], pitch: f64) -> [f32; 2] {
         if self.input.is_empty() {
             self.pending_pitch = Some(pitch);
         }
@@ -723,6 +723,12 @@ fn installed_mapped_voice_revocation_refuses_minted_chunk_without_fifo_mutation(
         .live_mapped_pitch_chunk(checkpoint, 1, intent, true)
         .unwrap()
         .unwrap();
+    let warm_keys = candidate.mapped_projection_memo_keys_for_test().unwrap();
+    assert!(
+        warm_keys
+            .iter()
+            .all(|role| role.iter().any(Option::is_some))
+    );
     let input_fifo = candidate.input_fifo.clone();
     let output_fifo = candidate.output_fifo.clone();
     let input = candidate.input.clone();
@@ -912,6 +918,13 @@ fn owned_mapped_pitch_descriptors_expire_after_input_and_same_owner_repreparatio
 
     // Reuse the SAME immutable original request and Native handle. Prepare one real
     // source frame so the new owner reaches identical serial/source coordinates.
+    assert!(
+        candidate
+            .mapped_projection_memo_keys_for_test()
+            .unwrap()
+            .iter()
+            .all(|role| role.iter().any(Option::is_some))
+    );
     let old_witness = candidate.mapped_pitch_witness_for_test().unwrap();
     let mut request = candidate.source.take().unwrap();
     request.actual_feed = None;
@@ -1751,6 +1764,130 @@ fn assert_owned_mapped_stream(
 }
 
 #[test]
+fn owned_mapped_numeric_projection_memo_preserves_cold_hits_errors_and_exclusive_endpoints() {
+    use crate::audio_engine::prepared_native_history::{SourceReadCheckpoint, mapped_rate_probe};
+    let fixture = owned_long_birth(1536);
+    let input = fixture.request.mapped_input.as_ref().unwrap();
+    let original = SourceReadCheckpoint {
+        playback: fixture.request.playback,
+        plan: fixture.request.plan,
+    };
+    let start = original.playback.mapped_output_frame().unwrap();
+    input.projection_memo_clear_for_test();
+    assert_eq!(input.projection_memo_keys_for_test(), [[None; 2]; 2]);
+    for frame in [
+        start,
+        start + 1,
+        start + 1535,
+        start + 1536,
+        start + 8192,
+        start,
+    ] {
+        let reference = input.projection_pair_for_test(frame, false);
+        mapped_rate_probe::start();
+        let cold = input.projection_pair_for_test(frame, true);
+        let first = mapped_rate_probe::finish();
+        assert_eq!(first.projection_hits + first.projection_misses, 2);
+        for (actual, expected) in cold.into_iter().zip(reference) {
+            assert!(actual.unwrap().matches_exact(expected.unwrap()));
+        }
+        mapped_rate_probe::start();
+        let hit = input.projection_pair_for_test(frame, true);
+        let counts = mapped_rate_probe::finish();
+        assert_eq!((counts.projection_hits, counts.projection_misses), (2, 0));
+        for (actual, expected) in hit
+            .into_iter()
+            .zip(input.projection_pair_for_test(frame, false))
+        {
+            assert!(actual.unwrap().matches_exact(expected.unwrap()));
+        }
+    }
+    let keys = input.projection_memo_keys_for_test();
+    for frame in [start - 1, u64::MAX, u64::MAX] {
+        let actual = input.projection_pair_for_test(frame, true);
+        let reference = input.projection_pair_for_test(frame, false);
+        for (actual, expected) in actual.into_iter().zip(reference) {
+            assert_eq!(
+                actual.err().unwrap().to_string(),
+                expected.err().unwrap().to_string()
+            );
+        }
+        assert_eq!(
+            input.projection_memo_keys_for_test(),
+            keys,
+            "errors are not memoized"
+        );
+    }
+    let mut exhausted = original;
+    let frames = exhausted.playback.chunk(usize::MAX).0;
+    assert!(frames > 0);
+    assert!(exhausted.playback.advance(frames));
+    exhausted.plan.frame_pos = exhausted.playback.position().frame;
+    exhausted.plan.seek_mode = exhausted.playback.position().seek_mode;
+    assert!(!exhausted.playback.can_read_frames(1));
+    let expected = input.projection_pair_for_test(start + frames as u64, false)[1]
+        .as_ref()
+        .unwrap()
+        .to_owned();
+    input.project(&mut exhausted, 0).unwrap();
+    assert!(exhausted.matches_exact(expected));
+    let mut forged = exhausted;
+    forged.plan.frame_pos += 1;
+    let before = forged;
+    assert!(input.project(&mut forged, 0).is_err());
+    assert!(forged.matches_exact(before));
+    assert_original_current(&fixture.captured);
+}
+
+#[test]
+fn owned_mapped_numeric_projection_memo_does_not_cross_new_request_or_geometry_owners() {
+    use crate::audio_engine::prepared_native_history::mapped_rate_probe;
+    let old = owned_long_birth(511);
+    let input = old.request.mapped_input.as_ref().unwrap();
+    let frame = old.request.playback.mapped_output_frame().unwrap() + 2048;
+    let old_values = input
+        .projection_pair_for_test(frame, true)
+        .map(Result::unwrap);
+    assert_eq!(input.projection_memo_keys_for_test()[0][1], Some(frame));
+    drop(old);
+
+    let fresh = owned_long_birth(1536);
+    let input = fresh.request.mapped_input.as_ref().unwrap();
+    // Genuine capture can warm its own Current origin. No previous nonorigin
+    // endpoint may survive a fresh request, even if the allocator reuses storage.
+    assert!(
+        input
+            .projection_memo_keys_for_test()
+            .iter()
+            .flatten()
+            .all(|key| *key != Some(frame))
+    );
+    let expected = input
+        .projection_pair_for_test(frame, false)
+        .map(Result::unwrap);
+    assert!(!expected[0].matches_exact(old_values[0]));
+    mapped_rate_probe::start();
+    let actual = input
+        .projection_pair_for_test(frame, true)
+        .map(Result::unwrap);
+    let first = mapped_rate_probe::finish();
+    assert_eq!((first.projection_hits, first.projection_misses), (0, 2));
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!(actual.matches_exact(expected));
+    }
+    mapped_rate_probe::start();
+    let hit = input
+        .projection_pair_for_test(frame, true)
+        .map(Result::unwrap);
+    let counts = mapped_rate_probe::finish();
+    assert_eq!((counts.projection_hits, counts.projection_misses), (2, 0));
+    for (actual, expected) in hit.into_iter().zip(expected) {
+        assert!(actual.matches_exact(expected));
+    }
+    assert_original_current(&fresh.captured);
+}
+
+#[test]
 fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomically() {
     use crate::audio_engine::mapped_source_clock::MappedLoopGeometry;
     use crate::audio_engine::prepared_native_history::{
@@ -1790,6 +1927,13 @@ fn owned_mapped_future_projection_requires_original_checkpoint_and_fails_atomica
         playback: fixture.request.playback,
         plan: fixture.request.plan,
     };
+    // Cache the genuine canonical result first; a hit cannot authorize an impostor.
+    assert!(
+        input
+            .projection_pair_for_test(64, true)
+            .iter()
+            .all(Result::is_ok)
+    );
     let mut copied = original;
     assert!(!copied.project_output_frames(1));
     assert!(copied.matches_exact(original));
@@ -1935,6 +2079,28 @@ fn owned_mapped_future_refuses_cancel_stale_ack_bad_coverage_and_keeps_original_
 
     for invalid in 0..11 {
         let mut fixture = owned_birth(7);
+        // Numeric hits must never preserve an old cancellation, ACK or source permit.
+        let input = fixture.request.mapped_input.as_ref().unwrap();
+        let frame = fixture.request.playback.mapped_output_frame().unwrap();
+        assert!(
+            input
+                .projection_pair_for_test(frame, true)
+                .iter()
+                .all(Result::is_ok)
+        );
+        assert!(
+            input
+                .projection_pair_for_test(frame + 1, true)
+                .iter()
+                .all(Result::is_ok)
+        );
+        assert!(
+            input
+                .projection_memo_keys_for_test()
+                .iter()
+                .flatten()
+                .all(Option::is_some)
+        );
         let source = fixture.request.sample.clone();
         let stems = fixture.request.stems.clone();
         let accepted = fixture.request.binding.accepted;
@@ -2005,6 +2171,13 @@ fn owned_mapped_future_refuses_cancel_stale_ack_bad_coverage_and_keeps_original_
             candidate
                 .prepare_owned_mapped_birth_future(fixture.request, cut)
                 .unwrap();
+            assert!(
+                candidate
+                    .mapped_projection_memo_keys_for_test()
+                    .unwrap()
+                    .iter()
+                    .all(|role| role.iter().any(Option::is_some))
+            );
             if invalid == 5 {
                 assert!(fixture.captured.cancel());
             } else {
@@ -2050,6 +2223,29 @@ fn owned_mapped_future_refuses_cancel_stale_ack_bad_coverage_and_keeps_original_
             },
         )
         .unwrap();
+    {
+        let request = candidate.source.as_ref().unwrap();
+        let frame = request.playback.mapped_output_frame().unwrap();
+        let input = request.mapped_input.as_ref().unwrap();
+        assert!(
+            input
+                .projection_pair_for_test(frame, true)
+                .iter()
+                .all(Result::is_ok)
+        );
+        assert!(
+            input
+                .projection_pair_for_test(frame + 1, true)
+                .iter()
+                .all(Result::is_ok)
+        );
+    }
+    let warm_keys = candidate.mapped_projection_memo_keys_for_test().unwrap();
+    assert!(
+        warm_keys
+            .iter()
+            .all(|role| role.iter().any(Option::is_some))
+    );
     drop(fixture.work);
     drop(fixture.captured);
     drop(fixture.path);
@@ -2060,6 +2256,10 @@ fn owned_mapped_future_refuses_cancel_stale_ack_bad_coverage_and_keeps_original_
     // This is the exact fixed-storage reset used by callback paths. Source/map
     // ownership survives it, and only worker-style request retirement releases it.
     candidate.reset_adapter();
+    assert_eq!(
+        candidate.mapped_projection_memo_keys_for_test(),
+        Some(warm_keys)
+    );
     assert!(weak_map.upgrade().is_some());
     assert!(weak_pcm.upgrade().is_some());
     drop(candidate.source.take());

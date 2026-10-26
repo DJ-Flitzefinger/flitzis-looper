@@ -12,13 +12,61 @@ use crate::audio_engine::native_history_permit::{
 use crate::audio_engine::ordinary_start::OrdinaryStartWork;
 use crate::audio_engine::pad_start::{MappedStartPendingGuard, MappedStartSource};
 use crate::audio_engine::pitch_intent::PitchIntent;
+use std::cell::Cell;
 use std::sync::Arc;
+
+#[derive(Clone, Copy)]
+enum ProjectionRole {
+    Birth,
+    Current,
+}
+
+#[derive(Default)]
+struct ProjectionMemoSlot {
+    // Read the small key first: a miss never copies the full numeric checkpoint.
+    frame: Cell<Option<u64>>,
+    result: Cell<Option<SourceReadCheckpoint>>,
+}
+
+#[derive(Default)]
+struct ProjectionMemo {
+    // The role's origin stays in slot zero; slot one retains its most recent other
+    // endpoint. Look-ahead eviction is only a performance miss, never new authority.
+    slots: [ProjectionMemoSlot; 2],
+}
+
+impl ProjectionMemo {
+    fn get(&self, frame: u64, origin: u64) -> Option<SourceReadCheckpoint> {
+        let slot = &self.slots[usize::from(frame != origin)];
+        (slot.frame.get() == Some(frame))
+            .then(|| slot.result.get())
+            .flatten()
+    }
+
+    fn insert(&self, frame: u64, origin: u64, result: SourceReadCheckpoint) {
+        let slot = &self.slots[usize::from(frame != origin)];
+        slot.result.set(Some(result));
+        slot.frame.set(Some(frame));
+    }
+
+    fn clear(&self) {
+        for slot in &self.slots {
+            slot.frame.set(None);
+        }
+    }
+}
 
 pub(crate) struct MappedNativeInput {
     source: Arc<MappedStartSource>,
     pending: MappedStartPendingGuard,
     clock: MappedClockEpoch,
     origin: SourceReadCheckpoint,
+    // A claimed live continuation never rewrites the original request or birth proof.
+    current_origin: Option<SourceReadCheckpoint>,
+    // Numeric Copy results only. Geometry and role origins belong to this unique Box;
+    // no source/permit/status result is memoized and the Box is not shared via Sync.
+    birth_projection: ProjectionMemo,
+    current_projection: ProjectionMemo,
     permit: NativeHistoryPermitIdentity,
     target: u64,
     request_id: u64,
@@ -66,6 +114,7 @@ pub(super) struct MappedNativePitchStamp {
     pub(super) incarnation: u64,
     pub(super) input_serial: u64,
     pub(super) actual_frame: u64,
+    pub(super) continuation_revision: u64,
 }
 
 impl MappedNativePitchStamp {
@@ -185,6 +234,9 @@ impl MappedNativeInput {
             pending,
             clock,
             origin,
+            current_origin: None,
+            birth_projection: ProjectionMemo::default(),
+            current_projection: ProjectionMemo::default(),
             permit: request.permit.scalar_identity(),
             target,
             request_id: request.request_id,
@@ -234,6 +286,9 @@ impl MappedNativeInput {
             pending: action.mapped_pending_guard().map_err(|_| unavailable())?,
             clock: request.playback.mapped_epoch().ok_or_else(unavailable)?,
             origin,
+            current_origin: None,
+            birth_projection: ProjectionMemo::default(),
+            current_projection: ProjectionMemo::default(),
             permit: request.permit.scalar_identity(),
             target: request.target_output_frame,
             request_id: request.request_id,
@@ -443,11 +498,57 @@ impl MappedNativeInput {
         })
     }
 
-    fn checkpoint_at(&self, frame: u64) -> Result<SourceReadCheckpoint, RubberBandError> {
-        if frame < self.target {
+    fn role_origin(&self, role: ProjectionRole) -> SourceReadCheckpoint {
+        match role {
+            ProjectionRole::Birth => self.origin,
+            ProjectionRole::Current => self.current_origin.unwrap_or(self.origin),
+        }
+    }
+
+    fn project_origin(
+        &self,
+        role: ProjectionRole,
+        frame: u64,
+    ) -> Result<SourceReadCheckpoint, RubberBandError> {
+        #[cfg(test)]
+        let _probe = super::mapped_rate_probe::scope(super::mapped_rate_probe::Stage::Projection);
+        let origin = self.role_origin(role);
+        let start = origin
+            .playback
+            .mapped_output_frame()
+            .filter(|start| frame >= *start)
+            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let memo = match role {
+            ProjectionRole::Birth => &self.birth_projection,
+            ProjectionRole::Current => &self.current_projection,
+        };
+        if let Some(result) = memo.get(frame, start) {
+            #[cfg(test)]
+            super::mapped_rate_probe::record_projection_memo(true);
+            return Ok(result);
+        }
+        #[cfg(test)]
+        super::mapped_rate_probe::record_projection_memo(false);
+        let result = self.project_origin_uncached(origin, frame)?;
+        memo.insert(frame, start, result);
+        Ok(result)
+    }
+
+    // Keep the original strict factory intact. In particular, even an origin-frame
+    // miss must reconstruct the canonical span and validate its original geometry.
+    fn project_origin_uncached(
+        &self,
+        origin: SourceReadCheckpoint,
+        frame: u64,
+    ) -> Result<SourceReadCheckpoint, RubberBandError> {
+        if origin
+            .playback
+            .mapped_output_frame()
+            .is_none_or(|start| frame < start)
+        {
             return Err(RubberBandError::UnavailableSourceHistory);
         }
-        let mut playback = self.origin.playback;
+        let mut playback = origin.playback;
         playback
             .project_mapped_compact_to(self.source.geometry(), frame)
             .map_err(|_| RubberBandError::UnavailableSourceHistory)?;
@@ -458,9 +559,91 @@ impl MappedNativeInput {
                 frame_pos: position.frame,
                 seek_mode: position.seek_mode,
                 loop_period: playback.reader_period(),
-                ..self.origin.plan
+                ..origin.plan
             },
         })
+    }
+
+    fn checkpoint_at(&self, frame: u64) -> Result<SourceReadCheckpoint, RubberBandError> {
+        self.project_origin(ProjectionRole::Current, frame)
+    }
+
+    /// Historical raw preparation is always evaluated through the immutable birth clock.
+    pub(super) fn project_birth(
+        &self,
+        checkpoint: SourceReadCheckpoint,
+        frames: u64,
+    ) -> Option<SourceReadCheckpoint> {
+        let address = checkpoint.playback.mapped_output_frame()?;
+        let original = self.project_origin(ProjectionRole::Birth, address).ok()?;
+        if !checkpoint.matches_exact(original) {
+            return None;
+        }
+        self.project_origin(ProjectionRole::Birth, address.checked_add(frames)?)
+            .ok()
+    }
+
+    pub(super) fn continuation_matches(
+        &self,
+        previous: SourceReadCheckpoint,
+        next: SourceReadCheckpoint,
+    ) -> bool {
+        let Ok(previous) = self.canonicalize(previous) else {
+            return false;
+        };
+        let Some(epoch) = next.playback.mapped_epoch() else {
+            return false;
+        };
+        let mut expected = previous.playback;
+        next.is_consistent()
+            && !next.playback.has_phase_program()
+            && !next.plan.transition.is_active()
+            && previous.plan.matches_source_contract(next.plan)
+            && previous.playback.mapped_output_frame() == next.playback.mapped_output_frame()
+            && expected
+                .replace_mapped_epoch(self.source.geometry(), epoch)
+                .is_ok()
+            && expected.matches_exact(&next.playback)
+    }
+
+    pub(super) fn install_continuation_claimed(&mut self, origin: SourceReadCheckpoint) {
+        self.current_projection.clear();
+        self.current_origin = Some(origin);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn projection_memo_clear_for_test(&self) {
+        self.birth_projection.clear();
+        self.current_projection.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn projection_memo_keys_for_test(&self) -> [[Option<u64>; 2]; 2] {
+        [&self.birth_projection, &self.current_projection]
+            .map(|memo| std::array::from_fn(|index| memo.slots[index].frame.get()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn projection_pair_for_test(
+        &self,
+        frame: u64,
+        cached: bool,
+    ) -> [Result<SourceReadCheckpoint, RubberBandError>; 2] {
+        [ProjectionRole::Birth, ProjectionRole::Current].map(|role| {
+            if cached {
+                self.project_origin(role, frame)
+            } else {
+                self.project_origin_uncached(self.role_origin(role), frame)
+            }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn projection_memo_layout_for_test() -> (usize, usize) {
+        (
+            std::mem::size_of::<ProjectionMemoSlot>(),
+            std::mem::size_of::<ProjectionMemo>(),
+        )
     }
 
     /// Normalize only a genuine exclusive endpoint from the preceding original span.
@@ -469,6 +652,8 @@ impl MappedNativeInput {
         &self,
         checkpoint: SourceReadCheckpoint,
     ) -> Result<SourceReadCheckpoint, RubberBandError> {
+        #[cfg(test)]
+        let _probe = super::mapped_rate_probe::scope(super::mapped_rate_probe::Stage::Canonicalize);
         let unavailable = || RubberBandError::UnavailableSourceHistory;
         let address = checkpoint
             .playback
@@ -477,10 +662,13 @@ impl MappedNativeInput {
         if !checkpoint.is_consistent()
             || checkpoint.plan.transition.is_active()
             || !checkpoint.plan.matches_source_contract(self.origin.plan)
-            || checkpoint
-                .playback
-                .mapped_epoch()
-                .is_none_or(|clock| !clock.matches_exact(self.clock))
+            || checkpoint.playback.mapped_epoch().is_none_or(|clock| {
+                !clock.matches_exact(
+                    self.current_origin
+                        .and_then(|origin| origin.playback.mapped_epoch())
+                        .unwrap_or(self.clock),
+                )
+            })
         {
             return Err(unavailable());
         }

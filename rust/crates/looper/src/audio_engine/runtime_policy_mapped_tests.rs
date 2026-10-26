@@ -1752,10 +1752,10 @@ fn original_decimal_none_map_now_adopts_at_actual_e_without_changing_first_pcm()
 }
 
 #[test]
-fn excluded_exact_grid_is_stably_quiet_without_disabling_legacy_map_availability() {
+fn excluded_exact_grid_keeps_cached_evidence_and_refuses_fresh_selected_map_launch() {
     let mut fixture = DryMappedPath::new(2, 23);
-    // A finite original beat below the documented -126 grid bound excludes
-    // only exact live preparation; ordinary rounded launch remains independent.
+    // A finite original beat below the documented -126 grid bound excludes exact
+    // runtime preparation and a fresh selected-map birth; it grants no Legacy fallback.
     let (job, delivery) = fixture.map_anchors(
         0,
         &[
@@ -1785,10 +1785,43 @@ fn excluded_exact_grid_is_stably_quiet_without_disabling_legacy_map_availability
     unchanged(&fixture.path, &before);
     fixture.path.source.engine.stop_sample(0).unwrap();
     fixture.path.drain();
-    let start = fixture.start(0);
-    assert_eq!(start.sync_request().mode, SourceSyncMode::Mapped);
-    assert!(fixture.path.voice(0).source_playback.is_mapped());
-    assert!(!fixture.path.voice(0).source_playback.is_compact_mapped());
+    // The explicit stop is a legitimate effect. Capture the refusal baseline afterwards.
+    let surviving = scalar_state(&fixture.path);
+    let timeline = fixture.path.timeline;
+    let feedback = [fixture.path.feedback(0), fixture.path.feedback(1)];
+    let preparation = snapshot.map_preparation(0);
+    assert!(fixture.path.source.consumer.is_empty());
+    assert!(
+        !fixture
+            .path
+            .source
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == 0)
+    );
+    let error = fixture
+        .path
+        .source
+        .engine
+        .capture_pad_start(0, 0.0, Some(fixture.end_seconds()), 1.0, false, None, None)
+        .err()
+        .expect("unsupported selected map cannot fall back to Legacy");
+    assert_eq!(error.to_string(), "ValueError: mapped_timing_unavailable");
+    unchanged(&fixture.path, &surviving);
+    assert!(fixture.path.timeline.matches_clock_epoch(&timeline));
+    assert_eq!(
+        fixture.path.timeline.output_frame(),
+        timeline.output_frame()
+    );
+    assert_eq!(
+        [fixture.path.feedback(0), fixture.path.feedback(1)],
+        feedback
+    );
+    assert!(fixture.path.source.consumer.is_empty());
+    assert!(Arc::ptr_eq(&snapshot, &automatic_mapped(&fixture.path)));
+    assert_eq!(snapshot.map_preparation(0), preparation);
+    assert_eq!(snapshot.observation(), Some(failed));
 }
 
 #[test]

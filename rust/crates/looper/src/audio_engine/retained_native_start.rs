@@ -45,6 +45,16 @@ struct RetainedContinuation {
     logical_origin: SourceReadCheckpoint,
     actual_origin: SourceReadCheckpoint,
     emitted_output_frames: u64,
+    // Present only for a claimed mapped continuation. This base survives repeated cuts.
+    raw_output_at_origin: Option<u64>,
+}
+
+/// Comparison-only preflight token; checkpoints remain in the existing global capture/array.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MappedRateContinuation {
+    stamp: super::mapped_input::MappedNativePitchStamp,
+    next_revision: u64,
+    raw_output_at_origin: u64,
 }
 
 struct RetainedRateUpdate {
@@ -102,6 +112,11 @@ impl RawStartProvenance {
         else {
             return false;
         };
+        if let Some(mapped) = mapped {
+            return mapped
+                .project_birth(self.input_origin, actual_frames as u64)
+                .is_some_and(|expected| expected.matches_exact(self.endpoint));
+        }
         let mut expected = self.input_origin;
         project_checkpoint(&mut expected, actual_frames as u64, mapped)
             && same_checkpoint(expected, self.endpoint, mapped)
@@ -115,6 +130,9 @@ impl RetainedNativeStartTimeline {
         primed_output_frames: usize,
         mapped: Option<&MappedNativeInput>,
     ) -> bool {
+        #[cfg(test)]
+        let _probe =
+            super::mapped_rate_probe::scope(super::mapped_rate_probe::Stage::EndpointProof);
         if !self.valid {
             return false;
         }
@@ -125,7 +143,7 @@ impl RetainedNativeStartTimeline {
         {
             return false;
         }
-        if let Some(mapped) = mapped {
+        if let Some(mapped) = mapped.filter(|_| self.provenance.continuation.is_none()) {
             let Some(raw) = self.provenance.raw else {
                 return false;
             };
@@ -148,6 +166,7 @@ impl RetainedNativeStartTimeline {
                 mut logical_origin,
                 mut actual_origin,
                 emitted_output_frames,
+                ..
             }) => {
                 project_checkpoint(&mut logical_origin, emitted_output_frames, mapped)
                     && project_checkpoint(&mut actual_origin, emitted_output_frames, mapped)
@@ -234,15 +253,89 @@ impl NativeAdapterState {
             .playback
             .mapped_output_frame()
             .ok_or(RubberBandError::UnavailableSourceHistory)?;
-        let raw_output_frame = u64::try_from(raw.cut.discarded_raw_output_frames)
-            .ok()
-            .and_then(|frame| frame.checked_add(raw.emitted_output_frames as u64))
-            .ok_or(RubberBandError::UnavailableSourceHistory)?;
+        let raw_output_frame = match timeline.provenance.continuation {
+            Some(continuation) => continuation
+                .raw_output_at_origin
+                .and_then(|base| base.checked_add(continuation.emitted_output_frames)),
+            None => u64::try_from(raw.cut.discarded_raw_output_frames)
+                .ok()
+                .and_then(|frame| frame.checked_add(raw.emitted_output_frames as u64)),
+        }
+        .ok_or(RubberBandError::UnavailableSourceHistory)?;
         Ok(Some(RetainedMappedOutputCoordinates {
             logical_output_frame,
             raw_output_frame,
             actual_input_frame,
         }))
+    }
+
+    pub(crate) fn stage_mapped_rate_continuation(
+        &self,
+        previous: SourceReadCheckpoint,
+        replacement: SourceReadCheckpoint,
+    ) -> Option<MappedRateContinuation> {
+        let mapped = self.mapped_input()?;
+        let source = self.source.as_ref()?;
+        let timeline = self.retained_start_timeline?;
+        let coordinates = self.retained_mapped_output_coordinates().ok()??;
+        let stamp = self.mapped_pitch_stamp()?;
+        if !self.active
+            || !self.used
+            || self.dirty
+            || !mapped.has_effective_voice()
+            || !mapped.effective_adapter_current(Some(stamp))
+            || !mapped.effective_source_current(source)
+            || previous.playback.has_phase_program()
+            || previous.plan.transition.is_active()
+            || !mapped.same_checkpoint(previous, timeline.logical)
+            || !mapped.same_checkpoint(previous, timeline.actual)
+            || coordinates.logical_output_frame != coordinates.actual_input_frame
+            || previous.playback.mapped_output_frame() != Some(coordinates.logical_output_frame)
+            || stamp.actual_frame != coordinates.actual_input_frame
+            || !mapped.continuation_matches(previous, replacement)
+        {
+            return None;
+        }
+        Some(MappedRateContinuation {
+            stamp,
+            next_revision: self.mapped_continuation_revision.checked_add(1)?,
+            raw_output_at_origin: coordinates.raw_output_frame,
+        })
+    }
+
+    /// The whole global claim already rechecked the token, source and replacement.
+    pub(crate) fn install_mapped_rate_continuation_claimed(
+        &mut self,
+        replacement: SourceReadCheckpoint,
+        staged: MappedRateContinuation,
+    ) {
+        debug_assert_eq!(self.mapped_pitch_stamp(), Some(staged.stamp));
+        self.source
+            .as_mut()
+            .expect("claimed source")
+            .mapped_input
+            .as_mut()
+            .expect("claimed mapped source")
+            .install_continuation_claimed(replacement);
+        let timeline = self
+            .retained_start_timeline
+            .as_mut()
+            .expect("claimed timeline");
+        // The historical raw prefix is deliberately frozen, including its original endpoint.
+        timeline.logical = replacement;
+        timeline.actual = replacement;
+        timeline.provenance.continuation = Some(RetainedContinuation {
+            logical_origin: replacement,
+            actual_origin: replacement,
+            emitted_output_frames: 0,
+            raw_output_at_origin: Some(staged.raw_output_at_origin),
+        });
+        self.mapped_continuation_revision = staged.next_revision;
+        self.mapped_pitch
+            .as_mut()
+            .expect("claimed mapped pitch")
+            .stamp
+            .continuation_revision = staged.next_revision;
     }
 
     /// The read receipt names actual input; the caller still emits at the distinct logical n.
@@ -825,6 +918,7 @@ impl NativeAdapterState {
                         logical_origin: logical,
                         actual_origin: actual,
                         emitted_output_frames: 0,
+                        raw_output_at_origin: None,
                     }),
                 },
                 valid: true,
@@ -884,6 +978,7 @@ impl NativeAdapterState {
                     logical_origin: logical,
                     actual_origin: actual,
                     emitted_output_frames: 0,
+                    raw_output_at_origin: None,
                 }),
             },
             valid: true,

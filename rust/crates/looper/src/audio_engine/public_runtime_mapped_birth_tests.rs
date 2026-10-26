@@ -5,6 +5,10 @@ use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::audio_engine::source_playback::SourcePlayback;
 use crate::audio_engine::source_sync_policy::SourceSyncMode;
 
+mod retained_mapped_rate_tests {
+    include!("retained_mapped_rate_tests.rs");
+}
+
 fn complete_launch_path() -> LaunchPath {
     let mut source = ColdCustody::new_selected_with_pcm(None, [8192; 128]);
     source.engine.input_runtime = Some(

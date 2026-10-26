@@ -21,6 +21,91 @@ use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Inclusive, non-additive component measurements for the explicitly enabled test thread.
+/// Disabled calls return before reading the clock; no callback logging or allocation occurs.
+#[cfg(test)]
+pub(crate) mod mapped_rate_probe {
+    use std::cell::Cell;
+    use std::time::Instant;
+
+    #[derive(Clone, Copy)]
+    pub(crate) enum Stage {
+        Projection,
+        Canonicalize,
+        EndpointProof,
+        ReaderFill,
+        NativePitch,
+        NativeShift,
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(crate) struct Bucket {
+        pub(crate) calls: u64,
+        pub(crate) nanos: u128,
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(crate) struct Snapshot {
+        pub(crate) buckets: [Bucket; 6],
+        pub(crate) projection_hits: u64,
+        pub(crate) projection_misses: u64,
+    }
+
+    thread_local! {
+        static ENABLED: Cell<bool> = const { Cell::new(false) };
+        static COUNTERS: Cell<Snapshot> = const { Cell::new(Snapshot {
+            buckets: [Bucket { calls: 0, nanos: 0 }; 6],
+            projection_hits: 0,
+            projection_misses: 0,
+        }) };
+    }
+
+    pub(crate) fn record_projection_memo(hit: bool) {
+        if !ENABLED.get() {
+            return;
+        }
+        let mut counters = COUNTERS.get();
+        if hit {
+            counters.projection_hits += 1;
+        } else {
+            counters.projection_misses += 1;
+        }
+        COUNTERS.set(counters);
+    }
+
+    pub(crate) struct Scope(Option<(Stage, Instant)>);
+
+    pub(crate) fn scope(stage: Stage) -> Scope {
+        if !ENABLED.get() {
+            return Scope(None);
+        }
+        Scope(Some((stage, Instant::now())))
+    }
+
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            if let Some((stage, start)) = self.0 {
+                let elapsed = start.elapsed().as_nanos();
+                let mut counters = COUNTERS.get();
+                let bucket = &mut counters.buckets[stage as usize];
+                bucket.calls += 1;
+                bucket.nanos += elapsed;
+                COUNTERS.set(counters);
+            }
+        }
+    }
+
+    pub(crate) fn start() {
+        assert!(!ENABLED.replace(true), "component probes cannot be nested");
+        COUNTERS.set(Snapshot::default());
+    }
+
+    pub(crate) fn finish() -> Snapshot {
+        assert!(ENABLED.replace(false), "component probe was not enabled");
+        COUNTERS.get()
+    }
+}
+
 // Comparison identity allocated only with the already off-realtime Native/FIFO owner.
 // Zero is unavailable; exhaustion never wraps or recycles an adapter identity.
 static NEXT_MAPPED_ADAPTER_ID: AtomicU64 = AtomicU64::new(1);
@@ -35,6 +120,7 @@ fn next_mapped_adapter_id() -> u64 {
 
 #[path = "retained_native_start.rs"]
 mod retained_start;
+pub(crate) use retained_start::MappedRateContinuation;
 #[cfg(test)]
 pub(crate) use retained_start::RetainedMappedOutputCoordinates;
 use retained_start::RetainedNativeStartTimeline;
@@ -818,6 +904,8 @@ pub(crate) struct NativeAdapterState {
     /// Never reset: re-preparing the same original action must not revive old descriptors.
     mapped_preparation_incarnation: u64,
     mapped_adapter_id: u64,
+    // Persistent even across resets: a zero-input master cut cannot revive an old chunk.
+    mapped_continuation_revision: u64,
 }
 
 /// Fixed adapter metadata, not another source clock. The source request retains its owners.
@@ -829,7 +917,104 @@ struct MappedNativePitchState {
     stamp: MappedNativePitchStamp,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MappedContinuationTestState {
+    input: Vec<Vec<f32>>,
+    output: Vec<Vec<f32>>,
+    input_fifo: Vec<FixedFifo>,
+    output_fifo: Vec<FixedFifo>,
+    head: Option<f64>,
+    identity: Option<(u64, usize, u64, u64, u64)>,
+    effective_tuple: Option<(PitchIntent, bool)>,
+    pitch_scale_bits: u64,
+    active: bool,
+    used: bool,
+    pub(crate) revision: u64,
+    pub(crate) coordinates: Option<RetainedMappedOutputCoordinates>,
+}
+
+#[cfg(test)]
+impl MappedContinuationTestState {
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        self.input == other.input
+            && self.output == other.output
+            && self.input_fifo == other.input_fifo
+            && self.output_fifo == other.output_fifo
+            && self.head == other.head
+            && self.identity == other.identity
+    }
+
+    pub(crate) fn own_identity(&self) -> Option<(u64, usize, u64)> {
+        self.identity
+            .map(|(adapter, native, incarnation, _, _)| (adapter, native, incarnation))
+    }
+
+    /// Independent adapters have different identities. Compare their complete fixed stream
+    /// state and input chronology, then check each identity against its own baseline separately.
+    pub(crate) fn same_stream_state(&self, other: &Self) -> bool {
+        self.input == other.input
+            && self.output == other.output
+            && self.input_fifo == other.input_fifo
+            && self.output_fifo == other.output_fifo
+            && self.head == other.head
+            && self
+                .identity
+                .map(|(_, _, _, serial, frame)| (serial, frame))
+                == other
+                    .identity
+                    .map(|(_, _, _, serial, frame)| (serial, frame))
+            && self.effective_tuple == other.effective_tuple
+            && self.pitch_scale_bits == other.pitch_scale_bits
+            && self.active == other.active
+            && self.used == other.used
+            && self.revision == other.revision
+            && self.coordinates == other.coordinates
+    }
+
+    pub(crate) fn effective_tuple(&self) -> Option<(PitchIntent, bool)> {
+        self.effective_tuple
+    }
+}
+
 impl NativeAdapterState {
+    #[cfg(test)]
+    pub(crate) fn mapped_projection_memo_keys_for_test(&self) -> Option<[[Option<u64>; 2]; 2]> {
+        self.mapped_input()
+            .map(MappedNativeInput::projection_memo_keys_for_test)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn continuation_test_state(&self) -> MappedContinuationTestState {
+        MappedContinuationTestState {
+            input: self.input.clone(),
+            output: self.output.clone(),
+            input_fifo: self.input_fifo.clone(),
+            output_fifo: self.output_fifo.clone(),
+            head: self.mapped_pending_pitch_for_test(),
+            identity: self.mapped_pitch_witness_for_test(),
+            effective_tuple: self
+                .mapped_pitch
+                .as_ref()
+                .map(|state| (state.intent, state.key_lock)),
+            pitch_scale_bits: self.pitch_scale.to_bits(),
+            active: self.active,
+            used: self.used,
+            revision: self.mapped_continuation_revision,
+            coordinates: self.retained_mapped_output_coordinates().unwrap(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_continuation_revision_for_test(&mut self, revision: u64) {
+        self.mapped_continuation_revision = revision;
+        self.mapped_pitch
+            .as_mut()
+            .expect("genuine mapped owner")
+            .stamp
+            .continuation_revision = revision;
+    }
+
     pub(crate) fn new(rubberband: Option<RubberBandLiveShifter>, channels: usize) -> Self {
         let block_size = rubberband
             .as_ref()
@@ -859,6 +1044,7 @@ impl NativeAdapterState {
             mapped_pitch: None,
             mapped_preparation_incarnation: 0,
             mapped_adapter_id: next_mapped_adapter_id(),
+            mapped_continuation_revision: 0,
         }
     }
 
@@ -901,6 +1087,7 @@ impl NativeAdapterState {
             && stamp.adapter_id == self.mapped_adapter_id
             && stamp.incarnation != 0
             && stamp.incarnation == self.mapped_preparation_incarnation
+            && stamp.continuation_revision == self.mapped_continuation_revision
             && stamp.native == self.rubberband.as_ref()?.state_address())
         .then_some(stamp)
     }
@@ -967,6 +1154,11 @@ impl NativeAdapterState {
 
     pub(crate) fn has_physical_birth_context(&self) -> bool {
         self.input_history_context == Some(NativeStartHistoryContext::PhysicalBirth)
+    }
+
+    pub(crate) fn has_installed_mapped_voice(&self) -> bool {
+        self.mapped_input()
+            .is_some_and(|mapped| mapped.has_effective_voice())
     }
 
     pub(super) fn record_input_history_context(&mut self, context: NativeStartHistoryContext) {
@@ -1267,6 +1459,7 @@ impl NativeAdapterState {
                     .state_address(),
                 incarnation: self.mapped_preparation_incarnation,
                 input_serial: 0,
+                continuation_revision: self.mapped_continuation_revision,
                 actual_frame: request.playback.mapped_output_frame().ok_or(
                     NativeSourcePreparationError::Unavailable(
                         RubberBandError::UnavailableSourceHistory,
@@ -1712,6 +1905,8 @@ impl NativeAdapterState {
                     .and_then(|state| state.pending_head_pitch)
                     .expect("validated mapped block head");
                 if (pitch - self.pitch_scale).abs() > PITCH_SCALE_EPSILON {
+                    #[cfg(test)]
+                    let _probe = mapped_rate_probe::scope(mapped_rate_probe::Stage::NativePitch);
                     self.rubberband
                         .as_mut()
                         .expect("validated native owner")
@@ -1723,11 +1918,15 @@ impl NativeAdapterState {
                     let read = fifo.pop_into(&mut channel[..self.block_size]);
                     debug_assert_eq!(read, self.block_size);
                 }
-                self.rubberband
-                    .as_mut()
-                    .expect("validated native owner")
-                    .shift(&self.input, &mut self.output)
-                    .map_err(NativeSourcePreparationError::Backend)?;
+                {
+                    #[cfg(test)]
+                    let _probe = mapped_rate_probe::scope(mapped_rate_probe::Stage::NativeShift);
+                    self.rubberband
+                        .as_mut()
+                        .expect("validated native owner")
+                        .shift(&self.input, &mut self.output)
+                        .map_err(NativeSourcePreparationError::Backend)?;
+                }
                 self.used = true;
                 for (fifo, channel) in self.output_fifo.iter_mut().zip(&self.output) {
                     let written = fifo.push_slice(&channel[..self.block_size]);

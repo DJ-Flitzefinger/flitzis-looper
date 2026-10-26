@@ -96,6 +96,109 @@ impl SourceLaneRetryState {
 }
 
 impl StretchProcessor {
+    #[cfg(test)]
+    pub(crate) fn mapped_projection_memo_keys_for_test(&self) -> Option<[[Option<u64>; 2]; 2]> {
+        self.native.mapped_projection_memo_keys_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mapped_continuation_state_for_test(
+        &self,
+    ) -> super::prepared_native_history::MappedContinuationTestState {
+        self.native.continuation_test_state()
+    }
+    #[cfg(test)]
+    pub(crate) fn set_mapped_continuation_revision_for_test(&mut self, revision: u64) {
+        self.native.set_continuation_revision_for_test(revision);
+    }
+    #[cfg(test)]
+    pub(crate) fn mapped_chunk_for_test(
+        &self,
+        playback: SourcePlayback,
+        plan: SourceReadPlan,
+        frames: usize,
+    ) -> Option<super::prepared_native_history::MappedNativePitchChunk> {
+        let source = self.native.source.as_ref()?;
+        self.native
+            .live_mapped_pitch_chunk(
+                SourceReadCheckpoint { playback, plan },
+                frames,
+                source.pitch_intent,
+                self.native.effective_key_lock()?,
+            )
+            .ok()?
+    }
+    #[cfg(test)]
+    pub(crate) fn mapped_chunk_current_for_test(
+        &self,
+        chunk: &super::prepared_native_history::MappedNativePitchChunk,
+    ) -> bool {
+        self.native
+            .validate_mapped_render(&self.varispeed, &self.output, chunk)
+            .is_ok()
+    }
+
+    pub(crate) fn has_installed_mapped_voice(&self) -> bool {
+        self.native.has_installed_mapped_voice()
+    }
+    /// Availability alone is insufficient: retain this actual productive source/Native owner.
+    pub(crate) fn equal_mapped_rate_ready(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        let Ok(Some(actual)) = self.actual_source_checkpoint(feed.playback, feed.plan) else {
+            return false;
+        };
+        !self.wet_mode_failed()
+            && !self.source_lane_busy()
+            && self.native.has_owned_mapped_input()
+            && self.owns_pitch_contract(feed.pitch_intent, feed.key_lock)
+            && actual.matches_exact(SourceReadCheckpoint {
+                playback: *feed.playback,
+                plan: feed.plan,
+            })
+            && self
+                .native
+                .has_productive_continuity(feed, self.productive_history)
+            && self.native.matches_effective_source(
+                feed,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+    }
+
+    pub(crate) fn stage_mapped_rate_continuation(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        replacement: SourcePlayback,
+    ) -> Option<super::prepared_native_history::MappedRateContinuation> {
+        if !self.equal_mapped_rate_ready(feed) {
+            return None;
+        }
+        self.native.stage_mapped_rate_continuation(
+            SourceReadCheckpoint {
+                playback: *feed.playback,
+                plan: feed.plan,
+            },
+            SourceReadCheckpoint {
+                playback: replacement,
+                plan: feed.plan,
+            },
+        )
+    }
+
+    pub(crate) fn install_mapped_rate_continuation_claimed(
+        &mut self,
+        replacement: SourcePlayback,
+        plan: SourceReadPlan,
+        staged: super::prepared_native_history::MappedRateContinuation,
+    ) {
+        self.native.install_mapped_rate_continuation_claimed(
+            SourceReadCheckpoint {
+                playback: replacement,
+                plan,
+            },
+            staged,
+        );
+    }
+
     /// A missing mapping is the established identity; a refused mapping is never a fallback.
     pub(crate) fn actual_source_checkpoint(
         &self,
@@ -156,6 +259,50 @@ impl StretchProcessor {
             && self
                 .native
                 .has_productive_continuity(&actual_feed, self.productive_history)
+            && self.native.matches_effective_source(
+                &actual_feed,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+            && self.native.can_retarget_retained_rate(target)
+    }
+
+    /// The direct mixed mapped cohort may retain only an already productive scalar owner.
+    /// A missing retained mapping is identity, never proof of productive Native history.
+    pub(crate) fn productive_scalar_rate_ready(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        target: f64,
+    ) -> bool {
+        if feed.playback.is_mapped()
+            || feed.playback.has_phase_program()
+            || feed.plan.transition.is_active()
+            || self.wet_mode_failed()
+            || self.source_lane_busy()
+            || !self.owns_pitch_contract(feed.pitch_intent, feed.key_lock)
+        {
+            return false;
+        }
+        let Ok(actual) = self.actual_source_checkpoint(feed.playback, feed.plan) else {
+            return false;
+        };
+        let actual = actual.unwrap_or(SourceReadCheckpoint {
+            playback: *feed.playback,
+            plan: feed.plan,
+        });
+        if actual.playback.is_mapped()
+            || actual.playback.has_phase_program()
+            || actual.plan.transition.is_active()
+        {
+            return false;
+        }
+        let actual_feed = ProductiveSourceFeed {
+            playback: &actual.playback,
+            plan: actual.plan,
+            ..*feed
+        };
+        self.native
+            .has_productive_continuity(&actual_feed, self.productive_history)
             && self.native.matches_effective_source(
                 &actual_feed,
                 self.preparation_epoch,
@@ -955,16 +1102,21 @@ impl StretchProcessor {
                     feed.plan,
                     feed.playback,
                 ))
-                || feed
-                    .plan
-                    .fill_fractional_buffers_checked_with_readers(
-                        feed.sample,
-                        readers,
-                        feed.playback,
-                        self.resampled_buffers_mut(frames),
-                        frames,
-                    )
-                    .is_err())
+                || {
+                    #[cfg(test)]
+                    let _probe = super::prepared_native_history::mapped_rate_probe::scope(
+                        super::prepared_native_history::mapped_rate_probe::Stage::ReaderFill,
+                    );
+                    feed.plan
+                        .fill_fractional_buffers_checked_with_readers(
+                            feed.sample,
+                            readers,
+                            feed.playback,
+                            self.resampled_buffers_mut(frames),
+                            frames,
+                        )
+                        .is_err()
+                })
         {
             // Never consume missing-tap zeros or touch productive native/FIFO/history state.
             self.silence_output(frames);
@@ -1022,9 +1174,12 @@ impl StretchProcessor {
         let prior_frames = self
             .productive_history
             .map_or(0, |history| history.fed_output_frames);
-        if !finite
-            && feed
-                .plan
+        if !finite && {
+            #[cfg(test)]
+            let _probe = super::prepared_native_history::mapped_rate_probe::scope(
+                super::prepared_native_history::mapped_rate_probe::Stage::ReaderFill,
+            );
+            feed.plan
                 .fill_fractional_buffers_with_readers(
                     feed.sample,
                     readers,
@@ -1033,7 +1188,7 @@ impl StretchProcessor {
                     frames,
                 )
                 .is_err()
-        {
+        } {
             self.silence_output(frames);
             self.wet_render_failed = wet;
             return None;

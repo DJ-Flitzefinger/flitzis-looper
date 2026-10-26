@@ -10,7 +10,9 @@ use crate::audio_engine::content_placement::{ContentKey, SlotSnapshot};
 use crate::audio_engine::global_rate_status::{RateEffect, RateError, RateState, RateTuple};
 use crate::audio_engine::key_lock_preparation::ProspectiveSourceHistory;
 use crate::audio_engine::master_provenance::MasterProvenance;
-use crate::audio_engine::native_history_permit::NativeHistoryPermit;
+use crate::audio_engine::native_history_permit::{
+    NativeHistoryPermit, NativeSourceAdmissionIdentity,
+};
 use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::source_feed_history::SourceFeedContext;
 use crate::audio_engine::transport::TransportTimeline;
@@ -23,11 +25,15 @@ struct RateWork {
 }
 
 pub(super) struct RateVoice {
-    pub(super) id: usize,
     pub(super) placement: SlotSnapshot,
     pub(super) key: ContentKey,
     pub(super) incarnation: u64,
     pub(super) authority: u64,
+    endpoint: RateEndpoint,
+}
+
+pub(super) struct RateEndpoint {
+    pub(super) id: usize,
     pub(super) generation: u64,
     pub(super) paused: bool,
     pub(super) continuity: u64,
@@ -42,10 +48,50 @@ pub(super) struct RateVoice {
     work: Option<RateWork>,
 }
 
+impl std::ops::Deref for RateVoice {
+    type Target = RateEndpoint;
+    fn deref(&self) -> &RateEndpoint {
+        &self.endpoint
+    }
+}
+impl std::ops::DerefMut for RateVoice {
+    fn deref_mut(&mut self) -> &mut RateEndpoint {
+        &mut self.endpoint
+    }
+}
+
+// Global-only authority choice. A failed Current capture never enters Retained.
+enum GlobalRateVoice {
+    Current(RateVoice),
+    Retained {
+        endpoint: RateEndpoint,
+        admission: NativeSourceAdmissionIdentity,
+    },
+}
+impl std::ops::Deref for GlobalRateVoice {
+    type Target = RateEndpoint;
+    fn deref(&self) -> &RateEndpoint {
+        match self {
+            Self::Current(voice) => voice,
+            Self::Retained { endpoint, .. } => endpoint,
+        }
+    }
+}
+impl std::ops::DerefMut for GlobalRateVoice {
+    fn deref_mut(&mut self) -> &mut RateEndpoint {
+        match self {
+            Self::Current(voice) => voice,
+            Self::Retained { endpoint, .. } => endpoint,
+        }
+    }
+}
+
 struct RateCapture {
     execution: u64,
     timing_fence: u64,
-    voices: [Option<RateVoice>; MAX_VOICES],
+    voices: [Option<GlobalRateVoice>; MAX_VOICES],
+    // Serializes the global effect only. It never supplies a retained source's authority.
+    claim_anchor: Option<SlotSnapshot>,
 }
 
 struct PendingRate {
@@ -194,7 +240,7 @@ impl RtMixer {
             );
         } else if pending.dry_mapped {
             let result = self
-                .dry_mapped_rate_cohort_current(pending.requested)
+                .dry_mapped_rate_cohort_current(pending.requested, None)
                 .and_then(|()| {
                     if !self.global_rate_drains_settled() {
                         return Ok(false);
@@ -300,12 +346,38 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(crate) fn rate_voice_snapshot_for_test(&self, index: usize) -> Option<PitchSourceSnapshot> {
+        self.capture_rate_voice_snapshot(index)
+    }
+
+    #[cfg(test)]
     pub(crate) fn rate_voice_needs_history_for_test(
         &self,
         index: usize,
         requested: RateTuple,
     ) -> Result<bool, RateError> {
         self.rate_voice_needs_history(index, requested)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capture_pending_global_rate_for_test(
+        &mut self,
+        frame: u64,
+    ) -> Result<(), RateError> {
+        let mut coordinator = self
+            .global_rate
+            .take()
+            .expect("initialized rate coordinator");
+        let mut pending = coordinator
+            .pending
+            .take()
+            .expect("genuine drained rate request");
+        assert!(pending.capture.is_none());
+        assert!(pending.dry_mapped);
+        let result = self.capture_global_rate(&mut pending, frame, frame);
+        coordinator.pending = Some(pending);
+        self.global_rate = Some(coordinator);
+        result
     }
 
     fn global_rate_needs_history(&self, requested: RateTuple) -> Result<bool, RateError> {
@@ -327,7 +399,11 @@ impl RtMixer {
         Ok(false)
     }
 
-    fn dry_mapped_rate_cohort_current(&self, requested: RateTuple) -> Result<(), RateError> {
+    fn dry_mapped_rate_cohort_current(
+        &self,
+        requested: RateTuple,
+        capture: Option<&RateCapture>,
+    ) -> Result<(), RateError> {
         if self.voices.iter().any(|voice| {
             voice.active
                 && voice.source_playback.is_mapped()
@@ -345,6 +421,80 @@ impl RtMixer {
                 continue;
             }
             let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            let snapshot = self
+                .capture_rate_voice_snapshot(index)
+                .ok_or(RateError::SourceChanged)?;
+            if voice.source_playback.is_mapped() && voice.stretch.has_active_native_ownership() {
+                if !self.mapped_native_rate_available(index, &snapshot)
+                    || self.rate_voice_needs_history(index, requested)?
+                {
+                    return Err(RateError::MappedTimingUnavailable);
+                }
+                continue;
+            }
+            if !voice.source_playback.is_mapped() && voice.stretch.has_active_native_ownership() {
+                let key = if let Some(capture) = capture {
+                    let Some(GlobalRateVoice::Current(current)) = capture.voices[index].as_ref()
+                    else {
+                        return Err(RateError::SourceChanged);
+                    };
+                    // Final readiness runs under this claim's placement marker. Use only
+                    // its original Current capture; no fresh observation or Retained retry.
+                    if current.id != voice.sample_id
+                        || current.placement.content_key() != Some(current.key)
+                        || !self
+                            .input_runtime_ownership
+                            .slot_snapshot_fields_current(current.placement)
+                    {
+                        return Err(RateError::SourceChanged);
+                    }
+                    current.key
+                } else {
+                    self.input_runtime_ownership
+                        .slot_snapshot(voice.sample_id)
+                        .and_then(|slot| slot.content_key())
+                        .ok_or(RateError::SourceChanged)?
+                };
+                let target = self
+                    .tempo_ratio_for_request_with_rate(
+                        voice.sync_request,
+                        self.timing_for_voice(voice).period_seconds(),
+                        requested.speed,
+                        requested.period,
+                    )
+                    .ok_or(RateError::MappedTimingUnavailable)?;
+                let readers = snapshot
+                    .readers()
+                    .ok_or(RateError::MappedTimingUnavailable)?;
+                let prospective = ProductiveSourceFeed {
+                    pitch_intent: pitch,
+                    key_lock,
+                    sample: &snapshot.sample,
+                    stems: readers.current.or(snapshot.stems.as_ref()),
+                    outgoing_stems: readers.outgoing,
+                    sample_rate_hz: snapshot.sample_rate_hz,
+                    accepted: snapshot.accepted,
+                    playback: &snapshot.playback,
+                    plan: snapshot.plan,
+                    permit: None,
+                    // Scalar readiness proves its own retained coordinates, not a mapped address.
+                    output_frame: None,
+                };
+                if voice.paused
+                    || self.rate_hold_active_for_key(key)
+                    || self
+                        .pitch_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.has_pending_content(key))
+                    || self.rate_voice_needs_history(index, requested)?
+                    || !voice
+                        .stretch
+                        .productive_scalar_rate_ready(&prospective, target)
+                {
+                    return Err(RateError::MappedTimingUnavailable);
+                }
+                continue;
+            }
             if voice.stretch.has_active_native_ownership()
                 || voice.stretch.has_retained_source_input()
                 || self.rate_voice_needs_history(index, requested)?
@@ -353,9 +503,6 @@ impl RtMixer {
             {
                 return Err(RateError::MappedTimingUnavailable);
             }
-            let snapshot = self
-                .capture_rate_voice_snapshot(index)
-                .ok_or(RateError::SourceChanged)?;
             if snapshot.plan.transition.is_active()
                 || snapshot.actual_feed.is_some()
                 || pitch
@@ -380,6 +527,55 @@ impl RtMixer {
             }
         }
         Ok(())
+    }
+
+    fn rate_hold_active_for_key(&self, key: ContentKey) -> bool {
+        self.hold_actions[key.cell().index()]
+            .as_ref()
+            .is_some_and(|work| work.action.key() == key && !work.action.state().terminal())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rate_hold_active_for_key_for_test(&self, key: ContentKey) -> bool {
+        self.rate_hold_active_for_key(key)
+    }
+
+    fn mapped_native_rate_available(&self, index: usize, snapshot: &PitchSourceSnapshot) -> bool {
+        let voice = &self.voices[index];
+        let Some(birth) = voice.mapped_birth else {
+            return false;
+        };
+        let Some(admission) = voice.source_admission.as_ref() else {
+            return false;
+        };
+        let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+        if !voice.active
+            || voice.paused
+            || !birth.native
+            || !birth.status.emitted
+            || birth.status.mixed
+            || birth.first_pending()
+            || admission.content_key() != Some(birth.key)
+            || admission.retry_identity().source_generation != birth.source_generation
+            || !snapshot.playback.is_mapped()
+            || snapshot.playback.has_phase_program()
+            || snapshot.plan.transition.is_active()
+            || self.rate_hold_active_for_key(birth.key)
+            || self
+                .pitch_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.has_pending_content(birth.key))
+        {
+            return false;
+        }
+        let prospective = feed(
+            snapshot,
+            pitch,
+            key_lock,
+            snapshot.playback.mapped_output_frame().unwrap_or(u64::MAX),
+            None,
+        );
+        voice.stretch.equal_mapped_rate_ready(&prospective)
     }
 
     fn global_rate_snapshot(
@@ -479,7 +675,6 @@ impl RtMixer {
             .ok_or(RateError::SourceChanged)?;
         let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
         Ok(RateVoice {
-            id,
             placement,
             key,
             incarnation: self
@@ -490,23 +685,130 @@ impl RtMixer {
                 .input_runtime_ownership
                 .authority_for_cell(key.cell())
                 .load(Ordering::Acquire),
-            generation: voice.generation,
-            paused: voice.paused,
-            continuity: voice.source_feed_history.continuity_revision(),
-            pitch,
-            key_lock,
-            binding: ProductiveSourceBinding::new(
-                &snapshot.sample,
-                snapshot.sample_rate_hz,
-                snapshot.accepted,
-            ),
-            permit,
-            playback: snapshot.playback,
-            plan: snapshot.plan,
-            context: snapshot.source_feed_context,
-            needs_history: false,
-            work: None,
+            endpoint: RateEndpoint {
+                id,
+                generation: voice.generation,
+                paused: voice.paused,
+                continuity: voice.source_feed_history.continuity_revision(),
+                pitch,
+                key_lock,
+                binding: ProductiveSourceBinding::new(
+                    &snapshot.sample,
+                    snapshot.sample_rate_hz,
+                    snapshot.accepted,
+                ),
+                permit,
+                playback: snapshot.playback,
+                plan: snapshot.plan,
+                context: snapshot.source_feed_context,
+                needs_history: false,
+                work: None,
+            },
         })
+    }
+
+    fn capture_global_rate_participant(
+        &self,
+        index: usize,
+        snapshot: &PitchSourceSnapshot,
+    ) -> Result<GlobalRateVoice, RateError> {
+        let voice = &self.voices[index];
+        if !voice.stretch.has_installed_mapped_voice() {
+            return self
+                .capture_rate_participant(index, snapshot)
+                .map(GlobalRateVoice::Current);
+        }
+        // This branch belongs only to the qualified installed mapped owner, never a pending
+        // Current candidate or a generic old PCM pin.
+        if !self.mapped_native_rate_available(index, snapshot) {
+            return Err(RateError::SourceChanged);
+        }
+        let admission = voice
+            .source_admission
+            .as_ref()
+            .ok_or(RateError::SourceChanged)?;
+        let permit = NativeVoiceHistoryContext {
+            admission,
+            lifetime: &voice.history_lifetime,
+            generation: voice.generation,
+            preparation_epoch: &voice.history_lifetime,
+            accepted: snapshot.accepted,
+        }
+        .capture(&snapshot.sample, snapshot.sample_rate_hz)
+        .ok_or(RateError::SourceChanged)?;
+        let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+        Ok(GlobalRateVoice::Retained {
+            admission: admission.retry_identity(),
+            endpoint: RateEndpoint {
+                id: voice.sample_id,
+                generation: voice.generation,
+                paused: voice.paused,
+                continuity: voice.source_feed_history.continuity_revision(),
+                pitch,
+                key_lock,
+                binding: ProductiveSourceBinding::new(
+                    &snapshot.sample,
+                    snapshot.sample_rate_hz,
+                    snapshot.accepted,
+                ),
+                permit,
+                playback: snapshot.playback,
+                plan: snapshot.plan,
+                context: snapshot.source_feed_context,
+                needs_history: false,
+                work: None,
+            },
+        })
+    }
+
+    fn global_rate_participant_current(
+        &self,
+        index: usize,
+        expected: &GlobalRateVoice,
+    ) -> Result<(), RateError> {
+        let GlobalRateVoice::Retained {
+            admission,
+            endpoint,
+        } = expected
+        else {
+            let GlobalRateVoice::Current(current) = expected else {
+                unreachable!()
+            };
+            return self.rate_participant_current(index, current);
+        };
+        let voice = &self.voices[index];
+        if !voice.active
+            || voice.sample_id != endpoint.id
+            || voice.generation != endpoint.generation
+            || voice.paused != endpoint.paused
+            || voice.source_feed_history.continuity_revision() != endpoint.continuity
+            || self.effective_rate_voice_tuple(index) != (endpoint.pitch, endpoint.key_lock)
+            || self.pending_key_lock_tuples[endpoint.id].is_some()
+            || self.queued_key_lock_tuples[endpoint.id].is_some()
+            || voice
+                .source_admission
+                .as_ref()
+                .map(|source| source.retry_identity())
+                != Some(*admission)
+        {
+            return Err(RateError::ParticipantChanged);
+        }
+        let snapshot = self
+            .capture_rate_voice_snapshot(index)
+            .ok_or(RateError::SourceChanged)?;
+        if ProductiveSourceBinding::new(
+            &snapshot.sample,
+            snapshot.sample_rate_hz,
+            snapshot.accepted,
+        ) != endpoint.binding
+            || !endpoint
+                .permit
+                .current(&snapshot.sample, snapshot.sample_rate_hz)
+            || !self.mapped_native_rate_available(index, &snapshot)
+        {
+            return Err(RateError::SourceChanged);
+        }
+        Ok(())
     }
 
     pub(super) fn rate_participant_current(
@@ -567,6 +869,7 @@ impl RtMixer {
             execution,
             timing_fence,
             voices: std::array::from_fn(|_| None),
+            claim_anchor: None,
         };
         for index in 0..MAX_VOICES {
             let voice = &self.voices[index];
@@ -582,7 +885,20 @@ impl RtMixer {
             let mut snapshot = self
                 .global_rate_snapshot(index, pending)
                 .ok_or(RateError::SourceChanged)?;
-            let mut participant = self.capture_rate_participant(index, &snapshot)?;
+            let mut participant = if pending.dry_mapped {
+                self.capture_global_rate_participant(index, &snapshot)?
+            } else {
+                GlobalRateVoice::Current(self.capture_rate_participant(index, &snapshot)?)
+            };
+            if capture.claim_anchor.is_none() {
+                capture.claim_anchor = Some(match &participant {
+                    GlobalRateVoice::Current(current) => current.placement,
+                    GlobalRateVoice::Retained { endpoint, .. } => self
+                        .input_runtime_ownership
+                        .slot_snapshot(endpoint.id)
+                        .ok_or(RateError::SourceChanged)?,
+                });
+            }
             if !snapshot.project_output_frames(execution - frame) {
                 return Err(RateError::HistoryUnavailable);
             }
@@ -647,7 +963,7 @@ impl RtMixer {
             return Err(RateError::Capacity);
         }
         if pending.dry_mapped {
-            self.dry_mapped_rate_cohort_current(pending.requested)?;
+            self.dry_mapped_rate_cohort_current(pending.requested, pending.capture.as_ref())?;
         } else if pending.requested != self.effective_global_rate()
             && self
                 .voices
@@ -689,7 +1005,7 @@ impl RtMixer {
                 }
                 continue;
             };
-            self.rate_participant_current(index, expected)?;
+            self.global_rate_participant_current(index, expected)?;
         }
         if self
             .input_runtime_ownership
@@ -787,7 +1103,9 @@ impl RtMixer {
                 ) {
                     return false;
                 }
-            } else if self.voices[index].stretch.has_retained_source_input() {
+            } else if self.voices[index].stretch.has_retained_source_input()
+                && !self.voices[index].source_playback.is_mapped()
+            {
                 let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
                 let Some(target) = self.tempo_ratio_for_request_with_rate(
                     self.voices[index].sync_request,
@@ -894,6 +1212,7 @@ impl RtMixer {
             return Err(RateError::MissedBoundary);
         }
         let mut mapped_replacements = [None; MAX_VOICES];
+        let mut mapped_native_stages = [None; MAX_VOICES];
         if pending.dry_mapped {
             if transport.master_period_seconds().map(f64::to_bits)
                 != self.master_period_seconds.map(f64::to_bits)
@@ -947,17 +1266,24 @@ impl RtMixer {
                 playback
                     .replace_mapped_epoch(geometry, epoch)
                     .map_err(|_| RateError::MappedTimingUnavailable)?;
+                if voice.stretch.has_active_native_ownership() {
+                    let snapshot = self
+                        .capture_rate_voice_snapshot(index)
+                        .ok_or(RateError::SourceChanged)?;
+                    let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+                    let prospective = feed(&snapshot, pitch, key_lock, frame, None);
+                    mapped_native_stages[index] = Some(
+                        voice
+                            .stretch
+                            .stage_mapped_rate_continuation(&prospective, playback)
+                            .ok_or(RateError::MappedTimingUnavailable)?,
+                    );
+                }
                 *replacement = Some(playback);
             }
         }
         let capture = pending.capture.as_ref().unwrap();
-        let anchor = capture
-            .voices
-            .iter()
-            .flatten()
-            .next()
-            .ok_or(RateError::ParticipantChanged)?
-            .placement;
+        let anchor = capture.claim_anchor.ok_or(RateError::ParticipantChanged)?;
         let ownership = self.input_runtime_ownership.clone();
         let _lease =
             crate::audio_engine::GlobalTimingLease::acquire(&ownership.global_timing_publishing)
@@ -969,7 +1295,30 @@ impl RtMixer {
         ownership
             .commit_slot_write_fixed(
                 &write,
-                || mixer.borrow_mut().global_rate_ready(pending, frame, true),
+                || {
+                    let mut mixer = mixer.borrow_mut();
+                    mixer.global_rate_ready(pending, frame, true)
+                        && mapped_native_stages
+                            .iter()
+                            .enumerate()
+                            .all(|(index, staged)| {
+                                let Some(staged) = staged else {
+                                    return true;
+                                };
+                                let Some(snapshot) = mixer.capture_rate_voice_snapshot(index)
+                                else {
+                                    return false;
+                                };
+                                let (pitch, key_lock) = mixer.effective_rate_voice_tuple(index);
+                                let prospective = feed(&snapshot, pitch, key_lock, frame, None);
+                                mapped_replacements[index].is_some_and(|replacement| {
+                                    mixer.voices[index]
+                                        .stretch
+                                        .stage_mapped_rate_continuation(&prospective, replacement)
+                                        == Some(*staged)
+                                })
+                            })
+                },
                 |_| {
                     let mut mixer = mixer.borrow_mut();
                     for index in 0..MAX_VOICES {
@@ -990,7 +1339,10 @@ impl RtMixer {
                     }
                     for index in 0..MAX_VOICES {
                         let voice = &mixer.voices[index];
-                        if !voice.active || !voice.stretch.has_retained_source_input() {
+                        if !voice.active
+                            || !voice.stretch.has_retained_source_input()
+                            || voice.source_playback.is_mapped()
+                        {
                             continue;
                         }
                         let target = mixer
@@ -1004,6 +1356,23 @@ impl RtMixer {
                         mixer.voices[index]
                             .stretch
                             .retarget_retained_rate_claimed(target);
+                    }
+                    for (index, staged) in mapped_native_stages.into_iter().enumerate() {
+                        if let Some(staged) = staged {
+                            let replacement =
+                                mapped_replacements[index].expect("staged mapped replacement");
+                            let plan = capture.voices[index]
+                                .as_ref()
+                                .expect("captured mapped participant")
+                                .plan;
+                            mixer.voices[index]
+                                .stretch
+                                .install_mapped_rate_continuation_claimed(
+                                    replacement,
+                                    plan,
+                                    staged,
+                                );
+                        }
                     }
                     // Actual source controls change only after every endangered owner is adopted.
                     // Invalidation cannot revoke those now-productive Native/FIFO trajectories.
@@ -1266,6 +1635,7 @@ mod terminal_render_tests {
                     execution: 3,
                     timing_fence: 1,
                     voices: std::array::from_fn(|_| None),
+                    claim_anchor: None,
                 }),
                 dry_mapped: false,
                 anchor: None,
