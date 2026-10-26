@@ -85,6 +85,28 @@ exclusive-file, actual installed-hash, rollback and checked-source guards. The
 installed file observed after a service gap had unestablished source provenance;
 its exact hash was separately preserved instead of assuming the previous delivery.
 
+### Native PC delivery receipt
+
+Code commit `888af81fa5326759eae248d672424db4379fd7f0` was normally pushed to
+existing `main`; clean HEAD, tracking and freshly queried remote equality passed
+at 2026-10-26 10:28:42 UTC. Fresh App/module/exclusive-file, actual installed-hash,
+rollback and checked-source guards passed before the native Release installation.
+The install completed at 10:30:04 UTC. The actual installed 35316224-byte Native
+has SHA256 `ec0e0caa91a8091d3c739dad842ecff9b6abef45bb2cbdd773769fe38e588e74`.
+Its 13 API checks and `repo/start.bat --check` passed against the source installation,
+including another startup check after cleanup. The App/audio device was not
+started or stopped, settings/private audio were untouched, and no Portable was
+installed. Private and installed link-build hashes differ; checked source inputs
+match, rather than a claimed binary-byte identity.
+
+After terminal jobs, no temporary module holders/reparse points and fresh clean
+remote equality, regular native PowerShell removal deleted only this block's
+owned `tmp/`: 9186 reproducible files, 164216691 bytes. Canonical Scratch retained
+its original 1506 entries with no additions. Logs, frozen/reference evidence,
+receipts, the prior known 5b9 and actual unattributed 09a0 rollback copies, shared
+regular build cache/environment and all Human/private/unknown data remain.
+This is a native software test delivery; the open requirements below remain open.
+
 ## Remaining connected requirements
 
 Unequal logical/actual-input continuation, mapped live SET/Key Lock replay,

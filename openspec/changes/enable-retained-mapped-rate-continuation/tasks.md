@@ -13,8 +13,8 @@
 - [x] Freeze the actual combined attempt and obtain systems POST before jobs.
 - [x] Run affected exact/Native/32/resource/performance checks and final diff review.
 - [x] Verify cold/hit/miss, role/cut/revocation and old-reader parity controls; record actual memo/scratch sizes and consuming measurements.
-- [ ] Publish checked English commit and normal main push; verify fresh clean remote equality.
-- [ ] Preserve concise positive/negative evidence and clean only owned disposable output.
+- [x] Publish checked English commit and normal main push; verify fresh clean remote equality.
+- [x] Preserve concise positive/negative evidence and clean only owned disposable output.
 
 Unequal endpoints, live SET/KL replay, wet phase/Hold, finite EOF, qualified early
 Attack and BeatThis B2/default/Human acceptance remain open in the FULL Goal.
