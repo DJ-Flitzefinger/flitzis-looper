@@ -201,6 +201,48 @@ def test_accepted_coupled_geometry_survives_own_mode_failure(
     assert controller.transport.residency.key_lock_status(0).error == "native worker failed"
 
 
+def test_mode_failure_keeps_physical_auto_geometry_for_the_next_pending_edit(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    accepted, feedback = _mode_source(controller, audio_engine_mock)
+    accepted.key_lock_request_id = None
+    project = controller.project
+    project.sample_durations[0] = 120.0
+    project.manual_bpm[0] = 120.0
+    project.pad_loop_auto[0] = True
+    project.pad_loop_end_s[0] = None
+    project.pad_loop_bars[0] = 32.0
+    residency = controller.transport.residency
+    residency.publish_loop(0, 3.0, 67.0)
+    accepted.status = "accepted"
+    residency.poll()
+    assert 0 not in residency._pending
+
+    failed = Ticket()
+    failed.key_lock_request_id = 2
+    audio_engine_mock.prepare_resident_control.return_value = failed
+    controller.transport.pad.set_pad_key_lock(0, enabled=True)
+    failed.status = "accepted"
+    feedback.update(
+        effective=False,
+        ready=False,
+        request_id=2,
+        window_revision=2,
+        state="error",
+        error="native worker failed",
+    )
+    residency.poll()
+    assert 0 not in residency._pending
+    assert project.pad_key_lock[0] is True
+    assert residency.key_lock_status(0).effective is False
+
+    audio_engine_mock.prepare_resident_control.return_value = Ticket()
+    residency.remember(0)
+    project.pad_loop_start_s[0] = 6.0
+    residency.publish_loop(0, 6.0, 70.0)
+    assert residency.acknowledged_region(0) == (3.0, 67.0)
+
+
 @pytest.mark.parametrize("stale", ["window", "request", "source", "generation"])
 def test_old_feedback_never_completes_latest_mode(
     controller: AppController, audio_engine_mock: Mock, stale: str

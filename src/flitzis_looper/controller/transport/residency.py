@@ -2,7 +2,7 @@
 
 import math
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
@@ -24,6 +24,7 @@ class _Intent:
     bars: float
     key_lock: bool
     key_lock_override: bool | None
+    physical_region: tuple[float, float | None] | None = field(default=None, compare=False)
 
 
 @dataclass(slots=True)
@@ -129,6 +130,18 @@ class ResidencyController:
                 if previous is None:
                     return
                 mode = previous.key_lock
+            previous = self._effective.get(sample_id)
+            if (
+                geometry is None
+                and previous is not None
+                and replace(
+                    previous, key_lock=intent.key_lock, key_lock_override=intent.key_lock_override
+                )
+                == intent
+            ):
+                # Processing preferences can differ from actual mode after a
+                # failure without changing the acknowledged physical interval.
+                intent = replace(intent, physical_region=previous.physical_region)
             self._effective[sample_id] = intent if mode is None else replace(intent, key_lock=mode)
 
     def _ensure_start_assignment_ready(self, sample_id: int) -> None:
@@ -318,18 +331,12 @@ class ResidencyController:
     def acknowledged_region(self, sample_id: int) -> tuple[float, float | None] | None:
         """Return previous native geometry while another region is preparing."""
         pending = self._pending.get(sample_id)
-        if pending is None:
+        if pending is None or not self._same_owner(sample_id, pending):
             return None
         previous = pending.previous
-        if not previous.auto:
-            return previous.start, previous.end
-        return self._transport.loop.region_for_intent(
-            sample_id,
-            start=previous.start,
-            end=previous.end,
-            auto=previous.auto,
-            bars=previous.bars,
-        )
+        # Retain the original physical tuple; a new map or parent preference
+        # cannot reinterpret an earlier ACK. An absent end remains unknown.
+        return previous.physical_region or (previous.start, previous.end)
 
     def _cache_backed(self, sample_id: int) -> bool:
         try:
@@ -384,7 +391,9 @@ class ResidencyController:
                 end,
                 **self._transport.source_generation_options(expected_source_generation),
             )
-            self._effective[sample_id] = self._intent(sample_id)
+            self._effective[sample_id] = replace(
+                self._intent(sample_id), physical_region=(start, end)
+            )
             self._acknowledged_geometry.pop(sample_id, None)
             return
         self._request(sample_id, start, end, expected_source_generation=expected_source_generation)
@@ -510,7 +519,7 @@ class ResidencyController:
         """Retain the input's launch intent until the required source context is ready."""
         self._ensure_start_assignment_ready(sample_id)
         if captured_start is not None:
-            self._retain_captured_start(sample_id, captured_start)
+            self._retain_captured_start(sample_id, captured_start, (start, end))
             return
         if play is None:
             message = "Ordinary start requires its original capture or playback callback"
@@ -548,7 +557,12 @@ class ResidencyController:
             expected_source_generation=expected_source_generation,
         )
 
-    def _retain_captured_start(self, sample_id: int, start: CapturedPadStart) -> None:
+    def _retain_captured_start(
+        self,
+        sample_id: int,
+        start: CapturedPadStart,
+        region: tuple[float, float | None],
+    ) -> None:
         identity = id(start)
         if identity in self._captured_starts:
             return
@@ -568,7 +582,7 @@ class ResidencyController:
         pending = _CapturedStart(
             start,
             cache_backed,
-            self._intent(sample_id),
+            replace(self._intent(sample_id), physical_region=region),
             deadline=time.monotonic() + 30.0,
             dependency=dependency,
         )
@@ -674,7 +688,12 @@ class ResidencyController:
     @staticmethod
     def _with_geometry(intent: _Intent, geometry: _Intent) -> _Intent:
         return replace(
-            intent, start=geometry.start, end=geometry.end, auto=geometry.auto, bars=geometry.bars
+            intent,
+            start=geometry.start,
+            end=geometry.end,
+            auto=geometry.auto,
+            bars=geometry.bars,
+            physical_region=geometry.physical_region,
         )
 
     def _remember_captured_geometry(self, pending: _CapturedStart, sample_id: int) -> None:
@@ -822,7 +841,7 @@ class ResidencyController:
         ):
             baseline = self._confirmed_baseline(sample_id, waiting_intent, baseline)
         pending = _Pending(
-            requested,
+            replace(requested, physical_region=(start, end)),
             baseline,
             start,
             end,

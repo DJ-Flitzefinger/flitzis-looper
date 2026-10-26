@@ -1,5 +1,7 @@
 # Beat This migration and independent pad pitch: implementation design
 
+For control meanings and step-by-step use, see the [Source Map guide](source-map-guide.md).
+
 Decision date: 2026-10-05. Current integration: independent pitch controls, source-map
 custody/editor and the qualified initial mapped launch are implemented. The
 independent source-SYNC control and its exact delivery boundary are described below;

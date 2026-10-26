@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from imgui_bundle import imgui, implot
 
+from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render, waveform_editor
 
@@ -162,6 +163,40 @@ def _context(controller: AppController, audio: Mock) -> tuple[UiContext, _Pendin
     audio.waveform_readiness.side_effect = worker.readiness
     audio.retry_waveform.side_effect = worker.retry
     return UiContext(controller), worker
+
+
+def test_adjust_loop_renders_saved_variable_loop_without_a_ready_map(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    headless_plot: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx, worker = _context(controller, audio_engine_mock)
+    ctx.bold_font = imgui.get_io().fonts.fonts[1]
+    observation = _observe_draw(monkeypatch)
+    project = controller.project
+    project.multi_loop = True
+    project.bpm_lock = True
+    project.global_timing_policy = GlobalTimingPolicy(
+        schema_version=1, sync=True, realtime_bpm=True, revision=2
+    )
+    project.pad_loop_auto[0] = True
+    project.pad_loop_start_s[0] = 16.0
+    project.pad_loop_bars[0] = 32.0
+    controller.session.active_sample_ids.add(0)
+    before = project.model_dump()
+    audio_engine_mock.reset_mock()
+
+    ctx.ui.waveform.open(0)
+    for _ in range(3):
+        _full_frame(ctx, worker, observation)
+    assert ctx.ui.waveform.view_limits(0, loop_only=True) == (15.5, 80.0)
+
+    assert project.model_dump() == before
+    assert controller.session.waveform_editor_open
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.prepare_resident_control.assert_not_called()
+    audio_engine_mock.seek_sample.assert_not_called()
 
 
 @dataclass

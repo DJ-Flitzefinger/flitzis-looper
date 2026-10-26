@@ -264,7 +264,10 @@ class BpmController:
                 self._project.pad_timing_intent[sample_id] = timing_intent
                 self._transport._mark_project_changed()
         self._transport.loop._apply_effective_pad_loop_region_to_audio(
-            sample_id, timing=timing, expected_source_generation=expected_source_generation
+            sample_id,
+            timing=timing,
+            expected_source_generation=expected_source_generation,
+            defer_unavailable_map=True,
         )
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:

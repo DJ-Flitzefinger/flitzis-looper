@@ -84,6 +84,30 @@ Same-content analysis SHALL preserve intent; actual replacement/unload SHALL cle
 - **AND** the new copied intent SHALL remain independent
 - **AND** unknown fields, wrong types and revision overflow SHALL still refuse
 
+### Requirement: Pending maps do not prevent restoration or editor inspection
+Restoration and non-authorizing waveform display SHALL tolerate missing,
+restoring or unqualified requested maps without changing saved SYNC/REALTIME
+preferences, bar counts or physical markers. Display MAY project ordinary scalar
+geometry without claiming mapped playback or phase. Passive loop publication
+SHALL defer unavailable mapped geometry rather than overwrite an existing live
+loop with scalar geometry. Real audio publication failures SHALL remain visible.
+Explicit mapped edits, seeks and adoption SHALL retain their qualification guards.
+Pending replacement display SHALL retain original acknowledged physical endpoints
+under existing source-owner fences, never reinterpret them with a newer map.
+
+#### Scenario: Restore and inspect a saved 32-bar variable request
+- **GIVEN** saved SYNC and REALTIME BPM preferences and an automatic 32-bar loop
+- **WHEN** the source map is unavailable during restore or Adjust Loop rendering
+- **THEN** restoration and rendering SHALL continue without altering saved intent
+- **AND** unavailable mapped controls SHALL explain their readiness requirement
+- **AND** no display projection SHALL acknowledge variable playback or grid phase
+
+#### Scenario: A new map cannot rewrite preceding physical acknowledgement
+- **WHEN** a loop replacement is pending and the map is missing or changes
+- **THEN** display SHALL retain the preceding acknowledged physical endpoints
+- **AND** a new unacknowledged end SHALL NOT count as a preceding physical ACK
+- **AND** source replacement SHALL invalidate the old owner observation
+
 ### Requirement: Initial control integration preserves remaining SYNC obligations
 This control integration SHALL preserve all unsupported mapped tuple/transition
 refusals of the current initial envelope and SHALL NOT present itself as complete

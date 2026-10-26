@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from flitzis_looper.timing_policy import GlobalTimingPolicy
 from tests.flitzis_looper.conftest import (
     FakeCapturedGlobalStart,
     FakeCapturedPadStart,
@@ -298,6 +299,51 @@ def test_loop_requested_and_effective_separate_until_matching_ack(
     controller.transport.residency.poll()
     assert controller.transport.loop.effective_region(0) == (6.0, 6.0 + 1.0 / 44_100)
     assert controller.transport.residency.status(0) == (None, None)
+
+
+def test_pending_auto_loop_keeps_original_physical_ack_when_a_map_is_missing(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    accepted = resident(controller, audio_engine_mock)
+    project = controller.project
+    project.pad_loop_auto[0] = True
+    project.pad_loop_end_s[0] = None
+    project.pad_loop_bars[0] = 32.0
+    residency = controller.transport.residency
+    residency.publish_loop(0, 3.0, 67.0)
+    accepted.status = "accepted"
+    residency.poll()
+    assert 0 not in residency._pending
+
+    project.multi_loop = True
+    project.bpm_lock = True
+    project.global_timing_policy = GlobalTimingPolicy(
+        schema_version=1, sync=True, realtime_bpm=True, revision=2
+    )
+    replacement = Ticket()
+    audio_engine_mock.prepare_resident_control.return_value = replacement
+    residency.remember(0)
+    project.pad_loop_start_s[0] = 6.0
+    residency.publish_loop(0, 6.0, 70.0)
+
+    assert controller.transport.loop.effective_region(0) == (3.0, 67.0)
+    assert project.pad_loop_auto[0] is True
+    assert project.pad_loop_bars[0] == 32.0
+    audio_engine_mock.loaded_residency.return_value["source_identity"] = 456
+    assert residency.acknowledged_region(0) is None
+    residency.cancel(0)
+    assert residency.acknowledged_region(0) is None
+
+
+def test_new_region_without_a_previous_ack_does_not_claim_its_end_as_previous_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    resident(controller, audio_engine_mock)
+    project = controller.project
+    project.pad_loop_auto[0] = True
+    project.pad_loop_end_s[0] = None
+    controller.transport.residency.publish_loop(0, 3.0, 67.0)
+    assert controller.transport.residency.acknowledged_region(0) == (3.0, None)
 
 
 @pytest.mark.parametrize("status", ["failed", "rejected", "cancelled"])

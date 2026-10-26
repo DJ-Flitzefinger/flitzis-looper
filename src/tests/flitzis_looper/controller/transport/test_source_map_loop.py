@@ -145,6 +145,45 @@ def _intent(controller: AppController) -> tuple[float, float | None, bool, float
     )
 
 
+@pytest.mark.parametrize("readiness", ["missing", "uncertain", "unknown-meter"])
+def test_unavailable_map_can_be_inspected_and_passively_refreshed_without_publication(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock, readiness: str
+) -> None:
+    mapped_loop.effective.return_value = (
+        None
+        if readiness == "missing"
+        else _geometry(middle_coverage="uncertain")
+        if readiness == "uncertain"
+        else _geometry(meter="unknown")
+    )
+    before = _intent(controller)
+
+    assert controller.transport.loop.effective_region(0) == (1.0, 3.0)
+    controller.transport.bpm.on_pad_bpm_changed(0, publish_bpm=False)
+    assert _intent(controller) == before
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.prepare_resident_control.assert_not_called()
+    with pytest.raises(ValueError, match=r"qualified|supported"):
+        controller.transport.loop.requested_region(0)
+
+    mapped_loop.effective.return_value = _geometry()
+    assert controller.transport.loop.effective_region(0) == (1.0, 3.5)
+    controller.transport.loop.apply_source_map_bars(0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(
+        0, 1.0, 3.5, expected_source_generation=1
+    )
+
+
+def test_passive_map_refresh_does_not_hide_a_real_audio_publication_failure(
+    controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
+) -> None:
+    audio_engine_mock.set_pad_loop_region.side_effect = ValueError("stale source generation")
+    with pytest.raises(ValueError, match="stale source generation"):
+        controller.transport.loop._apply_effective_pad_loop_region_to_audio(
+            0, defer_unavailable_map=True
+        )
+
+
 def test_selection_with_available_sync_parents_uses_map_bars_without_changing_source_timing(
     controller: AppController, audio_engine_mock: Mock, mapped_loop: Mock
 ) -> None:

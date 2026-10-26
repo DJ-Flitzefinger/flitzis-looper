@@ -372,7 +372,9 @@ class PadLoopController:
                 ),
             )
         self.apply_grid_anchor_to_audio(sample_id, timing=timing)
-        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(
+            sample_id, timing=timing, defer_unavailable_map=True
+        )
 
     def _loaded_activity_anchor_s(
         self,
@@ -457,10 +459,22 @@ class PadLoopController:
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
         expected_source_generation: int | None = None,
+        defer_unavailable_map: bool = False,
     ) -> None:
         if self._project.sample_paths[sample_id] is None:
             return
-        start_s, end_s = self._effective_pad_loop_region(sample_id, timing=timing)
+        try:
+            start_s, end_s = self._effective_pad_loop_region(sample_id, timing=timing)
+        except RuntimeError, ValueError:
+            if not (
+                defer_unavailable_map
+                and self._project.pad_loop_auto[sample_id]
+                and self._requires_variable_map(sample_id)
+            ):
+                raise
+            # Cold admission owns its existing saved resident hint. A passive
+            # refresh cannot replace a live mapped loop with scalar geometry.
+            return
         self._transport.residency.publish_loop(
             sample_id, start_s, end_s, expected_source_generation=expected_source_generation
         )
@@ -557,7 +571,10 @@ class PadLoopController:
                 sample_id, timing=timing, expected_source_generation=expected_source_generation
             )
             self._apply_effective_pad_loop_region_to_audio(
-                sample_id, timing=timing, expected_source_generation=expected_source_generation
+                sample_id,
+                timing=timing,
+                expected_source_generation=expected_source_generation,
+                defer_unavailable_map=True,
             )
         return True
 
@@ -855,7 +872,36 @@ class PadLoopController:
         acknowledged = self._transport.residency.acknowledged_region(sample_id)
         if acknowledged is not None:
             return acknowledged
-        return self._effective_pad_loop_region(sample_id, timing=timing)
+        return self._projected_region(sample_id, timing=timing)
+
+    def _projected_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        """Display ordinary geometry while a requested map is unavailable.
+
+        This projection grants no map, playback or phase acknowledgement and is
+        never used to authorize a mapped edit or seek.
+        """
+        validate_sample_id(sample_id)
+        timing = self._resolve_timing(sample_id, timing)
+        try:
+            return self._effective_pad_loop_region(sample_id, timing=timing)
+        except RuntimeError, ValueError:
+            if not (
+                self._project.pad_loop_auto[sample_id] and self._requires_variable_map(sample_id)
+            ):
+                raise
+        return self._scalar_region_for_intent(
+            sample_id,
+            start=float(self._project.pad_loop_start_s[sample_id]),
+            end=self._project.pad_loop_end_s[sample_id],
+            auto=True,
+            bars=self._stored_bars(sample_id),
+            timing=timing,
+        )
 
     def requested_region(
         self,

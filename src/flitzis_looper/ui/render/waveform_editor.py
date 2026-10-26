@@ -291,6 +291,14 @@ def _render_source_map_loop_actions(
     if _render_text_button("Snap markers##source-map-snap", height):
         ctx.audio.pads.snap_source_map_markers(pad_id)
     imgui.end_disabled()
+    if unavailable:
+        _toolbar_next_item(imgui.calc_text_size("Source Map needed").x)
+        _aligned_toolbar_text("Source Map needed", height, TEXT_MUTED_RGBA)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Variable loop editing needs a ready Source Map with reviewed 4/4 coverage. "
+                "You can inspect the waveform while the map is unavailable."
+            )
 
 
 def _render_loop_controls(
@@ -323,17 +331,11 @@ def _render_loop_controls_body(
     if _render_text_button("ALL##wf_loop_all", height):
         ctx.audio.pads.set_pad_full_track_loop_region(pad_id)
 
-    map_mode = (
-        source_map is not None
-        and source_map.selected
-        and ctx.state.project.resolve_pad_realtime_bpm(pad_id)
-    )
-    map_unavailable = (
-        map_mode
-        and source_map is not None
-        and (
-            source_map.geometry is None or source_map.status in {"pending", "restoring", "settling"}
-        )
+    map_mode = ctx.state.project.resolve_pad_realtime_bpm(pad_id)
+    map_unavailable = map_mode and (
+        source_map is None
+        or source_map.geometry is None
+        or source_map.status in {"pending", "restoring", "settling"}
     )
     if map_mode:
         _render_source_map_loop_actions(ctx, pad_id, height, unavailable=map_unavailable)
