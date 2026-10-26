@@ -71,7 +71,8 @@ fn static_unavailable_neighbor_phase_cannot_block_an_original_mapped_to_fixed_mo
     }
     let mut ends = vec![None; NUM_SAMPLES];
     ends[0] = Some(fixture.end_seconds());
-    ends[1] = Some(1499.0 / f64::from(RATE));
+    // Two-frame mismatch is outside the new <=1-frame physical class.
+    ends[1] = Some(1498.0 / f64::from(RATE));
     fixture
         .path
         .source
@@ -104,7 +105,7 @@ fn static_unavailable_neighbor_phase_cannot_block_an_original_mapped_to_fixed_mo
         .capture_pad_start(
             1,
             0.0,
-            Some(1499.0 / f64::from(RATE)),
+            Some(1498.0 / f64::from(RATE)),
             1.0,
             false,
             None,

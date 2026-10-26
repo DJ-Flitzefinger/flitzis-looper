@@ -263,6 +263,7 @@ pub(crate) fn metadata(
             (12, "key_lock_effective"),
             (13, "key_lock_requested"),
             (14, "phase_birth_unadvanced"),
+            (15, "physical_normalized_static_clock"),
         ] {
             row.set_item(name, flags & (1 << bit) != 0)?;
         }

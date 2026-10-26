@@ -89,6 +89,227 @@ fn preceding(case: Case) -> SourcePlayback {
     current
 }
 
+fn physical_case(f: f64, master_f: f64, start: usize, length: usize) -> Case {
+    Case {
+        f,
+        master_f,
+        origin: 0.0,
+        start,
+        length,
+        whole: start,
+        fraction: -0.0,
+        launch: 0,
+        prior_frames: 0,
+        held_frames: 0,
+        prior_rate: f / master_f,
+        first: 0,
+        anchor_frame: 0,
+        anchor: 0.0,
+    }
+}
+
+#[test]
+fn normalized_physical_exact_human_inputs_keep_physical_domain_and_original_target() {
+    for (f, o, start, length, q) in [
+        (0.6384121783045781 * 48_000.0, 996.0, 981597, 3922404, 128.0),
+        (
+            0.6540201851490401 * 48_000.0,
+            1980.0,
+            1089806,
+            8036600,
+            256.0,
+        ),
+    ] {
+        let case = Case {
+            origin: o,
+            ..physical_case(f, 0.6540201851490401 * 48_000.0, start, length)
+        };
+        let raw = preceding(case);
+        assert!(matches!(
+            SourcePlayback::static_continuation(&raw, timeline(case), 0, 7, f, o, q),
+            Err(crate::audio_engine::static_source_clock::StaticClockError::InvalidGeometry)
+        ));
+        let mut clock = SourcePlayback::static_physical_normalized_continuation(
+            &raw,
+            timeline(case),
+            0,
+            7,
+            f,
+            o,
+            q,
+        )
+        .unwrap();
+        assert_eq!(clock.effective_domain(), raw.effective_domain());
+        assert_eq!(clock.position(), raw.position());
+        assert_eq!(clock.position().fraction.to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(clock.rate_target().to_bits(), raw.rate_target().to_bits());
+        let steady = length as f64 / q / case.master_f;
+        assert_eq!(clock.tempo_ratio().to_bits(), steady.to_bits());
+        assert!(clock.advance(12345));
+        let endpoint = clock.position();
+        assert!(clock.dissolve_static());
+        assert_eq!(clock.position(), endpoint);
+        assert_eq!(clock.rate_target().to_bits(), raw.rate_target().to_bits());
+        assert_eq!(clock.tempo_ratio().to_bits(), steady.to_bits());
+    }
+}
+
+#[test]
+fn normalized_physical_q92_fraction_oracle_partition_seam_and_signed_zero() {
+    let case = physical_case(1.49, 1.5, 3, 137);
+    let raw = preceding(case);
+    let source = SourcePlayback::static_physical_normalized_continuation(
+        &raw,
+        timeline(case),
+        0,
+        8,
+        case.f,
+        case.origin,
+        92.0,
+    )
+    .unwrap();
+    // Independently generated Python Fraction(P*Fraction(actual-f64-M)/Q) modulo P.
+    for (n, frame, fraction) in [
+        (0, 3, 9223372036854775808),
+        (1, 3, 4607117149240200444),
+        (2, 4, 4607051879680383480),
+        (77, 79, 4601634506215575556),
+        (138, 3, 9223372036854775808),
+        (139, 3, 4607117149240200508),
+        (10001, 67, 4602939897411910701),
+        (1125899906842641, 83, 4601112349737039783),
+    ] {
+        let point = source.position_at(n).unwrap();
+        assert_eq!(point.frame, frame, "n={n}");
+        assert_eq!(point.fraction.to_bits(), fraction, "n={n}");
+    }
+    let mut partitioned = source;
+    for n in [1, 2, 7, 33, 95, 863] {
+        assert!(partitioned.advance(n));
+    }
+    let expected = source.position_at(1001).unwrap();
+    assert_eq!(partitioned.position(), expected);
+    assert_eq!(
+        partitioned.position().fraction.to_bits(),
+        expected.fraction.to_bits()
+    );
+}
+
+#[test]
+fn normalized_physical_rejects_nonclosing_fractional_q_and_large_rate_step() {
+    for (case, q) in [
+        (physical_case(1.6, 1.5, 3, 137), 92.0),
+        (physical_case(1.49, 1.5, 3, 137), 92.25),
+        (physical_case(1.8, 1.0, 3, 1), 1.0),
+    ] {
+        let raw = preceding(case);
+        assert!(
+            SourcePlayback::static_physical_normalized_continuation(
+                &raw,
+                timeline(case),
+                0,
+                8,
+                case.f,
+                case.origin,
+                q
+            )
+            .is_err()
+        );
+        assert_eq!(raw.position().frame, case.start);
+        assert_eq!(
+            raw.rate_target().to_bits(),
+            (case.f / case.master_f).to_bits()
+        );
+    }
+}
+
+#[test]
+fn normalized_physical_q92_nonzero_debt_fraction_oracles_capture_both_directions() {
+    let cases = [
+        (
+            12,
+            0.609375,
+            412,
+            vec![
+                (16, 12, 4604930618986332160_u64),
+                (17, 13, 4605005067077998400),
+                (53, 50, 4588205294283235855),
+                (411, 137, 4579703934117076202),
+                (412, 138, 4579508125437641060),
+                (413, 139, 4575004525810221768),
+                (5000, 34, 4605093792885876602),
+            ],
+        ),
+        (
+            34,
+            1.984375,
+            1039,
+            vec![
+                (16, 34, 4604930618986332160_u64),
+                (17, 35, 4604725631775032024),
+                (53, 70, 4606353291422967580),
+                (1038, 74, 4602519724620593079),
+                (1039, 75, 4602156662694110186),
+                (1040, 76, 4602026123574478291),
+                (5000, 34, 4605093792885876602),
+            ],
+        ),
+    ];
+    for (whole, prior_rate, capture, rows) in cases {
+        let case = Case {
+            whole,
+            fraction: 0.75,
+            prior_rate,
+            prior_frames: 16,
+            first: 16,
+            ..physical_case(1.49, 1.5, 3, 137)
+        };
+        let raw = preceding(case);
+        let source = SourcePlayback::static_physical_normalized_continuation(
+            &raw,
+            timeline(case),
+            16,
+            8,
+            case.f,
+            case.origin,
+            92.0,
+        )
+        .unwrap();
+        assert!(!source.static_phase_settled());
+        // Python Fraction r=(Q*r0+P*(actualM-M0)+signed min(P*(actualM-M0)/64,abs(d))) mod(P*Q), then /Q.
+        for (n, frame, bits) in rows {
+            let point = source.position_at(n - 16).unwrap();
+            assert_eq!(point.frame, frame, "n={n}");
+            assert_eq!(point.fraction.to_bits(), bits, "n={n}");
+        }
+        let mut partitioned = source;
+        assert!(partitioned.advance(capture - 17));
+        assert!(!partitioned.static_phase_settled());
+        assert!(partitioned.advance(1));
+        assert!(partitioned.static_phase_settled());
+        assert_eq!(
+            partitioned.position(),
+            source.position_at(capture - 16).unwrap()
+        );
+    }
+    let negative_rounding = physical_case(1.488, 1.5, 3, 137);
+    let raw = preceding(negative_rounding);
+    let opposite = SourcePlayback::static_physical_normalized_continuation(
+        &raw,
+        timeline(negative_rounding),
+        0,
+        8,
+        negative_rounding.f,
+        0.0,
+        92.0,
+    )
+    .unwrap();
+    assert_eq!(
+        opposite.position_at(10001).unwrap().fraction.to_bits(),
+        4602939897411910701
+    );
+}
+
 fn verify(case: Case, expected: &[Expected]) {
     let master = timeline(case);
     let preceding = preceding(case);

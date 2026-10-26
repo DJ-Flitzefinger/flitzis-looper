@@ -590,10 +590,52 @@ The separate physical splitter SHALL prove A*d<=n<Z*d exactly before a single RN
 
 Physical spans SHALL remain at most240 bytes, epochs128 bytes and32 optional copied playbacks at most16KiB, Copy with no destructor. Actual compiled Debug/Release2MiB, observed Rust allocation requests and complete consuming2/4/6 plus unconditional stress10 evidence remain required. Earlier declared20/10, tiny20 and physical measurements SHALL remain unchanged historical evidence. The current resource gates concern2/4/6 and maximum stress10; historical20 results SHALL NOT require optimization for20. This physical extent branch grants no common phase/bar commensurability, finite OneShot/EOF, Native/pitch/Key Lock, arbitrary mapped history permission, musical/device/Human acceptance or complete SYNC/REALTIME acceptance. All FULL-Goal obligations remain.
 
+### Requirement: Rounded physical loops support bounded fixed phase normalization
+A separately qualified PhysicalNormalized static class SHALL support an existing compatible integral quarter extent Q from 1 through u32::MAX when exact decoded abs(F*Q-P) is at most one source frame, without changing Physical P, selected A, source identity, reader taps or accepted timing.
+
+The exact static class SHALL be tried first and SHALL retain its prior behavior.
+The new class SHALL use the original all-participant PHASE claim and retain F/O/Q
+as source-estimate provenance. Its cycle target SHALL be A+(P/Q)*(M(n)-M(T)) modulo
+physical P. It SHALL preserve the complete raw source pair at actual E and correct
+continuously using the existing bounded convergence, without relabeling A as a
+proven musical beat or certifying the accuracy of the estimated BPM.
+
+Authoritative coordinates SHALL use Q-scaled integers: raw Q*(s-A), progress
+P*(M(n)-M(E)), physical period P*Q and shortest signed correction to
+P*(M(E)-M(T)). No rounded binary64 P/Q SHALL authorize geometry. The original
+requested rate F/G SHALL remain distinct from the normalized steady derivative
+P/(Q*G), which SHALL be reported truthfully. Dissolve/recovery SHALL preserve the
+current source pair and derivative and restore the original scalar target.
+Existing [.5,2] derivative bounds, analytic correction at most 1/32 and total
+actual-E rate step at most .05 SHALL also hold for this class, including short
+loops and zero correction debt.
+
+The class SHALL include Q in its common-grid admission. At g in [-126,0], aligned
+master coefficients remain below126 bits, exact P uses at most64 bits and Q at
+most32. Q-scaled progress uses fewer than317 bits; stored correction fewer than349
+bits. At h=2g-k>=-316, source numerators remain below414 bits within an explicit
+448-bit cap and checked512-bit scratch. Final absolute rational coordinates and
+denominators remain below414/349 bits and SHALL use the existing physical642/636
+splitter with checked1024-bit scratch, one ties-even fractional rounding, canonical
+seam carry and exact raw signed-zero identity. Out-of-bound input SHALL refuse
+without mutating source, rate or playback state.
+
+#### Scenario: Decimal-BPM Legacy source closes an ordinary physical loop
+- **WHEN** a source-qualified Legacy Fixed request uses rounded physical markers for a compatible 8-, 32- or 64-bar loop
+- **THEN** the separately admitted class can install after ordinary rate adoption without inventing accepted timing
+- **AND** a genuine completed dry read is still required for phase-read confirmation
+- **AND** this software evidence does not establish musical BPM accuracy or Human listening acceptance
+
+#### Scenario: Odd quarter denominator and unsupported short loop
+- **WHEN** a compatible 23-bar loop has Q=92
+- **THEN** normalized coordinates retain exact division by92, including seams and partitioned reads
+- **WHEN** a short compatible physical interval would violate derivative or actual-E step limits
+- **THEN** it retains preceding ordinary playback with unconfirmed phase
+
 ### Requirement: Qualified dry static SYNC converges without changing its declared grid
 After the original Fixed request has adopted its ordinary rate and completed its existing active-frame glide, a later original all-participant policy claim MAY install an exact static correction. It SHALL retain the effective source's original signed scalar origin O and frames per quarter F as geometry provenance. The target SHALL preserve the actual intentional selected-A launch at original T: A+F*(M(n)-M(T)). M(T) SHALL be captured from the sole scheduler before preparation, never inferred from the activation cursor or reevaluated using a later tempo projection. This launch reference SHALL NOT certify a new grid/downbeat or turn arbitrary activation drift into an intentional offset.
 
-The admitted first class SHALL retain its actual Physical or already authorized ScalarMusical reader domain. The exact decoded product F*Q SHALL equal that domain's source-frame period P, with the existing compatible-cycle Q, P in [.5,2^64] and positive Q below2^64. A rounded compatibility product, manual/TAP metadata or ready variable map SHALL NOT manufacture accepted timing, a new reader period or bar-phase authority. Nonclosing cases SHALL keep their preceding ordinary audio and unconfirmed phase.
+The admitted first class SHALL retain its actual Physical or already authorized ScalarMusical reader domain. The exact decoded product F*Q SHALL equal that domain's source-frame period P, with the existing compatible-cycle Q, P in [.5,2^64] and positive Q below2^64. A rounded compatibility product, manual/TAP metadata or ready variable map SHALL NOT manufacture accepted timing, a new reader period or bar-phase authority. Outside the separately qualified PhysicalNormalized class, nonclosing cases SHALL keep their preceding ordinary audio and unconfirmed phase.
 
 Let u=(M(n)-M(E))*F and D be a feasible signed representative of A+F*(M(E)-M(T))-s0 modulo P. The copied clock SHALL evaluate s0+u+sign(D)*min(u/2^k,abs(D)) from immutable anchors before its own source modulo. It SHALL select the nearest feasible winding, positive on equal distance, and try the other winding when necessary. It SHALL require k from6 through64, exact analytic source rate and corrected rate in [.5,2], analytic correction at most.03125 source frame per output frame, and a finite capture within the admitted output horizon. Actual master cast plateaus SHALL remain plateaus. These are bounds on the analytic rate; they SHALL NOT falsely require every discrete binary64 master increment to be positive. The unwrapped phase SHALL remain continuous, with bounded rate steps; no seek, restart, stop, master rewrite or hidden phase clipping is permitted.
 
@@ -612,7 +654,7 @@ Let u=(M(n)-M(E))*F and D be a feasible signed representative of A+F*(M(E)-M(T))
 - **AND** copied partitioning SHALL not introduce a new rounding anchor or change the trajectory
 
 ### Requirement: Static phase arithmetic and copied authority remain bounded
-The static class SHALL separately check a common dyadic grid g in [-126,0]. Every signed integer coefficient AFTER exact alignment to2^g for F, O, raw fraction and every actual master value over the complete horizon SHALL have magnitude below2^126; raw whole/physical period retain at most64 bits. Unscaled f64 magnitude SHALL NOT substitute for this coefficient bound. With k<=64 the finest grid SHALL be at least-316; static-specific products, signed sums, residues and final numerators SHALL remain below384 bits in checked512-bit scratch. Final exact dyadic splitting SHALL use one ties-to-even binary64 rounding, at most2^-54 source-frame error, canonical seam carry and original raw fraction bits whenever exact fractional identity recurs, including negative zero. Out-of-certificate input SHALL refuse without mutation or a cursor-independent retry token.
+The exact static class SHALL separately check a common dyadic grid g in [-126,0]. Every signed integer coefficient AFTER exact alignment to2^g for F, O, raw fraction and every actual master value over the complete horizon SHALL have magnitude below2^126; raw whole/physical period retain at most64 bits. Unscaled f64 magnitude SHALL NOT substitute for this coefficient bound. With k<=64 the finest grid SHALL be at least-316; exact-static-specific products, signed sums, residues and final numerators SHALL remain below384 bits in checked512-bit scratch. Final exact dyadic splitting SHALL use one ties-to-even binary64 rounding, at most2^-54 source-frame error, canonical seam carry and original raw fraction bits whenever exact fractional identity recurs, including negative zero. Out-of-certificate input SHALL refuse without mutation or a cursor-independent retry token.
 
 The static clock SHALL share the existing mutually exclusive copied playback storage with mapped clocks, preserve complete program/domain/request identity, and retain Copy/no destructor and the existing copied-layout limits. Actual source/map/ACK/content/lifetime custody, reader checks, global-before-placement all32 claim, retirement and scheduler remain authoritative. Static scalar reader tags SHALL NOT bypass complete layout/domain and full-chunk reader preflight before output writes.
 

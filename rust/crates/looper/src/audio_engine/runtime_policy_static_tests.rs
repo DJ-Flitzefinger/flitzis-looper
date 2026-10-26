@@ -3,6 +3,8 @@
 
 #[path = "runtime_policy_static_master_tests.rs"]
 mod master_tests;
+#[path = "runtime_policy_rounded_physical_tests.rs"]
+mod rounded_physical_tests;
 
 use super::*;
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
@@ -1039,7 +1041,9 @@ fn static_same_snapshot_service_waits_for_actual_glide_then_keeps_one_program() 
 #[test]
 fn static_nonclosure_refuses_the_second_claim_for_all_thirty_two_lanes_without_partial_programs() {
     let mut lengths = vec![2048; 32];
-    lengths[31] = 2047;
+    // One-frame physical rounding is now a separate admitted class. Keep this
+    // atomic-refusal case outside its explicit bound, without changing its guards.
+    lengths[31] = 2046;
     let mut fixture = StaticPath::new(&lengths);
     fixture.publish(true, 2, 7, None);
     let snapshot = fixture.effect();
@@ -1618,7 +1622,7 @@ fn static_competing_original_global_lease_keeps_phase_work_pending_without_clock
 
 #[test]
 fn static_nonclosing_neighbor_cannot_block_a_new_pad_optout_ordinary_mode_effect() {
-    let mut fixture = StaticPath::new(&[2047, 3072]);
+    let mut fixture = StaticPath::new(&[2046, 3072]);
     fixture
         .path
         .source

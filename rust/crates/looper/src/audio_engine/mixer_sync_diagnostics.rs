@@ -106,6 +106,7 @@ impl RtMixer {
             | (u64::from(key_lock) << 12)
             | (u64::from(self.pad_key_lock_enabled[voice.sample_id]) << 13)
             | (u64::from(voice.phase_birth_unadvanced) << 14);
+        flags |= u64::from(voice.source_playback.is_physical_normalized_static()) << 15;
         row[17] = match voice.sync_request.mode {
             crate::audio_engine::source_sync_policy::SourceSyncMode::Legacy => 0,
             crate::audio_engine::source_sync_policy::SourceSyncMode::Off => 1,

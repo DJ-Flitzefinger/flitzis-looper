@@ -9,17 +9,26 @@
 //! sufficient. The denominator is a power of two at most 2^316. A nonzero tail
 //! is normal binary64, and the final ties-even split has <=2^-54 frame error.
 //! These bounds are checked at admission; this is not arbitrary-f64 support.
+//!
+//! PhysicalNormalized is a separate integral-Q<=u32::MAX class. It multiplies
+//! raw pairs and physical periods by Q and uses exact P*master progress. At the
+//! same grid its stored correction is <349 bits, final numerator <414 (cap448)
+//! in checked512 scratch. Final absolute N/D uses <414/349 bits within the
+//! existing physical642/636,1024-bit splitter theorem; P/Q is never a clock float.
 
 use super::compact_source_numerics::{
     Grid, GridStats, decode_f64_at_grid, exact_f64_parts, master_grid_exponent,
 };
-use super::general_source_numerics::{Integer, Magnitude};
+use super::general_source_numerics::{
+    Integer, Magnitude, PhysicalInteger, split_physical_coordinate,
+};
 use super::source_playback::FractionalSourcePosition;
 use super::source_reader::{ExplicitSeekMode, SourceLoopDomain, SourceReaderPeriod};
 use super::transport::TransportBeatProjection;
 
 const MAX_PERIOD: f64 = 18_446_744_073_709_551_616.0;
 const MAX_COEFFICIENT_BITS: u32 = 384;
+const MAX_NORMALIZED_POSITION_BITS: u32 = 448;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StaticClockError {
@@ -40,6 +49,10 @@ pub(crate) struct StaticPhaseClock {
     quarters: f64,
     master_at_first: f64,
     nominal_ratio: f64,
+    steady_ratio: f64,
+    physical_normalized: bool,
+    quarter_scale: u32,
+    physical_period: u64,
     correcting_ratio: f64,
     correction: [u8; 48],
     marker: u64,
@@ -65,6 +78,64 @@ impl StaticPhaseClock {
         nominal_ratio: f64,
         launch_master: f64,
     ) -> Result<Self, StaticClockError> {
+        Self::new_with_class(
+            raw,
+            domain,
+            projection,
+            execution,
+            marker,
+            frames_per_beat,
+            origin_frame,
+            quarters,
+            nominal_ratio,
+            launch_master,
+            false,
+        )
+    }
+
+    /// Separate physical class: exact Q-scaled progress, with no new reader period.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_physical_normalized(
+        raw: FractionalSourcePosition,
+        domain: SourceLoopDomain,
+        projection: TransportBeatProjection,
+        execution: u64,
+        marker: u64,
+        frames_per_beat: f64,
+        origin_frame: f64,
+        quarters: f64,
+        nominal_ratio: f64,
+        launch_master: f64,
+    ) -> Result<Self, StaticClockError> {
+        Self::new_with_class(
+            raw,
+            domain,
+            projection,
+            execution,
+            marker,
+            frames_per_beat,
+            origin_frame,
+            quarters,
+            nominal_ratio,
+            launch_master,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_class(
+        raw: FractionalSourcePosition,
+        domain: SourceLoopDomain,
+        projection: TransportBeatProjection,
+        execution: u64,
+        marker: u64,
+        frames_per_beat: f64,
+        origin_frame: f64,
+        quarters: f64,
+        nominal_ratio: f64,
+        launch_master: f64,
+        physical_normalized: bool,
+    ) -> Result<Self, StaticClockError> {
         use StaticClockError::{
             InvalidEpoch, InvalidGeometry, NumericalUnavailable, UnsupportedRate,
         };
@@ -87,6 +158,18 @@ impl StaticPhaseClock {
         {
             return Err(InvalidGeometry);
         }
+        let quarter_scale = if physical_normalized {
+            if domain.musical_period != SourceReaderPeriod::Physical
+                || quarters.fract() != 0.0
+                || quarters < 1.0
+                || quarters > f64::from(u32::MAX)
+            {
+                return Err(InvalidGeometry);
+            }
+            quarters as u32
+        } else {
+            1
+        };
         let (m0, last) = projection
             .finite_beats_for_horizon(execution, u64::MAX)
             .ok_or(NumericalUnavailable)?;
@@ -105,6 +188,9 @@ impl StaticPhaseClock {
         ] {
             stats = stats.include_f64(value).ok_or(NumericalUnavailable)?;
         }
+        if physical_normalized {
+            stats = stats.include_f64(quarters).ok_or(NumericalUnavailable)?;
+        }
         let required = master_grid_exponent(output_fpb, projection.original_beat_anchor())
             .ok_or(NumericalUnavailable)?;
         let grid = stats
@@ -112,33 +198,53 @@ impl StaticPhaseClock {
             .and_then(|base| base.refine(required))
             .ok_or(NumericalUnavailable)?;
         let g = grid.exponent();
-        let source = on_grid(frames_per_beat, grid).ok_or(NumericalUnavailable)?;
-        let output = on_grid(output_fpb, grid).ok_or(NumericalUnavailable)?;
+        let scale = Integer::from_u128(u128::from(quarter_scale)).ok_or(NumericalUnavailable)?;
+        let source = if physical_normalized {
+            Integer::from_u128(domain.region.len() as u128)
+                .and_then(|value| value.shl(u32::try_from(-g).ok()?))
+        } else {
+            on_grid(frames_per_beat, grid)
+        }
+        .ok_or(NumericalUnavailable)?;
+        let output = on_grid(output_fpb, grid)
+            .and_then(|value| value.mul(scale))
+            .ok_or(NumericalUnavailable)?;
         let minimum = output;
         if source.shl(1).ok_or(NumericalUnavailable)? < minimum
             || source > output.shl(1).ok_or(NumericalUnavailable)?
         {
             return Err(UnsupportedRate);
         }
-        let period = period_at(domain, 2 * g).ok_or(InvalidGeometry)?;
+        let physical = period_at(domain, 2 * g).ok_or(InvalidGeometry)?;
         let half = scalar_at(0.5, 2 * g).ok_or(NumericalUnavailable)?;
         let maximum = scalar_at(MAX_PERIOD, 2 * g).ok_or(NumericalUnavailable)?;
-        if period < half || period > maximum {
+        if physical < half || physical > maximum {
             return Err(InvalidGeometry);
         }
-        // This compares decoded products. Rounded F*Q cannot grant closure.
+        // The exact class retains F*Q=P. The explicit normalized class retains
+        // physical P and permits only the existing <=1-frame rounding extent.
         let product =
             exact_product_at(frames_per_beat, quarters, 2 * g).ok_or(NumericalUnavailable)?;
-        if product != period {
+        if physical_normalized {
+            let rounding = product.sub(physical).ok_or(NumericalUnavailable)?;
+            if rounding.magnitude > scalar_at(1.0, 2 * g).ok_or(NumericalUnavailable)?.magnitude {
+                return Err(InvalidGeometry);
+            }
+        } else if product != physical {
             return Err(InvalidGeometry);
         }
-        let raw_absolute = pair_at(raw.frame, raw.fraction, 2 * g).ok_or(NumericalUnavailable)?;
+        let period = physical.mul(scale).ok_or(NumericalUnavailable)?;
+        let raw_absolute = pair_at(raw.frame, raw.fraction, 2 * g)
+            .and_then(|value| value.mul(scale))
+            .ok_or(NumericalUnavailable)?;
         let raw_relative = pair_at(raw.frame - domain.region.start, raw.fraction, 2 * g)
+            .and_then(|value| value.mul(scale))
             .ok_or(NumericalUnavailable)?;
         if raw_relative >= period {
             return Err(InvalidGeometry);
         }
         let target = pair_at(domain.region.start, 0.0, 2 * g)
+            .and_then(|value| value.mul(scale))
             .and_then(|origin| {
                 on_grid(m0, grid)?
                     .sub(on_grid(launch_master, grid)?)?
@@ -199,6 +305,13 @@ impl StaticPhaseClock {
         } else {
             1.0 + 2.0_f64.powi(-i32::from(k))
         };
+        // Display/derivative metadata only. Authoritative positions never use
+        // this rounded quotient: they retain exact Q-scaled integer arithmetic.
+        let steady_ratio = if physical_normalized {
+            (domain.region.len() as f64 / quarters / output_fpb).clamp(0.5, 2.0)
+        } else {
+            nominal_ratio
+        };
         let mut clock = Self {
             projection,
             raw,
@@ -207,7 +320,15 @@ impl StaticPhaseClock {
             quarters,
             master_at_first: m0,
             nominal_ratio,
-            correcting_ratio: (nominal_ratio * factor).clamp(0.5, 2.0),
+            steady_ratio,
+            physical_normalized,
+            quarter_scale,
+            physical_period: if physical_normalized {
+                domain.region.len() as u64
+            } else {
+                0
+            },
+            correcting_ratio: (steady_ratio * factor).clamp(0.5, 2.0),
             correction,
             marker,
             first_frame: execution,
@@ -257,9 +378,15 @@ impl StaticPhaseClock {
             return None;
         }
         let master = self.projection.beat_position_at_frame(frame);
+        let source = if self.physical_normalized {
+            Integer::from_u128(u128::from(self.physical_period))?
+                .shl(u32::try_from(-self.grid.exponent()).ok()?)?
+        } else {
+            on_grid(self.frames_per_beat, self.grid)?
+        };
         on_grid(master, self.grid)?
             .sub(on_grid(self.master_at_first, self.grid)?)?
-            .mul(on_grid(self.frames_per_beat, self.grid)?)?
+            .mul(source)?
             .filter_nonnegative()
     }
 
@@ -273,6 +400,13 @@ impl StaticPhaseClock {
         frame: u64,
     ) -> Option<FractionalSourcePosition> {
         let h = 2 * self.grid.exponent() - i16::from(self.k);
+        if self.physical_normalized
+            && (domain.musical_period != SourceReaderPeriod::Physical
+                || domain.region.len() as u64 != self.physical_period)
+        {
+            return None;
+        }
+        let scale = Integer::from_u128(u128::from(self.quarter_scale))?;
         let progress = self.progress_at(frame)?;
         let distance = self.distance().shl(u32::from(self.k))?;
         let correction = if progress < distance {
@@ -284,17 +418,39 @@ impl StaticPhaseClock {
             self.raw.frame.checked_sub(domain.region.start)?,
             self.raw.fraction,
             h,
-        )?;
+        )?
+        .mul(scale)?;
         let advanced = base.add(progress.shl(u32::from(self.k))?)?;
         let corrected = if self.negative {
             advanced.sub(correction)?
         } else {
             advanced.add(correction)?
         };
-        if corrected.magnitude.bit_width() > MAX_COEFFICIENT_BITS {
+        let limit = if self.physical_normalized {
+            MAX_NORMALIZED_POSITION_BITS
+        } else {
+            MAX_COEFFICIENT_BITS
+        };
+        if corrected.magnitude.bit_width() > limit {
             return None;
         }
-        let period = period_at(domain, h)?;
+        let period = period_at(domain, h)?.mul(scale)?;
+        if self.physical_normalized {
+            let denominator = scale.shl(u32::try_from(-h).ok()?)?;
+            let absolute = residue(corrected, period)?
+                .add(Integer::from_u128(domain.region.start as u128)?.mul(denominator)?)?;
+            let coordinate = split_physical_coordinate(
+                PhysicalInteger::from_integer(absolute),
+                PhysicalInteger::from_integer(denominator),
+                self.raw.fraction,
+                domain.region,
+            )?;
+            return Some(FractionalSourcePosition {
+                frame: usize::try_from(coordinate.whole).ok()?,
+                fraction: coordinate.fraction,
+                seek_mode: ExplicitSeekMode::Normal,
+            });
+        }
         split_pair(
             residue(corrected, period)?,
             period,
@@ -325,13 +481,16 @@ impl StaticPhaseClock {
 
     pub(crate) fn ratio(self) -> f64 {
         if self.settled() {
-            self.nominal_ratio
+            self.steady_ratio
         } else {
             self.correcting_ratio
         }
     }
     pub(crate) fn nominal_ratio(self) -> f64 {
         self.nominal_ratio
+    }
+    pub(crate) fn is_physical_normalized(self) -> bool {
+        self.physical_normalized
     }
     pub(crate) fn intended_frame(self) -> u64 {
         self.intended_frame
@@ -365,6 +524,10 @@ impl StaticPhaseClock {
             && self.grid_matches(other.frames_per_beat, other.origin_frame, other.quarters)
             && self.master_at_first.to_bits() == other.master_at_first.to_bits()
             && self.nominal_ratio.to_bits() == other.nominal_ratio.to_bits()
+            && self.steady_ratio.to_bits() == other.steady_ratio.to_bits()
+            && self.physical_normalized == other.physical_normalized
+            && self.quarter_scale == other.quarter_scale
+            && self.physical_period == other.physical_period
             && self.correcting_ratio.to_bits() == other.correcting_ratio.to_bits()
             && self.correction == other.correction
             && self.marker == other.marker

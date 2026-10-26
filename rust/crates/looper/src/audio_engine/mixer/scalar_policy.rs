@@ -477,6 +477,25 @@ impl RtMixer {
                     grid.origin_frame(),
                     quarters,
                 )
+                .or_else(|error| {
+                    // Separate physical class; the exact class and reader period
+                    // remain unchanged. Its own bounds admit only <=1-frame closure.
+                    if error == super::super::static_source_clock::StaticClockError::InvalidGeometry
+                        && domain.musical_period == SourceReaderPeriod::Physical
+                    {
+                        SourcePlayback::static_physical_normalized_continuation(
+                            &candidate,
+                            *timeline,
+                            execution,
+                            snapshot.revision(),
+                            grid.frames_per_beat(),
+                            grid.origin_frame(),
+                            quarters,
+                        )
+                    } else {
+                        Err(error)
+                    }
+                })
                 .map_err(|_| Error::Unsupported)?;
             }
         }

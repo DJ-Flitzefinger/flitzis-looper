@@ -223,6 +223,51 @@ impl SourcePlayback {
         origin_frame: f64,
         quarters: f64,
     ) -> Result<Self, StaticClockError> {
+        Self::static_continuation_class(
+            previous,
+            timeline,
+            execution,
+            marker,
+            frames_per_beat,
+            origin_frame,
+            quarters,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn static_physical_normalized_continuation(
+        previous: &Self,
+        timeline: super::transport::TransportTimeline,
+        execution: u64,
+        marker: u64,
+        frames_per_beat: f64,
+        origin_frame: f64,
+        quarters: f64,
+    ) -> Result<Self, StaticClockError> {
+        Self::static_continuation_class(
+            previous,
+            timeline,
+            execution,
+            marker,
+            frames_per_beat,
+            origin_frame,
+            quarters,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn static_continuation_class(
+        previous: &Self,
+        timeline: super::transport::TransportTimeline,
+        execution: u64,
+        marker: u64,
+        frames_per_beat: f64,
+        origin_frame: f64,
+        quarters: f64,
+        physical_normalized: bool,
+    ) -> Result<Self, StaticClockError> {
         if !previous.phase_reference.current(&timeline) {
             return Err(StaticClockError::InvalidEpoch);
         }
@@ -250,7 +295,12 @@ impl SourcePlayback {
         if !valid {
             return Err(StaticClockError::InvalidGeometry);
         }
-        let clock = StaticPhaseClock::new(
+        let construct = if physical_normalized {
+            StaticPhaseClock::new_physical_normalized
+        } else {
+            StaticPhaseClock::new
+        };
+        let clock = construct(
             raw,
             domain,
             projection,
@@ -279,6 +329,10 @@ impl SourcePlayback {
 
     pub(crate) fn is_static_phase(&self) -> bool {
         self.static_state().is_some()
+    }
+    pub(crate) fn is_physical_normalized_static(&self) -> bool {
+        self.static_state()
+            .is_some_and(|clock| clock.is_physical_normalized())
     }
     pub(crate) fn static_output_frame(&self) -> Option<u64> {
         self.static_state().map(|clock| clock.intended_frame())
