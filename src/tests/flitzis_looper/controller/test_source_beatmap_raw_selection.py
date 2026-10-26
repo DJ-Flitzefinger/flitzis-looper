@@ -477,6 +477,9 @@ def test_raw_original_completion_follows_content_placement_and_copy_is_independe
     controller.project.sample_paths[3] = "samples/shared.wav"
     assert maps.raw_state(3).status == "none"
     assert maps.raw_state(3).occupied
+    assert maps.raw_state(3).owner_pad_id == 2
+    assert maps.raw_state(3).owner_status == "unreviewed"
+    assert maps.raw_state(3).owner_revision == candidate.revision
     with pytest.raises(RuntimeError, match="occupied or retiring"):
         maps.analyze_original(3, expected_attempt=1)
     job.cancel.assert_not_called()

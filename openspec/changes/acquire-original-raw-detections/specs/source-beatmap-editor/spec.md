@@ -21,6 +21,18 @@ The existing controller SHALL own one transient raw review slot with original jo
 - **THEN** the controller SHALL retain cancel-retiring until the original job reports terminal and its own raw_review_retired receipt is true
 - **AND** it SHALL NOT claim a free review slot from cancellation_requested, job terminal alone or a pending exact-birth disk deletion
 
+#### Scenario: Another PAD holds the review slot
+- **WHEN** an original analysis for one PAD occupies the single slot and another PAD is displayed
+- **THEN** the editor SHALL identify the original content's current PAD and analysis state and offer navigation to it
+- **AND** navigation SHALL recheck the same attempt, current owner and capture revision without discarding work or granting map authority
+- **AND** completed detector analysis SHALL remain explicitly distinct from a map with qualified timing coverage and meter
+
+#### Scenario: A reviewed map is successfully selected
+- **WHEN** the explicit review job's original map artifact is durably selected and installed as the effective source-qualified artifact
+- **THEN** the controller SHALL retire only the matching raw attempt, content and capture revision, whose complete detections are embedded in that artifact
+- **AND** failed preparation, failed persistence, stale completion or an unrelated selection SHALL preserve the raw review attempt
+- **AND** another analysis SHALL remain unavailable until the original raw job reports both terminal and raw_review_retired
+
 #### Scenario: Placement becomes pending after the first loader lookup
 - **WHEN** the original completion passes its first loader lookup and a placement publication makes the later original Native resolution or current source-generation capture temporarily unreadable
 - **THEN** the loader SHALL retain the same original event and private delivery for a later bounded poll without cancelling the job or changing accepted state

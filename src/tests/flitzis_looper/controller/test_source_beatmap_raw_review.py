@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.models import PadContentIdentity
 from tests.flitzis_looper.controller.raw_source_beatmap_fakes import (
     FakeRawCandidate,
     raw_event,
@@ -17,7 +18,9 @@ from tests.flitzis_looper.controller.test_source_beatmap_selection import _event
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
+    from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
     from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
+    from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 
 
 def _candidate(
@@ -221,6 +224,79 @@ def test_raw_discard_after_valid_review_admission_does_not_cancel_new_completion
     assert maps.status(0) == "effective"
 
 
+def test_successful_review_retires_only_its_raw_capture_after_durable_selection(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    maps, raw, candidate = _candidate(controller, audio_engine_mock)
+    accepted = review_job(audio_engine_mock)
+    maps.review_raw(
+        0, [(0, 0.0), (4, 1.5)], expected_attempt=1, expected_revision=candidate.revision
+    )
+    raw.cancel.assert_not_called()
+    assert maps.raw_state(0).status == "unreviewed"
+    maps.completed(0, _event(accepted, "b"))
+    assert maps.status(0) == "effective"
+    raw.cancel.assert_called_once()
+    accepted.cancel.assert_not_called()
+    assert maps.raw_state(0).status == "cancel_retiring"
+    maps.poll(frozenset())
+    assert maps.raw_state(0).occupied, "Terminal alone cannot release the original reader."
+    raw.source_beatmap_async_status.return_value["raw_review_retired"] = True
+    maps.poll(frozenset())
+    assert not maps.raw_state(0).occupied
+    assert maps.status(0) == "effective"
+
+
+def test_old_review_completion_does_not_retire_another_pads_new_analysis(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    maps, raw, candidate = _candidate(controller, audio_engine_mock)
+    accepted = review_job(audio_engine_mock)
+    maps.review_raw(
+        0, [(0, 0.0), (4, 1.5)], expected_attempt=1, expected_revision=candidate.revision
+    )
+    maps.discard_raw(0, expected_attempt=1, expected_revision=candidate.revision)
+    raw.source_beatmap_async_status.return_value["raw_review_retired"] = True
+    maps.poll(frozenset())
+    controller.project.pad_content[1] = PadContentIdentity(instance_id="f" * 32)
+    controller.project.sample_paths[1] = controller.project.sample_paths[0]
+    newer = raw_job(audio_engine_mock)
+    maps.analyze_original(1, expected_attempt=1)
+    maps.completed(0, _event(accepted, "b"))
+    assert maps.status(0) == "effective"
+    assert maps.raw_state(1).attempt == 2
+    assert maps.raw_state(1).status == "queued"
+    newer.cancel.assert_not_called()
+
+
+def test_reentrant_equal_reference_does_not_retire_raw_without_own_selection(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    maps, raw, candidate = _candidate(controller, audio_engine_mock)
+    accepted = review_job(audio_engine_mock)
+    maps.review_raw(
+        0, [(0, 0.0), (4, 1.5)], expected_attempt=1, expected_revision=candidate.revision
+    )
+
+    def newer_selection(
+        slot: int,
+        _content: str,
+        _previous: PadSourceBeatmapIntent | None,
+        selected: PadSourceBeatmapIntent,
+        reservation: AssetRetirementReservation,
+    ) -> bool:
+        controller.project.pad_source_beatmap_intent[slot] = selected.model_copy(
+            update={"revision": selected.revision + 1}
+        )
+        reservation.close()
+        return False
+
+    monkeypatch.setattr(maps, "_select_durable", newer_selection)
+    maps.completed(0, _event(accepted, "b"))
+    assert maps.raw_state(0).status == "unreviewed"
+    raw.cancel.assert_not_called()
+
+
 def test_review_save_failure_retires_new_artifact_and_preserves_old_effective_map(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -253,3 +329,5 @@ def test_review_save_failure_retires_new_artifact_and_preserves_old_effective_ma
     artifact = accepted.resolve_source_beatmap_artifact_completion.return_value
     artifact.retire_unselected.assert_called_once()
     assert controller._assets._reserved == 0
+    assert maps.raw_state(0).status == "unreviewed"
+    raw.cancel.assert_not_called()

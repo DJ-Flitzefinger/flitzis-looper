@@ -54,6 +54,7 @@ class _MapJob:
     restoring: bool
     source_context: object
     reservation: AssetRetirementReservation | None = None
+    raw_review: tuple[int, str] | None = None
 
 
 @dataclass
@@ -90,6 +91,9 @@ class RawSourceBeatmapState:
     revision: str | None = None
     info: SourceBeatmapRawInfo | None = None
     error: str | None = None
+    owner_pad_id: int | None = None
+    owner_status: str | None = None
+    owner_revision: str | None = None
 
 
 @dataclass(slots=True)
@@ -172,11 +176,24 @@ class SourceBeatmapSelection:
         raw = self._raw
         if raw is None or self._content(sample_id) != raw.content:
             return RawSourceBeatmapState(
-                self._raw_attempt, "none", raw is not None and raw.status != "failed"
+                self._raw_attempt,
+                "none",
+                raw is not None and raw.status != "failed",
+                owner_pad_id=None if raw is None else self._slot(raw.content),
+                owner_status=None if raw is None else raw.status,
+                owner_revision=None if raw is None else raw.revision,
             )
         info = self._raw_info(raw)
         return RawSourceBeatmapState(
-            raw.attempt, raw.status, raw.status != "failed", raw.revision, info, raw.failure
+            raw.attempt,
+            raw.status,
+            raw.status != "failed",
+            raw.revision,
+            info,
+            raw.failure,
+            owner_pad_id=sample_id,
+            owner_status=raw.status,
+            owner_revision=raw.revision,
         )
 
     def _raw_info(self, raw: _RawReview) -> SourceBeatmapRawInfo | None:
@@ -286,6 +303,7 @@ class SourceBeatmapSelection:
                 expected_source_generation=raw.source_generation,
             ),
         )
+        self._pending[content].raw_review = raw.attempt, expected_revision
 
     @staticmethod
     def _encode_raw_review(
@@ -637,6 +655,7 @@ class SourceBeatmapSelection:
             return
         self._pending.pop(pending.content, None)
         reference = SourceBeatmapReference.model_validate_json(artifact.receipt_json())
+        selected_by_completion = False
         try:
             current = self.project.pad_source_beatmap_intent[sample_id]
             if current != pending.intent:
@@ -655,7 +674,7 @@ class SourceBeatmapSelection:
                     schema_version=1, revision=pending.intent.revision, selected=reference
                 )
                 assert pending.reservation is not None
-                self._select_durable(
+                selected_by_completion = self._select_durable(
                     sample_id, pending.content, current, selected, pending.reservation
                 )
                 pending.reservation = None
@@ -665,12 +684,31 @@ class SourceBeatmapSelection:
                     reference, artifact, cast("LoaderEventDelivery", delivery)
                 )
                 self._errors.pop(pending.content, None)
+                self._retire_reviewed_raw(sample_id, pending, selected=selected_by_completion)
         except (OSError, RuntimeError, ValueError) as error:
             self._errors[pending.content] = str(error)
             artifact.retire_unselected()
         finally:
             if pending.reservation is not None:
                 pending.reservation.close()
+
+    def _retire_reviewed_raw(self, sample_id: int, pending: _MapJob, *, selected: bool) -> None:
+        if (
+            not selected
+            or self._content(sample_id) != pending.content
+            or pending.raw_review is None
+        ):
+            return
+        raw = self._raw
+        if (
+            raw is not None
+            and raw.content == pending.content
+            and (raw.attempt, raw.revision) == pending.raw_review
+            and raw.status == "unreviewed"
+        ):
+            # The selected immutable artifact owns the complete capture now.
+            # Keep the slot occupied until its original raw-reader retirement ACK.
+            self._cancel_raw()
 
     def effective(self, sample_id: int) -> SourceBeatmap | None:
         """Return fresh Native-qualified geometry only for the still selected content."""

@@ -711,6 +711,25 @@ def _raw_label_controls(ctx: UiContext, frame: SourceMapEditorFrame, state: _Raw
     imgui.end_disabled()
 
 
+def _raw_owner_navigation(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
+    raw = frame.raw
+    if raw.status == "none" and raw.occupied and raw.owner_pad_id is not None:
+        owner = raw.owner_pad_id
+        imgui.text_wrapped(
+            f"PAD {owner + 1} holds the {raw.owner_status or 'pending'} analysis. "
+            "Open it to review or discard the detections before analyzing another PAD."
+        )
+        if imgui.button(f"Open PAD {owner + 1} analysis##source-raw-owner"):
+            current = ctx.ui.source_map.selection.raw_state(frame.pad_id)
+            if (
+                current.occupied
+                and current.attempt == raw.attempt
+                and current.owner_pad_id == owner
+                and current.owner_revision == raw.owner_revision
+            ):
+                ctx.ui.waveform.open(owner)
+
+
 def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
     raw = frame.raw
     label = raw.status.replace("_", "-")
@@ -719,6 +738,7 @@ def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
     elif raw.info is not None and raw.info["status"] == "placement_pending":
         label = "original source placement pending"
     imgui.text_colored(TEXT_MUTED_RGBA, f"Raw analysis: {label}")
+    _raw_owner_navigation(ctx, frame)
     _raw_actions(ctx, frame)
     if raw.status == "failed":
         imgui.text_colored(TEXT_MUTED_RGBA, "Raw analysis failed; see console diagnostics.")
@@ -729,6 +749,10 @@ def _raw_review(ctx: UiContext, frame: SourceMapEditorFrame) -> None:
     imgui.text_wrapped(
         "Unreviewed detector observations. Quarter-note count and meter are unverified; "
         "timing uncertainty is unknown. Detected downbeats are observations."
+    )
+    imgui.text_wrapped(
+        "Analysis alone does not enable variable SYNC. Label the beats, build the map, "
+        "then verify its timing coverage and meter."
     )
     if raw.info["status"] != "ready":
         return

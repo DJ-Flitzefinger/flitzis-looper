@@ -1,10 +1,12 @@
 """Real ImGui mouse gestures over the transient raw review controller boundary."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.controller.source_beatmap_selection import RawSourceBeatmapState
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.ui.render import source_beatmap_editor
 from tests.flitzis_looper.controller.raw_source_beatmap_fakes import (
@@ -31,6 +33,80 @@ if TYPE_CHECKING:
 def _assign_raw_ui(ctx: UiContext, controller: AppController) -> None:
     controller.project.pad_content[0] = PadContentIdentity(instance_id="e" * 32)
     ctx.ui.source_map.selection._source_generation = Mock(return_value=71)
+
+
+@pytest.mark.parametrize("change", [None, "attempt", "owner", "revision", "retired"])
+def test_foreign_analysis_navigation_rechecks_original_review_owner(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str | None,
+) -> None:
+    with _plot_context():
+        ctx, _worker = _context(controller, audio_engine_mock)
+        raw = RawSourceBeatmapState(
+            attempt=1,
+            status="none",
+            occupied=True,
+            owner_pad_id=1,
+            owner_status="unreviewed",
+            owner_revision="a" * 64,
+        )
+        current = raw
+        if change == "attempt":
+            current = replace(raw, attempt=2)
+        elif change == "owner":
+            current = replace(raw, owner_pad_id=2)
+        elif change == "revision":
+            current = replace(raw, owner_revision="b" * 64)
+        elif change == "retired":
+            current = replace(raw, occupied=False)
+        frame = source_beatmap_editor.SourceMapEditorFrame(
+            pad_id=0,
+            identity=object(),
+            selected=False,
+            status="none",
+            geometry=None,
+            revision=None,
+            rate=48_000,
+            anchor_count=0,
+            can_undo=False,
+            raw=raw,
+        )
+        monkeypatch.setattr(ctx.ui.source_map.selection, "raw_state", Mock(return_value=current))
+        opened = Mock()
+        monkeypatch.setattr(ctx.ui.waveform, "open", opened)
+        monkeypatch.setattr(source_beatmap_editor.imgui, "button", Mock(return_value=True))
+        monkeypatch.setattr(source_beatmap_editor.imgui, "text_wrapped", Mock())
+        source_beatmap_editor._raw_owner_navigation(ctx, frame)
+        if change is None:
+            opened.assert_called_once_with(1)
+        else:
+            opened.assert_not_called()
+
+
+def test_actual_foreign_analysis_button_returns_to_its_original_pad_without_cancelling(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _plot_context():
+        ctx, worker = _context(controller, audio_engine_mock)
+        ctx.bold_font = source_beatmap_editor.imgui.get_io().fonts.fonts[1]
+        ctx.ui.waveform.open(0)
+        _expose(ctx, monkeypatch, None)
+        _assign_raw_ui(ctx, controller)
+        maps = ctx.ui.source_map.selection
+        job, candidate = raw_job(audio_engine_mock), FakeRawCandidate()
+        maps.analyze_original(0, expected_attempt=0)
+        maps.raw_completed(0, raw_event(job, candidate))
+        controller.project.pad_content[1] = controller.project.pad_content[0]
+        controller.project.sample_paths[1] = controller.project.sample_paths[0]
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="b" * 32)
+        observer = _observe_draw(monkeypatch)
+        frames = [_full_frame(ctx, worker, observer) for _ in range(5)]
+        _click_toolbar("Open PAD 2 analysis##source-raw-owner", ctx, worker, observer, frames)
+        assert controller.session.waveform_editor_pad_id == 1
+        assert maps.raw_state(1).status == "unreviewed"
+        job.cancel.assert_not_called()
 
 
 def test_actual_analyze_click_uses_original_generation_without_selecting_map_or_audio(
