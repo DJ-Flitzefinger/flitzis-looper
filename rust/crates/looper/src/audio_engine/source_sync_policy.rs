@@ -42,6 +42,8 @@ pub(crate) struct SourceSyncObservation {
     /// Exact installed phase custody for service suppression, never a phase/read ACK.
     pub(crate) phase_program_current: bool,
     pub(crate) phase_program_revision: Option<u64>,
+    /// Actual settled dry source/output read, independent of programme installation.
+    pub(crate) phase_read_confirmed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

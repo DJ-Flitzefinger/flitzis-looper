@@ -298,6 +298,24 @@ pub(super) fn source_sync_status(
         .transpose()
         .map_err(PyRuntimeError::new_err)?
         .flatten();
+    let phase_read_current = || {
+        status.policy.is_some_and(|policy| {
+            policy.phase_program_current
+                && snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.row_current(id)
+                        && policy.phase_program_revision == Some(snapshot.revision())
+                        && snapshot
+                            .row(id)
+                            .is_some_and(|row| row.request == policy.request)
+                })
+        })
+    };
+    result.set_item(
+        "phase_read_confirmed",
+        status
+            .policy
+            .and_then(|policy| phase_read_current().then_some(policy.phase_read_confirmed)),
+    )?;
     let adoption = snapshot.as_ref().and_then(|snapshot| {
         let row = snapshot.row(id)?;
         let attempt = snapshot.observation()?;
@@ -341,6 +359,9 @@ pub(super) fn source_sync_status(
     }
     // Dictionary allocation is control-only. A replacement during it must not
     // project the old callback witness onto a new source or content incarnation.
+    if !phase_read_current() {
+        result.set_item("phase_read_confirmed", py.None())?;
+    }
     Ok((binding.current()
         && birth_current()
         && engine.input_runtime_ownership.source_sync_status(id) == Some(status))

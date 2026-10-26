@@ -223,8 +223,10 @@ impl RtMixer {
         for voice in &mut self.voices {
             if voice.active {
                 if voice.sample_id == source {
+                    voice.phase_read = None;
                     voice.sample_id = target;
                 } else if voice.sample_id == target {
+                    voice.phase_read = None;
                     voice.sample_id = source;
                 }
             }

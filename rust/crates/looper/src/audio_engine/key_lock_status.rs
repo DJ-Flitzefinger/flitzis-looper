@@ -100,7 +100,12 @@ impl KeyLockStatusSlot {
                     status
                         .policy
                         .is_some_and(|policy| policy.phase_program_current),
-                ) << 6),
+                ) << 6)
+                | (u8::from(
+                    status
+                        .policy
+                        .is_some_and(|policy| policy.phase_read_confirmed),
+                ) << 7),
             Ordering::SeqCst,
         );
         let witness = status.witness.unwrap_or(SourceSyncWitness {
@@ -241,6 +246,7 @@ impl KeyLockStatusSlot {
                 settled: flags & 16 != 0,
                 target_current: flags & 32 != 0,
                 phase_program_current: flags & 64 != 0,
+                phase_read_confirmed: flags & 128 != 0,
                 phase_program_revision: match self.sync_phase_revision.load(Ordering::SeqCst) {
                     0 => None,
                     revision => Some(revision),

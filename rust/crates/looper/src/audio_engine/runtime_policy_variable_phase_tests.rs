@@ -620,14 +620,16 @@ fn variable_real_global_b64_b256_births_keep_own_q8_q256_without_artificial_phas
             playback.mapped_phase_settled(&geometry).unwrap(),
             "id={id}: already aligned global birth"
         );
+        assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], false);
     }
     // Exercise the small loop seam while the 256-quarter source remains within
-    // its own loop. These are actual source reads, not a grid-phase ACK.
+    // its own loop. Only the complete settled dry reads qualify the new read witness.
     fixture.dry.path.render(125);
     for id in [0, 1] {
         let position = fixture.dry.path.voice(id).source_playback.position();
         assert!((fixture.starts[id]..fixture.ends[id]).contains(&position.frame));
         assert!(fixture.dry.path.feedback(id)["grid_phase_confirmed"].is_null());
+        assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
     }
 }
 
@@ -1524,6 +1526,57 @@ fn descriptive_variable_actual_constructor_renderer_cohorts_report_median_max_an
                 elapsed[2] <= nominal
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "descriptive settled phase-read profile; Root runs after frozen POST"]
+fn descriptive_settled_phase_read_renderer_reports_affected_productive_cost() {
+    for lanes in [2, 4, 6, 10] {
+        let mut elapsed = Vec::new();
+        for repeat in 0..4 {
+            let mut fixture = VariablePath::small(lanes, 0);
+            let mode = fixture.mode();
+            let phase = fixture.effect();
+            assert!(Arc::ptr_eq(&mode, &phase));
+            fixture.dry.path.render(1);
+            for id in 0..lanes {
+                let geometry = phase.prepared_map(id).unwrap().geometry();
+                assert!(
+                    fixture
+                        .dry
+                        .path
+                        .voice(id)
+                        .source_playback
+                        .mapped_phase_settled(&geometry)
+                        .unwrap()
+                );
+                assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
+            }
+            fixture.drain();
+            let mut output = [0.; 1024];
+            let start = Instant::now();
+            let (_, allocations) = observe_current_thread(|| {
+                fixture
+                    .dry
+                    .render_into(&mut output, &mut ImmediateAudioBufferRetirement)
+            });
+            let millis = start.elapsed().as_secs_f64() * 1000.;
+            assert_eq!(allocations, ThreadAllocations::default());
+            assert!(output.iter().all(|value| value.is_finite()));
+            assert!(output.iter().any(|value| *value != 0.));
+            for id in 0..lanes {
+                assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
+            }
+            if repeat > 0 {
+                elapsed.push(millis);
+            }
+        }
+        elapsed.sort_by(f64::total_cmp);
+        println!(
+            "variable_settled_read_profile active={lanes} frames=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms=10.6666667 rust_allocations=0; actual settled dry read before/after; no device or worst-case acceptance",
+            elapsed[1], elapsed[2]
+        );
     }
 }
 

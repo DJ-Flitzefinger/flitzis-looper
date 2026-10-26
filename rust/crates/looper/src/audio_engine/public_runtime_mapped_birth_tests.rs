@@ -1605,6 +1605,7 @@ fn public_mapped_piano_retrigger_keeps_original_request_and_pending_attack_align
     );
     assert_eq!(status["birth"]["execution_frame"], execution);
     assert_eq!(status["phase_program_current"], false);
+    assert!(status["phase_read_confirmed"].is_null());
 }
 
 #[test]

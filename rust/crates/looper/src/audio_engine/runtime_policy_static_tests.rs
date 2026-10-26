@@ -24,6 +24,7 @@ struct StaticPath {
     path: Path,
     lanes: usize,
     lengths: Vec<usize>,
+    starts: Vec<usize>,
     parameters: rtrb::Consumer<crate::messages::ControlParameterMessage>,
 }
 
@@ -37,7 +38,16 @@ impl StaticPath {
     }
 
     fn new_with_pause(lengths: &[usize], pause_before_progress: bool) -> Self {
+        Self::with_regions(
+            lengths,
+            &vec![STATIC_START; lengths.len()],
+            pause_before_progress,
+        )
+    }
+
+    fn with_regions(lengths: &[usize], starts: &[usize], pause_before_progress: bool) -> Self {
         assert!(!lengths.is_empty() && lengths.len() <= 32);
+        assert_eq!(starts.len(), lengths.len());
         let pcm = (0..STATIC_SOURCE_FRAMES)
             .map(|frame| ((frame * 73 % 28_001) as i32 - 14_000) as i16)
             .collect::<Vec<_>>();
@@ -78,6 +88,7 @@ impl StaticPath {
             path,
             lanes: lengths.len(),
             lengths: lengths.to_vec(),
+            starts: starts.to_vec(),
             parameters,
         };
         for id in 0..fixture.lanes {
@@ -116,7 +127,7 @@ impl StaticPath {
                 );
                 assert_eq!(
                     fixture.path.voice(id).source_playback.position().frame,
-                    STATIC_START
+                    fixture.starts[id]
                 );
             }
             let silent = fixture.path.render(25);
@@ -124,7 +135,7 @@ impl StaticPath {
             assert_eq!(fixture.path.timeline.output_frame(), 25);
             for id in 0..fixture.lanes {
                 let raw = fixture.path.voice(id).source_playback.position();
-                assert_eq!(raw.frame, STATIC_START);
+                assert_eq!(raw.frame, fixture.starts[id]);
                 assert_eq!(raw.fraction, 0.0);
                 fixture.path.source.engine.resume_sample(id).unwrap();
                 fixture.drain();
@@ -136,7 +147,7 @@ impl StaticPath {
         for id in 0..fixture.lanes {
             assert_eq!(
                 fixture.path.voice(id).source_playback.position().frame,
-                STATIC_START + 23
+                fixture.starts[id] + 23
             );
             assert_eq!(fixture.path.voice(id).source_playback.tempo_ratio(), 1.0);
         }
@@ -192,8 +203,8 @@ impl StaticPath {
         let mut starts = vec![0.0; NUM_SAMPLES];
         let mut ends = vec![None; NUM_SAMPLES];
         for id in 0..self.lanes {
-            starts[id] = STATIC_START as f64 / f64::from(RATE);
-            ends[id] = Some((STATIC_START + self.lengths[id]) as f64 / f64::from(RATE));
+            starts[id] = self.starts[id] as f64 / f64::from(RATE);
+            ends[id] = Some((self.starts[id] + self.lengths[id]) as f64 / f64::from(RATE));
         }
         self.path
             .source
@@ -229,8 +240,8 @@ impl StaticPath {
             .engine
             .capture_pad_start(
                 id,
-                STATIC_START as f64 / f64::from(RATE),
-                Some((STATIC_START + self.lengths[id]) as f64 / f64::from(RATE)),
+                self.starts[id] as f64 / f64::from(RATE),
+                Some((self.starts[id] + self.lengths[id]) as f64 / f64::from(RATE)),
                 1.0,
                 false,
                 None,
@@ -521,6 +532,7 @@ fn static_aligned_original_launch_ignores_off_grid_origin_without_artificial_deb
         assert_eq!(playback.position().fraction.to_bits(), 0_f64.to_bits());
         assert!(playback.static_phase_settled());
         assert_eq!(playback.tempo_ratio(), 1.0);
+        assert_eq!(fixture.path.feedback(id)["phase_read_confirmed"], false);
     }
     for frames in [1, 31, 1993, 4096, 16384] {
         assert_eq!(fixture.path.render(frames), ordinary.path.render(frames));
@@ -533,6 +545,7 @@ fn static_aligned_original_launch_ignores_off_grid_origin_without_artificial_deb
                 STATIC_START + output % fixture.lengths[id]
             );
             assert_eq!(playback.position().fraction.to_bits(), 0_f64.to_bits());
+            assert_eq!(fixture.path.feedback(id)["phase_read_confirmed"], true);
         }
     }
 }
@@ -565,6 +578,241 @@ fn static_actual_e_preserves_first_pair_taps_pcm_and_requires_a_second_original_
     assert_eq!(fixture.path.render(1), preceding.path.render(1));
     assert_eq!(verify_dense_actual_reads(&fixture, 0), 1);
     assert_eq!(verify_dense_actual_reads(&fixture, 1), 1);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    assert_ne!(fixture.path.feedback(1)["phase_read_confirmed"], true);
+}
+
+#[test]
+fn static_phase_read_confirmation_requires_fresh_settled_output_after_a_read_gap() {
+    let mut fixture = StaticPath::new(&[4096, 5888]);
+    fixture.install();
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    let frame = fixture.path.timeline.output_frame();
+    fixture.path.source.mixer.render_rt_at_output_frame(
+        &mut [0.0; 2],
+        &mut [0.0; NUM_SAMPLES],
+        frame + 1,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    assert_ne!(fixture.path.feedback(1)["phase_read_confirmed"], true);
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    let pause = fixture.path.source.engine.pause_sample(0).unwrap();
+    fixture.drain();
+    assert!(
+        pause
+            .current_observation()
+            .unwrap()
+            .unwrap()
+            .ordinary_paused()
+    );
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture.path.render(17);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+#[test]
+fn static_phase_read_does_not_transfer_to_a_new_raw_policy_revision() {
+    let mut fixture = StaticPath::new(&[4096, 5888]);
+    fixture.install();
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture.publish(true, 3, 8, None);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture.effect();
+    fixture.effect();
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+#[test]
+fn static_phase_read_is_revoked_by_a_real_grid_edit() {
+    let mut fixture = StaticPath::new(&[2048]);
+    fixture.install();
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture
+        .path
+        .source
+        .engine
+        .set_pad_timing_metadata(0, -13.0 / f64::from(RATE))
+        .unwrap();
+    fixture.drain();
+    assert!(!fixture.path.voice(0).phase_read_current());
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+#[test]
+fn static_phase_read_is_not_borrowed_across_real_hold_and_release() {
+    let mut fixture = StaticPath::new(&[2048]);
+    fixture.install();
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    let held = Python::attach(|py| {
+        fixture
+            .path
+            .source
+            .engine
+            .pause_waveform_hold(0, 5511_u64.into_pyobject(py).unwrap().as_any(), None)
+            .unwrap()
+    });
+    fixture.drain();
+    assert!(held.is_current());
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    let frozen = fixture.path.voice(0).source_playback.position();
+    fixture.path.render(41);
+    assert_eq!(fixture.path.voice(0).source_playback.position(), frozen);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    assert!(
+        fixture
+            .path
+            .source
+            .engine
+            .release_waveform_hold(&held)
+            .unwrap()
+    );
+    fixture.drain();
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    fixture.path.render(1);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+#[test]
+fn static_phase_read_requires_a_fresh_observation_after_actual_move_or_swap() {
+    for target in [2, 1] {
+        let lengths: &[usize] = if target == 2 { &[2048] } else { &[2048, 16384] };
+        let mut fixture = StaticPath::new(lengths);
+        fixture.install();
+        fixture.path.render(1);
+        assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+        let original = fixture.path.voice(0).source_playback;
+        let generation = fixture.path.voice(0).generation;
+        let capture = fixture
+            .path
+            .source
+            .engine
+            ._capture_pad_pair(0, target)
+            .unwrap();
+        let ticket = fixture
+            .path
+            .source
+            .engine
+            ._prepare_pad_pair(&capture)
+            .unwrap();
+        fixture
+            .path
+            .source
+            .engine
+            ._publish_pad_pair(&ticket)
+            .unwrap();
+        fixture.drain();
+        let acknowledgement = ticket.own_acknowledgement().unwrap();
+        fixture
+            .path
+            .source
+            .engine
+            ._reconcile_pad_pair(&ticket)
+            .unwrap();
+        fixture
+            .path
+            .source
+            .engine
+            ._finish_pad_pair(&ticket, &acknowledgement)
+            .unwrap();
+        assert_eq!(fixture.path.voice(target).generation, generation);
+        assert!(
+            fixture
+                .path
+                .voice(target)
+                .source_playback
+                .matches_exact(&original)
+        );
+        assert_ne!(fixture.path.feedback(target)["phase_read_confirmed"], true);
+    }
+}
+
+#[test]
+fn static_two_pad_global_flow_keeps_eight_bar_offset_and_twenty_three_bar_loop() {
+    // Engineering scale: 64 frames/quarter, four quarters/bar. No Human audio or calibration.
+    let starts = [STATIC_START, STATIC_START + 8 * 4 * 64];
+    let lengths = [16 * 4 * 64, 23 * 4 * 64];
+    let mut fixture = StaticPath::with_regions(&lengths, &starts, false);
+    // The ordinary global stop/start keeps its original source bindings and time authority.
+    let stop = Python::attach(|py| {
+        let bindings = (0..2)
+            .map(|id| {
+                Py::new(
+                    py,
+                    fixture
+                        .path
+                        .source
+                        .engine
+                        .current_input_runtime_pad_binding(id)
+                        .unwrap()
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        fixture
+            .path
+            .source
+            .engine
+            .stop_global_playback_batch(py, bindings, None)
+            .unwrap()
+    });
+    fixture.drain();
+    assert_eq!(stop.publication_status(), "accepted");
+    let start = Python::attach(|py| {
+        let entries = (0..2)
+            .map(|id| {
+                let binding = fixture
+                    .path
+                    .source
+                    .engine
+                    .current_input_runtime_pad_binding(id)
+                    .unwrap()
+                    .unwrap();
+                (
+                    Py::new(py, binding).unwrap(),
+                    starts[id] as f64 / f64::from(RATE),
+                    Some((starts[id] + lengths[id]) as f64 / f64::from(RATE)),
+                )
+            })
+            .collect();
+        fixture
+            .path
+            .source
+            .engine
+            .start_global_playback_batch(py, entries, None)
+            .unwrap()
+    });
+    fixture.drain();
+    assert_eq!(start.publication_status(), "accepted");
+    for id in 0..2 {
+        assert_eq!(
+            fixture.path.voice(id).source_playback.position().frame,
+            starts[id]
+        );
+    }
+    fixture.install();
+    let master = fixture.path.timeline;
+    let mut elapsed = 0;
+    for count in [1, 31, 2048, 8192, 16384] {
+        fixture.path.render(count);
+        elapsed += count;
+        for id in 0..2 {
+            assert_eq!(
+                fixture.path.voice(id).source_playback.position().frame,
+                starts[id] + elapsed % lengths[id]
+            );
+            assert_eq!(fixture.path.feedback(id)["phase_read_confirmed"], true);
+        }
+    }
+    assert!(fixture.path.timeline.matches_clock_epoch(&master));
 }
 
 #[test]
@@ -1459,6 +1707,7 @@ fn static_fresh_neutral_pitch_retrigger_starts_full_physical_beginning_without_o
     let mut ordinary = StaticPath::new(&[2048]);
     fixture.install();
     assert_eq!(fixture.path.render(2048), ordinary.path.render(2048));
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
     let generation = fixture.path.voice(0).generation;
     let admission = fixture
         .path
@@ -1501,6 +1750,7 @@ fn static_fresh_neutral_pitch_retrigger_starts_full_physical_beginning_without_o
     assert_eq!(fixture.path.timeline.output_frame(), execution);
     let voice = fixture.path.voice(0);
     assert_ne!(voice.generation, generation);
+    assert!(!voice.phase_read_current());
     assert_eq!(
         voice
             .source_admission

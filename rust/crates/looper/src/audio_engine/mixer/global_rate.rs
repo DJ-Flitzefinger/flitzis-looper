@@ -154,6 +154,9 @@ impl RtMixer {
         error: RateError,
         execution: Option<u64>,
     ) {
+        if state == RateState::Applied {
+            self.publish_active_source_sync_status();
+        }
         self.input_runtime_ownership
             .global_rate_status
             .publish_effect_with_master(

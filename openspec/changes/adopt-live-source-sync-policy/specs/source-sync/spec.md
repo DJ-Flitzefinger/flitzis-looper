@@ -842,6 +842,44 @@ device/music/Human and all original FULL-Goal gates SHALL remain explicitly open
 - **THEN** programme custody or MODE/PHASE acknowledgements SHALL NOT set grid_phase_confirmed or certify unproved Native/history paths
 - **AND** retained BeatThis B2, music/device/Human and FULL-Goal gates SHALL remain open until their own required evidence and acceptance exist
 
+### Requirement: Dry phase feedback requires a current actual source read
+
+Native SHALL expose a separate nullable phase_read_confirmed observation. Installed
+programme custody, mode/rate acknowledgement and numerical convergence alone SHALL
+NOT confirm a rendered grid phase. A positive observation SHALL require a nonempty
+complete DryOutput source-read receipt that was actually mixed, with its exact
+plan/playback and actual output frame, and settled phase clocks at both ends.
+
+The fixed per-voice witness SHALL retain its exact endpoint, voice generation,
+original request and phase-policy revision. Publication SHALL independently qualify
+the current content/source/window, OwnACK, master/drain fence and original phase
+programme, and aggregate every active voice of that PAD. Public feedback SHALL
+additionally match the current runtime snapshot and raw request; dictionary
+allocation SHALL NOT transfer the witness to a replacement publication.
+
+Start, stop, restart, source/loop/seek/control invalidation, moved PADs and every
+attempted positive render interval/chunk SHALL revoke preceding read evidence.
+A failed/partial read, pause/Hold, copied birth, equal wrapped source position,
+NativeInput receipt or old request SHALL NOT borrow a positive observation.
+
+Python MAY report the current PAD's grid_phase_confirmed and effective SYNC only
+from this positive observation together with the exact requested policy, intent,
+qualified map where required, actual active mode and settled target. Global phase
+confirmation SHALL require at least one active SYNC participant and positive
+observations for every participating active or unconfirmed PAD; stopped PADs
+SHALL NOT create proof. This is source-coordinate/output-read software evidence,
+not device, hearing, detector quality or Human acceptance. Existing unproved
+Native/pitch/stem phase-preparation and constant-history guards SHALL remain.
+
+#### Scenario: A programme is installed before its first successful read
+- **WHEN** a current dry phase programme is installed or its numerical target is captured
+- **THEN** programme feedback MAY be current while rendered phase remains unconfirmed
+- **AND** only a subsequent complete interval settled at both ends MAY confirm phase
+
+#### Scenario: A current read is followed by a gap or ownership change
+- **WHEN** the next render cannot read its exact actual interval or a source/control/PAD owner changes
+- **THEN** preceding confirmation SHALL be revoked and a fresh qualified read SHALL be required
+
 ### Requirement: Productive performance targets six PADs with at most ten under stress
 
 The current optimization target SHALL be productive playback with2/4/6 concurrent

@@ -107,6 +107,9 @@ class SourceSyncStatus(TypedDict):
     policy_realtime_bpm: bool | None
     settled: bool | None
     target_current: NotRequired[bool | None]
+    phase_program_current: NotRequired[bool | None]
+    phase_program_revision: NotRequired[int | None]
+    phase_read_confirmed: NotRequired[bool | None]
     adoption: NotRequired[RuntimePolicyAdoption | None]
 
 class SourceBeatmapEvaluation(TypedDict):

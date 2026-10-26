@@ -609,8 +609,37 @@ runtime publication and actual start/retrigger path. It does not change BPM Lock
 or Key Lock. Saved intent and a ready editor map do not prove audible adoption:
 callback-owned feedback retains the actual voice's request and map revision.
 Changing the request can therefore show a pending replacement while the previous
-voice continues. Until continuous adoption is integrated, an actual supported
-start/retrigger applies the new request.
+voice continues. Supported dry live policies use the existing atomic adoption
+path; other representations retain their explicit start/retrigger or refusal
+guidance.
+
+### Focused native delivery — 2026-10-26
+
+For the two-PAD test, retain each PAD's own loop start, length and Grid Offset.
+Enable Multi Loop and BPM Lock, start both PADs through global Start/Stop, then
+enable SYNC with REALTIME BPM. The supported dry path uses Key Lock off and zero
+pitch offset. A confirmed phase status requires a complete actual dry source read
+from the current, settled programme with current content, window, map and policy
+ownership. An installed programme or accepted mode alone cannot confirm it.
+The SYNC button colour shows the requested preference, independently of this status.
+Pauses, holds, source/grid edits, retriggers and changed master effects revoke old
+evidence; a subsequent qualified read can confirm the current programme. This is
+software source-coordinate evidence, not a listening or device acceptance test.
+
+**Analyze original full mix (Beat This)** acquires unreviewed observations, rather
+than a qualified variable-tempo map. Review explicit quarter-note labels, use
+**Build source map from labels**, then verify the applicable span's count,
+coverage and meter in Source Map. Each participating mapped PAD needs its own
+qualified coverage. When another PAD owns the single review slot, **Open PAD N
+analysis** returns to it. Successfully accepting that review releases the slot
+after its actual retirement acknowledgement; **Discard candidate** also remains
+available for an unwanted candidate.
+
+The performance target is six simultaneous PADs. Descriptive synthetic checks use
+2/4/6 PADs and at most ten for stress. They do not guarantee a particular device
+or all combinations; heavy correction can exceed the callback budget at ten, and
+more than ten may cause performance problems or glitches. The existing Native
+Key Lock/pitch phase guards and broader musical acceptance gates remain in force.
 
 Missing, restoring or stale map qualification does not silently select scalar
 playback for a requested mapped launch. The existing refusal preserves previous

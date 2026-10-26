@@ -113,6 +113,10 @@ class TimingPolicyController:
             ),
             None,
         )
+        phase_states = [state for state in states if state.requested and state.active is not False]
+        phase_confirmed = bool(phase_states) and all(
+            state.active is True and state.grid_phase_confirmed is True for state in phase_states
+        )
         return GlobalTimingControlStatus(
             requested=getattr(policy, control),
             preference=self.preference(control),
@@ -120,4 +124,5 @@ class TimingPolicyController:
             pending=pending,
             detail=detail,
             available=self.available(control),
+            grid_phase_confirmed=True if phase_confirmed else None,
         )

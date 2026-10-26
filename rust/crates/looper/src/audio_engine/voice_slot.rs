@@ -83,6 +83,14 @@ impl VoiceSourceTiming {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct PhaseReadWitness {
+    playback: SourcePlayback,
+    request: super::source_sync_policy::SourceSyncRequest,
+    policy_revision: Option<(u64, u64)>,
+    generation: u64,
+}
+
 pub struct VoiceSlot {
     pub active: bool,
     pub sample_id: usize,
@@ -97,6 +105,8 @@ pub struct VoiceSlot {
     pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     /// Full original snapshot claim, separate from the immutable numeric epoch.
     pub(crate) phase_policy_revision: Option<(u64, u64)>,
+    /// A complete settled dry interval was actually mixed under these exact owners.
+    pub(crate) phase_read: Option<PhaseReadWitness>,
     /// Original birth effect validated the captured scheduler projection at T.
     pub(crate) phase_launch_qualified: bool,
     /// Only actual live rendering consumes this; copied preparation never does.
@@ -131,6 +141,7 @@ impl VoiceSlot {
             mapped_birth: None,
             sync_request: super::source_sync_policy::SourceSyncRequest::default(),
             phase_policy_revision: None,
+            phase_read: None,
             phase_launch_qualified: false,
             phase_birth_unadvanced: false,
             source_timing: VoiceSourceTiming::default(),
@@ -164,6 +175,7 @@ impl VoiceSlot {
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.phase_read = None;
         self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
@@ -222,6 +234,7 @@ impl VoiceSlot {
     }
 
     fn stop_inner(&mut self) {
+        self.phase_read = None;
         self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
@@ -266,6 +279,7 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.phase_read = None;
         self.mapped_birth = None;
         self.phase_birth_unadvanced = false;
         self.phase_launch_qualified = false;
@@ -310,6 +324,7 @@ impl VoiceSlot {
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
         self.source_playback = playback;
+        self.phase_read = None;
         self.mapped_birth = None;
         self.phase_launch_qualified = false;
         self.stretch.reset();
@@ -325,10 +340,39 @@ impl VoiceSlot {
 
     /// Source controls fence captured future reads separately from DSP-only mode preparation.
     pub(crate) fn invalidate_source_preparation(&mut self) {
+        self.phase_read = None;
         self.phase_policy_revision = None;
         self.source_control_epoch.invalidate();
         self.source_feed_history.invalidate_captures();
         self.stretch.invalidate_prepared();
+    }
+
+    pub(crate) fn phase_clock_settled(&self, playback: &SourcePlayback) -> bool {
+        playback.static_phase_settled()
+            || (playback.is_mapped_phase()
+                && self
+                    .mapped_start
+                    .as_ref()
+                    .and_then(|owner| owner.mapped_geometry())
+                    .is_some_and(|geometry| playback.mapped_phase_settled(geometry) == Ok(true)))
+    }
+
+    pub(crate) fn phase_read_witness(&self, playback: SourcePlayback) -> PhaseReadWitness {
+        PhaseReadWitness {
+            playback,
+            request: self.sync_request,
+            policy_revision: self.phase_policy_revision,
+            generation: self.generation,
+        }
+    }
+
+    pub(crate) fn phase_read_current(&self) -> bool {
+        self.phase_read.is_some_and(|read| {
+            read.generation == self.generation
+                && read.request == self.sync_request
+                && read.policy_revision == self.phase_policy_revision
+                && read.playback.matches_exact(&self.source_playback)
+        })
     }
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {

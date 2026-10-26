@@ -152,6 +152,29 @@ fn static_other_pad_equal_period_accepted_refresh_keeps_the_exact_actual_master_
 }
 
 #[test]
+fn static_equal_period_accepted_refresh_preserves_an_actual_settled_read() {
+    let mut fixture = StaticPath::new(&[2048]);
+    fixture
+        .path
+        .source
+        .load_and_ack_selected_with_frames(1, None, STATIC_SOURCE_FRAMES);
+    let period = publish_reference(&mut fixture, STATIC_PERIOD);
+    assert_eq!(period.to_bits(), STATIC_PERIOD.to_bits());
+    fixture.install();
+    fixture.path.render(1);
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+    let projection = fixture.path.timeline.beat_projection().unwrap();
+    let refresh = current_reference_refresh(&fixture, period);
+    fixture.drain();
+    fixture.path.render(1);
+    fixture.path.render(0);
+    assert_eq!(refresh.publication_status(), "accepted");
+    assert!(refresh.is_current());
+    assert!(projection.matches_exact(fixture.path.timeline.beat_projection().unwrap()));
+    assert_eq!(fixture.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+#[test]
 fn static_successful_original_accepted_master_change_dissolves_then_requalifies_live_phase() {
     let (mut fixture, old_period) = static_with_nonbinary_master();
     fixture.path.render(17);
@@ -172,6 +195,7 @@ fn static_successful_original_accepted_master_change_dissolves_then_requalifies_
     assert_eq!(refresh.publication_status(), "accepted");
     assert!(refresh.is_current());
     assert_eq!(fixture.path.timeline.output_frame(), claim);
+    assert_ne!(fixture.path.feedback(0)["phase_read_confirmed"], true);
     assert_eq!(
         fixture
             .path

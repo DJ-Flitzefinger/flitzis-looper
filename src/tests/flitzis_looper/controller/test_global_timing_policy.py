@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
 from flitzis_looper.input_mapping.actions import (
     LooperAction,
     global_realtime_bpm_toggle_action,
@@ -21,6 +22,53 @@ from tests.flitzis_looper.controller.transport.test_source_map_loop import _bind
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
+
+
+@pytest.mark.parametrize(
+    ("other_active", "other_phase", "expected"),
+    [(False, None, True), (True, True, True), (True, None, None), (None, None, None)],
+)
+def test_global_phase_requires_all_relevant_active_or_unconfirmed_participants(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    other_active: bool | None,
+    other_phase: bool | None,
+    expected: bool | None,
+) -> None:
+    controller.project.sample_paths[0] = "samples/first.wav"
+    controller.project.sample_paths[1] = "samples/second.wav"
+    first = SourceSyncStatus(
+        requested=True,
+        active=True,
+        effective=True,
+        state="effective",
+        grid_phase_confirmed=True,
+    )
+    other = SourceSyncStatus(
+        requested=True,
+        active=other_active,
+        state="stopped" if other_active is False else "pending",
+        grid_phase_confirmed=other_phase,
+    )
+    monkeypatch.setattr(
+        controller.transport.source_sync, "status", Mock(side_effect=[first, other])
+    )
+    assert controller.transport.timing_policy.status("sync").grid_phase_confirmed is expected
+
+
+def test_stopped_pads_cannot_create_global_phase_confirmation(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.sample_paths[0] = "samples/stopped.wav"
+    stopped = SourceSyncStatus(
+        requested=True,
+        active=False,
+        state="stopped",
+        grid_phase_confirmed=True,
+    )
+    monkeypatch.setattr(controller.transport.source_sync, "status", Mock(return_value=stopped))
+    assert controller.transport.timing_policy.status("sync").grid_phase_confirmed is None
 
 
 @pytest.fixture(autouse=True)

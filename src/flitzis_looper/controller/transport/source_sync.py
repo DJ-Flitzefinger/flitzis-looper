@@ -182,6 +182,14 @@ class SourceSyncStatus:
         return None if self.guidance is None else _GUIDANCE[self.guidance]
 
 
+def _phase_feedback_valid(feedback: dict[str, object]) -> bool:
+    phase_revision = feedback.get("phase_program_revision")
+    return all(
+        feedback.get(key) is None or type(feedback[key]) is bool
+        for key in ("phase_read_confirmed", "phase_program_current")
+    ) and (phase_revision is None or (type(phase_revision) is int and 0 < phase_revision < 1 << 64))
+
+
 def _valid_feedback_fields(feedback: dict[str, object], metadata: dict[str, object]) -> bool:
     """Validate source fences and field types before considering actual audio mode."""
     if any(
@@ -202,8 +210,10 @@ def _valid_feedback_fields(feedback: dict[str, object], metadata: dict[str, obje
     if target_current is not None and type(target_current) is not bool:
         return False
     revision, map_revision = feedback.get("intent_revision"), feedback.get("map_revision")
-    return (revision is None or (type(revision) is int and 0 <= revision < 1 << 64)) and (
-        map_revision is None or isinstance(map_revision, str)
+    return (
+        _phase_feedback_valid(feedback)
+        and (revision is None or (type(revision) is int and 0 <= revision < 1 << 64))
+        and (map_revision is None or isinstance(map_revision, str))
     )
 
 
@@ -456,15 +466,28 @@ class SourceSyncController:
                 and feedback["map_revision"] == geometry.revision()
             )
         if matching and feedback["settled"] is True and (not requested or effective):
+            phase_confirmed = (
+                requested
+                and active
+                and feedback.get("target_current") is True
+                and feedback.get("phase_program_current") is True
+                and feedback.get("phase_program_revision") is not None
+                and feedback.get("phase_read_confirmed") is True
+            )
             return SourceSyncStatus(
                 requested=requested,
                 effective=effective,
                 active=active,
-                state="pending" if requested else "pending" if effective else "off",
+                state="effective"
+                if phase_confirmed
+                else "pending"
+                if requested or effective
+                else "off",
                 policy_mode=mode,
                 actual_realtime_bpm=_actual_realtime_bpm(feedback),
-                detail="Grid phase is unconfirmed." if requested else None,
-                guidance="phase" if requested else None,
+                detail="Grid phase is unconfirmed." if requested and not phase_confirmed else None,
+                guidance="phase" if requested and not phase_confirmed else None,
+                grid_phase_confirmed=True if phase_confirmed else None,
             )
         if (
             matching

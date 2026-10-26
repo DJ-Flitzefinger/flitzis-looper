@@ -806,6 +806,112 @@ def test_current_scalar_target_settling_precedes_redundant_adoption_refusal(
     assert status.detail == ("Grid phase is unconfirmed." if sync else None)
 
 
+def _confirmed_phase_feedback(controller: AppController, audio: Mock) -> dict[str, object]:
+    feedback = _current_scalar_glide(controller, audio, sync=True)
+    feedback.update(
+        effective=True,
+        settled=True,
+        phase_program_current=True,
+        phase_program_revision=11,
+        phase_read_confirmed=True,
+        adoption=None,
+    )
+    return feedback
+
+
+def test_actual_current_phase_read_confirms_pad_and_global_sync(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _confirmed_phase_feedback(controller, audio_engine_mock)
+    status = controller.transport.source_sync.status(0)
+    assert status.state == "effective"
+    assert status.grid_phase_confirmed is True
+    assert status.guidance is None
+    assert status.detail is None
+    global_status = controller.transport.timing_policy.status("sync")
+    assert global_status.grid_phase_confirmed is True
+    assert global_status.pending is False
+
+
+def test_phase_read_needs_the_current_original_variable_map_delivery(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio = audio_engine_mock
+    feedback = _mapped_request_with_old_audio(controller, audio, actual_mode="mapped")
+    maps = controller.loader.source_beatmaps
+    job = _job(audio)
+    maps.select(0, "current original variable map")
+    event = _event(job)
+    job.resolve_source_beatmap_artifact_completion.return_value.map.return_value = _geometry()
+    maps.completed(0, event)
+    geometry = maps.effective(0)
+    assert geometry is not None
+    feedback.update(
+        intent_revision=5,
+        policy_revision=2,
+        policy_sync=True,
+        policy_realtime_bpm=True,
+        map_revision=geometry.revision(),
+        target_current=True,
+        settled=True,
+        phase_program_current=True,
+        phase_program_revision=11,
+        phase_read_confirmed=True,
+        adoption=None,
+    )
+    assert controller.transport.source_sync.status(0).grid_phase_confirmed is True
+    audio._resolve_loader_event.return_value = None
+    assert controller.transport.source_sync.status(0).grid_phase_confirmed is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("phase_read_confirmed", None),
+        ("phase_read_confirmed", False),
+        ("phase_program_current", False),
+        ("phase_program_revision", None),
+        ("target_current", False),
+        ("settled", False),
+        ("active", False),
+        ("policy_revision", 0),
+        ("intent_revision", 6),
+        ("source_generation", 2),
+        ("window_revision", 8),
+    ],
+)
+def test_phase_read_cannot_override_stale_or_unconfirmed_audio(
+    controller: AppController, audio_engine_mock: Mock, field: str, value: object
+) -> None:
+    feedback = _confirmed_phase_feedback(controller, audio_engine_mock)
+    feedback[field] = value
+    status = controller.transport.source_sync.status(0)
+    assert status.state != "effective"
+    assert status.grid_phase_confirmed is None
+    assert controller.transport.timing_policy.status("sync").grid_phase_confirmed is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("phase_read_confirmed", 1),
+        ("phase_program_current", "true"),
+        ("phase_program_revision", True),
+        ("phase_program_revision", 0),
+        ("phase_program_revision", -1),
+        ("phase_program_revision", 1 << 64),
+    ],
+)
+def test_malformed_phase_read_fields_remain_unconfirmed(
+    controller: AppController, audio_engine_mock: Mock, field: str, value: object
+) -> None:
+    feedback = _confirmed_phase_feedback(controller, audio_engine_mock)
+    feedback[field] = value
+    status = controller.transport.source_sync.status(0)
+    assert status.state == "unconfirmed"
+    assert status.grid_phase_confirmed is None
+
+
 @pytest.mark.parametrize("sync", [None, False, True])
 @pytest.mark.parametrize("target_current", [None, False, "missing"])
 def test_missing_or_false_target_current_cannot_override_adoption_refusal(

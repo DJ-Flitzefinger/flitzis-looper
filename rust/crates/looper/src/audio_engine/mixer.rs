@@ -5051,6 +5051,19 @@ impl RtMixer {
             let phase_program_revision = phase_program_current
                 .then_some(voice.phase_policy_revision.map(|(revision, _)| revision))
                 .flatten();
+            let phase_read_confirmed = phase_program_current
+                && voice.phase_read_current()
+                && voice.source_admission.as_ref().is_some_and(|admission| {
+                    admission.content_key() == Some(key)
+                        && admission.retry_identity().source_generation == source_generation
+                        && admission.current_for_birth(
+                            &self.input_runtime_ownership,
+                            &self.current_timing_acknowledgements,
+                            sample,
+                            self.sample_rate_hz as u32,
+                            false,
+                        )
+                });
             let settled = match request.mode {
                 super::source_sync_policy::SourceSyncMode::Legacy
                 | super::source_sync_policy::SourceSyncMode::Off
@@ -5070,15 +5083,18 @@ impl RtMixer {
                         settled,
                         phase_program_current,
                         phase_program_revision,
+                        phase_read_confirmed,
                     })
                 }
                 Some(previous) if previous.request == request => {
                     previous.target_current &= target_current;
                     previous.settled &= settled;
                     previous.phase_program_current &= phase_program_current;
+                    previous.phase_read_confirmed &= phase_read_confirmed;
                     if previous.phase_program_revision != phase_program_revision {
                         previous.phase_program_current = false;
                         previous.phase_program_revision = None;
+                        previous.phase_read_confirmed = false;
                     }
                 }
                 Some(_) => policy_coherent = false,
@@ -5218,6 +5234,7 @@ impl RtMixer {
 
     fn refresh_global_rate_observation(&mut self) {
         self.refresh_global_rate_intent();
+        self.publish_active_source_sync_status();
         self.input_runtime_ownership
             .global_rate_status
             .refresh_effective_with_master(
@@ -5234,6 +5251,7 @@ impl RtMixer {
         provenance: super::master_provenance::MasterProvenance,
     ) {
         self.refresh_global_rate_intent();
+        self.publish_active_source_sync_status();
         self.input_runtime_ownership
             .global_rate_status
             .refresh_effective_with_master(
@@ -5243,6 +5261,19 @@ impl RtMixer {
                 },
                 Some(provenance),
             );
+    }
+
+    /// Publish actual invalidation before the enclosing rate/master effect ACK.
+    /// Recompute unchanged no-op observations without clearing their read witness.
+    fn publish_active_source_sync_status(&self) {
+        let mut published = [false; NUM_SAMPLES];
+        for voice in self.voices.iter().filter(|voice| voice.active) {
+            let id = voice.sample_id;
+            if !published[id] {
+                self.publish_source_sync_status(id);
+                published[id] = true;
+            }
+        }
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) {
@@ -6245,6 +6276,7 @@ impl RtMixer {
         let mut ordinary_terminated = [None; MAX_VOICES];
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
+            voice.phase_read = None;
             if !voice.active {
                 // An in-flight worker may finish after stop/unload. Drain its fenced owner even
                 // when no voice renders again; all large destruction remains on the worker.
@@ -6370,6 +6402,7 @@ impl RtMixer {
                 // Each iteration consumes output frames and crosses at most one fixed rate step.
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
                 while rendered < frames {
+                    voice.phase_read = None;
                     let output_frame =
                         output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
                     if voice.source_playback.is_static_phase()
@@ -6599,6 +6632,23 @@ impl RtMixer {
                             && position.frame == birth.source_start
                             && position.fraction.to_bits() == 0.0_f64.to_bits()
                             && output_frame == birth.status.execution;
+                    }
+                    if chunk_frames > 0
+                        && source_read.is_some_and(|receipt| {
+                            receipt.domain
+                                == super::source_feed_history::SourceReadDomain::DryOutput
+                                && receipt.output_frames == chunk_frames
+                                && receipt.playback.matches_exact(&voice.source_playback)
+                                && receipt.plan.matches_exact(source_plan)
+                        })
+                        && output_frame.is_some_and(|frame| {
+                            voice.source_playback.static_output_frame() == Some(frame)
+                                || voice.source_playback.mapped_output_frame() == Some(frame)
+                        })
+                        && voice.phase_clock_settled(&voice.source_playback)
+                        && voice.phase_clock_settled(&next_playback)
+                    {
+                        voice.phase_read = Some(voice.phase_read_witness(next_playback));
                     }
                     voice.source_playback = next_playback;
                     rendered += chunk_frames;
