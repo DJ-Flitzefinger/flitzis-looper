@@ -39,6 +39,10 @@ pub struct SourceBeatmap {
 }
 
 impl SourceBeatmap {
+    pub(in crate::audio_engine) fn is_pristine_automatic(&self) -> bool {
+        self.inner.pristine_automatic
+    }
+
     /// Borrowed pure geometry for already qualified callers; no audio permission.
     pub(crate) fn canonical_segment_at_beat(&self, beat: f64) -> Option<CanonicalBeatSegment> {
         self.inner.canonical_segment_at_beat(beat)

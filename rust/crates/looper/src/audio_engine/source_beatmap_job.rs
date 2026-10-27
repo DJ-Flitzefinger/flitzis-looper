@@ -6,11 +6,13 @@ use crate::audio_engine::source_beatmap_artifact::{SourceBeatmapArtifact, StoreP
 use crate::messages::LoaderEvent;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::AtomicBool};
 
 pub(super) enum PreparedMap {
     Accepted {
         map: SourceBeatmap,
         artifact: Option<SourceBeatmapArtifact>,
+        automatic_claim: Option<Arc<AtomicBool>>,
     },
     Raw(crate::audio_engine::source_beatmap_artifact::SourceBeatmapRawArtifact),
 }
@@ -28,8 +30,13 @@ pub(super) enum MapInput<'a> {
         installation_root: &'a str,
     },
     Validate(&'a str),
+    AcquireAutomaticBeatThis {
+        expected_generation: u64,
+        installation_root: &'a str,
+    },
     Store(&'a str),
     Restore(&'a str),
+    RestoreAutomatic(&'a str),
     Create {
         origin: f64,
         period: f64,
@@ -45,6 +52,14 @@ impl JobState {
     pub(super) fn prepare_source_beatmap(
         &self,
         encoded: &str,
+        after_verify: impl FnOnce(),
+    ) -> Result<(), String> {
+        self.prepare_source_beatmap_input(MapInput::Validate(encoded), after_verify)
+    }
+
+    pub(super) fn prepare_source_beatmap_input(
+        &self,
+        input: MapInput<'_>,
         after_verify: impl FnOnce(),
     ) -> Result<(), String> {
         self.require_purpose(OfflinePurpose::SourceBeatmap)?;
@@ -65,22 +80,10 @@ impl JobState {
         }
         let _running = RunningGuard(&self.preparing);
         drop(transition);
-        self.prepare_source_beatmap_body(encoded, after_verify)
+        self.prepare_source_beatmap_input_body(input, after_verify, &mut |_, _| Ok(()))
     }
 
-    /// The caller already owns direct preparation or the original armed async guard.
-    pub(super) fn prepare_source_beatmap_body(
-        &self,
-        encoded: &str,
-        after_verify: impl FnOnce(),
-    ) -> Result<(), String> {
-        self.prepare_source_beatmap_input_body(
-            MapInput::Validate(encoded),
-            after_verify,
-            &mut |_, _| Ok(()),
-        )
-    }
-
+    /// The caller owns direct preparation or the original armed async guard.
     pub(super) fn prepare_source_beatmap_input_body(
         &self,
         input: MapInput<'_>,
@@ -106,6 +109,10 @@ impl JobState {
         };
         reader.require_map_custody()?;
         let cancelled = || self.cancelled();
+        let automatic = matches!(
+            &input,
+            MapInput::RestoreAutomatic(_) | MapInput::AcquireAutomaticBeatThis { .. }
+        );
         if matches!(
             input,
             MapInput::AcquireRaw { .. } | MapInput::AcquireBeatThis { .. }
@@ -218,25 +225,55 @@ impl JobState {
                 reader.require_map_custody()?;
                 (artifact.map(), Some(artifact))
             }
-            MapInput::Restore(receipt) => {
+            MapInput::Restore(receipt) | MapInput::RestoreAutomatic(receipt) => {
+                let held = crate::audio_engine::source_beatmap::budget::sum(&[
+                    reader.held_bytes()?,
+                    if automatic { receipt.len() } else { 0 },
+                ])?;
                 let (_, bytes, _, _) =
                     crate::audio_engine::source_beatmap_artifact::receipt_evidence(receipt)?;
                 let bytes = usize::try_from(bytes).map_err(|_| "beatmap_review_budget_overflow")?;
-                crate::audio_engine::source_beatmap::budget::edit(
-                    bytes,
-                    reader.held_bytes()?,
-                    bytes,
-                )?;
+                crate::audio_engine::source_beatmap::budget::edit(bytes, held, bytes)?;
                 let (root, _) = reader.map_artifact_paths()?;
                 let artifact = SourceBeatmapArtifact::restore_with_context(
                     root,
                     receipt,
-                    (reader.held_bytes()?, 0),
+                    (held, 0),
                     &cancelled,
                 )?;
                 let map = artifact.map();
                 reader.verify_source_beatmap(&map, &cancelled)?;
                 (map, Some(artifact))
+            }
+            MapInput::AcquireAutomaticBeatThis {
+                expected_generation,
+                installation_root,
+            } => {
+                let crate::audio_engine::source_beatmap_capture::RawCapture::BeatThis(raw) =
+                    self.acquire_beat_this_raw(reader, expected_generation, installation_root)?
+                else {
+                    return Err("automatic map acquisition requires Beat This capture".into());
+                };
+                let held = crate::audio_engine::source_beatmap::budget::sum(&[
+                    reader.held_bytes()?,
+                    installation_root.len(),
+                ])?;
+                let map = crate::audio_engine::source_beatmap::automatic::build(&raw, held)?;
+                // The validated map owns complete canonical capture provenance.
+                // Retire the independent raw before store's admitted peak.
+                drop(raw);
+                reader.verify_source_beatmap(&map, &cancelled)?;
+                let (root, original) = reader.map_artifact_paths()?;
+                let artifact = SourceBeatmapArtifact::store_with_context(
+                    root,
+                    original,
+                    map,
+                    (held, 0),
+                    &cancelled,
+                    observe,
+                )?;
+                reader.require_map_custody()?;
+                (artifact.map(), Some(artifact))
             }
             MapInput::Create {
                 origin,
@@ -306,13 +343,22 @@ impl JobState {
                 (artifact.map(), Some(artifact))
             }
         };
+        if automatic && (artifact.is_none() || !map.is_pristine_automatic()) {
+            return Err(
+                "automatic source map requires original unedited automatic-v4 provenance".into(),
+            );
+        }
         // Tests block this exact admitted request while all real readers and the
         // running reservation remain held. Production supplies an empty closure.
         after_verify();
         if self.cancelled() {
             return Err("source beatmap preparation superseded or cancelled".into());
         }
-        *prepared = Some(PreparedMap::Accepted { map, artifact });
+        *prepared = Some(PreparedMap::Accepted {
+            map,
+            artifact,
+            automatic_claim: automatic.then(|| Arc::new(AtomicBool::new(false))),
+        });
         Ok(())
     }
 
@@ -365,11 +411,16 @@ impl JobState {
                 .is_some_and(|owner| owner.current());
         let queued = if accepted {
             let event = match prepared {
-                PreparedMap::Accepted { map, artifact } => LoaderEvent::SourceBeatmapCompleted {
+                PreparedMap::Accepted {
+                    map,
+                    artifact,
+                    automatic_claim,
+                } => LoaderEvent::SourceBeatmapCompleted {
                     id: self.identity.pad_id,
                     request_id: self.identity.request_id,
                     map,
                     artifact,
+                    automatic_claim,
                 },
                 PreparedMap::Raw(artifact) => LoaderEvent::SourceBeatmapRawCompleted {
                     id: self.identity.pad_id,

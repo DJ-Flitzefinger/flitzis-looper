@@ -270,6 +270,8 @@ pub(super) struct ValidatedMap {
     pub(super) sample_rate_hz: u32,
     pub(super) source_frames: u64,
     pub(super) can_undo: bool,
+    /// Data classification only; source and export permission are separate.
+    pub(super) pristine_automatic: bool,
     pub(super) raw_count: usize,
     pub(super) raw_index: Option<review_index::RawIndex>,
     pub(super) accepted_metadata: Box<[review_index::AcceptedMetadata]>,
@@ -488,6 +490,42 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
         .as_u64()
         .ok_or("decoder_extent_missing")?;
 
+    let pristine_automatic = version == 4
+        && raw_index
+            .as_ref()
+            .is_some_and(|raw| raw.backend == "beat_this")
+        && record.accepted.parent_revision.is_none()
+        && record.accepted.lineage.len() == 1
+        && record.accepted.lineage.first().is_some_and(|op| {
+            let payload = &op.payload;
+            op.id == super::automatic::POLICY
+                && op.parent_revision.is_none()
+                && matches!(op.kind, OperationKind::Refinement)
+                && op.author == "native-beat-this"
+                && payload.as_object().is_some_and(|value| value.len() == 8)
+                && payload["policy"] == super::automatic::POLICY
+                && payload["fit_radius_events"] == super::automatic::RADIUS
+                && payload["knot_stride_events"] == super::automatic::STRIDE
+                && payload["count_hypothesis"]
+                    == "one-estimated-quarter-per-detector-event-no-renumbering"
+                && payload["max_residual_seconds"] == 0.025
+                && payload["max_residual_period_fraction"] == 0.05
+                && payload["adjacent_period_ratio"]
+                    .as_array()
+                    .is_some_and(|ratios| ratios.len() == 2 && ratios[0] == 0.5 && ratios[1] == 1.5)
+                && payload["max_edge_beats"] == 1
+        })
+        && record.accepted.anchors.iter().all(|anchor| {
+            matches!(anchor.review, Review::Estimated) && anchor.sample_edit.is_none()
+        })
+        && record.accepted.intervals.iter().all(|interval| {
+            matches!(
+                interval.coverage,
+                Coverage::Estimated | Coverage::GapUnknownCount
+            ) && interval.meter.status == MeterStatus::Unknown
+                && interval.meter.downbeat_label.is_none()
+        });
+
     // Move the typed payload into one JSON tree after preparing small geometry.
     // Existing canonical/digest helpers remain the only hash authority. These
     // bounded operations are off realtime and admitted from streaming shape
@@ -527,6 +565,7 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
         sample_rate_hz,
         source_frames,
         can_undo,
+        pristine_automatic,
         raw_count,
         raw_index,
         accepted_metadata: accepted_metadata.into_boxed_slice(),

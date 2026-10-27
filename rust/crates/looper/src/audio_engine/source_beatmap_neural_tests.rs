@@ -188,6 +188,147 @@ fn original_beat_this_missing_worker_retires_real_staging_and_allows_retry() {
 }
 
 #[test]
+fn automatic_map_only_missing_worker_preserves_epochs_and_does_not_reserve_raw_review() {
+    let (fixture, _) = fixture(1);
+    let raw_slot = crate::audio_engine::source_beatmap_raw::RawReviewLease::reserve().unwrap();
+    let requests = fixture.engine.pad_request_ids.lock().unwrap().clone();
+    let epochs: Vec<_> = fixture
+        .engine
+        .prepared_source_epochs
+        .iter()
+        .map(|e| e.load(Ordering::Acquire))
+        .collect();
+    for _ in 0..2 {
+        let job = fixture
+            .engine
+            .begin_automatic_source_beatmap_async(
+                0,
+                fixture
+                    .directory
+                    .path()
+                    .join("missing-worker")
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+                generation(&fixture),
+            )
+            .unwrap();
+        assert_eq!(terminal(&job, Duration::from_secs(15)), "failed");
+        no_staging(&fixture);
+    }
+    assert_eq!(*fixture.engine.pad_request_ids.lock().unwrap(), requests);
+    assert_eq!(
+        fixture
+            .engine
+            .prepared_source_epochs
+            .iter()
+            .map(|e| e.load(Ordering::Acquire))
+            .collect::<Vec<_>>(),
+        epochs
+    );
+    drop(raw_slot);
+}
+
+#[test]
+#[ignore = "explicit real pinned NN map-only composition; no device/hearing acceptance"]
+fn automatic_map_only_real_worker_exports_source_bound_v4_without_raw_slot_or_tempo_changes() {
+    let installation =
+        std::env::var("LOOPER_BEAT_THIS_INSTALL_DIR").expect("explicit verified worker root");
+    let (fixture, _pcm) = fixture(32);
+    let raw_slot = crate::audio_engine::source_beatmap_raw::RawReviewLease::reserve().unwrap();
+    let requests = fixture.engine.pad_request_ids.lock().unwrap().clone();
+    let epochs: Vec<_> = fixture
+        .engine
+        .prepared_source_epochs
+        .iter()
+        .map(|e| e.load(Ordering::Acquire))
+        .collect();
+    let job = fixture
+        .engine
+        .begin_automatic_source_beatmap_async(0, installation, generation(&fixture))
+        .unwrap();
+    let stage = terminal(&job, Duration::from_secs(180));
+    let detail = Python::attach(|py| {
+        job.source_beatmap_async_status(py)
+            .unwrap()
+            .unwrap()
+            .bind(py)
+            .get_item("detail")
+            .unwrap()
+            .unwrap()
+            .extract::<Option<String>>()
+            .unwrap()
+    });
+    assert_eq!(stage, "ready", "{detail:?}");
+    let artifact = Python::attach(|py| {
+        let mut result = None;
+        while let Some(event) = fixture.engine.poll_loader_events(py).unwrap() {
+            let event = event.bind(py).cast::<PyDict>().unwrap();
+            let kind = event
+                .get_item("type")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap();
+            assert_ne!(kind, "source_beatmap_raw_completed");
+            if kind == "source_beatmap_completed" {
+                let original = event
+                    .get_item("_native_event_owner")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<PyRef<'_, LoaderEventDelivery>>()
+                    .unwrap();
+                assert!(
+                    job.resolve_source_beatmap_completion(&original)
+                        .unwrap()
+                        .is_none()
+                );
+                let export = fixture
+                    .engine
+                    .consume_automatic_source_beatmap(py, &original)
+                    .unwrap()
+                    .unwrap();
+                let artifact = export
+                    .bind(py)
+                    .get_item(1)
+                    .unwrap()
+                    .extract::<Py<crate::audio_engine::SourceBeatmapArtifact>>()
+                    .unwrap()
+                    .borrow(py)
+                    .clone();
+                assert!(artifact.map().is_pristine_automatic());
+                assert!(
+                    fixture
+                        .engine
+                        .consume_automatic_source_beatmap(py, &original)
+                        .unwrap()
+                        .is_none()
+                );
+                result = Some(artifact);
+            }
+        }
+        result.expect("genuine private automatic map-only completion")
+    });
+    assert_eq!(*fixture.engine.pad_request_ids.lock().unwrap(), requests);
+    assert_eq!(
+        fixture
+            .engine
+            .prepared_source_epochs
+            .iter()
+            .map(|e| e.load(Ordering::Acquire))
+            .collect::<Vec<_>>(),
+        epochs
+    );
+    no_staging(&fixture);
+    println!(
+        "AUTOMATIC_MAP_ONLY_REALNN schema=4 source_frames=1536000 source_rate=48000 raw_slot_occupied=true request_epoch_unchanged=true genuine_one_shot_export=true; synthetic click music, no hearing acceptance"
+    );
+    artifact.retire_unselected();
+    drop(artifact);
+    drop(raw_slot);
+}
+
+#[test]
 #[ignore = "explicit real pinned Beat This worker on generated original PCM; no device/music qualification"]
 fn original_beat_this_real_worker_publishes_complete_source_bound_capture() {
     let installation = std::env::var("LOOPER_BEAT_THIS_INSTALL_DIR")

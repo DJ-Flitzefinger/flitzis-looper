@@ -1003,6 +1003,13 @@ class AudioEngine:
     def consume_automatic_source_beatmap(
         self, delivery: LoaderEventDelivery
     ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None: ...
+    AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: ClassVar[int]
+    def begin_automatic_source_beatmap_restore_async(
+        self, sample_id: int, receipt_json: str
+    ) -> OfflineAnalysisJob: ...
+    def begin_automatic_source_beatmap_async(
+        self, sample_id: int, installation_root: str, *, expected_source_generation: int
+    ) -> OfflineAnalysisJob: ...
     def sync_diagnostic_snapshot(self, request_id: int) -> dict[str, object] | None: ...
     def loop_acceptance_snapshot(
         self, sample_id: int, request_id: int

@@ -1199,6 +1199,19 @@ impl OfflineAnalysisJob {
         self.state()
             .prepare_source_beatmap(record_json, after_verify)
     }
+
+    /// Deterministic original-job event-before-retirement lifetime negative.
+    #[cfg(test)]
+    pub(super) fn publish_automatic_map_before_retirement_for_test(&self, receipt: &str) {
+        self.state()
+            .prepare_source_beatmap_input(
+                source_beatmap_job::MapInput::RestoreAutomatic(receipt),
+                || {},
+            )
+            .unwrap();
+        assert!(self.state().finish_source_beatmap_body(false).unwrap());
+        assert!(!self.state().finished.load(Ordering::Acquire));
+    }
 }
 
 impl Drop for OfflineAnalysisJob {

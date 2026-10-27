@@ -1035,6 +1035,8 @@ pub enum LoaderEvent {
         request_id: u64,
         map: crate::audio_engine::SourceBeatmap,
         artifact: Option<crate::audio_engine::SourceBeatmapArtifact>,
+        /// Private one-shot claim from a verified automatic map-only input.
+        automatic_claim: Option<Arc<std::sync::atomic::AtomicBool>>,
     },
     /// Unverified original observations, never accepted geometry or durable selection.
     SourceBeatmapRawCompleted {

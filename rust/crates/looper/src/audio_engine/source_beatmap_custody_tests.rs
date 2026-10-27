@@ -423,6 +423,7 @@ fn unowned_historical_map_cannot_publish_an_actual_source_completion() {
             request_id,
             map: historical,
             artifact: None,
+            automatic_claim: None,
         })
         .unwrap();
     assert!(

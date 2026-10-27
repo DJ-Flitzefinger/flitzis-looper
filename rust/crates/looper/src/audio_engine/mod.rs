@@ -1984,6 +1984,10 @@ impl AudioEngine {
         self.loop_acceptance.diagnostics.request()
     }
 
+    /// Capability for source-bound automatic map-only worker jobs.
+    #[classattr]
+    const AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: u32 = 1;
+
     /// Data-only export under the genuine original analysis/source admission.
     pub fn consume_automatic_source_beatmap(
         &self,
@@ -3036,6 +3040,31 @@ impl AudioEngine {
         receipt_json: String,
     ) -> PyResult<OfflineAnalysisJob> {
         self.begin_source_beatmap_restore_async_with(sample_id, receipt_json, || {})
+    }
+
+    /// Restore an unedited automatic-v4 map without changing performer timing.
+    pub fn begin_automatic_source_beatmap_restore_async(
+        &self,
+        sample_id: usize,
+        receipt_json: String,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_automatic_source_beatmap_restore_async_with(sample_id, receipt_json, || {})
+    }
+
+    /// Acquire only automatic map data through the existing source-bound worker.
+    #[pyo3(signature=(sample_id,installation_root,*,expected_source_generation))]
+    pub fn begin_automatic_source_beatmap_async(
+        &self,
+        sample_id: usize,
+        installation_root: String,
+        expected_source_generation: u64,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.begin_automatic_source_beatmap_async_with(
+            sample_id,
+            expected_source_generation,
+            installation_root,
+            || {},
+        )
     }
 
     /// Declare automatic/manual/TAP/legacy timing authority under the native owner.

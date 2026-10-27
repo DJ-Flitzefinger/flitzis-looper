@@ -32,8 +32,13 @@ enum AsyncMapInput {
         installation_root: String,
     },
     Validate(String),
+    AcquireAutomaticBeatThis {
+        expected_generation: u64,
+        installation_root: String,
+    },
     Store(String),
     Restore(String),
+    RestoreAutomatic(String),
     Create {
         origin: f64,
         period: f64,
@@ -62,8 +67,16 @@ impl AsyncMapInput {
                 installation_root,
             },
             Self::Validate(encoded) => MapInput::Validate(encoded),
+            Self::AcquireAutomaticBeatThis {
+                expected_generation,
+                installation_root,
+            } => MapInput::AcquireAutomaticBeatThis {
+                expected_generation: *expected_generation,
+                installation_root,
+            },
             Self::Store(encoded) => MapInput::Store(encoded),
             Self::Restore(receipt) => MapInput::Restore(receipt),
+            Self::RestoreAutomatic(receipt) => MapInput::RestoreAutomatic(receipt),
             Self::Create {
                 origin,
                 period,
@@ -86,6 +99,10 @@ impl AsyncMapInput {
             Self::AcquireBeatThis {
                 expected_generation,
                 installation_root,
+            }
+            | Self::AcquireAutomaticBeatThis {
+                expected_generation,
+                installation_root,
             } => {
                 *expected_generation > 0
                     && !installation_root.is_empty()
@@ -93,7 +110,9 @@ impl AsyncMapInput {
                     && Path::new(installation_root).is_absolute()
             }
             Self::Validate(encoded) | Self::Store(encoded) => encoded.len() <= MAX_RECORD_BYTES,
-            Self::Restore(receipt) => receipt.len() <= MAX_RECEIPT_BYTES,
+            Self::Restore(receipt) | Self::RestoreAutomatic(receipt) => {
+                receipt.len() <= MAX_RECEIPT_BYTES
+            }
             Self::Create { origin, period, .. } => {
                 origin.is_finite() && period.is_finite() && *period > 0.0
             }
@@ -640,6 +659,38 @@ impl AudioEngine {
         self.queue_source_beatmap_input(
             sample_id,
             AsyncMapInput::Restore(receipt_json),
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_automatic_source_beatmap_restore_async_with(
+        &self,
+        sample_id: usize,
+        receipt_json: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::RestoreAutomatic(receipt_json.into_boxed_str().into_string()),
+            after_verify,
+            |_, _| Ok(()),
+        )
+    }
+
+    pub(in crate::audio_engine) fn begin_automatic_source_beatmap_async_with(
+        &self,
+        sample_id: usize,
+        expected_generation: u64,
+        installation_root: String,
+        after_verify: impl FnOnce() + Send + 'static,
+    ) -> PyResult<OfflineAnalysisJob> {
+        self.queue_source_beatmap_input(
+            sample_id,
+            AsyncMapInput::AcquireAutomaticBeatThis {
+                expected_generation,
+                installation_root: installation_root.into_boxed_str().into_string(),
+            },
             after_verify,
             |_, _| Ok(()),
         )

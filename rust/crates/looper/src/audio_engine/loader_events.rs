@@ -566,14 +566,28 @@ pub(super) fn poll(
             } => Some(analysis),
             _ => None,
         };
-        let automatic_stored =
-            automatic_analysis.and_then(|analysis| match &analysis.automatic_source_map {
+        let automatic_stored = automatic_analysis
+            .and_then(|analysis| match &analysis.automatic_source_map {
                 Some(crate::messages::AutomaticSourceMap::Stored { artifact, consumed }) => {
                     Some((artifact.clone(), consumed.clone()))
                 }
                 _ => None,
+            })
+            .or_else(|| match &event {
+                LoaderEvent::SourceBeatmapCompleted {
+                    artifact: Some(artifact),
+                    automatic_claim: Some(consumed),
+                    ..
+                } => Some((artifact.clone(), consumed.clone())),
+                _ => None,
             });
         let source_beatmap = match &event {
+            LoaderEvent::SourceBeatmapCompleted {
+                automatic_claim: Some(_),
+                ..
+            } => automatic_stored
+                .as_ref()
+                .map(|(artifact, _)| artifact.map()),
             LoaderEvent::SourceBeatmapCompleted { map, .. } => Some(map.clone()),
             _ => automatic_stored
                 .as_ref()
@@ -637,6 +651,7 @@ pub(super) fn poll(
             request_id,
             map,
             artifact,
+            ..
         } => {
             dict.set_item("type", "source_beatmap_completed")?;
             dict.set_item("id", id)?;

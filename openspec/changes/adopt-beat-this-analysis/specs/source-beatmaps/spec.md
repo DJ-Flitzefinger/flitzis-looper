@@ -195,3 +195,38 @@ follow. Ordinary editor extrapolation SHALL NOT authorize this policy.
 - **THEN** only its exact affine phase reference may extend to g
 - **AND** missing physical-edge coverage or an intervening gap refuses that reference
 - **AND** normal map queries and all physical audio boundaries remain unchanged
+
+### Requirement: Automatic Map Jobs Preserve Independent Performer Timing
+
+Native SHALL provide dedicated automatic acquire/restore inputs on the existing
+bounded SourceBeatmap job purpose. These inputs SHALL NOT advance source request
+incarnations or prepared timing epochs, use the transient RAW review admission,
+run key detection, publish performer BPM/key intent or create another worker pool.
+Acquisition SHALL build from the genuine validated Beat This original capture;
+automatic restore SHALL require pristine automatic-v4 policy provenance rather
+than accepting a manually edited descendant or a receipt/DTO label alone.
+
+The original source/cancellation/timing owner SHALL remain strict through verified
+artifact preparation and completion. A fresh private one-shot claim SHALL be
+created only after final verification and cancellation checks. Event and delivery
+clones SHALL share it. Only the existing validated consumption may derive separate
+source-only custody; later performer timing edits SHALL NOT make original analysis
+metadata current or grant replay. Automatic delivery SHALL use its verified
+artifact's geometry rather than a separate display map field.
+
+Consumers SHALL retain the original automatic job until actual worker retirement
+reports terminal status. Event delivery alone SHALL NOT prove retirement. Natural
+terminal release SHALL NOT call cancel; explicit cancellation SHALL retain its
+ability to revoke a completion. After valid export, staleness of the original
+timing epoch SHALL NOT itself revoke derived source-only map custody.
+
+This Native prerequisite SHALL NOT select an App map or activate SYNC. App
+automatic priority, durable selection, retirement hold and single-SYNC integration
+remain required before connected activation or musical acceptance.
+
+#### Scenario: Current analysis lacks a map after restart
+- **GIVEN** a current source retains independent manual or TAP performer timing
+- **WHEN** a dedicated automatic map-only job verifies that source and completes
+- **THEN** source requests, timing epochs and performer metadata remain unchanged
+- **AND** the genuine map exports once under its original owner
+- **AND** a restored artifact gains no new birth or deletion rights

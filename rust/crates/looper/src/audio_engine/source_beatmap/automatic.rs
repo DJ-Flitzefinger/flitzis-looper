@@ -5,9 +5,9 @@ use super::{MAX_ANCHORS, SourceBeatmap, budget, editor};
 use crate::audio_engine::source_beatmap_capture::beat_this::BeatThisRawData;
 use serde_json::{Value, json};
 
-const POLICY: &str = "beat-this-local-line-pwa-v1";
-const RADIUS: usize = 4;
-const STRIDE: usize = 4;
+pub(super) const POLICY: &str = "beat-this-local-line-pwa-v1";
+pub(super) const RADIUS: usize = 4;
+pub(super) const STRIDE: usize = 4;
 
 #[derive(Clone, Copy)]
 struct Knot {

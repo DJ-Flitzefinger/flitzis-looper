@@ -4,6 +4,11 @@ use crate::audio_engine::complete_context::{CompleteSourceReader, NativeAnalysis
 use crate::messages::{AutomaticSourceMap, BackgroundTaskKind, LoadedAnalysis};
 use std::sync::atomic::AtomicBool;
 
+mod map_only_jobs {
+    use super::*;
+    include!("automatic_map_job_tests.rs");
+}
+
 pub(super) struct Carrier {
     _event: Py<PyAny>,
     delivery: Py<LoaderEventDelivery>,
