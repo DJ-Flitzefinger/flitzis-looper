@@ -114,8 +114,11 @@ timing authority revision SHALL independently qualify admission. Python SHALL NO
 supply that authority revision. Legacy timing intent and SYNC intent revisions
 SHALL NOT be rewritten merely to represent grid-target freshness.
 
-Explicit grid-following phase SHALL target original-map `B(g) + M(n)` modulo the
-unchanged physical loop's quarter extent. It SHALL retain the actual source pair
+Explicit grid-following phase SHALL target original-map `B(g) + M(n)` modulo one
+quarter note, as specified by the later explicit-grid beat-phase requirement in
+adopt-live-source-sync-policy. That rule supersedes the former full-Q correction;
+the unchanged physical loop's Q SHALL still govern folding and window scheduling.
+It SHALL retain the actual source pair
 at admission E and converge using the existing bounded positive/negative phase
 correction. Original launch T/E, physical A/Z/Q, original map knots and local tempo
 SHALL remain unchanged. It SHALL NOT use an A-relative subtraction that cancels g,

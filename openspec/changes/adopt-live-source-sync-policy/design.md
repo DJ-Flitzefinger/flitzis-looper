@@ -1,3 +1,23 @@
+## Current explicit-grid beat-phase correction — 2026-10-27
+
+For an admitted explicit grid origin g, use correction period C=1 quarter note;
+for absent g retain C=Q and the existing launch-relative target. This supersedes
+the full-Q debt rule below only for explicit g. Debt reduction AND captured
+winding reconstruction use C. Physical folding, window entry/cycle scheduling
+and source domain identity retain Q. Explicit-g admission retains positive
+integral Q and the complete original g/revision identity. Nearest feasible winding,
+positive tie and alternate-adjacent fallback retain original analytic rate bounds.
+An already aligned integer-beat offset requires no correction or phrase seek.
+Unknown meter still cannot certify bar/downbeat or kick/snare parity.
+
+The genuine three-PAD reproduction uses FLAC64 bars and two independent eight-bar
+PAD2 sources, fresh Native imports/maps/OwnACK and the App's regular policy service.
+It retains the initial source read, full 64-bar horizon and actual long-loop seam.
+The full-Q baseline starts only0.026275 quarter apart but introduces0.499961 quarter
+of relative excursion before eventual current-read confirmation. The repair must
+pass the unchanged excursion gate, retain whole-Q residual diagnostics and confirm
+beat residual modulo1 with independently current public read feedback.
+
 ## Current Human bug impact: idle live-timing service — 2026-10-23
 
 Human report: loading a PAD with default REALTIME BPM ON, SYNC/BPM Lock OFF

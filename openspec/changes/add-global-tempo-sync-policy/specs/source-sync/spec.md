@@ -1,5 +1,17 @@
 ## ADDED Requirements
 
+### Requirement: Shared SYNC preserves intentional whole-beat phrase offsets
+With explicit source Grid Offset g, the shared SYNC path SHALL use the
+adopt-live-source-sync-policy beat-phase rule modulo1, without chasing phrase
+position modulo the complete loop Q. Absent-g launch-relative behavior SHALL
+remain unchanged. Full source/grid identity and current actual-read confirmation
+SHALL remain required independently of mode adoption and map readiness.
+
+#### Scenario: Different loop lengths already have matching beat phase
+- **WHEN** explicit-g long and short loops differ by a whole number of beats
+- **THEN** shared SYNC SHALL retain that phrase offset while folding each own loop
+- **AND** it SHALL NOT introduce a whole-loop phase chase or claim unverified bar phase
+
 ### Requirement: Timing controls retain preferences under a shared parent hierarchy
 The application SHALL resolve MULTI LOOP -> BPM LOCK -> optional SYNC through the existing GUI, Learn/MIDI, runtime and Native paths. Each child SHALL be unavailable for editing when its requested parent is unavailable or off. Stored BPM Lock, SYNC, historical Realtime BPM and content preferences SHALL remain intact while a parent is off. The runtime SHALL project realtime_bpm=true, including neutral revision0, without rewriting saved schema1 preferences or historical seals. Legacy tracker actions SHALL address SYNC. Control availability SHALL use qualified requested-parent state rather than an actual playing/settled acknowledgement, allowing configuration before playback. Key Lock, map selection, speed and trigger quantization SHALL remain separate controls. Source tempo tracking SHALL NOT add another master clock.
 

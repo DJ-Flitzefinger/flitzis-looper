@@ -1154,7 +1154,16 @@ fn pending_phase(lanes: usize) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
 }
 
 fn pending_phase_at(lanes: usize, initial: usize) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
+    pending_phase_at_origin(lanes, initial, None)
+}
+
+fn pending_phase_at_origin(
+    lanes: usize,
+    initial: usize,
+    origin: Option<f64>,
+) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
     let mut fixture = VariablePath::small(lanes, initial);
+    fixture.phase_origins.fill(origin);
     let snapshot = fixture.mode();
     fixture.dry.path.render(129);
     let current = request(&fixture.dry.path);
@@ -1498,8 +1507,16 @@ fn descriptive_composed_actual_constructor_renderer_cohorts_report_median_max_an
 }
 
 fn pending_full_fraction(lanes: usize) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
+    pending_full_fraction_origin(lanes, None)
+}
+
+fn pending_full_fraction_origin(
+    lanes: usize,
+    origin: Option<f64>,
+) -> (VariablePath, Arc<RuntimePolicySnapshot>) {
     let anchors = &[(0., 0.), (0.37, 1.), (0.91, 2.)][..];
     let mut fixture = VariablePath::new(&vec![(anchors, 43680, Some(2.)); lanes], 24000., 12000);
+    fixture.phase_origins.fill(origin);
     let snapshot = fixture.mode();
     fixture.dry.path.render(129);
     assert!(Arc::ptr_eq(&snapshot, &request(&fixture.dry.path)));
@@ -1531,9 +1548,14 @@ fn assert_full_fraction_consumed(fixture: &VariablePath) {
                     .unwrap()
                     .has_full_fraction_recovery()
             );
+            // The preceding scalar birth already advances at its accepted
+            // .91 ratio. At adoption beta0-M0 is about .115, so BOTH target
+            // periods choose the same nonzero negative correction here.
             assert!(
                 span.playback.tempo_ratio() < 0.74,
-                "the entire first segment must consume the negative global correction"
+                "the entire first segment must consume negative correction; origin={:?}, actual_rate={}",
+                fixture.phase_origins[id],
+                span.playback.tempo_ratio()
             );
         }
         assert!(fixture.dry.path.feedback(id)["grid_phase_confirmed"].is_null());
@@ -1546,15 +1568,17 @@ fn full_fraction_claim_consuming_reader_and_copied_history_fit_two_mib_without_r
         .name("full-fraction-two-mib".into())
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
-            let (mut fixture, snapshot) = pending_full_fraction(6);
-            let mut output = [0.; 1024];
-            let (_, allocations) =
-                observe_current_thread(|| consume_pending(&mut fixture, &mut output));
-            assert_eq!(allocations, ThreadAllocations::default());
-            assert_eq!(snapshot.observation().unwrap().state, "applied");
-            assert!(output.iter().all(|v| v.is_finite()));
-            assert!(output.iter().any(|v| *v != 0.));
-            assert_full_fraction_consumed(&fixture);
+            for origin in [None, Some(0.0)] {
+                let (mut fixture, snapshot) = pending_full_fraction_origin(6, origin);
+                let mut output = [0.; 1024];
+                let (_, allocations) =
+                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                assert_eq!(allocations, ThreadAllocations::default());
+                assert_eq!(snapshot.observation().unwrap().state, "applied");
+                assert!(output.iter().all(|v| v.is_finite()));
+                assert!(output.iter().any(|v| *v != 0.));
+                assert_full_fraction_consumed(&fixture);
+            }
         })
         .unwrap()
         .join()
@@ -1565,32 +1589,35 @@ fn full_fraction_claim_consuming_reader_and_copied_history_fit_two_mib_without_r
 #[ignore = "descriptive FullFraction consuming profile; Root runs serially after frozen POST"]
 fn descriptive_full_fraction_actual_constructor_renderer_cohorts_report_median_max_and_limits() {
     // This decimal map admits global correction. It has no waiting-window
-    // region; all512 measured frames must consume its actual negative correction.
-    for lanes in [2, 4, 6, 10] {
-        let mut elapsed = Vec::new();
-        for repeat in 0..4 {
-            let (mut fixture, snapshot) = pending_full_fraction(lanes);
-            let mut output = [0.; 1024];
-            let started = Instant::now();
-            let (_, allocations) =
-                observe_current_thread(|| consume_pending(&mut fixture, &mut output));
-            let millis = started.elapsed().as_secs_f64() * 1000.;
-            assert_eq!(allocations, ThreadAllocations::default());
-            assert_eq!(snapshot.observation().unwrap().state, "applied");
-            assert_full_fraction_consumed(&fixture);
-            assert!(output.iter().any(|v| *v != 0.));
-            if repeat > 0 {
-                elapsed.push(millis);
+    // region; all512 measured frames must consume actual negative correction
+    // after the preceding ordinary scalar birth, for either target period.
+    for origin in [None, Some(0.0)] {
+        for lanes in [2, 4, 6, 10] {
+            let mut elapsed = Vec::new();
+            for repeat in 0..4 {
+                let (mut fixture, snapshot) = pending_full_fraction_origin(lanes, origin);
+                let mut output = [0.; 1024];
+                let started = Instant::now();
+                let (_, allocations) =
+                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                let millis = started.elapsed().as_secs_f64() * 1000.;
+                assert_eq!(allocations, ThreadAllocations::default());
+                assert_eq!(snapshot.observation().unwrap().state, "applied");
+                assert_full_fraction_consumed(&fixture);
+                assert!(output.iter().any(|v| *v != 0.));
+                if repeat > 0 {
+                    elapsed.push(millis);
+                }
             }
+            elapsed.sort_by(f64::total_cmp);
+            let nominal = 512. / f64::from(RATE) * 1000.;
+            println!(
+                "full_fraction_productive_profile grid_origin={origin:?} region=global_correction active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original drains, actual-E FullFraction construction/all32 claim, consuming dry renderer/history/copied advance; zero Rust requests asserted; setup excluded; no Native/device/music/worstcase or Human acceptance",
+                elapsed[1],
+                elapsed[2],
+                elapsed[2] <= nominal
+            );
         }
-        elapsed.sort_by(f64::total_cmp);
-        let nominal = 512. / f64::from(RATE) * 1000.;
-        println!(
-            "full_fraction_productive_profile region=global_negative_correction active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original drains, actual-E FullFraction construction/all32 claim, consuming dry renderer/history/copied advance; zero Rust requests asserted; setup excluded; no Native/device/music/worstcase or Human acceptance",
-            elapsed[1],
-            elapsed[2],
-            elapsed[2] <= nominal
-        );
     }
 }
 
@@ -1751,24 +1778,26 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
         .name("variable-productive-two-mib".into())
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
-            for (initial, correcting) in [(23, false), (3200, true)] {
-                let (mut fixture, snapshot) = pending_phase_at(6, initial);
-                let mut output = [0.; 1024];
-                let (_, allocations) =
-                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
-                assert_eq!(
-                    snapshot.observation().unwrap().state,
-                    "applied",
-                    "{:?}",
-                    snapshot.observation()
-                );
-                assert!(
-                    (0..6).all(|id| fixture.dry.path.voice(id).source_playback.is_mapped_phase())
-                );
-                assert!(output.iter().all(|sample| sample.is_finite()));
-                assert!(output.iter().any(|sample| *sample != 0.));
-                assert_eq!(allocations, ThreadAllocations::default());
-                assert_consumed_region(&fixture, correcting);
+            for origin in [None, Some(0.0)] {
+                for (initial, correcting) in [(23, false), (3200, true)] {
+                    let (mut fixture, snapshot) = pending_phase_at_origin(6, initial, origin);
+                    let mut output = [0.; 1024];
+                    let (_, allocations) =
+                        observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                    assert_eq!(
+                        snapshot.observation().unwrap().state,
+                        "applied",
+                        "{:?}",
+                        snapshot.observation()
+                    );
+                    assert!((0..6).all(|id| {
+                        fixture.dry.path.voice(id).source_playback.is_mapped_phase()
+                    }));
+                    assert!(output.iter().all(|sample| sample.is_finite()));
+                    assert!(output.iter().any(|sample| *sample != 0.));
+                    assert_eq!(allocations, ThreadAllocations::default());
+                    assert_consumed_region(&fixture, correcting);
+                }
             }
         })
         .unwrap();
@@ -1778,44 +1807,48 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
 #[test]
 #[ignore = "descriptive consuming profile; Root runs serially after actual combined POST review"]
 fn descriptive_variable_actual_constructor_renderer_cohorts_report_median_max_and_limits() {
-    for (region, initial, correcting) in [("wait", 23, false), ("correcting_window", 3200, true)] {
-        for lanes in [2, 4, 6, 10] {
-            let mut elapsed = Vec::new();
-            for repeat in 0..4 {
-                let (mut fixture, snapshot) = pending_phase_at(lanes, initial);
-                let mut output = [0.; 1024];
-                let start = Instant::now();
-                let (_, allocations) =
-                    observe_current_thread(|| consume_pending(&mut fixture, &mut output));
-                let millis = start.elapsed().as_secs_f64() * 1000.;
-                assert_eq!(allocations, ThreadAllocations::default());
-                assert_eq!(snapshot.observation().unwrap().state, "applied");
-                assert!(
-                    (0..lanes).all(|id| fixture
-                        .dry
-                        .path
-                        .voice(id)
-                        .source_playback
-                        .is_mapped_phase())
-                );
-                let (frames, corrected) = assert_consumed_region(&fixture, correcting);
-                if repeat == 0 {
-                    println!(
-                        "variable_productive_region region={region} actual_phase_frames={frames} actual_correcting_frames={corrected} expected_correcting_rate=63/32"
+    for origin in [None, Some(0.0)] {
+        for (region, initial, correcting) in
+            [("wait", 23, false), ("correcting_window", 3200, true)]
+        {
+            for lanes in [2, 4, 6, 10] {
+                let mut elapsed = Vec::new();
+                for repeat in 0..4 {
+                    let (mut fixture, snapshot) = pending_phase_at_origin(lanes, initial, origin);
+                    let mut output = [0.; 1024];
+                    let start = Instant::now();
+                    let (_, allocations) =
+                        observe_current_thread(|| consume_pending(&mut fixture, &mut output));
+                    let millis = start.elapsed().as_secs_f64() * 1000.;
+                    assert_eq!(allocations, ThreadAllocations::default());
+                    assert_eq!(snapshot.observation().unwrap().state, "applied");
+                    assert!(
+                        (0..lanes).all(|id| fixture
+                            .dry
+                            .path
+                            .voice(id)
+                            .source_playback
+                            .is_mapped_phase())
                     );
+                    let (frames, corrected) = assert_consumed_region(&fixture, correcting);
+                    if repeat == 0 {
+                        println!(
+                            "variable_productive_region grid_origin={origin:?} region={region} actual_phase_frames={frames} actual_correcting_frames={corrected} expected_correcting_rate=63/32"
+                        );
+                    }
+                    if repeat > 0 {
+                        elapsed.push(millis);
+                    }
                 }
-                if repeat > 0 {
-                    elapsed.push(millis);
-                }
+                elapsed.sort_by(f64::total_cmp);
+                let nominal = 512. / f64::from(RATE) * 1000.;
+                println!(
+                    "variable_productive_profile grid_origin={origin:?} region={region} active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original drains, actual-E phase construction/all32 claim, consuming full dry renderer/history/copied advance; Rust requests observed zero; setup precedes measurement; no Native/device/music/worstcase acceptance; earlier performance negatives remain open",
+                    elapsed[1],
+                    elapsed[2],
+                    elapsed[2] <= nominal
+                );
             }
-            elapsed.sort_by(f64::total_cmp);
-            let nominal = 512. / f64::from(RATE) * 1000.;
-            println!(
-                "variable_productive_profile region={region} active={lanes} fixed_capacity=32 frames_per_lane=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms={nominal:.7} within_nominal={}; includes original drains, actual-E phase construction/all32 claim, consuming full dry renderer/history/copied advance; Rust requests observed zero; setup precedes measurement; no Native/device/music/worstcase acceptance; earlier performance negatives remain open",
-                elapsed[1],
-                elapsed[2],
-                elapsed[2] <= nominal
-            );
         }
     }
 }
@@ -1823,51 +1856,54 @@ fn descriptive_variable_actual_constructor_renderer_cohorts_report_median_max_an
 #[test]
 #[ignore = "descriptive settled phase-read profile; Root runs after frozen POST"]
 fn descriptive_settled_phase_read_renderer_reports_affected_productive_cost() {
-    for lanes in [2, 4, 6, 10] {
-        let mut elapsed = Vec::new();
-        for repeat in 0..4 {
-            let mut fixture = VariablePath::small(lanes, 0);
-            let mode = fixture.mode();
-            let phase = fixture.effect();
-            assert!(Arc::ptr_eq(&mode, &phase));
-            fixture.dry.path.render(1);
-            for id in 0..lanes {
-                let geometry = phase.prepared_map(id).unwrap().geometry();
-                assert!(
+    for origin in [None, Some(0.0)] {
+        for lanes in [2, 4, 6, 10] {
+            let mut elapsed = Vec::new();
+            for repeat in 0..4 {
+                let mut fixture = VariablePath::small(lanes, 0);
+                fixture.phase_origins.fill(origin);
+                let mode = fixture.mode();
+                let phase = fixture.effect();
+                assert!(Arc::ptr_eq(&mode, &phase));
+                fixture.dry.path.render(1);
+                for id in 0..lanes {
+                    let geometry = phase.prepared_map(id).unwrap().geometry();
+                    assert!(
+                        fixture
+                            .dry
+                            .path
+                            .voice(id)
+                            .source_playback
+                            .mapped_phase_settled(&geometry)
+                            .unwrap()
+                    );
+                    assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
+                }
+                fixture.drain();
+                let mut output = [0.; 1024];
+                let start = Instant::now();
+                let (_, allocations) = observe_current_thread(|| {
                     fixture
                         .dry
-                        .path
-                        .voice(id)
-                        .source_playback
-                        .mapped_phase_settled(&geometry)
-                        .unwrap()
-                );
-                assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
+                        .render_into(&mut output, &mut ImmediateAudioBufferRetirement)
+                });
+                let millis = start.elapsed().as_secs_f64() * 1000.;
+                assert_eq!(allocations, ThreadAllocations::default());
+                assert!(output.iter().all(|value| value.is_finite()));
+                assert!(output.iter().any(|value| *value != 0.));
+                for id in 0..lanes {
+                    assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
+                }
+                if repeat > 0 {
+                    elapsed.push(millis);
+                }
             }
-            fixture.drain();
-            let mut output = [0.; 1024];
-            let start = Instant::now();
-            let (_, allocations) = observe_current_thread(|| {
-                fixture
-                    .dry
-                    .render_into(&mut output, &mut ImmediateAudioBufferRetirement)
-            });
-            let millis = start.elapsed().as_secs_f64() * 1000.;
-            assert_eq!(allocations, ThreadAllocations::default());
-            assert!(output.iter().all(|value| value.is_finite()));
-            assert!(output.iter().any(|value| *value != 0.));
-            for id in 0..lanes {
-                assert_eq!(fixture.dry.path.feedback(id)["phase_read_confirmed"], true);
-            }
-            if repeat > 0 {
-                elapsed.push(millis);
-            }
+            elapsed.sort_by(f64::total_cmp);
+            println!(
+                "variable_settled_read_profile grid_origin={origin:?} active={lanes} frames=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms=10.6666667 rust_allocations=0; actual settled dry read before/after; no device or worst-case acceptance",
+                elapsed[1], elapsed[2]
+            );
         }
-        elapsed.sort_by(f64::total_cmp);
-        println!(
-            "variable_settled_read_profile active={lanes} frames=512 warmups=1 repeats=3 median_ms={:.4} max_ms={:.4} nominal_ms=10.6666667 rust_allocations=0; actual settled dry read before/after; no device or worst-case acceptance",
-            elapsed[1], elapsed[2]
-        );
     }
 }
 
@@ -1935,8 +1971,9 @@ def choose(points, beginning, quarters, beta0, m0, fpb, launch_master=0, grid_or
         target = left[1]+(F(grid_origin)-left[0])*(right[1]-left[1])/(right[0]-left[0])
     else:
         target = affine(points,F(grid_origin))
-    residue = (target+F(m0)-beta0) % quarters
-    debts = [residue] if residue == 0 else sorted([residue, residue-quarters], key=lambda x: (abs(x), x < 0))
+    correction_period = quarters if grid_origin is None else F(1)
+    residue = (target+F(m0)-beta0) % correction_period
+    debts = [residue] if residue == 0 else sorted([residue, residue-correction_period], key=lambda x: (abs(x), x < 0))
     for debt in debts:
         if debt == 0:
             return (debt, 6, None)

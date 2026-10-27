@@ -30,199 +30,9 @@ fn authorized_music_automatic_maps_qualify_actual_loops() {
     let mut results = Vec::new();
     let mut all_ready = true;
     for (id, source) in sources.iter().enumerate() {
-        let original = PathBuf::from(source["path"].as_str().unwrap());
-        let expected = [
-            "339911dd7a54af5efc80fdcc05e1432648de9640348803e9b4c0657f59c1a5ea",
-            "fadd1534a3a51cf6de7fcd4d3ebefdc3e596a38c451e3c71cb6dc8c9350f8497",
-        ][id];
-        assert_eq!(source["source_sha256"], expected);
-        assert!(original.is_absolute());
-        assert_eq!(hash_file(&original), expected);
-        let request = path
-            .engine
-            .load_sample_async(
-                id,
-                original.to_str().unwrap().into(),
-                Some(false),
-                false,
-                true,
-                None,
-                None,
-                false,
-                "import",
-            )
-            .unwrap();
-        wait_until_for(Duration::from_secs(120), || {
-            path.drain();
-            path.engine.input_runtime_ownership.cold_status(id, request) == Some(2)
-        });
-        let event = terminal(&path.engine, request);
-        assert!(matches!(&event,LoaderEvent::Success {id:actual,analysis:None,..} if *actual==id));
+        let (event, decoder, playback) = verified_import(&mut path, id, id, source);
         source_events.push(event);
-        let (decoder, playback) = {
-            let leases = path.engine.cold_leases.lock().unwrap();
-            let lease = leases[id].as_ref().unwrap();
-            assert_eq!(hash_file(&lease.original_path), expected);
-            let decoder = lease.manifest.descriptor["decoder"]["pcm"].clone();
-            let playback = lease.manifest.descriptor["playback"]["pcm"].clone();
-            assert_eq!(
-                hash_file(&lease.cache_path.join("decoder.f32le")),
-                decoder["interleaved_sha256"]
-            );
-            assert_eq!(
-                hash_file(&lease.cache_path.join("playback.f32le")),
-                playback["interleaved_sha256"]
-            );
-            assert_eq!(&decoder, &source["expected_decoder_pcm"]);
-            assert!(
-                [
-                    "rate_hz",
-                    "channels",
-                    "full_frames",
-                    "interleaved_sha256",
-                    "mono_sha256",
-                    "source_zero_bits"
-                ]
-                .iter()
-                .all(|key| !source["expected_playback_pcm"][key].is_null()),
-                "independent playback fingerprint is incomplete"
-            );
-            for (key, value) in source["expected_playback_pcm"].as_object().unwrap() {
-                assert_eq!(&playback[key], value);
-            }
-            (decoder, playback)
-        };
-        assert_eq!(playback["rate_hz"], 48_000);
-        if id == 0 {
-            assert_eq!(decoder["rate_hz"], 44_100);
-        }
-        path.engine
-            .set_pad_bpm_with_source(
-                id,
-                Some(source["bpm"].as_f64().unwrap()),
-                Some(path.generation(id)),
-            )
-            .unwrap();
-        path.drain();
-        path.engine
-            .set_pad_timing_metadata_with_source(
-                id,
-                source["grid_origin"].as_f64().unwrap(),
-                Some(path.generation(id)),
-            )
-            .unwrap();
-        path.drain();
-        let requests = path.engine.pad_request_ids.lock().unwrap().clone();
-        let epochs: Vec<_> = path
-            .engine
-            .prepared_source_epochs
-            .iter()
-            .map(|e| e.load(Ordering::Acquire))
-            .collect();
-        let job = path
-            .engine
-            .begin_automatic_source_beatmap_async(id, installation.clone(), path.generation(id))
-            .unwrap();
-        let mut status_detail = None;
-        wait_until_for(Duration::from_secs(240), || {
-            Python::attach(|py| {
-                let status = job.source_beatmap_async_status(py).unwrap().unwrap();
-                let status = status.bind(py);
-                status_detail = status
-                    .get_item("detail")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<Option<String>>()
-                    .unwrap();
-                if status
-                    .get_item("terminal")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<bool>()
-                    .unwrap()
-                {
-                    assert_eq!(
-                        status
-                            .get_item("stage")
-                            .unwrap()
-                            .unwrap()
-                            .extract::<String>()
-                            .unwrap(),
-                        "ready",
-                        "{status_detail:?}"
-                    );
-                    true
-                } else {
-                    false
-                }
-            })
-        });
-        assert_eq!(*path.engine.pad_request_ids.lock().unwrap(), requests);
-        assert_eq!(
-            path.engine
-                .prepared_source_epochs
-                .iter()
-                .map(|e| e.load(Ordering::Acquire))
-                .collect::<Vec<_>>(),
-            epochs
-        );
-        let (artifact, derived) = Python::attach(|py| {
-            let mut found = None;
-            while let Some(event) = path.engine.poll_loader_events(py).unwrap() {
-                let dict = event.bind(py).cast::<PyDict>().unwrap();
-                if dict
-                    .get_item("type")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap()
-                    == "source_beatmap_completed"
-                {
-                    assert_eq!(
-                        dict.get_item("id")
-                            .unwrap()
-                            .unwrap()
-                            .extract::<usize>()
-                            .unwrap(),
-                        id
-                    );
-                    let owner = dict
-                        .get_item("_native_event_owner")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<PyRef<'_, LoaderEventDelivery>>()
-                        .unwrap();
-                    let export = path
-                        .engine
-                        .consume_automatic_source_beatmap(py, &owner)
-                        .unwrap()
-                        .unwrap();
-                    let tuple = export.bind(py);
-                    assert_eq!(tuple.get_item(0).unwrap().extract::<usize>().unwrap(), id);
-                    let artifact = tuple
-                        .get_item(1)
-                        .unwrap()
-                        .extract::<Py<crate::audio_engine::SourceBeatmapArtifact>>()
-                        .unwrap()
-                        .borrow(py)
-                        .clone();
-                    let derived = tuple
-                        .get_item(2)
-                        .unwrap()
-                        .extract::<Py<LoaderEventDelivery>>()
-                        .unwrap();
-                    assert!(
-                        path.engine
-                            .consume_automatic_source_beatmap(py, &owner)
-                            .unwrap()
-                            .is_none()
-                    );
-                    found = Some((artifact, derived));
-                }
-            }
-            found.expect("genuine automatic map-only delivery")
-        });
-        drop(job); // Strict terminal already observed, so natural release cannot cancel.
+        let (artifact, derived) = automatic_map(&mut path, id, &installation, None);
         let map = artifact.map();
         assert!(map.is_pristine_automatic());
         fs::write(
@@ -331,10 +141,13 @@ fn authorized_music_automatic_maps_qualify_actual_loops() {
             all_ready &= ready;
             cases.push(json!({"bars":bars,"start_s":start,"end_s":end,"status":format!("{:?}",prepared.class),"absolute_grid_ready":ready,"native_loaded_rate":qualified.loaded_rate(),"original_source_rate":decoder["rate_hz"],"same_original_map_revision":qualified.map().map_revision()==map.map_revision()}));
         }
-        results.push(json!({"pad_id":id,"source_sha256":expected,"decoder":decoder,"playback":playback,"map_revision":map.map_revision(),"cases":cases}));
+        results.push(json!({"pad_id":id,"source_sha256":source["source_sha256"],"decoder":decoder,"playback":playback,"map_revision":map.map_revision(),"cases":cases}));
         fs::write(root.join("actual-music-maps.json"),serde_json::to_vec_pretty(&json!({"scope":"Partial genuine source/NN/OwnACK/row qualification; no mapped reads or hearing acceptance","complete":false,"all_ready":all_ready,"sources":results})).unwrap()).unwrap();
         artifact.retire_unselected();
-        assert_eq!(hash_file(&original), expected);
+        assert_eq!(
+            hash_file(std::path::Path::new(source["path"].as_str().unwrap())),
+            source["source_sha256"]
+        );
     }
     path.engine.stop_all().unwrap();
     path.drain();
@@ -348,4 +161,224 @@ fn authorized_music_automatic_maps_qualify_actual_loops() {
         "ACTUAL_MUSIC_MAPS {}",
         root.join("actual-music-maps.json").display()
     );
+}
+
+pub(super) fn verified_import(
+    path: &mut Path,
+    id: usize,
+    expected_source: usize,
+    source: &Value,
+) -> (LoaderEvent, Value, Value) {
+    assert_eq!(source["pad_id"], expected_source);
+    let original = PathBuf::from(source["path"].as_str().unwrap());
+    let expected = [
+        "339911dd7a54af5efc80fdcc05e1432648de9640348803e9b4c0657f59c1a5ea",
+        "fadd1534a3a51cf6de7fcd4d3ebefdc3e596a38c451e3c71cb6dc8c9350f8497",
+    ][expected_source];
+    assert_eq!(source["source_sha256"], expected);
+    assert!(original.is_absolute());
+    assert_eq!(hash_file(&original), expected);
+    let request = path
+        .engine
+        .load_sample_async(
+            id,
+            original.to_str().unwrap().into(),
+            Some(false),
+            false,
+            true,
+            None,
+            None,
+            false,
+            "import",
+        )
+        .unwrap();
+    wait_until_for(Duration::from_secs(120), || {
+        path.drain();
+        path.engine.input_runtime_ownership.cold_status(id, request) == Some(2)
+    });
+    let event = terminal(&path.engine, request);
+    assert!(matches!(&event,LoaderEvent::Success {id:actual,analysis:None,..} if *actual==id));
+    let (decoder, playback) = {
+        let leases = path.engine.cold_leases.lock().unwrap();
+        let lease = leases[id].as_ref().unwrap();
+        assert_eq!(hash_file(&lease.original_path), expected);
+        let decoder = lease.manifest.descriptor["decoder"]["pcm"].clone();
+        let playback = lease.manifest.descriptor["playback"]["pcm"].clone();
+        assert_eq!(
+            hash_file(&lease.cache_path.join("decoder.f32le")),
+            decoder["interleaved_sha256"]
+        );
+        assert_eq!(
+            hash_file(&lease.cache_path.join("playback.f32le")),
+            playback["interleaved_sha256"]
+        );
+        assert_eq!(&decoder, &source["expected_decoder_pcm"]);
+        assert!(
+            [
+                "rate_hz",
+                "channels",
+                "full_frames",
+                "interleaved_sha256",
+                "mono_sha256",
+                "source_zero_bits"
+            ]
+            .iter()
+            .all(|key| !source["expected_playback_pcm"][key].is_null()),
+            "independent playback fingerprint is incomplete"
+        );
+        for (key, value) in source["expected_playback_pcm"].as_object().unwrap() {
+            assert_eq!(&playback[key], value);
+        }
+        (decoder, playback)
+    };
+    assert_eq!(playback["rate_hz"], 48_000);
+    if id == 0 {
+        assert_eq!(decoder["rate_hz"], 44_100);
+    }
+    path.engine
+        .set_pad_bpm_with_source(
+            id,
+            Some(source["bpm"].as_f64().unwrap()),
+            Some(path.generation(id)),
+        )
+        .unwrap();
+    path.drain();
+    path.engine
+        .set_pad_timing_metadata_with_source(
+            id,
+            source["grid_origin"].as_f64().unwrap(),
+            Some(path.generation(id)),
+        )
+        .unwrap();
+    path.drain();
+    (event, decoder, playback)
+}
+
+pub(super) fn automatic_map(
+    path: &mut Path,
+    id: usize,
+    installation: &str,
+    restore: Option<String>,
+) -> (
+    crate::audio_engine::SourceBeatmapArtifact,
+    Py<LoaderEventDelivery>,
+) {
+    let requests = path.engine.pad_request_ids.lock().unwrap().clone();
+    let epochs: Vec<_> = path
+        .engine
+        .prepared_source_epochs
+        .iter()
+        .map(|e| e.load(Ordering::Acquire))
+        .collect();
+    let job = match restore {
+        Some(receipt) => path
+            .engine
+            .begin_automatic_source_beatmap_restore_async(id, receipt)
+            .unwrap(),
+        None => path
+            .engine
+            .begin_automatic_source_beatmap_async(id, installation.to_owned(), path.generation(id))
+            .unwrap(),
+    };
+    let mut status_detail = None;
+    wait_until_for(Duration::from_secs(240), || {
+        Python::attach(|py| {
+            let status = job.source_beatmap_async_status(py).unwrap().unwrap();
+            let status = status.bind(py);
+            status_detail = status
+                .get_item("detail")
+                .unwrap()
+                .unwrap()
+                .extract::<Option<String>>()
+                .unwrap();
+            if status
+                .get_item("terminal")
+                .unwrap()
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+            {
+                assert_eq!(
+                    status
+                        .get_item("stage")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "ready",
+                    "{status_detail:?}"
+                );
+                true
+            } else {
+                false
+            }
+        })
+    });
+    assert_eq!(*path.engine.pad_request_ids.lock().unwrap(), requests);
+    assert_eq!(
+        path.engine
+            .prepared_source_epochs
+            .iter()
+            .map(|e| e.load(Ordering::Acquire))
+            .collect::<Vec<_>>(),
+        epochs
+    );
+    let (artifact, derived) = Python::attach(|py| {
+        let mut found = None;
+        while let Some(event) = path.engine.poll_loader_events(py).unwrap() {
+            let dict = event.bind(py).cast::<PyDict>().unwrap();
+            if dict
+                .get_item("type")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap()
+                == "source_beatmap_completed"
+            {
+                assert_eq!(
+                    dict.get_item("id")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<usize>()
+                        .unwrap(),
+                    id
+                );
+                let owner = dict
+                    .get_item("_native_event_owner")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<PyRef<'_, LoaderEventDelivery>>()
+                    .unwrap();
+                let export = path
+                    .engine
+                    .consume_automatic_source_beatmap(py, &owner)
+                    .unwrap()
+                    .unwrap();
+                let tuple = export.bind(py);
+                assert_eq!(tuple.get_item(0).unwrap().extract::<usize>().unwrap(), id);
+                let artifact = tuple
+                    .get_item(1)
+                    .unwrap()
+                    .extract::<Py<crate::audio_engine::SourceBeatmapArtifact>>()
+                    .unwrap()
+                    .borrow(py)
+                    .clone();
+                let derived = tuple
+                    .get_item(2)
+                    .unwrap()
+                    .extract::<Py<LoaderEventDelivery>>()
+                    .unwrap();
+                assert!(
+                    path.engine
+                        .consume_automatic_source_beatmap(py, &owner)
+                        .unwrap()
+                        .is_none()
+                );
+                found = Some((artifact, derived));
+            }
+        }
+        found.expect("genuine automatic map-only delivery")
+    });
+    drop(job); // Strict terminal already observed, so natural release cannot cancel.
+    (artifact, derived)
 }

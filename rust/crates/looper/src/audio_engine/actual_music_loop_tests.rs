@@ -13,6 +13,11 @@ mod maps {
     include!("actual_music_map_tests.rs");
 }
 
+mod mapped_playback {
+    use super::*;
+    include!("actual_mapped_music_playback_tests.rs");
+}
+
 struct Path {
     engine: AudioEngine,
     callback: Callback,

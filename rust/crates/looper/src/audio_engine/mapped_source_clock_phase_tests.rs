@@ -33,6 +33,44 @@ fn oracle_fraction(mut numerator: u128, denominator: u128) -> f64 {
     f64::from_bits(((exponent + 1023) as u64) << 52 | (significand as u64 & ((1_u64 << 52) - 1)))
 }
 
+// Independent exact lift of the actual binary64 master onto this fixture's
+// original map. Source folding remains Q=8; the integer beat lift is explicit.
+fn grid_eight_oracle(target_n: i128, target_d: i128, master: f64, lift: i128) -> (usize, f64) {
+    let bits = master.to_bits();
+    let (mn, md) = if master == 0.0 {
+        (0, 1)
+    } else {
+        let magnitude = i128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52));
+        let mantissa = if bits >> 63 == 0 {
+            magnitude
+        } else {
+            -magnitude
+        };
+        let exponent = ((bits >> 52) & 2047) as i32 - 1023 - 52;
+        if exponent >= 0 {
+            (mantissa << exponent, 1)
+        } else {
+            (mantissa, 1_i128 << -exponent)
+        }
+    };
+    let d = target_d * md;
+    let b = 2 * d + (target_n * md + mn * target_d + (lift - 2) * d).rem_euclid(8 * d);
+    let n = if b <= 4 * d {
+        b * 24_000
+    } else if b <= 8 * d {
+        96_000 * d + (b - 4 * d) * 48_000
+    } else {
+        288_000 * d + (b - 8 * d) * 36_000
+    };
+    let mut whole = (n / d) as usize;
+    let mut fraction = oracle_fraction((n % d) as u128, d as u128);
+    if fraction == 1.0 {
+        whole += 1;
+        fraction = 0.0;
+    }
+    (whole, fraction)
+}
+
 fn grid_origin_geometry(origin_frame: f64, authority_revision: u64) -> MappedLoopGeometry {
     let map = map_with_source(
         &[(0., 0.), (2., 4.), (6., 8.), (18., 24.), (34., 40.)],
@@ -63,6 +101,92 @@ fn grid_origin_geometry(origin_frame: f64, authority_revision: u64) -> MappedLoo
 }
 
 #[test]
+fn phase_explicit_grid_retains_whole_beat_offsets_and_captures_both_fractional_directions() {
+    let geometry = grid_origin_geometry(0.0, 17);
+    let reference = LoopPhaseReference::Unavailable;
+    let execution = 1_000;
+    for master in [-2.0, 0.0, 2.0, 34.0] {
+        let actual = timeline(36_000.0, execution, master);
+        let epoch = MappedClockEpoch::common_phase(
+            811,
+            actual,
+            &geometry,
+            raw(48_000, 0.0),
+            execution,
+            reference,
+        )
+        .unwrap();
+        assert!(
+            settled(&geometry, epoch, reference, execution).unwrap(),
+            "whole beat offset must not be pulled through a loop"
+        );
+        assert_pair(
+            position(&geometry, epoch, reference, execution).unwrap(),
+            48_000,
+            0.0,
+        );
+        assert_pair(
+            position(&geometry, epoch, reference, execution + 36_000).unwrap(),
+            72_000,
+            0.0,
+        );
+        assert_local(&geometry, epoch, reference, execution + 24_001);
+    }
+    for (master, lift) in [(0.25, 2), (0.5, 2), (0.75, 1), (34.25, -32), (-0.25, 2)] {
+        let actual = timeline(36_000.0, execution, master);
+        let epoch = MappedClockEpoch::common_phase(
+            812,
+            actual,
+            &geometry,
+            raw(48_000, 0.0),
+            execution,
+            reference,
+        )
+        .unwrap();
+        assert_pair(
+            position(&geometry, epoch, reference, execution).unwrap(),
+            48_000,
+            0.0,
+        );
+        assert!(!settled(&geometry, epoch, reference, execution).unwrap());
+        let mut high = execution + 36_000;
+        while !settled(&geometry, epoch, reference, high).unwrap() {
+            high = execution + 2 * (high - execution);
+            assert!(high - execution <= 36_000 * 4096);
+        }
+        let mut low = execution;
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if settled(&geometry, epoch, reference, middle).unwrap() {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        assert!(!settled(&geometry, epoch, reference, high - 1).unwrap());
+        for frame in [high, high + 1, high + 36_000, high + 192_001] {
+            let (whole, fraction) =
+                grid_eight_oracle(0, 1, actual.beat_position_at_frame(frame).unwrap(), lift);
+            assert_pair(
+                position(&geometry, epoch, reference, frame).unwrap(),
+                whole,
+                fraction,
+            );
+            assert_local(&geometry, epoch, reference, frame);
+        }
+        if epoch.has_full_fraction_recovery() {
+            phase::assert_full_refresh_equivalent_for_test(
+                &geometry,
+                epoch,
+                reference,
+                &[execution, high - 1, high, high + 1],
+                &[high - 1, high],
+            );
+        }
+    }
+}
+
+#[test]
 fn phase_requested_grid_origin_uses_third_exact_inverse_preserves_e_and_converges_both_signs() {
     println!(
         "GRID_PHASE_COPY_BYTES epoch={} span={} reference={} local={:?}",
@@ -82,9 +206,9 @@ fn phase_requested_grid_origin_uses_third_exact_inverse_preserves_e_and_converge
             end: 360_000
         }
     );
-    for (marker, master) in [(101, 5_i128), (102, 7_i128)] {
+    for (marker, master, winding) in [(101, 5.25, 15), (102, 5.75, 16)] {
         let execution = 1_000;
-        let actual = timeline(24_000., execution, master as f64);
+        let actual = timeline(36_000., execution, master);
         let reference = launch_reference(&geometry, actual, 0);
         let first = raw(192_000, 0.5);
         let epoch =
@@ -130,7 +254,7 @@ fn phase_requested_grid_origin_uses_third_exact_inverse_preserves_e_and_converge
             };
             let denominator = 36_000 * master_d;
             let beat_n = 2 * denominator
-                + ((16 - 2) * denominator + 36_000 * master_n + master_d)
+                + ((16 - 2 - winding) * denominator + 36_000 * master_n + master_d)
                     .rem_euclid(8 * denominator);
             let source_n = if beat_n <= 4 * denominator {
                 beat_n * 24_000
@@ -385,7 +509,7 @@ fn phase_virtual_grid_origin_extends_only_original_edges_with_exact_both_sign_or
         );
         for master in [5., 7.] {
             let execution = 1_000;
-            let actual = timeline(24_000., execution, master);
+            let actual = timeline(36_000., execution, master);
             let reference = LoopPhaseReference::Unavailable;
             let first = raw(192_000, 0.5);
             let epoch =
@@ -423,7 +547,13 @@ fn phase_virtual_grid_origin_extends_only_original_edges_with_exact_both_sign_or
                     (mantissa, 1_i128 << (-exponent))
                 };
                 let d = target_d * md;
-                let b = 2 * d + (target_n * md + mn * target_d - 2 * d).rem_euclid(8 * d);
+                let winding = if target_n < 0 {
+                    master as i128 - 6
+                } else {
+                    master as i128 + 34
+                };
+                let b =
+                    2 * d + (target_n * md + mn * target_d - (2 + winding) * d).rem_euclid(8 * d);
                 let n = if b <= 4 * d {
                     b * 24_000
                 } else if b <= 8 * d {
@@ -1030,103 +1160,119 @@ fn compact_full_fraction_window_corrects_twice_then_captures_without_rounded_rea
         32.,
         6750,
     );
-    assert!(g.general.is_none());
-    let actual = timeline(187.5, 0, 0.);
-    let reference = launch_reference(&g, actual, 0);
-    let epoch =
-        MappedClockEpoch::common_phase(450, actual, &g, raw(13, f64::from_bits(1)), 0, reference)
-            .unwrap();
-    assert!(epoch.has_full_fraction_recovery());
-    // Independent stdlib Fraction oracle: compact-window-fraction-oracle-v1.json.
-    // beta0=(13+2^-1074)*4/375, seed24, h64, delta1/8, cycle257/8.
-    // The first window removes only1/8; the remaining debt needs a second window.
-    for (frame, whole, bits, region) in [
-        (0, 13, 1, 0),
-        (1, 13, 0x3fe0000000000000, 0),
-        (1499, 774, 0x3feffffffffffe04, 0),
-        (1500, 776, 2, 0),
-        (4473, 3749, 0x3d55c00000000000, 0),
-        (4474, 3750, 0x3d5b900000000000, 1),
-        (4475, 3751, 0x3fef000000000627, 1),
-        (5973, 6701, 0x3fc40000000055a4, 1),
-        (5974, 6703, 0x3fc0000000003800, 2),
-        (5975, 6705, 0x3fc0000000001900, 2),
-        (5999, 0, 0x3fe90000000001f0, 2),
-        (6000, 1, 0x3fd2000000000000, 2),
-        (10497, 3749, 0x3fe2000000000ba0, 2),
-        (10498, 3751, 0x3fbb800000007a10, 1),
-        (10499, 3753, 0x3fb3800000003d08, 1),
-        (10661, 4072, 0x3f8bfffffff8dd00, 1),
-        (10662, 4073, 0x3fefffffffffdb40, 3),
-        (10663, 4075, 0x3fefffffffffd380, 3),
+    let base = g;
+    for origin in [
+        None,
+        Some(GridPhaseOrigin {
+            frame_bits: 0.0_f64.to_bits(),
+            authority_revision: 71,
+        }),
     ] {
-        assert_pair(
-            position(&g, epoch, reference, frame).unwrap(),
-            whole,
-            f64::from_bits(bits),
-        );
-        let span = assert_affine_shuffled(&g, epoch, reference, frame);
-        let (_, _, seed, actual_region) = span.program.phase_value().unwrap();
-        assert_eq!(
-            span.local_phase_view(g.domain(), reference)
-                .unwrap()
-                .full_fraction_split_bits_for_test(),
-            Some(if region == 3 { 1024 } else { 2048 })
-        );
-        assert_eq!((seed.to_bits(), actual_region), (24_f64.to_bits(), region));
-        assert_eq!(settled(&g, epoch, reference, frame).unwrap(), region == 3);
-        if region == 1 {
+        let g = base.clone().with_grid_phase_origin(origin).unwrap();
+        assert!(g.general.is_none());
+        let actual = timeline(187.5, 0, 0.);
+        let reference = launch_reference(&g, actual, 0);
+        let epoch = MappedClockEpoch::common_phase(
+            450,
+            actual,
+            &g,
+            raw(13, f64::from_bits(1)),
+            0,
+            reference,
+        )
+        .unwrap();
+        assert!(epoch.has_full_fraction_recovery());
+        // Independent stdlib Fraction oracle: compact-window-fraction-oracle-v1.json.
+        // beta0=(13+2^-1074)*4/375, seed24, h64, delta1/8, cycle257/8.
+        // The first window removes only1/8; the remaining debt needs a second window.
+        for (frame, whole, bits, region) in [
+            (0, 13, 1, 0),
+            (1, 13, 0x3fe0000000000000, 0),
+            (1499, 774, 0x3feffffffffffe04, 0),
+            (1500, 776, 2, 0),
+            (4473, 3749, 0x3d55c00000000000, 0),
+            (4474, 3750, 0x3d5b900000000000, 1),
+            (4475, 3751, 0x3fef000000000627, 1),
+            (5973, 6701, 0x3fc40000000055a4, 1),
+            (5974, 6703, 0x3fc0000000003800, 2),
+            (5975, 6705, 0x3fc0000000001900, 2),
+            (5999, 0, 0x3fe90000000001f0, 2),
+            (6000, 1, 0x3fd2000000000000, 2),
+            (10497, 3749, 0x3fe2000000000ba0, 2),
+            (10498, 3751, 0x3fbb800000007a10, 1),
+            (10499, 3753, 0x3fb3800000003d08, 1),
+            (10661, 4072, 0x3f8bfffffff8dd00, 1),
+            (10662, 4073, 0x3fefffffffffdb40, 3),
+            (10663, 4075, 0x3fefffffffffd380, 3),
+        ] {
+            assert_pair(
+                position(&g, epoch, reference, frame).unwrap(),
+                whole,
+                f64::from_bits(bits),
+            );
+            let span = assert_affine_shuffled(&g, epoch, reference, frame);
+            let (_, _, seed, actual_region) = span.program.phase_value().unwrap();
             assert_eq!(
-                span.local_rate().unwrap().to_bits(),
-                (63_f64 / 32.).to_bits()
+                span.local_phase_view(g.domain(), reference)
+                    .unwrap()
+                    .full_fraction_split_bits_for_test(),
+                Some(if region == 3 { 1024 } else { 2048 })
+            );
+            assert_eq!((seed.to_bits(), actual_region), (24_f64.to_bits(), region));
+            assert_eq!(settled(&g, epoch, reference, frame).unwrap(), region == 3);
+            if region == 1 {
+                assert_eq!(
+                    span.local_rate().unwrap().to_bits(),
+                    (63_f64 / 32.).to_bits()
+                );
+            }
+        }
+        let first_window = refresh(&g, epoch, reference, 4474).unwrap();
+        assert_eq!(
+            (first_window.start_frame(), first_window.end_frame()),
+            (4474, 5974)
+        );
+        let second_window = refresh(&g, epoch, reference, 10498).unwrap();
+        assert_eq!(
+            (second_window.start_frame(), second_window.end_frame()),
+            (10498, 10662)
+        );
+        // Integer master checkpoints independently simplify the exact piecewise
+        // law to these fractions; the tiny initial source remains in the algebra.
+        for (frame, whole, fraction) in [
+            (4500, 3801, 3. / 16.),
+            (6000, 1, 9. / 32.),
+            (10500, 3755, 23. / 512.),
+            (10875, 4500, 0.),
+        ] {
+            assert_pair(
+                position(&g, epoch, reference, frame).unwrap(),
+                whole,
+                fraction,
             );
         }
-    }
-    let first_window = refresh(&g, epoch, reference, 4474).unwrap();
-    assert_eq!(
-        (first_window.start_frame(), first_window.end_frame()),
-        (4474, 5974)
-    );
-    let second_window = refresh(&g, epoch, reference, 10498).unwrap();
-    assert_eq!(
-        (second_window.start_frame(), second_window.end_frame()),
-        (10498, 10662)
-    );
-    // Integer master checkpoints independently simplify the exact piecewise
-    // law to these fractions; the tiny initial source remains in the algebra.
-    for (frame, whole, fraction) in [
-        (4500, 3801, 3. / 16.),
-        (6000, 1, 9. / 32.),
-        (10500, 3755, 23. / 512.),
-        (10875, 4500, 0.),
-    ] {
-        assert_pair(
-            position(&g, epoch, reference, frame).unwrap(),
-            whole,
-            fraction,
+        phase::assert_full_refresh_equivalent_for_test(
+            &g,
+            epoch,
+            reference,
+            &[
+                0,
+                4473,
+                4474,
+                5973,
+                5974,
+                5999,
+                6000,
+                10497,
+                10498,
+                10661,
+                10662,
+                10663,
+                u64::MAX,
+            ],
+            &[4473, 4474, 5974, 10498, 10662],
         );
     }
-    phase::assert_full_refresh_equivalent_for_test(
-        &g,
-        epoch,
-        reference,
-        &[
-            0,
-            4473,
-            4474,
-            5973,
-            5974,
-            5999,
-            6000,
-            10497,
-            10498,
-            10661,
-            10662,
-            10663,
-            u64::MAX,
-        ],
-        &[4473, 4474, 5974, 10498, 10662],
-    );
 }
 
 #[test]
@@ -1422,6 +1568,15 @@ fn phase_fractional_q_has_no_false_quarter_closure_while_integer_nonbar_q_remain
     .unwrap();
     fractional.prepare_common_phase();
     assert!(!fractional.has_common_phase());
+    assert!(
+        fractional
+            .clone()
+            .with_grid_phase_origin(Some(GridPhaseOrigin {
+                frame_bits: 0.0_f64.to_bits(),
+                authority_revision: 71
+            }))
+            .is_err()
+    );
     let mut quarter = MappedLoopGeometry::new(
         map,
         864001,

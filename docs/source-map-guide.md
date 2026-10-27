@@ -18,6 +18,11 @@ old saved tracker preference remains readable for compatibility. The supported
 dry mapped path requires Key Lock off and zero pitch offset; other
 representations retain their availability/refusal messages.
 
+Grid Offset chooses the beat phase; the loop start chooses the part of the song
+to play. SYNC corrects fractional beat differences and preserves an already
+matching whole-beat offset. It does not automatically choose the same musical
+phrase, bar or kick/snare pattern in two different songs.
+
 ## Normal use
 
 1. Load the songs and let their BPM analysis finish. Keep the selected loop starts

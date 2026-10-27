@@ -1,5 +1,26 @@
 ## ADDED Requirements
 
+### Requirement: Explicit source grids correct beat phase without chasing phrase position
+With an admitted explicit grid origin g, common phase SHALL target B(g)+M(n)
+modulo one quarter note. An aligned whole-beat offset SHALL retain its intentional
+source/phrase position. Correction debt and captured winding reconstruction SHALL
+both use C=1. Without explicit g, the existing launch-relative law SHALL retain
+C=Q. Physical folding, window scheduling and domain identity SHALL retain Q in
+both cases. Explicit-g admission SHALL retain positive integral Q, unchanged
+source/ACK guards, full g/revision identity, analytic rate limits and nearest
+feasible winding with positive ties and alternate-adjacent fallback. Unknown meter
+SHALL NOT be promoted to bar, downbeat or kick/snare-parity proof.
+
+#### Scenario: Aligned loops differ by a whole number of beats
+- **WHEN** an explicit-g voice has an integer beat offset from the current master
+- **THEN** its first source read and whole-beat offset SHALL remain intact without a phase chase
+- **AND** different own loop lengths SHALL continue folding at their own Q
+
+#### Scenario: A fractional correction reaches capture with a nonzero winding
+- **WHEN** an explicit-g programme captures the selected feasible beat winding
+- **THEN** debt reduction and captured reconstruction SHALL agree on C=1 without a discontinuity
+- **AND** current actual-read confirmation SHALL require beat residual modulo1, without requiring integer phrase offsets to vanish
+
 ### Requirement: Stable scalar launch refusals do not create automatic retry work
 An unchanged scalar-cohort launch refusal SHALL retain its exact bounded retry
 observation when original launch qualification remains unavailable.

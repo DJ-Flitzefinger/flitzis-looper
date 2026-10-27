@@ -1,5 +1,13 @@
 ## Latest Human simplification — 2026-10-27
 
+For explicit Grid Offset g, shared SYNC follows B(g)+Z beat phase using correction
+period1, preserving intentional whole-beat phrase offsets and the own loop Q.
+The absent-g launch-relative law retains Q. Debt and capture use the same period;
+window scheduling and physical folding always retain Q. Full source/grid authority
+and current actual-read confirmation remain required; beat alignment does not
+assert unknown bar/downbeat or kick/snare parity. See adopt-live-source-sync-policy
+for the normative phase rule and identical real-song counterexample.
+
 The effective hierarchy is MultiLoop -> BPM Lock -> optional SYNC. SYNC uses
 automatic source beat maps and follows beat phase; the separate REALTIME BPM
 control is removed. This supersedes the earlier separate Fixed/Mapped choice

@@ -1158,8 +1158,20 @@ impl<const N: usize> Core<N> {
             .add(g_int(self.m0)?.mul(a)?.mul(c)?)?
             .sub(self.initial.mul(c)?)
     }
+    fn correction_period(self) -> Option<Num<N>> {
+        if self.anchor.grid_target.is_none() {
+            return Some(self.q);
+        }
+        // An explicit source grid asks for beat phase, not a whole-loop phrase
+        // position. Positive integer Q is already required by phase admission.
+        // Keep Q for physical folding and the bounded correction-window schedule.
+        let grid = Grid::from_admitted_exponent(self.anchor.config.beat_exp as i16)?;
+        g_int(decode_f64_at_grid(1.0, grid)?)
+    }
     fn debt_period(self) -> Option<Num<N>> {
-        self.q.mul(self.inverse_den)?.mul(g_int(self.start.dx)?)
+        self.correction_period()?
+            .mul(self.inverse_den)?
+            .mul(g_int(self.start.dx)?)
     }
     fn positive_debt(self) -> Option<Num<N>> {
         g_residue(self.debt_numerator()?, self.debt_period()?)
@@ -1280,9 +1292,11 @@ impl<const N: usize> Core<N> {
             let master = g_int(self.m0)?.add(self.delta(frame)?)?;
             let c = g_int(self.start.dx)?;
             return Some(Value {
-                numerator: self
-                    .target_origin
-                    .add(master.sub(winding.mul(self.q)?)?.mul(c)?)?,
+                numerator: self.target_origin.add(
+                    master
+                        .sub(winding.mul(self.correction_period()?)?)?
+                        .mul(c)?,
+                )?,
                 denominator: c,
                 exponent: b,
                 captured: true,

@@ -2,6 +2,28 @@
 
 For control meanings and step-by-step use, see the [Source Map guide](source-map-guide.md).
 
+## Current beat-phase correction — 2026-10-27
+
+An explicit source Grid Offset g selects the beat lattice B(g)+Z. SYNC corrects
+the difference B(g)+M(n)-B(s(n)) modulo one quarter note. The selected loop start
+A remains the intentional entry/phrase choice. A whole-beat difference already
+has matching beat phase and must not provoke a whole-loop phase chase. Without
+an explicit g, the existing launch-relative target and modulo-Q law remain intact.
+This distinction supersedes earlier full-Q correction descriptions for explicit g.
+
+Use C=1 for explicit g and C=Q otherwise in both debt reduction and captured
+winding reconstruction. Retain Q for physical source folding, correction-window
+entry/cycles and domain identity. Try the nearest feasible winding, positive on
+ties, then the other adjacent winding under the existing rate bounds. The latter
+can exceed half a beat; no universal half-beat correction bound is promised.
+Explicit-g phase admission still requires positive integral Q. Fractional ordinary
+mapped playback remains separate. Full g and its authority revision remain part
+of target identity even when two origins have equivalent beat phase.
+
+Unknown meter does not establish bar, downbeat or kick/snare parity. Numerical
+beat-phase agreement and current rendered-read confirmation do not certify beat
+detection or musical listening acceptance.
+
 Decision date: 2026-10-05. Current integration: independent pitch controls, source-map
 custody/editor and the qualified initial mapped launch are implemented. The
 independent source-SYNC control and its exact delivery boundary are described below;
