@@ -409,7 +409,7 @@ fn requested_grid_phase_captures_native_authority_and_rejects_real_origin_aba() 
     let generation = binding(&fixture, 0).source_generation;
     fixture
         .engine
-        .set_pad_timing_metadata_with_source(0, 1. / 48_000., Some(generation))
+        .set_pad_timing_metadata_with_source(0, -1. / 48_000., Some(generation))
         .unwrap();
     fixture.dispatch_one();
     assert!(
@@ -425,9 +425,12 @@ fn requested_grid_phase_captures_native_authority_and_rejects_real_origin_aba() 
         &fixture.engine.input_runtime_ownership,
         changed_binding.binding
     ));
-    row.phase_origin_seconds = Some(1. / 48_000.);
+    row.phase_origin_seconds = Some(-1. / 48_000.);
     let changed = admit(&fixture, &row);
-    assert_eq!(changed.phase_origin().unwrap().frame_bits, 1_f64.to_bits());
+    assert_eq!(
+        changed.phase_origin().unwrap().frame_bits,
+        (-1_f64).to_bits()
+    );
     assert!(changed.phase_origin().unwrap().authority_revision > original_authority);
     fixture
         .engine

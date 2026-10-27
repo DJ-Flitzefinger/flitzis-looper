@@ -550,11 +550,11 @@ fn variable_mode_then_same_snapshot_phase_keeps_actual_pair_pcm_and_original_mas
 #[test]
 fn requested_grid_phase_real_late_birth_keeps_first_read_then_converges_without_allocations() {
     use crate::test_memory::{ThreadAllocations, observe_current_thread};
-    for requested_origin in [None, Some(1. / 1024.)] {
+    for requested_origin in [None, Some(1. / 1024.), Some(-1. / 1024.)] {
         let mut fixture = VariablePath::small(1, 0);
         fixture.dry.path.source.engine.stop_sample(0).unwrap();
         fixture.drain();
-        fixture.phase_origins[0] = requested_origin; // Some(g) rounds to47 frames, B(g)=188/375.
+        fixture.phase_origins[0] = requested_origin; // ±g rounds to±47 frames; exact B(g)=±188/375.
         fixture.publish(Some(wire(false, false, 1)), true, true, None, None);
         let birth = fixture
             .dry
@@ -659,7 +659,8 @@ fn requested_grid_phase_real_late_birth_keeps_first_read_then_converges_without_
         assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], false);
         let witness = phase.prepared_map(0).unwrap().sync_witness();
         let origin = witness.phase_origin.unwrap();
-        assert_eq!(origin.frame_bits, 47_f64.to_bits());
+        let g_frame = (requested_origin.unwrap() * f64::from(RATE)).round();
+        assert_eq!(origin.frame_bits, g_frame.to_bits());
         assert_eq!(
             origin.authority_revision,
             fixture
@@ -710,7 +711,7 @@ fn requested_grid_phase_real_late_birth_keeps_first_read_then_converges_without_
         assert!(verify_reads(&fixture, 0, anchor) > 0);
         assert_eq!(
             fixture.dry.path.feedback(0)["phase_origin_frame_bits"],
-            json!(47_f64.to_bits())
+            json!(g_frame.to_bits())
         );
         assert_eq!(
             fixture.dry.path.feedback(0)["phase_origin_authority_revision"],
@@ -722,7 +723,7 @@ fn requested_grid_phase_real_late_birth_keeps_first_read_then_converges_without_
             "absolute phase never creates intentional launch proof"
         );
         println!(
-            "REQUESTED_GRID_PHASE_REAL T=0 E=17 g_frame=47 rendered={rendered} correcting=true settled_read=true rust_allocations=0; synthetic PCM/source proof, not hearing acceptance"
+            "REQUESTED_GRID_PHASE_REAL T=0 E=17 g_frame={g_frame} rendered={rendered} correcting=true settled_read=true rust_allocations=0; synthetic PCM/source proof, not hearing acceptance"
         );
     }
 }
@@ -1924,7 +1925,16 @@ def seed_for(points, beginning, quarters, slope):
 def choose(points, beginning, quarters, beta0, m0, fpb, launch_master=0, grid_origin=None):
     slopes = [(r[0]-l[0])/(r[1]-l[1]) for l, r in zip(points, points[1:])
               if r[1] > beginning and l[1] < beginning+quarters]
-    target = beginning-F(launch_master) if grid_origin is None else affine(points,F(grid_origin))
+    if grid_origin is None:
+        target = beginning-F(launch_master)
+    elif grid_origin < 0:
+        # This fixture's original first usable segment touches physical zero.
+        # Extend only the explicit phase target; ordinary affine stays strict.
+        left, right = points[:2]
+        assert left[0] == 0
+        target = left[1]+(F(grid_origin)-left[0])*(right[1]-left[1])/(right[0]-left[0])
+    else:
+        target = affine(points,F(grid_origin))
     residue = (target+F(m0)-beta0) % quarters
     debts = [residue] if residue == 0 else sorted([residue, residue-quarters], key=lambda x: (abs(x), x < 0))
     for debt in debts:

@@ -156,9 +156,30 @@ impl ValidatedMap {
 
     pub(super) fn canonical_phase_origin_segment_by_source_ordering(
         &self,
-        compare: impl FnMut(f64) -> Option<Ordering>,
-    ) -> Option<CanonicalBeatSegment> {
-        self.canonical_segment_by_ordering(true, true, compare)
+        mut compare: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<(CanonicalBeatSegment, Option<f64>)> {
+        // virtual-source-edge-origin-v1 extends only the requested phase axis.
+        // A usable island after an intro gap or before a tail gap is no edge.
+        let edge = if compare(0.0)? == Ordering::Greater {
+            let left = *self.anchors.first()?;
+            let right = *self.anchors.get(1)?;
+            (left.seconds == 0.0 && self.segments.first()?.coverage.usable())
+                .then_some((left, right, 0.0))?
+        } else if compare(self.source_duration)? == Ordering::Less {
+            let index = self.anchors.len().checked_sub(2)?;
+            let left = self.anchors[index];
+            let right = self.anchors[index + 1];
+            (right.seconds == self.source_duration && self.segments[index].coverage.usable())
+                .then_some((left, right, self.source_duration))?
+        } else {
+            return self
+                .canonical_segment_by_ordering(true, true, compare)
+                .map(|segment| (segment, None));
+        };
+        Some((
+            CanonicalBeatSegment::from_anchors(edge.0, edge.1),
+            Some(edge.2),
+        ))
     }
 
     pub(super) fn canonical_segment_by_beat_ordering(

@@ -1,6 +1,6 @@
 //! Bounded original-seconds numerical regressions; no source/ACK or musical claim.
 use super::*;
-use crate::audio_engine::loop_phase_reference::LoopPhaseReference;
+use crate::audio_engine::loop_phase_reference::{GridPhaseOrigin, LoopPhaseReference};
 use crate::audio_engine::mapped_source_clock::tests::map_with_source;
 use crate::audio_engine::transport::TransportTimeline;
 
@@ -271,7 +271,6 @@ fn phase_requested_grid_origin_refuses_gap_seams_and_outside_without_old_target_
     base.prepare_common_phase();
     assert!(base.has_common_phase());
     for frame in [
-        -1.,
         96_000.,
         144_000.,
         192_000.,
@@ -341,6 +340,259 @@ fn phase_requested_grid_origin_refuses_gap_seams_and_outside_without_old_target_
         later.with_grid_phase_origin(target(216_000.)).is_ok(),
         "A==g is one supported point, not an empty interval failure"
     );
+}
+
+#[test]
+fn phase_virtual_grid_origin_extends_only_original_edges_with_exact_both_sign_oracle() {
+    let map = map_with_source(
+        &[(0., 0.), (2., 4.), (6., 8.), (18., 24.), (34., 40.)],
+        &["trusted"; 4],
+        false,
+        RATE,
+        1_632_000,
+    );
+    let record = map.canonical_record().to_owned();
+    let base = MappedLoopGeometry::new_general_declared(
+        map,
+        1_632_000,
+        RATE,
+        FrameRange {
+            start: 48_000,
+            end: 360_000,
+        },
+        8.,
+        false,
+    )
+    .unwrap();
+    for (g, target_n, target_d) in [
+        (-1_f64, -1_i128, 24_000_i128),
+        (1_632_001., 1_920_001, 48_000),
+    ] {
+        let geometry = base
+            .clone()
+            .with_grid_phase_origin(Some(GridPhaseOrigin {
+                frame_bits: g.to_bits(),
+                authority_revision: 71,
+            }))
+            .unwrap();
+        assert_eq!(geometry.domain(), base.domain());
+        assert_eq!(geometry.map.canonical_record(), record);
+        assert!(
+            geometry
+                .map
+                .canonical_beat_at_source(g / f64::from(RATE))
+                .is_none()
+        );
+        for master in [5., 7.] {
+            let execution = 1_000;
+            let actual = timeline(24_000., execution, master);
+            let reference = LoopPhaseReference::Unavailable;
+            let first = raw(192_000, 0.5);
+            let epoch =
+                MappedClockEpoch::common_phase(111, actual, &geometry, first, execution, reference)
+                    .unwrap();
+            assert_pair(
+                position(&geometry, epoch, reference, execution).unwrap(),
+                first.frame,
+                first.fraction,
+            );
+            let mut high = execution + 24_000;
+            while !settled(&geometry, epoch, reference, high).unwrap() {
+                high = execution + 2 * (high - execution);
+                assert!(high - execution <= 24_000 * 4096);
+            }
+            for frame in [
+                execution + 1,
+                high - 1,
+                high,
+                high + 1,
+                high + 192_000,
+                high + 384_001,
+            ] {
+                assert_local(&geometry, epoch, reference, frame);
+                if frame < high {
+                    continue;
+                }
+                // Independent exact original-map affine target and actual b64 M.
+                let bits = actual.beat_position_at_frame(frame).unwrap().to_bits();
+                let mantissa = i128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52));
+                let exponent = ((bits >> 52) & 2047) as i32 - 1023 - 52;
+                let (mn, md) = if exponent >= 0 {
+                    (mantissa << exponent, 1_i128)
+                } else {
+                    (mantissa, 1_i128 << (-exponent))
+                };
+                let d = target_d * md;
+                let b = 2 * d + (target_n * md + mn * target_d - 2 * d).rem_euclid(8 * d);
+                let n = if b <= 4 * d {
+                    b * 24_000
+                } else if b <= 8 * d {
+                    96_000 * d + (b - 4 * d) * 48_000
+                } else {
+                    288_000 * d + (b - 8 * d) * 36_000
+                };
+                let mut whole = (n / d) as usize;
+                let mut fraction = oracle_fraction((n % d) as u128, d as u128);
+                if fraction == 1. {
+                    whole += 1;
+                    fraction = 0.;
+                }
+                assert_pair(
+                    position(&geometry, epoch, reference, frame).unwrap(),
+                    whole,
+                    fraction,
+                );
+            }
+        }
+    }
+    // Signed virtual g never changes any copied epoch/program payload size.
+    assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 176);
+    assert_eq!(std::mem::size_of::<MappedSourceSpan>(), 288);
+}
+
+#[test]
+fn phase_virtual_grid_origin_refuses_missing_unusable_edges_and_physical_bridge_holes() {
+    let origin = |g: f64| {
+        Some(GridPhaseOrigin {
+            frame_bits: g.to_bits(),
+            authority_revision: 72,
+        })
+    };
+    let prepare = |anchors: &[(f64, f64)], coverage: &[&str], start: usize, end: usize| {
+        MappedLoopGeometry::new_general_declared(
+            map_with_source(anchors, coverage, false, RATE, 288_000),
+            288_000,
+            RATE,
+            FrameRange { start, end },
+            2.,
+            false,
+        )
+        .unwrap()
+    };
+    // The first/last usable island cannot replace a missing physical edge.
+    let missing_head = prepare(
+        &[(1., 2.), (2., 4.), (4., 8.), (6., 12.)],
+        &["trusted"; 3],
+        48_000,
+        96_000,
+    );
+    assert!(missing_head.with_grid_phase_origin(origin(-1.)).is_err());
+    let missing_tail = prepare(
+        &[(0., 0.), (2., 4.), (4., 8.), (5., 10.)],
+        &["trusted"; 3],
+        0,
+        48_000,
+    );
+    assert!(
+        missing_tail
+            .with_grid_phase_origin(origin(288_001.))
+            .is_err()
+    );
+    for unusable in ["gap_unknown_count", "uncertain"] {
+        let head = prepare(
+            &[(0., 0.), (2., 4.), (4., 8.), (6., 12.)],
+            &[unusable, "trusted", "trusted"],
+            120_000,
+            168_000,
+        );
+        assert!(head.with_grid_phase_origin(origin(-1.)).is_err());
+        let tail = prepare(
+            &[(0., 0.), (2., 4.), (4., 8.), (6., 12.)],
+            &["trusted", "trusted", unusable],
+            0,
+            48_000,
+        );
+        assert!(tail.with_grid_phase_origin(origin(288_001.)).is_err());
+        // Original edge usable, but the physical edge-to-A path crosses a hole.
+        let before = prepare(
+            &[(0., 0.), (2., 4.), (4., 8.), (6., 12.)],
+            &["trusted", unusable, "trusted"],
+            216_000,
+            264_000,
+        );
+        assert!(before.with_grid_phase_origin(origin(-1.)).is_err());
+        let after = prepare(
+            &[(0., 0.), (2., 4.), (4., 8.), (6., 12.)],
+            &["trusted", unusable, "trusted"],
+            0,
+            48_000,
+        );
+        assert!(after.with_grid_phase_origin(origin(288_001.)).is_err());
+    }
+}
+
+#[test]
+fn phase_virtual_grid_origin_uses_exact_decoder_extent_not_rounded_loaded_eof() {
+    // D=88201/44100, loaded D=96001+13/147 frames. Frame96001 is INSIDE,
+    // while96002 is outside. Both use the exact original physical-edge segment.
+    let duration = 88_201_f64 / 44_100.;
+    let map = map_with_source(
+        &[(0., 0.), (1., 2.), (duration, 4.)],
+        &["trusted"; 2],
+        false,
+        44_100,
+        88_201,
+    );
+    let base = MappedLoopGeometry::new_general_declared(
+        map,
+        96_001,
+        RATE,
+        FrameRange {
+            start: 0,
+            end: 48_000,
+        },
+        2.,
+        false,
+    )
+    .unwrap();
+    for g in [
+        -0.0_f64,
+        0.,
+        96_001.,
+        96_002.,
+        -(((1_u64 << 53) - 1) as f64),
+        ((1_u64 << 53) - 1) as f64,
+    ] {
+        let geometry = base
+            .clone()
+            .with_grid_phase_origin(Some(GridPhaseOrigin {
+                frame_bits: g.to_bits(),
+                authority_revision: 73,
+            }))
+            .unwrap();
+        assert_eq!(geometry.domain(), base.domain());
+        assert_eq!(geometry.phase_origin.unwrap().frame_bits, g.to_bits());
+        let actual = timeline(24_000., 0, 0.);
+        let e = MappedClockEpoch::common_phase(
+            112,
+            actual,
+            &geometry,
+            raw(13, -0.),
+            0,
+            LoopPhaseReference::Unavailable,
+        )
+        .unwrap();
+        assert_pair(
+            position(&geometry, e, LoopPhaseReference::Unavailable, 0).unwrap(),
+            13,
+            -0.,
+        );
+    }
+    for g in [
+        -((1_u64 << 53) as f64),
+        (1_u64 << 53) as f64,
+        f64::NEG_INFINITY,
+        0.5,
+    ] {
+        assert!(
+            base.clone()
+                .with_grid_phase_origin(Some(GridPhaseOrigin {
+                    frame_bits: g.to_bits(),
+                    authority_revision: 73
+                }))
+                .is_err()
+        );
+    }
 }
 
 #[test]

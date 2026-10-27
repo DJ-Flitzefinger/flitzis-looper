@@ -142,8 +142,8 @@ target/ratio/timer state and their distinct applied versus nominal rate semantic
 This representation SHALL NOT change any clock law, history or source authority.
 Unsupported coverage and unavailable numeric preparation SHALL refuse the explicit
 target without silently using the legacy A-relative target. Signed historical
-origin intent remains representable; virtual negative-origin activation support
-is separate from this inert Native foundation.
+origin intent remains representable. This inert Native foundation includes the
+explicit virtual-source-edge-origin-v1 phase-reference policy below.
 
 Operational four-quarter bars SHALL remove only the computational verified-4/4
 prerequisite for a requested beat count. Unknown meter, unreviewed detector count,
@@ -168,3 +168,30 @@ foundation SHALL NOT activate automatic App selection or assert musical acceptan
 - **WHEN** the explicit operational four-quarter policy prepares a loop extent
 - **THEN** numerical beat-count preparation may succeed without verified-4/4 status
 - **AND** the original map and meter evidence remain unchanged
+
+### Requirement: Virtual Grid Origins Extend Only A Qualified Phase Axis
+
+Native SHALL accept finite integral requested loaded-frame grid origins with
+absolute magnitude below2^53, including signed historical offsets. Under
+`virtual-source-edge-origin-v1`, only g outside the physical source interval0..D
+MAY use an original affine segment extended to define exact phase B(g). The
+segment SHALL touch physical0 orD from the interior and retain usable original
+coverage. D SHALL be the validated decoder source extent compared exactly at the
+loaded playback rate. Missing edges, unusable edge intervals or gaps on the
+physical edge-to-A path SHALL refuse preparation. In-source point/coverage checks
+SHALL retain their strict behavior.
+
+Virtual preparation SHALL NOT add anchors, edit map revisions, extend playable
+coverage, change local tempo or alter source/loop A/Z/Q. All actual source reads
+SHALL remain within the existing physical domain. The immutable target SHALL
+retain signed g bits, Native authority and the complete original inverse without
+adding copied state or widening numeric/resource limits. The first read at E
+SHALL remain the original actual source pair; only bounded phase correction may
+follow. Ordinary editor extrapolation SHALL NOT authorize this policy.
+
+#### Scenario: Negative saved grid offset and an unusable intro
+- **GIVEN** a saved g before physical source zero
+- **WHEN** the original usable segment reaches physical zero and its path to A is usable
+- **THEN** only its exact affine phase reference may extend to g
+- **AND** missing physical-edge coverage or an intervening gap refuses that reference
+- **AND** normal map queries and all physical audio boundaries remain unchanged

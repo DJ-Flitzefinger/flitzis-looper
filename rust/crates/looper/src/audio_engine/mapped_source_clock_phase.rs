@@ -14,6 +14,9 @@
 //! captured values cancel raw symbolically and retain only g's denominator.
 //! Physical folding then pairs A with that one denominator. No operation forms
 //! a raw*g*A denominator product; the same fixed512/2048 worst-width gates apply.
+//! A private virtual edge target permits signed g outside audio. Original axes
+//! have magnitude<2^126, so |g-x0|<2^127 and the inverse sum needs at most254 bits.
+//! It uses the same checked broad scratch bounds, never playable extrapolation.
 
 use super::{
     CanonicalBeatSegment, ExplicitSeekMode, FractionalSourcePosition, MappedClockEpoch,
@@ -394,7 +397,7 @@ impl MappedLoopGeometry {
     ) -> Result<Self, MappedClockError> {
         if let Some(origin) = origin {
             let frame = f64::from_bits(origin.frame_bits);
-            if !frame.is_finite() || frame < 0.0 || frame.trunc() != frame {
+            if !frame.is_finite() || frame.abs() >= (1_u64 << 53) as f64 || frame.trunc() != frame {
                 return Err(MappedClockError::InvalidGeometry);
             }
         }
@@ -422,11 +425,12 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
     } else {
         g.exact_continuation?.compact?.original_grids()
     };
+    let mut bridge_edge = None;
     let grid_target = if let Some(origin) = g.phase_origin {
         let frame = f64::from_bits(origin.frame_bits);
         let initial = GridStats::new().include_f64(frame)?.finish()?.refine(0)?;
         let raw = decode_f64_at_grid(frame, initial)?;
-        let inverse = g
+        let (inverse, edge) = g
             .map
             .canonical_phase_origin_segment_by_source_ordering(|v| {
                 crate::audio_engine::compact_source_numerics::compare_scaled_f64_to_grid(
@@ -436,6 +440,7 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
                     initial,
                 )
             })?;
+        bridge_edge = edge;
         source = GridStats::new()
             .include_base(source)
             .include_f64(frame)?
@@ -483,10 +488,14 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
     let divisor = int(ax.dx)?;
     if let Some(target) = grid_target {
         let target_axes = Axes::new(target.inverse, g.loaded_rate_hz, sg, bg)?;
-        let target_beat = target_axes.inverse(decode_f64_at_grid(
-            f64::from_bits(target.origin.frame_bits),
-            sg,
-        )?)?;
+        // Validate only the physical edge-to-A path for a virtual target.
+        // Its exterior affine phase is not claimed as source/map coverage.
+        let bridge_frame = if let Some(edge) = bridge_edge {
+            decode_scaled_f64_at_grid(edge, g.loaded_rate_hz, sg)?
+        } else {
+            decode_f64_at_grid(f64::from_bits(target.origin.frame_bits), sg)?
+        };
+        let target_beat = target_axes.inverse(bridge_frame)?;
         let target_divisor = int(target_axes.dx)?;
         let ordering = begin.mul(target_divisor)?.cmp(&target_beat.mul(divisor)?);
         if ordering != Ordering::Equal {
@@ -1097,7 +1106,9 @@ impl<const N: usize> Core<N> {
         } else {
             decode_source_pair_at_grid(source_start, 0.0, sg)?
         };
-        if a < start.x0 || a > start.x0.checked_add(start.dx)? {
+        // Some targets passed the strict point/physical-edge policy off RT.
+        // Only their requested axis may extend outside the original segment.
+        if target.is_none() && (a < start.x0 || a > start.x0.checked_add(start.dx)?) {
             return None;
         }
         let target_origin = start.inverse(a)?.resize::<N>()?;

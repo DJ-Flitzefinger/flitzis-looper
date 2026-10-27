@@ -158,10 +158,7 @@ impl QualifiedSourceMap {
             .phase_origin_seconds
             .map(|seconds| {
                 let frame = (seconds * f64::from(self.loaded_rate)).round();
-                if !seconds.is_finite()
-                    || !frame.is_finite()
-                    || frame < 0.0
-                    || frame >= (1_u64 << 53) as f64
+                if !seconds.is_finite() || !frame.is_finite() || frame.abs() >= (1_u64 << 53) as f64
                 {
                     return Err(
                         "requested mapped grid origin has no supported loaded-frame coordinate"

@@ -55,7 +55,7 @@ impl SourceBeatmap {
     pub(crate) fn canonical_phase_origin_segment_by_source_ordering(
         &self,
         compare: impl FnMut(f64) -> Option<std::cmp::Ordering>,
-    ) -> Option<CanonicalBeatSegment> {
+    ) -> Option<(CanonicalBeatSegment, Option<f64>)> {
         self.inner
             .canonical_phase_origin_segment_by_source_ordering(compare)
     }
