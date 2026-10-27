@@ -49,12 +49,17 @@ type SourceBeatmapStatus = Literal[
 @dataclass
 class _MapJob:
     content: str
-    intent: PadSourceBeatmapIntent
-    job: OfflineAnalysisJob
+    intent: PadSourceBeatmapIntent | None
+    job: OfflineAnalysisJob | None
     restoring: bool
     source_context: object
     reservation: AssetRetirementReservation | None = None
     raw_review: tuple[int, str] | None = None
+    automatic: bool = False
+    staged: tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None = None
+    publishing: bool = False
+    failure_context: object = None
+    attached: bool = False
 
 
 @dataclass
@@ -136,11 +141,13 @@ class SourceBeatmapSelection:
         self._pending: dict[str, _MapJob] = {}
         self._effective: dict[str, _EffectiveMap] = {}
         self._publications: list[_Publication] = []
-        self._failed: dict[str, tuple[PadSourceBeatmapIntent, object]] = {}
+        self._failed: dict[str, tuple[PadSourceBeatmapIntent | None, object]] = {}
+        self._on_effective: Callable[[int], None] = lambda _sample_id: None
         self._retry_after: dict[str, float] = {}
         self._errors: dict[str, str] = {}
         self._raw: _RawReview | None = None
         self._raw_attempt = 0
+        self._automatic_deferred: frozenset[int] = frozenset()
 
     def analyze_original(self, sample_id: int, *, expected_attempt: int) -> None:
         """Acquire complete original detections without entering accepted-map admission."""
@@ -432,6 +439,7 @@ class SourceBeatmapSelection:
         edit_guard: Callable[[int], None],
         source_generation: Callable[[int], int | None] | None = None,
         beat_this_installation_root: Path | None = None,
+        on_effective: Callable[[int], None] | None = None,
     ) -> None:
         self._commit = commit
         self._blocked = blocked
@@ -440,6 +448,8 @@ class SourceBeatmapSelection:
             self._source_generation = source_generation
         if beat_this_installation_root is not None:
             self._beat_this_installation_root = beat_this_installation_root
+        if on_effective is not None:
+            self._on_effective = on_effective
 
     def _content(self, sample_id: int) -> str | None:
         content = self.project.pad_content[sample_id]
@@ -522,13 +532,19 @@ class SourceBeatmapSelection:
 
     def _admit(self, sample_id: int, content: str, begin: Callable[[], OfflineAnalysisJob]) -> None:
         """Retain the same selection/publication owner for every map preparation purpose."""
-        if content in self._pending:
+        pending = self._pending.get(content)
+        if pending is not None and not pending.automatic:
             message = "source beatmap preparation is already pending for this content"
             raise RuntimeError(message)
         previous = self.project.pad_source_beatmap_intent[sample_id]
         requested = next_source_beatmap_intent(
             previous, None if previous is None else previous.selected
         )
+        if pending is not None:
+            self._cancel(content)
+            # Even a refused manual admission supersedes automatic work.
+            self.project.pad_source_beatmap_intent[sample_id] = requested
+            self.changed()
         context = self._source_context(sample_id)
         reservation = self.assets.reserve(8)
         try:
@@ -552,8 +568,10 @@ class SourceBeatmapSelection:
         """Identify selected or explicitly requested map mode without granting geometry."""
         validate_sample_id(sample_id)
         intent = self.project.pad_source_beatmap_intent[sample_id]
+        content = self._content(sample_id)
+        pending = None if content is None else self._pending.get(content)
         return (intent is not None and intent.selected is not None) or (
-            self._content(sample_id) in self._pending
+            pending is not None and not pending.automatic
         )
 
     def clear(self, sample_id: int) -> None:
@@ -580,6 +598,8 @@ class SourceBeatmapSelection:
         previous: PadSourceBeatmapIntent | None,
         selected: PadSourceBeatmapIntent,
         reservation: AssetRetirementReservation,
+        *,
+        current_guard: Callable[[], bool] = lambda: True,
     ) -> bool:
         candidate = self.project.model_copy(deep=True)
         candidate.pad_source_beatmap_intent[sample_id] = selected
@@ -594,6 +614,7 @@ class SourceBeatmapSelection:
                 lambda: (
                     self._content(sample_id) == content
                     and self.project.pad_source_beatmap_intent[sample_id] is previous
+                    and current_guard()
                 ),
             )
         except BaseException:
@@ -604,6 +625,7 @@ class SourceBeatmapSelection:
         if (
             self._content(sample_id) != content
             or self.project.pad_source_beatmap_intent[sample_id] is not previous
+            or not current_guard()
         ):
             self.assets.release_assignment_image(image)
             reservation.close()
@@ -648,6 +670,11 @@ class SourceBeatmapSelection:
         delivery = event.get("_native_event_owner")
         if pending is None or delivery is None:
             return
+        if pending.automatic:
+            self._automatic_completed(pending, event)
+            return
+        assert pending.job is not None
+        assert pending.intent is not None
         artifact = pending.job.resolve_source_beatmap_artifact_completion(
             cast("LoaderEventDelivery", delivery)
         )
@@ -658,10 +685,12 @@ class SourceBeatmapSelection:
         selected_by_completion = False
         try:
             current = self.project.pad_source_beatmap_intent[sample_id]
+            expected_intent = current
             if current != pending.intent:
                 artifact.retire_unselected()
                 return
             if pending.restoring:
+                assert current is not None
                 if current.selected != reference:
                     return
                 lease = self.assets._acquire_map(reference)
@@ -671,20 +700,33 @@ class SourceBeatmapSelection:
                     lease.release()
             else:
                 selected = PadSourceBeatmapIntent(
-                    schema_version=1, revision=pending.intent.revision, selected=reference
+                    # Explicit manual preparation always owns this revision.
+                    schema_version=1,
+                    revision=pending.intent.revision,
+                    selected=reference,
                 )
+                expected_intent = selected
                 assert pending.reservation is not None
                 selected_by_completion = self._select_durable(
                     sample_id, pending.content, current, selected, pending.reservation
                 )
                 pending.reservation = None
             selected_intent = self.project.pad_source_beatmap_intent[sample_id]
-            if selected_intent is not None and selected_intent.selected == reference:
+            owner = self.audio._resolve_loader_event(cast("LoaderEventDelivery", delivery))
+            owner_matches = owner is not None and owner[0] == sample_id
+            if (
+                (pending.restoring or selected_by_completion)
+                and self._content(sample_id) == pending.content
+                and selected_intent is expected_intent
+                and owner_matches
+            ):
                 self._effective[pending.content] = _EffectiveMap(
                     reference, artifact, cast("LoaderEventDelivery", delivery)
                 )
                 self._errors.pop(pending.content, None)
                 self._retire_reviewed_raw(sample_id, pending, selected=selected_by_completion)
+            else:
+                artifact.retire_unselected()
         except (OSError, RuntimeError, ValueError) as error:
             self._errors[pending.content] = str(error)
             artifact.retire_unselected()
@@ -786,6 +828,174 @@ class SourceBeatmapSelection:
         getter = getattr(self.audio, "waveform_source_identity", None)
         return None if getter is None else getter(sample_id)
 
+    def _automatic_context(self, sample_id: int) -> object:
+        context = self._source_context(sample_id)
+        if isinstance(context, tuple) and len(context) == 4:
+            # Resident-window frame counts are not original-source identity.
+            return context[0], context[1], context[3]
+        return None
+
+    def _automatic_completed(self, pending: _MapJob, event: dict[str, object]) -> None:
+        if pending.staged is None:
+            pending.staged = self._capture_automatic(event)
+            if pending.staged is None:
+                if pending.job is not None and pending.job.is_cancelled():
+                    # A timing edit may win between poll and completion export.
+                    # No source-only claim was spent; fresh preparation may retry.
+                    self._cancel(pending.content, pending)
+                    return
+                self._record_map_failure(
+                    pending,
+                    self._errors.get(
+                        pending.content, "Automatic source map completion is no longer current."
+                    ),
+                )
+
+    def _capture_automatic(
+        self, event: dict[str, object]
+    ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None:
+        """Consume Native's one-shot claim before any timing metadata callback."""
+        if not self._automatic_supported():
+            return None
+        owner = event.get("_native_event_owner")
+        if owner is None:
+            return None
+        try:
+            return self.audio.consume_automatic_source_beatmap(cast("LoaderEventDelivery", owner))
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            if str(error).startswith("loader event content placement pending"):
+                message = "loader event content placement pending"
+                raise RuntimeError(message) from error
+            sample_id = event.get("id")
+            content = self._content(sample_id) if type(sample_id) is int else None
+            if content is not None:
+                self._errors[content] = f"Automatic source map: {error}"
+            return None
+
+    def _adopt_automatic(
+        self,
+        sample_id: int,
+        content: str,
+        previous: PadSourceBeatmapIntent | None,
+        captured: tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None,
+    ) -> None:
+        """Bind an already consumed source-only completion after its content is recorded."""
+        if captured is None:
+            return
+        current = self.project.pad_source_beatmap_intent[sample_id]
+        if (
+            self._content(sample_id) != content
+            or current != previous
+            or (current is not None and not current.automatic)
+            or content in self._pending
+        ):
+            captured[1].retire_unselected()
+            return
+        self._pending[content] = _MapJob(
+            content=content,
+            intent=current,
+            job=None,
+            restoring=False,
+            source_context=self._automatic_context(sample_id),
+            automatic=True,
+            staged=captured,
+        )
+        self._errors.pop(content, None)
+        self._publish_automatic(sample_id, self._pending[content])
+
+    def _automatic_supported(self) -> bool:
+        return (
+            getattr(self.audio, "AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION", None) == 1
+            and getattr(self.audio, "AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION", None) == 1
+            and getattr(self.audio, "GRID_PHASE_ORIGIN_API_VERSION", None) == 1
+        )
+
+    def _automatic_current(self, sample_id: int, pending: _MapJob) -> bool:
+        if (
+            self._content(sample_id) != pending.content
+            or self._pending.get(pending.content) is not pending
+            or self.project.pad_source_beatmap_intent[sample_id] != pending.intent
+            or (pending.intent is not None and not pending.intent.automatic)
+        ):
+            return False
+        context = self._automatic_context(sample_id)
+        if context is None:
+            message = "loader event content placement pending"
+            raise RuntimeError(message)
+        if pending.source_context is None:
+            pending.source_context = context
+        if context != pending.source_context or pending.staged is None:
+            return False
+        owner = self.audio._resolve_loader_event(pending.staged[2])
+        return owner is not None and owner[0] == sample_id
+
+    def _publish_automatic(self, sample_id: int, pending: _MapJob) -> None:
+        if pending.publishing or pending.staged is None or self._blocked() or self._publications:
+            return
+        pending.publishing = True
+        try:
+            if not self._automatic_current(sample_id, pending):
+                self._cancel(pending.content, pending)
+                return
+            artifact, delivery = pending.staged[1:]
+            reference = SourceBeatmapReference.model_validate_json(artifact.receipt_json())
+            previous = self.project.pad_source_beatmap_intent[sample_id]
+            if not pending.attached and not self._attach_automatic(
+                sample_id, pending, previous, reference
+            ):
+                self._cancel(pending.content, pending)
+                return
+            # No Python receipt equality can replace this fresh Native source guard.
+            if not self._automatic_current(sample_id, pending):
+                self._cancel(pending.content, pending)
+                return
+            self._effective[pending.content] = _EffectiveMap(reference, artifact, delivery)
+            pending.attached = True
+            self._on_effective(sample_id)
+            if not self._automatic_current(sample_id, pending):
+                self._cancel(pending.content, pending)
+                return
+            pending.staged = None
+            self._pending.pop(pending.content, None)
+            self._errors.pop(pending.content, None)
+        except (OSError, RuntimeError, ValueError) as error:
+            self._errors[pending.content] = str(error)
+            self._retry_after[pending.content] = monotonic() + 1.0
+        finally:
+            pending.publishing = False
+
+    def _attach_automatic(
+        self,
+        sample_id: int,
+        pending: _MapJob,
+        previous: PadSourceBeatmapIntent | None,
+        reference: SourceBeatmapReference,
+    ) -> bool:
+        if pending.restoring:
+            if previous is None or previous.selected != reference:
+                return False
+            lease = self.assets._acquire_map(reference)
+            try:
+                lease.acknowledge_source_beatmap()
+            finally:
+                lease.release()
+            return self._automatic_current(sample_id, pending)
+        if pending.reservation is None:
+            pending.reservation = self.assets.reserve(8)
+        selected = next_source_beatmap_intent(previous, reference, automatic=True)
+        applied = self._select_durable(
+            sample_id,
+            pending.content,
+            previous,
+            selected,
+            pending.reservation,
+            current_guard=lambda: self._automatic_current(sample_id, pending),
+        )
+        pending.reservation = None
+        if applied:
+            pending.intent = selected
+        return applied
+
     @staticmethod
     def _transient(message: str) -> bool:
         return any(
@@ -801,7 +1011,14 @@ class SourceBeatmapSelection:
             )
         )
 
-    def poll(self, deferred: frozenset[int], *, admit_restore: bool = True) -> None:
+    def poll(
+        self,
+        deferred: frozenset[int],
+        *,
+        admit_restore: bool = True,
+        automatic_deferred: frozenset[int] = frozenset(),
+    ) -> None:
+        self._automatic_deferred = automatic_deferred
         self._poll_raw(deferred)
         self._settle_publications()
         self._poll_jobs(deferred)
@@ -816,11 +1033,18 @@ class SourceBeatmapSelection:
             if (
                 sample_id is None
                 or self.project.pad_source_beatmap_intent[sample_id] != pending.intent
-                or pending.job.is_cancelled()
+                or (
+                    pending.job is not None
+                    and pending.staged is None
+                    and pending.job.is_cancelled()
+                )
             ):
                 self._cancel(content)
                 continue
-            status = pending.job.source_beatmap_async_status()
+            status = None if pending.job is None else pending.job.source_beatmap_async_status()
+            if pending.automatic and pending.staged is not None:
+                self._poll_staged_automatic(sample_id, pending, status)
+                continue
             if (
                 status is not None
                 and status.get("terminal") is True
@@ -831,35 +1055,56 @@ class SourceBeatmapSelection:
                 }
             ):
                 detail = str(status.get("detail") or status["stage"])
-                self._errors[content] = detail
-                if self._transient(detail):
-                    self._retry_after[content] = monotonic() + 1.0
-                else:
-                    self._failed[content] = pending.intent, pending.source_context
-                self._cancel(content)
+                self._record_map_failure(pending, detail)
         current_contents = {row.instance_id for row in self.project.pad_content if row is not None}
         for cache in (self._effective, self._failed, self._errors, self._retry_after):
             for content in cache.keys() - current_contents:
                 cache.pop(content, None)
 
+    def _record_map_failure(self, pending: _MapJob, detail: str) -> None:
+        self._errors[pending.content] = detail
+        if self._transient(detail):
+            self._retry_after[pending.content] = monotonic() + 1.0
+        else:
+            self._failed[pending.content] = (
+                pending.intent,
+                pending.failure_context if pending.automatic else pending.source_context,
+            )
+        self._cancel(pending.content, pending)
+
+    def _poll_staged_automatic(
+        self,
+        sample_id: int,
+        pending: _MapJob,
+        status: dict[str, object] | None,
+    ) -> None:
+        if pending.job is not None:
+            if status is None or status.get("terminal") is not True:
+                return
+            # Natural post-retirement Drop preserves the exported source owner.
+            pending.job = None
+        if monotonic() >= self._retry_after.get(pending.content, 0.0):
+            self._publish_automatic(sample_id, pending)
+
     def _discover_restore(self, deferred: frozenset[int]) -> None:
         # Discovery also covers Copy/Move/Bank publications without a loader event.
         # At most one admission per tick uses the existing bounded Native cold pool.
         for sample_id, intent in enumerate(self.project.pad_source_beatmap_intent):
-            if intent is None or intent.selected is None or sample_id in deferred:
+            automatic = intent is None or intent.automatic
+            if sample_id in deferred or not self._discoverable(sample_id, intent):
                 continue
             content = self._content(sample_id)
             if content is None or content in self._pending or self.effective(sample_id) is not None:
                 continue
-            context = self._source_context(sample_id)
+            context = self._discovery_context(sample_id, automatic=automatic)
             if context is None or self._failed.get(content) == (intent, context):
                 continue
             if monotonic() < self._retry_after.get(content, 0.0):
                 continue
             try:
-                job = self.audio.begin_source_beatmap_restore_async(
-                    sample_id, intent.selected.model_dump_json()
-                )
+                job = self._begin_discovered(sample_id, intent)
+                if job is None:
+                    continue
             except (OSError, RuntimeError, ValueError) as error:
                 message = str(error)
                 if not self._transient(message):
@@ -869,14 +1114,70 @@ class SourceBeatmapSelection:
                     self._retry_after[content] = monotonic() + 1.0
                 return
             self._pending[content] = _MapJob(
-                content, intent, job, restoring=True, source_context=context
+                content,
+                intent,
+                job,
+                restoring=intent is not None,
+                source_context=self._automatic_context(sample_id) if automatic else context,
+                automatic=automatic,
+                failure_context=context,
             )
             return
 
-    def _cancel(self, content: str) -> None:
+    def _discoverable(self, sample_id: int, intent: PadSourceBeatmapIntent | None) -> bool:
+        if intent is not None and not intent.automatic:
+            return intent.selected is not None
+        if intent is None and not self.project.resolve_pad_source_sync(sample_id):
+            return False
+        return self._automatic_supported() and sample_id not in self._automatic_deferred
+
+    def _discovery_context(self, sample_id: int, *, automatic: bool) -> object:
+        if not automatic:
+            return self._source_context(sample_id)
+        context = self._automatic_context(sample_id)
+        root = self._beat_this_installation_root
+        installation: tuple[str, int | None] | None
+        try:
+            installation = (
+                None if root is None else (str(root), (root / "current.json").stat().st_mtime_ns)
+            )
+        except OSError:
+            installation = None if root is None else (str(root), None)
+        return None if context is None else (context, installation)
+
+    def _begin_discovered(
+        self,
+        sample_id: int,
+        intent: PadSourceBeatmapIntent | None,
+    ) -> OfflineAnalysisJob | None:
+        if intent is not None:
+            assert intent.selected is not None
+            begin = (
+                self.audio.begin_automatic_source_beatmap_restore_async
+                if intent.automatic
+                else self.audio.begin_source_beatmap_restore_async
+            )
+            return begin(sample_id, intent.selected.model_dump_json())
+        if self._beat_this_installation_root is None:
+            return None
+        generation = self._source_generation(sample_id)
+        if type(generation) is not int or generation <= 0:
+            return None
+        return self.audio.begin_automatic_source_beatmap_async(
+            sample_id,
+            str(self._beat_this_installation_root),
+            expected_source_generation=generation,
+        )
+
+    def _cancel(self, content: str, expected: _MapJob | None = None) -> None:
+        if expected is not None and self._pending.get(content) is not expected:
+            return
         pending = self._pending.pop(content, None)
         if pending is not None:
-            pending.job.cancel()
+            if pending.job is not None:
+                pending.job.cancel()
+            if pending.staged is not None:
+                pending.staged[1].retire_unselected()
             if pending.reservation is not None:
                 pending.reservation.close()
 

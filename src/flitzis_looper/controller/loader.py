@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.control_diagnostics import ConsoleDiagnostics
-    from flitzis_looper_audio import AudioEngine, LoaderEventDelivery
+    from flitzis_looper_audio import AudioEngine, LoaderEventDelivery, SourceBeatmapArtifact
 
 
 _PadValue = TypeVar("_PadValue")
@@ -788,7 +788,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._retry_deferred_restores()
         # Native readiness can precede this control-side source ACK's complete
         # timing/runtime refresh. Admit only after its original success delivery.
-        self.source_beatmaps.poll(deferred | frozenset(self._session.loading_sample_ids))
+        self.source_beatmaps.poll(
+            deferred | frozenset(self._session.loading_sample_ids),
+            automatic_deferred=frozenset(self._session.analyzing_sample_ids),
+        )
 
     def _deliver_loader_event(
         self,
@@ -853,7 +856,13 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 handler(sample_id, event)
             except RuntimeError as error:
                 if (
-                    event_type not in {"source_beatmap_completed", "source_beatmap_raw_completed"}
+                    event_type
+                    not in {
+                        "success",
+                        "task_success",
+                        "source_beatmap_completed",
+                        "source_beatmap_raw_completed",
+                    }
                     or str(error) != "loader event content placement pending"
                 ):
                     raise
@@ -1102,6 +1111,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             )
             return
 
+        automatic_map = self._capture_loaded_map(event, prepared)
+        previous_map_intent = (
+            None if new_assignment else self._project.pad_source_beatmap_intent[sample_id]
+        )
         self._settle_load_request(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
         restored_assignment = not new_assignment
@@ -1125,6 +1138,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         )
 
         self._record_completed_duration(sample_id, event)
+        self.source_beatmaps._adopt_automatic(
+            sample_id, content.instance_id, previous_map_intent, automatic_map
+        )
 
         try:
             self._assets.sync_assignments()
@@ -1156,6 +1172,31 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             message = "Incoming source receipt refers to an unknown intent revision"
             raise ValueError(message)
         return adopted
+
+    def _capture_loaded_map(
+        self,
+        event: dict[str, object],
+        prepared: tuple[Path, ProjectAssetLease],
+    ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None:
+        try:
+            return self.source_beatmaps._capture_automatic(event)
+        except RuntimeError:
+            if prepared[1] is not event.get("original_lease"):
+                prepared[1].release()
+            raise
+
+    def _capture_analysis_map(self, sample_id: int, event: dict[str, object]) -> None:
+        captured = self.source_beatmaps._capture_automatic(event)
+        content = self._project.pad_content[sample_id]
+        if content is not None:
+            self.source_beatmaps._adopt_automatic(
+                sample_id,
+                content.instance_id,
+                self._project.pad_source_beatmap_intent[sample_id],
+                captured,
+            )
+        elif captured is not None:
+            captured[1].retire_unselected()
 
     def _record_completed_duration(self, sample_id: int, event: dict[str, object]) -> None:
         duration_s = event.get("duration_s")
@@ -1585,6 +1626,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         if not self._matches_analysis_request(sample_id, event):
             return
 
+        self._capture_analysis_map(sample_id, event)
         analysis = event.get("analysis")
         parsed = _parse_sample_analysis(analysis)
         key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))

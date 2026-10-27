@@ -39,6 +39,7 @@ from flitzis_looper.models import (
     StemMixMode,
     validate_sample_id,
 )
+from flitzis_looper.timing_policy import effective_runtime_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,15 +96,24 @@ class _InputSourceMapProjection:
     delivery: LoaderEventDelivery | None = None
     exact_quarters: float | None = None
     ordinary_pending: bool = False
+    phase_origin_seconds: float | None = None
+    operational_four_quarter_bars: bool = False
+    grid_origin_supported: bool = False
 
     def payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "sync_requested": self.requested,
             "intent_revision": self.revision,
             "delivery": self.delivery,
             "exact_quarters": self.exact_quarters,
             "ordinary_pending": self.ordinary_pending,
         }
+        if self.grid_origin_supported:
+            payload.update(
+                phase_origin_seconds=self.phase_origin_seconds,
+                operational_four_quarter_bars=self.operational_four_quarter_bars,
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -935,7 +945,7 @@ class InputMappingController(BaseController):
                 if (
                     requested_sync
                     or sync_intent.revision > 0
-                    or not self._project.global_timing_policy.is_neutral
+                    or not effective_runtime_policy(self._project.global_timing_policy).is_neutral
                 ):
                     launch = self._app.transport.loop._capture_launch_region(
                         sample_id, timing=timing
@@ -980,7 +990,7 @@ class InputMappingController(BaseController):
 
     def _timing_policy_projection(self) -> str | None:
         """Fence an entire changed global request while any cohort row is reserved."""
-        policy = self._project.global_timing_policy
+        policy = effective_runtime_policy(self._project.global_timing_policy)
         encoded = None if policy.is_neutral else policy.model_dump_json()
         previous = self._last_input_runtime_state_signature
         if self._app.transport._pair_deferred_sample_ids and (
@@ -1042,6 +1052,11 @@ class InputMappingController(BaseController):
             delivery,
             exact,
             ordinary_pending,
+            self._app.transport.loop.grid_anchor_sec(sample_id)
+            if requested and delivery is not None
+            else None,
+            exact is not None,
+            getattr(self._audio, "GRID_PHASE_ORIGIN_API_VERSION", None) == 1,
         )
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:

@@ -12,6 +12,8 @@ from time import monotonic, time_ns
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from flitzis_looper.timing_policy import effective_runtime_policy
+
 if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
     from flitzis_looper_audio import AudioEngine
@@ -208,6 +210,9 @@ class TimingTrace:
             })
         return {
             "policy": project.global_timing_policy.model_dump(mode="json"),
+            "effective_policy": effective_runtime_policy(project.global_timing_policy).model_dump(
+                mode="json"
+            ),
             "multi_loop": project.multi_loop,
             "bpm_lock": project.bpm_lock,
             "key_lock": project.key_lock,

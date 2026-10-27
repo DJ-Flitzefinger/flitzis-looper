@@ -97,7 +97,7 @@ def test_policy_matrix_preserves_explicit_pad_preference_and_legacy_behavior(
     expected_preference = global_sync is True if not requested and revision == 0 else requested
     assert source_sync_preference(policy, pad) is expected_preference
     assert source_sync_requested(policy, pad) is (expected_preference and global_sync is not False)
-    assert variable_source_timing(policy) is (realtime is not False)
+    assert variable_source_timing(policy) is True
     assert pad == PadSourceSyncIntent(requested=requested, revision=revision)
 
 

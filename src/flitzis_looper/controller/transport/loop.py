@@ -89,7 +89,7 @@ class PadLoopController:
             message = "The selected source map is unavailable or still preparing"
             raise ValueError(message)
         info = geometry.editor_info()
-        rate = info["sample_rate_hz"]
+        rate = self._audio.loaded_sample_shape(sample_id)[0]
         duration = info["source_duration_seconds"]
         if (
             not isinstance(rate, int)
@@ -184,7 +184,11 @@ class PadLoopController:
         )
 
     def _source_map_bar_end(self, edit: _SourceMapLoopEdit, start: float, bars: float) -> float:
-        result = edit.geometry.source_after_beats(start, bars * 4.0, require_four_four=True)
+        result = edit.geometry.source_after_beats(
+            start,
+            bars * 4.0,
+            require_four_four=getattr(self._audio, "GRID_PHASE_ORIGIN_API_VERSION", None) != 1,
+        )
         return self._source_map_marker(edit.geometry, result, edit.rate)
 
     def _source_map_interval(
@@ -278,7 +282,11 @@ class PadLoopController:
             if first["beat"] is None or last["beat"] is None:
                 return None
             beats = last["beat"] - first["beat"]
-            result = geometry.source_after_beats(start, beats, require_four_four=True)
+            result = geometry.source_after_beats(
+                start,
+                beats,
+                require_four_four=getattr(self._audio, "GRID_PHASE_ORIGIN_API_VERSION", None) != 1,
+            )
             self._source_map_marker(geometry, result, rate)
         except RuntimeError, ValueError:
             return None
@@ -836,14 +844,18 @@ class PadLoopController:
                 message = "Variable SYNC requires a qualified source map."
                 raise ValueError(message)
             return None
-        return self._mapped_region(geometry, start=start, bars=bars)
+        return self._mapped_region(sample_id, geometry, start=start, bars=bars)
 
     def _mapped_region(
-        self, geometry: SourceBeatmap, *, start: float, bars: float
+        self, sample_id: int, geometry: SourceBeatmap, *, start: float, bars: float
     ) -> tuple[float, float]:
-        rate = geometry.editor_info()["sample_rate_hz"]
+        rate = self._audio.loaded_sample_shape(sample_id)[0]
         start = physical_source_marker_s(start, sample_rate_hz=rate)
-        result = geometry.source_after_beats(start, bars * 4.0, require_four_four=True)
+        result = geometry.source_after_beats(
+            start,
+            bars * 4.0,
+            require_four_four=getattr(self._audio, "GRID_PHASE_ORIGIN_API_VERSION", None) != 1,
+        )
         end = self._source_map_marker(geometry, result, rate)
         if end <= start:
             message = "Mapped automatic loop has no physical source interval"
@@ -856,6 +868,7 @@ class PadLoopController:
         """Validate status against its captured map without publishing loop or start intent."""
         if self._project.pad_loop_auto[sample_id] and self._requires_variable_map(sample_id):
             return self._mapped_region(
+                sample_id,
                 geometry,
                 start=float(self._project.pad_loop_start_s[sample_id]),
                 bars=self._stored_bars(sample_id),
@@ -933,7 +946,7 @@ class PadLoopController:
         bars = self._stored_bars(sample_id)
         auto = self._project.pad_loop_auto[sample_id]
         region = (
-            self._mapped_region(geometry, start=start, bars=bars)
+            self._mapped_region(sample_id, geometry, start=start, bars=bars)
             if auto and geometry is not None
             else self._scalar_region_for_intent(
                 sample_id,

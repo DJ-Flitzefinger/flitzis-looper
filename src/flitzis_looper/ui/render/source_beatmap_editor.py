@@ -902,9 +902,10 @@ def _render_source_map_controls(
         return
 
     imgui.text_wrapped(
-        "A source map assigns song positions to musical beats. Fixed-tempo SYNC needs no map "
-        "when REALTIME BPM is off. A manual 4/4 map uses the current constant BPM/grid; "
-        "full-mix analysis detects beats that still need review before variable SYNC."
+        "SYNC automatically prepares a source map from detected beats. It follows those beats "
+        "during playback; no manual map creation is required. Loop bars count four detected "
+        "quarter notes without claiming a verified musical meter. The controls below provide "
+        "optional manual corrections; a manual 4/4 map uses the current constant BPM/grid."
     )
 
     imgui.begin_disabled(frame.status in _BUSY or frame.identity is None)

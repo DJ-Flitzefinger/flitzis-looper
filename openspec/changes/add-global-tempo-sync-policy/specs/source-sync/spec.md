@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Timing controls retain preferences under a shared parent hierarchy
-The application SHALL resolve MULTI LOOP -> BPM LOCK -> SYNC -> REALTIME BPM through the existing GUI, Learn/MIDI, runtime and Native paths. Each child SHALL be unavailable for editing when its requested parent is unavailable or off. Stored BPM Lock, SYNC, Realtime BPM and content preferences SHALL remain intact while a parent is off. Control availability SHALL use qualified requested-parent state rather than an actual playing/settled acknowledgement, allowing configuration before playback. Key Lock, map selection, speed and trigger quantization SHALL remain separate controls. Source tempo tracking SHALL NOT add another master clock.
+The application SHALL resolve MULTI LOOP -> BPM LOCK -> optional SYNC through the existing GUI, Learn/MIDI, runtime and Native paths. Each child SHALL be unavailable for editing when its requested parent is unavailable or off. Stored BPM Lock, SYNC, historical Realtime BPM and content preferences SHALL remain intact while a parent is off. The runtime SHALL project realtime_bpm=true, including neutral revision0, without rewriting saved schema1 preferences or historical seals. Legacy tracker actions SHALL address SYNC. Control availability SHALL use qualified requested-parent state rather than an actual playing/settled acknowledgement, allowing configuration before playback. Key Lock, map selection, speed and trigger quantization SHALL remain separate controls. Source tempo tracking SHALL NOT add another master clock.
 
 #### Scenario: A parent is disabled and enabled again
 - **WHEN** MultiLoop or BPM Lock is changed while dependent preferences remain on
@@ -91,7 +91,7 @@ The application SHALL resolve MULTI LOOP -> BPM LOCK -> SYNC -> REALTIME BPM thr
 - **AND** a hierarchy revision preflight SHALL preserve ordinary MultiLoop cancellation/supersession of an already reserved Pair/Bank launch
 
 #### Scenario: The user selects fixed BPM
-- **WHEN** Realtime BPM is switched off
+- **WHEN** SYNC is switched off
 - **THEN** timing policy SHALL use the original current constant detected, manual or TAP timing rather than the current variable-map segment
 - **AND** selected maps, raw evidence and corrections SHALL remain intact
 - **AND** master tempo and unrelated requested controls SHALL remain unchanged
@@ -121,7 +121,27 @@ Historical projects without global choices SHALL retain their raw prior preferen
 - **AND** historical complete image bytes and seals SHALL remain unchanged
 
 ### Requirement: Resolved policy selects Legacy static or variable source timing
-An unavailable or disabled SYNC request SHALL select the established Legacy path: original constant detected/manual/TAP timing and existing BPM matching only when actual BPM Lock is enabled. A remembered global SYNC preference SHALL NOT force matching while the parent is inactive. Qualified SYNC with Realtime BPM off SHALL select static-grid synchronization; both on SHALL require the existing qualified variable map. Fixed and mapped actual consumers SHALL require actual BPM Lock, not merely a retained master period. Native runtime projection SHALL resolve its captured requested MultiLoop and BPM-Lock parents before choosing a timing target while preserving raw intent across omitted-row retention; actual-parent guards alone SHALL NOT replace requested-parent resolution. Missing or unsupported variable geometry MUST NOT silently select fixed synchronization. GUI, MIDI, runtime publication, loop/grid and automatic timing publication SHALL consume the same resolved policy.
+An unavailable or disabled SYNC request SHALL select the established Legacy path: original constant detected/manual/TAP timing and existing BPM matching only when actual BPM Lock is enabled. A remembered global SYNC preference SHALL NOT force matching while the parent is inactive. Qualified requested SYNC SHALL use the existing source-qualified mapped path regardless of the historical tracker preference. Fixed and mapped actual consumers SHALL require actual BPM Lock, not merely a retained master period. Native runtime projection SHALL resolve its captured requested MultiLoop and BPM-Lock parents before choosing a timing target while preserving raw intent across omitted-row retention; actual-parent guards alone SHALL NOT replace requested-parent resolution. Missing or unsupported variable geometry MUST NOT silently select fixed synchronization. GUI, MIDI, runtime publication, loop/grid and automatic timing publication SHALL consume the same resolved policy.
+
+#### Scenario: One SYNC preference selects the effective source timing
+- **WHEN** SYNC is requested with its parents available
+- **THEN** the application SHALL project the mapped target with historical tracker preferences preserved only as saved data
+- **AND** SYNC OFF SHALL use the original constant source timing without map prerequisites
+
+### Requirement: Automatic map selection retains original source custody
+Normal SYNC SHALL reuse a pristine automatic map from original analysis or acquire one through the existing map worker. Fresh standalone acquisition SHALL require requested SYNC and defer primary analysis. Saved automatic selections SHALL restore with fresh source verification without another NN inference. Manual selection or Clear SHALL supersede late automatic work. Map geometry SHALL preserve original decoder seconds; physical loop markers SHALL use the loaded rate. Operational loop bars SHALL contain four detected quarters without asserting verified meter or downbeats; gaps and uncertainty SHALL remain unavailable.
+
+#### Scenario: Optional map completion precedes metadata and worker retirement
+- **WHEN** an original Cold/Task map claim becomes available
+- **THEN** the application SHALL consume it once before tempo/key callbacks and bind it to the recorded current content afterward
+- **AND** placement Pending SHALL retry before core mutations, while other optional map failures SHALL NOT abort successful core load or analysis
+- **AND** a map-only job SHALL remain owned until actual terminal retirement after export and SHALL then release naturally
+- **AND** effective attachment SHALL require source/content/intent currentness before, inside and after successful durable publication; false publication SHALL NOT grant an ACK
+
+#### Scenario: A stopped third PAD is loaded during active SYNC
+- **WHEN** a fresh unfenced Native observation proves the loaded source inactive
+- **THEN** effective, pending, detail and phase aggregation SHALL exclude that PAD consistently
+- **AND** unknown or pending-launch participants SHALL remain included, and an empty participant set SHALL grant no effective or phase confirmation
 
 #### Scenario: Parent and child combinations are used
 - **WHEN** parent availability and remembered child choices are resolved

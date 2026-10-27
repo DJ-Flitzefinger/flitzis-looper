@@ -227,9 +227,17 @@ class AppController:
             edit_guard=self.ensure_not_copy_target,
             source_generation=self.transport.capture_current_pad_edit_generation,
             beat_this_installation_root=self._beat_this_installation_root,
+            on_effective=self._on_source_map_effective,
         )
         self.transport.loop.bind_source_maps(self.loader.source_beatmaps)
         self.transport.source_sync.bind_source_maps(self.loader.source_beatmaps)
+
+    def _on_source_map_effective(self, sample_id: int) -> None:
+        """Refresh derived loop residency without rewriting tempo or grid intent."""
+        self.transport.loop._apply_effective_pad_loop_region_to_audio(
+            sample_id, defer_unavailable_map=True
+        )
+        self.transport.refresh_input_runtime()
 
     def _init_recording_control(self) -> None:
         """Bind one original Engine and project namespace before restore and UI work."""

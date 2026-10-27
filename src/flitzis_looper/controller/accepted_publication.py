@@ -12,6 +12,7 @@ from flitzis_looper.controller.current_binding import (
 )
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
+from flitzis_looper.timing_policy import effective_runtime_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -467,7 +468,7 @@ class AcceptedTimingController:
         )
 
     def _control_signature(self, sample_id: int) -> tuple[object, ...]:
-        policy = self._project.global_timing_policy
+        policy = effective_runtime_policy(self._project.global_timing_policy)
         sync = self._project.pad_source_sync_intent[sample_id]
         intent = self._project.pad_source_beatmap_intent[sample_id]
         selected = None if intent is None else intent.selected

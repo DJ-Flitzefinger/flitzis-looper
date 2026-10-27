@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from flitzis_looper.models import validate_sample_id
 from flitzis_looper.source_sync_intent import next_source_sync_intent
-from flitzis_looper.timing_policy import variable_source_timing
+from flitzis_looper.timing_policy import effective_runtime_policy, variable_source_timing
 
 if TYPE_CHECKING:
     from flitzis_looper.control_diagnostics import ConsoleDiagnostics
@@ -350,7 +350,7 @@ class SourceSyncController:
 
     def requested_mode(self, sample_id: int) -> Literal["legacy", "fixed", "mapped"]:
         """Resolve the same mode matrix as Native without granting adoption."""
-        policy = self._project.global_timing_policy
+        policy = effective_runtime_policy(self._project.global_timing_policy)
         requested = self._project.resolve_pad_source_sync(sample_id)
         if not requested:
             return "legacy"
@@ -369,7 +369,7 @@ class SourceSyncController:
             or binding.is_current() is not True
             or not _valid_feedback(feedback, metadata)
             or (
-                not self._project.global_timing_policy.is_neutral
+                not effective_runtime_policy(self._project.global_timing_policy).is_neutral
                 and not _policy_feedback_valid(feedback)
             )
         ):
@@ -417,7 +417,9 @@ class SourceSyncController:
             if self.requested_mode(sample_id) == "mapped" and self._maps is not None
             else None
         )
-        if not self._project.global_timing_policy.is_neutral or _policy_feedback_valid(feedback):
+        if not effective_runtime_policy(
+            self._project.global_timing_policy
+        ).is_neutral or _policy_feedback_valid(feedback):
             return self._policy_status(sample_id, feedback, map_observation)
         adoption = self._adoption_status(sample_id, feedback)
         active, effective = feedback["active"] is True, feedback["effective"] is True
@@ -448,7 +450,7 @@ class SourceSyncController:
         requested = self._project.resolve_pad_source_sync(sample_id)
         expected = self.requested_mode(sample_id)
         intent = self._project.pad_source_sync_intent[sample_id]
-        policy = self._project.global_timing_policy
+        policy = effective_runtime_policy(self._project.global_timing_policy)
         active, effective = feedback["active"] is True, feedback["effective"] is True
         mode = cast("Literal['legacy', 'off', 'fixed', 'mapped'] | None", feedback["policy_mode"])
         matching = (
@@ -534,7 +536,7 @@ class SourceSyncController:
         adoption = feedback.get("adoption")
         if not isinstance(adoption, dict) or not _adoption_fields_valid(adoption):
             return None
-        policy = self._project.global_timing_policy
+        policy = effective_runtime_policy(self._project.global_timing_policy)
         intent = self._project.pad_source_sync_intent[sample_id]
         revision = None if policy.is_neutral else policy.revision
         if (

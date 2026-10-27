@@ -51,6 +51,22 @@ def _event(job: Mock, generation: str = "a") -> dict[str, object]:
     }
 
 
+def test_manual_false_durable_result_cannot_reuse_equal_receipt_or_leak_birth(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assigned(controller, audio_engine_mock)
+    job = _job(audio_engine_mock)
+    maps = controller.loader.source_beatmaps
+    maps.select(0, "record")
+    event = _event(job)
+    monkeypatch.setattr(maps, "_select_durable", lambda *_args, **_kwargs: False)
+    maps.completed(0, event)
+    assert maps.effective(0) is None
+    job.resolve_source_beatmap_artifact_completion.return_value.retire_unselected.assert_called_once()
+
+
 def test_original_job_delivery_commits_compact_selection_and_publishes_saved_owner(
     controller: AppController,
     audio_engine_mock: Mock,

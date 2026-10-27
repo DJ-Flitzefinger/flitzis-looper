@@ -16,6 +16,29 @@ use crate::audio_engine::source_beatmap_artifact::StorePoint;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[test]
+fn automatic_selection_intent_preserves_legacy_shape_and_strict_optional_provenance() {
+    use crate::audio_engine::source_beatmap_artifact::validate_intent_value;
+    let mut intent = serde_json::json!({"schema_version": 1, "revision": 1, "selected": null});
+    assert!(validate_intent_value(&intent).is_ok());
+    intent["automatic"] = false.into();
+    assert!(validate_intent_value(&intent).is_ok());
+    intent["automatic"] = true.into();
+    assert!(validate_intent_value(&intent).is_err());
+    intent["automatic"] = 1.into();
+    assert!(validate_intent_value(&intent).is_err());
+    intent["selected"] = serde_json::json!({
+        "schema_version": 1, "kind": "source-beatmap-v1",
+        "reference": format!("samples/.pcm-cache/source-beatmaps/v1/.ready-{}/map.json", "a".repeat(32)),
+        "bytes": 2048, "sha256": "b".repeat(64),
+        "map_revision": "c".repeat(64), "decoder_identity": "d".repeat(64)
+    });
+    intent["automatic"] = true.into();
+    assert!(validate_intent_value(&intent).is_ok());
+    intent["unexpected"] = false.into();
+    assert!(validate_intent_value(&intent).is_err());
+}
+
 fn samples_root(fixture: &ColdCustody) -> PathBuf {
     fixture.engine.cold_leases.lock().unwrap()[0]
         .as_ref()

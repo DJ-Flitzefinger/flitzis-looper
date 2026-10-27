@@ -6,7 +6,7 @@ tempo algorithm or establish that synchronization sounds correct.
 
 1. Start the updated Looper normally. Keep the two loaded songs and their existing
    settings. No new BPM map is required to record a timing log.
-2. Click **Start Timing Log** below SYNC / REALTIME BPM before starting the PADs.
+2. Click **Start Timing Log** below SYNC before starting the PADs.
 3. Play PAD2 and PAD3 together with the short and long loops that reproduce the
    drift. If another PAD normally repeats eight bars, include it in the test.
 4. Click **Heard Drift** when kick/snare audibly move apart. Keep playing long

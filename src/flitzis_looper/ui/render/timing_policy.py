@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 def render_global_timing_policy(ctx: UiContext) -> None:
     controls: tuple[tuple[TimingControl, str, Callable[[], None]], ...] = (
         ("sync", "SYNC", ctx.audio.global_.toggle_source_sync),
-        ("realtime_bpm", "REALTIME BPM", ctx.audio.global_.toggle_realtime_bpm),
     )
     for control, label, action in controls:
         status = ctx.state.global_.timing_policy_status(control)

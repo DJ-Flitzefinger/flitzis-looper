@@ -157,8 +157,13 @@ def _feedback(audio: Mock, **changes: object) -> dict[str, object]:
         "window_revision": 7,
         "active": False,
         "effective": False,
-        "intent_revision": None,
+        "intent_revision": 0,
         "map_revision": None,
+        "policy_mode": "mapped" if changes.get("map_revision") is not None else "legacy",
+        "policy_revision": 0,
+        "policy_sync": None,
+        "policy_realtime_bpm": True,
+        "settled": True,
     }
     feedback.update(changes)
     audio.pad_source_sync_status = Mock(return_value=feedback)
@@ -174,9 +179,9 @@ def _adoption(**changes: object) -> dict[str, object]:
         "reason": None,
         "execution_frame": None,
         "target_mode": "legacy",
-        "target_policy_revision": None,
+        "target_policy_revision": 0,
         "target_policy_sync": None,
-        "target_policy_realtime_bpm": None,
+        "target_policy_realtime_bpm": True,
         "target_intent_revision": 0,
     }
     observation.update(changes)
@@ -290,7 +295,7 @@ def test_current_map_guidance_precedes_generic_adoption_without_hiding_actual_au
     audio.capture_pad_start.assert_not_called()
     audio.set_pad_loop_region.assert_not_called()
     global_status = controller.transport.timing_policy.status("realtime_bpm")
-    assert global_status.effective is (actual_mode == "mapped")
+    assert global_status.effective is (actual_mode != "legacy")
     assert global_status.pending is True
     assert global_status.detail == status.guidance_text
 
@@ -379,7 +384,7 @@ def test_ready_unapplied_map_status_reuses_the_first_geometry_for_original_loop_
     assert status.map_readiness is None
     assert status.grid_phase_confirmed is None
     effective.assert_called_once_with(0)
-    mapped_region.assert_called_once_with(geometry, start=1.0, bars=1.0)
+    mapped_region.assert_called_once_with(0, geometry, start=1.0, bars=1.0)
     assert loop._source_sync_requested_region(0, geometry) == (1.0, 3.5)
     assert (project.model_dump(), controller.session.model_dump()) == before
     audio.set_input_runtime_state.assert_not_called()
@@ -577,9 +582,9 @@ def _inactive_policy_refusal(
         state="refused",
         reason=reason,
         target_mode=controller.transport.source_sync.requested_mode(0),
-        target_policy_revision=None if policy.is_neutral else policy.revision,
+        target_policy_revision=policy.revision,
         target_policy_sync=policy.sync,
-        target_policy_realtime_bpm=policy.realtime_bpm,
+        target_policy_realtime_bpm=True,
     )
     feedback = _feedback(
         audio,
@@ -610,9 +615,9 @@ def test_inactive_no_active_voice_attempt_stays_off_and_quiet_across_pad_and_glo
     capsys.readouterr()
 
     assert adoption["target_mode"] == "legacy"
-    assert adoption["target_policy_revision"] == (None if policy.is_neutral else 2)
+    assert adoption["target_policy_revision"] == policy.revision
     assert adoption["target_policy_sync"] is policy.sync
-    assert adoption["target_policy_realtime_bpm"] is policy.realtime_bpm
+    assert adoption["target_policy_realtime_bpm"] is True
     assert adoption["target_intent_revision"] == 0
     for _ in range(4):
         status = controller.transport.source_sync.status(0)
@@ -627,10 +632,10 @@ def test_inactive_no_active_voice_attempt_stays_off_and_quiet_across_pad_and_glo
         sync = controller.transport.timing_policy.status("sync")
         realtime = controller.transport.timing_policy.status("realtime_bpm")
         assert sync.requested is policy.sync
-        assert realtime.requested is policy.realtime_bpm
+        assert realtime.requested is policy.sync
         assert sync.preference is False
-        assert realtime.preference is True
-        assert sync.effective is False
+        assert realtime.preference is False
+        assert sync.effective is None
         assert realtime.effective is None
         assert sync.pending is realtime.pending is False
         assert sync.detail is realtime.detail is None
@@ -717,14 +722,14 @@ def test_requested_fixed_idle_attempt_is_stopped_without_an_applied_acknowledgem
 
     status = controller.transport.source_sync.status(0)
 
-    assert adoption["target_mode"] == "fixed"
-    assert status.state == "stopped"
+    assert adoption["target_mode"] == "mapped"
+    assert status.state == "pending"
     assert status.requested is True
     assert status.active is False
     assert status.effective is False
     assert status.policy_mode is None
     assert status.actual_realtime_bpm is None
-    assert status.guidance == "restart"
+    assert status.guidance == "pending"
     assert controller.transport.timing_policy.status("sync").pending is False
     assert controller.transport.timing_policy.status("realtime_bpm").pending is False
     assert adoption["state"] == "refused"
@@ -786,7 +791,7 @@ def _current_scalar_glide(
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(
         requested=mode == "fixed", revision=5
     )
-    revision = None if neutral else policy.revision
+    revision = policy.revision
     return _feedback(
         audio,
         active=True,
@@ -796,16 +801,16 @@ def _current_scalar_glide(
         policy_mode=mode,
         policy_revision=revision,
         policy_sync=policy.sync,
-        policy_realtime_bpm=policy.realtime_bpm,
+        policy_realtime_bpm=True,
         settled=False,
         target_current=True,
         adoption=_adoption(
             state="refused",
             reason="unsupported",
-            target_mode=mode,
+            target_mode="mapped" if sync else "legacy",
             target_policy_revision=revision,
             target_policy_sync=policy.sync,
-            target_policy_realtime_bpm=policy.realtime_bpm,
+            target_policy_realtime_bpm=True,
             target_intent_revision=5,
         ),
     )
@@ -819,9 +824,9 @@ def test_current_scalar_target_settling_precedes_redundant_adoption_refusal(
 
     status = controller.transport.source_sync.status(0)
 
-    assert status.state == "pending"
-    assert status.guidance == "settling"
-    assert status.detail is None
+    assert status.state == ("refused" if sync else "pending")
+    assert status.guidance == ("refused" if sync else "settling")
+    assert (status.detail is not None) is (sync is True)
     assert status.active is True
     assert status.effective is False
     assert status.actual_realtime_bpm is None
@@ -832,14 +837,18 @@ def test_current_scalar_target_settling_precedes_redundant_adoption_refusal(
 
     feedback.update(settled=True, effective=sync is True)
     status = controller.transport.source_sync.status(0)
-    assert status.state == ("pending" if sync else "off")
-    assert status.guidance == ("phase" if sync else None)
-    assert status.detail == ("Grid phase is unconfirmed." if sync else None)
+    assert status.state == ("refused" if sync else "off")
+    assert status.guidance == ("refused" if sync else None)
+    assert (status.detail is not None) is (sync is True)
 
 
 def _confirmed_phase_feedback(controller: AppController, audio: Mock) -> dict[str, object]:
     feedback = _current_scalar_glide(controller, audio, sync=True)
+    geometry = _geometry()
+    controller.loader.source_beatmaps.effective = Mock(return_value=geometry)
     feedback.update(
+        policy_mode="mapped",
+        map_revision=geometry.revision(),
         effective=True,
         settled=True,
         phase_program_current=True,
@@ -990,7 +999,7 @@ def test_target_current_cannot_override_a_mismatched_raw_policy_request(
     controller: AppController, audio_engine_mock: Mock, field: str, value: object
 ) -> None:
     feedback = _current_scalar_glide(controller, audio_engine_mock, sync=None)
-    feedback[field] = value
+    feedback[field] = 7 if field == "policy_revision" else value
 
     status = controller.transport.source_sync.status(0)
 
@@ -1053,7 +1062,7 @@ def test_adoption_preserves_nullable_default_and_later_raw_policy_revisions(
         schema_version=1, sync=None, realtime_bpm=None, revision=revision
     )
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=False, revision=5)
-    target_revision = None if revision == 0 else revision
+    target_revision = revision
     adoption = _adoption(target_policy_revision=target_revision, target_intent_revision=5)
     _feedback(
         audio_engine_mock,
@@ -1062,7 +1071,7 @@ def test_adoption_preserves_nullable_default_and_later_raw_policy_revisions(
         policy_mode="legacy",
         policy_revision=target_revision,
         policy_sync=None,
-        policy_realtime_bpm=None,
+        policy_realtime_bpm=True,
         settled=True,
         adoption=adoption,
     )
@@ -1072,7 +1081,7 @@ def test_adoption_preserves_nullable_default_and_later_raw_policy_revisions(
     assert status.guidance == "pending"
     assert status.effective is False
 
-    adoption["target_policy_revision"] = 0 if revision == 0 else None
+    adoption["target_policy_revision"] = None
     status = controller.transport.source_sync.status(0)
     assert status.state == "pending"
     assert status.guidance == "restart"
@@ -1239,9 +1248,7 @@ def test_untouched_scalar_capture_keeps_original_path_despite_unrelated_sync_int
 ) -> None:
     _assigned(controller, audio_engine_mock)
     controller.project.pad_source_sync_intent[1] = PadSourceSyncIntent(requested=True, revision=1)
-    refresh = Mock(
-        side_effect=AssertionError("unrelated SYNC must not recapture this scalar source")
-    )
+    refresh = Mock(return_value=True)
     controller.transport.bind_input_runtime_refresh(refresh)
     if action == "pad":
         controller.transport.playback.trigger_pad(0)
@@ -1250,7 +1257,7 @@ def test_untouched_scalar_capture_keeps_original_path_despite_unrelated_sync_int
         controller.session.active_sample_ids = {0}
         controller.transport.playback.start_or_restart_global_start_stop()
         audio_engine_mock.capture_global_start.assert_called_once()
-    refresh.assert_not_called()
+    refresh.assert_called_once_with()
 
 
 def test_failed_runtime_publication_retains_requested_pending_intent(

@@ -95,10 +95,21 @@ class PadSourceBeatmapIntent(BaseModel):
     schema_version: int = Field(strict=True, ge=1, le=1)
     revision: int = Field(strict=True, ge=0, le=MAX_SOURCE_BEATMAP_REVISION)
     selected: SourceBeatmapReference | None
+    automatic: bool = Field(default=False, strict=True, exclude_if=lambda value: value is False)
+
+    @model_validator(mode="after")
+    def _validate_automatic_selection(self) -> Self:
+        if self.automatic and self.selected is None:
+            message = "Automatic map provenance requires its selected historical receipt."
+            raise ValueError(message)
+        return self
 
 
 def next_source_beatmap_intent(
-    current: PadSourceBeatmapIntent | None, selected: SourceBeatmapReference | None
+    current: PadSourceBeatmapIntent | None,
+    selected: SourceBeatmapReference | None,
+    *,
+    automatic: bool = False,
 ) -> PadSourceBeatmapIntent:
     """Advance every selection or clear request without wrapping or reusing revisions.
 
@@ -108,6 +119,7 @@ def next_source_beatmap_intent(
     Args:
         current: Existing content intent, independently revalidated before use.
         selected: Exact historical receipt to select, or None to request a clear.
+        automatic: Identify a verified automatic selection, preserving manual priority.
 
     Returns:
         A detached validated request with its next checked revision.
@@ -117,4 +129,6 @@ def next_source_beatmap_intent(
     if revision == MAX_SOURCE_BEATMAP_REVISION:
         message = "source beatmap intent revision capacity exhausted"
         raise ValueError(message)
-    return PadSourceBeatmapIntent(schema_version=1, revision=revision + 1, selected=selected)
+    return PadSourceBeatmapIntent(
+        schema_version=1, revision=revision + 1, selected=selected, automatic=automatic
+    )

@@ -969,7 +969,7 @@ class GlobalAudioActions:
         self._toggle_timing_policy("sync", global_source_sync_toggle_action())
 
     def toggle_realtime_bpm(self) -> None:
-        self._toggle_timing_policy("realtime_bpm", global_realtime_bpm_toggle_action())
+        self._toggle_timing_policy("sync", global_realtime_bpm_toggle_action())
 
     def _toggle_timing_policy(self, control: TimingControl, action: LooperAction) -> None:
         self._controller.input_mapping.perform_learnable_action(

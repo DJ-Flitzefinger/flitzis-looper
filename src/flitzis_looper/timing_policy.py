@@ -80,5 +80,10 @@ def source_sync_requested(policy: GlobalTimingPolicy, pad: PadSourceSyncIntent) 
 
 
 def variable_source_timing(policy: GlobalTimingPolicy) -> bool:
-    """A disabled tracker selects initial constant timing, never a frozen map segment."""
-    return policy.realtime_bpm is not False
+    """SYNC follows the source grid; the saved old tracker choice is historical."""
+    return True
+
+
+def effective_runtime_policy(policy: GlobalTimingPolicy) -> GlobalTimingPolicy:
+    """Project one SYNC onto the existing wire without rewriting saved preferences."""
+    return policy.model_copy(update={"realtime_bpm": True})

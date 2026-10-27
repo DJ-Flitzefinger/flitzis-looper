@@ -128,7 +128,7 @@ def global_source_sync_toggle_action() -> LooperAction:
 
 def global_realtime_bpm_toggle_action() -> LooperAction:
     """Toggle variable source timing independently of the global SYNC gate."""
-    return LooperAction(key="global.realtime_bpm.toggle", label="Toggle Realtime BPM")
+    return LooperAction(key="global.realtime_bpm.toggle", label="Toggle SYNC (legacy binding)")
 
 
 def source_sync_toggle_action(pad_id: int) -> LooperAction:

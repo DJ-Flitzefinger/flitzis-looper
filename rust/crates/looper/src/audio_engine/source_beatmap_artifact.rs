@@ -84,11 +84,13 @@ pub(super) fn validate_intent_value(value: &serde_json::Value) -> Result<(), Str
         schema_version: u32,
         revision: u64,
         selected: Option<Receipt>,
+        #[serde(default)]
+        automatic: bool,
     }
     let object = value
         .as_object()
         .ok_or("source beatmap intent must be an object")?;
-    if object.len() != 3
+    if !(object.len() == 3 || (object.len() == 4 && object.contains_key("automatic")))
         || !["schema_version", "revision", "selected"]
             .iter()
             .all(|key| object.contains_key(*key))
@@ -100,6 +102,9 @@ pub(super) fn validate_intent_value(value: &serde_json::Value) -> Result<(), Str
         return Err("unsupported source beatmap intent version".into());
     }
     let _ = intent.revision;
+    if intent.automatic && intent.selected.is_none() {
+        return Err("automatic map provenance requires a selected receipt".into());
+    }
     if let Some(receipt) = intent.selected {
         let encoded = serde_json::to_string(&receipt).map_err(error)?;
         Receipt::parse(&encoded)?;

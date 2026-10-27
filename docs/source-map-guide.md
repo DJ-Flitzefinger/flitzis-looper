@@ -1,61 +1,61 @@
-# Source Maps: fixed tempo, variable tempo and 4/4
+# BPM, SYNC and source maps
 
-A source map relates positions in the original song to musical quarter notes.
-It lets the engine translate musical lengths into source positions when the
-song's tempo changes. Four quarter notes make one 4/4 bar; 32 bars contain 128
-quarter notes.
+BPM describes an average tempo. A source map also describes where detected beats
+occur in the original song. Extra decimal places alone do not make an estimate
+accurate. BPM analysis checks stable interior sections and tests nearby integer
+tempos against separate sections; it keeps a fractional estimate when the
+evidence does not support the integer.
 
-| Intended use | Controls | Map needed? |
+| Intended use | Controls | Source map |
 | --- | --- | --- |
-| Match songs with constant tempo | Multi Loop, BPM Lock and SYNC on; REALTIME BPM off | No. Use each song's correct BPM, grid and loop markers. |
-| Follow tempo changes within a song | Multi Loop, BPM Lock, SYNC and REALTIME BPM on | A current, qualified Source Map for each participating mapped PAD. |
-| Explicitly describe an evenly spaced 4/4 song | Create manual 4/4 map | Optional constant map from the current BPM/grid; no tempo-change detection. |
+| Constant rate playback with accurate BPM | Multi Loop and BPM Lock; SYNC off | No map required. Each PAD keeps its own loop markers and BPM. |
+| Keep detected beats aligned, including recording-speed variations | Multi Loop, BPM Lock and SYNC on | Prepared automatically; no manual map creation required. |
+| Correct a detector mistake or describe a constant grid manually | Adjust Loop > Source Map | Optional advanced editing. Explicit manual choices take priority. |
 
-The SYNC button shows your preference. Its colour does not prove map or phase
-adoption. Read the requested/mode/status text in the editor. Ordinary playback
-may remain available through the supported launch path while a request is pending.
+SYNC follows detected beat positions using the current master tempo. There is
+one SYNC control; old REALTIME BPM MIDI bindings address that same control. The
+old saved tracker preference remains readable for compatibility. The supported
+dry mapped path requires Key Lock off and zero pitch offset; other
+representations retain their availability/refusal messages.
 
-## Constant tempo
+## Normal use
 
-Check the song's BPM and grid, keeping your chosen loop markers. For fixed-tempo
-SYNC, leave REALTIME BPM off: full-song analysis is unnecessary. If you want an
-explicit constant map, open **Adjust Loop**, expand **Source Map**, and choose
-**Create manual 4/4 map**. This records the current grid as your manual 4/4
-interpretation. It does not measure changing tempo.
+1. Load the songs and let their BPM analysis finish. Keep the selected loop starts
+   and Grid Offset; choose, for example, 8 and 64 bars in Adjust Loop.
+2. Enable Multi Loop and BPM Lock with the intended reference PAD selected.
+3. Enable SYNC. Maps are reused from analysis or prepared in the background.
+   Saved automatic maps are source-verified after reopening.
+4. Start the PADs and inspect the status. The button shows your preference;
+   an applied mode alone does not prove current grid phase or audible alignment.
 
-## Variable tempo and full-song analysis
+Automatic maps contain estimated detections. A loop bar operationally means four
+detected quarter notes; 64 bars contain 256. This convention does not claim a
+verified time signature or first downbeat. Gaps and uncertain timing remain
+unavailable instead of inventing missing beats. Map timestamps remain in song
+seconds when playback resamples 44.1 kHz to 48 kHz. Physical loop markers use the
+loaded playback rate.
 
-1. In **Adjust Loop > Source Map**, choose **Analyze original full mix (Beat This)**.
-   It analyzes the original whole song independently of the loop. Completion
-   initially means unreviewed detector observations, not a ready variable map.
-2. Use **Inspect detections**. Enter **Raw event index** and **Quarter-note
-   coordinate**, then **Add/update label** for reviewed original events. Supply
-   2–64 labels in chronological order. Consecutive quarter notes can be 0, 1, 2;
-   a complete 4/4 bar advances by 4. Missing/extra detections must not silently
-   change that count.
-3. Choose **Build source map from labels**. New intervals start with uncertain
-   coverage and unknown meter; the map retains the original detections.
-4. In the map's interval controls, select an anchor span and review its
-   **Quarter-note count**. **Coverage: Trusted > Set coverage** records reviewed
-   timing. **Meter: Verified 4/4 > Set meter** records the actual meter.
-   **Set downbeat** records a known bar-start label. These choices describe your
-   review; they do not perform the review automatically.
-5. Reviewed coverage must include the whole intended loop. Gaps or unknown meter
-   cannot authorize automatic bars across that span. Repeat for each mapped PAD,
-   then enable REALTIME BPM and inspect the actual status. The supported dry
-   common-phase path currently requires Key Lock off and zero pitch offset;
-   other paths retain their availability/refusal messages.
+## Optional manual correction
+
+**Create manual 4/4 map** describes an evenly spaced grid using the current BPM
+and Grid Offset. It does not detect speed changes. **Analyze original full mix
+(Beat This)** in the advanced editor opens the separate raw review workflow:
+inspect detections, label quarter-note coordinates, build a map, then explicitly
+review counts, coverage and meter. This is optional for normal automatic SYNC.
+A verified 4/4 label records a manual musical judgement.
 
 There is one raw review slot. **Open PAD N analysis** returns to its owner.
-Successfully accepting that review releases the slot after retirement completes.
-**Discard candidate** removes an unwanted raw candidate without clearing an
-already accepted Source Map.
+**Discard candidate** releases an unwanted review without clearing the accepted
+map. Manual selection, correction and **Clear** supersede automatic work; late
+analysis cannot restore an explicitly cleared selection.
 
 ## Pending maps and recovery
 
-Opening the editor or restoring a project must preserve its timing preferences,
-loop length and markers. With an unavailable map, a waveform can show ordinary
-scalar geometry; that display grants no mapped-playback or phase acknowledgement.
-Passive refreshes defer unavailable mapped loop changes, preserving existing live
-geometry. Map edits still require qualified coverage. A missing map must not make
-startup or editor rendering fatal; deleting the saved project is unnecessary.
+An unavailable map must not make startup or opening Adjust Loop fatal. Ordinary
+geometry may remain visible while qualification is pending; that display does
+not authorize mapped playback. Existing audio and its actual owner remain until
+a supported replacement is adopted. Loading a stopped PAD does not give it
+authority over the active cohort's status or phase confirmation.
+
+Listening remains necessary: correct software coordinates do not prove that
+detected beats coincide with audible kick and snare through all 64 bars.

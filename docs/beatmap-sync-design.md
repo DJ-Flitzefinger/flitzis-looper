@@ -615,7 +615,19 @@ voice continues. Supported dry live policies use the existing atomic adoption
 path; other representations retain their explicit start/retrigger or refusal
 guidance.
 
-### Focused native delivery — 2026-10-26
+### Current single-SYNC activation — 2026-10-27
+
+The latest Human simplification supersedes the earlier separate tracker workflow
+below. One optional SYNC automatically obtains/restores estimated source maps and
+uses the source-bound grid origin. Manual 4/4 creation and raw-review labels are
+advanced corrections, not normal prerequisites. Operational bars count four
+detected quarters without claiming verified meter. Physical markers use loaded
+PCM rate; source-map seconds retain decoder provenance. See
+[the current guide](source-map-guide.md) and the latest global-policy design.
+Software qualification and current phase-read feedback remain distinct from the
+Human's required audible 64-bar acceptance.
+
+### Earlier focused native delivery — 2026-10-26
 
 For the two-PAD test, retain each PAD's own loop start, length and Grid Offset.
 Enable Multi Loop and BPM Lock, start both PADs through global Start/Stop, then

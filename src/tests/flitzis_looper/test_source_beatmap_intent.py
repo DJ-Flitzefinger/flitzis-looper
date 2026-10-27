@@ -26,6 +26,19 @@ def _reference(root: str = "samples/Shared Take") -> SourceBeatmapReference:
     )
 
 
+def test_automatic_selection_is_additive_and_manual_clear_stays_explicit() -> None:
+    manual = next_source_beatmap_intent(None, _reference())
+    assert set(manual.model_dump()) == {"schema_version", "revision", "selected"}
+    automatic = next_source_beatmap_intent(None, _reference(), automatic=True)
+    assert automatic.model_dump()["automatic"] is True
+    assert PadSourceBeatmapIntent.model_validate_json(automatic.model_dump_json()) == automatic
+    cleared = next_source_beatmap_intent(automatic, None)
+    assert cleared.automatic is False
+    assert cleared.revision == 2
+    with pytest.raises(ValidationError):
+        PadSourceBeatmapIntent(schema_version=1, revision=1, selected=None, automatic=True)
+
+
 @pytest.mark.parametrize(
     "root", ["samples", "samples/Shared Take", f"samples/materials/M{'e' * 32}"]
 )
@@ -149,7 +162,12 @@ def test_checked_revision_exhaustion_and_unchecked_instances_never_wrap() -> Non
         next_source_beatmap_intent(None, _reference().model_copy(update={"bytes": 0}))
 
 
-@pytest.mark.parametrize("field", tuple(PadSourceBeatmapIntent.model_fields))
+@pytest.mark.parametrize(
+    "field",
+    tuple(
+        name for name, field in PadSourceBeatmapIntent.model_fields.items() if field.is_required()
+    ),
+)
 def test_new_intent_is_complete_and_never_fills_partial_metadata(field: str) -> None:
     data = next_source_beatmap_intent(None, _reference()).model_dump()
     data.pop(field)

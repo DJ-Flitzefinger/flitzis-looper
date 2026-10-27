@@ -3,10 +3,11 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from flitzis_looper.timing_policy import next_global_timing_policy, variable_source_timing
+from flitzis_looper.timing_policy import next_global_timing_policy
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
 
 type TimingControl = Literal["sync", "realtime_bpm"]
 
@@ -31,6 +32,7 @@ class TimingPolicyController:
 
     def set_enabled(self, control: TimingControl, *, enabled: bool) -> None:
         """Persist one checked global revision without rewriting any content intent."""
+        control = "sync"  # Historical REALTIME MIDI bindings address the single SYNC control.
         current = self._project.global_timing_policy
         updated = next_global_timing_policy(current, control=control, enabled=enabled)
         if updated == current:
@@ -46,9 +48,7 @@ class TimingPolicyController:
 
     def available(self, control: TimingControl) -> bool:
         """Configuration uses requested parents; callback mode/phase ACK is unrelated."""
-        if not self._project.resolve_bpm_lock():
-            return False
-        return control == "sync" or self.preference("sync") is True
+        return self._project.resolve_bpm_lock()
 
     def toggle(self, control: TimingControl) -> None:
         """Use the same resolved preference for direct GUI and learned actions."""
@@ -57,8 +57,6 @@ class TimingPolicyController:
 
     def preference(self, control: TimingControl) -> bool | None:
         policy = self._project.global_timing_policy
-        if control == "realtime_bpm":
-            return variable_source_timing(policy)
         if policy.sync is not None:
             return policy.sync
         preferences = {
@@ -72,31 +70,15 @@ class TimingPolicyController:
         """Aggregate real PAD observations; a global request cannot borrow old ACKs."""
         policy = self._project.global_timing_policy
         states = [
-            self._transport.source_sync.status(sample_id)
+            state
             for sample_id, path in enumerate(self._project.sample_paths)
             if path is not None
+            and self._participates(
+                sample_id, state := self._transport.source_sync.status(sample_id)
+            )
         ]
-        values = (
-            {state.effective for state in states}
-            if control == "sync"
-            else {state.actual_realtime_bpm for state in states}
-        )
-        pending_states = (
-            states
-            if control == "sync"
-            else [
-                state
-                for state in states
-                if not (
-                    state.state == "pending"
-                    and state.guidance == "phase"
-                    and state.actual_realtime_bpm is not None
-                )
-            ]
-        )
-        pending = any(
-            state.state in {"pending", "refused", "unconfirmed"} for state in pending_states
-        )
+        values = {state.effective for state in states}
+        pending = any(state.state in {"pending", "refused", "unconfirmed"} for state in states)
         detail = next(
             (
                 state.guidance_text
@@ -108,21 +90,57 @@ class TimingPolicyController:
                     "phase",
                     "restart",
                 )
-                for state in pending_states
+                for state in states
                 if state.guidance == guidance
             ),
             None,
         )
-        phase_states = [state for state in states if state.requested and state.active is not False]
+        phase_states = [state for state in states if state.requested]
         phase_confirmed = bool(phase_states) and all(
             state.active is True and state.grid_phase_confirmed is True for state in phase_states
         )
         return GlobalTimingControlStatus(
-            requested=getattr(policy, control),
+            requested=policy.sync,
             preference=self.preference(control),
             effective=next(iter(values)) if len(values) == 1 else None,
             pending=pending,
             detail=detail,
             available=self.available(control),
             grid_phase_confirmed=True if phase_confirmed else None,
+        )
+
+    def _participates(self, sample_id: int, state: SourceSyncStatus) -> bool:
+        if state.active is True or self._launch_pending(sample_id) is not False:
+            return True
+        return state.active is None and not self._proven_inactive(sample_id)
+
+    def _launch_pending(self, sample_id: int) -> bool | None:
+        try:
+            admitted = self._transport._audio.admitted_launch_ids()
+        except RuntimeError, ValueError, TypeError, AttributeError:
+            return None
+        if not isinstance(admitted, list):
+            return None
+        return sample_id in admitted
+
+    def _proven_inactive(self, sample_id: int) -> bool:
+        """Exclude a stopped source only from a fresh, unfenced Native observation."""
+        content = self._project.pad_content[sample_id]
+        fence = self._transport.playback._pause_intent._is_observation_fenced
+        if content is None or fence(sample_id):
+            return False
+        try:
+            if self._launch_pending(sample_id) is not False:
+                return False
+            observation = self._transport._audio._current_ordinary_transport_observation(sample_id)
+            if self._launch_pending(sample_id) is not False:
+                return False
+        except RuntimeError, ValueError, TypeError, AttributeError:
+            return False
+        return (
+            self._project.pad_content[sample_id] is content
+            and not fence(sample_id)
+            and observation is not None
+            and observation.sample_id == sample_id
+            and observation.active is False
         )

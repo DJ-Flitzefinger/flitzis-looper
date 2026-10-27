@@ -31,7 +31,11 @@ def _bits(value: float) -> str:
 
 
 def _geometry(
-    *, middle_coverage: str = "trusted", meter: str = "quarter_note_4_4_verified"
+    *,
+    middle_coverage: str = "trusted",
+    meter: str = "quarter_note_4_4_verified",
+    source_rate: int = 48000,
+    scale: float = 1.0,
 ) -> SourceBeatmap:
     descriptor = {
         "schema_version": 1,
@@ -39,10 +43,10 @@ def _geometry(
         "pcm": {
             "format": "f32-le-interleaved-v1",
             "channel_layout": "interleaved-channel-index-order-v1",
-            "rate_hz": 48000,
+            "rate_hz": source_rate,
             "channels": 2,
-            "full_frames": 480000,
-            "full_bytes": 3840000,
+            "full_frames": round(10.0 * scale * source_rate),
+            "full_bytes": round(10.0 * scale * source_rate) * 8,
             "interleaved_sha256": "b" * 64,
             "mono_sha256": "c" * 64,
             "mono_revision": "test-mono-v1",
@@ -74,8 +78,8 @@ def _geometry(
         "anchors": [
             {
                 "id": f"anchor-{index}",
-                "source_seconds_bits": _bits(seconds),
-                "beat_bits": _bits(beat),
+                "source_seconds_bits": _bits(seconds * scale),
+                "beat_bits": _bits(beat * scale),
                 "raw_beat_index": None,
                 "review": "reviewed",
                 "sample_edit": None,
@@ -122,6 +126,7 @@ def _bind_map(controller: AppController, geometry: SourceBeatmap | None) -> Mock
 @pytest.fixture
 def mapped_loop(controller: AppController, audio_engine_mock: Mock) -> Mock:
     audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.loaded_sample_shape.return_value = (48000, 2, 480000)
     controller.project.sample_paths[0] = "samples/manual-map.wav"
     controller.project.sample_durations[0] = 10.0
     controller.project.manual_bpm[0] = 120.0

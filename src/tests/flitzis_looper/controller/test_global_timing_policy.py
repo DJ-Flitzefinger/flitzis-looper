@@ -91,7 +91,7 @@ def _pending_off_adoption(
         target_mode="legacy",
         target_policy_revision=2,
         target_policy_sync=False,
-        target_policy_realtime_bpm=False,
+        target_policy_realtime_bpm=True,
         **changes,
     )
     feedback = _feedback(
@@ -158,7 +158,12 @@ def test_live_attempt_and_applied_unsettled_effect_never_acknowledge_audio(
         controller, audio_engine_mock, state=state, execution_frame=execution_frame
     )
     feedback.update(
-        effective=False, policy_mode="legacy", policy_revision=2, policy_sync=False, settled=False
+        effective=False,
+        policy_mode="legacy",
+        policy_revision=2,
+        policy_sync=False,
+        policy_realtime_bpm=True,
+        settled=False,
     )
 
     status = controller.transport.source_sync.status(0)
@@ -177,7 +182,13 @@ def test_matching_actual_settlement_wins_over_current_refusal_and_old_launch_err
         controller, audio_engine_mock, state="refused", reason="capacity"
     )
     controller.transport.residency.report_launch_error(0, "older launch error")
-    feedback.update(effective=False, policy_mode="legacy", policy_revision=2, policy_sync=False)
+    feedback.update(
+        effective=False,
+        policy_mode="legacy",
+        policy_revision=2,
+        policy_sync=False,
+        policy_realtime_bpm=True,
+    )
 
     status = controller.transport.source_sync.status(0)
 
@@ -306,7 +317,7 @@ def test_applied_attempt_does_not_describe_a_stopped_voice_as_settling(
         controller, audio_engine_mock, state="applied", execution_frame=123
     )
     controller.project.global_timing_policy = _policy(sync=True, realtime=False)
-    adoption.update(target_mode="fixed", target_policy_sync=True)
+    adoption.update(target_mode="mapped", target_policy_sync=True)
     feedback.update(
         active=False,
         effective=False,
@@ -320,8 +331,8 @@ def test_applied_attempt_does_not_describe_a_stopped_voice_as_settling(
 
     status = controller.transport.source_sync.status(0)
 
-    assert status.state == "stopped"
-    assert status.guidance == "restart"
+    assert status.state == "pending"
+    assert status.guidance == "pending"
     assert status.active is False
     assert status.effective is False
 
@@ -452,11 +463,11 @@ def test_global_choices_publish_one_revision_without_touching_pad_or_other_contr
     assert first.revision == 1
     assert controller.project.model_dump(exclude={"global_timing_policy"}) == before
     kwargs = audio_engine_mock.set_input_runtime_state.call_args.kwargs
-    assert json.loads(kwargs["timing_policy_json"]) == first.model_dump()
+    assert json.loads(kwargs["timing_policy_json"]) == first.model_dump() | {"realtime_bpm": True}
     assert kwargs["source_map_rows"][0]["sync_requested"] is True
     assert kwargs["source_map_rows"][0]["intent_revision"] == 0
     controller.transport.timing_policy.set_enabled("realtime_bpm", enabled=False)
-    assert controller.project.global_timing_policy == _policy(sync=True, realtime=False)
+    assert controller.project.global_timing_policy == _policy(sync=False, realtime=None)
     assert controller.project.model_dump(exclude={"global_timing_policy"}) == before
 
 
@@ -485,7 +496,7 @@ def test_inherited_pad_off_creates_explicit_preference_and_global_mask_does_not_
     [
         (False, False, "legacy"),
         (False, True, "legacy"),
-        (True, False, "fixed"),
+        (True, False, "mapped"),
         (True, True, "mapped"),
     ],
 )
@@ -517,7 +528,7 @@ def test_realtime_choice_alone_keeps_unsynchronized_legacy_preference(
     controller.project.global_timing_policy = _policy(sync=None, realtime=False)
     assert controller.transport.source_sync.requested_mode(0) == "legacy"
     controller.project.pad_source_sync_intent[0] = PadSourceSyncIntent(requested=True, revision=0)
-    assert controller.transport.source_sync.requested_mode(0) == "fixed"
+    assert controller.transport.source_sync.requested_mode(0) == "mapped"
 
 
 def _settled_mode_feedback(
@@ -536,11 +547,11 @@ def _settled_mode_feedback(
         active=True,
         effective=True,
         intent_revision=0,
-        map_revision=geometry.revision() if realtime else None,
-        policy_mode="mapped" if realtime else "fixed",
+        map_revision=geometry.revision(),
+        policy_mode="mapped",
         policy_revision=2,
         policy_sync=True,
-        policy_realtime_bpm=realtime,
+        policy_realtime_bpm=True,
         settled=True,
         target_current=True,
     )
@@ -558,17 +569,17 @@ def test_settled_matching_rt_does_not_inherit_sync_phase_only_pending(
     state = controller.transport.source_sync.status(0)
     assert state.state == "pending"
     assert state.guidance == "phase"
-    assert state.actual_realtime_bpm is realtime
+    assert state.actual_realtime_bpm is True
     assert state.grid_phase_confirmed is None
     sync = controller.transport.timing_policy.status("sync")
     assert sync.pending is True
     assert sync.detail == "Timing mode applied; grid phase is unconfirmed."
     assert sync.grid_phase_confirmed is None
     rt = controller.transport.timing_policy.status("realtime_bpm")
-    assert rt.requested is realtime
-    assert rt.effective is realtime
-    assert rt.pending is False
-    assert rt.detail is None
+    assert rt.requested is True
+    assert rt.effective is True
+    assert rt.pending is True
+    assert rt.detail == sync.detail
     assert rt.grid_phase_confirmed is None
 
 
@@ -589,10 +600,10 @@ def test_rt_preserves_actual_pending_refusal_and_source_policy_mismatches(
             adoption=_adoption(
                 state="refused",
                 reason="capacity",
-                target_mode="mapped" if realtime else "fixed",
+                target_mode="mapped",
                 target_policy_revision=2,
                 target_policy_sync=True,
-                target_policy_realtime_bpm=realtime,
+                target_policy_realtime_bpm=True,
             ),
         )
     elif change == "settled":
@@ -607,12 +618,12 @@ def test_rt_preserves_actual_pending_refusal_and_source_policy_mismatches(
     assert rt.detail == state.guidance_text
     if change == "policy_revision":
         assert state.guidance == "restart"
-        assert rt.effective is realtime
+        assert rt.effective is True
     elif change == "refused":
         assert state.guidance == "refused"
-        assert rt.effective is realtime
+        assert rt.effective is True
     else:
-        assert rt.effective is None
+        assert rt.effective is (False if change == "settled" else None)
 
 
 def test_phase_guidance_with_unknown_actual_rt_keeps_rt_unconfirmed_pending(
@@ -631,9 +642,9 @@ def test_phase_guidance_with_unknown_actual_rt_keeps_rt_unconfirmed_pending(
     )
     state = controller.transport.source_sync.status(0)
     assert state.guidance == "phase"
-    assert state.actual_realtime_bpm is None
+    assert state.actual_realtime_bpm is True
     rt = controller.transport.timing_policy.status("realtime_bpm")
-    assert rt.effective is None
+    assert rt.effective is True
     assert rt.pending is True
     assert rt.detail == state.guidance_text
 
@@ -645,9 +656,7 @@ def test_fixed_actual_settlement_needs_no_map_and_cannot_borrow_old_global_ack(
 ) -> None:
     _assigned(controller, audio_engine_mock)
     controller.project.global_timing_policy = _policy(sync=True, realtime=False)
-    monkeypatch.setattr(
-        controller.loader.source_beatmaps, "effective", lambda _id: pytest.fail("fixed map access")
-    )
+    monkeypatch.setattr(controller.loader.source_beatmaps, "effective", lambda _id: None)
     feedback = _feedback(
         audio_engine_mock,
         active=True,
@@ -689,7 +698,7 @@ def test_global_off_ack_uses_full_actual_policy_while_retaining_old_active_audio
         policy_realtime_bpm=None,
     )
     assert controller.transport.source_sync.status(0).state == "pending"
-    feedback.update(policy_sync=False, policy_realtime_bpm=False)
+    feedback.update(policy_sync=False, policy_realtime_bpm=True)
     assert controller.transport.source_sync.status(0).state == "off"
     feedback.update(policy_mode="mapped", effective=True, map_revision="a" * 64)
     state = controller.transport.source_sync.status(0)
@@ -732,15 +741,15 @@ def test_fixed_or_legacy_preparation_refusal_is_diagnosed_without_changing_actua
     status = controller.transport.source_sync.status(0)
 
     assert status.state == "refused"
-    assert status.detail == reason
+    assert reason in status.detail
     assert status.requested is sync
     assert status.active is active
     assert status.effective is active
     assert status.policy_mode == ("mapped" if active else None)
     assert status.actual_realtime_bpm is (True if active else None)
-    diagnostics.observe.assert_called_once_with("source_sync", reason, pad_id=0, request=0)
+    diagnostics.observe.assert_called_once_with("source_sync", status.detail, pad_id=0, request=0)
 
-    # A matching actual settlement takes precedence over a retained earlier launch error.
+    # Historical Fixed audio cannot acknowledge the requested Mapped settlement.
     feedback.update(
         active=True,
         effective=sync,
@@ -748,10 +757,10 @@ def test_fixed_or_legacy_preparation_refusal_is_diagnosed_without_changing_actua
         policy_mode="fixed" if sync else "legacy",
         policy_revision=2,
         policy_sync=sync,
-        policy_realtime_bpm=False,
+        policy_realtime_bpm=True,
         settled=True,
     )
-    assert controller.transport.source_sync.status(0).state == ("pending" if sync else "off")
+    assert controller.transport.source_sync.status(0).state == ("refused" if sync else "off")
 
 
 def test_changed_global_policy_waits_for_whole_reserved_cohort_then_retries(
@@ -815,7 +824,8 @@ def test_gui_learn_and_midi_share_each_global_action_without_early_mutation(
         "binding_key": "midi:note:1:60",
         "action_key": action.key,
     })
-    assert getattr(controller.project.global_timing_policy, control) is (control == "sync")
+    assert controller.project.global_timing_policy.sync is (control == "sync")
+    assert controller.project.global_timing_policy.realtime_bpm is None
     request.assert_called_once_with(service=True)
     getattr(ctx.audio.global_, method)()
     assert controller.project.global_timing_policy.revision == 2
@@ -833,7 +843,7 @@ def test_fixed_auto_loop_uses_initial_period_and_retains_map_without_variable_ma
     controller.project.pad_loop_bars[0] = 1.0
     controller.project.pad_loop_auto[0] = True
     selection = _bind_map(controller, _geometry())
-    controller.project.global_timing_policy = _policy(sync=True, realtime=False)
+    controller.project.global_timing_policy = _policy(sync=False, realtime=False)
     assert controller.transport.loop.requested_region(0) == (1.0, 3.0)
     with pytest.raises(ValueError, match="Variable source timing is unavailable"):
         controller.transport.loop.apply_source_map_bars(0)

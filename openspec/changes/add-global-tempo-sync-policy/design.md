@@ -1,4 +1,33 @@
-## Latest Human contract and reusable authority — 2026-10-23
+## Latest Human simplification — 2026-10-27
+
+The effective hierarchy is MultiLoop -> BPM Lock -> optional SYNC. SYNC uses
+automatic source beat maps and follows beat phase; the separate REALTIME BPM
+control is removed. This supersedes the earlier separate Fixed/Mapped choice
+below. Saved schema1 sync/realtime_bpm/revision and historical seals remain
+unchanged; one shared runtime projection sets realtime_bpm=true, including
+neutral revision0, without rewriting saved preferences. Legacy tracker actions
+address SYNC. Native retains its old protocol modes for compatibility, but old
+Fixed audio cannot confirm a newly requested Mapped state.
+
+Reuse the original analysis carrier, source-only Native claim, map jobs, selector
+pending owner and durable asset publication. Consume before tempo/key callbacks;
+require source/content/intent currentness through durable publication. Exported
+map-only jobs stay alive until strict terminal retirement, then release naturally.
+Manual/Clear wins; a retry cannot consume twice or replay core metadata effects.
+Fresh standalone NN acquisition requires requested SYNC and defers primary
+analysis. Saved automatic maps restore with source verification without NN.
+Explicit manual selections are never replaced automatically.
+
+New map rows bind the existing source grid origin and Native authority revision.
+Physical A/B markers use the loaded rate; original map timestamps and decoder
+provenance retain source seconds. Operational bars contain four detected quarter
+notes without falsely verifying meter/downbeats/counts. Gap/uncertainty, source,
+ACK, final-claim, callback and unsupported-representation guards remain.
+Global effective/pending/detail/phase uses one active-or-unknown participant set;
+only fresh unfenced source-qualified inactivity excludes a stopped PAD. No
+participants grants no effective or phase ACK. No new clock or owning pipeline.
+
+## Earlier Human hierarchy and reusable authority — 2026-10-23
 
 The effective hierarchy is MultiLoop -> BPM Lock -> SYNC -> Realtime BPM. Retain
 separate raw project/content preferences; suspend child availability while a

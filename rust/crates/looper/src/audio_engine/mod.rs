@@ -1988,6 +1988,9 @@ impl AudioEngine {
     #[classattr]
     const AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: u32 = 1;
 
+    #[classattr]
+    const AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION: u32 = 1;
+
     /// Data-only export under the genuine original analysis/source admission.
     pub fn consume_automatic_source_beatmap(
         &self,

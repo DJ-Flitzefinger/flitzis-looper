@@ -77,8 +77,8 @@ def test_global_buttons_keep_actions_separate_and_show_pending_actual_audio(
     render.render_global_timing_policy(ctx)
     sync.assert_called_once_with()
     realtime.assert_not_called()
-    assert text == ["Mode ON | pending | grid phase unconfirmed", "Applied ON | pending"]
-    assert guidance == [detail, detail]
+    assert text == ["Mode ON | pending | grid phase unconfirmed"]
+    assert guidance == [detail]
     assert all("Requested OFF." in tooltip for tooltip in tooltips)
     assert all(detail in tooltip for tooltip in tooltips)
     if detail != "Start/retrigger to apply this timing change.":
@@ -88,7 +88,7 @@ def test_global_buttons_keep_actions_separate_and_show_pending_actual_audio(
 def test_fixed_global_source_timing_keeps_selected_map_out_of_generic_waveform_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policy = GlobalTimingPolicy(schema_version=1, sync=True, realtime_bpm=False, revision=2)
+    policy = GlobalTimingPolicy(schema_version=1, sync=False, realtime_bpm=False, revision=2)
     ctx = cast(
         "UiContext",
         SimpleNamespace(state=SimpleNamespace(project=ProjectState(global_timing_policy=policy))),
@@ -146,8 +146,8 @@ def test_trace_buttons_route_independently_and_respect_availability(
         render,
         "imgui",
         SimpleNamespace(
-        begin_disabled=disabled.append,
-        end_disabled=disabled.pop,
+            begin_disabled=disabled.append,
+            end_disabled=disabled.pop,
             button=lambda label, _size: label == clicked and not disabled[-1],
             text=lambda _value: None,
             text_wrapped=lambda _value: None,
