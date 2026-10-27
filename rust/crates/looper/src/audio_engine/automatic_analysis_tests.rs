@@ -126,6 +126,25 @@ fn assert_grid(values: &[f32], duration: f64, name: &str) {
     assert!(values.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
+fn automatic_map_observation(analysis: &crate::messages::LoadedAnalysis) -> Value {
+    let Some(crate::messages::AutomaticSourceMap::Stored { artifact, consumed }) =
+        &analysis.automatic_source_map
+    else {
+        return json!({"status":"unavailable","error":analysis.automatic_source_map_error});
+    };
+    let encoded = fs::read(artifact.reference()).unwrap();
+    let record: Value = serde_json::from_slice(&encoded).unwrap();
+    let intervals = record["record"]["accepted"]["intervals"]
+        .as_array()
+        .unwrap();
+    json!({"status":"stored","schema_version":record["schema_version"],"reference":artifact.reference(),
+        "source_identity":artifact.map().source_identity(),
+        "source_rate_hz":record["record"]["source"]["decoder_descriptor"]["pcm"]["rate_hz"],
+        "estimated_coverage":intervals.iter().any(|row|row["coverage"]=="estimated"),
+        "unknown_meter":intervals.iter().all(|row|row["meter"]["status"]=="unknown"),
+        "consumed":consumed.load(Ordering::Acquire)})
+}
+
 fn import_and_ack(source: &Path, output_rate: u32, public_incoming: bool) -> Value {
     import_and_ack_with_backend(source, output_rate, public_incoming, None)
 }
@@ -308,7 +327,9 @@ fn import_and_ack_with_backend(
         engine.loaded_source_generations.lock().unwrap()[0],
         (request, output_rate)
     );
+    let mut automatic_maps = Vec::new();
     if backend.is_some() {
+        automatic_maps.push(automatic_map_observation(&analysis));
         let method: Value = serde_json::from_str(
             analysis
                 .bpm_method_json
@@ -341,6 +362,7 @@ fn import_and_ack_with_backend(
             repeated.is_some()
         });
         let repeated = repeated.unwrap();
+        automatic_maps.push(automatic_map_observation(&repeated));
         assert_eq!(repeated.bpm.to_bits(), analysis.bpm.to_bits());
         assert_eq!(repeated.beat_grid.beats, analysis.beat_grid.beats);
         assert_eq!(repeated.bpm_method_json, analysis.bpm_method_json);
@@ -397,6 +419,7 @@ fn import_and_ack_with_backend(
             panic!("tempo-only finite restore failed: {restored:?}");
         };
         assert!(restored.key.is_none());
+        automatic_maps.push(automatic_map_observation(&restored));
         assert_eq!(restored.bpm.to_bits(), analysis.bpm.to_bits());
         assert_eq!(restored.bpm_method_json, analysis.bpm_method_json);
         assert_eq!(
@@ -434,6 +457,7 @@ fn import_and_ack_with_backend(
         "actual_symphonia_decoder_pcm":decoder, "actual_playback_pcm":playback,
         "bpm":analysis.bpm, "key":analysis.key,
         "bpm_method":analysis.bpm_method_json,
+        "automatic_source_maps":automatic_maps,
         "key_scope":"actual result; unknown remains unknown; no model substitution or musical label acceptance",
         "beats":analysis.beat_grid.beats, "downbeats":analysis.beat_grid.downbeats,
         "bars":analysis.beat_grid.bars, "runtime":runtime,
@@ -507,6 +531,16 @@ fn primary_neural_authorized_unicode_flac_import_and_own_ack() {
     let method: Value =
         serde_json::from_str(result["bpm_method"].as_str().expect("neural metadata")).unwrap();
     assert_eq!(method["source_sha256"], expected);
+    let maps = result["automatic_source_maps"].as_array().unwrap();
+    assert_eq!(maps.len(), 3);
+    for map in maps {
+        assert_eq!(map["status"], "stored");
+        assert_eq!(map["schema_version"], 4);
+        assert_eq!(map["source_rate_hz"], 44_100);
+        assert_eq!(map["estimated_coverage"], true);
+        assert_eq!(map["unknown_meter"], true);
+        assert_eq!(map["consumed"], false);
+    }
     result["authorized_source_sha256"] = json!(expected);
     result["exact_unicode_path"] = json!(source.to_str().unwrap());
     result["compiled_test_source_sha256"] = json!(format!(

@@ -64,6 +64,8 @@ fn dequeued_native_delivery_retains_original_owner_through_actual_move_and_swap(
                 source_beatmap: None,
                 source_beatmap_artifact: None,
                 source_beatmap_raw: None,
+                automatic_map: None,
+                automatic_map_error: None,
             }));
             let (_, feedback) = RingBuffer::<AudioMessage>::new(8);
             fixture.engine.test_control_channels =
@@ -136,6 +138,8 @@ fn retained_source_delivery_rechecks_timing_without_borrowing_new_analysis() {
         source_beatmap: None,
         source_beatmap_artifact: None,
         source_beatmap_raw: None,
+        automatic_map: None,
+        automatic_map_error: None,
     };
     assert_eq!(
         resolve_delivery(&fixture.engine, &delivery).unwrap(),
@@ -310,6 +314,8 @@ fn original_native_source_event_survives_timing_advance_without_stale_analysis()
                 },
                 bpm_method_json: Some("original optional metadata, must be stripped".into()),
                 beat_error: None,
+                automatic_source_map: None,
+                automatic_source_map_error: None,
             }),
             analysis_error: Some("original timing diagnostic".into()),
             analysis_tempo_only: true,

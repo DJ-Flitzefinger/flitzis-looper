@@ -1981,6 +1981,15 @@ impl AudioEngine {
         self.loop_acceptance.diagnostics.request()
     }
 
+    /// Data-only export under the genuine original analysis/source admission.
+    pub fn consume_automatic_source_beatmap(
+        &self,
+        py: Python<'_>,
+        delivery: &loader_events::LoaderEventDelivery,
+    ) -> PyResult<Option<Py<pyo3::types::PyTuple>>> {
+        loader_events::consume_automatic_map(self, py, delivery)
+    }
+
     pub fn sync_diagnostic_snapshot(
         &self,
         py: Python<'_>,

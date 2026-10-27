@@ -112,6 +112,20 @@ impl NativeAnalysisOwner {
         }
     }
 
+    pub(super) fn has_analysis_epoch(&self) -> bool {
+        self.epoch.is_some()
+    }
+
+    /// Derive data-only map custody from this exact original admission. The
+    /// request-locked caller must first validate the original strict epoch.
+    pub(super) fn source_only(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            epoch: None,
+            cancellation: self.cancellation.clone(),
+        }
+    }
+
     pub(super) fn current(&self) -> bool {
         !self
             .cancellation
@@ -744,7 +758,7 @@ fn start_analysis_with(
                     })
             }))
             .unwrap_or_else(|_| Err("Analysis worker failed".into()));
-            let analysis = match result {
+            let mut analysis = match result {
                 Ok(result) => result,
                 Err(error) => {
                     if cancelled() {
@@ -766,6 +780,22 @@ fn start_analysis_with(
                 }
             };
 
+            if analysis.automatic_source_map.is_some() {
+                match (reader.map_artifact_paths(), reader.held_bytes()) {
+                    (Ok((root, original)), Ok(held)) => super::app_analysis::store_automatic_map(
+                        &mut analysis,
+                        root,
+                        original,
+                        held,
+                        &cancelled,
+                        |map| reader.verify_source_beatmap(map, &cancelled),
+                    ),
+                    (Err(error), _) | (_, Err(error)) => {
+                        analysis.automatic_source_map = None;
+                        analysis.automatic_source_map_error = Some(error);
+                    }
+                }
+            }
             if cancelled() {
                 let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
                     id,

@@ -1,5 +1,10 @@
 // Actual source-qualified durable artifacts; bounded software proof, not musical acceptance.
 
+mod automatic_carrier {
+    use super::*;
+    include!("automatic_map_carrier_tests.rs");
+}
+
 mod editor_async_tests {
     use super::*;
     include!("source_beatmap_editor_async_tests.rs");

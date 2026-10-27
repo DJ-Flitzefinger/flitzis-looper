@@ -80,8 +80,9 @@ def test_original_job_delivery_commits_compact_selection_and_publishes_saved_own
 
 
 @pytest.mark.parametrize("preparing", [False, True])
+@pytest.mark.parametrize("timing_stale", [False, True])
 def test_selector_observation_reuses_one_original_delivery_qualification(
-    controller: AppController, audio_engine_mock: Mock, *, preparing: bool
+    controller: AppController, audio_engine_mock: Mock, *, preparing: bool, timing_stale: bool
 ) -> None:
     audio = audio_engine_mock
     _assigned(controller, audio)
@@ -95,6 +96,8 @@ def test_selector_observation_reuses_one_original_delivery_qualification(
     if preparing:
         _job(audio)
         maps.select(0, "replacement record")
+    # Immutable source geometry does not authorize fresh tempo-analysis timing.
+    audio._resolve_loader_event.return_value = (0, timing_stale)
     audio._resolve_loader_event.reset_mock()
     artifact.map.reset_mock()
 

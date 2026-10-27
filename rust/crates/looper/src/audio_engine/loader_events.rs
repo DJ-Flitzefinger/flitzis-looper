@@ -8,9 +8,21 @@ use super::{AudioEngine, resident_relocation, task_to_str};
 use crate::messages::{BackgroundTaskKind, LoaderEvent};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::TryRecvError;
+
+/// One-shot export state belonging to a genuine automatic analysis terminal.
+#[derive(Clone, Debug)]
+struct AutomaticMapDelivery {
+    consumed: Arc<AtomicBool>,
+    cold: bool,
+    /// Only the separately exported delivery may expose map custody. Sharing
+    /// the consumed flag must never authorize the original analysis delivery.
+    exported: bool,
+}
 
 /// Retained Native event custody survives a Python participant-observer fence.
 #[pyclass(frozen)]
@@ -21,16 +33,24 @@ pub struct LoaderEventDelivery {
     source_beatmap: Option<super::source_beatmap::SourceBeatmap>,
     source_beatmap_artifact: Option<super::source_beatmap_artifact::SourceBeatmapArtifact>,
     source_beatmap_raw: Option<super::source_beatmap_artifact::SourceBeatmapRawArtifact>,
+    automatic_map: Option<AutomaticMapDelivery>,
+    automatic_map_error: Option<String>,
 }
 
 impl LoaderEventDelivery {
+    fn map_access_authorized(&self) -> bool {
+        self.automatic_map.as_ref().is_none_or(|automatic| {
+            automatic.exported && automatic.consumed.load(Ordering::Acquire)
+        })
+    }
+
     /// Effective immutable map custody keeps its genuine original Native owner after admission.
     /// Later job cancellation revokes pending work, not this comparison-only provenance.
     pub(super) fn source_map_belongs_to(
         &self,
         ownership: &std::sync::Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     ) -> bool {
-        self.owner.belongs_to(ownership)
+        self.map_access_authorized() && self.owner.belongs_to(ownership)
     }
 
     pub(super) fn source_beatmap_raw_for(
@@ -38,7 +58,7 @@ impl LoaderEventDelivery {
         owner: &super::complete_context::NativeAnalysisOwner,
         shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> PyResult<Option<super::source_beatmap_raw::SourceBeatmapRawCandidate>> {
-        if !owner.same_admission(&self.owner) || !owner.current() {
+        if !self.map_access_authorized() || !owner.same_admission(&self.owner) || !owner.current() {
             return Ok(None);
         }
         let Some(artifact) = self.source_beatmap_raw.as_ref() else {
@@ -63,7 +83,7 @@ impl LoaderEventDelivery {
         ownership: &std::sync::Arc<super::input_runtime_binding::InputRuntimeOwnership>,
         binding: super::input_runtime_binding::InputPadBinding,
     ) -> bool {
-        self.owner.source_map_binding_current(ownership, binding)
+        self.map_access_authorized() && self.owner.source_map_binding_current(ownership, binding)
     }
 
     /// Called under the existing request lock before a runtime publication is staged.
@@ -72,6 +92,9 @@ impl LoaderEventDelivery {
         binding: &super::input_runtime_binding::InputRuntimePadBinding,
         exact_quarters: Option<f64>,
     ) -> Result<super::source_map_admission::QualifiedSourceMap, String> {
+        if !self.map_access_authorized() {
+            return Err("automatic source map requires its one-shot exported delivery".into());
+        }
         if !self.owner.source_map_admission_current(binding) {
             return Err(
                 "source map original Native admission is stale or belongs to another source".into(),
@@ -117,7 +140,7 @@ impl LoaderEventDelivery {
         &self,
         owner: &super::complete_context::NativeAnalysisOwner,
     ) -> PyResult<Option<super::source_beatmap_artifact::SourceBeatmapArtifact>> {
-        if !owner.same_admission(&self.owner) || !owner.current() {
+        if !self.map_access_authorized() || !owner.same_admission(&self.owner) || !owner.current() {
             return Ok(None);
         }
         let Some(artifact) = self.source_beatmap_artifact.as_ref() else {
@@ -146,7 +169,7 @@ impl LoaderEventDelivery {
         &self,
         owner: &super::complete_context::NativeAnalysisOwner,
     ) -> PyResult<Option<super::source_beatmap::SourceBeatmap>> {
-        if !owner.same_admission(&self.owner) || !owner.current() {
+        if !self.map_access_authorized() || !owner.same_admission(&self.owner) || !owner.current() {
             return Ok(None);
         }
         let Some(map) = self.source_beatmap.as_ref() else {
@@ -168,6 +191,115 @@ impl LoaderEventDelivery {
     pub fn same_owner(&self, other: &Self) -> bool {
         self.owner.same_admission(&other.owner)
     }
+
+    /// Historical optional outcome only; never current playback qualification.
+    pub fn automatic_source_beatmap_error(&self) -> Option<&str> {
+        self.automatic_map_error.as_deref()
+    }
+}
+
+/// Export one genuine automatic result without recapturing current source custody.
+/// Fallible Python wrappers precede the final locked checks and one-shot export.
+pub(super) fn consume_automatic_map(
+    engine: &AudioEngine,
+    py: Python<'_>,
+    delivery: &LoaderEventDelivery,
+) -> PyResult<Option<Py<PyTuple>>> {
+    let Some(automatic) = &delivery.automatic_map else {
+        return Ok(None);
+    };
+    let Some(artifact) = &delivery.source_beatmap_artifact else {
+        return Ok(None);
+    };
+    if delivery.source_beatmap.is_none()
+        || !delivery.owner.belongs_to(&engine.input_runtime_ownership)
+        || !delivery.owner.current()
+        || automatic.consumed.load(Ordering::Acquire)
+    {
+        return Ok(None);
+    }
+    let initial = match delivery.owner.observe_control() {
+        PlacementObservation::Current(snapshot) => snapshot,
+        PlacementObservation::Pending => {
+            return Err(PyRuntimeError::new_err(
+                "loader event content placement pending",
+            ));
+        }
+        _ => return Ok(None),
+    };
+    let derived = LoaderEventDelivery {
+        owner: delivery.owner.source_only(),
+        timing_epoch: None,
+        source_beatmap: delivery.source_beatmap.clone(),
+        source_beatmap_artifact: Some(artifact.clone()),
+        source_beatmap_raw: None,
+        automatic_map: Some(AutomaticMapDelivery {
+            exported: true,
+            ..automatic.clone()
+        }),
+        automatic_map_error: None,
+    };
+    let result = (initial.slot(), artifact.clone(), derived)
+        .into_pyobject(py)?
+        .unbind();
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    if !delivery.owner.belongs_to(&engine.input_runtime_ownership) || !delivery.owner.current() {
+        return Ok(None);
+    }
+    let current = match delivery.owner.observe_control() {
+        PlacementObservation::Current(snapshot) if snapshot.same_projection(initial) => snapshot,
+        PlacementObservation::Current(_) => {
+            return Err(PyRuntimeError::new_err(
+                "loader event content placement pending: export target changed",
+            ));
+        }
+        PlacementObservation::Pending => {
+            return Err(PyRuntimeError::new_err(
+                "loader event content placement pending",
+            ));
+        }
+        _ => return Ok(None),
+    };
+    if automatic.cold {
+        let Some(expected) = delivery.timing_epoch else {
+            return Ok(None);
+        };
+        if engine
+            .prepared_source_epoch(current.slot())
+            .map_err(PyRuntimeError::new_err)?
+            .load(Ordering::Acquire)
+            != expected
+        {
+            return Ok(None);
+        }
+    } else if !delivery.owner.has_analysis_epoch() {
+        return Ok(None);
+    }
+    // Original strict admission is checked immediately before the shared claim.
+    if !delivery.owner.current()
+        || !matches!(delivery.owner.observe_control(),
+        PlacementObservation::Current(snapshot) if snapshot.same_projection(current))
+    {
+        return Ok(None);
+    }
+    if automatic
+        .consumed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(None);
+    }
+    // Cancellation need not take the request lock. A concurrent cancellation
+    // retires this one-shot result; it never reopens the claim for replay.
+    if delivery.owner.cancellation_requested() {
+        artifact.retire_unselected();
+        return Ok(None);
+    }
+    artifact.acknowledge_export();
+    Ok(Some(result))
 }
 
 pub(super) fn resolve_delivery(
@@ -189,9 +321,15 @@ pub(super) fn resolve_delivery(
                 .map_err(PyRuntimeError::new_err)?;
             Ok(Some((
                 id,
+                // A map-only export proves source custody, never fresh timing
+                // completion. Its original analysis delivery keeps that role.
                 delivery
-                    .timing_epoch
-                    .is_some_and(|expected| epoch.load(Ordering::Acquire) != expected),
+                    .automatic_map
+                    .as_ref()
+                    .is_some_and(|automatic| automatic.exported)
+                    || delivery
+                        .timing_epoch
+                        .is_some_and(|expected| epoch.load(Ordering::Acquire) != expected),
             )))
         }
         PlacementObservation::Pending => Err(PyRuntimeError::new_err(
@@ -417,13 +555,35 @@ pub(super) fn poll(
             LoaderEvent::Success { timing_epoch, .. } => *timing_epoch,
             _ => None,
         };
+        let automatic_analysis = match &event {
+            LoaderEvent::Success {
+                analysis: Some(analysis),
+                ..
+            }
+            | LoaderEvent::TaskSuccess {
+                analysis: Some(analysis),
+                ..
+            } => Some(analysis),
+            _ => None,
+        };
+        let automatic_stored =
+            automatic_analysis.and_then(|analysis| match &analysis.automatic_source_map {
+                Some(crate::messages::AutomaticSourceMap::Stored { artifact, consumed }) => {
+                    Some((artifact.clone(), consumed.clone()))
+                }
+                _ => None,
+            });
         let source_beatmap = match &event {
             LoaderEvent::SourceBeatmapCompleted { map, .. } => Some(map.clone()),
-            _ => None,
+            _ => automatic_stored
+                .as_ref()
+                .map(|(artifact, _)| artifact.map()),
         };
         let source_beatmap_artifact = match &event {
             LoaderEvent::SourceBeatmapCompleted { artifact, .. } => artifact.clone(),
-            _ => None,
+            _ => automatic_stored
+                .as_ref()
+                .map(|(artifact, _)| artifact.clone()),
         };
         let source_beatmap_raw = match &event {
             LoaderEvent::SourceBeatmapRawCompleted { artifact, .. } => Some(artifact.clone()),
@@ -439,6 +599,13 @@ pub(super) fn poll(
                     source_beatmap,
                     source_beatmap_artifact,
                     source_beatmap_raw,
+                    automatic_map: automatic_stored.map(|(_, consumed)| AutomaticMapDelivery {
+                        consumed,
+                        cold: matches!(&event, LoaderEvent::Success { .. }),
+                        exported: false,
+                    }),
+                    automatic_map_error: automatic_analysis
+                        .and_then(|analysis| analysis.automatic_source_map_error.clone()),
                 },
             )?,
         )?;

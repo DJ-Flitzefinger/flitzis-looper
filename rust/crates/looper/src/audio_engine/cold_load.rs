@@ -2019,7 +2019,7 @@ impl ColdLoad {
         let (
             lease,
             sample,
-            analysis,
+            mut analysis,
             detected_loop_start_s,
             analysis_error,
             incoming_defaults,
@@ -2060,6 +2060,34 @@ impl ColdLoad {
                 &mut resident_registration,
             )
             .map_err(|error| error.to_string())?;
+        if let Some(analysis) = analysis.as_mut() {
+            let cancelled = || self.is_cancelled();
+            match sample.samples.len().checked_mul(4) {
+                Some(held) => super::app_analysis::store_automatic_map(
+                    analysis,
+                    &self.samples_root,
+                    &lease.original_path,
+                    held,
+                    &cancelled,
+                    |map| {
+                        if map.source_identity() != lease.manifest.decoder_identity.as_str() {
+                            return Err(
+                                "automatic map decoder identity differs from committed source"
+                                    .into(),
+                            );
+                        }
+                        lease
+                            .verify_original_for_offline_cancellable(&cancelled)
+                            .map_err(|error| error.to_string())
+                    },
+                ),
+                None => {
+                    analysis.automatic_source_map = None;
+                    analysis.automatic_source_map_error =
+                        Some("automatic map PCM budget overflow".into());
+                }
+            }
+        }
         #[cfg(all(test, windows))]
         {
             let probe = self.before_publication.lock().unwrap().take();

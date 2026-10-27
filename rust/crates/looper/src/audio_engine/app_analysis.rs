@@ -6,7 +6,7 @@ use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, key_input_from_f32_le}
 use super::source_beatmap_capture::beat_this::{
     BeatThisSourceInput, expected_logit_count, pinned_model,
 };
-use crate::messages::{LoadedAnalysis, SampleBuffer};
+use crate::messages::{AutomaticSourceMap, LoadedAnalysis, SampleBuffer};
 use pyo3::prelude::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -15,6 +15,109 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const LIMIT: usize = 512 * 1024 * 1024;
+
+/// Completed DTO storage only. Artifact storage accounts for its input map itself.
+pub(super) fn metadata_retained_bytes(analysis: &LoadedAnalysis) -> Result<usize, String> {
+    super::source_beatmap::budget::sum(&[
+        std::mem::size_of::<LoadedAnalysis>(),
+        analysis.key.as_ref().map_or(0, String::capacity),
+        analysis
+            .bpm_method_json
+            .as_ref()
+            .map_or(0, String::capacity),
+        analysis.beat_error.as_ref().map_or(0, String::capacity),
+        analysis
+            .automatic_source_map_error
+            .as_ref()
+            .map_or(0, String::capacity),
+        analysis
+            .beat_grid
+            .beats
+            .capacity()
+            .checked_mul(4)
+            .ok_or("beat grid budget overflow")?,
+        analysis
+            .beat_grid
+            .downbeats
+            .capacity()
+            .checked_mul(4)
+            .ok_or("downbeat grid budget overflow")?,
+        analysis
+            .beat_grid
+            .bars
+            .capacity()
+            .checked_mul(4)
+            .ok_or("bar grid budget overflow")?,
+    ])
+}
+
+/// Reuse the existing sealed artifact birth and reserved retirement owner. A map
+/// failure is optional; valid tempo/key/source results remain unchanged.
+pub(super) fn store_automatic_map(
+    analysis: &mut LoadedAnalysis,
+    root: &std::path::Path,
+    original: &std::path::Path,
+    held_pcm: usize,
+    cancelled: &impl Fn() -> bool,
+    verify: impl FnOnce(&super::SourceBeatmap) -> Result<(), String>,
+) {
+    let Some(pending) = analysis.automatic_source_map.take() else {
+        return;
+    };
+    let map = match pending {
+        AutomaticSourceMap::Pending(map) => map,
+        AutomaticSourceMap::Stored { artifact, .. } => artifact.map(),
+    };
+    let stored = (|| {
+        verify(&map)?;
+        if cancelled() {
+            return Err("automatic source map superseded".into());
+        }
+        let other = metadata_retained_bytes(analysis)?;
+        let artifact = super::SourceBeatmapArtifact::store_with_context(
+            root,
+            original,
+            map,
+            (held_pcm, other),
+            cancelled,
+            &mut |_, _| Ok(()),
+        )?;
+        if cancelled() {
+            return Err("automatic source map superseded after storage".into());
+        }
+        Ok(artifact)
+    })();
+    match stored {
+        Ok(artifact) => {
+            analysis.automatic_source_map = Some(AutomaticSourceMap::Stored {
+                artifact,
+                consumed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
+            analysis.automatic_source_map_error = None;
+        }
+        Err(error) => analysis.automatic_source_map_error = Some(error),
+    }
+}
+
+fn retain_optional_map(
+    map: &mut Option<super::SourceBeatmap>,
+    error: &mut Option<String>,
+    core: usize,
+) -> Result<(), String> {
+    if core > LIMIT {
+        return Err("neural analysis metadata exceeds preparation budget".into());
+    }
+    if let Some(pending) = map {
+        let coexist = pending
+            .retained_bytes()
+            .and_then(|bytes| super::source_beatmap::budget::sum(&[core, bytes]));
+        if !coexist.is_ok_and(|bytes| bytes <= LIMIT) {
+            *map = None;
+            *error = Some("automatic map and analysis metadata exceed preparation budget".into());
+        }
+    }
+    Ok(())
+}
 
 /// Preflight known geometry before the caller materializes complete PCM.
 pub(super) fn prepare_input(
@@ -226,8 +329,16 @@ pub(super) fn analyze(
             Err(error) if tempo_only => return Err(error),
             Err(error) => return Ok(LoadedAnalysis { bpm: 0.0, key,
                 beat_grid: flitzis_looper_analysis::BeatGrid { beats: vec![], downbeats: vec![], bars: vec![] },
-                bpm_method_json: None, beat_error: Some(error) }),
+                bpm_method_json: None, beat_error: Some(error), automatic_source_map: None, automatic_source_map_error: None }),
         };
+        let descriptor_bytes = super::source_beatmap::budget::value_tree(&context.descriptor)?;
+        let source_live = super::source_beatmap::budget::sum(&[held, descriptor_bytes,
+            source_digest.capacity(), mono_sha256.capacity(), key.as_ref().map_or(0, String::capacity)])?;
+        let (mut automatic_map, mut automatic_error) = match super::source_beatmap::automatic::build(&raw, source_live) {
+            Ok(map) => (Some(map), None),
+            Err(error) => (None, Some(error)),
+        };
+        retain_optional_map(&mut automatic_map, &mut automatic_error, super::source_beatmap::budget::sum(&[source_live, wire])?)?;
         let predictions = raw.predictions();
         let estimate = super::app_tempo::estimate(&predictions.beat_seconds, frames as f64 / f64::from(rate));
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
@@ -236,11 +347,25 @@ pub(super) fn analyze(
             "frontend_id":pinned_model()["frontend_id"],"source_sha256":source_digest,
             "mono_sha256":mono_sha256,"sample_rate_hz":rate,"frame_count":frames,
             "raw_beats":predictions.beat_seconds,"raw_downbeats":predictions.downbeat_seconds}).as_object().unwrap().clone());
+        let method_tree = super::source_beatmap::budget::value_tree(&method)?;
+        let method_len = super::source_beatmap::budget::serialized_len(&method)?;
+        let grid_bytes = super::source_beatmap::budget::sum(&[
+            predictions.beat_seconds.len().max(4).checked_mul(4).ok_or("neural grid budget overflow")?,
+            predictions.downbeat_seconds.len().max(4).checked_mul(8).ok_or("neural downbeat budget overflow")?,
+        ])?;
+        let core = super::source_beatmap::budget::sum(&[source_live, raw.encoding_workspace_bytes()?,
+            method_tree, method_len.checked_mul(2).ok_or("neural method budget overflow")?, grid_bytes,
+            std::mem::size_of::<LoadedAnalysis>()])?.max(super::source_beatmap::budget::sum(&[held, wire])?);
+        retain_optional_map(&mut automatic_map, &mut automatic_error, core)?;
+        let method_json = method.to_string();
+        drop(method);
         let beats = predictions.beat_seconds.iter().map(|&v| v as f32).collect();
         let downbeats: Vec<_> = predictions.downbeat_seconds.iter().map(|&v| v as f32).collect();
         Ok(LoadedAnalysis { bpm: estimate.bpm.unwrap_or(0.0), key,
             beat_grid: flitzis_looper_analysis::BeatGrid { beats, bars: downbeats.clone(), downbeats },
-            bpm_method_json: Some(method.to_string()),
+            bpm_method_json: Some(method_json),
+            automatic_source_map: automatic_map.map(AutomaticSourceMap::Pending),
+            automatic_source_map_error: automatic_error,
             beat_error: estimate.bpm.is_none().then(|| format!("Neural tempo estimate {}", estimate.status)) })
     })).unwrap_or_else(|_| Err("neural analysis worker panicked".into()));
     match (result, temporary.close()) {

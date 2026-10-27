@@ -947,6 +947,17 @@ impl ControlMessage {
 /// Re-export from the analysis crate.
 pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 
+/// Private optional geometry; a stored claim belongs to one original admission.
+#[derive(Clone, Debug)]
+pub(crate) enum AutomaticSourceMap {
+    Pending(crate::audio_engine::SourceBeatmap),
+    Stored {
+        artifact: crate::audio_engine::SourceBeatmapArtifact,
+        /// Per source admission, never shared merely because analysis was cached.
+        consumed: Arc<std::sync::atomic::AtomicBool>,
+    },
+}
+
 /// Ordinary App estimate. No accepted timing/map or current Native authority.
 #[derive(Clone, Debug)]
 pub struct LoadedAnalysis {
@@ -955,6 +966,8 @@ pub struct LoadedAnalysis {
     pub beat_grid: flitzis_looper_analysis::BeatGrid,
     pub bpm_method_json: Option<String>,
     pub beat_error: Option<String>,
+    pub(crate) automatic_source_map: Option<AutomaticSourceMap>,
+    pub(crate) automatic_source_map_error: Option<String>,
 }
 
 impl From<SampleAnalysis> for LoadedAnalysis {
@@ -965,6 +978,8 @@ impl From<SampleAnalysis> for LoadedAnalysis {
             beat_grid: value.beat_grid,
             bpm_method_json: None,
             beat_error: None,
+            automatic_source_map: None,
+            automatic_source_map_error: None,
         }
     }
 }

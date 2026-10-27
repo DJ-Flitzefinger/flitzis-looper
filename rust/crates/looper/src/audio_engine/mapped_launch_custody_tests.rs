@@ -533,6 +533,7 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
             "policy_mode":"mapped","policy_revision":null,"policy_sync":null,
             "policy_realtime_bpm":null,"settled":true,"target_current":true,"adoption":null,
             "phase_program_current":false,"phase_program_revision":null,
+            "phase_read_confirmed":null,
             "birth": {
                 "requested":"first_sound_at_grid","outcome":"complete_beginning_at_e",
                 "alignment":"earliest_bound_met","reason":null,
