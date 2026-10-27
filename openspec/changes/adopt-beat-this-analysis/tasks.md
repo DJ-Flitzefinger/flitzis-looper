@@ -203,9 +203,10 @@ the retained scientific/reference gates above; those gates remain incomplete.
 - [ ] Resolve operational loop bars and captured GridOffset alignment before activation.
 - [ ] Consolidate optional SYNC through existing GUI/MIDI/runtime policy without a separate
   REALTIME BPM prerequisite; retain truthful pending, effective and actual phase states.
-- [ ] Complete the latest Human Unicode-FLAC load reproduction, actual FLAC/MP3 tempo
-  comparison and fixed-tempo 8/32/64-bar evidence; evaluate integer hypotheses against
-  two separated ten-second windows and the long-span phase trajectory.
+- [x] Repair the Human Unicode-FLAC load, compare actual FLAC/MP3 timing, and record
+  source/PCM-bound 8-versus-32/64-bar rendering over64masterbars. Retain initial
+  offset, unwrapped progression, loop seams and physical rounding separately;
+  neural ordinal diagnostics do not establish musical/hearing acceptance.
 - [x] Add and check the finite v2 integer counterprobe with retained fractional/raw
   evidence, common-phase drift bounds, strict v1/v2 persistence/Copy and guarded
   tempo-only Legacy upgrade. This does not complete the paired render/listening gate.

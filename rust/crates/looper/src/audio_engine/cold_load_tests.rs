@@ -690,7 +690,7 @@ impl Callback {
         drain_control_messages(
             consumer,
             &mut self.scheduler,
-            0,
+            self.transport.output_frame(),
             &mut self.quantization,
             &mut self.transport,
             &mut self.mixer,
