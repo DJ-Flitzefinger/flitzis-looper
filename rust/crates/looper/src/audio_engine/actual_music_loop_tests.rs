@@ -8,6 +8,11 @@ use crate::audio_engine::{NUM_SAMPLES, resident_relocation};
 use crate::messages::ControlParameterMessage;
 use pyo3::types::PyModule;
 
+mod maps {
+    use super::*;
+    include!("actual_music_map_tests.rs");
+}
+
 struct Path {
     engine: AudioEngine,
     callback: Callback,
