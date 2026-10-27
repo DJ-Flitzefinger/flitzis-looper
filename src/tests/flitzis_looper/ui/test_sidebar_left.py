@@ -399,6 +399,38 @@ def test_sidebar_renders_pad_key_lock_only_for_loaded_pads(
     assert key_lock_calls == expected_key_lock_calls
 
 
+@pytest.mark.parametrize(
+    ("label", "factor"), [("BPM /2##half_bpm", 0.5), ("BPM x2##double_bpm", 2.0)]
+)
+@pytest.mark.parametrize("available", [False, True])
+def test_half_double_buttons_route_factors_and_disable_unavailable_bpm(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    factor: float,
+    *,
+    available: bool,
+) -> None:
+    ctx = UiContext(controller)
+    action = Mock()
+    disabled = False
+
+    def begin(value: object) -> None:
+        nonlocal disabled
+        disabled = bool(value)
+
+    monkeypatch.setattr(ctx.audio.pads, "scale_bpm", action)
+    monkeypatch.setattr(imgui, "begin_disabled", begin)
+    monkeypatch.setattr(imgui, "end_disabled", lambda: None)
+    monkeypatch.setattr(imgui, "same_line", lambda: None)
+    monkeypatch.setattr(imgui, "button", lambda text: not disabled and text == label)
+    sidebar_left._render_bpm_scale(ctx, 3, 94.0 if available else None)
+    if available:
+        action.assert_called_once_with(3, factor)
+    else:
+        action.assert_not_called()
+
+
 @pytest.mark.parametrize("manual", [False, True])
 @pytest.mark.parametrize("submitted", [False, True])
 def test_untouched_pad_bpm_entry_preserves_effective_value_and_override(
@@ -430,6 +462,8 @@ def test_untouched_pad_bpm_entry_preserves_effective_value_and_override(
     tooltip = Mock()
     monkeypatch.setattr(imgui, "set_tooltip", tooltip)
     monkeypatch.setattr(imgui, "button", lambda *_args: False)
+    monkeypatch.setattr(imgui, "begin_disabled", lambda *_args: None)
+    monkeypatch.setattr(imgui, "end_disabled", lambda: None)
 
     sidebar_left._render_bpm(
         ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)
@@ -458,6 +492,8 @@ def test_deliberate_pad_bpm_edit_preserves_fractional_override(
     monkeypatch.setattr(imgui, "is_item_active", lambda: False)
     monkeypatch.setattr(imgui, "is_item_hovered", lambda: False)
     monkeypatch.setattr(imgui, "button", lambda *_args: False)
+    monkeypatch.setattr(imgui, "begin_disabled", lambda *_args: None)
+    monkeypatch.setattr(imgui, "end_disabled", lambda: None)
 
     sidebar_left._render_bpm(
         ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)

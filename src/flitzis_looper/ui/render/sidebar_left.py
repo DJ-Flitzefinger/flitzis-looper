@@ -408,12 +408,24 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     if effective_bpm is not None and imgui.is_item_hovered():
         imgui.set_tooltip(f"Effective BPM: {format_bpm_entry_value(effective_bpm)}")
 
+    _render_bpm_scale(ctx, info.pad_id, effective_bpm)
+
     imgui.button("Tap BPM", (-1, 0))
     if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.left):
         ctx.audio.pads.tap_bpm(info.pad_id)
 
     if imgui.button("Clear Manual BPM", (-1, 0)):
         ctx.audio.pads.clear_manual_bpm(info.pad_id)
+
+
+def _render_bpm_scale(ctx: UiContext, pad_id: int, effective_bpm: float | None) -> None:
+    imgui.begin_disabled(effective_bpm is None)
+    if imgui.button("BPM /2##half_bpm"):
+        ctx.audio.pads.scale_bpm(pad_id, 0.5)
+    imgui.same_line()
+    if imgui.button("BPM x2##double_bpm"):
+        ctx.audio.pads.scale_bpm(pad_id, 2.0)
+    imgui.end_disabled()
 
 
 def _apply_source_key(ctx: UiContext, editor: SourceKeyEditor, key: str | None) -> None:

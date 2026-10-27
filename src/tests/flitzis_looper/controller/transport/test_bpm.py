@@ -183,7 +183,7 @@ def test_tap_bpm_fits_constant_tempo_across_all_taps(
     for _ in range(6):
         bpm = controller.transport.bpm.tap_bpm(sample_id)
 
-    assert bpm == pytest.approx(105.0, abs=0.01)
+    assert bpm == pytest.approx(120.0, abs=0.01)
     assert controller.session.tap_bpm_pad_id == sample_id
     assert controller.session.tap_bpm_timestamps == [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
 
@@ -290,7 +290,7 @@ def test_tap_bpm_non_monotonic_timestamps(
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(92.31, abs=0.01)
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
 
 
 def test_tap_bpm_negative_intervals(

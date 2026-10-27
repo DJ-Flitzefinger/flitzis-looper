@@ -565,6 +565,14 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             operation="set_manual_bpm",
         )
 
+    def scale_bpm(self, pad_id: int, factor: float) -> None:
+        perform_pad_action(
+            self._controller,
+            pad_id,
+            lambda: self._controller.transport.bpm.scale_bpm(pad_id, factor),
+            operation="scale_bpm",
+        )
+
     def clear_manual_bpm(self, pad_id: int) -> None:
         perform_pad_action(
             self._controller,

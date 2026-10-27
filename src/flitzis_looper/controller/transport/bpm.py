@@ -1,4 +1,6 @@
 import math
+from itertools import pairwise
+from statistics import median
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -40,10 +42,19 @@ class BpmController:
             self._project.pad_timing_intent[sample_id] = "legacy"
             self._transport._mark_project_changed()
 
-    def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
+    def set_manual_bpm(
+        self,
+        sample_id: int,
+        bpm: float,
+        *,
+        expected_source_generation: int | None = None,
+    ) -> None:
         """Set a pad's manual BPM override."""
         validate_sample_id(sample_id)
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        if expected_source_generation is not None and generation != expected_source_generation:
+            message = "BPM correction source changed before admission"
+            raise ValueError(message)
         ensure_finite(bpm)
         if bpm <= 0:
             msg = f"bpm must be > 0, got {bpm!r}"
@@ -62,6 +73,23 @@ class BpmController:
             timing_intent="manual",
             expected_source_generation=generation,
         )
+
+    def scale_bpm(self, sample_id: int, factor: float) -> None:
+        """Correct half/double detection through the current-source manual path."""
+        validate_sample_id(sample_id)
+        if factor not in {0.5, 2.0}:
+            message = "BPM correction factor must be 0.5 or 2"
+            raise ValueError(message)
+        generation = self._transport.capture_current_pad_edit_generation(sample_id)
+        if generation is None:
+            message = "BPM correction source confirmation unavailable"
+            raise ValueError(message)
+        current = self.effective_bpm(sample_id)
+        target = normalize_bpm(current * factor if current is not None else None)
+        if target is None:
+            message = "BPM is unavailable for half/double correction"
+            raise ValueError(message)
+        self.set_manual_bpm(sample_id, target, expected_source_generation=generation)
 
     def clear_manual_bpm(self, sample_id: int) -> None:
         """Clear a pad's manual BPM override."""
@@ -277,25 +305,112 @@ class BpmController:
 
 
 def _estimate_tap_interval_s(timestamps: list[float]) -> float | None:
-    """Estimate the constant tap interval from all accepted tap timestamps."""
+    """Refit the complete series without letting isolated taps move its beat count."""
     count = len(timestamps)
-    if count < 2:
+    if count < 2 or any(not math.isfinite(t) for t in timestamps):
         return None
-
-    mean_index = (count - 1) / 2.0
-    mean_time = sum(timestamps) / count
-    denominator = 0.0
-    numerator = 0.0
-    for index, timestamp in enumerate(timestamps):
-        index_offset = index - mean_index
-        denominator += index_offset * index_offset
-        numerator += index_offset * (float(timestamp) - mean_time)
-
-    if denominator <= 0.0:
+    if any(a >= b for a, b in pairwise(timestamps)):
         return None
+    # Avoid loss of precision from the absolute monotonic epoch. Original indices
+    # remain intact even when their timestamps receive zero weight.
+    times = [t - timestamps[0] for t in timestamps]
+    if count < 4:
+        fit = _fit_tap_line(times, [1.0] * count)
+        return fit[1] if fit is not None else None
+    return _robust_tap_period(times)
 
-    interval_s = numerator / denominator
-    if not math.isfinite(interval_s) or interval_s <= 0.0:
+
+def _robust_tap_period(times: list[float]) -> float | None:
+    count = len(times)
+    seed = _tap_seed(times)
+    if seed is None:
         return None
+    origin, period = seed
+    for _ in range(5):
+        residual = [t - origin - i * period for i, t in enumerate(times)]
+        center = median(residual)
+        origin += center
+        cutoff = _tap_residual_cutoff(residual, period)
+        weights = [
+            (1 - ((r - center) / cutoff) ** 2) ** 2 if abs(r - center) < cutoff else 0.0
+            for r in residual
+        ]
+        if sum(w > 0 for w in weights) * 2 <= count:
+            return None
+        fit = _fit_tap_line(times, weights)
+        if fit is None:
+            return None
+        origin, period = fit
+    return _final_tap_period(times, origin, period)
 
-    return interval_s
+
+def _tap_seed(times: list[float]) -> tuple[float, float] | None:
+    count = len(times)
+    # Long indexed spans suppress cyclic tap jitter; adjacent IOI medians can be
+    # biased (e.g. a repeating +10ms,+10ms,-20ms pattern) over long histories.
+    lag = count // 2
+    long_period = median((times[i + lag] - times[i]) / lag for i in range(count - lag))
+    short_period = median(b - a for a, b in pairwise(times))
+    best: tuple[float, float] | None = None
+    best_count = count // 2
+    for period in (long_period, short_period):
+        origin = median(t - i * period for i, t in enumerate(times))
+        residual = [t - origin - i * period for i, t in enumerate(times)]
+        center = median(residual)
+        cutoff = _tap_residual_cutoff(residual, period)
+        supported = sum(abs(r - center) < cutoff for r in residual)
+        if supported > best_count:
+            best_count = supported
+            best = (origin + center, period)
+    return best
+
+
+def _final_tap_period(times: list[float], origin: float, period: float) -> float | None:
+    # Reclassify against each new fit; previously excluded taps may re-enter.
+    # Final OLS uses every inlier's ORIGINAL index across the whole measurement.
+    previous: list[bool] | None = None
+    count = len(times)
+    for _ in range(5):
+        residual = [t - origin - i * period for i, t in enumerate(times)]
+        center = median(residual)
+        cutoff = _tap_residual_cutoff(residual, period)
+        keep = [abs(r - center) <= cutoff for r in residual]
+        indices = [i for i, yes in enumerate(keep) if yes]
+        if len(indices) * 2 <= count or indices[-1] - indices[0] < 0.5 * (count - 1):
+            return None
+        fit = _fit_tap_line(times, [float(yes) for yes in keep])
+        if fit is None:
+            return None
+        origin, period = fit
+        if keep == previous:
+            return period
+        previous = keep
+    # An unstable inlier classification must not publish a new manual tempo.
+    return None
+
+
+def _tap_residual_cutoff(residual: list[float], period: float) -> float:
+    center = median(residual)
+    jitter = 1.4826 * median(abs(r - center) for r in residual)
+    # Prediction jitter is distinct from uncertainty of the fitted period: its
+    # gate must not collapse as 1/sqrt(N) and eventually reject normal human taps.
+    return min(0.25 * period, max(0.003, 4.5 * jitter))
+
+
+def _fit_tap_line(times: list[float], weights: list[float]) -> tuple[float, float] | None:
+    total = math.fsum(weights)
+    if total <= 0:
+        return None
+    mx = math.fsum(i * w for i, w in enumerate(weights)) / total
+    my = math.fsum(t * w for t, w in zip(times, weights, strict=True)) / total
+    xx = math.fsum(w * (i - mx) ** 2 for i, w in enumerate(weights))
+    if xx <= 0:
+        return None
+    period = (
+        math.fsum(
+            w * (i - mx) * (t - my) for i, (t, w) in enumerate(zip(times, weights, strict=True))
+        )
+        / xx
+    )
+    origin = my - period * mx
+    return (origin, period) if math.isfinite(period) and period > 0 else None

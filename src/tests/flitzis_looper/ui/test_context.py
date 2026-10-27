@@ -425,6 +425,14 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.pads.clear_manual_bpm(0)
         assert controller.project.manual_bpm[0] is None
 
+    def test_half_double_delegates_to_current_manual_bpm(self, controller: AppController) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.manual_bpm[0] = 91.89220756855694
+        audio_actions.pads.scale_bpm(0, 0.5)
+        assert controller.project.manual_bpm[0] == 45.94610378427847
+        audio_actions.pads.scale_bpm(0, 2.0)
+        assert controller.project.manual_bpm[0] == 91.89220756855694
+
     def test_set_and_clear_manual_key(self, controller: AppController) -> None:
         audio_actions = AudioActions(controller)
 

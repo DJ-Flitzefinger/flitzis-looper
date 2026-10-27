@@ -39,6 +39,8 @@ PRIMARY = [
     ("pad.eq", "set_pad_eq"),
     ("pad.eq_band", "set_pad_eq"),
     ("pad.bpm", "set_pad_bpm"),
+    ("pad.half_bpm", "set_pad_bpm"),
+    ("pad.double_bpm", "set_pad_bpm"),
     ("pad.clear_bpm", "set_pad_bpm"),
     ("pad.tap", "set_pad_bpm"),
 ]
@@ -57,6 +59,8 @@ def _context(
         controller.project.manual_bpm[0] = 90.0
         controller.project.pad_timing_intent[0] = "manual"
         native["intent"] = "manual"
+    if action in {"pad.half_bpm", "pad.double_bpm"}:
+        controller.project.manual_bpm[0] = 94.0
     if action == "pad.tap":
         controller.session.tap_bpm_pad_id = 0
         controller.session.tap_bpm_timestamps = [1.0]
@@ -96,6 +100,8 @@ def _actions(ctx: UiContext) -> dict[str, Callable[[], object]]:
         "pad.eq": lambda: pads.set_pad_eq(0, -3.0, 2.0, 1.0),
         "pad.eq_band": lambda: pads.set_pad_eq_band(0, "mid", 2.0),
         "pad.bpm": lambda: pads.set_manual_bpm(0, 120.0),
+        "pad.half_bpm": lambda: pads.scale_bpm(0, 0.5),
+        "pad.double_bpm": lambda: pads.scale_bpm(0, 2.0),
         "pad.clear_bpm": lambda: pads.clear_manual_bpm(0),
         "pad.tap": lambda: pads.tap_bpm(0),
     }
