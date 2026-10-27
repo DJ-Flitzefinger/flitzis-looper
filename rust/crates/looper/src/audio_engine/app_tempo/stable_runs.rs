@@ -324,11 +324,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(update.as_object().unwrap().clone());
-            method["schema_version"] = json!(4);
+            method["schema_version"] = json!(5);
             assert_eq!(method["raw_beats"], original["raw_beats"]);
             assert_eq!(method["raw_downbeats"], original["raw_downbeats"]);
             fs::write(
-                root.join(format!("pad{pad}-v4-method.json")),
+                root.join(format!("pad{pad}-v5-method.json")),
                 serde_json::to_vec_pretty(&method).unwrap(),
             )
             .unwrap();
@@ -337,9 +337,135 @@ mod tests {
             );
         }
         fs::write(
-            root.join("tempo-replay-v4.json"),
+            root.join("tempo-replay-v5.json"),
             serde_json::to_vec_pretty(&reports).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    #[ignore = "authorized retained GPU-FLAC observations; numeric replay without inference or App"]
+    fn authorized_gpu_flac_corroborated_hull_replay_preserves_the_exact_selected_base() {
+        use serde_json::{Value, json};
+        use sha2::{Digest, Sha256};
+        use std::{fs, path::PathBuf};
+        let input = PathBuf::from(
+            std::env::var_os("FLITZI_CORROBORATED_HULL_SOURCE_REPORT")
+                .expect("retained authorized report"),
+        );
+        let root = PathBuf::from(
+            std::env::var_os("FLITZI_CORROBORATED_HULL_REPLAY_ROOT")
+                .expect("owned replay output root"),
+        );
+        assert!(input.is_absolute() && root.is_absolute());
+        let input = input.canonicalize().unwrap();
+        let output = root
+            .canonicalize()
+            .unwrap()
+            .join("source-bound-flac-v5.json");
+        assert_ne!(input, output);
+        let bytes = fs::read(&input).unwrap();
+        let report: Value = serde_json::from_slice(&bytes).unwrap();
+        let original: Value = serde_json::from_str(report["bpm_method"].as_str().unwrap()).unwrap();
+        assert_eq!(original["schema_version"], 4);
+        assert_eq!(original["policy"], "neural-stable-regions-v4");
+        assert_eq!(
+            original["source_sha256"],
+            report["authorized_source_sha256"]
+        );
+        assert_eq!(
+            original["source_sha256"],
+            "339911dd7a54af5efc80fdcc05e1432648de9640348803e9b4c0657f59c1a5ea"
+        );
+        assert_eq!(report["own_source_ack"], true);
+        assert_eq!(
+            original["frame_count"],
+            report["actual_playback_pcm"]["full_frames"]
+        );
+        assert_eq!(
+            original["sample_rate_hz"],
+            report["actual_playback_pcm"]["rate_hz"]
+        );
+        assert_eq!(
+            original["mono_sha256"],
+            report["actual_playback_pcm"]["mono_sha256"]
+        );
+        assert_eq!(original["frame_count"], 14_251_520);
+        assert_eq!(original["sample_rate_hz"], 48_000);
+        assert_eq!(
+            original["integer_probe"]["fractional_check"]["status"],
+            "inconclusive"
+        );
+        let beats: Vec<_> = original["raw_beats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        let duration = original["frame_count"].as_f64().unwrap()
+            / original["sample_rate_hz"].as_f64().unwrap();
+        let result = estimate(&beats, duration);
+        assert_eq!(result.policy, "neural-stable-regions-v5");
+        assert_eq!(result.status, "estimated");
+        let selected = result.selected.as_ref().unwrap();
+        assert_eq!(result.bpm, Some(selected.bpm));
+        // Retained JSON parsing can move a binary64 diagnostic by a few ULPs;
+        // this tolerance never permits replacing the exact new selected base.
+        assert!(
+            selected
+                .bpm
+                .to_bits()
+                .abs_diff(original["bpm"].as_f64().unwrap().to_bits())
+                <= 4
+        );
+        close_metadata(
+            &serde_json::to_value(&result.selected).unwrap(),
+            &original["selected"],
+        );
+        close_metadata(
+            &serde_json::to_value(&result.regions).unwrap(),
+            &original["regions"],
+        );
+        let probe = result.integer_probe.as_ref().unwrap();
+        let common = probe.common_region.as_ref().unwrap();
+        assert_eq!(common.window_seconds, [0.0, 2.0 * duration / 3.0]);
+        assert_eq!(common.retained, 303);
+        assert!(common.excluded_raw_indices.is_empty());
+        assert_eq!(probe.base_bpm, selected.bpm);
+        assert_eq!(probe.candidate_bpm, 92.0);
+        assert_eq!(probe.evidence_tier, "two_ten_second");
+        assert_eq!(probe.windows.len(), 2);
+        assert_eq!(probe.status, "fractional_estimate");
+        assert_eq!(probe.reason, "long_span_mismatch");
+        assert_eq!(probe.fractional_check.status, "pass");
+        assert!((0.024..0.025).contains(&probe.fractional_check.max_residual_seconds.unwrap()));
+        assert!(
+            (0.0029..0.0031).contains(
+                &probe
+                    .fractional_check
+                    .window_phase_difference_seconds
+                    .unwrap()
+            )
+        );
+        assert!(probe.window_phase_difference_seconds.unwrap() > 0.2);
+        assert!(probe.common_max_residual_seconds.unwrap() > 0.13);
+        let mut method = original.clone();
+        method.as_object_mut().unwrap().extend(
+            serde_json::to_value(&result)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        method["schema_version"] = json!(5);
+        assert_eq!(method["raw_beats"], original["raw_beats"]);
+        assert_eq!(method["raw_downbeats"], original["raw_downbeats"]);
+        assert_eq!(method["execution"], original["execution"]);
+        fs::write(output, serde_json::to_vec_pretty(&json!({
+            "schema_version":1,
+            "source_report_sha256":format!("{:x}",Sha256::digest(&bytes)),
+            "scope":"Retained original observations only; no new NN, App, Native installation, map/phase ACK or hearing claim; original execution receipt retained",
+            "method":method,
+        })).unwrap()).unwrap();
     }
 }

@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-pub(super) const POLICY: &str = "neural-stable-regions-v4";
+pub(super) const POLICY: &str = "neural-stable-regions-v5";
 const RESIDUAL_SECONDS: f64 = 0.025;
 mod integer;
 mod stable_runs;

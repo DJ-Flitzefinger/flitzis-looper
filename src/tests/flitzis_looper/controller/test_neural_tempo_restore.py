@@ -56,8 +56,9 @@ def _previous() -> SampleAnalysis:
 
 
 @pytest.mark.parametrize("cuda", [False, True])
-def test_v4_execution_diagnostic_survives_restore_and_copy_without_changing_tempo(
-    *, cuda: bool
+@pytest.mark.parametrize("version", [4, 5])
+def test_v4_and_v5_execution_diagnostic_survives_restore_and_copy_without_changing_tempo(
+    version: int, *, cuda: bool
 ) -> None:
     receipt = (
         ExecutionReceipt(1, "auto", "cuda:0", "Fixture GPU", "float32", "2.8.0+cu128", "12.8", None)
@@ -66,8 +67,8 @@ def test_v4_execution_diagnostic_survives_restore_and_copy_without_changing_temp
     )
     data = _method().model_dump(mode="python")
     data.update(
-        schema_version=4,
-        policy="neural-stable-regions-v4",
+        schema_version=version,
+        policy=f"neural-stable-regions-v{version}",
         status="insufficient",
         bpm=None,
         selected=None,

@@ -193,6 +193,45 @@ fn evaluate(
     }
 }
 
+fn corroborated_thirds_hull(
+    beats: &[f64],
+    duration: f64,
+    selected: &RegionEstimate,
+    regions: &[RegionEstimate],
+) -> Option<RegionEstimate> {
+    if !(2..=3).contains(&regions.len()) || !regions.contains(selected) {
+        return None;
+    }
+    let thirds = [
+        [0.0, duration / 3.0],
+        [duration / 3.0, 2.0 * duration / 3.0],
+        [2.0 * duration / 3.0, duration],
+    ];
+    let mut seen = [false; 3];
+    let mut hull = selected.window_seconds;
+    let mut extended = false;
+    for other in regions {
+        let index = thirds.iter().position(|w| *w == other.window_seconds)?;
+        if seen[index] || !((other.bpm / selected.bpm - 1.0).abs() <= 0.00025) {
+            return None;
+        }
+        seen[index] = true;
+        let [lower, upper] = other.window_seconds;
+        let [selected_lower, selected_upper] = selected.window_seconds;
+        extended |= (lower < selected_lower && upper < selected_upper)
+            || (lower > selected_lower && upper > selected_upper);
+        hull[0] = hull[0].min(lower);
+        hull[1] = hull[1].max(upper);
+    }
+    if !extended {
+        return None;
+    }
+    // This one strict fit includes EVERY original observation through the hull,
+    // including unreported gaps/thirds. Never concatenate local phases or masks.
+    // Its free BPM is a residual reference only; probe() keeps the exact base.
+    region(beats, hull[0], hull[1], 24, 30.0)
+}
+
 pub(super) fn probe(
     beats: &[f64],
     duration: f64,
@@ -213,7 +252,8 @@ pub(super) fn probe(
                         || super::stable_runs::is_candidate(beats, duration, r.window_seconds))
             })
         })
-        .cloned();
+        .cloned()
+        .or_else(|| corroborated_thirds_hull(beats, duration, selected, regions));
     let mut result = Counterprobe {
         status: "inconclusive",
         reason: "insufficient_probe_coverage",
@@ -517,5 +557,163 @@ mod tests {
         assert_eq!(probe.fractional_check.status, "inconclusive");
         assert!(probe.common_region.is_none());
         assert!(probe.windows.is_empty());
+    }
+
+    fn fitted_thirds(beats: &[f64], duration: f64) -> Vec<super::RegionEstimate> {
+        [
+            [0.0, duration / 3.0],
+            [duration / 3.0, 2.0 * duration / 3.0],
+            [2.0 * duration / 3.0, duration],
+        ]
+        .into_iter()
+        .filter_map(|w| super::region(beats, w[0], w[1], 24, 30.0))
+        .collect()
+    }
+
+    #[test]
+    fn corroborated_prefix_checks_exact_base_without_claiming_its_unstable_outro() {
+        for bpm in [94.0, 93.99, 91.892_207_568_556_94] {
+            let beats: Vec<_> = observations(bpm, 300.0, false)
+                .into_iter()
+                .map(|t| t + 0.0003 * (t - 200.0).max(0.0).powi(2))
+                .take_while(|t| *t < 300.0)
+                .collect();
+            let original = beats.clone();
+            let regions = fitted_thirds(&beats, 300.0);
+            assert_eq!(regions.len(), 2);
+            let result = estimate(&beats, 300.0);
+            assert_eq!(result.status, "estimated");
+            assert_eq!(result.regions, regions);
+            assert_eq!(result.selected.as_ref(), Some(&regions[0]));
+            let probe = result.integer_probe.unwrap();
+            assert_eq!(probe.base_bpm, regions[0].bpm);
+            assert_eq!(probe.common_region.unwrap().window_seconds, [0.0, 200.0]);
+            assert_eq!(probe.evidence_tier, "two_ten_second");
+            assert_eq!(probe.windows.len(), 2);
+            assert_eq!(probe.fractional_check.status, "pass");
+            if bpm == 94.0 {
+                assert_eq!(result.bpm, Some(94.0));
+            } else {
+                assert_eq!(probe.status, "fractional_estimate");
+                assert_eq!(result.bpm, Some(regions[0].bpm));
+            }
+            assert_eq!(beats, original);
+        }
+    }
+
+    #[test]
+    fn corroborated_thirds_do_not_rephase_a_forty_ms_boundary_step() {
+        let mut beats = observations(94.0, 300.0, false);
+        for t in &mut beats {
+            if *t >= 100.0 {
+                *t += 0.04;
+            }
+        }
+        let regions = fitted_thirds(&beats, 300.0);
+        assert_eq!(regions.len(), 3);
+        let selected = &regions[0];
+        let probe = super::probe(&beats, 300.0, selected, &regions);
+        assert_eq!(probe.base_bpm, selected.bpm);
+        assert!(probe.common_region.is_some());
+        assert_eq!(probe.evidence_tier, "two_ten_second");
+        assert!(
+            probe
+                .fractional_check
+                .window_phase_difference_seconds
+                .unwrap()
+                > 0.039
+        );
+        assert_eq!(probe.fractional_check.status, "fail");
+        assert_eq!(probe.status, "inconclusive");
+        assert_eq!(probe.reason, "no_supported_candidate");
+    }
+
+    #[test]
+    fn corroborated_thirds_do_not_substitute_the_hull_free_fit_for_the_exact_base() {
+        let mut beats = observations(94.0, 300.0, false);
+        let boundary = beats.partition_point(|t| *t < 100.0);
+        for (i, t) in beats.iter_mut().enumerate().skip(boundary) {
+            *t += 0.0001 * (i - boundary) as f64;
+        }
+        let regions = fitted_thirds(&beats, 300.0);
+        let selected = &regions[0];
+        assert!((regions[1].bpm / selected.bpm - 1.0).abs() <= 0.00025);
+        let probe = super::probe(&beats, 300.0, selected, &regions);
+        assert_ne!(probe.common_region.as_ref().unwrap().bpm, selected.bpm);
+        assert_eq!(probe.base_bpm, selected.bpm);
+        assert!(
+            probe
+                .fractional_check
+                .window_phase_difference_seconds
+                .unwrap()
+                > 0.005
+        );
+        assert_eq!(probe.fractional_check.status, "fail");
+        assert_eq!(probe.reason, "no_supported_candidate");
+    }
+
+    #[test]
+    fn missing_extra_boundary_events_and_separated_islands_cannot_join_original_ordinals() {
+        for extra in [false, true] {
+            let mut beats = observations(94.0, 300.0, false);
+            let boundary = beats.partition_point(|t| *t < 100.0);
+            if extra {
+                beats.insert(boundary, (beats[boundary - 1] + beats[boundary]) * 0.5);
+            } else {
+                beats.remove(boundary - 1);
+            }
+            let regions = fitted_thirds(&beats, 300.0);
+            assert_eq!(regions.len(), 3);
+            let original = beats.clone();
+            let probe = super::probe(&beats, 300.0, &regions[0], &regions);
+            assert!(probe.common_region.is_none());
+            assert!(probe.windows.is_empty());
+            assert_eq!(probe.fractional_check.status, "inconclusive");
+            assert_eq!(beats, original);
+        }
+        let beats: Vec<_> = observations(94.0, 300.0, false)
+            .into_iter()
+            .filter(|t| *t < 100.0 || *t >= 200.0)
+            .collect();
+        let regions = fitted_thirds(&beats, 300.0);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[1].window_seconds, [200.0, 300.0]);
+        let probe = super::probe(&beats, 300.0, &regions[0], &regions);
+        assert!(probe.common_region.is_none());
+        assert!(probe.windows.is_empty());
+    }
+
+    #[test]
+    fn hull_cannot_drop_a_conflicting_third_duplicate_non_third_or_foreign_selection() {
+        let beats: Vec<_> = observations(94.0, 300.0, false)
+            .into_iter()
+            .map(|t| {
+                if t < 200.0 {
+                    t
+                } else {
+                    200.0 + (t - 200.0) * 94.0 / 96.0
+                }
+            })
+            .collect();
+        let regions = fitted_thirds(&beats, 300.0);
+        assert_eq!(regions.len(), 3);
+        assert!((regions[2].bpm - 96.0).abs() < 1e-10);
+        assert!(
+            super::corroborated_thirds_hull(&beats, 300.0, &regions[0], &regions[..2]).is_some()
+        );
+        let probe = super::probe(&beats, 300.0, &regions[0], &regions);
+        assert!(probe.common_region.is_none());
+        let mut duplicate = regions[..2].to_vec();
+        duplicate.push(regions[1].clone());
+        assert!(super::corroborated_thirds_hull(&beats, 300.0, &regions[0], &duplicate).is_none());
+        let mut non_third = regions[..2].to_vec();
+        non_third[1].window_seconds = [101.0, 199.0];
+        assert!(super::corroborated_thirds_hull(&beats, 300.0, &regions[0], &non_third).is_none());
+        assert!(
+            super::corroborated_thirds_hull(&beats, 300.0, &regions[0], &regions[..1]).is_none()
+        );
+        let mut foreign = regions[0].clone();
+        foreign.max_residual_seconds += 0.000001;
+        assert!(super::corroborated_thirds_hull(&beats, 300.0, &foreign, &regions[..2]).is_none());
     }
 }

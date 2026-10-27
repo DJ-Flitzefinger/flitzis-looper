@@ -13,6 +13,13 @@ short original can use a declared shorter check; a short resident loop does not
 shorten an available full song. Unchecked estimates remain estimates. These finite
 checks do not prove an exact integer tempo, correct beat labels or musical alignment.
 
+New version-five analyses can also check one continuous span supported by compatible
+song thirds when the preferred middle is unsuitable. The entire span is fitted
+together, including every intervening detected event. Its reported boundaries
+show which part was checked; a passing prefix does not verify the rest of the song.
+The fractional check keeps the selected BPM; the existing preference for a
+supported nearby integer still applies. Earlier cached results remain readable.
+
 The sidebar shows the last confirmed BPM inference device separately from BPM and
 STEM processing stage. New analyses can use CUDA with one fresh CPU fallback when
 CUDA execution fails. "CPU (CUDA fallback)" identifies that fallback; an old cache
@@ -23,10 +30,10 @@ remains visible while the later alignment stage runs.
 | Intended use | Controls | Source map |
 | --- | --- | --- |
 | Constant rate playback with accurate BPM | Multi Loop and BPM Lock; SYNC off | No map required. Each PAD keeps its own loop markers and BPM. |
-| Keep detected beats aligned, including recording-speed variations | Multi Loop, BPM Lock and SYNC on | Prepared automatically; no manual map creation required. |
+| Experimental detected-beat alignment, including recording-speed variations | Multi Loop, BPM Lock and SYNC on for explicit tests | Prepared automatically; no manual map creation required. |
 | Correct a detector mistake or describe a constant grid manually | Adjust Loop > Source Map | Optional advanced editing. Explicit manual choices take priority. |
 
-SYNC follows detected beat positions using the current master tempo. There is
+SYNC is intended to follow detected beat positions using the current master tempo. There is
 one SYNC control; old REALTIME BPM MIDI bindings address that same control. The
 old saved tracker preference remains readable for compatibility. The supported
 dry mapped path requires Key Lock off and zero pitch offset; other
@@ -37,15 +44,16 @@ to play. SYNC corrects fractional beat differences and preserves an already
 matching whole-beat offset. It does not automatically choose the same musical
 phrase, bar or kick/snare pattern in two different songs.
 
-## Normal use
+## Current BPM validation
 
 1. Load the songs and let their BPM analysis finish. Keep the selected loop starts
    and Grid Offset; choose, for example, 8 and 64 bars in Adjust Loop.
 2. Enable Multi Loop and BPM Lock with the intended reference PAD selected.
-3. Enable SYNC. Maps are reused from analysis or prepared in the background.
-   Saved automatic maps are source-verified after reopening.
-4. Start the PADs and inspect the status. The button shows your preference;
-   an applied mode alone does not prove current grid phase or audible alignment.
+3. Leave SYNC off and compare the loops over the intended playback duration.
+   Accurate scalar BPM playback does not require a source map.
+4. SYNC remains available for explicit development tests. Live transitions and
+   musical alignment still require further work and acceptance. Its button shows
+   the preference; an applied mode alone does not prove current grid phase.
 
 Automatic maps contain estimated detections. A loop bar operationally means four
 detected quarter notes; 64 bars contain 256. This convention does not claim a

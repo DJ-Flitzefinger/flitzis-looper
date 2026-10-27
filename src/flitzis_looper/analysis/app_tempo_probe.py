@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from flitzis_looper.analysis.app_tempo_envelope import validate_envelope_common
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -360,18 +362,40 @@ def historical_probe(
     return probe
 
 
+def _v5_common_points(method: AppTempoMethod, probe: AdaptiveTempoProbe) -> list[tuple[int, float]]:
+    assert method.selected is not None
+    envelope = validate_envelope_common(
+        method,
+        probe.common_region,
+        selected_is_run=_is_run(method, method.selected.window_seconds),
+    )
+    if not envelope:
+        return _common_points(method, probe)
+    common = probe.common_region
+    assert common is not None
+    points = _points(method, common)
+    mx, my, _ = _pivot(points)
+    if not _close(probe.pivot_raw_index, mx) or not _close(probe.pivot_seconds, my):
+        _invalid("Counterprobe pivot differs from common retained observations")
+    return points
+
+
 def validate_adaptive_probe(
     method: AppTempoMethod,
     probe: IntegerTempoProbe | AdaptiveTempoProbe | None,
 ) -> None:
     """Recompute both exact candidate periods using the same immutable common mask."""
     if not isinstance(probe, AdaptiveTempoProbe):
-        _invalid("Version four requires its adaptive dual candidate evidence")
+        _invalid("Version four or five requires its adaptive dual candidate evidence")
     if method.selected is None or probe.base_bpm != method.selected.bpm:
         _invalid("Counterprobe base differs from the exact selected regional fit")
     if probe.candidate_bpm != min(300, max(30, math.floor(probe.base_bpm + 0.5))):
         _invalid("Counterprobe candidate is not the nearest integer")
-    points = _common_points(method, probe)
+    points = (
+        _v5_common_points(method, probe)
+        if method.schema_version == 5
+        else _common_points(method, probe)
+    )
     integer_fields = (
         probe.common_max_residual_seconds,
         probe.common_rms_residual_seconds,

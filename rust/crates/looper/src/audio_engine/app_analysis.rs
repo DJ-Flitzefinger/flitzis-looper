@@ -343,7 +343,7 @@ pub(super) fn analyze(
         let estimate = super::app_tempo::estimate(&predictions.beat_seconds, frames as f64 / f64::from(rate));
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
         let object = method.as_object_mut().ok_or("neural estimate envelope missing")?;
-        object.extend(json!({"schema_version":4,"backend":"beat_this","model_sha256":pinned_model()["sha256"],
+        object.extend(json!({"schema_version":5,"backend":"beat_this","model_sha256":pinned_model()["sha256"],
             "frontend_id":pinned_model()["frontend_id"],"source_sha256":source_digest,
             "mono_sha256":mono_sha256,"sample_rate_hz":rate,"frame_count":frames,
             "raw_beats":predictions.beat_seconds,"raw_downbeats":predictions.downbeat_seconds}).as_object().unwrap().clone());

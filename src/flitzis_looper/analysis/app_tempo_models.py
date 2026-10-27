@@ -28,13 +28,14 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4]
+    schema_version: Literal[1, 2, 3, 4, 5]
     backend: Literal["beat_this"]
     policy: Literal[
         "neural-stable-regions-v1",
         "neural-stable-regions-v2",
         "neural-stable-regions-v3",
         "neural-stable-regions-v4",
+        "neural-stable-regions-v5",
     ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
@@ -67,8 +68,8 @@ class AppTempoMethod(BaseModel):
     @model_validator(mode="after")
     def _coherent_estimate(self) -> AppTempoMethod:
         if self.execution is not None:
-            if self.schema_version != 4:
-                message = "Execution receipts require version four tempo metadata"
+            if self.schema_version not in {4, 5}:
+                message = "Execution receipts require version four or five tempo metadata"
                 raise ValueError(message)
             validate_execution(self.execution)
         duration = self.frame_count / self.sample_rate_hz
@@ -143,7 +144,7 @@ class AppTempoMethod(BaseModel):
 
     def _validate_integer_probe(self, duration: float) -> None:
         probe = self.integer_probe
-        if self.schema_version == 4:
+        if self.schema_version in {4, 5}:
             validate_adaptive_probe(self, probe)
             return
         probe = historical_probe(probe)
