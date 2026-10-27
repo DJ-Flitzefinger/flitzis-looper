@@ -195,13 +195,23 @@ fn import_and_ack_with_backend(
     let request = if public_incoming {
         assert_eq!(output_rate, 48_000, "actual headless public API format");
         engine
-            .load_incoming_sample_async(0, source.to_string_lossy().into_owned(), false)
+            .load_incoming_sample_async(
+                0,
+                source
+                    .to_str()
+                    .expect("exact Unicode source path")
+                    .to_owned(),
+                false,
+            )
             .unwrap()
     } else {
         admit_for_format(
             &engine,
             0,
-            source.to_string_lossy().into_owned(),
+            source
+                .to_str()
+                .expect("exact Unicode source path")
+                .to_owned(),
             true,
             false,
             true,
@@ -339,8 +349,9 @@ fn import_and_ack_with_backend(
             .as_ref()
             .unwrap()
             .original_path
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .expect("exact Unicode restored original path")
+            .to_owned();
         let restored_request = admit_for_format_selected_intent_with_pitch(
             &engine,
             0,
@@ -452,6 +463,62 @@ fn primary_neural_import_and_reanalysis_share_original_estimate_and_own_ack() {
     pulse_track_seconds(&source, 48_000, 120);
     let result = import_and_ack_with_backend(&source, 48_000, true, Some(backend));
     println!("PRIMARY_NEURAL {}", result);
+}
+
+#[test]
+#[ignore = "explicit authorized Unicode FLAC, pinned local neural runtime, no App/device"]
+fn primary_neural_authorized_unicode_flac_import_and_own_ack() {
+    const TEST: &str = "audio_engine::cold_load::tests::automatic_analysis_tests::primary_neural_authorized_unicode_flac_import_and_own_ack";
+    if std::env::var_os(CHILD).is_none() {
+        child(TEST, 48_000, true);
+        return;
+    }
+    let source = PathBuf::from(
+        std::env::var_os("FLITZI_AUTHORIZED_FLAC").expect("explicit authorized FLAC"),
+    );
+    let expected =
+        std::env::var("FLITZI_AUTHORIZED_FLAC_SHA256").expect("explicit authorized source digest");
+    assert!(source.is_absolute());
+    assert_eq!(source.extension().and_then(|v| v.to_str()), Some("flac"));
+    assert!(
+        source
+            .to_str()
+            .expect("exact Unicode source")
+            .contains('\u{2019}')
+    );
+    assert_eq!(expected.len(), 64);
+    assert!(
+        expected
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    );
+    assert_eq!(hash_file(&source), expected);
+    let backend =
+        std::env::var("FLITZI_PRIMARY_BEAT_INSTALLATION").expect("explicit installed backend");
+    let root =
+        PathBuf::from(std::env::var_os("FLITZI_NEURAL_TEST_ROOT").expect("explicit owned root"));
+    assert!(root.is_absolute());
+    let (_directory, _cwd) = owned_directory_at(&root);
+    let mut result = import_and_ack_with_backend(&source, 48_000, true, Some(backend));
+    assert_eq!(hash_file(&source), expected);
+    let method: Value =
+        serde_json::from_str(result["bpm_method"].as_str().expect("neural metadata")).unwrap();
+    assert_eq!(method["source_sha256"], expected);
+    result["authorized_source_sha256"] = json!(expected);
+    result["exact_unicode_path"] = json!(source.to_str().unwrap());
+    result["compiled_test_source_sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(include_bytes!("automatic_analysis_tests.rs"))
+    ));
+    result["scope"] = json!(
+        "Compiled headless Rust public import/OwnACK and complete neural parity; not installed module attribution or hearing acceptance"
+    );
+    fs::write(
+        root.join("actual-unicode-flac-import.json"),
+        serde_json::to_vec_pretty(&result).unwrap(),
+    )
+    .unwrap();
+    println!("AUTHORIZED_UNICODE_FLAC {}", result);
 }
 
 #[test]
