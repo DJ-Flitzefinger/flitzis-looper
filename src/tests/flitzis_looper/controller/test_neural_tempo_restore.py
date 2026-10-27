@@ -54,6 +54,115 @@ def _previous() -> SampleAnalysis:
     )
 
 
+def _v2_method() -> AppTempoMethod:
+    data = _method().model_dump(mode="python")
+    data.update(schema_version=2, policy="neural-stable-regions-v2")
+    data["selected"]["bpm"] = 119.999
+    data["regions"][0]["bpm"] = 119.999
+    common = data["selected"]
+    windows = [
+        {**common, "window_seconds": bounds, "retained": 32}
+        for bounds in ([20.0, 36.0], [64.0, 80.0])
+    ]
+    data["integer_probe"] = {
+        "status": "supported_integer_estimate",
+        "reason": "two_windows_and_common_phase",
+        "candidate_bpm": 120.0,
+        "base_bpm": 119.999,
+        "windows": windows,
+        "common_region": common,
+        "common_max_residual_seconds": 0.01,
+        "common_rms_residual_seconds": 0.005,
+        "rms_penalty_seconds": 0.00001,
+        "window_phase_difference_seconds": 0.001,
+    }
+    return AppTempoMethod.model_validate(data)
+
+
+def test_v2_preserves_base_fit_and_validates_integer_preference() -> None:
+    method = _v2_method()
+    reopened = AppTempoMethod.model_validate_json(method.model_dump_json())
+    assert reopened == method
+    assert reopened.bpm == 120.0
+    assert reopened.selected is not None
+    assert reopened.selected.bpm == 119.999
+    for key, value in (
+        ("base_bpm", 119.99),
+        ("candidate_bpm", 120.5),
+        ("window_phase_difference_seconds", 0.006),
+        ("rms_penalty_seconds", 0.0003),
+        ("common_max_residual_seconds", 0.026),
+        ("common_rms_residual_seconds", 1.0),
+        ("windows", []),
+        ("common_region", None),
+    ):
+        damaged = method.model_dump(mode="python")
+        damaged["integer_probe"][key] = value
+        with pytest.raises(ValidationError):
+            AppTempoMethod.model_validate(damaged)
+    damaged = method.model_dump(mode="python")
+    damaged["bpm"] = 119.999
+    with pytest.raises(ValidationError):
+        AppTempoMethod.model_validate(damaged)
+    for key, value in (("retained", 31), ("excluded_raw_indices", [45, 45])):
+        damaged = method.model_dump(mode="python")
+        damaged["integer_probe"]["windows"][0][key] = value
+        with pytest.raises(ValidationError):
+            AppTempoMethod.model_validate(damaged)
+    damaged = method.model_dump(mode="python")
+    damaged["raw_beats"][40:72] = [20 + i * 0.05 for i in range(32)]
+    with pytest.raises(ValidationError):
+        AppTempoMethod.model_validate(damaged)
+    damaged = method.model_dump(mode="python")
+    damaged["schema_version"] = 1
+    with pytest.raises(ValidationError):
+        AppTempoMethod.model_validate(damaged)
+
+
+def test_restore_upgrades_old_policy_only_without_performer_override(
+    controller: AppController,
+) -> None:
+    project = controller.project
+    project.sample_analysis[0] = _previous().model_copy(update={"bpm_method": _method()})
+    assert controller.loader._needs_tempo_refinement(0)
+    project.sample_analysis[0] = _previous().model_copy(
+        update={"bpm": 120.0, "bpm_method": _v2_method()}
+    )
+    assert not controller.loader._needs_tempo_refinement(0)
+    project.sample_analysis[0] = _previous().model_copy(update={"bpm_method": _method()})
+    for intent in ("manual", "tap", "automatic"):
+        project.pad_timing_intent[0] = intent
+        assert not controller.loader._needs_tempo_refinement(0)
+    project.pad_timing_intent[0] = "legacy"
+    project.manual_bpm[0] = 119.5
+    assert not controller.loader._needs_tempo_refinement(0)
+
+
+def test_v2_copy_and_json_keep_the_finite_prior_and_original_observations() -> None:
+    project = ProjectState()
+    project.sample_paths[0] = "samples/legacy.wav"
+    project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    project.sample_analysis[0] = _previous().model_copy(
+        update={"bpm": 120.0, "bpm_method": _v2_method()}
+    )
+    snapshot = capture_copy_snapshot(project, 0)
+    reopened = CopySnapshot.model_validate_json(snapshot.model_dump_json())
+    copied = project_with_copy_snapshot(
+        project,
+        1,
+        reopened,
+        target_identity=PadContentIdentity(instance_id="b" * 32, copied_from="a" * 32),
+    )
+    assert copied.sample_analysis[1] == project.sample_analysis[0]
+    damaged = json.loads(snapshot.payload_json)
+    damaged["analysis"]["bpm"] = 117.0
+    loaded = SampleAnalysis.model_validate(damaged["analysis"])
+    assert loaded.bpm == 117.0
+    assert loaded.bpm_method is None
+    with pytest.raises(ValidationError):
+        CopySnapshotData.model_validate(damaged)
+
+
 @pytest.mark.parametrize("auto", [False, True])
 def test_tempo_restore_preserves_key_start_offset_and_newer_key_work(
     controller: AppController, audio_engine_mock: Mock, *, auto: bool

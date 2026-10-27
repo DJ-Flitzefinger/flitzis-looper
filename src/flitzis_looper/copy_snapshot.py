@@ -154,9 +154,15 @@ class MusicalSnapshotData(BaseModel):
             accepted = _model_data(data.get("accepted_timing"))
             method = _model_data(data.get("bpm_method"))
             if method is not None:
-                data["bpm_method"] = AppTempoMethod.model_validate(method, strict=True).model_dump(
-                    mode="python", warnings="error"
-                )
+                parsed_method = AppTempoMethod.model_validate(method, strict=True)
+                if (
+                    parsed_method.schema_version == 2
+                    and parsed_method.bpm is not None
+                    and parsed_method.bpm != data.get("bpm")
+                ):
+                    message = "Copy tempo provenance contradicts the cached BPM"
+                    raise ValueError(message)
+                data["bpm_method"] = parsed_method.model_dump(mode="python", warnings="error")
             if accepted is not None:
                 # Snapshot capture must reject evidence that legacy loading would discard.
                 data["accepted_timing"] = PersistedAcceptedTiming.model_validate(

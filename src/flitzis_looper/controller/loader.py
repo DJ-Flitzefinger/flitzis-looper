@@ -1758,7 +1758,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         previous = self._project.sample_analysis[sample_id]
         return (
             previous is not None
-            and previous.bpm_method is None
+            and (
+                previous.bpm_method is None
+                or previous.bpm_method.schema_version < 2
+                or (previous.bpm_method.bpm is not None and previous.bpm_method.bpm != previous.bpm)
+            )
             and self._project.manual_bpm[sample_id] is None
             and self._project.pad_timing_intent[sample_id] == "legacy"
         )

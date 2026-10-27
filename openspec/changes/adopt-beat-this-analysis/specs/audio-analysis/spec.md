@@ -753,7 +753,8 @@ preferred middle estimate SHALL have compatible extending-region support within
 If long-region corroboration is unavailable, a complete-source fit with at least
 8points and4seconds span MAY provide explicitly `single_region_estimate` metadata,
 without claiming that independent corroboration. Failure SHALL remain explicit.
-No proximity to an integer SHALL cause BPM rounding. Original scientific
+Proximity alone SHALL NOT cause BPM rounding. The later Human-requested App v2
+policy below MAY choose an explicitly estimated integer prior. Original scientific
 lattice/error/status rules SHALL remain unchanged.
 
 Ordinary load and explicit analysis-only requests SHALL use this same primary
@@ -789,3 +790,43 @@ removal of the separate REALTIME prerequisite, and actual64-bar Human listening
 remain separate open work after this estimator step. Constant digital tracks
 SHALL be evaluated for inaudible drift over that interval; this requirement
 SHALL NOT claim an unattainable universal100% detector guarantee.
+
+### Requirement: Integer Tempo Counterprobe Retains Its Fractional Evidence
+The later `neural-stable-regions-v2` App policy SHALL retain the v1 regional fit,
+raw observations and provenance, and evaluate the nearest integer through two
+candidate-neutral sixteen-second windows wholly inside source20-80%, with at
+least ten seconds between windows, eight retained observations and ten seconds
+of actual retained span per window. Unsupported coverage SHALL be inconclusive.
+Both hypotheses SHALL use identical original detector ordinals and the same
+candidate-neutral stable-middle exclusion mask. One common middle-source phase
+SHALL expose long-span drift; local rephasing, modulo residuals and candidate-based
+outlier removal SHALL NOT establish integer support.
+
+An integer MAY become the final App estimate only with a stable middle fit,
+base proximity at most0.005BPM, common residual at most min(25ms,5%period),
+distant-window mean-phase difference at most5ms, and common RMS penalty versus
+the fractional fit at most0.25ms. Nearest-integer diagnostics SHALL still be
+computed when outside the adoption proximity. This is a finite policy preference
+among compatible estimates, never a uniquely proven/exact integer tempo,
+quarter-count certificate, Native timing/map/phase ACK or Human acceptance.
+The selected base regional BPM SHALL remain separately stored without rewriting
+raw observations. Incompatible or inconclusive probes SHALL keep that base BPM.
+
+Schema-version2 SHALL store the probe and validate final/base/candidate consistency;
+v1 remains readable. Eligible Legacy restores MAY upgrade v1 through the existing
+source/edit-fenced tempo-only path once, preserving key, manual/TAP/Automatic
+intent, physical loop start and GridOffset. A failed/cancelled/stale upgrade SHALL
+preserve the previous value and metadata. Ordinary import and explicit reanalysis
+SHALL share this policy and its final BPM through the existing controller path.
+
+#### Scenario: Integer prior is supported without claiming uniqueness
+- **GIVEN** the fractional base lies near94 and both windows/common phase satisfy every v2 bound
+- **WHEN** primary tempo analysis completes
+- **THEN** final App BPM may be94 and the fractional base/raw positions remain stored
+- **AND** the result is explicitly an estimated integer preference
+
+#### Scenario: Briefly plausible integer would accumulate drift
+- **GIVEN** two independently rephased excerpts appear compatible with92
+- **WHEN** the common long-span trajectory or adoption bounds fail
+- **THEN** the fractional base remains the final BPM
+- **AND** unavailable stable coverage remains inconclusive with diagnostics retained

@@ -206,4 +206,7 @@ the retained scientific/reference gates above; those gates remain incomplete.
 - [ ] Complete the latest Human Unicode-FLAC load reproduction, actual FLAC/MP3 tempo
   comparison and fixed-tempo 8/32/64-bar evidence; evaluate integer hypotheses against
   two separated ten-second windows and the long-span phase trajectory.
+- [x] Add and check the finite v2 integer counterprobe with retained fractional/raw
+  evidence, common-phase drift bounds, strict v1/v2 persistence/Copy and guarded
+  tempo-only Legacy upgrade. This does not complete the paired render/listening gate.
 - [ ] Obtain the Human's actual musical 64-bar listening feedback after native delivery.

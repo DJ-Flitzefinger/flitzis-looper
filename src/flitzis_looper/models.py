@@ -186,7 +186,7 @@ class SampleAnalysis(BaseModel):
         if value is None:
             return None
         try:
-            return (
+            method = (
                 AppTempoMethod.model_validate_json(value)
                 if isinstance(value, str)
                 else AppTempoMethod.model_validate(value)
@@ -194,6 +194,19 @@ class SampleAnalysis(BaseModel):
         except ValueError, TypeError:
             # Invalid optional provenance must not erase valid historical analysis.
             return None
+        return method
+
+    @model_validator(mode="after")
+    def _discard_contradictory_tempo_provenance(self) -> Self:
+        method = self.bpm_method
+        if (
+            method is not None
+            and method.schema_version == 2
+            and method.bpm is not None
+            and method.bpm != self.bpm
+        ):
+            self.bpm_method = None
+        return self
 
     @field_validator("accepted_timing", mode="before")
     @classmethod

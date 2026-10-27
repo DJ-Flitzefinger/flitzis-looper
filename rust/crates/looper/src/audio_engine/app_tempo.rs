@@ -3,8 +3,9 @@
 
 use serde::Serialize;
 
-pub(super) const POLICY: &str = "neural-stable-regions-v1";
+pub(super) const POLICY: &str = "neural-stable-regions-v2";
 const RESIDUAL_SECONDS: f64 = 0.025;
+mod integer;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct RegionEstimate {
@@ -23,6 +24,8 @@ pub(crate) struct TempoEstimate {
     pub bpm: Option<f64>,
     pub selected: Option<RegionEstimate>,
     pub regions: Vec<RegionEstimate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integer_probe: Option<integer::Counterprobe>,
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -166,6 +169,7 @@ pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
         bpm: None,
         selected: None,
         regions: Vec::new(),
+        integer_probe: None,
     };
     if !duration.is_finite()
         || duration <= 0.0
@@ -217,6 +221,13 @@ pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
         result.regions.push(whole);
     } else if !result.regions.is_empty() {
         result.status = "uncorroborated";
+    }
+    if let Some(base) = result.bpm {
+        let probe = integer::probe(beats, duration, base, &result.regions);
+        if probe.status == "supported_integer_estimate" {
+            result.bpm = Some(probe.candidate_bpm);
+        }
+        result.integer_probe = Some(probe);
     }
     result
 }
@@ -326,6 +337,25 @@ mod tests {
                 serde_json::to_string(&fit).unwrap()
             );
             assert_eq!(fit.status, "estimated");
+            if let Some(expected) = pad["expected_bpm"].as_f64() {
+                let actual = fit.bpm.unwrap();
+                if expected.fract() == 0.0 {
+                    assert_eq!(actual, expected);
+                } else {
+                    // Fixture JSON parsing can differ by one binary64 ULP;
+                    // this is a numeric comparison, not a source identity seal.
+                    let (mut lower, mut upper) = (expected, expected);
+                    for _ in 0..4 {
+                        lower = lower.next_down();
+                        upper = upper.next_up();
+                    }
+                    assert!((lower..=upper).contains(&actual));
+                    assert_eq!(actual, fit.selected.as_ref().unwrap().bpm);
+                }
+            }
+            if let Some(expected) = pad["expected_integer_status"].as_str() {
+                assert_eq!(fit.integer_probe.as_ref().unwrap().status, expected);
+            }
         }
     }
 }
