@@ -41,8 +41,16 @@ struct MappedCopyState {
 /// Neither variant retains an owning source, map, reader or permission.
 #[derive(Clone, Copy, Debug)]
 enum CopiedClock {
+    Scalar(ScalarGlide),
     Mapped(MappedCopyState),
     Static(StaticPhaseClock),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScalarGlide {
+    ratio: f64,
+    target: f64,
+    frames_until_step: usize,
 }
 
 /// Temporary coordinates borrowing the caller's original retained geometry.
@@ -123,17 +131,32 @@ pub(crate) struct SourcePlayback {
     domain: Option<SourceLoopDomain>,
     original_scalar_period: OriginalScalarPeriod,
     elapsed_output_frames: u64,
-    ratio: f64,
-    target: f64,
-    frames_until_step: usize,
     // Before this epoch, only an intentional start/seek defines reconstructible source history.
     history_reconstructible: bool,
     scalar_projection: ScalarProjection,
     phase_reference: LoopPhaseReference,
-    mapped: Option<CopiedClock>,
+    clock: CopiedClock,
 }
 
 impl SourcePlayback {
+    fn is_scalar(&self) -> bool {
+        matches!(self.clock, CopiedClock::Scalar(_))
+    }
+
+    // Callers first exclude both other enum variants. These helpers never
+    // synthesize a scalar clock from an admitted mapped/static trajectory.
+    fn glide(&self) -> &ScalarGlide {
+        match &self.clock {
+            CopiedClock::Scalar(glide) => glide,
+            _ => unreachable!("scalar clock required"),
+        }
+    }
+    fn glide_mut(&mut self) -> &mut ScalarGlide {
+        match &mut self.clock {
+            CopiedClock::Scalar(glide) => glide,
+            _ => unreachable!("scalar clock required"),
+        }
+    }
     /// Historical (phase generation, original output frame, master beat).
     pub(crate) fn diagnostic_launch_reference(&self) -> Option<(u64, u64, f64)> {
         self.phase_reference.parts()
@@ -166,7 +189,14 @@ impl SourcePlayback {
         &self,
         timeline: &super::transport::TransportTimeline,
     ) -> bool {
-        self.phase_reference.current(timeline)
+        if let Some(epoch) = self
+            .mapped_epoch()
+            .filter(|epoch| epoch.is_absolute_grid_phase())
+        {
+            epoch.matches_timeline(timeline)
+        } else {
+            self.phase_reference.current(timeline)
+        }
     }
 
     pub(crate) fn validate_mapped_reference(&self, geometry: &MappedLoopGeometry) -> bool {
@@ -185,7 +215,7 @@ impl SourcePlayback {
         next: &super::transport::TransportTimeline,
         frame: u64,
     ) {
-        if self.mapped.is_none()
+        if self.is_scalar()
             && self.elapsed_output_frames == 0
             && self.domain.is_some_and(|domain| {
                 let raw = self.position();
@@ -199,15 +229,15 @@ impl SourcePlayback {
     }
 
     fn mapped_state(&self) -> Option<MappedCopyState> {
-        match self.mapped {
-            Some(CopiedClock::Mapped(state)) => Some(state),
+        match self.clock {
+            CopiedClock::Mapped(state) => Some(state),
             _ => None,
         }
     }
 
     fn static_state(&self) -> Option<StaticPhaseClock> {
-        match self.mapped {
-            Some(CopiedClock::Static(state)) => Some(state),
+        match self.clock {
+            CopiedClock::Static(state) => Some(state),
             _ => None,
         }
     }
@@ -280,7 +310,7 @@ impl SourcePlayback {
             .ok_or(StaticClockError::InvalidEpoch)?;
         if previous.is_mapped()
             || previous.is_static_phase()
-            || previous.ratio.to_bits() != previous.target.to_bits()
+            || previous.glide().ratio.to_bits() != previous.glide().target.to_bits()
         {
             return Err(StaticClockError::InvalidEpoch);
         }
@@ -309,7 +339,7 @@ impl SourcePlayback {
             frames_per_beat,
             origin_frame,
             quarters,
-            previous.target,
+            previous.glide().target,
             launch_master,
         )?;
         Ok(Self {
@@ -317,12 +347,9 @@ impl SourcePlayback {
             domain: Some(domain),
             original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
-            ratio: clock.ratio(),
-            target: previous.target,
-            frames_until_step: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::Legacy,
-            mapped: Some(CopiedClock::Static(clock)),
+            clock: CopiedClock::Static(clock),
             phase_reference: previous.phase_reference,
         })
     }
@@ -359,7 +386,7 @@ impl SourcePlayback {
     }
     /// Even captured actual-M coordinates are not a constant-rate scalar history.
     pub(crate) fn has_constant_scalar_trajectory(&self) -> bool {
-        self.mapped.is_none() && self.ratio.to_bits() == self.target.to_bits()
+        self.is_scalar() && self.glide().ratio.to_bits() == self.glide().target.to_bits()
     }
 
     /// Caller custody owns the effect. Preserve the current pair and derivative;
@@ -745,21 +772,18 @@ impl SourcePlayback {
         let origin = span
             .position_in_domain_with_reference(geometry.domain(), intended_output_frame, reference)
             .ok_or(MappedClockError::NumericalUnavailable)?;
-        let ratio = span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
+        span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
         Ok(Self {
             origin,
             domain: Some(geometry.domain()),
             original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
             elapsed_output_frames: 0,
-            ratio,
-            target: ratio,
-            frames_until_step: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::Legacy,
-            mapped: Some(CopiedClock::Mapped(MappedCopyState {
+            clock: CopiedClock::Mapped(MappedCopyState {
                 span,
                 intended_output_frame,
-            })),
+            }),
             phase_reference: reference,
         })
     }
@@ -793,21 +817,18 @@ impl SourcePlayback {
             .compact_view(geometry)?
             .position_at(intended_output_frame)
             .ok_or(MappedClockError::NumericalUnavailable)?;
-        let ratio = span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
+        span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
         Ok(Self {
             origin,
             domain: Some(geometry.domain()),
             original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
             elapsed_output_frames: 0,
-            ratio,
-            target: ratio,
-            frames_until_step: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::Legacy,
-            mapped: Some(CopiedClock::Mapped(MappedCopyState {
+            clock: CopiedClock::Mapped(MappedCopyState {
                 span,
                 intended_output_frame,
-            })),
+            }),
             phase_reference: reference,
         })
     }
@@ -863,7 +884,7 @@ impl SourcePlayback {
             return false;
         };
         state.intended_output_frame = next;
-        self.mapped = Some(CopiedClock::Mapped(state));
+        self.clock = CopiedClock::Mapped(state);
         self.origin = position;
         true
     }
@@ -1213,13 +1234,14 @@ impl SourcePlayback {
             domain: None,
             original_scalar_period: OriginalScalarPeriod::Unavailable,
             elapsed_output_frames: 0,
-            ratio,
-            target: ratio,
-            frames_until_step: 0,
             history_reconstructible: true,
             scalar_projection: ScalarProjection::Legacy,
             phase_reference: LoopPhaseReference::Unavailable,
-            mapped: None,
+            clock: CopiedClock::Scalar(ScalarGlide {
+                ratio,
+                target: ratio,
+                frames_until_step: 0,
+            }),
         }
     }
 
@@ -1244,13 +1266,14 @@ impl SourcePlayback {
             domain: Some(domain),
             original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
-            ratio: initial_ratio,
-            target,
-            frames_until_step: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::PairPhysical,
             phase_reference: LoopPhaseReference::Unavailable,
-            mapped: None,
+            clock: CopiedClock::Scalar(ScalarGlide {
+                ratio: initial_ratio,
+                target,
+                frames_until_step: 0,
+            }),
         })
     }
 
@@ -1276,13 +1299,14 @@ impl SourcePlayback {
             domain: Some(domain),
             original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
-            ratio: initial_ratio,
-            target,
-            frames_until_step: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::PairMusical,
             phase_reference: LoopPhaseReference::Unavailable,
-            mapped: None,
+            clock: CopiedClock::Scalar(ScalarGlide {
+                ratio: initial_ratio,
+                target,
+                frames_until_step: 0,
+            }),
         })
     }
 
@@ -1296,21 +1320,34 @@ impl SourcePlayback {
             return self;
         }
         self.rebase();
-        self.ratio = checked_ratio(ratio);
-        self.target = self.ratio;
-        self.frames_until_step = 0;
+        self.glide_mut().ratio = checked_ratio(ratio);
+        self.glide_mut().target = self.glide().ratio;
+        self.glide_mut().frames_until_step = 0;
         self.history_reconstructible = self.scalar_projection == ScalarProjection::Legacy;
         self
     }
 
     pub(crate) fn tempo_ratio(&self) -> f64 {
-        self.static_state()
-            .map_or(self.ratio, |clock| clock.ratio())
+        match self.clock {
+            CopiedClock::Scalar(glide) => glide.ratio,
+            CopiedClock::Static(clock) => clock.ratio(),
+            CopiedClock::Mapped(state) => state
+                .span
+                .local_rate()
+                .expect("admitted immutable span has a local rate"),
+        }
     }
 
     /// Observe the pending target separately from the applied rate without advancing it.
     pub(crate) fn rate_target(&self) -> f64 {
-        self.target
+        match self.clock {
+            CopiedClock::Scalar(glide) => glide.target,
+            CopiedClock::Static(clock) => clock.nominal_ratio(),
+            CopiedClock::Mapped(state) => state
+                .span
+                .local_rate()
+                .expect("admitted immutable span has a local rate"),
+        }
     }
 
     /// Copy a constant source trajectory's past for off-thread endpoint priming.
@@ -1321,7 +1358,7 @@ impl SourcePlayback {
         if self.is_mapped() || self.is_static_phase() {
             return None;
         }
-        if self.ratio.to_bits() != self.target.to_bits() {
+        if self.glide().ratio.to_bits() != self.glide().target.to_bits() {
             return None;
         }
         if self.elapsed_output_frames >= output_frames as u64 {
@@ -1340,7 +1377,7 @@ impl SourcePlayback {
         // have reached Normal at E while its actual prefix still belongs to this history.
         let position = self.origin;
         let missing_frames = output_frames - self.elapsed_output_frames as usize;
-        let distance = missing_frames as f64 * self.ratio;
+        let distance = missing_frames as f64 * self.glide().ratio;
         let (coordinate, silent_prefix) = if position.seek_mode == ExplicitSeekMode::Normal {
             let period = domain
                 .musical_period
@@ -1353,10 +1390,10 @@ impl SourcePlayback {
             (domain.region.start as f64 + phase, 0)
         } else {
             let endpoint = position.frame as f64 + position.fraction;
-            let silent = ((distance - endpoint).max(0.0) / self.ratio).ceil() as usize;
+            let silent = ((distance - endpoint).max(0.0) / self.glide().ratio).ceil() as usize;
             let silent = silent.min(missing_frames);
             (
-                endpoint - (missing_frames - silent) as f64 * self.ratio,
+                endpoint - (missing_frames - silent) as f64 * self.glide().ratio,
                 silent,
             )
         };
@@ -1371,7 +1408,7 @@ impl SourcePlayback {
             seek_mode: position.seek_mode,
         };
         history.elapsed_output_frames = 0;
-        history.frames_until_step = 0;
+        history.glide_mut().frames_until_step = 0;
         Some((history, silent_prefix))
     }
 
@@ -1448,9 +1485,9 @@ impl SourcePlayback {
             && self.domain == other.domain
             && self.original_scalar_period == other.original_scalar_period
             && self.elapsed_output_frames == other.elapsed_output_frames
-            && self.ratio.to_bits() == other.ratio.to_bits()
-            && self.target.to_bits() == other.target.to_bits()
-            && self.frames_until_step == other.frames_until_step
+            && self.glide().ratio.to_bits() == other.glide().ratio.to_bits()
+            && self.glide().target.to_bits() == other.glide().target.to_bits()
+            && self.glide().frames_until_step == other.glide().frames_until_step
             && self.history_reconstructible == other.history_reconstructible
             && self.scalar_projection == other.scalar_projection
     }
@@ -1479,7 +1516,7 @@ impl SourcePlayback {
             (None, None) => {}
         }
         self.scalar_projection == other.scalar_projection
-            && self.target.to_bits() == other.target.to_bits()
+            && self.glide().target.to_bits() == other.glide().target.to_bits()
     }
 
     #[cfg(test)]
@@ -1586,16 +1623,16 @@ impl SourcePlayback {
         }
         let target = checked_ratio(target);
         if self.is_static_phase() {
-            if target.to_bits() == self.target.to_bits() {
+            if target.to_bits() == self.rate_target().to_bits() {
                 return true;
             }
             if !self.dissolve_static() {
                 return false;
             }
         }
-        if target != self.target {
-            self.target = target;
-            self.frames_until_step = 0;
+        if target != self.glide().target {
+            self.glide_mut().target = target;
+            self.glide_mut().frames_until_step = 0;
         }
         true
     }
@@ -1632,32 +1669,34 @@ impl SourcePlayback {
             let remaining = state.span.end_frame() - state.intended_output_frame;
             return (
                 max_frames.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
-                self.ratio,
+                self.tempo_ratio(),
             );
         }
-        if self.frames_until_step == 0 && self.ratio != self.target {
+        if self.glide().frames_until_step == 0 && self.glide().ratio != self.glide().target {
             self.rebase();
             self.history_reconstructible = false;
-            let delta = (self.target - self.ratio).clamp(-TEMPO_STEP, TEMPO_STEP);
-            self.ratio = if (self.target - self.ratio).abs() <= TEMPO_STEP {
-                self.target
-            } else {
-                (self.ratio + delta).clamp(SPEED_MIN, SPEED_MAX)
-            };
+            let delta = (self.glide().target - self.glide().ratio).clamp(-TEMPO_STEP, TEMPO_STEP);
+            self.glide_mut().ratio =
+                if (self.glide().target - self.glide().ratio).abs() <= TEMPO_STEP {
+                    self.glide().target
+                } else {
+                    (self.glide().ratio + delta).clamp(SPEED_MIN, SPEED_MAX)
+                };
             // Once the new pair mode reaches its target this timer is inactive.
             // Canonical zero lets constant in-epoch rewind/replay retain exact state.
-            self.frames_until_step = if self.is_pair_scalar() && self.ratio == self.target {
-                0
-            } else {
-                TEMPO_STEP_OUTPUT_FRAMES
-            };
+            self.glide_mut().frames_until_step =
+                if self.is_pair_scalar() && self.glide().ratio == self.glide().target {
+                    0
+                } else {
+                    TEMPO_STEP_OUTPUT_FRAMES
+                };
         }
-        let frames = if self.ratio == self.target {
+        let frames = if self.glide().ratio == self.glide().target {
             max_frames
         } else {
-            max_frames.min(self.frames_until_step)
+            max_frames.min(self.glide().frames_until_step)
         };
-        (frames, self.ratio)
+        (frames, self.glide().ratio)
     }
 
     pub(crate) fn position(&self) -> FractionalSourcePosition {
@@ -1707,7 +1746,7 @@ impl SourcePlayback {
     fn pair_physical_position_at(&self, elapsed: u64) -> FractionalSourcePosition {
         let domain = self.domain.expect("physical pair has its admitted domain");
         let length = domain.region.len() as u128;
-        let bits = self.ratio.to_bits();
+        let bits = self.glide().ratio.to_bits();
         let exponent = ((bits >> 52) & 0x7ff) as u32;
         // Admitted rates are normal [0.5, 2.0]: exponent 1022..=1024,
         // ratio = significand / 2^shift, shift 51..=53. The complete u64
@@ -1749,7 +1788,7 @@ impl SourcePlayback {
         );
         // The fixed common grid H=2^53 exactly represents every admitted period
         // and rate. C=P*H <=2^117; D=n*rate*H <2^118 for the entire u64 epoch.
-        let displacement = u128::from(elapsed) * musical_pair_units(self.ratio);
+        let displacement = u128::from(elapsed) * musical_pair_units(self.glide().ratio);
         let relative = (self.origin.frame - domain.region.start) as u128;
         let base = relative * MUSICAL_PAIR_SCALE + displacement % period;
         // The canonical anchor gives base<2C. Keep f separate even when it is
@@ -1803,7 +1842,7 @@ impl SourcePlayback {
             + self
                 .elapsed_output_frames
                 .saturating_add(output_offset as u64) as f64
-                * self.ratio;
+                * self.glide().ratio;
         if let Some(domain) = self.domain
             && let Some(period) = domain.musical_period.scalar_period()
             && period != domain.region.len() as f64
@@ -1902,8 +1941,7 @@ impl SourcePlayback {
                 return false;
             };
             self.origin = position;
-            self.ratio = clock.ratio();
-            self.mapped = Some(CopiedClock::Static(clock));
+            self.clock = CopiedClock::Static(clock);
             return true;
         }
         if let Some(mut state) = self.mapped_state() {
@@ -1924,7 +1962,7 @@ impl SourcePlayback {
                 return false;
             };
             state.intended_output_frame = next;
-            self.mapped = Some(CopiedClock::Mapped(state));
+            self.clock = CopiedClock::Mapped(state);
             self.origin = position;
             return true;
         }
@@ -1933,13 +1971,15 @@ impl SourcePlayback {
                 return false;
             };
             self.elapsed_output_frames = elapsed;
-            self.frames_until_step = self.frames_until_step.saturating_sub(output_frames);
+            self.glide_mut().frames_until_step =
+                self.glide().frames_until_step.saturating_sub(output_frames);
             return true;
         }
         self.elapsed_output_frames = self
             .elapsed_output_frames
             .saturating_add(output_frames as u64);
-        self.frames_until_step = self.frames_until_step.saturating_sub(output_frames);
+        self.glide_mut().frames_until_step =
+            self.glide().frames_until_step.saturating_sub(output_frames);
         true
     }
 
@@ -2549,7 +2589,7 @@ mod tests {
         assert_eq!(logical.chunk(3).0, 3);
         assert!(logical.advance(3));
         let position = logical.position();
-        let remaining_step_frames = logical.frames_until_step;
+        let remaining_step_frames = logical.glide().frames_until_step;
         let exact_ratio = 1.37_f64;
         let mut feed = logical.at_constant_ratio(exact_ratio);
 
@@ -2564,7 +2604,7 @@ mod tests {
         assert_eq!(feed.position().seek_mode, ExplicitSeekMode::Normal);
 
         assert_eq!(logical.position(), position);
-        assert_eq!(logical.target, 1.25);
+        assert_eq!(logical.glide().target, 1.25);
         assert_eq!(logical.chunk(777).0, remaining_step_frames);
         assert_ne!(logical.tempo_ratio(), exact_ratio);
     }

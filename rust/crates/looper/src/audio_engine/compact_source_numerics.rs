@@ -74,6 +74,17 @@ pub(super) struct GridStats {
 }
 
 impl GridStats {
+    /// Extend existing admitted bounds without losing any original coefficient.
+    pub(super) fn include_base(self, base: BaseGrid) -> Self {
+        Self {
+            minimum_exponent: self.minimum_exponent.min(base.exponent),
+            maximum_top: Some(
+                self.maximum_top
+                    .map_or(base.maximum_top(), |top| top.max(base.maximum_top())),
+            ),
+        }
+    }
+
     pub(super) const fn new() -> Self {
         Self {
             minimum_exponent: 0,

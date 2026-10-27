@@ -179,7 +179,14 @@ impl RtMixer {
         let id = voice.sample_id;
         let row = snapshot.row(id).ok_or(Error::SourceChanged)?;
         let launch_qualified = voice.phase_launch_qualified;
-        if phase_only && row.request.requires_common_phase() && !launch_qualified {
+        // This only selects the absolute numeric law. All current source/map,
+        // actual-E reader, master and complete-cohort checks below still apply.
+        let absolute_grid = row.request.mode == SourceSyncMode::Mapped
+            && snapshot
+                .prepared_map(id)
+                .is_some_and(|target| target.geometry().has_absolute_grid_phase());
+        if phase_only && row.request.requires_common_phase() && !launch_qualified && !absolute_grid
+        {
             *evidence = Some(UnsupportedEvidence::Launch {
                 index,
                 generation: voice.generation,

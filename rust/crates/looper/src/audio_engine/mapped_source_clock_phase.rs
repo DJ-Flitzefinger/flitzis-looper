@@ -8,6 +8,12 @@
 //! Intentional B(A)-M(T) debt uses two original inverses only in <=459-bit
 //! comparisons. At capture symbolic cancellation restores the start denominator;
 //! captured source N<2^388,D<2^380, within the original461/454 normalization gate.
+//! An explicit grid target substitutes exact B(g) for B(A)-M(T). Its original
+//! segment and loaded-frame g join the checked 126-bit grids before preparation.
+//! Debt pairs raw/g inverses; uncaptured values retain only raw's denominator,
+//! captured values cancel raw symbolically and retain only g's denominator.
+//! Physical folding then pairs A with that one denominator. No operation forms
+//! a raw*g*A denominator product; the same fixed512/2048 worst-width gates apply.
 
 use super::{
     CanonicalBeatSegment, ExplicitSeekMode, FractionalSourcePosition, MappedClockEpoch,
@@ -15,14 +21,16 @@ use super::{
     SpanProgram, TransportTimeline, valid_rate,
 };
 use crate::audio_engine::compact_source_numerics::{
-    BaseGrid, Grid, decode_f64_at_grid, decode_scaled_f64_at_grid, decode_source_pair_at_grid,
-    exact_f64_parts, master_grid_exponent, required_grid_f64,
+    BaseGrid, Grid, GridStats, decode_f64_at_grid, decode_scaled_f64_at_grid,
+    decode_source_pair_at_grid, exact_f64_parts, master_grid_exponent, required_grid_f64,
 };
 use crate::audio_engine::general_source_numerics::{
     Integer, Magnitude, MappedReaderPeriod, PreparedRecoverySplit, normalize_recovery_coefficient,
     split_recovery_coordinate,
 };
-use crate::audio_engine::loop_phase_reference::LoopPhaseReference;
+use crate::audio_engine::loop_phase_reference::{
+    GridPhaseOrigin, GridPhaseTarget, LoopPhaseReference, same_grid_target,
+};
 use std::cmp::Ordering;
 
 const CAPTURED: u8 = 0;
@@ -90,7 +98,7 @@ impl PhaseConfig {
     }
 }
 
-/// A separate64-byte payload. E/projection are immutable; M0 is reconstructed.
+/// Fixed copied payload. E/projection and optional requested grid identity are immutable.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CommonPhaseAnchor {
     frame: u64,
@@ -98,6 +106,7 @@ pub(super) struct CommonPhaseAnchor {
     inverse_segment: CanonicalBeatSegment,
     quarters: f64,
     config: PhaseConfig,
+    grid_target: Option<GridPhaseTarget>,
 }
 impl CommonPhaseAnchor {
     pub(super) fn matches_exact(self, other: Self) -> bool {
@@ -106,6 +115,7 @@ impl CommonPhaseAnchor {
             && self.inverse_segment.matches_exact(other.inverse_segment)
             && self.quarters.to_bits() == other.quarters.to_bits()
             && self.config == other.config
+            && same_grid_target(self.grid_target, other.grid_target)
     }
 }
 
@@ -128,6 +138,7 @@ pub(super) struct CommonPhasePreparation {
     quarters: f64,
     downbeat: u8,
     bar: bool,
+    grid_target: Option<GridPhaseTarget>,
 }
 #[derive(Clone, Copy, Debug)]
 struct DyadicRecovery {
@@ -357,14 +368,42 @@ impl MappedLoopGeometry {
         reference: LoopPhaseReference,
         timeline: &TransportTimeline,
     ) -> Result<LoopPhaseReference, MappedClockError> {
+        let preparation = self
+            .common_phase
+            .ok_or(MappedClockError::NumericalUnavailable)?;
+        if preparation.grid_target.is_some() {
+            // Absolute phase owns its target and actual-E projection in the epoch.
+            // Retain the original launch solely as history, including Unavailable.
+            return Ok(reference);
+        }
         if !reference.current(timeline) {
             return Err(MappedClockError::InvalidEpoch);
         }
-        let start = self
-            .common_phase
-            .ok_or(MappedClockError::NumericalUnavailable)?
-            .start;
-        Ok(reference.qualify(start))
+        Ok(reference.qualify(preparation.start))
+    }
+
+    pub(crate) fn has_absolute_grid_phase(&self) -> bool {
+        self.common_phase
+            .is_some_and(|preparation| preparation.grid_target.is_some())
+    }
+
+    /// Off-realtime target preparation. It never translates the map or reader domain.
+    pub(crate) fn with_grid_phase_origin(
+        mut self,
+        origin: Option<GridPhaseOrigin>,
+    ) -> Result<Self, MappedClockError> {
+        if let Some(origin) = origin {
+            let frame = f64::from_bits(origin.frame_bits);
+            if !frame.is_finite() || frame < 0.0 || frame.trunc() != frame {
+                return Err(MappedClockError::InvalidGeometry);
+            }
+        }
+        self.phase_origin = origin;
+        self.prepare_common_phase();
+        if origin.is_some() && !self.has_common_phase() {
+            return Err(MappedClockError::NumericalUnavailable);
+        }
+        Ok(self)
     }
 
     /// Optional OFFRT metadata. Failure never invalidates ordinary Ready geometry.
@@ -378,10 +417,39 @@ impl MappedLoopGeometry {
 }
 
 fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
-    let (source, beat) = if let Some(p) = g.general {
+    let (mut source, mut beat) = if let Some(p) = g.general {
         p.original_grids()
     } else {
         g.exact_continuation?.compact?.original_grids()
+    };
+    let grid_target = if let Some(origin) = g.phase_origin {
+        let frame = f64::from_bits(origin.frame_bits);
+        let initial = GridStats::new().include_f64(frame)?.finish()?.refine(0)?;
+        let raw = decode_f64_at_grid(frame, initial)?;
+        let inverse = g
+            .map
+            .canonical_phase_origin_segment_by_source_ordering(|v| {
+                crate::audio_engine::compact_source_numerics::compare_scaled_f64_to_grid(
+                    v,
+                    g.loaded_rate_hz,
+                    raw,
+                    initial,
+                )
+            })?;
+        source = GridStats::new()
+            .include_base(source)
+            .include_f64(frame)?
+            .include_scaled_f64(inverse.source_start, g.loaded_rate_hz)?
+            .include_scaled_f64(inverse.source_end, g.loaded_rate_hz)?
+            .finish()?;
+        beat = GridStats::new()
+            .include_base(beat)
+            .include_f64(inverse.beat_start)?
+            .include_f64(inverse.beat_end)?
+            .finish()?;
+        Some(GridPhaseTarget { origin, inverse })
+    } else {
+        None
     };
     let period = reader_period(g.domain)?;
     let maximum = period.max_canonical_frame(g.domain.region.start)?;
@@ -413,6 +481,29 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
     let ax = Axes::new(start, g.loaded_rate_hz, sg, bg)?;
     let begin = ax.inverse(raw)?;
     let divisor = int(ax.dx)?;
+    if let Some(target) = grid_target {
+        let target_axes = Axes::new(target.inverse, g.loaded_rate_hz, sg, bg)?;
+        let target_beat = target_axes.inverse(decode_f64_at_grid(
+            f64::from_bits(target.origin.frame_bits),
+            sg,
+        )?)?;
+        let target_divisor = int(target_axes.dx)?;
+        let ordering = begin.mul(target_divisor)?.cmp(&target_beat.mul(divisor)?);
+        if ordering != Ordering::Equal {
+            let (left, left_d, right, right_d) = if ordering == Ordering::Less {
+                (begin, divisor, target_beat, target_divisor)
+            } else {
+                (target_beat, target_divisor, begin, divisor)
+            };
+            // Usable endpoints do not establish beat count across a gap.
+            g.map.visit_canonical_segments_exact(
+                |v| compare_f64(v, left, left_d, bg.exponent()),
+                |v| compare_f64(v, right, right_d, bg.exponent()),
+                false,
+                |_| Some(()),
+            )?;
+        }
+    }
     let end = begin.add(q.mul(divisor)?)?;
     let reference = g.map.canonical_phase_reference_exact(
         |v| compare_f64(v, begin, divisor, bg.exponent()),
@@ -468,6 +559,7 @@ fn prepare(g: &MappedLoopGeometry) -> Option<CommonPhasePreparation> {
         source,
         beat,
         start,
+        grid_target,
         minimum,
         maximum,
         positive_seed,
@@ -519,6 +611,9 @@ fn seed(
 }
 
 impl MappedClockEpoch {
+    pub(crate) fn is_absolute_grid_phase(self) -> bool {
+        phase_anchor(self).is_some_and(|anchor| anchor.grid_target.is_some())
+    }
     #[cfg(test)]
     pub(crate) fn phase_grid_equivalent_for_test(
         self,
@@ -570,10 +665,15 @@ impl MappedClockEpoch {
             return Err(MappedClockError::InvalidEpoch);
         }
         let p = geometry.common_phase.ok_or(unavailable)?;
-        let (launch_master, start_inverse) = reference.mapped_parts().ok_or(unavailable)?;
-        if !reference.current(&timeline) || !start_inverse.matches_exact(p.start) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
+        let launch_master = if p.grid_target.is_none() {
+            let (master, start_inverse) = reference.mapped_parts().ok_or(unavailable)?;
+            if !reference.current(&timeline) || !start_inverse.matches_exact(p.start) {
+                return Err(MappedClockError::InvalidEpoch);
+            }
+            Some(master)
+        } else {
+            None
+        };
         let period = reader_period(geometry.domain).ok_or(unavailable)?;
         if !period.canonical_pair(raw.frame, raw.fraction, geometry.domain.region.start) {
             return Err(unavailable);
@@ -603,13 +703,11 @@ impl MappedClockEpoch {
             projection.original_beat_anchor(),
         )
         .ok_or(unavailable)?;
-        let bg = p
-            .beat
-            .refine(
-                gm.min(required_grid_f64(m0).ok_or(unavailable)?)
-                    .min(required_grid_f64(launch_master).ok_or(unavailable)?),
-            )
-            .ok_or(unavailable)?;
+        let mut required = gm.min(required_grid_f64(m0).ok_or(unavailable)?);
+        if let Some(master) = launch_master {
+            required = required.min(required_grid_f64(master).ok_or(unavailable)?);
+        }
+        let bg = p.beat.refine(required).ok_or(unavailable)?;
         decode_f64_at_grid(last, bg).ok_or(unavailable)?;
         let inverse =
             Axes::new(inverse_segment, geometry.loaded_rate_hz, sg, bg).ok_or(unavailable)?;
@@ -665,6 +763,7 @@ impl MappedClockEpoch {
                     k: 0,
                     flags: (p.downbeat << 3) | ((p.bar as u8) << 5),
                 },
+                grid_target: p.grid_target,
             }),
         };
         let (positive, period, target_origin, start_dx) = if recovery.grid().is_some() {
@@ -961,6 +1060,9 @@ impl<const N: usize> Core<N> {
         source_start: u64,
     ) -> Option<Self> {
         let anchor = phase_anchor(epoch)?;
+        // The immutable epoch is the only target input. A different historical
+        // launch reference cannot replace its captured g-side inverse.
+        let target = anchor.grid_target;
         let sg = Grid::from_admitted_exponent(anchor.config.source_exp as i16)?;
         let bg = Grid::from_admitted_exponent(anchor.config.beat_exp as i16)?;
         let inverse = Axes::new(anchor.inverse_segment, rate, sg, bg)?;
@@ -981,16 +1083,29 @@ impl<const N: usize> Core<N> {
             }
             (inverse.inverse(raw)?.resize::<N>()?, g_int(inverse.dx)?)
         };
-        let (master, start_inverse) = reference.mapped_parts()?;
+        let legacy = if target.is_none() {
+            Some(reference.mapped_parts()?)
+        } else {
+            None
+        };
+        let start_inverse = target
+            .map(|target| target.inverse)
+            .or_else(|| legacy.map(|(_, segment)| segment))?;
         let start = Axes::new(start_inverse, rate, sg, bg)?;
-        let a = decode_source_pair_at_grid(source_start, 0.0, sg)?;
+        let a = if let Some(target) = target {
+            decode_f64_at_grid(f64::from_bits(target.origin.frame_bits), sg)?
+        } else {
+            decode_source_pair_at_grid(source_start, 0.0, sg)?
+        };
         if a < start.x0 || a > start.x0.checked_add(start.dx)? {
             return None;
         }
-        let target_origin = start
-            .inverse(a)?
-            .resize::<N>()?
-            .sub(g_int(decode_f64_at_grid(master, bg)?)?.mul(g_int(start.dx)?)?)?;
+        let target_origin = start.inverse(a)?.resize::<N>()?;
+        let target_origin = if target.is_some() {
+            target_origin
+        } else {
+            target_origin.sub(g_int(decode_f64_at_grid(legacy?.0, bg)?)?.mul(g_int(start.dx)?)?)?
+        };
         let (m0, last) = epoch
             .projection
             .finite_beats_for_horizon(epoch.first_output_frame, u64::MAX)?;
@@ -1413,13 +1528,15 @@ fn clock<const N: usize>(
     {
         return Err(unavailable);
     }
-    if !reference
-        .mapped_parts()
-        .is_some_and(|(_, start)| start.matches_exact(p.start))
+    if p.grid_target.is_none()
+        && !reference
+            .mapped_parts()
+            .is_some_and(|(_, start)| start.matches_exact(p.start))
     {
         return Err(unavailable);
     }
     if a.quarters.to_bits() != p.quarters.to_bits()
+        || !same_grid_target(a.grid_target, p.grid_target)
         || a.config.downbeat() != p.downbeat
         || a.config.bar_qualified() != p.bar
         || a.config

@@ -537,6 +537,8 @@ fn physical_end_or_none_original_eof_past_last_map_anchor_refuses_original_cohor
         let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
         for (id, row) in rows.iter_mut().enumerate().take(fixture.dry.lanes) {
             *row = SourceMapRow {
+                phase_origin_seconds: None,
+                operational_four_quarter_bars: false,
                 sync_requested: true,
                 intent_revision: fixture.dry.intent_revision,
                 delivery: Some(fixture.dry.deliveries[id].clone()),

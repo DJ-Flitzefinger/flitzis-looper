@@ -23,6 +23,8 @@ pub(crate) struct KeyLockStatus {
 pub(crate) struct SourceSyncWitness {
     pub(crate) intent_revision: u64,
     pub(crate) map_revision: [u64; 4],
+    pub(crate) phase_origin: Option<crate::audio_engine::loop_phase_reference::GridPhaseOrigin>,
+    pub(crate) operational_four_quarter_bars: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +56,9 @@ pub(super) struct KeyLockStatusSlot {
     sync_flags: AtomicU8,
     sync_intent: AtomicU64,
     sync_map: [AtomicU64; 4],
+    sync_origin_flags: AtomicU8,
+    sync_origin_frame: AtomicU64,
+    sync_origin_authority: AtomicU64,
     sync_policy_mode: AtomicU8,
     sync_policy_revision: AtomicU64,
     sync_policy_choices: AtomicU8,
@@ -111,6 +116,8 @@ impl KeyLockStatusSlot {
         let witness = status.witness.unwrap_or(SourceSyncWitness {
             intent_revision: 0,
             map_revision: [0; 4],
+            phase_origin: None,
+            operational_four_quarter_bars: false,
         });
         self.sync_intent.store(
             status.policy.map_or(witness.intent_revision, |policy| {
@@ -156,6 +163,21 @@ impl KeyLockStatusSlot {
         for (word, value) in self.sync_map.iter().zip(witness.map_revision) {
             word.store(value, Ordering::SeqCst);
         }
+        self.sync_origin_flags.store(
+            u8::from(witness.phase_origin.is_some())
+                | (u8::from(witness.operational_four_quarter_bars) << 1),
+            Ordering::SeqCst,
+        );
+        self.sync_origin_frame.store(
+            witness.phase_origin.map_or(0, |origin| origin.frame_bits),
+            Ordering::SeqCst,
+        );
+        self.sync_origin_authority.store(
+            witness
+                .phase_origin
+                .map_or(0, |origin| origin.authority_revision),
+            Ordering::SeqCst,
+        );
         self.sync_birth_source_request.store(
             status.birth_source_request_incarnation.unwrap_or(0),
             Ordering::SeqCst,
@@ -217,6 +239,14 @@ impl KeyLockStatusSlot {
                 map_revision: std::array::from_fn(|index| {
                     self.sync_map[index].load(Ordering::SeqCst)
                 }),
+                phase_origin: (self.sync_origin_flags.load(Ordering::SeqCst) & 1 != 0).then(|| {
+                    crate::audio_engine::loop_phase_reference::GridPhaseOrigin {
+                        frame_bits: self.sync_origin_frame.load(Ordering::SeqCst),
+                        authority_revision: self.sync_origin_authority.load(Ordering::SeqCst),
+                    }
+                }),
+                operational_four_quarter_bars: self.sync_origin_flags.load(Ordering::SeqCst) & 2
+                    != 0,
             }),
             policy: (flags & 4 != 0).then(|| SourceSyncObservation {
                 request: SourceSyncRequest {

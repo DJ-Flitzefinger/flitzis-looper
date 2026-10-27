@@ -275,6 +275,8 @@ fn decimal_general_path() -> (LaunchPath, OfflineAnalysisJob) {
     bindings[0] = Some(binding(&path.source, 0));
     let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
     maps[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery),
@@ -405,6 +407,8 @@ fn quiet_original_path_with_residency(
     bindings[0] = Some(binding(&path.source, 0));
     let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
     maps[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery),
@@ -1022,6 +1026,8 @@ fn accepted_musical_domain_keeps_compact_ordinary_and_piano_births() {
         bindings[0] = Some(current);
         let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
         maps[0] = SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 1,
             delivery: Some(delivery),
@@ -1142,6 +1148,8 @@ fn physical_compact_geometry_birth_uses_general_then_off_preserves_original_pair
     bindings[0] = Some(binding(&path.source, 0));
     let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
     rows[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 2,
         delivery: Some(delivery),
@@ -1614,6 +1622,8 @@ fn fresh_piano_without_map_uses_only_original_explicit_pending_permission() {
     publish(
         &path.source,
         SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 1,
             ordinary_pending: true,
@@ -1647,6 +1657,8 @@ fn fresh_piano_without_map_uses_only_original_explicit_pending_permission() {
     publish(
         &path.source,
         SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 2,
             ordinary_pending: false,

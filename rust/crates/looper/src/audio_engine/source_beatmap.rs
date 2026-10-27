@@ -52,6 +52,14 @@ impl SourceBeatmap {
         self.inner.canonical_segment_by_source_ordering(compare)
     }
 
+    pub(crate) fn canonical_phase_origin_segment_by_source_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<std::cmp::Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.inner
+            .canonical_phase_origin_segment_by_source_ordering(compare)
+    }
+
     /// Borrow an original segment using a fallible monotone exact beat comparison.
     pub(crate) fn canonical_segment_by_beat_ordering(
         &self,

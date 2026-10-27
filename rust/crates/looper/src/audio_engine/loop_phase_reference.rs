@@ -1,7 +1,36 @@
-//! Copied intentional-launch coordinates, never source or publication authority.
+//! Copied phase metadata, never source or publication authority.
+//! Intentional launch history and requested grid axes have distinct purposes.
 
 use super::source_beatmap::CanonicalBeatSegment;
 use super::transport::TransportTimeline;
+
+/// Requested loaded-frame grid zero plus its captured Native timing authority.
+/// This copied identity is not an acknowledgement of source or timing adoption.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GridPhaseOrigin {
+    pub(crate) frame_bits: u64,
+    pub(crate) authority_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GridPhaseTarget {
+    pub(crate) origin: GridPhaseOrigin,
+    pub(crate) inverse: CanonicalBeatSegment,
+}
+
+impl GridPhaseTarget {
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.origin == other.origin && self.inverse.matches_exact(other.inverse)
+    }
+}
+
+pub(crate) fn same_grid_target(a: Option<GridPhaseTarget>, b: Option<GridPhaseTarget>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.matches_exact(b),
+        _ => false,
+    }
+}
 
 /// Existing work-owner data: future M(T) is a prediction until actual effect.
 #[derive(Clone, Copy, Debug, Default)]

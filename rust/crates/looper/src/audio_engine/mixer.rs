@@ -5177,7 +5177,12 @@ impl RtMixer {
 
     /// Current original-map programme service custody, never quarter/bar read proof.
     fn mapped_phase_program_current(&self, voice: &VoiceSlot) -> bool {
-        if !voice.phase_launch_qualified {
+        if !voice.phase_launch_qualified
+            && !voice
+                .source_playback
+                .mapped_epoch()
+                .is_some_and(|epoch| epoch.is_absolute_grid_phase())
+        {
             return false;
         }
         if !voice.phase_policy_revision.is_some_and(|(_, fence)| {

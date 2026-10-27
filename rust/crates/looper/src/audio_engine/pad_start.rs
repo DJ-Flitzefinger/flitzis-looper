@@ -234,7 +234,14 @@ impl MappedStartSource {
                 && geometry.has_compact_continuation()
             {
                 source.geometry = geometry;
-                source.geometry.prepare_common_phase();
+                if let Some(origin) = qualified.phase_origin() {
+                    source.geometry = match source.geometry.with_grid_phase_origin(Some(origin)) {
+                        Ok(geometry) => geometry,
+                        Err(_) => return (preparation, None),
+                    };
+                } else {
+                    source.geometry.prepare_common_phase();
+                }
                 preparation.class = RuntimeMapClass::Ready;
                 return (preparation, Some(Arc::new(source)));
             }
@@ -273,7 +280,7 @@ impl MappedStartSource {
                 rate,
                 region,
                 quarters,
-                true,
+                !qualified.operational_four_quarter_bars(),
             ),
             // Manual physical intent retains its existing meter contract and
             // never inherits saved bars or a displayed inverse difference.
@@ -285,7 +292,11 @@ impl MappedStartSource {
                 false,
             ),
         }?;
-        geometry.prepare_common_phase();
+        if let Some(origin) = qualified.phase_origin() {
+            geometry = geometry.with_grid_phase_origin(Some(origin))?;
+        } else {
+            geometry.prepare_common_phase();
+        }
         Ok(geometry)
     }
 

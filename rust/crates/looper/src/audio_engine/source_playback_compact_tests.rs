@@ -36,9 +36,22 @@ fn assert_complete_copy(actual: &SourcePlayback, expected: &SourcePlayback) {
     assert_position(actual.origin, expected.origin);
     assert_eq!(actual.domain, expected.domain);
     assert_eq!(actual.elapsed_output_frames, expected.elapsed_output_frames);
-    assert_eq!(actual.ratio.to_bits(), expected.ratio.to_bits());
-    assert_eq!(actual.target.to_bits(), expected.target.to_bits());
-    assert_eq!(actual.frames_until_step, expected.frames_until_step);
+    assert_eq!(
+        actual.tempo_ratio().to_bits(),
+        expected.tempo_ratio().to_bits()
+    );
+    assert_eq!(
+        actual.rate_target().to_bits(),
+        expected.rate_target().to_bits()
+    );
+    match (actual.clock, expected.clock) {
+        (CopiedClock::Scalar(a), CopiedClock::Scalar(b)) => {
+            assert_eq!(a.frames_until_step, b.frames_until_step)
+        }
+        (CopiedClock::Mapped(_), CopiedClock::Mapped(_))
+        | (CopiedClock::Static(_), CopiedClock::Static(_)) => {}
+        _ => panic!("copied clock variant changed"),
+    }
     assert_eq!(
         actual.history_reconstructible,
         expected.history_reconstructible
@@ -1000,7 +1013,7 @@ fn compact_consuming_workload_runs_on_explicit_two_mib_stack_without_rust_reques
     assert_copy::<SourcePlayback>();
     assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
     assert!(std::mem::size_of::<[SourcePlayback; MAX_VOICES]>() <= 16 * 1024);
 
     // All wide qualification/epoch setup, owners and heap buffers precede thread creation.
@@ -1395,7 +1408,7 @@ fn actual_e_constructor_and_generic_consuming_reader_fit_two_mib_without_rust_al
     assert_copy::<SourcePlayback>();
     assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
     assert!(std::mem::size_of::<[SourcePlayback; MAX_VOICES]>() <= 16 * 1024);
     let geometry = variable_geometry();
     let sample = sample();

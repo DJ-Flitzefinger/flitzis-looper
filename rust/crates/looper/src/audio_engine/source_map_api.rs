@@ -13,6 +13,11 @@ const KEYS: [&str; 4] = [
     "delivery",
     "exact_quarters",
 ];
+const OPTIONAL_KEYS: [&str; 3] = [
+    "ordinary_pending",
+    "phase_origin_seconds",
+    "operational_four_quarter_bars",
+];
 
 fn required<'py>(row: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
     row.get_item(key)?
@@ -22,7 +27,7 @@ fn required<'py>(row: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyA
 fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
     // Checking both count and every required key rejects additions and renamed
     // fields before cloning any delivery owners.
-    if row.len() != KEYS.len() && row.len() != KEYS.len() + 1 {
+    if !(KEYS.len()..=KEYS.len() + OPTIONAL_KEYS.len()).contains(&row.len()) {
         return Err(PyValueError::new_err(
             "source map projection requires sync_requested, intent_revision, delivery, exact_quarters and optional ordinary_pending",
         ));
@@ -31,7 +36,7 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
         let key = key
             .cast::<PyString>()
             .map_err(|_| PyValueError::new_err("source map projection keys must be strings"))?;
-        if !KEYS.contains(&key.to_str()?) && key.to_str()? != "ordinary_pending" {
+        if !KEYS.contains(&key.to_str()?) && !OPTIONAL_KEYS.contains(&key.to_str()?) {
             return Err(PyValueError::new_err(
                 "source map projection has an unknown key",
             ));
@@ -54,6 +59,34 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
         }
     };
     let sync_requested = required(row, "sync_requested")?;
+    let operational_four_quarter_bars = match row.get_item("operational_four_quarter_bars")? {
+        None => false,
+        Some(value) if value.is_instance_of::<PyBool>() => value.extract::<bool>()?,
+        Some(_) => {
+            return Err(PyValueError::new_err(
+                "operational_four_quarter_bars must be a strict boolean",
+            ));
+        }
+    };
+    let phase_origin_seconds = match row.get_item("phase_origin_seconds")? {
+        None => None,
+        Some(value) if value.is_none() => None,
+        Some(value)
+            if !value.is_instance_of::<PyBool>()
+                && (value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>()) =>
+        {
+            let seconds = value.extract::<f64>()?;
+            if !seconds.is_finite() {
+                return Err(PyValueError::new_err("phase_origin_seconds must be finite"));
+            }
+            Some(seconds)
+        }
+        Some(_) => {
+            return Err(PyValueError::new_err(
+                "phase_origin_seconds must be numeric or None",
+            ));
+        }
+    };
     if !sync_requested.is_instance_of::<PyBool>() {
         return Err(PyValueError::new_err(
             "source map sync_requested must be a strict boolean",
@@ -113,6 +146,8 @@ fn parse_row(row: &Bound<'_, PyDict>) -> PyResult<SourceMapRow> {
         delivery,
         exact_quarters,
         ordinary_pending,
+        phase_origin_seconds,
+        operational_four_quarter_bars,
     })
 }
 
@@ -123,6 +158,48 @@ pub(super) fn parse_rows(py: Python<'_>, rows: Vec<Py<PyDict>>) -> PyResult<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requested_grid_phase_fields_are_optional_strict_and_never_supply_authority() {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = row(py);
+            let defaults = parses(py, value.clone()).unwrap();
+            assert_eq!(defaults[0].phase_origin_seconds, None);
+            assert!(!defaults[0].operational_four_quarter_bars);
+            value.set_item("phase_origin_seconds", -0.125).unwrap();
+            value
+                .set_item("operational_four_quarter_bars", true)
+                .unwrap();
+            let parsed = parses(py, value.clone()).unwrap();
+            assert_eq!(parsed[0].phase_origin_seconds, Some(-0.125)); // historical signed intent, not supported geometry.
+            assert!(parsed[0].operational_four_quarter_bars);
+            assert!(parsed[0].delivery.is_none());
+            for invalid in [
+                true.into_pyobject(py)
+                    .unwrap()
+                    .to_owned()
+                    .into_any()
+                    .unbind(),
+                "0".into_pyobject(py).unwrap().into_any().unbind(),
+                f64::NAN.into_pyobject(py).unwrap().into_any().unbind(),
+                f64::INFINITY.into_pyobject(py).unwrap().into_any().unbind(),
+            ] {
+                value.set_item("phase_origin_seconds", invalid).unwrap();
+                assert!(parses(py, value.clone()).is_err());
+            }
+            value.set_item("phase_origin_seconds", py.None()).unwrap();
+            value.set_item("operational_four_quarter_bars", 1).unwrap();
+            assert!(parses(py, value.clone()).is_err());
+            value
+                .set_item("operational_four_quarter_bars", false)
+                .unwrap();
+            value
+                .set_item("phase_origin_authority_revision", 0)
+                .unwrap();
+            assert!(parses(py, value).is_err());
+        });
+    }
 
     fn row<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
         let row = PyDict::new(py);

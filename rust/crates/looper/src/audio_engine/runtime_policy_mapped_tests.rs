@@ -344,6 +344,8 @@ impl DryMappedPath {
         let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
         for (id, row) in rows.iter_mut().enumerate().take(self.lanes) {
             *row = SourceMapRow {
+                phase_origin_seconds: None,
+                operational_four_quarter_bars: false,
                 sync_requested: true,
                 intent_revision: self.intent_revision,
                 delivery: (!missing_map).then(|| self.deliveries[id].clone()),

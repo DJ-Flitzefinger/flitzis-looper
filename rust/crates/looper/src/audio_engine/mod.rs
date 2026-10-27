@@ -1674,6 +1674,9 @@ impl AudioEngine {
     const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 1;
     #[classattr]
     const ORDINARY_TRANSPORT_API_VERSION: u32 = 2;
+
+    #[classattr]
+    const GRID_PHASE_ORIGIN_API_VERSION: u32 = 1;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,

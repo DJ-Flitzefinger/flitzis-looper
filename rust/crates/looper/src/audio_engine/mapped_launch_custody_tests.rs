@@ -545,6 +545,8 @@ fn public_source_sync_feedback_retains_original_effect_across_requested_changes_
     publish(
         &path.source,
         SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: false,
             intent_revision: 8,
             delivery: Some(delivery),
@@ -957,6 +959,8 @@ fn clear_or_original_job_cancel_refuses_pending_launch_and_keeps_effective_origi
             publish(
                 &path.source,
                 SourceMapRow {
+                    phase_origin_seconds: None,
+                    operational_four_quarter_bars: false,
                     sync_requested: true,
                     intent_revision: 2,
                     delivery: None,
@@ -1023,6 +1027,8 @@ fn publish_mixed_members(path: &LaunchPath, delivery: &LoaderEventDelivery) {
     }
     let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
     maps[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery.clone()),

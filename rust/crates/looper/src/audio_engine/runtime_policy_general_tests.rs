@@ -112,6 +112,8 @@ impl GeneralPath {
         let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
         for (id, row) in rows.iter_mut().enumerate().take(self.dry.lanes) {
             *row = SourceMapRow {
+                phase_origin_seconds: None,
+                operational_four_quarter_bars: false,
                 sync_requested: scalar_legacy != Some(id),
                 intent_revision: self.dry.intent_revision,
                 delivery: Some(self.dry.deliveries[id].clone()),
@@ -1409,7 +1411,7 @@ fn verify_general_two_mib(anchors: &'static [(f64, f64)], quarters: Option<f64>)
     assert!(!std::mem::needs_drop::<SourcePlayback>());
     assert!(!std::mem::needs_drop::<SourceReaderPeriod>());
     assert!(
-        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 264
+        std::mem::size_of::<crate::audio_engine::mapped_source_clock::MappedSourceSpan>() <= 288
     );
     assert!(std::mem::size_of::<[SourcePlayback; 32]>() <= 16 * 1024);
     assert!(std::mem::size_of::<[Option<SourcePlayback>; 32]>() <= 16 * 1024);

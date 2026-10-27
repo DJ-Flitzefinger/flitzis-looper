@@ -484,12 +484,19 @@ fn bounded_copy_span_carries_no_owned_map_or_dynamic_storage() {
     assert!(!std::mem::needs_drop::<
         crate::audio_engine::source_playback::SourcePlayback,
     >());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    // Full exact grid-target identity adds 24 bytes to the historical 264-byte
+    // span (epoch 152 -> 176), without a heap owner or a larger stack allowance.
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
     let cohort_bytes = std::mem::size_of::<
         [Option<crate::audio_engine::source_playback::SourcePlayback>;
             crate::audio_engine::constants::MAX_VOICES],
     >();
-    assert!(cohort_bytes <= 16 * 1024);
+    assert!(
+        cohort_bytes <= 16 * 1024,
+        "cohort_bytes={cohort_bytes} playback_bytes={} option_bytes={}",
+        std::mem::size_of::<crate::audio_engine::source_playback::SourcePlayback>(),
+        std::mem::size_of::<Option<crate::audio_engine::source_playback::SourcePlayback>>()
+    );
     eprintln!(
         "mapped_clock_sizes: epoch={} span={} playback={} source_feed_span={} projection={}",
         std::mem::size_of::<MappedClockEpoch>(),

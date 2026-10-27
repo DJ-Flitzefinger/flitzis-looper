@@ -844,7 +844,7 @@ fn musical_pair_copy_remains_nonowning_and_within_the_existing_fixed_lane_bound(
     fn copy<T: Copy>() {}
     copy::<SourcePlayback>();
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
     assert!(
         std::mem::size_of::<[Option<SourcePlayback>; crate::audio_engine::constants::MAX_VOICES]>()
             <= 16 * 1024

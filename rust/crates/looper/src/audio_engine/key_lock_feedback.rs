@@ -291,6 +291,24 @@ pub(super) fn source_sync_status(
                 .collect::<String>()
         }),
     )?;
+    // Additive requested-target identity only for the new opt-in projection.
+    // Actual programme/read qualification still comes from the callback below.
+    if let Some(witness) = status.witness
+        && (witness.phase_origin.is_some() || witness.operational_four_quarter_bars)
+    {
+        result.set_item(
+            "phase_origin_frame_bits",
+            witness.phase_origin.map(|origin| origin.frame_bits),
+        )?;
+        result.set_item(
+            "phase_origin_authority_revision",
+            witness.phase_origin.map(|origin| origin.authority_revision),
+        )?;
+        result.set_item(
+            "operational_four_quarter_bars",
+            witness.operational_four_quarter_bars,
+        )?;
+    }
     let snapshot = engine
         .input_runtime
         .as_ref()

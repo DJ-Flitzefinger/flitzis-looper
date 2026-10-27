@@ -73,6 +73,7 @@ pub(crate) struct MappedLoopGeometry {
     general: Option<general::GeneralPreparation>,
     full_fraction: Option<general::GeneralPreparation>,
     common_phase: Option<phase::CommonPhasePreparation>,
+    phase_origin: Option<super::loop_phase_reference::GridPhaseOrigin>,
 }
 
 /// Frozen actual transport epoch and caller-supplied non-owning identity marker.
@@ -683,6 +684,7 @@ impl MappedLoopGeometry {
             general: None,
             full_fraction: None,
             common_phase: None,
+            phase_origin: None,
         })
     }
 

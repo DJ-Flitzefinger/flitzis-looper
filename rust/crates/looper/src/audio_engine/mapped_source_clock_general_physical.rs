@@ -181,6 +181,7 @@ impl MappedLoopGeometry {
             }),
             full_fraction: None,
             common_phase: None,
+            phase_origin: None,
         })
     }
 }
@@ -627,19 +628,22 @@ pub(super) fn refresh(
 }
 
 pub(super) struct PhysicalLocalSpanView {
-    span: MappedSourceSpan,
+    start_frame: u64,
+    end_frame: u64,
+    endpoint_frame: usize,
+    endpoint_fraction: f64,
     affine: PhysicalAffine,
 }
 impl PhysicalLocalSpanView {
     pub(super) fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
-        if frame == self.span.end_frame {
+        if frame == self.end_frame {
             return Some(FractionalSourcePosition {
-                frame: self.span.endpoint_frame,
-                fraction: self.span.endpoint_fraction,
+                frame: self.endpoint_frame,
+                fraction: self.endpoint_fraction,
                 seek_mode: ExplicitSeekMode::Normal,
             });
         }
-        self.span.contains(frame).then_some(())?;
+        (self.start_frame <= frame && frame < self.end_frame).then_some(())?;
         self.affine.position(frame)
     }
 }
@@ -712,7 +716,16 @@ pub(super) fn local_view(
     let affine = core
         .prepare_affine(span.segment, span.loaded_rate_hz)
         .ok_or(unavailable)?;
-    Ok(PhysicalLocalSpanView { span, affine })
+    // All admission and affine preparation above use the complete original span.
+    // Evaluation needs only its bounds and cached exclusive endpoint; the affine
+    // already retains the exact epoch and arithmetic, without a second copy.
+    Ok(PhysicalLocalSpanView {
+        start_frame: span.start_frame,
+        end_frame: span.end_frame,
+        endpoint_frame: span.endpoint_frame,
+        endpoint_fraction: span.endpoint_fraction,
+        affine,
+    })
 }
 
 #[cfg(test)]
@@ -799,8 +812,8 @@ mod tests {
                 (actual.frame, actual.fraction.to_bits())
             );
         }
-        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 152);
-        assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 176);
+        assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
         assert!(!std::mem::needs_drop::<MappedSourceSpan>());
     }
 
@@ -838,6 +851,33 @@ mod tests {
                 );
             }
             assert!(view.position_at(span.end_frame() + 1).is_none());
+            if span.start_frame() > 0 {
+                assert!(view.position_at(span.start_frame() - 1).is_none());
+            }
+            for malformed in [
+                MappedSourceSpan {
+                    end_frame: span.start_frame,
+                    ..span
+                },
+                MappedSourceSpan {
+                    endpoint_frame: g.domain().region.end,
+                    ..span
+                },
+                MappedSourceSpan {
+                    endpoint_fraction: f64::NAN,
+                    ..span
+                },
+                MappedSourceSpan {
+                    endpoint_fraction: 1.0,
+                    ..span
+                },
+                MappedSourceSpan {
+                    source_start: span.source_start + 1,
+                    ..span
+                },
+            ] {
+                assert!(local_view(malformed, g.domain()).is_err());
+            }
         }
     }
 

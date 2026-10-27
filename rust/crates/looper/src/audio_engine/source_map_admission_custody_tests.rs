@@ -78,6 +78,8 @@ fn publish_live_map(fixture: &ColdCustody, delivery: &LoaderEventDelivery, revis
     bindings[0] = Some(current);
     let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
     maps[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: revision,
         delivery: Some(delivery.clone()),
@@ -378,6 +380,139 @@ fn runtime_fixture() -> ColdCustody {
     fixture
 }
 
+#[test]
+fn requested_grid_phase_captures_native_authority_and_rejects_real_origin_aba() {
+    let mut fixture = runtime_fixture();
+    let (carrier, artifact, derived) = super::automatic_carrier::export_for_source(&fixture, 0);
+    let delivery = Python::attach(|py| derived.borrow(py).clone());
+    assert!(carrier.original.current());
+    let mut row = SourceMapRow {
+        sync_requested: true,
+        delivery: Some(delivery),
+        phase_origin_seconds: Some(0.),
+        ..Default::default()
+    };
+    let admit = |fixture: &ColdCustody, row: &SourceMapRow| {
+        let current = binding(fixture, 0);
+        let mut projection = SourceMapProjection::qualify(row, Some(&current)).unwrap();
+        projection.remask_parents(true, true);
+        projection
+            .snapshot(&fixture.engine.input_runtime_ownership, current.binding)
+            .admit(&fixture.engine.input_runtime_ownership, current.binding)
+            .unwrap()
+            .unwrap()
+    };
+    let original = admit(&fixture, &row);
+    let original_binding = binding(&fixture, 0);
+    let other = binding(&fixture, 1);
+    let original_authority = original.phase_origin().unwrap().authority_revision;
+    let generation = binding(&fixture, 0).source_generation;
+    fixture
+        .engine
+        .set_pad_timing_metadata_with_source(0, 1. / 48_000., Some(generation))
+        .unwrap();
+    fixture.dispatch_one();
+    assert!(
+        !carrier.original.current(),
+        "original analysis timing never becomes data-only custody"
+    );
+    let changed_binding = binding(&fixture, 0);
+    assert!(!original.current_for(
+        &fixture.engine.input_runtime_ownership,
+        original_binding.binding
+    ));
+    assert!(!original.current_for(
+        &fixture.engine.input_runtime_ownership,
+        changed_binding.binding
+    ));
+    row.phase_origin_seconds = Some(1. / 48_000.);
+    let changed = admit(&fixture, &row);
+    assert_eq!(changed.phase_origin().unwrap().frame_bits, 1_f64.to_bits());
+    assert!(changed.phase_origin().unwrap().authority_revision > original_authority);
+    fixture
+        .engine
+        .set_pad_timing_metadata_with_source(0, 0., Some(generation))
+        .unwrap();
+    fixture.dispatch_one();
+    row.phase_origin_seconds = Some(0.);
+    let returned = admit(&fixture, &row);
+    assert!(!original.same_projection(&returned));
+    assert_ne!(original.sync_witness(), returned.sync_witness());
+    assert!(
+        returned.phase_origin().unwrap().authority_revision
+            > changed.phase_origin().unwrap().authority_revision
+    );
+    assert!(other.current());
+    assert!(!original.current_for(
+        &fixture.engine.input_runtime_ownership,
+        binding(&fixture, 0).binding
+    ));
+    row.phase_origin_seconds = Some(f64::MAX);
+    assert!(SourceMapProjection::qualify(&row, Some(&binding(&fixture, 0))).is_err());
+    drop(row);
+    drop(returned);
+    drop(changed);
+    drop(original);
+    let path = carrier.path.clone();
+    artifact.retire_unselected();
+    drop(artifact);
+    drop(derived);
+    drop(carrier);
+    flush_python_drops();
+    wait_output_retired(&fixture, &path);
+    assert!(!path.exists());
+}
+
+#[test]
+fn operational_four_quarter_count_prepares_unknown_meter_without_promoting_its_record() {
+    let fixture = runtime_fixture();
+    let (_job, delivery) = original_delivery(&fixture);
+    let current = binding(&fixture, 0);
+    let mut row = SourceMapRow {
+        sync_requested: true,
+        delivery: Some(delivery),
+        exact_quarters: Some(1.),
+        ..Default::default()
+    };
+    let prepare = |row: &SourceMapRow| {
+        let mut projection = SourceMapProjection::qualify(row, Some(&current)).unwrap();
+        projection.remask_parents(true, true);
+        let qualified = projection
+            .snapshot(&fixture.engine.input_runtime_ownership, current.binding)
+            .admit(&fixture.engine.input_runtime_ownership, current.binding)
+            .unwrap()
+            .unwrap();
+        let before = qualified.map().map_revision().to_owned();
+        let result = crate::audio_engine::pad_start::MappedStartSource::prepare_runtime_map(
+            &qualified,
+            current.binding,
+            0.,
+            Some(64. / 48_000.),
+        );
+        assert_eq!(qualified.map().map_revision(), before);
+        assert!(
+            !qualified
+                .map()
+                .canonical_phase_reference_exact(|v| v.partial_cmp(&0.), |v| v.partial_cmp(&1.))
+                .unwrap()
+                .bar_qualified()
+        );
+        result
+    };
+    assert_eq!(
+        prepare(&row).0.class,
+        crate::audio_engine::source_map_admission::RuntimeMapClass::Unsupported
+    );
+    row.operational_four_quarter_bars = true;
+    let (prepared, source) = prepare(&row);
+    assert_eq!(
+        prepared.class,
+        crate::audio_engine::source_map_admission::RuntimeMapClass::Ready
+    );
+    assert!(source.is_some());
+    assert!(prepared.witness.unwrap().operational_four_quarter_bars);
+}
+
 fn original_delivery(fixture: &ColdCustody) -> (OfflineAnalysisJob, LoaderEventDelivery) {
     let (job, event) = stored_event(fixture, &record(fixture, 0));
     let delivery = Python::attach(|py| {
@@ -437,6 +572,8 @@ fn selected_real_map_is_data_only_until_sync_and_keeps_immutable_pin_after_clear
     let ownership = &fixture.engine.input_runtime_ownership;
     let before = ownership.launch_revision(0);
     let mut row = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: false,
         intent_revision: 1,
         delivery: Some(delivery),
@@ -486,6 +623,8 @@ fn selected_real_map_is_data_only_until_sync_and_keeps_immutable_pin_after_clear
     publish(
         &fixture,
         SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 2,
             delivery: None,
@@ -557,6 +696,8 @@ fn pending_flag_cannot_replace_a_selected_original_delivery_or_its_source_checks
     let fixture = runtime_fixture();
     let (_job, delivery) = original_delivery(&fixture);
     let mut row = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery),
@@ -605,6 +746,8 @@ fn original_job_cancel_refuses_pending_claim_without_destroying_admitted_geometr
     let (job, delivery) = original_delivery(&fixture);
     let current = binding(&fixture, 0);
     let row = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 1,
         delivery: Some(delivery),
@@ -653,6 +796,8 @@ fn real_original_capture_prepares_manual_map_geometry_and_rejects_later_token_ca
     publish(
         &fixture,
         SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 1,
             delivery: Some(delivery),
@@ -775,6 +920,8 @@ fn omitted_map_rows_drop_real_old_selection_after_unload_or_replacement_and_refr
                 .unwrap();
             let (_job, delivery) = original_delivery(&fixture);
             let row = SourceMapRow {
+                phase_origin_seconds: None,
+                operational_four_quarter_bars: false,
                 sync_requested,
                 intent_revision: 37,
                 delivery: Some(delivery),
@@ -883,6 +1030,8 @@ fn omitted_map_rows_drop_cancelled_original_job_without_blocking_runtime_refresh
         .unwrap();
     let (job, delivery) = original_delivery(&fixture);
     let row = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 38,
         delivery: Some(delivery),
@@ -971,6 +1120,8 @@ impl ReaderDomainPath {
         bindings[0] = Some(current);
         let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
         rows[0] = SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: mapped,
             intent_revision: u64::from(mapped),
             delivery: Some(delivery.clone()),

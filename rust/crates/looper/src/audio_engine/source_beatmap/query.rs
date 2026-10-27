@@ -151,25 +151,34 @@ impl ValidatedMap {
         &self,
         compare: impl FnMut(f64) -> Option<Ordering>,
     ) -> Option<CanonicalBeatSegment> {
-        self.canonical_segment_by_ordering(true, compare)
+        self.canonical_segment_by_ordering(true, false, compare)
+    }
+
+    pub(super) fn canonical_phase_origin_segment_by_source_ordering(
+        &self,
+        compare: impl FnMut(f64) -> Option<Ordering>,
+    ) -> Option<CanonicalBeatSegment> {
+        self.canonical_segment_by_ordering(true, true, compare)
     }
 
     pub(super) fn canonical_segment_by_beat_ordering(
         &self,
         compare: impl FnMut(f64) -> Option<Ordering>,
     ) -> Option<CanonicalBeatSegment> {
-        self.canonical_segment_by_ordering(false, compare)
+        self.canonical_segment_by_ordering(false, false, compare)
     }
 
     fn canonical_segment_by_ordering(
         &self,
         source_axis: bool,
+        require_supported_anchor: bool,
         mut compare: impl FnMut(f64) -> Option<Ordering>,
     ) -> Option<CanonicalBeatSegment> {
         let mut low = 0;
         let mut high = self.anchors.len();
         let mut final_ordering = None;
-        // At most ceil(log2(MAX_ANCHORS+1)) = 18 comparisons. Cache the final
+        // Binary search uses at most ceil(log2(MAX_ANCHORS+1)) = 18 comparisons;
+        // the opt-in grid-origin guard then checks one exact anchor. Cache the final
         // anchor's comparison to distinguish equality from an outside query.
         while low < high {
             let middle = low + (high - low) / 2;
@@ -184,6 +193,20 @@ impl ValidatedMap {
             }
         }
         if low == 0 || (low == self.anchors.len() && final_ordering? != Ordering::Equal) {
+            return None;
+        }
+        // The explicit grid zero must be a supported point, including BOTH
+        // neighbors at an exact anchor. Preserve old continuation selection.
+        if require_supported_anchor
+            && compare(axis(self.anchors[low - 1], source_axis))? == Ordering::Equal
+            && (low
+                .checked_sub(2)
+                .is_some_and(|left| !self.segments[left].coverage.usable())
+                || self
+                    .segments
+                    .get(low - 1)
+                    .is_some_and(|right| !right.coverage.usable()))
+        {
             return None;
         }
         let index = (low - 1).min(self.segments.len() - 1);

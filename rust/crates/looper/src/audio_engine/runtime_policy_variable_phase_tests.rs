@@ -25,6 +25,7 @@ struct VariablePath {
     starts: Vec<usize>,
     quarters: Vec<Option<f64>>,
     fpb: f64,
+    phase_origins: Vec<Option<f64>>,
 }
 
 impl VariablePath {
@@ -125,6 +126,7 @@ impl VariablePath {
             starts: starts.to_vec(),
             quarters: shapes.iter().map(|(_, _, q)| *q).collect(),
             fpb,
+            phase_origins: vec![None; shapes.len()],
         };
         for (id, (anchors, end, q)) in shapes.iter().enumerate() {
             fixture
@@ -231,6 +233,8 @@ impl VariablePath {
             .map(|id| {
                 if id < self.dry.lanes {
                     SourceMapRow {
+                        phase_origin_seconds: self.phase_origins[id],
+                        operational_four_quarter_bars: false,
                         sync_requested: optout != Some(id),
                         intent_revision: self.dry.intent_revision,
                         delivery: Some(self.dry.deliveries[id].clone()),
@@ -431,6 +435,7 @@ fn oracle_pairs(
                 masters,
                 fixture.fpb,
                 0,
+                fixture.phase_origins[id].map(|seconds| (seconds * f64::from(RATE)).round()),
             ))
             .unwrap()
             .extract()
@@ -540,6 +545,287 @@ fn variable_mode_then_same_snapshot_phase_keeps_actual_pair_pcm_and_original_mas
     fixture.dry.path.render(17);
     assert_eq!(verify_reads(&fixture, 0, anchor), 17);
     assert!(fixture.dry.path.feedback(0)["grid_phase_confirmed"].is_null());
+}
+
+#[test]
+fn requested_grid_phase_real_late_birth_keeps_first_read_then_converges_without_allocations() {
+    use crate::test_memory::{ThreadAllocations, observe_current_thread};
+    for requested_origin in [None, Some(1. / 1024.)] {
+        let mut fixture = VariablePath::small(1, 0);
+        fixture.dry.path.source.engine.stop_sample(0).unwrap();
+        fixture.drain();
+        fixture.phase_origins[0] = requested_origin; // Some(g) rounds to47 frames, B(g)=188/375.
+        fixture.publish(Some(wire(false, false, 1)), true, true, None, None);
+        let birth = fixture
+            .dry
+            .path
+            .source
+            .engine
+            .capture_pad_start(0, 0., Some(6750. / f64::from(RATE)), 1., false, None, None)
+            .unwrap();
+        fixture.drain();
+        assert_eq!(birth.original_frame(), Some(0));
+        let mut silence = [0.; 34];
+        fixture
+            .dry
+            .render_into(&mut silence, &mut ImmediateAudioBufferRetirement);
+        assert!(silence.iter().all(|value| *value == 0.));
+        assert_eq!(fixture.dry.path.timeline.output_frame(), 17);
+        assert!(
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .publish_pad_start(&birth, None)
+                .unwrap()
+        );
+        fixture.drain();
+        assert_eq!(birth.state(), "applied", "{:?}", birth.reason());
+        assert_eq!(birth.original_frame(), Some(0));
+        assert_eq!(birth.execution_frame(), Some(17));
+        let initial = fixture.dry.path.voice(0).source_playback;
+        assert_eq!(
+            initial
+                .diagnostic_launch_reference()
+                .map(|(_, frame, master)| (frame, master)),
+            Some((0, 0.))
+        );
+        assert_position(
+            initial.position(),
+            FractionalSourcePosition {
+                frame: 0,
+                fraction: 0.,
+                seek_mode: ExplicitSeekMode::Normal,
+            },
+        );
+        assert!(!initial.is_mapped_phase());
+        let mut onset = [0.; 2];
+        fixture
+            .dry
+            .render_into(&mut onset, &mut ImmediateAudioBufferRetirement);
+        assert!(onset.iter().any(|value| *value != 0.));
+        let mut history = SourceFeedSnapshot::new();
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .source_feed_history
+                .capture_into(&mut history)
+        );
+        let first = history.spans().next().unwrap();
+        assert_eq!(first.frames, 1);
+        assert_position(first.playback.position_at(0).unwrap(), initial.position());
+
+        let mode = fixture.mode();
+        fixture.dry.path.render(129);
+        let anchor = OracleAnchor::capture(&fixture, 0);
+        let phase = request(&fixture.dry.path);
+        fixture.drain();
+        let (_, constructor_allocations) = observe_current_thread(|| {
+            fixture
+                .dry
+                .render_into(&mut [], &mut ImmediateAudioBufferRetirement)
+        });
+        assert_eq!(constructor_allocations, ThreadAllocations::default());
+        assert!(Arc::ptr_eq(&mode, &phase));
+        assert_position(
+            fixture.dry.path.voice(0).source_playback.position(),
+            anchor.raw,
+        );
+        assert!(!fixture.dry.path.voice(0).phase_launch_qualified);
+        if requested_origin.is_none() {
+            assert!(!fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+            assert_eq!(
+                phase.observation().unwrap().reason,
+                Some(crate::audio_engine::input_mapping::RuntimePolicyError::Unsupported)
+            );
+            continue;
+        }
+        assert!(
+            fixture.dry.path.voice(0).source_playback.is_mapped_phase(),
+            "observation={:?} feedback={:?} launch={:?} qualified={}",
+            phase.observation(),
+            fixture.dry.path.feedback(0),
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .source_playback
+                .diagnostic_launch_reference(),
+            fixture.dry.path.voice(0).phase_launch_qualified
+        );
+        assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], false);
+        let witness = phase.prepared_map(0).unwrap().sync_witness();
+        let origin = witness.phase_origin.unwrap();
+        assert_eq!(origin.frame_bits, 47_f64.to_bits());
+        assert_eq!(
+            origin.authority_revision,
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .current_input_runtime_pad_binding(0)
+                .unwrap()
+                .unwrap()
+                .binding
+                .authority_revision
+        );
+        let mut output = [0.; 512];
+        let mut rendered = 0;
+        let mut correcting = false;
+        loop {
+            let (_, allocations) = observe_current_thread(|| {
+                fixture
+                    .dry
+                    .render_into(&mut output, &mut ImmediateAudioBufferRetirement)
+            });
+            assert_eq!(allocations, ThreadAllocations::default());
+            assert!(output.iter().all(|value| value.is_finite()));
+            assert!(output.iter().any(|value| *value != 0.));
+            rendered += output.len() / 2;
+            let settled = fixture
+                .dry
+                .path
+                .voice(0)
+                .source_playback
+                .mapped_phase_settled(phase.prepared_map(0).unwrap().geometry())
+                .unwrap();
+            correcting |= !settled;
+            if rendered == output.len() / 2 {
+                assert!(verify_reads(&fixture, 0, anchor) > 0);
+            }
+            if fixture.dry.path.feedback(0)["phase_read_confirmed"] == true {
+                assert!(settled);
+                break;
+            }
+            assert!(
+                rendered < 100_000,
+                "fixed synthetic g-debt did not converge"
+            );
+        }
+        assert!(correcting);
+        assert!(verify_reads(&fixture, 0, anchor) > 0);
+        assert_eq!(
+            fixture.dry.path.feedback(0)["phase_origin_frame_bits"],
+            json!(47_f64.to_bits())
+        );
+        assert_eq!(
+            fixture.dry.path.feedback(0)["phase_origin_authority_revision"],
+            json!(origin.authority_revision)
+        );
+        assert_eq!(birth.original_frame(), Some(0));
+        assert!(
+            !fixture.dry.path.voice(0).phase_launch_qualified,
+            "absolute phase never creates intentional launch proof"
+        );
+        println!(
+            "REQUESTED_GRID_PHASE_REAL T=0 E=17 g_frame=47 rendered={rendered} correcting=true settled_read=true rust_allocations=0; synthetic PCM/source proof, not hearing acceptance"
+        );
+    }
+}
+
+#[test]
+fn requested_grid_phase_after_real_loop_edit_uses_actual_cursor_without_launch_reference() {
+    for requested_origin in [None, Some(47. / f64::from(RATE))] {
+        let mut fixture = VariablePath::small(1, 23);
+        let generation = fixture
+            .dry
+            .path
+            .source
+            .engine
+            .current_input_runtime_pad_binding(0)
+            .unwrap()
+            .unwrap()
+            .source_generation;
+        let voice_generation = fixture.dry.path.voice(0).generation;
+        let sample = fixture.dry.path.voice(0).sample.as_ref().unwrap().clone();
+        for end in [6751, 6750] {
+            fixture
+                .dry
+                .path
+                .source
+                .engine
+                .set_pad_loop_region_with_source(
+                    0,
+                    0.,
+                    Some(end as f64 / f64::from(RATE)),
+                    Some(generation),
+                )
+                .unwrap();
+            fixture.drain();
+            assert_eq!(
+                fixture.dry.path.source.mixer.loop_region_frames(0),
+                (0, Some(end))
+            );
+            fixture.dry.path.render(1);
+        }
+        assert_eq!(fixture.dry.path.timeline.output_frame(), 25);
+        assert!(!fixture.dry.path.voice(0).phase_launch_qualified);
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .source_playback
+                .diagnostic_launch_reference()
+                .is_none()
+        );
+        let (job, delivery) =
+            fixture
+                .dry
+                .map_anchors_with_metadata(0, &fixture.anchors[0], None, true);
+        fixture.dry.jobs.push(job);
+        fixture.dry.deliveries[0] = delivery;
+        fixture.phase_origins[0] = requested_origin;
+        let mode = fixture.mode();
+        fixture.dry.path.render(129);
+        let anchor = OracleAnchor::capture(&fixture, 0);
+        let phase = fixture.effect();
+        assert!(Arc::ptr_eq(&mode, &phase));
+        assert_position(
+            fixture.dry.path.voice(0).source_playback.position(),
+            anchor.raw,
+        );
+        assert_eq!(fixture.dry.path.voice(0).generation, voice_generation);
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .sample
+                .as_ref()
+                .unwrap()
+                .same_source(&sample)
+        );
+        assert!(!fixture.dry.path.voice(0).phase_launch_qualified);
+        assert!(
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .source_playback
+                .diagnostic_launch_reference()
+                .is_none()
+        );
+        if requested_origin.is_none() {
+            assert!(!fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+            assert_eq!(
+                phase.observation().unwrap().reason,
+                Some(crate::audio_engine::input_mapping::RuntimePolicyError::Unsupported)
+            );
+        } else {
+            assert!(
+                fixture.dry.path.voice(0).source_playback.is_mapped_phase(),
+                "{:?}",
+                phase.observation()
+            );
+            fixture.dry.path.render(17);
+            assert_eq!(verify_reads(&fixture, 0, anchor), 17);
+        }
+    }
 }
 
 #[test]
@@ -1350,8 +1636,8 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
     copy::<MappedClockEpoch>();
     copy::<MappedSourceSpan>();
     assert!(!std::mem::needs_drop::<SourcePlayback>());
-    assert!(std::mem::size_of::<MappedClockEpoch>() <= 152);
-    assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
+    assert!(std::mem::size_of::<MappedClockEpoch>() <= 176);
+    assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
     assert!(std::mem::size_of::<SourcePlayback>() <= 512);
     assert!(std::mem::size_of::<[Option<SourcePlayback>; 32]>() <= 16 * 1024);
     let phase_bytes =
@@ -1367,10 +1653,10 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
         MappedLoopGeometry::composed_local_payload_sizes_for_test();
     let affine_bytes =
         std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::RationalAffine>();
-    // Original numeric payloads are unchanged. One copied epoch grows24 bytes
-    // (f64 basis replaced by signed32-byte basis); allow32 including alignment.
-    // Grid stores one, declared/physical two, FullFraction one via its span.
-    // Keep historical caps explicit, not size-of-derived moving limits.
+    // Original numeric payloads and local-view caps remain unchanged. The full
+    // grid target grows the copied epoch by24 bytes; physical and composed views
+    // avoid retaining unused span geometry after complete validation. Keep all
+    // historical local caps explicit, not size-of-derived moving limits.
     assert!(
         std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::Integer>() <= 257
     );
@@ -1381,7 +1667,10 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
     );
     assert!(affine_bytes <= 944);
     assert!(grid_bytes <= 1184 + 32);
-    assert!(declared_bytes <= 1184 + 64 && physical_bytes <= 1184 + 64);
+    assert!(
+        declared_bytes <= 1184 + 64 && physical_bytes <= 1184 + 64,
+        "temporary_bytes grid={grid_bytes} declared={declared_bytes} physical={physical_bytes} full_phase={full_phase_bytes} full_general={full_general_bytes} composed_ordinary={composed_ordinary_bytes} composed_full={composed_full_bytes} composed_enum={composed_bytes} phase_enum={phase_bytes} general_enum={general_bytes} playback_view={playback_view_bytes}"
+    );
     assert!(full_phase_bytes <= 1200 + 32 && full_general_bytes <= 1200 + 32);
     // The original composed wide payload keeps three signed2048 integers<=771
     // bytes, two i128 masters32, raw8, prepared reader72 and one class byte.
@@ -1409,8 +1698,9 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
         std::mem::size_of::<crate::audio_engine::full_fraction_source_numerics::ComposedAffine<256>>(
         ) <= 912
     );
-    // The selected enum adds at most one16-byte tag/alignment layer. The span
-    // and original grid contribute272 bytes; LocalView adds one more layer.
+    // The selected enum adds at most one16-byte tag/alignment layer. Composed
+    // observation keeps the original epoch, bounds and grid after validation;
+    // LocalView adds one more layer. Historical payload caps remain unchanged.
     assert!(composed_ordinary_bytes <= 864);
     assert!(composed_full_bytes <= 1184 && composed_bytes <= 1200);
     println!(
@@ -1428,7 +1718,7 @@ fn variable_consuming_constructor_claim_reader_history_fits_explicit_two_mib_wit
         )
     );
     println!(
-        "variable_phase_temporary_layout grid_bytes={grid_bytes} declared_bytes={declared_bytes} physical_bytes={physical_bytes} rational_affine_bytes={affine_bytes} full_phase_bytes={full_phase_bytes} full_general_bytes={full_general_bytes} composed_ordinary_bytes={composed_ordinary_bytes} composed_full_bytes={composed_full_bytes} composed_enum_bytes={composed_bytes} phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} epoch_bytes={} span_bytes={} playback_bytes={} cohort_bytes={} historical_old_class_inner_max=1184 historical_old_outer_max=1200 new_inner_max=1280 new_outer_max=1312 phase_needs_drop={} playback_view_needs_drop={}; copied fixed caps152/264/512 and unchanged16KiB cohort; this is layout, not measured peak stack",
+        "variable_phase_temporary_layout grid_bytes={grid_bytes} declared_bytes={declared_bytes} physical_bytes={physical_bytes} rational_affine_bytes={affine_bytes} full_phase_bytes={full_phase_bytes} full_general_bytes={full_general_bytes} composed_ordinary_bytes={composed_ordinary_bytes} composed_full_bytes={composed_full_bytes} composed_enum_bytes={composed_bytes} phase_local_bytes={phase_bytes} general_local_bytes={general_bytes} compact_local_playback_bytes={playback_view_bytes} epoch_bytes={} span_bytes={} playback_bytes={} cohort_bytes={} historical_old_class_inner_max=1184 historical_old_outer_max=1200 new_inner_max=1280 new_outer_max=1312 phase_needs_drop={} playback_view_needs_drop={}; copied fixed caps176/288/512 (historical152/264) and unchanged16KiB cohort; this is layout, not measured peak stack",
         std::mem::size_of::<MappedClockEpoch>(),
         std::mem::size_of::<MappedSourceSpan>(),
         std::mem::size_of::<SourcePlayback>(),
@@ -1631,10 +1921,11 @@ def seed_for(points, beginning, quarters, slope):
     return max(seeds, key=lambda item: (item[0], -item[1])) if seeds else None
 
 
-def choose(points, beginning, quarters, beta0, m0, fpb, launch_master=0):
+def choose(points, beginning, quarters, beta0, m0, fpb, launch_master=0, grid_origin=None):
     slopes = [(r[0]-l[0])/(r[1]-l[1]) for l, r in zip(points, points[1:])
               if r[1] > beginning and l[1] < beginning+quarters]
-    residue = (beginning+F(m0)-F(launch_master)-beta0) % quarters
+    target = beginning-F(launch_master) if grid_origin is None else affine(points,F(grid_origin))
+    residue = (target+F(m0)-beta0) % quarters
     debts = [residue] if residue == 0 else sorted([residue, residue-quarters], key=lambda x: (abs(x), x < 0))
     for debt in debts:
         if debt == 0:
@@ -1677,12 +1968,12 @@ def beta_at(beta0, elapsed, quarters, programme):
     return beta0+elapsed+sigma*correction
 
 
-def evaluate(anchors, rate, start, end, quarters, raw_frame, raw_fraction, master0, masters, fpb, launch_master=0):
+def evaluate(anchors, rate, start, end, quarters, raw_frame, raw_fraction, master0, masters, fpb, launch_master=0, grid_origin=None):
     points = axes(anchors, rate)
     beginning = affine(points, F(start))
     quarters = affine(points, F(end))-beginning if quarters is None else F(quarters)
     beta0 = affine(points, F(raw_frame)+F(raw_fraction))
-    programme = choose(points, beginning, quarters, beta0, master0, fpb, launch_master)
+    programme = choose(points, beginning, quarters, beta0, master0, fpb, launch_master, grid_origin)
     result = []
     for observed in masters:
         beta = beta_at(beta0, F(observed)-F(master0), quarters, programme)

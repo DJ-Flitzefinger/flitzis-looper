@@ -60,6 +60,8 @@ fn publish_cohort_maps(
     for id in [0, 1] {
         bindings[id] = Some(binding(&path.source, id));
         rows[id] = SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: revisions[id],
             delivery: Some(deliveries[id].clone()),

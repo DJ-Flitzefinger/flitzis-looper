@@ -311,6 +311,7 @@ impl MappedLoopGeometry {
             }),
             full_fraction: None,
             common_phase: None,
+            phase_origin: None,
         })
     }
     pub(crate) fn has_general_continuation(&self) -> bool {
@@ -1045,8 +1046,8 @@ mod tests {
             );
             assert_eq!(span.position_at(n), None);
         }
-        assert!(std::mem::size_of::<MappedSourceSpan>() <= 264);
-        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 152);
+        assert!(std::mem::size_of::<MappedSourceSpan>() <= 288);
+        assert_eq!(std::mem::size_of::<MappedClockEpoch>(), 176);
     }
 
     #[test]

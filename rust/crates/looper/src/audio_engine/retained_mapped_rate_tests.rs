@@ -169,6 +169,8 @@ fn independent_pad_cohort_source(
         assert!(current.current());
         bindings[id] = Some(current);
         rows[id] = SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: 1,
             delivery: Some(delivery),

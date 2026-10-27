@@ -669,22 +669,26 @@ pub(super) enum LocalView {
     Full(Local<256>),
 }
 pub(super) struct Local<const N: usize> {
-    span: MappedSourceSpan,
+    epoch: MappedClockEpoch,
+    start_frame: u64,
+    end_frame: u64,
+    endpoint_frame: usize,
+    endpoint_fraction: f64,
     beat: Grid,
     affine: ComposedAffine<N>,
 }
 impl<const N: usize> Local<N> {
     fn position_at(&self, frame: u64) -> Option<FractionalSourcePosition> {
-        if frame == self.span.end_frame {
+        if frame == self.end_frame {
             return Some(FractionalSourcePosition {
-                frame: self.span.endpoint_frame,
-                fraction: self.span.endpoint_fraction,
+                frame: self.endpoint_frame,
+                fraction: self.endpoint_fraction,
                 seek_mode: ExplicitSeekMode::Normal,
             });
         }
-        self.span.contains(frame).then_some(())?;
+        (self.start_frame <= frame && frame < self.end_frame).then_some(())?;
         self.affine.position(decode_f64_at_grid(
-            self.span.epoch.addressed_master_at(frame)?,
+            self.epoch.addressed_master_at(frame)?,
             self.beat,
         )?)
     }
@@ -759,7 +763,13 @@ fn local_typed<const N: usize>(
         return None;
     }
     Some(Local {
-        span,
+        // Retain the complete original epoch for exactly the same addressed
+        // master evaluation; prepared evaluation no longer needs span geometry.
+        epoch: span.epoch,
+        start_frame: span.start_frame,
+        end_frame: span.end_frame,
+        endpoint_frame: span.endpoint_frame,
+        endpoint_fraction: span.endpoint_fraction,
         beat: core.beat,
         affine,
     })

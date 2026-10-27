@@ -651,6 +651,10 @@ fn composed_borrowed_compact_api_checks_whole_original_span_and_exclusive_endpoi
         .compact_view_with_reference(&g, super::super::LoopPhaseReference::Unavailable)
         .unwrap();
     let local = span.local_general_view(g.domain()).unwrap();
+    assert!(local.position_at(span.end_frame + 1).is_none());
+    if span.start_frame > 0 {
+        assert!(local.position_at(span.start_frame - 1).is_none());
+    }
     for frame in [
         span.end_frame,
         span.start_frame,
@@ -666,6 +670,11 @@ fn composed_borrowed_compact_api_checks_whole_original_span_and_exclusive_endpoi
     let mut wrong_endpoint = span;
     wrong_endpoint.endpoint_fraction = f64::from_bits(span.endpoint_fraction.to_bits() ^ 1);
     assert!(wrong_endpoint.compact_view(&g).is_err());
+    for fraction in [f64::NAN, -1.0, 1.0] {
+        let mut invalid = span;
+        invalid.endpoint_fraction = fraction;
+        assert!(invalid.local_general_view(g.domain()).is_err());
+    }
     let mut wrong_program = span;
     wrong_program.program.data[0] ^= 1;
     assert!(wrong_program.compact_view(&g).is_err());

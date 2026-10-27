@@ -4,13 +4,23 @@ use crate::audio_engine::complete_context::{CompleteSourceReader, NativeAnalysis
 use crate::messages::{AutomaticSourceMap, BackgroundTaskKind, LoadedAnalysis};
 use std::sync::atomic::AtomicBool;
 
-struct Carrier {
+pub(super) struct Carrier {
     _event: Py<PyAny>,
     delivery: Py<LoaderEventDelivery>,
-    original: NativeAnalysisOwner,
+    pub(super) original: NativeAnalysisOwner,
     claim: Arc<AtomicBool>,
     cancellation: Arc<AtomicBool>,
-    path: PathBuf,
+    pub(super) path: PathBuf,
+}
+
+pub(super) fn export_for_source(
+    fixture: &ColdCustody,
+    id: usize,
+) -> (Carrier, SourceBeatmapArtifact, Py<LoaderEventDelivery>) {
+    let carrier = make_carrier(fixture, id, false, analysis_for(fixture, id), true);
+    let (slot, artifact, derived) = consume(&fixture.engine, &carrier).unwrap();
+    assert_eq!(slot, id);
+    (carrier, artifact, derived)
 }
 
 fn analysis_for(fixture: &ColdCustody, id: usize) -> LoadedAnalysis {

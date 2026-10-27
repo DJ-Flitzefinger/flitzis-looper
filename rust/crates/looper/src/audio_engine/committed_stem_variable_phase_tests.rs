@@ -103,6 +103,8 @@ fn publish_mapped_policy(
     ends[0] = Some(p.loop_region.end as f64 / f64::from(RATE));
     let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
     rows[0] = SourceMapRow {
+        phase_origin_seconds: None,
+        operational_four_quarter_bars: false,
         sync_requested: true,
         intent_revision: 7,
         delivery: Some(delivery.clone()),

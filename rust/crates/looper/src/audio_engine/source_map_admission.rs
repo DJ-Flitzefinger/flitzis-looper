@@ -5,6 +5,7 @@ use super::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, SourceSyncWitness,
 };
 use super::loader_events::LoaderEventDelivery;
+use super::loop_phase_reference::GridPhaseOrigin;
 use super::pitch_actions::PitchActionReject;
 use super::source_beatmap::SourceBeatmap;
 use super::source_beatmap_artifact::SourceBeatmapArtifact;
@@ -37,6 +38,8 @@ pub(crate) struct SourceMapRow {
     pub(crate) delivery: Option<LoaderEventDelivery>,
     pub(crate) exact_quarters: Option<f64>,
     pub(crate) ordinary_pending: bool,
+    pub(crate) phase_origin_seconds: Option<f64>,
+    pub(crate) operational_four_quarter_bars: bool,
 }
 
 /// Stable off-realtime preparation class, never actual-E or source-adoption permission.
@@ -96,6 +99,8 @@ pub(crate) struct QualifiedSourceMap {
     loaded_rate: u32,
     exact_quarters: Option<f64>,
     witness: SourceSyncWitness,
+    phase_origin: Option<GridPhaseOrigin>,
+    operational_four_quarter_bars: bool,
 }
 
 impl QualifiedSourceMap {
@@ -133,8 +138,54 @@ impl QualifiedSourceMap {
             witness: SourceSyncWitness {
                 intent_revision: 0,
                 map_revision: revision,
+                phase_origin: None,
+                operational_four_quarter_bars: false,
             },
+            phase_origin: None,
+            operational_four_quarter_bars: false,
         })
+    }
+
+    fn with_requested_phase(
+        mut self,
+        row: &SourceMapRow,
+        binding: &InputRuntimePadBinding,
+    ) -> Result<Self, String> {
+        if row.phase_origin_seconds.is_some() && !binding.current() {
+            return Err("requested mapped grid origin binding is stale".into());
+        }
+        self.phase_origin = row
+            .phase_origin_seconds
+            .map(|seconds| {
+                let frame = (seconds * f64::from(self.loaded_rate)).round();
+                if !seconds.is_finite()
+                    || !frame.is_finite()
+                    || frame < 0.0
+                    || frame >= (1_u64 << 53) as f64
+                {
+                    return Err(
+                        "requested mapped grid origin has no supported loaded-frame coordinate"
+                            .to_owned(),
+                    );
+                }
+                Ok(GridPhaseOrigin {
+                    frame_bits: frame.to_bits(),
+                    authority_revision: binding.binding.authority_revision,
+                })
+            })
+            .transpose()?;
+        self.operational_four_quarter_bars = row.operational_four_quarter_bars;
+        self.witness.phase_origin = self.phase_origin;
+        self.witness.operational_four_quarter_bars = self.operational_four_quarter_bars;
+        Ok(self)
+    }
+
+    pub(crate) fn phase_origin(&self) -> Option<GridPhaseOrigin> {
+        self.phase_origin
+    }
+
+    pub(crate) fn operational_four_quarter_bars(&self) -> bool {
+        self.operational_four_quarter_bars
     }
 
     pub(crate) fn map(&self) -> &SourceBeatmap {
@@ -176,6 +227,12 @@ impl QualifiedSourceMap {
             .placement
             .and_then(|placement| placement.content_key())
             == Some(self.key)
+            && self.phase_origin.is_none_or(|origin| {
+                binding.authority_revision == origin.authority_revision
+                    && binding.placement.is_some_and(|placement| {
+                        ownership.authority_current(placement.slot(), binding)
+                    })
+            })
             && binding.sample_rate_hz == self.loaded_rate
             && ownership.binding_source_generation(
                 binding
@@ -191,6 +248,8 @@ impl QualifiedSourceMap {
             && self.generation == other.generation
             && self.loaded_rate == other.loaded_rate
             && self.exact_quarters == other.exact_quarters
+            && self.phase_origin == other.phase_origin
+            && self.operational_four_quarter_bars == other.operational_four_quarter_bars
             && self.delivery.same_owner(&other.delivery)
             && self.map.map_revision() == other.map.map_revision()
     }
@@ -322,10 +381,11 @@ impl SourceMapProjection {
             .delivery
             .as_ref()
             .map(|delivery| {
-                let mut selected = delivery.qualify_source_map(
-                    binding.ok_or("selected source map requires current loaded binding")?,
-                    row.exact_quarters,
-                )?;
+                let binding =
+                    binding.ok_or("selected source map requires current loaded binding")?;
+                let mut selected = delivery
+                    .qualify_source_map(binding, row.exact_quarters)?
+                    .with_requested_phase(row, binding)?;
                 selected.witness.intent_revision = row.intent_revision;
                 Ok::<_, String>(selected)
             })

@@ -62,6 +62,8 @@ fn static_unavailable_neighbor_phase_cannot_block_an_original_mapped_to_fixed_mo
     let mut rows = vec![SourceMapRow::default(); NUM_SAMPLES];
     for (id, row) in rows.iter_mut().enumerate().take(2) {
         *row = SourceMapRow {
+            phase_origin_seconds: None,
+            operational_four_quarter_bars: false,
             sync_requested: true,
             intent_revision: fixture.intent_revision,
             delivery: (id == 0).then(|| fixture.deliveries[0].clone()),

@@ -104,3 +104,67 @@ SYNC control remain the connected activation work.
 - **THEN** the original analysis metadata remains stale
 - **AND** the derived immutable geometry still requires the same original current source
 - **AND** neither replay nor edited DTO fields can acquire another export
+### Requirement: Optional Requested Grid Origin Uses Exact Source Phase
+
+The Native map projection SHALL accept additive optional requested
+`phase_origin_seconds` and `operational_four_quarter_bars` fields. Absent values
+SHALL retain the existing legacy map behavior. A requested grid zero SHALL remain
+intent data: its original delivery, current source binding and Native-captured
+timing authority revision SHALL independently qualify admission. Python SHALL NOT
+supply that authority revision. Legacy timing intent and SYNC intent revisions
+SHALL NOT be rewritten merely to represent grid-target freshness.
+
+Explicit grid-following phase SHALL target original-map `B(g) + M(n)` modulo the
+unchanged physical loop's quarter extent. It SHALL retain the actual source pair
+at admission E and converge using the existing bounded positive/negative phase
+correction. Original launch T/E, physical A/Z/Q, original map knots and local tempo
+SHALL remain unchanged. It SHALL NOT use an A-relative subtraction that cancels g,
+round B(g) to a new binary64 anchor, translate source geometry or jump the first read.
+
+Preparation SHALL include g and its original inverse segment in the checked
+numeric grids. Qualified geometry, immutable phase anchors, programmes and read
+witnesses SHALL bind the complete target and captured Native authority. Geometry
+validation SHALL reject a different prepared target inverse even with equal origin
+bits. Geometry-free retained spans SHALL evaluate only their immutable captured
+target; an incoming historical launch reference cannot inject another g-side inverse.
+
+Absolute grid phase SHALL use the complete current Native source/OwnACK, actual-E
+reader/domain, master-projection, rate and final-cohort claim. It SHALL NOT require
+or manufacture historical launch qualification: original T/M(T) remains unchanged
+as history where available. Legacy None and Fixed/static paths SHALL retain their
+existing intentional-launch guards. Actual programme/read confirmation remains
+separate from intent or coordinate construction.
+
+Copied playback SHALL retain the existing 512-byte and 32-voice 16-KiB cohort
+bounds on the supported 64-bit build. Scalar glide fields MAY share the existing
+exclusive clock storage with mapped/static trajectories, preserving exact scalar
+target/ratio/timer state and their distinct applied versus nominal rate semantics.
+This representation SHALL NOT change any clock law, history or source authority.
+Unsupported coverage and unavailable numeric preparation SHALL refuse the explicit
+target without silently using the legacy A-relative target. Signed historical
+origin intent remains representable; virtual negative-origin activation support
+is separate from this inert Native foundation.
+
+Operational four-quarter bars SHALL remove only the computational verified-4/4
+prerequisite for a requested beat count. Unknown meter, unreviewed detector count,
+downbeat evidence and accepted-timing status SHALL remain unchanged. This Native
+foundation SHALL NOT activate automatic App selection or assert musical acceptance.
+
+#### Scenario: Different source segments and a delayed actual effect
+- **GIVEN** A, the current source pair and g use three distinct original inverse segments
+- **WHEN** explicit grid-following phase is admitted after its genuine launch T
+- **THEN** the first read at E equals the original current source pair
+- **AND** bounded correction converges toward B(g)+M using exact original axes
+- **AND** physical loop boundaries, quarter extent and existing legacy defaults remain intact
+
+#### Scenario: Grid-origin ABA and mixed copied references
+- **WHEN** g changes and returns through genuine Native timing edits
+- **THEN** its changed authority fences the original prepared target
+- **AND** an old phase epoch refuses geometry with a different prepared g-side inverse
+- **AND** another PAD's source and timing remain independent
+
+#### Scenario: Unknown meter permits an operational count only
+- **GIVEN** source-qualified geometry retains unknown meter
+- **WHEN** the explicit operational four-quarter policy prepares a loop extent
+- **THEN** numerical beat-count preparation may succeed without verified-4/4 status
+- **AND** the original map and meter evidence remain unchanged
