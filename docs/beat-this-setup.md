@@ -199,3 +199,10 @@ Actual Demucs completed on CUDA and forced CPU with retained execution receipts.
 BS-RoFormer device propagation has source/unit coverage only in this delivery.
 Historical cached analyses/stems remain device-unknown until a new execution
 provides a receipt. No existing cache is relabelled from CUDA availability alone.
+
+The matching native Release and verified CUDA installation were delivered under
+the closed-App guard with the previous Native/pointer pair retained for rollback.
+The startup check passed without launching the App. A subsequent compiled,
+headless public Unicode-FLAC import/OwnACK, reanalysis and restore test passed
+with CUDA execution and the unchanged estimate 91.89220756855694 BPM. This tests
+the Native bridge; it does not certify a listening session or SYNC alignment.

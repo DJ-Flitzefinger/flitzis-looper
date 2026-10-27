@@ -10,4 +10,4 @@
 - [x] Verify old CPU bytes, finite-profile rejection, fallback boundaries and actual retirement.
 - [x] Compare one authorized matched full-source CPU/GPU run with retained hashes and numeric tolerances.
 - [x] Complete combined Systems POST, independent final-diff review and affected checks.
-- [ ] Perform guarded paired Native/pointer delivery and record rollback and actual limits.
+- [x] Perform guarded paired Native/pointer delivery and record rollback and actual limits.
