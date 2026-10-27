@@ -14,6 +14,7 @@ use super::{MAX_ANCHORS, MAX_RECORD_BYTES, budget, review_index};
 const ENCODING: &str = "source-beatmap-pwa-v1";
 const ENCODING_V2: &str = "source-beatmap-pwa-v2";
 const ENCODING_V3: &str = "source-beatmap-pwa-v3";
+const ENCODING_V4: &str = "source-beatmap-pwa-v4";
 const INTERPOLATION: &str = "pwa-source-seconds-quarter-v1";
 const BOUNDARY: &str = "right-interior-left-final-gap-unavailable-v1";
 const SNAP: &str = "nearest-quarter-subdivision-later-tie-v1";
@@ -181,14 +182,20 @@ struct SampleEdit {
 #[serde(rename_all = "snake_case")]
 pub(super) enum Coverage {
     Trusted,
+    Estimated,
     Uncertain,
     GapUnknownCount,
 }
 
 impl Coverage {
+    pub(super) fn usable(self) -> bool {
+        matches!(self, Self::Trusted | Self::Estimated)
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Trusted => "trusted",
+            Self::Estimated => "estimated",
             Self::Uncertain => "uncertain",
             Self::GapUnknownCount => "gap_unknown_count",
         }
@@ -270,6 +277,7 @@ pub(super) struct ValidatedMap {
     pub(super) segments: Box<[Segment]>,
     /// Derived immutable coverage index, not another map or timing authority.
     pub(super) unsupported_prefix: Box<[u32]>,
+    pub(super) estimated_prefix: Box<[u32]>,
     pub(super) meter_prefix: Box<[u32]>,
     pub(super) gap_prefix: Box<[u32]>,
     pub(super) coverage_changes: Box<[u32]>,
@@ -321,6 +329,7 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
         (1, ENCODING) => typed_envelope(encoded, VersionedRaw::Legacy)?,
         (2, ENCODING_V2) => typed_envelope(encoded, VersionedRaw::Capture)?,
         (3, ENCODING_V3) => typed_envelope(encoded, VersionedRaw::BeatThis)?,
+        (4, ENCODING_V4) => typed_envelope(encoded, VersionedRaw::BeatThis)?,
         _ => return Err("unsupported_beatmap_envelope".into()),
     };
     let version = envelope.schema_version;
@@ -352,7 +361,8 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
             )?;
             Some(review_index::RawIndex::qm(capture)?)
         }
-        (VersionedRaw::BeatThis(raw), 3, ENCODING_V3) => {
+        (VersionedRaw::BeatThis(raw), 3, ENCODING_V3)
+        | (VersionedRaw::BeatThis(raw), 4, ENCODING_V4) => {
             digest_text(&raw.raw_revision)?;
             let capture = raw.capture.validate()?;
             if capture.decoder_identity() != record.source.decoder_identity
@@ -392,8 +402,22 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
             sample_edit: anchor.sample_edit.is_some(),
         });
     }
+    if version < 4
+        && record
+            .accepted
+            .intervals
+            .iter()
+            .any(|i| i.coverage == Coverage::Estimated)
+    {
+        return Err("estimated_coverage_requires_v4".into());
+    }
     let (anchors, segments) = geometry(&record.accepted, raw_count)?;
     let mut unsupported_prefix = Vec::new();
+    let mut estimated_prefix = Vec::new();
+    estimated_prefix
+        .try_reserve_exact(segments.len() + 1)
+        .map_err(|e| e.to_string())?;
+    estimated_prefix.push(0_u32);
     let mut meter_prefix = Vec::new();
     let mut gap_prefix = Vec::new();
     unsupported_prefix
@@ -443,7 +467,11 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
                 + u32::from(segment.downbeat_label.is_none()),
         );
         let count = unsupported_prefix.last().copied().unwrap_or(0);
-        unsupported_prefix.push(count + u32::from(segment.coverage != Coverage::Trusted));
+        unsupported_prefix.push(count + u32::from(!segment.coverage.usable()));
+        estimated_prefix.push(
+            estimated_prefix.last().copied().unwrap_or(0)
+                + u32::from(segment.coverage == Coverage::Estimated),
+        );
         meter_prefix
             .push(meter_prefix.last().copied().unwrap_or(0) + u32::from(!segment.four_four));
         gap_prefix.push(
@@ -505,6 +533,7 @@ pub(super) fn parse(encoded: &str, held: usize, retained: usize) -> Result<Valid
         anchors: anchors.into_boxed_slice(),
         segments: segments.into_boxed_slice(),
         unsupported_prefix: unsupported_prefix.into_boxed_slice(),
+        estimated_prefix: estimated_prefix.into_boxed_slice(),
         meter_prefix: meter_prefix.into_boxed_slice(),
         gap_prefix: gap_prefix.into_boxed_slice(),
         coverage_changes: coverage_changes.into_boxed_slice(),

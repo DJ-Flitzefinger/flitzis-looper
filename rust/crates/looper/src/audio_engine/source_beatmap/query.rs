@@ -128,7 +128,7 @@ impl Evaluation {
 
     pub(super) fn supported(self) -> bool {
         matches!(self.coordinate_status, "supported" | "anchor")
-            && self.interval_status == "trusted"
+            && matches!(self.interval_status, "trusted" | "estimated")
     }
 }
 
@@ -187,7 +187,7 @@ impl ValidatedMap {
             return None;
         }
         let index = (low - 1).min(self.segments.len() - 1);
-        (self.segments[index].coverage == Coverage::Trusted).then(|| {
+        self.segments[index].coverage.usable().then(|| {
             CanonicalBeatSegment::from_anchors(self.anchors[index], self.anchors[index + 1])
         })
     }
@@ -329,7 +329,7 @@ impl ValidatedMap {
             .partition_point(|anchor| anchor.beat <= beat)
             .saturating_sub(1)
             .min(self.segments.len() - 1);
-        (self.segments[index].coverage == Coverage::Trusted).then(|| {
+        self.segments[index].coverage.usable().then(|| {
             CanonicalBeatSegment::from_anchors(self.anchors[index], self.anchors[index + 1])
         })
     }
@@ -434,17 +434,31 @@ impl ValidatedMap {
     fn exact(&self, index: usize) -> Evaluation {
         let anchor = self.anchors[index];
         let segment_index = index.min(self.segments.len() - 1);
-        let touching_gap = index
-            .checked_sub(1)
-            .map(|left| self.segments[left].coverage)
+        let touching = [
+            index
+                .checked_sub(1)
+                .map(|left| self.segments[left].coverage),
+            self.segments.get(index).map(|right| right.coverage),
+        ];
+        // Preserve the historical first unsupported neighbor. Estimated is
+        // usable provenance and must never hide either unsupported class.
+        let coverage = touching
             .into_iter()
-            .chain(self.segments.get(index).map(|right| right.coverage))
-            .find(|coverage| *coverage != Coverage::Trusted);
-        let coverage = touching_gap.unwrap_or(Coverage::Trusted);
+            .flatten()
+            .find(|c| !c.usable())
+            .or_else(|| {
+                touching
+                    .into_iter()
+                    .flatten()
+                    .find(|c| *c == Coverage::Estimated)
+            })
+            .unwrap_or(Coverage::Trusted);
         Evaluation {
             source_seconds: Some(anchor.seconds),
             beat: Some(anchor.beat),
-            local_bpm: (coverage == Coverage::Trusted).then_some(self.segments[segment_index].bpm),
+            local_bpm: coverage
+                .usable()
+                .then_some(self.segments[segment_index].bpm),
             coordinate_status: "anchor",
             interval_status: coverage.label(),
             segment_index: Some(segment_index),
@@ -462,7 +476,7 @@ impl ValidatedMap {
         extrapolate: bool,
     ) -> Evaluation {
         let segment = self.segments[index];
-        if segment.coverage != Coverage::Trusted {
+        if !segment.coverage.usable() {
             let mut missing = self.missing_axis(
                 target,
                 source_axis,
@@ -504,7 +518,7 @@ impl ValidatedMap {
             interval_status: if extrapolate {
                 "unverified_extrapolation"
             } else {
-                "trusted"
+                segment.coverage.label()
             },
             segment_index: Some(index),
             physical_domain: self.physical_domain(source),
@@ -594,7 +608,11 @@ impl ValidatedMap {
             return Evaluation::unavailable("unsupported_meter");
         }
         let endpoint_segment = if beats >= 0.0 { after - 1 } else { first };
-        end.interval_status = "trusted";
+        end.interval_status = if self.estimated_prefix[first] != self.estimated_prefix[after] {
+            "estimated"
+        } else {
+            "trusted"
+        };
         end.meter_status = self.meter_status(endpoint_segment);
         end.downbeat_label = self.segments[endpoint_segment].downbeat_label;
         end.local_bpm = Some(self.segments[endpoint_segment].bpm);

@@ -109,6 +109,7 @@ impl super::record::ValidatedMap {
             .ok_or("beatmap_review_budget_overflow")?;
         let prefixes = [
             self.unsupported_prefix.len(),
+            self.estimated_prefix.len(),
             self.meter_prefix.len(),
             self.gap_prefix.len(),
             self.coverage_changes.len(),

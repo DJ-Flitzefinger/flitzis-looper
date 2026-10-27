@@ -27,6 +27,15 @@ fn map_value(map: &SourceBeatmap) -> Value {
 }
 
 #[test]
+fn legacy_v2_cannot_import_estimated_playback_semantics() {
+    let (raw, intent) = labelled_capture();
+    let map = interpretation::build(&raw, &intent, 0).unwrap();
+    let mut value = map_value(&map);
+    value["record"]["accepted"]["intervals"][0]["coverage"] = json!("estimated");
+    assert_eq!(editor::seal(value).unwrap_err(), "estimated_coverage_requires_v4");
+}
+
+#[test]
 fn v2_preserves_complete_capture_and_three_revisions_without_ordinal_inference() {
     let (raw, intent) = labelled_capture();
     let map = interpretation::build(&raw, &intent, 4096).unwrap();

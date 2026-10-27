@@ -12,6 +12,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+pub(super) mod automatic;
 pub(super) mod budget;
 pub(super) mod editor;
 pub(super) mod interpretation;

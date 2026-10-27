@@ -189,3 +189,21 @@
   plus affected map changes; verify current live launch/render behavior remains unchanged.
 - [ ] Record accepted exact model/environment hashes and completed default cutover. Until this
   task passes, report replacement as incomplete, even if the adapter benchmark works.
+
+## Later focused Human execution
+
+The direct October 26-27 focused instructions govern App delivery independently of
+the retained scientific/reference gates above; those gates remain incomplete.
+
+- [x] Add explicit v4 Estimated source-map construction/query semantics with unchanged
+  raw observations, bounded local smoothing/gaps/edges, unknown meter, checked memory
+  admission and old-envelope compatibility. This is pure Native geometry, not App activation.
+- [ ] Attach genuine automatic maps to existing source/artifact/delivery/selection custody,
+  including manual priorities, cached restore, Copy and retirement.
+- [ ] Resolve operational loop bars and captured GridOffset alignment before activation.
+- [ ] Consolidate optional SYNC through existing GUI/MIDI/runtime policy without a separate
+  REALTIME BPM prerequisite; retain truthful pending, effective and actual phase states.
+- [ ] Complete the latest Human Unicode-FLAC load reproduction, actual FLAC/MP3 tempo
+  comparison and fixed-tempo 8/32/64-bar evidence; evaluate integer hypotheses against
+  two separated ten-second windows and the long-span phase trajectory.
+- [ ] Obtain the Human's actual musical 64-bar listening feedback after native delivery.

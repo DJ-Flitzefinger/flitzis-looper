@@ -546,7 +546,7 @@ pub(super) fn interval_shape(interval: &Value) -> bool {
     exact_keys(interval, &["coverage", "meter"])
         && matches!(
             interval["coverage"].as_str(),
-            Some("trusted" | "uncertain" | "gap_unknown_count")
+            Some("trusted" | "estimated" | "uncertain" | "gap_unknown_count")
         )
         && exact_keys(
             &interval["meter"],
@@ -1117,7 +1117,7 @@ impl SourceBeatmap {
             let Some(label) = segment.downbeat_label else {
                 continue;
             };
-            if segment.coverage != record::Coverage::Trusted {
+            if !segment.coverage.usable() {
                 continue;
             }
             let phase = label.rem_euclid(4) as f64;

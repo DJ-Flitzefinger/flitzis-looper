@@ -334,8 +334,50 @@ impl BeatThisRawData {
         }
     }
 
-    pub(super) fn encoded_len(&self) -> Result<usize, String> {
+    pub(in crate::audio_engine) fn encoded_len(&self) -> Result<usize, String> {
         codec::encoded_len(&self.envelope())
+    }
+
+    /// Counting serialization still materializes one LE/base64 array at a time.
+    /// Admit that scratch before a map builder calls encoded_len or embeds raw.
+    pub(in crate::audio_engine) fn encoding_workspace_bytes(&self) -> Result<usize, String> {
+        let p = self.predictions();
+        let arrays = [
+            &p.beat_seconds,
+            &p.downbeat_seconds,
+            &p.beat_logits,
+            &p.downbeat_logits,
+        ];
+        let mut retained = 0_usize;
+        let mut scratch = 0_usize;
+        for array in arrays {
+            retained = retained
+                .checked_add(
+                    array
+                        .capacity()
+                        .checked_mul(8)
+                        .ok_or("capture_encoding_budget_overflow")?,
+                )
+                .ok_or("capture_encoding_budget_overflow")?;
+            let bytes = array
+                .len()
+                .checked_mul(8)
+                .ok_or("capture_encoding_budget_overflow")?;
+            let encoded = bytes
+                .div_ceil(3)
+                .checked_mul(4)
+                .ok_or("capture_encoding_budget_overflow")?;
+            scratch = scratch.max(
+                bytes
+                    .checked_add(encoded)
+                    .ok_or("capture_encoding_budget_overflow")?,
+            );
+        }
+        // Bounded descriptors, request strings, typed headers and allocator slack.
+        retained
+            .checked_add(scratch)
+            .and_then(|n| n.checked_add(16 * 1024 * 1024))
+            .ok_or_else(|| "capture_encoding_budget_overflow".into())
     }
 
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
@@ -348,7 +390,7 @@ impl BeatThisRawData {
         codec::encode(&self.envelope())
     }
 
-    pub(super) fn embedded_value(&self) -> Result<Value, String> {
+    pub(in crate::audio_engine) fn embedded_value(&self) -> Result<Value, String> {
         self.validate()?;
         if codec::revision(ENCODING, self)? != self.raw_revision {
             return Err("Beat This capture revision differs".into());

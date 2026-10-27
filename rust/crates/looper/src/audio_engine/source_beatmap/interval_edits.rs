@@ -168,6 +168,9 @@ pub(super) fn apply(accepted: &mut Value, operation: EditOperation) -> Result<Va
             reviewed_quarter_notes,
             ..
         } => {
+            if coverage == Coverage::Estimated {
+                return Err("estimated_coverage_is_constructor_owned".into());
+            }
             if coverage != Coverage::GapUnknownCount
                 && reviewed_quarter_notes
                     .is_none_or(|count| !count.is_finite() || count <= 0.0 || count != old_count)

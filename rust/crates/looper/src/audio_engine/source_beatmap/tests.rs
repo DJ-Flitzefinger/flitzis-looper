@@ -94,6 +94,29 @@ fn seal(value: &mut Value) {
     value["record"]["accepted"]["map_revision"] = json!(revision);
 }
 
+#[test]
+fn legacy_v1_cannot_import_estimated_playback_semantics() {
+    let valid = fixture(&[(0.0, 0.0), (2.0, 4.0)], &["uncertain"]);
+    assert!(editor::seal(valid.clone()).is_ok());
+    let mut changed = valid;
+    changed["record"]["accepted"]["intervals"][0]["coverage"] = json!("estimated");
+    assert_eq!(
+        editor::seal(changed).unwrap_err(),
+        "estimated_coverage_requires_v4"
+    );
+}
+
+#[test]
+fn legacy_exact_anchor_keeps_first_unsupported_neighbor_semantics() {
+    let value = fixture(
+        &[(0.0, 0.0), (2.0, 4.0), (4.0, 8.0)],
+        &["uncertain", "gap_unknown_count"],
+    );
+    let map = editor::seal(value).unwrap();
+    assert_eq!(map.inner.at_source(2.0).interval_status, "uncertain");
+    assert!(!map.inner.at_source(2.0).supported());
+}
+
 fn prepared(mut value: Value) -> SourceBeatmap {
     seal(&mut value);
     SourceBeatmap::parse(&value.to_string()).unwrap()
