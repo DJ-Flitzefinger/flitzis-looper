@@ -858,3 +858,62 @@ Unavailable numeric BPM SHALL display as unavailable, rather than as zero tempo.
 - **THEN** the stable-run fits may recover the scalar tempo without joining or renumbering events
 - **AND** absent common phase support leaves the integer probe inconclusive
 - **AND** no map, grid origin or Native phase certificate is created by this estimate
+
+### Requirement: Adaptive Dual Candidate Checks Preserve Genuine Common Coverage
+The App `neural-stable-regions-v4` policy SHALL retain the existing regional base
+fit, original observations and stable-run selection. It SHALL evaluate the nearest
+integer and the EXACT selected fractional base using one candidate-neutral common
+mask and the same centered pivot of original event indices and retained source
+times. The unconstrained free fit SHALL supply only the residual comparison; it
+SHALL NOT substitute for validation of the selected base.
+
+Common coverage SHALL prefer the qualified historical 20–80 percent fit.
+Otherwise it MAY use the genuine selected contiguous run or whole-original fit.
+It SHALL NOT join runs, bridge an event-density transition, select an arbitrary
+third to conceal failed common phase, renumber events or rephase individual
+windows. A short resident loop SHALL NOT shorten an available complete original.
+
+Historical sixteen-second window geometry SHALL remain when it qualifies.
+Otherwise retained common observations SHALL be partitioned into two disjoint
+halves; outer windows up to sixteen seconds SHALL maximize useful span and aim
+for ten-second separation when compatible with the required retained spans.
+Actual source endpoints, counts and positive gap SHALL determine the evidence
+tier. `two_ten_second` SHALL require at least eight observations and ten seconds
+of retained span in EACH local fit and common-mask window. `short_source` SHALL
+require at least four observations and one second in EACH window and SHALL be
+available ONLY from a strict whole-original fit with at least eight observations
+and four seconds. A short island in a longer recording SHALL NOT grant this tier.
+Absent two valid windows, BOTH checks SHALL remain inconclusive.
+
+Each candidate SHALL retain maximum/RMS residual, shared window mean-phase
+difference and RMS penalty against the common free line. Maximum residual SHALL
+remain at most 25ms or five percent of that candidate's period, mean-phase
+difference at most 5ms and RMS penalty at most 0.25ms. Integer preference SHALL
+also require the base to be within 0.005 BPM. Fractional validity SHALL be reported
+separately as pass, fail or inconclusive; an integer failure SHALL NOT itself
+validate the fractional base. If neither candidate is supported, the regional
+base MAY remain an explicitly unvalidated estimate, rather than zero or a falsely
+validated result. Integer preference is finite evidence, with the short-source
+tier explicitly weaker; it SHALL NOT claim exact musical tempo or certainty.
+
+Schema4 SHALL retain strict common membership, masks, original-index count/span
+and gap, one common pivot, both candidates' recomputable metrics, status/reason
+and final-BPM consistency. Four-point probe windows SHALL be exclusive to v4;
+ordinary regions and ALL v1/v2/v3 metadata SHALL retain their preceding guards.
+Historical records/seals SHALL remain readable without relabeling or automatic
+upgrade of valid cached v2/v3 analysis. Existing failed-old-Legacy recovery and
+performer/source/OwnACK/retirement safeguards SHALL remain unchanged. Estimates
+and execution metadata SHALL NOT grant map, Native timing, grid-phase or hearing
+acceptance.
+
+#### Scenario: A shorter complete digital source has stable evidence
+- **GIVEN** a complete original shorter than the former seventy-second boundary
+- **WHEN** two disjoint strict probes fit its actual retained observations
+- **THEN** its declared tier and candidate checks SHALL describe those actual spans
+- **AND** no loaded-loop extent, nominal duration or fabricated gap SHALL stand in for coverage
+
+#### Scenario: Subdivisions invalidate global ordinals between stable runs
+- **WHEN** an interior selected run has two ten-second probes but extra detections occur elsewhere
+- **THEN** both candidates MAY be checked within that one genuine run without joining ordinals
+- **AND** a base near 89.9819 SHALL NOT become 90 merely because an integer fits short windows
+- **AND** the independent common-mask phase calculation SHALL retain local-only excluded events

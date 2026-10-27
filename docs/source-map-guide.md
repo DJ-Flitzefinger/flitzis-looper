@@ -6,6 +6,13 @@ accurate. BPM analysis checks stable interior sections and tests nearby integer
 tempos against separate sections; it keeps a fractional estimate when the
 evidence does not support the integer.
 
+Both the selected fractional estimate and the nearby integer use the same two
+separate probe windows and one shared original-event phase. Each window retains
+at least ten seconds when enough complete-source material is available. A genuinely
+short original can use a declared shorter check; a short resident loop does not
+shorten an available full song. Unchecked estimates remain estimates. These finite
+checks do not prove an exact integer tempo, correct beat labels or musical alignment.
+
 | Intended use | Controls | Source map |
 | --- | --- | --- |
 | Constant rate playback with accurate BPM | Multi Loop and BPM Lock; SYNC off | No map required. Each PAD keeps its own loop markers and BPM. |

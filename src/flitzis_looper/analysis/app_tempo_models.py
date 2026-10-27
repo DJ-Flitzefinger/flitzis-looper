@@ -6,41 +6,16 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from flitzis_looper.analysis.app_tempo_probe import (
+    AdaptiveTempoProbe,
+    IntegerTempoProbe,
+    TempoRegion,
+    historical_probe,
+    validate_adaptive_probe,
+)
+
 _Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 _Time = Annotated[float, Field(allow_inf_nan=False, ge=0)]
-
-
-class TempoRegion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    window_seconds: Annotated[list[_Time], Field(min_length=2, max_length=2)]
-    bpm: Annotated[float, Field(allow_inf_nan=False, ge=30, le=300)]
-    retained: Annotated[int, Field(ge=8, le=250_000)]
-    excluded_raw_indices: Annotated[list[int], Field(max_length=250_000)]
-    max_residual_seconds: Annotated[float, Field(allow_inf_nan=False, ge=0, le=0.025)]
-    rms_residual_seconds: Annotated[float, Field(allow_inf_nan=False, ge=0, le=0.025)]
-
-
-class IntegerTempoProbe(BaseModel):
-    """Finite policy preference; never Native timing/map/phase authorization."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["supported_integer_estimate", "fractional_estimate", "inconclusive"]
-    reason: Literal[
-        "two_windows_and_common_phase",
-        "long_span_mismatch",
-        "fractional_preferred",
-        "insufficient_inner_coverage",
-    ]
-    candidate_bpm: Annotated[float, Field(allow_inf_nan=False, ge=30, le=300)]
-    base_bpm: Annotated[float, Field(allow_inf_nan=False, ge=30, le=300)]
-    windows: Annotated[list[TempoRegion], Field(max_length=2)]
-    common_region: TempoRegion | None
-    common_max_residual_seconds: _Time | None
-    common_rms_residual_seconds: _Time | None
-    rms_penalty_seconds: _Time | None
-    window_phase_difference_seconds: _Time | None
 
 
 class AppTempoMethod(BaseModel):
@@ -48,10 +23,13 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3]
+    schema_version: Literal[1, 2, 3, 4]
     backend: Literal["beat_this"]
     policy: Literal[
-        "neural-stable-regions-v1", "neural-stable-regions-v2", "neural-stable-regions-v3"
+        "neural-stable-regions-v1",
+        "neural-stable-regions-v2",
+        "neural-stable-regions-v3",
+        "neural-stable-regions-v4",
     ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
@@ -59,7 +37,7 @@ class AppTempoMethod(BaseModel):
     bpm: Annotated[float | None, Field(allow_inf_nan=False, ge=30, le=300)]
     selected: TempoRegion | None
     regions: Annotated[list[TempoRegion], Field(max_length=5)]
-    integer_probe: IntegerTempoProbe | None = Field(
+    integer_probe: IntegerTempoProbe | AdaptiveTempoProbe | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     model_sha256: _Digest
@@ -145,6 +123,10 @@ class AppTempoMethod(BaseModel):
 
     def _validate_integer_probe(self, duration: float) -> None:
         probe = self.integer_probe
+        if self.schema_version == 4:
+            validate_adaptive_probe(self, probe)
+            return
+        probe = historical_probe(probe)
         if probe is None or self.selected is None or probe.base_bpm != self.selected.bpm:
             message = "Version two requires the counterprobe of its base regional estimate"
             raise ValueError(message)

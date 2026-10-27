@@ -4,6 +4,17 @@ use super::{RegionEstimate, TempoEstimate, region};
 const MAX_RUNS: usize = 64;
 
 pub(super) fn recover(beats: &[f64], duration: f64, result: &mut TempoEstimate) {
+    let Some(bounds) = candidate_bounds(beats, duration) else {
+        return;
+    };
+    recover_candidates(beats, duration, bounds, result);
+}
+
+pub(super) fn is_candidate(beats: &[f64], duration: f64, window: [f64; 2]) -> bool {
+    candidate_bounds(beats, duration).is_some_and(|bounds| bounds.contains(&window))
+}
+
+fn candidate_bounds(beats: &[f64], duration: f64) -> Option<Vec<[f64; 2]>> {
     let mut bounds = Vec::with_capacity(MAX_RUNS);
     let mut start = 0;
     // Adjacent IOI scale changes discover candidates only. Each candidate still
@@ -16,13 +27,22 @@ pub(super) fn recover(beats: &[f64], duration: f64, result: &mut TempoEstimate) 
             if end - start >= 24 && beats[end - 1] - beats[start] >= 30.0 {
                 if bounds.len() == MAX_RUNS {
                     // Never hide a conflicting 65th candidate by truncation.
-                    return;
+                    return None;
                 }
                 bounds.push([beats[start], beats[end - 1].next_up().min(duration)]);
             }
             start = end;
         }
     }
+    Some(bounds)
+}
+
+fn recover_candidates(
+    beats: &[f64],
+    duration: f64,
+    bounds: Vec<[f64; 2]>,
+    result: &mut TempoEstimate,
+) {
     let mut runs: Vec<RegionEstimate> = bounds
         .into_iter()
         .filter_map(|w| region(beats, w[0], w[1], 24, 30.0))
@@ -101,7 +121,10 @@ mod tests {
         let selected = result.selected.unwrap();
         assert!(selected.retained >= 24);
         assert!(selected.window_seconds[1] - selected.window_seconds[0] >= 30.0);
-        assert_eq!(result.integer_probe.unwrap().status, "inconclusive");
+        let probe = result.integer_probe.unwrap();
+        assert_eq!(probe.evidence_tier, "two_ten_second");
+        assert_eq!(probe.fractional_check.status, "pass");
+        assert_ne!(probe.status, "inconclusive");
         assert_eq!(beats, original);
         assert!(result.regions.iter().any(|r| r.window_seconds[0] > 60.0));
         assert!(result.regions.iter().any(|r| r.window_seconds[0] < 1.0));
@@ -211,7 +234,11 @@ mod tests {
         use std::{fs, path::PathBuf};
         let root =
             PathBuf::from(std::env::var_os("FLITZI_TEMPO_REPLAY_ROOT").expect("owned replay root"));
+        let baseline = PathBuf::from(
+            std::env::var_os("FLITZI_TEMPO_BASELINE_ROOT").expect("retained v3 baseline root"),
+        );
         assert!(root.is_absolute());
+        assert!(baseline.is_absolute());
         let mut reports = Vec::new();
         for pad in 1..=3 {
             let original: Value = serde_json::from_slice(
@@ -227,6 +254,38 @@ mod tests {
             let duration = original["frame_count"].as_f64().unwrap()
                 / original["sample_rate_hz"].as_f64().unwrap();
             let result = estimate(&beats, duration);
+            let previous: Value = serde_json::from_slice(
+                &fs::read(baseline.join(format!("pad{pad}-v3-method.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(previous["source_sha256"], original["source_sha256"]);
+            assert_eq!(previous["raw_beats"], original["raw_beats"]);
+            assert_eq!(previous["raw_downbeats"], original["raw_downbeats"]);
+            assert!(
+                result
+                    .bpm
+                    .unwrap()
+                    .to_bits()
+                    .abs_diff(previous["bpm"].as_f64().unwrap().to_bits())
+                    <= 4
+            );
+            let probe = result.integer_probe.as_ref().unwrap();
+            assert_eq!(
+                result.bpm,
+                Some(if probe.status == "supported_integer_estimate" {
+                    probe.candidate_bpm
+                } else {
+                    result.selected.as_ref().unwrap().bpm
+                })
+            );
+            close_metadata(
+                &serde_json::to_value(&result.regions).unwrap(),
+                &previous["regions"],
+            );
+            close_metadata(
+                &serde_json::to_value(&result.selected).unwrap(),
+                &previous["selected"],
+            );
             if pad < 3 {
                 assert_eq!(result.bpm, original["bpm"].as_f64());
                 close_metadata(
@@ -234,17 +293,29 @@ mod tests {
                     &original["regions"],
                 );
                 close_metadata(
-                    &serde_json::to_value(&result.integer_probe).unwrap(),
-                    &original["integer_probe"],
+                    &serde_json::to_value(&result.selected).unwrap(),
+                    &original["selected"],
                 );
             } else {
                 assert_eq!(original["status"], "insufficient");
                 assert_eq!(result.status, "estimated");
                 assert!((89.97..89.99).contains(&result.bpm.unwrap()));
-                assert_eq!(
-                    result.integer_probe.as_ref().unwrap().status,
-                    "inconclusive"
-                );
+                let probe = result.integer_probe.as_ref().unwrap();
+                assert_eq!(probe.status, "fractional_estimate");
+                assert_eq!(probe.evidence_tier, "two_ten_second");
+                assert_eq!(probe.fractional_check.status, "pass");
+                assert!(probe.windows.iter().all(|w| {
+                    let retained: Vec<_> = beats
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, t)| {
+                            **t >= w.window_seconds[0]
+                                && **t < w.window_seconds[1]
+                                && w.excluded_raw_indices.binary_search(i).is_err()
+                        })
+                        .collect();
+                    retained.last().unwrap().1 - retained.first().unwrap().1 >= 10.0
+                }));
                 assert!(result.regions.len() >= 2);
             }
             let mut method = original.clone();
@@ -253,11 +324,11 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(update.as_object().unwrap().clone());
-            method["schema_version"] = json!(3);
+            method["schema_version"] = json!(4);
             assert_eq!(method["raw_beats"], original["raw_beats"]);
             assert_eq!(method["raw_downbeats"], original["raw_downbeats"]);
             fs::write(
-                root.join(format!("pad{pad}-v3-method.json")),
+                root.join(format!("pad{pad}-v4-method.json")),
                 serde_json::to_vec_pretty(&method).unwrap(),
             )
             .unwrap();
@@ -266,7 +337,7 @@ mod tests {
             );
         }
         fs::write(
-            root.join("tempo-replay.json"),
+            root.join("tempo-replay-v4.json"),
             serde_json::to_vec_pretty(&reports).unwrap(),
         )
         .unwrap();
