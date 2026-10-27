@@ -3,9 +3,10 @@
 
 use serde::Serialize;
 
-pub(super) const POLICY: &str = "neural-stable-regions-v2";
+pub(super) const POLICY: &str = "neural-stable-regions-v3";
 const RESIDUAL_SECONDS: f64 = 0.025;
 mod integer;
+mod stable_runs;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct RegionEstimate {
@@ -221,6 +222,9 @@ pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
         result.regions.push(whole);
     } else if !result.regions.is_empty() {
         result.status = "uncorroborated";
+    }
+    if result.bpm.is_none() {
+        stable_runs::recover(beats, duration, &mut result);
     }
     if let Some(base) = result.bpm {
         let probe = integer::probe(beats, duration, base, &result.regions);

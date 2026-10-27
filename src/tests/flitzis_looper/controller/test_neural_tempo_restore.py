@@ -54,9 +54,9 @@ def _previous() -> SampleAnalysis:
     )
 
 
-def _v2_method() -> AppTempoMethod:
+def _v2_method(version: int = 2) -> AppTempoMethod:
     data = _method().model_dump(mode="python")
-    data.update(schema_version=2, policy="neural-stable-regions-v2")
+    data.update(schema_version=version, policy=f"neural-stable-regions-v{version}")
     data["selected"]["bpm"] = 119.999
     data["regions"][0]["bpm"] = 119.999
     common = data["selected"]
@@ -79,8 +79,9 @@ def _v2_method() -> AppTempoMethod:
     return AppTempoMethod.model_validate(data)
 
 
-def test_v2_preserves_base_fit_and_validates_integer_preference() -> None:
-    method = _v2_method()
+@pytest.mark.parametrize("version", [2, 3])
+def test_v2_preserves_base_fit_and_validates_integer_preference(version: int) -> None:
+    method = _v2_method(version)
     reopened = AppTempoMethod.model_validate_json(method.model_dump_json())
     assert reopened == method
     assert reopened.bpm == 120.0
@@ -138,12 +139,13 @@ def test_restore_upgrades_old_policy_only_without_performer_override(
     assert not controller.loader._needs_tempo_refinement(0)
 
 
-def test_v2_copy_and_json_keep_the_finite_prior_and_original_observations() -> None:
+@pytest.mark.parametrize("version", [2, 3])
+def test_v2_copy_and_json_keep_the_finite_prior_and_original_observations(version: int) -> None:
     project = ProjectState()
     project.sample_paths[0] = "samples/legacy.wav"
     project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
     project.sample_analysis[0] = _previous().model_copy(
-        update={"bpm": 120.0, "bpm_method": _v2_method()}
+        update={"bpm": 120.0, "bpm_method": _v2_method(version)}
     )
     snapshot = capture_copy_snapshot(project, 0)
     reopened = CopySnapshot.model_validate_json(snapshot.model_dump_json())
@@ -161,6 +163,53 @@ def test_v2_copy_and_json_keep_the_finite_prior_and_original_observations() -> N
     assert loaded.bpm_method is None
     with pytest.raises(ValidationError):
         CopySnapshotData.model_validate(damaged)
+
+
+def _unavailable_method(version: int) -> AppTempoMethod:
+    data = _v2_method(version).model_dump(mode="python")
+    data.update(status="insufficient", bpm=None, selected=None, regions=[], integer_probe=None)
+    return AppTempoMethod.model_validate(data)
+
+
+def test_unavailable_v2_upgrade_settles_once_without_changing_other_analysis(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    previous = _previous().model_copy(update={"bpm": 0.0, "bpm_method": _unavailable_method(2)})
+    controller.project.sample_analysis[0] = previous
+    assert controller.loader._needs_tempo_refinement(0)
+    for intent in ("manual", "tap", "automatic"):
+        controller.project.pad_timing_intent[0] = intent
+        assert not controller.loader._needs_tempo_refinement(0)
+    controller.project.pad_timing_intent[0] = "legacy"
+    controller.project.manual_bpm[0] = 94.0
+    assert not controller.loader._needs_tempo_refinement(0)
+    controller.project.manual_bpm[0] = None
+    audio_engine_mock.pad_timing_intent.return_value = "legacy"
+    controller.loader._finish_loaded_timing(
+        0,
+        {
+            "analysis_kind": "tempo_only",
+            "analysis": {"bpm_method": _unavailable_method(3).model_dump_json()},
+        },
+        new_assignment=False,
+        restored_assignment=False,
+        timing_stale=False,
+    )
+    updated = controller.project.sample_analysis[0]
+    assert updated is not None
+    assert updated.bpm == previous.bpm
+    assert updated.key == previous.key
+    assert updated.beat_grid == previous.beat_grid
+    assert updated.bpm_method == _unavailable_method(3)
+    assert not controller.loader._needs_tempo_refinement(0)
+    # An unavailable optional result never replaces a previously useful estimate.
+    controller.project.sample_analysis[0] = previous.model_copy(update={"bpm": 94.0})
+    assert not controller.loader._needs_tempo_refinement(0)
+    controller.loader._apply_tempo_only_analysis(
+        0, {"bpm_method": _unavailable_method(3).model_dump_json()}
+    )
+    assert controller.project.sample_analysis[0].bpm_method == previous.bpm_method
 
 
 @pytest.mark.parametrize("auto", [False, True])
@@ -273,6 +322,9 @@ def test_failed_same_source_beats_preserve_tempo_but_complete_key(
     controller.loader._analysis_request_ids[0] = 7
     completed = Mock(return_value=True)
     monkeypatch.setattr(controller.loader._key_analysis, "complete", completed)
+    # This beat-failure fixture has no automatic-map backend. A mock-valued
+    # version attribute otherwise records an equality probe as an audio call.
+    audio_engine_mock.AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION = 0
     audio_engine_mock.reset_mock()
     controller.loader._handle_task_success(
         0,

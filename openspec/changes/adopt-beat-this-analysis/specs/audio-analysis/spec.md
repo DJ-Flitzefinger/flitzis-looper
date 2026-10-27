@@ -764,7 +764,7 @@ KeyNet SHALL keep its own44100Hz frontend. Existing worker admission, source/edi
 fences, bounded preparation and actual process/reader retirement SHALL remain.
 The single Human RAW-review slot SHALL NOT be acquired by ordinary estimation.
 
-The preceding no-reanalysis-on-restore rule SHALL continue for current neural
+The preceding no-reanalysis-on-restore rule SHALL continue for successful current neural
 metadata, manual/TAP and Automatic timing. The focused delivery MAY refresh old
 unmarked Legacy tempo during restore, without KeyNet work. It SHALL merge only
 BPM/beat observations/method metadata, preserving key/history, A/GridOffset,
@@ -830,3 +830,31 @@ SHALL share this policy and its final BPM through the existing controller path.
 - **WHEN** the common long-span trajectory or adoption bounds fail
 - **THEN** the fractional base remains the final BPM
 - **AND** unavailable stable coverage remains inconclusive with diagnostics retained
+
+### Requirement: Stable Run Recovery Preserves Original Beat Counts
+The App `neural-stable-regions-v3` policy SHALL preserve successful v2 estimates
+and its integer counterprobe. Only when the existing fixed-window and whole-source
+fits cannot supply a BPM MAY it discover disjoint contiguous detector runs at
+adjacent-interval scale changes outside [2/3, 1.5]. Discovery SHALL NOT establish
+tempo or change event ordinals. Each eligible run SHALL pass the same minimum
+24 observations, 30-second retained span, residual, coverage and outlier guards.
+More than 64 eligible runs SHALL leave recovery unavailable rather than conceal
+competing evidence through truncation. Two disjoint agreeing strict fits within
+0.025% SHALL be required; conflicting stable tempo evidence SHALL prevent adoption.
+The longest compatible run SHALL supply the fractional base. Integer adoption
+SHALL still require the original stable common-middle fit and all v2 bounds.
+
+Schema3 SHALL retain complete observations and at most five regional witnesses;
+v1/v2 SHALL remain readable. A failed/invalid numeric cached v2 Legacy estimate
+with no manual override MAY receive one source/edit-fenced tempo-only upgrade.
+Unavailable completed v3 metadata MAY replace unavailable older method metadata
+on an already-invalid numeric cache, preserving its key, grid, cuts and wishes.
+It SHALL NOT trigger inference on every subsequent restore or replace a valid BPM.
+Unavailable numeric BPM SHALL display as unavailable, rather than as zero tempo.
+
+#### Scenario: Extra subdivisions break global detector ordinals
+- **GIVEN** two disjoint strict stable runs separated by extra detected subdivisions
+- **WHEN** all fixed-window and complete-source fits fail
+- **THEN** the stable-run fits may recover the scalar tempo without joining or renumbering events
+- **AND** absent common phase support leaves the integer probe inconclusive
+- **AND** no map, grid origin or Native phase certificate is created by this estimate

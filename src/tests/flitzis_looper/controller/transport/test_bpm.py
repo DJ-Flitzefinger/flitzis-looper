@@ -44,6 +44,21 @@ def test_effective_bpm_prefers_manual(controller: AppController) -> None:
     assert controller.transport.bpm.effective_bpm(sample_id) == 120.0
 
 
+@pytest.mark.parametrize("bpm", [0.0, -1.0, float("nan"), float("inf")])
+def test_unavailable_cached_bpm_is_not_displayed_as_zero(
+    controller: AppController,
+    bpm: float,
+) -> None:
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=bpm,
+        key="Gm",
+        beat_grid=BeatGrid(beats=[], downbeats=[], bars=[]),
+    )
+    assert controller.transport.bpm.effective_bpm(0) is None
+    controller.project.manual_bpm[0] = 94.0
+    assert controller.transport.bpm.effective_bpm(0) == 94.0
+
+
 def test_tap_bpm_computes_on_second_tap(
     controller: AppController, monkeypatch: pytest.MonkeyPatch, audio_engine_mock: Mock
 ) -> None:

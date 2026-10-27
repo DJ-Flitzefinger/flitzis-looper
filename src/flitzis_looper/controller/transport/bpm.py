@@ -145,7 +145,7 @@ class BpmController:
         if manual is not None:
             return float(manual)
         analysis = self._project.sample_analysis[sample_id]
-        return analysis.bpm if analysis is not None else None
+        return normalize_bpm(analysis.bpm) if analysis is not None else None
 
     def current_timing(self, sample_id: int) -> CurrentPadTiming | None:
         """Resolve one current period/origin/identity snapshot without caching history."""

@@ -48,9 +48,11 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     backend: Literal["beat_this"]
-    policy: Literal["neural-stable-regions-v1", "neural-stable-regions-v2"]
+    policy: Literal[
+        "neural-stable-regions-v1", "neural-stable-regions-v2", "neural-stable-regions-v3"
+    ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
     ]
@@ -97,7 +99,7 @@ class AppTempoMethod(BaseModel):
                 message = "Selected tempo must be one of the retained regions"
                 raise ValueError(message)
             expected = self.selected.bpm
-            if self.schema_version == 2:
+            if self.schema_version >= 2:
                 self._validate_integer_probe(duration)
                 probe = self.integer_probe
                 if probe is not None and probe.status == "supported_integer_estimate":
@@ -129,7 +131,7 @@ class AppTempoMethod(BaseModel):
             ):
                 message = "Tempo region differs from complete observation extent"
                 raise ValueError(message)
-            if self.schema_version == 2:
+            if self.schema_version >= 2:
                 excluded = region.excluded_raw_indices
                 available = sum(start <= t < end for t in self.raw_beats)
                 if (

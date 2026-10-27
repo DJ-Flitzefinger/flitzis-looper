@@ -201,7 +201,7 @@ class SampleAnalysis(BaseModel):
         method = self.bpm_method
         if (
             method is not None
-            and method.schema_version == 2
+            and method.schema_version >= 2
             and method.bpm is not None
             and method.bpm != self.bpm
         ):

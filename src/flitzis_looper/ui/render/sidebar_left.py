@@ -204,7 +204,7 @@ def format_manual_bpm_entry_value(bpm: float | None) -> str:
     if bpm is None:
         return ""
     value = float(bpm)
-    if not math.isfinite(value):
+    if not math.isfinite(value) or value <= 0:
         return ""
     return format_bpm_entry_value(value)
 

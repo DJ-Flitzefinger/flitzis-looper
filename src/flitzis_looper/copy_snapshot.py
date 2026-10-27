@@ -156,7 +156,7 @@ class MusicalSnapshotData(BaseModel):
             if method is not None:
                 parsed_method = AppTempoMethod.model_validate(method, strict=True)
                 if (
-                    parsed_method.schema_version == 2
+                    parsed_method.schema_version >= 2
                     and parsed_method.bpm is not None
                     and parsed_method.bpm != data.get("bpm")
                 ):

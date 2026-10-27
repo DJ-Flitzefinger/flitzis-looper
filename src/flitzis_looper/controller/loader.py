@@ -1512,6 +1512,13 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         except ValueError, TypeError:
             return
         if method.status not in {"estimated", "single_region_estimate"} or method.bpm is None:
+            if method.schema_version >= 3 and normalize_bpm(previous.bpm) is None:
+                # Record a completed unavailable upgrade without changing key,
+                # grid, cuts or numeric intent and retrying it on every restore.
+                self._project.sample_analysis[sample_id] = previous.model_copy(
+                    update={"bpm_method": method}
+                )
+                self._mark_project_changed()
             return
         self._project.sample_analysis[sample_id] = previous.model_copy(
             update={
@@ -1803,6 +1810,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             and (
                 previous.bpm_method is None
                 or previous.bpm_method.schema_version < 2
+                or (previous.bpm_method.schema_version < 3 and normalize_bpm(previous.bpm) is None)
                 or (previous.bpm_method.bpm is not None and previous.bpm_method.bpm != previous.bpm)
             )
             and self._project.manual_bpm[sample_id] is None
