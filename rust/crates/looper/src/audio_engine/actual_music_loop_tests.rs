@@ -16,6 +16,7 @@ mod maps {
 mod mapped_playback {
     use super::*;
     include!("actual_mapped_music_playback_tests.rs");
+    include!("actual_music_sync_toggle_tests.rs");
 }
 
 struct Path {

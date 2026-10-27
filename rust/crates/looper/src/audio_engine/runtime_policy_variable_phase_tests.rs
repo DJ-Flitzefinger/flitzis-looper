@@ -1068,6 +1068,12 @@ fn variable_identical_publications_and_same_snapshot_do_not_restart_the_frozen_p
 #[test]
 fn variable_explicit_partial_parent_off_local_optout_and_nullable_legacy_keep_distinct_phase_rules()
 {
+    for origin in [None, Some(47.0 / f64::from(RATE))] {
+        partial_parent_grid_case(origin);
+    }
+}
+
+fn partial_parent_grid_case(origin: Option<f64>) {
     for (policy, multi, parent, optout, expected_phase) in [
         (Some(wire(true, false, 3)), true, true, None, false),
         (Some(wire(false, true, 3)), true, true, None, false),
@@ -1077,6 +1083,7 @@ fn variable_explicit_partial_parent_off_local_optout_and_nullable_legacy_keep_di
         (None, true, true, None, false),
     ] {
         let mut fixture = VariablePath::small(1, 23);
+        fixture.phase_origins.fill(origin);
         fixture.install();
         fixture.publish(policy, multi, parent, optout, None);
         fixture.effect();
@@ -1084,7 +1091,9 @@ fn variable_explicit_partial_parent_off_local_optout_and_nullable_legacy_keep_di
             fixture.dry.path.voice(0).source_playback.is_mapped_phase(),
             expected_phase
         );
-        assert!(fixture.dry.path.feedback(0)["grid_phase_confirmed"].is_null());
+        let feedback = fixture.dry.path.feedback(0);
+        assert!(feedback.get("phase_read_confirmed").is_some());
+        assert_ne!(feedback["phase_read_confirmed"], true);
     }
     for (sync, realtime, expected_phase) in [
         (Some(true), None, true),
@@ -1092,6 +1101,7 @@ fn variable_explicit_partial_parent_off_local_optout_and_nullable_legacy_keep_di
         (None, None, false),
     ] {
         let mut fixture = VariablePath::small(1, 23);
+        fixture.phase_origins.fill(origin);
         fixture.publish(
             Some(json!({"schema_version":1,"sync":sync,"realtime_bpm":realtime,"revision":9})),
             true,

@@ -2432,3 +2432,43 @@ settings/private audio changed. Native delivery scratch was cleaned and fresh
 clean HEAD/tracking/actual-remote equality rechecked at10:16:15Z. The Human may use
 the launch-only `repo/start.bat` for this installed preview. All complete-SYNC and
 Human acceptance limits above remain open; this is restored Play availability.
+
+## Fresh scalar-to-SYNC diagnostic, 2026-10-27
+
+The Human reports that the fresh 64-bar/8-bar pair stays audibly synchronous with
+SYNC OFF, but enabling SYNC spoils it. This positive OFF result supersedes any
+claim that another SYNC test is needed to establish that particular milestone.
+The current SYNC implementation remains unsuitable for acceptance.
+
+The opt-in ignored `authorized_music_fresh_live_sync_toggle` regression preserves
+the fresh saved cuts, grid offsets, scalar BPM, original source/PCM identities and
+automatic map receipts. It tests both possible original BPM-Lock references;
+the Human's actual session reference was not captured. It first launches scalar
+resident cuts with SYNC OFF, then requests live ON without replacing those cuts.
+A separate stop/preparation/restart branch must not stand in for live adoption.
+All input and positive/negative output evidence is retained in the workspace's
+owned `test-artifacts/sync-toggle-human-fresh-20261027` block, outside Git.
+
+Both references refuse live mapped adoption once as `unsupported`; actual mode
+stays Legacy. Control/source continuity, finite output and current dry endpoint
+reads remain valid. The separate prepared restart does adopt Mapped, but drives
+the literal detector-beat pair toward 0.1463898571 quarter, compared with the OFF
+endpoint of 0.00757953 quarter. The maximum additional excursion is about
+0.13881033 quarter. The target equals the difference between the two map
+coordinates at the user grid origins; it is not independent musical evidence.
+These are two concrete open product defects, not a passing SYNC result.
+
+The diagnostic receipt stores the final complete mixed subchunk, which may start
+inside a callback. Its endpoint predicate therefore requires a nonempty current
+DryOutput interval ending at the actual callback boundary, with current source
+generation and no Key Lock, rather than claiming whole-callback coverage. The
+live-adoption and maximum 0.05-quarter excursion health gates remain strict and
+are expected RED for the current product. This opt-in diagnostic does not run in
+the ordinary suite and its expected failure is not hidden or reclassified as a
+passing musical test.
+
+The adjacent grid-origin lifecycle regressions pass in locked Release: 31 tests,
+6 opt-in ignored. They cover actual reads, pause/Hold, real versus no-op master
+effects, parent transitions, rejection and preserved launch/source ownership;
+they do not replace the fresh music diagnostic or Human listening acceptance.
+This delivery changes tests/evidence only, not production SYNC behavior.

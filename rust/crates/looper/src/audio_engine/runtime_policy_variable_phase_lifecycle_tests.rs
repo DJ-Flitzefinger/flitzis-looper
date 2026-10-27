@@ -2,11 +2,135 @@
 use super::*;
 use crate::audio_engine::source_reader::SourceReaderPeriod;
 
+fn assert_new_phase_read_required(fixture: &VariablePath) {
+    let feedback = fixture.dry.path.feedback(0);
+    assert!(feedback.get("phase_read_confirmed").is_some());
+    assert_ne!(feedback["phase_read_confirmed"], true);
+    assert!(!fixture.dry.path.voice(0).phase_read_current());
+}
+
+fn settle_explicit_grid(
+    fixture: &mut VariablePath,
+    snapshot: &RuntimePolicySnapshot,
+    anchor: OracleAnchor,
+) {
+    assert!(fixture.phase_origins[0].is_some());
+    let origin = snapshot
+        .prepared_map(0)
+        .unwrap()
+        .sync_witness()
+        .phase_origin
+        .unwrap();
+    assert_eq!(origin.frame_bits, 47_f64.to_bits());
+    assert_eq!(
+        origin.authority_revision,
+        fixture
+            .dry
+            .path
+            .source
+            .engine
+            .current_input_runtime_pad_binding(0)
+            .unwrap()
+            .unwrap()
+            .binding
+            .authority_revision
+    );
+    assert!(
+        fixture
+            .dry
+            .path
+            .voice(0)
+            .source_playback
+            .mapped_epoch()
+            .unwrap()
+            .is_absolute_grid_phase()
+    );
+    for attempt in 0..2048 {
+        let output = fixture.dry.path.render(512);
+        assert!(output.iter().all(|value| value.is_finite()));
+        assert!(output.iter().any(|value| *value != 0.0));
+        if fixture.dry.path.voice(0).phase_read_current() {
+            break;
+        }
+        assert!(
+            attempt < 2047,
+            "fixed explicit-grid lifecycle case did not settle"
+        );
+    }
+    assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], true);
+    let frame = fixture.dry.path.timeline.output_frame();
+    let expected = oracle_pairs(fixture, 0, anchor, &[frame]);
+    let pair = FractionalSourcePosition {
+        frame: expected[0].0,
+        fraction: f64::from_bits(expected[0].1),
+        seek_mode: ExplicitSeekMode::Normal,
+    };
+    assert_position(fixture.dry.path.voice(0).source_playback.position(), pair);
+    fixture.dry.path.render(1);
+    verify_source_frame(fixture, 0, pair, Some(frame));
+    assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], true);
+}
+
+fn requalify_explicit_grid(fixture: &mut VariablePath) {
+    let anchor = OracleAnchor::capture(fixture, 0);
+    let snapshot = fixture.effect();
+    assert_position(
+        fixture.dry.path.voice(0).source_playback.position(),
+        anchor.raw,
+    );
+    assert_new_phase_read_required(fixture);
+    settle_explicit_grid(fixture, &snapshot, anchor);
+}
+
+fn refresh_unchanged_phase_read(fixture: &mut VariablePath) {
+    let feedback = fixture.dry.path.feedback(0);
+    assert!(feedback.get("phase_read_confirmed").is_some());
+    assert_ne!(feedback["phase_read_confirmed"], true);
+    // A new admitted timing fence cannot borrow the previous public ACK,
+    // even when its numeric effect retains the exact programme and read.
+    assert!(fixture.dry.path.voice(0).phase_read_current());
+    let before = scalar_state(&fixture.dry.path);
+    let frame = fixture.dry.path.timeline.output_frame();
+    let raw = fixture.dry.path.voice(0).source_playback.position();
+    let timeline = fixture.dry.path.timeline;
+    fixture.effect();
+    unchanged(&fixture.dry.path, &before);
+    assert!(fixture.dry.path.timeline.matches_clock_epoch(&timeline));
+    assert_eq!(fixture.dry.path.timeline.output_frame(), frame);
+    assert_new_phase_read_required(fixture);
+    fixture.dry.path.render(1);
+    verify_source_frame(fixture, 0, raw, Some(frame));
+    assert!(fixture.dry.path.voice(0).phase_read_current());
+    assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], true);
+}
+
 fn verify_first_read(fixture: &VariablePath, id: usize, raw: FractionalSourcePosition) {
+    verify_source_frame(fixture, id, raw, None);
+}
+
+fn verify_source_frame(
+    fixture: &VariablePath,
+    id: usize,
+    raw: FractionalSourcePosition,
+    final_output_frame: Option<u64>,
+) {
     let voice = fixture.dry.path.voice(id);
     let mut history = SourceFeedSnapshot::new();
     assert!(voice.source_feed_history.capture_into(&mut history));
-    let span = history.spans().last().unwrap();
+    let original = history.spans().last().unwrap();
+    let span = if let Some(frame) = final_output_frame {
+        // Settled reads can coalesce with the preceding callback. Select the
+        // actual final frame; do not clear history or mutate the source clock.
+        let last = original
+            .slice(original.frames.checked_sub(1).unwrap(), 1)
+            .unwrap();
+        assert_eq!(last.playback.mapped_output_frame(), Some(frame));
+        last
+    } else {
+        // Preserve the original post-resume first-read boundary assertion.
+        assert_eq!(original.frames, 1);
+        original.slice(0, 1).unwrap()
+    };
     assert_eq!(span.frames, 1);
     assert_position(span.playback.position(), raw);
     let sample = voice.sample.as_ref().unwrap();
@@ -48,12 +172,22 @@ fn verify_first_read(fixture: &VariablePath, id: usize, raw: FractionalSourcePos
 
 #[test]
 fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_and_pcm() {
+    for origin in [None, Some(47.0 / f64::from(RATE))] {
+        full_fraction_pause_resume_grid_case(origin);
+    }
+}
+
+fn full_fraction_pause_resume_grid_case(origin: Option<f64>) {
     let mut fixture = VariablePath::new(
         &[(&[(0., 0.), (0.37, 1.), (0.91, 2.)], 43680, Some(2.))],
         24000.,
         12000,
     );
-    fixture.install();
+    fixture.phase_origins.fill(origin);
+    let (initial, anchors) = fixture.install();
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &initial, anchors[0]);
+    }
     assert!(
         fixture
             .dry
@@ -64,6 +198,15 @@ fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_
             .unwrap()
             .has_full_fraction_recovery()
     );
+    let original = fixture
+        .dry
+        .path
+        .voice(0)
+        .mapped_start
+        .as_ref()
+        .unwrap()
+        .original_launch()
+        .cloned();
     for pass in 0..3 {
         fixture.dry.path.render(17);
         let raw = fixture.dry.path.voice(0).source_playback.position();
@@ -71,6 +214,7 @@ fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_
         fixture.dry.path.source.engine.pause_sample(0).unwrap();
         fixture.drain();
         assert!(fixture.dry.path.voice(0).paused);
+        assert_new_phase_read_required(&fixture);
         let frozen = fixture.dry.path.voice(0).source_playback;
         fixture.dry.path.render(29);
         assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
@@ -85,11 +229,15 @@ fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_
             ordinary.original_scalar_domain(),
             frozen.original_scalar_domain()
         );
+        assert_new_phase_read_required(&fixture);
         fixture.dry.path.render(1);
         verify_first_read(&fixture, 0, raw);
         if pass == 0 {
             // A genuine global tempo effect uses a continuous master anchor;
             // it must preserve the newly rounded pair in ordinary FF mapping.
+            if origin.is_some() {
+                requalify_explicit_grid(&mut fixture);
+            }
             fixture.dry.path.render(11);
             let raw = fixture.dry.path.voice(0).source_playback.position();
             fixture
@@ -122,12 +270,36 @@ fn full_fraction_real_pause_resume_and_continuous_master_change_keep_first_pair_
                     .to_bits(),
                 (25000. / f64::from(RATE)).to_bits()
             );
+            if origin.is_some() {
+                // Independently specified command, checked against actual master above.
+                fixture.fpb = 25000.0;
+            }
+            assert_new_phase_read_required(&fixture);
             fixture.dry.path.render(1);
             verify_first_read(&fixture, 0, raw);
         }
-        fixture.effect();
+        let anchor = OracleAnchor::capture(&fixture, 0);
+        let phase = fixture.effect();
         assert!(fixture.dry.path.voice(0).source_playback.is_mapped_phase());
-        assert!(fixture.dry.path.feedback(0)["grid_phase_confirmed"].is_null());
+        assert_new_phase_read_required(&fixture);
+        assert!(match (
+            fixture
+                .dry
+                .path
+                .voice(0)
+                .mapped_start
+                .as_ref()
+                .unwrap()
+                .original_launch(),
+            original.as_ref()
+        ) {
+            (Some(now), Some(before)) => now.same_owner(before),
+            (None, None) => true,
+            _ => false,
+        });
+        if origin.is_some() {
+            settle_explicit_grid(&mut fixture, &phase, anchor);
+        }
     }
 }
 
@@ -186,8 +358,18 @@ fn variable_cancel_after_actual_phase_keeps_complete_snapshot_pin_and_pcm_withou
 
 #[test]
 fn variable_pause_noeffect_real_hold_and_live_resume_preserve_fine_cursor_then_requalify() {
+    for origin in [None, Some(47.0 / f64::from(RATE))] {
+        pause_hold_grid_case(origin);
+    }
+}
+
+fn pause_hold_grid_case(origin: Option<f64>) {
     let mut fixture = VariablePath::small(1, 23);
-    fixture.install();
+    fixture.phase_origins.fill(origin);
+    let (initial, anchors) = fixture.install();
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &initial, anchors[0]);
+    }
     fixture.dry.path.render(4_400);
     let raw = fixture.dry.path.voice(0).source_playback.position();
     assert_ne!(
@@ -204,6 +386,7 @@ fn variable_pause_noeffect_real_hold_and_live_resume_preserve_fine_cursor_then_r
             .unwrap()
             .ordinary_paused()
     );
+    assert_new_phase_read_required(&fixture);
     let paused = fixture.dry.path.voice(0).source_playback;
     fixture.dry.path.source.engine.pause_sample(0).unwrap();
     fixture.drain();
@@ -234,8 +417,13 @@ fn variable_pause_noeffect_real_hold_and_live_resume_preserve_fine_cursor_then_r
     assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
     fixture.dry.path.render(1);
     verify_first_read(&fixture, 0, raw);
-    fixture.effect();
+    let anchor = OracleAnchor::capture(&fixture, 0);
+    let phase = fixture.effect();
     assert!(fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+    assert_new_phase_read_required(&fixture);
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &phase, anchor);
+    }
     fixture.dry.path.render(19);
     let held_raw = fixture.dry.path.voice(0).source_playback.position();
     let ticket = Python::attach(|py| {
@@ -249,6 +437,7 @@ fn variable_pause_noeffect_real_hold_and_live_resume_preserve_fine_cursor_then_r
     });
     fixture.drain();
     assert!(ticket.is_current());
+    assert_new_phase_read_required(&fixture);
     fixture.dry.path.render(513);
     assert_position(
         fixture.dry.path.voice(0).source_playback.position(),
@@ -270,14 +459,28 @@ fn variable_pause_noeffect_real_hold_and_live_resume_preserve_fine_cursor_then_r
         held_raw,
     );
     assert!(!fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+    assert_new_phase_read_required(&fixture);
     fixture.dry.path.render(1);
     verify_first_read(&fixture, 0, held_raw);
+    if origin.is_some() {
+        requalify_explicit_grid(&mut fixture);
+    }
 }
 
 #[test]
 fn variable_real_master_effect_recovers_current_fraction_but_true_noop_retains_programme() {
+    for origin in [None, Some(47.0 / f64::from(RATE))] {
+        master_effect_grid_case(origin);
+    }
+}
+
+fn master_effect_grid_case(origin: Option<f64>) {
     let mut fixture = VariablePath::small(2, 23);
-    fixture.install();
+    fixture.phase_origins.fill(origin);
+    let (initial, anchors) = fixture.install();
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &initial, anchors[0]);
+    }
     fixture.dry.path.render(4400);
     let clocks = scalar_state(&fixture.dry.path);
     fixture
@@ -290,6 +493,9 @@ fn variable_real_master_effect_recovers_current_fraction_but_true_noop_retains_p
     fixture.drain();
     fixture.dry.path.render(0);
     unchanged(&fixture.dry.path, &clocks);
+    if origin.is_some() {
+        refresh_unchanged_phase_read(&mut fixture);
+    }
     let before = scalar_state(&fixture.dry.path);
     let timeline = fixture.dry.path.timeline;
     let ownership = fixture
@@ -376,6 +582,27 @@ fn variable_real_master_effect_recovers_current_fraction_but_true_noop_retains_p
     );
     assert_eq!(rejected.effect.effective, rate_before.effect.effective);
     assert_eq!(rejected.master_provenance, rate_before.master_provenance);
+    if origin.is_some() {
+        let request_revision = ownership.global_rate_status.requested_revision();
+        // Rejection updates the rate receipt, not the last audio SourceSync
+        // snapshot. Observe a real callback before checking its new fence.
+        let frame = fixture.dry.path.timeline.output_frame();
+        let raw = fixture.dry.path.voice(0).source_playback.position();
+        fixture.dry.path.render(1);
+        verify_source_frame(&fixture, 0, raw, Some(frame));
+        refresh_unchanged_phase_read(&mut fixture);
+        assert_eq!(
+            ownership.global_rate_status.requested_revision(),
+            request_revision
+        );
+        let after = ownership.global_rate_status.read().unwrap();
+        assert_eq!(after.effect.state, rejected.effect.state);
+        assert_eq!(after.effect.error, rejected.effect.error);
+        assert_eq!(after.effect.requested, rejected.effect.requested);
+        assert_eq!(after.effect.effective, rejected.effect.effective);
+        assert_eq!(after.master_provenance, rejected.master_provenance);
+        assert_eq!(fixture.dry.path.feedback(0)["phase_read_confirmed"], true);
+    }
 }
 
 #[test]
@@ -468,8 +695,18 @@ fn variable_actual_general_physical_and_declared_routes_keep_genuine_birth_domai
 
 #[test]
 fn variable_parent_and_intent_aba_stales_pending_birth_and_preserves_actual_cursor() {
+    for origin in [None, Some(47.0 / f64::from(RATE))] {
+        parent_aba_grid_case(origin);
+    }
+}
+
+fn parent_aba_grid_case(origin: Option<f64>) {
     let mut fixture = VariablePath::small(1, 23);
-    fixture.install();
+    fixture.phase_origins.fill(origin);
+    let (initial, anchors) = fixture.install();
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &initial, anchors[0]);
+    }
     fixture.dry.path.render(67);
     let raw = fixture.dry.path.voice(0).source_playback.position();
     let future = fixture
@@ -492,6 +729,7 @@ fn variable_parent_and_intent_aba_stales_pending_birth_and_preserves_actual_curs
     fixture.publish(Some(wire(false, false, 3)), true, true, None, None);
     assert_eq!(fixture.effect().observation().unwrap().state, "applied");
     assert!(!fixture.dry.path.voice(0).source_playback.is_mapped());
+    assert_new_phase_read_required(&fixture);
     assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
     fixture.dry.intent_revision = 9;
     fixture.publish(Some(wire(true, true, 4)), true, true, None, None);
@@ -507,10 +745,16 @@ fn variable_parent_and_intent_aba_stales_pending_birth_and_preserves_actual_curs
     let mode = fixture.effect();
     assert_eq!(mode.observation().unwrap().state, "applied");
     assert!(!fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+    assert_new_phase_read_required(&fixture);
     assert_position(fixture.dry.path.voice(0).source_playback.position(), raw);
     fixture.dry.path.render(1);
-    fixture.effect();
+    let anchor = OracleAnchor::capture(&fixture, 0);
+    let phase = fixture.effect();
     assert!(fixture.dry.path.voice(0).source_playback.is_mapped_phase());
+    assert_new_phase_read_required(&fixture);
+    if origin.is_some() {
+        settle_explicit_grid(&mut fixture, &phase, anchor);
+    }
 }
 
 #[test]
