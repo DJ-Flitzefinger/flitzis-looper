@@ -13,6 +13,13 @@ short original can use a declared shorter check; a short resident loop does not
 shorten an available full song. Unchecked estimates remain estimates. These finite
 checks do not prove an exact integer tempo, correct beat labels or musical alignment.
 
+The sidebar shows the last confirmed BPM inference device separately from BPM and
+STEM processing stage. New analyses can use CUDA with one fresh CPU fallback when
+CUDA execution fails. "CPU (CUDA fallback)" identifies that fallback; an old cache
+without a device receipt shows "Device unknown". CUDA availability or a queued job
+alone does not mean that a GPU has processed the song. STEM inference device
+remains visible while the later alignment stage runs.
+
 | Intended use | Controls | Source map |
 | --- | --- | --- |
 | Constant rate playback with accurate BPM | Multi Loop and BPM Lock; SYNC off | No map required. Each PAD keeps its own loop markers and BPM. |

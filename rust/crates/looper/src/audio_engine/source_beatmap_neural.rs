@@ -5,7 +5,7 @@ use crate::audio_engine::analysis_pcm::MONO_RULE;
 use crate::audio_engine::complete_context::{CompleteSourceReader, NativeAnalysisOwner};
 use crate::audio_engine::source_beatmap_capture::{
     RawCapture,
-    beat_this::{BeatThisRawData, BeatThisSourceInput, pinned_model},
+    beat_this::{BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model},
 };
 use pyo3::prelude::*;
 use pyo3::types::PyString;
@@ -108,12 +108,11 @@ pub(in crate::audio_engine) fn invoke_worker(
     installation_root: &str,
     probe: Py<PyAny>,
 ) -> Result<(BeatThisRawData, usize), String> {
-    let expected = json!({"schema_version":1,"identity":identity,
+    let mut expected = json!({"schema_version":1,"identity":identity,
         "pcm":{"path":path,"sample_rate_hz":source.source_sample_rate_hz,
             "frame_count":source.source_frame_count,"origin_seconds":0.0,
-            "dtype":"float32-le","channels":1},"model":pinned_model()})
-    .to_string();
-    if expected.len() > 32 * 1024 {
+            "dtype":"float32-le","channels":1},"model":pinned_model()});
+    if expected.to_string().len() > 32 * 1024 {
         return Err("Beat This request byte limit exceeded".into());
     }
     Python::attach(|py| {
@@ -143,7 +142,23 @@ pub(in crate::audio_engine) fn invoke_worker(
             return Err("Beat This bridge response byte limit exceeded".into());
         }
         let length = encoded.len();
-        BeatThisRawData::from_worker(source, &expected, encoded).map(|raw| (raw, length))
+        // The bridge resolves its configuration once. Only its closed protocol
+        // discriminator chooses a known profile; all expected request fields
+        // below remain derived from this Native source and request owner.
+        #[derive(serde::Deserialize)]
+        struct BridgeVersion {
+            schema_version: u32,
+        }
+        let version: BridgeVersion = serde_json::from_str(encoded).map_err(|e| e.to_string())?;
+        if version.schema_version == 2 {
+            expected["schema_version"] = 2.into();
+            expected["model"] = pinned_cuda_model();
+            expected["execution_policy"] = "auto".into();
+        } else if version.schema_version != 1 {
+            return Err("unknown Beat This worker profile".into());
+        }
+        BeatThisRawData::from_worker(source, &expected.to_string(), encoded)
+            .map(|raw| (raw, length))
     })
 }
 

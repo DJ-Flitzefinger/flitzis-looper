@@ -9,6 +9,7 @@ import pytest
 from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.models import PadContentIdentity
+from flitzis_looper.stem_execution import StemExecution
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket, FakeProjectAssetLease
 
@@ -92,6 +93,35 @@ def _resolve_candidates(
     assert job.generation_fingerprint is not None
 
 
+def test_coalesced_alignment_retains_device_for_current_shared_subscribers(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    tasks, _tickets = _shared(controller, audio_engine_mock, tmp_path)
+    assert controller.stems.generate_stems_async(0)
+    assert controller.stems.generate_stems_async(215)
+    _resolve_candidates(controller, tasks, 2)
+    job = next(iter(controller.stems._jobs.values()))
+    execution = StemExecution(backend="demucs", model_name="htdemucs", device="cuda")
+    event = stems_module._StemBackendEvent(
+        job.request.sample_id,
+        job.request.source_version,
+        job.source,
+        job.request.cache_dir,
+        "progress",
+        percent=0.8,
+        execution=execution,
+    )
+    first = controller.stems._capture_generation_delivery(event, job)
+    assert first is not None
+    last = controller.stems._capture_generation_delivery(
+        replace(event, percent=0.85, stage="Aligning stem cache", execution=None), job
+    )
+    assert last is not None
+    assert last.event.execution == execution
+    controller.stems._dispatch_job_event(last.event, job, delivery=last)
+    assert all(controller.session.stem_generation_execution.get(i) == execution for i in (0, 215))
+
+
 def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -99,6 +129,8 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     tmp_path: Path,
 ) -> None:
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
+    execution = StemExecution(backend="demucs", model_name="htdemucs", device="cuda")
+    stem_backend.result = replace(stem_backend.result, execution=execution)
     assert controller.stems.generate_stems_async(0)
     assert controller.stems.generate_stems_async(215)
     assert len(tasks) == len(controller.stems._jobs) == 2
@@ -116,6 +148,7 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     assert not last.available
     assert entries[0] is not entries[1]
     assert first.cache_dir == last.cache_dir
+    assert first.execution == last.execution == execution
     assert first.fingerprint_schema == last.fingerprint_schema == "effective-stem-v3"
     assert first.generation_fingerprint == last.generation_fingerprint
     assert first.generation_fingerprint is not None
@@ -124,6 +157,7 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     tickets[1].status = "accepted"
     controller.stems.on_frame_render()
     assert controller.stems.stems_available(215)
+    assert controller.stems.stem_execution(215) == execution
     assert not controller.stems.stems_available(0)
     tickets[0].status = "rejected"
     controller.stems.on_frame_render()

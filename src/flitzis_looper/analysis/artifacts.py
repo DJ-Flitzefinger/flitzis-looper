@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 from pydantic import ConfigDict, Field, TypeAdapter
 
@@ -15,6 +15,7 @@ from flitzis_looper.analysis.contracts import BeatModelIdentity
 
 if TYPE_CHECKING:
     from threading import Event
+
 
 SOURCE_REVISION = "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c"
 FRONTEND_ID = "beat-this-1.1.0-soxr-hq-logmel-v1"
@@ -212,7 +213,15 @@ def environment_files(installed: Path) -> list[Path]:
     return files
 
 
-def _verify_environment_files(installed: Path, manifest: InstalledManifest, cancel: Event) -> None:
+class _EnvironmentReceipt(Protocol):
+    @property
+    def environment_files(self) -> dict[str, str]: ...
+
+    @property
+    def environment(self) -> EnvironmentManifest: ...
+
+
+def verify_environment_files(installed: Path, manifest: _EnvironmentReceipt, cancel: Event) -> None:
     files = manifest.environment_files
     required = {".venv/pyvenv.cfg", ".venv/Scripts/python.exe"}
     actual = {path.relative_to(installed).as_posix() for path in environment_files(installed)}
@@ -245,6 +254,10 @@ def _verify_environment_files(installed: Path, manifest: InstalledManifest, canc
     if packages != manifest.environment.packages:
         msg = "installation_packages_mismatch"
         raise ValueError(msg)
+
+
+# Keep the existing private seam for protocol-one callers and compatibility tests.
+_verify_environment_files = verify_environment_files
 
 
 def _read_distribution(path: Path, packages: dict[str, str]) -> None:

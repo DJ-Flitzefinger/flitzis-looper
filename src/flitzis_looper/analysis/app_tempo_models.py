@@ -4,7 +4,7 @@ import math
 from itertools import pairwise
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from flitzis_looper.analysis.app_tempo_probe import (
     AdaptiveTempoProbe,
@@ -12,6 +12,11 @@ from flitzis_looper.analysis.app_tempo_probe import (
     TempoRegion,
     historical_probe,
     validate_adaptive_probe,
+)
+from flitzis_looper.analysis.execution import (
+    ACTUAL_EXECUTION_ADAPTER,
+    ActualExecutionReceipt,
+    validate_execution,
 )
 
 _Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -48,9 +53,24 @@ class AppTempoMethod(BaseModel):
     frame_count: Annotated[int, Field(gt=0, le=2**63 - 1)]
     raw_beats: Annotated[list[_Time], Field(max_length=250_000)]
     raw_downbeats: Annotated[list[_Time], Field(max_length=250_000)]
+    execution: ActualExecutionReceipt | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("execution", mode="before")
+    @classmethod
+    def _load_execution(cls, value: object) -> ActualExecutionReceipt | None:
+        # Copy snapshots validate Python dumps strictly. Reconstruct this embedded
+        # dataclass without overriding its explicit strict fields or extra guard.
+        return None if value is None else ACTUAL_EXECUTION_ADAPTER.validate_python(value)
 
     @model_validator(mode="after")
     def _coherent_estimate(self) -> AppTempoMethod:
+        if self.execution is not None:
+            if self.schema_version != 4:
+                message = "Execution receipts require version four tempo metadata"
+                raise ValueError(message)
+            validate_execution(self.execution)
         duration = self.frame_count / self.sample_rate_hz
         self._validate_policy_version()
         self._validate_observations(duration)

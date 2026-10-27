@@ -417,6 +417,10 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     if imgui.button("Clear Manual BPM", (-1, 0)):
         ctx.audio.pads.clear_manual_bpm(info.pad_id)
 
+    imgui.text_colored(
+        TEXT_MUTED_RGBA, f"BPM inference: {ctx.state.pads.bpm_execution_label(info.pad_id)}"
+    )
+
 
 def _render_bpm_scale(ctx: UiContext, pad_id: int, effective_bpm: float | None) -> None:
     imgui.begin_disabled(effective_bpm is None)
@@ -1090,7 +1094,8 @@ def _stem_progress_text(ctx: UiContext, pad_id: int) -> str:
     stage, progress = ctx.state.stems.stem_generation_status(pad_id)
     stage = stage or "Generating stems"
     percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
-    return " ".join([part for part in (stage, percent_text) if part])
+    device = ctx.state.stems.execution_label(pad_id)
+    return " ".join([part for part in (stage, percent_text, f"· Inference: {device}") if part])
 
 
 def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
@@ -1104,6 +1109,9 @@ def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
     if ctx.state.stems.stems_available(info.pad_id):
         _labeled_value_row("Stems", "Available", avail_x=info.avail_x)
+        imgui.text_colored(
+            TEXT_MUTED_RGBA, f"Stem inference: {ctx.state.stems.execution_label(info.pad_id)}"
+        )
         return
 
     blocker = ctx.state.stems.stem_generation_block_reason(info.pad_id)

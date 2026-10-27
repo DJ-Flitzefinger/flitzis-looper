@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from threading import Event, current_thread, main_thread
 from typing import TYPE_CHECKING
 
-from flitzis_looper.analysis.artifacts import verify_installation
 from flitzis_looper.analysis.contracts import (
     BeatComponentResult,
     BeatModelIdentity,
@@ -15,6 +14,14 @@ from flitzis_looper.analysis.contracts import (
     WorkerLimits,
     decode_response,
     encode_request,
+)
+from flitzis_looper.analysis.cuda_artifacts import verify_worker_installation as verify_installation
+from flitzis_looper.analysis.execution import (
+    CudaBeatComponentResult,
+    CudaBeatModelIdentity,
+    CudaBeatWorkerRequest,
+    decode_cuda_response,
+    encode_cuda_request,
 )
 from flitzis_looper.analysis.process import WorkerCommand, run_process
 
@@ -32,7 +39,7 @@ class WorkerConfiguration:
     script: Path
     checkpoint: Path
     scratch_dir: Path
-    model: BeatModelIdentity
+    model: BeatModelIdentity | CudaBeatModelIdentity
     manifest: Path | None = None
 
 
@@ -103,7 +110,10 @@ class BeatWorkerAdapter:
         return BeatComponentResult(request.identity, request.model, "ready", "ready", predictions)
 
     def _preflight(
-        self, configuration: WorkerConfiguration, request: BeatWorkerRequest, cancel: Event
+        self,
+        configuration: WorkerConfiguration,
+        request: BeatWorkerRequest | CudaBeatWorkerRequest,
+        cancel: Event,
     ) -> str | None:
         if configuration.model != request.model:
             return "model_identity_mismatch"
@@ -160,6 +170,64 @@ class BeatWorkerAdapter:
         if digest != configuration.model.sha256:
             return "checkpoint_hash_mismatch"
         return "cancelled" if cancel.is_set() else None
+
+    def run_cuda(self, request: CudaBeatWorkerRequest, cancel: Event) -> CudaBeatComponentResult:
+        """Use the same admitted process and retirement path with protocol two metadata."""
+        if current_thread() is main_thread():
+            msg = "beat analysis must run on a background supervisor"
+            raise RuntimeError(msg)
+        if cancel.is_set():
+            return CudaBeatComponentResult(
+                request.identity, request.model, "cancelled", "cancelled"
+            )
+        try:
+            encoded = encode_cuda_request(request, self._limits)
+        except OSError, ValueError:
+            return CudaBeatComponentResult(
+                request.identity, request.model, "failed", "invalid_pcm_request"
+            )
+        configuration = self._configuration
+        reason = (
+            "missing_worker"
+            if configuration is None
+            else self._preflight(configuration, request, cancel)
+        )
+        if reason is not None or configuration is None:
+            status: ComponentStatus = "cancelled" if reason == "cancelled" else "unavailable"
+            return CudaBeatComponentResult(
+                request.identity, request.model, status, reason or "missing_worker"
+            )
+        command = WorkerCommand(
+            configuration.interpreter,
+            configuration.script,
+            configuration.checkpoint,
+            configuration.scratch_dir,
+        )
+        outcome = run_process(command, encoded, cancel, self._limits, self.retired)
+        if outcome.reason != "ok" or cancel.is_set():
+            reason = "cancelled" if cancel.is_set() else outcome.reason
+            status = "cancelled" if reason == "cancelled" else "failed"
+            return CudaBeatComponentResult(
+                request.identity,
+                request.model,
+                status,
+                reason,
+                resources_released=outcome.resources_released,
+            )
+        try:
+            response = decode_cuda_response(outcome.response, request, self._limits)
+        except ValueError:
+            return CudaBeatComponentResult(
+                request.identity, request.model, "failed", "invalid_worker_response"
+            )
+        return CudaBeatComponentResult(
+            request.identity,
+            request.model,
+            "ready",
+            "ready",
+            response.predictions,
+            execution=response.execution,
+        )
 
     @staticmethod
     def _result(

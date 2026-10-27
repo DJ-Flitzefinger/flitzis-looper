@@ -828,6 +828,17 @@ def check_source_beatmap_editor_api(native_module: object) -> None:
             )
 
 
+def check_beat_this_execution_api(engine_type: object, installation_root: Path) -> None:
+    """Only a selected CUDA profile requires the new Native execution protocol."""
+    if not (installation_root / "current.json").is_file():
+        return
+    execution = importlib.import_module("flitzis_looper.analysis.execution")
+    setup = importlib.import_module("flitzis_looper.analysis.setup")
+    configuration = setup.load_worker_configuration(installation_root, installation_root.parent)
+    if isinstance(configuration.model, execution.CudaBeatModelIdentity):
+        execution.require_cuda_native_capability(engine_type)
+
+
 def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
@@ -846,6 +857,9 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
     check_source_beatmap_editor_api(native_module)
+    check_beat_this_execution_api(
+        native_module.AudioEngine, checkout.parent / "analysis-runtime" / "beat-this"
+    )
     check_ordinary_transport_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")

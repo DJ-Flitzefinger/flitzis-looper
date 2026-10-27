@@ -11,10 +11,15 @@ from tempfile import TemporaryDirectory
 from threading import Event
 from typing import TYPE_CHECKING
 
-from flitzis_looper.analysis.process import OwnedCommandResult, run_owned_command
+from flitzis_looper.analysis.process import (
+    IndependentReceipts,
+    OwnedCommandResult,
+    run_owned_command,
+)
 from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.encoder_provenance import ENCODER_RESULT
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
+from flitzis_looper.stem_execution import STEM_EXECUTION_RESULT
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -32,7 +37,11 @@ class _StemCommandScope:
 _COMMAND_SCOPE: ContextVar[_StemCommandScope | None] = ContextVar(
     "stem-command-scope", default=None
 )
-_RECEIPT_PREFIXES = (ENCODER_RESULT.encode("ascii"), BS_INPUT_RESULT.encode("ascii"))
+_RECEIPT_PREFIXES = (
+    ENCODER_RESULT.encode("ascii"),
+    BS_INPUT_RESULT.encode("ascii"),
+    STEM_EXECUTION_RESULT.encode("ascii"),
+)
 _OWN_INFERENCE_MODULES = ("flitzis_looper.demucs_streaming", "flitzis_bs_roformer")
 
 
@@ -93,7 +102,7 @@ def _run_owned(
         env=env,
         cancel=cancel,
         retired=Event(),
-        receipt_prefixes=_RECEIPT_PREFIXES,
+        receipt_prefixes=IndependentReceipts(_RECEIPT_PREFIXES),
         request_abort=request_abort,
         abort_grace_seconds=0.4,
         stop_reason=stop_reason,

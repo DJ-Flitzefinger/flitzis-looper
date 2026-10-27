@@ -27,6 +27,7 @@ from flitzis_looper.controller.stem_generation import (
     detect_torch_cuda_available,
     run_command,
 )
+from flitzis_looper.stem_execution import completed_execution, report_execution
 
 __all__ = ["BsRoformerStemGenerationBackend", "verify_model_assets"]
 
@@ -90,6 +91,14 @@ class BsRoformerStemGenerationBackend:
                         progress(0.05, "CUDA failed; retrying same BS-RoFormer model on CPU")
                         continue
                     raise StemGenerationError(diagnostic)
+                execution = completed_execution(
+                    result.stdout,
+                    backend="bs-roformer",
+                    model_name=MODEL_NAME,
+                    device=device,
+                    cpu_fallback=cuda_error is not None,
+                )
+                report_execution(progress, execution)
                 _write_project_cache_artifacts(
                     output_root=output,
                     cache_dir=request.cache_dir,
@@ -110,6 +119,7 @@ class BsRoformerStemGenerationBackend:
                 artifact_count=5,
                 diagnostic=diagnostic[:1000],
                 decoder_verified=decoder_verified,
+                execution=execution,
             )
         msg = "BS-RoFormer did not run"
         raise StemGenerationError(msg)

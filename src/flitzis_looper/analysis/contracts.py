@@ -161,8 +161,15 @@ def decode_response(
     if response.identity != request.identity or response.model != request.model:
         msg = "response_identity_mismatch"
         raise ValueError(msg)
-    predictions = response.predictions
-    duration = request.pcm.frame_count / request.pcm.sample_rate_hz
+    validate_predictions(response.predictions, request.pcm, limits)
+    return response.predictions
+
+
+def validate_predictions(
+    predictions: BeatPredictions, pcm: MonoPcmInput, limits: WorkerLimits
+) -> None:
+    """Apply the same source-relative numeric guards to both finite worker protocols."""
+    duration = pcm.frame_count / pcm.sample_rate_hz
     for times in (predictions.beat_seconds, predictions.downbeat_seconds):
         if len(times) > limits.max_prediction_count:
             msg = "prediction_limit"
@@ -179,7 +186,6 @@ def decode_response(
     if len(predictions.beat_logits) > limits.max_prediction_count:
         msg = "logit_limit"
         raise ValueError(msg)
-    return predictions
 
 
 def validate_component_result(

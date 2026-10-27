@@ -1,3 +1,13 @@
+## Latest direct Human download rule — 2026-10-27
+
+Slow Internet is not a reason to cancel downloads or package installation after
+an elapsed-time budget. Do not impose a total download/install deadline, including
+through parent job supervision. Preserve and resume available download bytes,
+then verify the pinned hash before use, instead of discarding partial transfers.
+Explicit Human steering remains effective. This direct instruction supersedes
+older finite download/install budgets; local inspection, inference, realtime,
+source/OwnACK and retirement safety guards remain unchanged.
+
 ## Latest direct Human clarification — 2026-10-24: analysis, BeatThis and Human testing
 
 Read original-workspace codex-meta/handoff/human-astra-sync-clarification-20261024.txt,

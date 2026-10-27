@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from functools import partial
 from importlib import import_module
 from pathlib import Path
@@ -36,6 +37,7 @@ from flitzis_looper.stem_cancellation import (
     tool_environment,
     wait_cancellable,
 )
+from flitzis_looper.stem_execution import completed_execution_line
 
 if TYPE_CHECKING:
     from argparse import Namespace
@@ -334,8 +336,14 @@ class _DemucsApply(Protocol):
     apply_model: _ApplyModel
 
 
+@dataclass
+class _ExecutionObservation:
+    model_name: str = ""
+    devices: set[str] = field(default_factory=set)
+
+
 @contextmanager
-def _cancellable_cli(cancellation: StemCancellation) -> Iterator[None]:
+def _cancellable_cli(cancellation: StemCancellation) -> Iterator[_ExecutionObservation]:
     apply = cast("_DemucsApply", import_module("demucs.apply"))
     audio = cast("_DemucsAudio", import_module("demucs.audio"))
     original_model = _separate.get_model_from_args
@@ -344,10 +352,12 @@ def _cancellable_cli(cancellation: StemCancellation) -> Iterator[None]:
     original_apply = apply.apply_model
     original_audio = _separate.save_audio
     original_tools = audio.sp
+    execution = _ExecutionObservation()
 
     def load_model(args: Namespace) -> Module:
         cancellation.checkpoint("before_model_load")
         model = original_model(args)
+        execution.model_name = str(getattr(args, "name", ""))
         cancellation.checkpoint("after_model_load")
         return model
 
@@ -360,6 +370,10 @@ def _cancellable_cli(cancellation: StemCancellation) -> Iterator[None]:
     def apply_model(*args: object, **kwargs: object) -> Tensor:
         cancellation.checkpoint("before_model_batch")
         prediction = original_apply(*args, **kwargs)
+        # Stock Demucs moves computation to this explicit device, and may return
+        # the completed PCM on CPU. Failed calls never confirm an execution.
+        device = str(kwargs.get("device", "unknown")).split(":", 1)[0]
+        execution.devices.add(device)
         cancellation.checkpoint("after_model_batch")
         return prediction
 
@@ -370,7 +384,7 @@ def _cancellable_cli(cancellation: StemCancellation) -> Iterator[None]:
     _separate.save_audio = partial(save_audio, checkpoint=cancellation.checkpoint)
     audio.sp = _InputTools(cancellation.checkpoint)
     try:
-        yield
+        yield execution
     finally:
         _separate.get_model_from_args = original_model
         _separate.load_track = original_track
@@ -384,10 +398,20 @@ def main() -> None:
     """Execute Demucs' original CLI/model after installing the scoped output adapter."""
     cancellation = StemCancellation.from_environment()
     cancellation.checkpoint("before_model_stage")
-    with _cancellable_cli(cancellation):
+    with _cancellable_cli(cancellation) as execution:
         _separate.main()
     cancellation.checkpoint("before_completion_receipt")
+    if (
+        len(execution.devices) == 1
+        and execution.devices <= {"cpu", "cuda"}
+        and execution.model_name
+    ):
+        sys.stdout.write(
+            completed_execution_line("demucs", execution.model_name, next(iter(execution.devices)))
+            + "\n"
+        )
     sys.stdout.write(encoder_completion_line() + "\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":

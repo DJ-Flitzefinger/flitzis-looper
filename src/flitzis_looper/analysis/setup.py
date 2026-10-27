@@ -18,6 +18,21 @@ from pydantic import ConfigDict, TypeAdapter
 
 from flitzis_looper.analysis import artifacts
 from flitzis_looper.analysis.acquisition import acquire_to_quarantine, copy_to_quarantine
+from flitzis_looper.analysis.cuda_artifacts import (
+    CUDA_MANIFEST_ADAPTER,
+    CUDA_WORKER_FILES,
+    CudaInstalledManifest,
+    WorkerProfile,
+    cuda_model_identity,
+    cuda_source_directory,
+    read_installed_manifest,
+    validate_cuda_environment,
+    verify_worker_installation,
+)
+from flitzis_looper.analysis.execution import (
+    CudaBeatModelIdentity,
+    require_cuda_native_capability,
+)
 from flitzis_looper.analysis.worker import WorkerConfiguration
 
 
@@ -39,14 +54,21 @@ def install_worker(
     *,
     checkpoint_file: Path | None = None,
     offline: bool = False,
+    profile: WorkerProfile = "legacy-cpu-v1",
+    stage_only: bool = False,
 ) -> WorkerConfiguration:
-    """Explicitly provision and atomically select one fully verified isolated installation.
+    """Provision a verified installation, optionally leaving the active pointer untouched.
 
     Existing installations are retained, including when download, validation or setup
     fails. The optional local checkpoint supports fully offline setup with a populated
     uv cache. No analysis call invokes this operation.
     """
     _validate_setup_paths(install_dir, scratch_dir, checkpoint_file)
+    if profile not in {"legacy-cpu-v1", "cuda-auto-v2"}:
+        msg = "unknown_worker_profile"
+        raise ValueError(msg)
+    if profile == "cuda-auto-v2" and not stage_only:
+        require_cuda_native_capability()
     if offline and checkpoint_file is None:
         msg = "offline setup requires an explicit local checkpoint file"
         raise ValueError(msg)
@@ -66,14 +88,90 @@ def install_worker(
         ):
             msg = "checkpoint_hash_mismatch"
             raise ValueError(msg)
-        source = artifacts.worker_source_directory()
-        for name in artifacts.WORKER_FILES:
+        source = (
+            cuda_source_directory()
+            if profile == "cuda-auto-v2"
+            else artifacts.worker_source_directory()
+        )
+        files = CUDA_WORKER_FILES if profile == "cuda-auto-v2" else artifacts.WORKER_FILES
+        for name in files:
             shutil.copyfile(source / name, staging / name)
         _provision_environment(staging, scratch_dir, offline=offline)
-        manifest = _record_installation(staging)
-        artifacts.verify_installation(staging / "manifest.json", manifest.model, Event())
-        _publish_installation(staging, install_dir)
-    return load_worker_configuration(install_dir, scratch_dir)
+        manifest = (
+            _record_cuda_installation(staging)
+            if profile == "cuda-auto-v2"
+            else _record_installation(staging)
+        )
+        verify_worker_installation(staging / "manifest.json", manifest.model, Event())
+        installed = _retain_installation(staging, install_dir)
+        if stage_only:
+            configuration = load_staged_worker_configuration(install_dir, installed, scratch_dir)
+        else:
+            configuration = activate_worker_installation(install_dir, installed, scratch_dir)
+    return configuration
+
+
+def load_staged_worker_configuration(
+    install_dir: Path, installation: Path, scratch_dir: Path
+) -> WorkerConfiguration:
+    """Verify one inactive direct child without reading or changing current.json."""
+    _validate_setup_paths(install_dir, scratch_dir, None)
+    installed = _validated_installation_child(install_dir, installation)
+    manifest_path = installed / "manifest.json"
+    manifest = read_installed_manifest(manifest_path)
+    verify_worker_installation(manifest_path, manifest.model, Event())
+    checkpoint = installed / "final0.ckpt"
+    expected = artifacts.ACCEPTED_ARTIFACT
+    if (
+        checkpoint.stat().st_size != expected.size_bytes
+        or artifacts.file_digest(checkpoint, max_bytes=expected.size_bytes) != expected.sha256
+    ):
+        message = "checkpoint_hash_mismatch"
+        raise ValueError(message)
+    return _configuration_for_installation(installed, scratch_dir, manifest)
+
+
+def activate_worker_installation(
+    install_dir: Path, installation: Path, scratch_dir: Path
+) -> WorkerConfiguration:
+    """Reverify a retained known installation and atomically select that exact child."""
+    configuration = load_staged_worker_configuration(install_dir, installation, scratch_dir)
+    manifest = configuration.manifest
+    assert manifest is not None
+    pointer = _InstallationPointer(1, manifest.parent.name, artifacts.file_digest(manifest))
+    _write_installation_pointer(
+        install_dir, pointer, cuda=isinstance(configuration.model, CudaBeatModelIdentity)
+    )
+    return configuration
+
+
+def _validated_installation_child(install_dir: Path, installation: Path) -> Path:
+    valid_name = re.fullmatch(r"installation-[0-9a-f]{32}", installation.name) is not None
+    if not installation.is_absolute() or installation.parent != install_dir or not valid_name:
+        message = "installation_child_invalid"
+        raise ValueError(message)
+    if installation.is_symlink() or installation.is_junction():
+        message = "installation_child_reparse"
+        raise ValueError(message)
+    if installation.resolve(strict=True).parent != install_dir.resolve(strict=True):
+        message = "installation_child_outside_root"
+        raise ValueError(message)
+    return installation
+
+
+def _configuration_for_installation(
+    installed: Path,
+    scratch_dir: Path,
+    manifest: artifacts.InstalledManifest | CudaInstalledManifest,
+) -> WorkerConfiguration:
+    return WorkerConfiguration(
+        interpreter=installed / ".venv" / "Scripts" / "python.exe",
+        script=installed / "worker.py",
+        checkpoint=installed / "final0.ckpt",
+        scratch_dir=scratch_dir,
+        model=manifest.model,
+        manifest=installed / "manifest.json",
+    )
 
 
 def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> WorkerConfiguration:
@@ -94,16 +192,9 @@ def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> WorkerCon
     if artifacts.file_digest(manifest_path) != pointer.manifest_sha256:
         msg = "installation_manifest_corrupt"
         raise ValueError(msg)
-    manifest = artifacts.read_manifest(manifest_path)
-    artifacts.verify_installation(manifest_path, manifest.model, Event())
-    return WorkerConfiguration(
-        interpreter=installed / ".venv" / "Scripts" / "python.exe",
-        script=installed / "worker.py",
-        checkpoint=installed / "final0.ckpt",
-        scratch_dir=scratch_dir,
-        model=manifest.model,
-        manifest=manifest_path,
-    )
+    manifest = read_installed_manifest(manifest_path)
+    verify_worker_installation(manifest_path, manifest.model, Event())
+    return _configuration_for_installation(installed, scratch_dir, manifest)
 
 
 def _validate_setup_paths(
@@ -151,7 +242,6 @@ def _provision_environment(staging: Path, scratch_dir: Path, *, offline: bool) -
             stdout=log,
             stderr=subprocess.STDOUT,
             check=True,
-            timeout=900,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         _inspect_environment(staging, log)
@@ -203,13 +293,44 @@ def _record_installation(staging: Path) -> artifacts.InstalledManifest:
     return manifest
 
 
-def _publish_installation(staging: Path, install_dir: Path) -> None:
+def _record_cuda_installation(staging: Path) -> CudaInstalledManifest:
+    path = staging / "environment.json"
+    if path.stat().st_size > 64 * 1024:
+        msg = "environment_manifest_limit"
+        raise ValueError(msg)
+    environment = artifacts.ENVIRONMENT_ADAPTER.validate_json(path.read_bytes(), strict=True)
+    validate_cuda_environment(environment, staging)
+    manifest = CudaInstalledManifest(
+        schema_version=2,
+        profile="cuda-auto-v2",
+        artifact=artifacts.ACCEPTED_ARTIFACT,
+        model=cuda_model_identity(environment),
+        project_files={name: artifacts.file_digest(staging / name) for name in CUDA_WORKER_FILES},
+        environment=environment,
+        environment_files={
+            path.relative_to(staging).as_posix(): artifacts.file_digest(path)
+            for path in artifacts.environment_files(staging)
+        },
+    )
+    (staging / "manifest.json").write_bytes(CUDA_MANIFEST_ADAPTER.dump_json(manifest, indent=2))
+    return manifest
+
+
+def _retain_installation(staging: Path, install_dir: Path) -> Path:
     directory = f"installation-{uuid4().hex}"
-    pointer = _InstallationPointer(1, directory, artifacts.file_digest(staging / "manifest.json"))
-    staging.rename(install_dir / directory)
+    installed = install_dir / directory
+    staging.rename(installed)
+    return installed
+
+
+def _write_installation_pointer(
+    install_dir: Path, pointer: _InstallationPointer, *, cuda: bool
+) -> None:
     temporary_pointer = install_dir / f".current-{uuid4().hex}.json"
     try:
         temporary_pointer.write_bytes(_POINTER_ADAPTER.dump_json(pointer, indent=2))
+        if cuda:
+            require_cuda_native_capability()
         temporary_pointer.replace(install_dir / "current.json")
     finally:
         temporary_pointer.unlink(missing_ok=True)
@@ -222,18 +343,38 @@ def main() -> int:
     parser.add_argument("--scratch-dir", type=Path, required=True)
     parser.add_argument("--checkpoint-file", type=Path)
     parser.add_argument("--offline", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--stage-only", action="store_true")
+    action.add_argument("--activate-installation", type=Path)
+    parser.add_argument(
+        "--profile", choices=("legacy-cpu-v1", "cuda-auto-v2"), default="legacy-cpu-v1"
+    )
     options = parser.parse_args()
-    try:
-        configuration = install_worker(
-            options.install_dir,
-            options.scratch_dir,
-            checkpoint_file=options.checkpoint_file,
-            offline=options.offline,
+    if options.activate_installation is not None and (
+        options.checkpoint_file is not None or options.offline or options.profile != "legacy-cpu-v1"
+    ):
+        parser.error(
+            "activation uses the retained manifest; omit checkpoint, offline and profile options"
         )
+    try:
+        if options.activate_installation is not None:
+            configuration = activate_worker_installation(
+                options.install_dir, options.activate_installation, options.scratch_dir
+            )
+        else:
+            configuration = install_worker(
+                options.install_dir,
+                options.scratch_dir,
+                checkpoint_file=options.checkpoint_file,
+                offline=options.offline,
+                profile=options.profile,
+                stage_only=options.stage_only,
+            )
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"Beat This setup failed: {error}\n")
         return 1
-    sys.stdout.write(f"Verified Beat This worker: {configuration.manifest}\n")
+    status = "Verified inactive" if options.stage_only else "Verified"
+    sys.stdout.write(f"{status} Beat This worker: {configuration.manifest}\n")
     return 0
 
 

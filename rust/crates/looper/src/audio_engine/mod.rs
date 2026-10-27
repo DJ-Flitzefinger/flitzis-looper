@@ -1991,6 +1991,10 @@ impl AudioEngine {
     #[classattr]
     const AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION: u32 = 1;
 
+    /// Closed CPU-v1 and CUDA-auto-v2 analysis execution receipts.
+    #[classattr]
+    const BEAT_THIS_EXECUTION_API_VERSION: u32 = 2;
+
     /// Data-only export under the genuine original analysis/source admission.
     pub fn consume_automatic_source_beatmap(
         &self,

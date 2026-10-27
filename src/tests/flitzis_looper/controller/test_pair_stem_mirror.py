@@ -16,6 +16,7 @@ from flitzis_looper.controller.stem_job import StemGenerationJob
 from flitzis_looper.controller.stem_pair_preparation import PairPreparation
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.stem_execution import StemExecution
 from tests.flitzis_looper.controller.test_committed_stem_residency import (
     _entry,
     _RegistrationTicket,
@@ -164,6 +165,8 @@ def _pending_preparation(controller: StemController, assets: _Assets) -> PairPre
 
 def test_running_last_subscriber_move_keeps_actual_reader_until_worker_return() -> None:
     controller, assets, _audio = _controller()
+    execution = StemExecution(backend="demucs", model_name="htdemucs", device="cuda")
+    controller._session.stem_generation_execution[0] = execution
     job = _add_job(controller, assets)
     subscriber = job.subscribers()[0]
     original_request = job.request
@@ -186,6 +189,10 @@ def test_running_last_subscriber_move_keeps_actual_reader_until_worker_return() 
         _project_after(controller, plan)
         plan.apply(acknowledgement)
         moved = job.subscribers()[0]
+        assert (
+            controller._session.stem_generation_execution.get(215),
+            0 in controller._session.stem_generation_execution,
+        ) == (execution, False)
         assert moved.sample_id == 215
         assert moved.source is subscriber.source
         assert moved.request is subscriber.request

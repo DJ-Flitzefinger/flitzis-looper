@@ -196,14 +196,15 @@ def _bs_implementation_witnesses(
     assert processing[1] is None
     witnesses = processing[0].witnesses()
     expected = stem_provenance.processing_paths(request)
-    assert len(witnesses) == 25
-    assert len(expected) == 25
+    assert len(witnesses) == 26
+    assert len(expected) == 26
     assert {
         "stem_process.py",
         "process.py",
         "windows_job.py",
         "contracts.py",
         "stem_cancellation.py",
+        "stem_execution.py",
     } <= {path.name for path in expected}
     for (name, digest, size), path in zip(witnesses, expected, strict=True):
         assert Path(name).samefile(path)
@@ -677,13 +678,14 @@ def test_owned_encoder_witness_covers_common_pcm_and_keeps_unproved_demucs_produ
         encoder_executable=resolved,
     )
     paths = stem_provenance.processing_paths(request)
-    assert len(paths) == 29
+    assert len(paths) == 30
     assert any(path.name == "pcm16_wav.py" for path in paths)
+    assert any(path.name == "stem_execution.py" for path in paths)
     assert paths[-1] == resolved
     assert stem_provenance.processing_library_versions(request) is None
     processing = stem_provenance.capture_processing_files(request)
     assert processing is not None
-    assert len(processing[0].witnesses()) == 29
+    assert len(processing[0].witnesses()) == 30
     assert processing[1] is None  # no shared encoder DLL execution identity is inferred
     with pytest.raises(PermissionError):
         encoder.write_bytes(b"encoder changed before publication")

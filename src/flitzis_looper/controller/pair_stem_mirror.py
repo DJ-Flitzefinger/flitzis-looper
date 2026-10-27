@@ -52,6 +52,7 @@ _SESSION_TABLES = (
     "stem_generation_source_versions",
     "stem_generation_progress",
     "stem_generation_stage",
+    "stem_generation_execution",
     "stem_generation_errors",
     "stem_generation_diagnostics",
 )

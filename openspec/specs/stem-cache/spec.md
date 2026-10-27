@@ -378,4 +378,40 @@ acquire the Python GIL in response to per-stem controls.
 - **THEN** the runtime enabled-stem mask enables Drums, Melody, and Bass
 - **AND** the audio callback does not select only the cached `instrumental.wav` artifact
 
+### Requirement: Inference Device Observations Remain Diagnostic
+The selected PAD SHALL display confirmed BPM and stem inference devices separately
+from live playback and generic processing stages. CUDA availability, requested
+device and progress prose SHALL NOT establish actual execution. A running attempt
+without a completed execution receipt SHALL display `Device unknown`.
+
+Owned separator children MAY emit one bounded completed-device receipt after
+successful inference. The host SHALL check its backend, model and explicit device;
+missing, duplicated, malformed or mismatched receipts SHALL remain unknown.
+Encoder and BS-input execution witnesses SHALL remain independently preserved and
+validated. Existing two-argument progress callbacks SHALL remain compatible.
+
+The typed observation SHALL follow the existing current-source subscriber and
+Pair placement fences and survive later alignment progress and coalescing. Every
+successful shared subscriber SHALL receive the original terminal observation.
+New attempts and source replacement SHALL clear active observations. Historical
+cache metadata SHALL not be displayed as the current unconfirmed attempt.
+
+An optional stem-cache execution observation MAY persist through project restore,
+Copy and Move. Old caches SHALL remain readable with unknown device. Malformed
+optional observations SHALL NOT erase valid PCM or Pair evidence. New production
+SHALL replace the observation with its own terminal receipt or unknown; completed
+cache reuse SHALL preserve the original history. Execution metadata SHALL NOT
+grant source, timing, cache reuse, Native publication or audio authority.
+
+#### Scenario: CUDA inference completes before CPU alignment
+- **WHEN** a source-fenced completed CUDA receipt is followed by alignment progress
+- **THEN** the inference device remains visible independently of the alignment stage
+- **AND** returning PCM on CPU does not relabel the inference as CPU
+
+#### Scenario: A new attempt has no confirmed execution
+- **GIVEN** an older stem cache records CUDA inference
+- **WHEN** the performer starts another generation for that source
+- **THEN** its current device is unknown until its own valid receipt arrives
+- **AND** copied or restored historical metadata does not confirm that new execution
+
 

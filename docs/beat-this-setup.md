@@ -1,9 +1,13 @@
-# Optional Beat This reference worker
+# Beat This worker profiles
 
-B1b provides an explicitly installed worker, now also used by Source Map's
-original-fullmix review. Automatic loading, normal Analyze, saved grids and live
-timing still use the existing behavior. B2 must
-accept quality/resources before changing the new-analysis default.
+The installed worker serves new App BPM analysis, normal Analyze and automatic
+source-map preparation through the existing Native job. Manual/TAP and retained
+cached results keep their existing precedence. Explicit raw review remains a
+separate advanced workflow. Runtime/device checks do not certify musical accuracy.
+
+The two closed profiles are `legacy-cpu-v1` and `cuda-auto-v2`. The legacy source
+project and its scientific request/raw bytes remain unchanged. The CUDA profile
+uses the same model and CPU frontend with a separate pinned Torch runtime.
 
 ## Locked Windows runtime
 
@@ -18,6 +22,21 @@ The worker runs CPU FP32 with one Torch computation thread and one interop
 thread. Every request gets a fresh isolated process. A warm rerun benefits from
 filesystem/package caching, not a retained loaded model. There is no CUDA model
 execution or model VRAM allocation in this configuration.
+
+The new `workers/beat_this_cuda` project pins Torch/torchaudio2.8.0+cu128 in a
+single CUDA-capable Python3.12.13 environment. Its lock SHA-256 is
+`0a662b8a7b4058899bc8eb0b775d186bc1e5acf6f101ec2186d3f998c84d0f30`.
+It keeps CPU logmel preprocessing and minimal CPU postprocessing, transfers the
+float32 model and inference tensor to CUDA0 when usable, and disables TF32.
+CUDA availability/probe/placement/inference failure permits one fresh CPU model
+attempt in that same worker. Other failures and cancellation do not trigger retry.
+The completed receipt records actual device, GPU name, Torch/CUDA build and a
+coded fallback reason. It does not promise bit-identical results across devices.
+Package download and installation have no total elapsed-time limit, for either
+profile. Slow Internet alone must not cancel the operation. Keep resumable
+download bytes when recovering from an interrupted transfer; verify the pinned
+hash before use. The user can still interrupt setup. Local environment inspection
+retains its two-minute limit, independently of inference and audio-process guards.
 
 ## Explicit setup
 
@@ -51,6 +70,42 @@ Setup verifies a staged installation and publishes an atomic `current.json`
 pointer to a unique installation directory. Failed setup leaves the prior
 selected installation intact. Existing versions remain available to processes
 that already own them; setup does not delete a running worker's files.
+
+`--profile cuda-auto-v2` explicitly provisions the CUDA-capable profile; omission
+retains the legacy CPU setup behavior. Switching the real App pointer requires
+the matching protocol-capable Native and the existing closed-App/held-Native
+guard. Retain the previous Native and pointer together for rollback; restoring
+only one half is insufficient. A failed staged setup leaves the old pointer.
+The active CUDA-capable environment also serves CPU fallback, so no second active
+CPU environment is required. Keep the old CPU installation temporarily for paired
+rollback rather than making a new full environment for each test.
+
+To prepare a runtime while keeping the selected installation and Native intact,
+add `--stage-only`. This retains a verified `installation-<UUID>` directory and
+returns that new configuration directly. It neither reads nor writes `current.json`
+and does not require the loaded Native to support CUDA. For example, append
+`--profile cuda-auto-v2 --stage-only` to the setup command above. No App or audio
+device is started. This is inactive preparation, not permission to replace a held
+Native or start production analysis with an incompatible pair.
+
+Later, after arranging the matching Native under the closed-App guard, select
+that exact retained directory with:
+
+```powershell
+uv run python -m flitzis_looper.analysis.setup `
+  --install-dir "$workspacePath\analysis-runtime\beat-this" `
+  --scratch-dir "$workspacePath\scratch\b1b\setup" `
+  --activate-installation "$workspacePath\analysis-runtime\beat-this\installation-<UUID>"
+```
+
+Activation rechecks the known manifest, files and checkpoint of a direct child of
+the installation root. CUDA activation checks Native execution capability2 just
+before the atomic pointer change. CPU rollback retains compatibility with the old
+Native. Do not supply profile/checkpoint/offline options during activation; the
+validated retained installation determines its profile. Python callers can use
+`install_worker(..., stage_only=True)`, `load_staged_worker_configuration(...)`
+and `activate_worker_installation(...)` without deriving a staged configuration
+from the currently active pointer.
 
 ## Accepted artifact and provenance
 
@@ -88,10 +143,12 @@ OS-level network sandbox.
 
 On a background/control path, obtain
 `setup.load_worker_configuration(install_dir, scratch_dir)`, then pass
-`model=configuration.model` and `adapter=BeatWorkerAdapter(configuration)` to
+the legacy CPU `model=configuration.model` and `adapter=BeatWorkerAdapter(configuration)` to
 `OfflineAnalysisService.start`. Retain the job/service until actual retirement.
 Configuration loading reads local provenance only; it does not install or start
 the worker. See [Offline analysis](offline-analysis.md) for ownership and limits.
+The scientific protocol-one service remains a CPU reference. Protocol-two App
+analysis uses the existing Native source-map bridge, not that historical service.
 
 The worker reads complete shared mono at the actual loaded rate, performs
 full-buffer soxr HQ conversion directly to 22050 Hz and uses the pinned centered
@@ -122,3 +179,23 @@ Set `BEAT_THIS_CHECKPOINT` to the absolute verified checkpoint path to include
 the optional real-model parity test. Without it that test explicitly skips; a
 skip is not evidence of model parity. The reference run sets this variable and
 compares raw logits and minimal postprocessing over a chunk boundary.
+
+### Local CUDA execution check, 2026-10-27
+
+The known CUDA profile completed four authorized full-source mono inputs on an
+RTX 5090 Laptop GPU and on forced CPU. Beat/downbeat positions and final tempo
+estimates matched in all four cases. CPU logits matched the legacy CPU reference;
+CUDA logits differed by at most 0.00007582. These are bounded comparisons on the
+same FFmpeg reference PCM, not Native decoder or musical/hearing acceptance.
+
+Two later full-source runs took 4.34/4.57 seconds on CUDA versus 20.53/20.37 seconds
+on CPU, including supervision. The first CUDA run took 19.67 seconds versus 13.59
+seconds on CPU; startup overhead matters. These observations are not a general
+speed guarantee. Hiding the GPU produced a completed CPU fallback receipt.
+Cancellation and the local worker deadline retired real owned processes; those
+early-abort cases do not prove an already-running CUDA context was exercised.
+
+Actual Demucs completed on CUDA and forced CPU with retained execution receipts.
+BS-RoFormer device propagation has source/unit coverage only in this delivery.
+Historical cached analyses/stems remain device-unknown until a new execution
+provides a receipt. No existing cache is relabelled from CUDA availability alone.

@@ -1005,6 +1005,7 @@ class AudioEngine:
     ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None: ...
     AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: ClassVar[int]
     AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION: ClassVar[int]
+    BEAT_THIS_EXECUTION_API_VERSION: ClassVar[int]
     def begin_automatic_source_beatmap_restore_async(
         self, sample_id: int, receipt_json: str
     ) -> OfflineAnalysisJob: ...

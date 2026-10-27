@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
+from flitzis_looper.analysis.execution import ExecutionReceipt, LegacyCpuExecutionReceipt
 from flitzis_looper.copy_snapshot import (
     CopySnapshot,
     CopySnapshotData,
@@ -52,6 +53,101 @@ def _previous() -> SampleAnalysis:
     return SampleAnalysis(
         bpm=117.0, key="D#m", beat_grid=BeatGrid(beats=[0.1], downbeats=[], bars=[])
     )
+
+
+@pytest.mark.parametrize("cuda", [False, True])
+def test_v4_execution_diagnostic_survives_restore_and_copy_without_changing_tempo(
+    *, cuda: bool
+) -> None:
+    receipt = (
+        ExecutionReceipt(1, "auto", "cuda:0", "Fixture GPU", "float32", "2.8.0+cu128", "12.8", None)
+        if cuda
+        else LegacyCpuExecutionReceipt(1, "cpu", "cpu", None, "float32", "2.8.0+cpu", None, None)
+    )
+    data = _method().model_dump(mode="python")
+    data.update(
+        schema_version=4,
+        policy="neural-stable-regions-v4",
+        status="insufficient",
+        bpm=None,
+        selected=None,
+        regions=[],
+        integer_probe=None,
+        execution=receipt,
+    )
+    method = AppTempoMethod.model_validate(data)
+    assert AppTempoMethod.model_validate(method.model_dump(), strict=True) == method
+    analysis = _previous().model_copy(update={"bpm_method": method})
+    reopened = SampleAnalysis.model_validate_json(analysis.model_dump_json())
+    assert reopened.bpm == 117.0
+    assert reopened.key == "D#m"
+    assert reopened.bpm_method.execution == receipt
+    project = ProjectState()
+    project.sample_analysis[0] = reopened
+    project.manual_bpm[0] = 123.456
+    project.sample_paths[0] = "samples/legacy.wav"
+    project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
+    snapshot = capture_copy_snapshot(project, 0)
+    copied = project_with_copy_snapshot(
+        project,
+        1,
+        CopySnapshot.model_validate_json(snapshot.model_dump_json()),
+        target_identity=PadContentIdentity(instance_id="b" * 32, copied_from="a" * 32),
+    )
+    assert copied.sample_analysis[1] == reopened
+    assert copied.manual_bpm[1] == 123.456
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"schema_version": True},
+        {"schema_version": 1.0},
+        {"unknown": "value"},
+        {"device": "cuda:999"},
+    ],
+)
+def test_strict_tempo_copy_receipt_still_rejects_forged_fields(damage: dict[str, object]) -> None:
+    data = _method().model_dump()
+    data.update(
+        schema_version=4,
+        policy="neural-stable-regions-v4",
+        status="insufficient",
+        bpm=None,
+        selected=None,
+        regions=[],
+        integer_probe=None,
+        execution={
+            "schema_version": 1,
+            "requested_policy": "auto",
+            "device": "cuda:0",
+            "device_name": "Fixture GPU",
+            "precision": "float32",
+            "torch_version": "2.8.0+cu128",
+            "cuda_build_version": "12.8",
+            "fallback_reason": None,
+            **damage,
+        },
+    )
+    with pytest.raises(ValidationError):
+        AppTempoMethod.model_validate(data, strict=True)
+
+
+def test_historical_tempo_method_omits_absent_execution_and_rejects_new_receipt() -> None:
+    data = json.loads(_method().model_dump_json())
+    assert "execution" not in data
+    data["execution"] = {
+        "schema_version": 1,
+        "requested_policy": "cpu",
+        "device": "cpu",
+        "device_name": None,
+        "precision": "float32",
+        "torch_version": "2.8.0+cpu",
+        "cuda_build_version": None,
+        "fallback_reason": None,
+    }
+    with pytest.raises(ValidationError, match="version four"):
+        AppTempoMethod.model_validate(data)
 
 
 def _v2_method(version: int = 2) -> AppTempoMethod:

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
+from flitzis_looper.analysis.execution import device_label as bpm_device_label
 from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
 from flitzis_looper.controller.key_metadata import loaded_source_identity
 from flitzis_looper.input_mapping import (
@@ -34,6 +35,7 @@ from flitzis_looper.input_mapping.actions import (
     source_sync_toggle_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
+from flitzis_looper.stem_execution import device_label as stem_device_label
 from flitzis_looper.ui.pad_action import perform_pad_action
 from flitzis_looper.ui.pad_arrangement import PadArrangementGestures
 from flitzis_looper.ui.waveform_grid import waveform_view_start
@@ -234,6 +236,14 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
     def analysis_error(self, pad_id: int) -> str | None:
         return self._session.sample_analysis_errors.get(pad_id)
 
+    def bpm_execution_label(self, pad_id: int) -> str:
+        """Historical method metadata never represents a pending new inference."""
+        if self.is_loading(pad_id) or self.is_analyzing(pad_id):
+            return bpm_device_label(None)
+        analysis = self._project.sample_analysis[pad_id]
+        method = analysis.bpm_method if analysis is not None else None
+        return bpm_device_label(method.execution if method is not None else None)
+
     def peak(self, pad_id: int) -> float:
         return float(self._session.pad_peak[pad_id])
 
@@ -311,6 +321,9 @@ class StemSelectors:
             self._controller.stems.stem_generation_stage(pad_id),
             self._controller.stems.stem_generation_progress(pad_id),
         )
+
+    def execution_label(self, pad_id: int) -> str:
+        return stem_device_label(self._controller.stems.stem_execution(pad_id))
 
 
 class BankSelectors:

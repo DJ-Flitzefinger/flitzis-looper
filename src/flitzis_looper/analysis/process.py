@@ -50,6 +50,13 @@ class OwnedCommandResult:
     stderr: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class IndependentReceipts:
+    """Opt in to bounded per-prefix receipts without changing legacy tuple behavior."""
+
+    prefixes: tuple[bytes, ...]
+
+
 class _OwnedTreeProcess(subprocess.Popen[bytes]):
     """Popen-compatible process with explicit ownership of Windows descendants."""
 
@@ -147,7 +154,12 @@ class _CommandReader(_ResponseReader):
     """Drain arbitrary diagnostics while retaining a finite tail and receipt evidence."""
 
     def __init__(
-        self, stream: IO[bytes], limit: int, receipt_prefixes: tuple[bytes, ...] = ()
+        self,
+        stream: IO[bytes],
+        limit: int,
+        receipt_prefixes: tuple[bytes, ...] = (),
+        *,
+        independent_receipts: bool = False,
     ) -> None:
         super().__init__(stream, limit, thread_name="owned-command-output")
         self.receipt_prefixes = receipt_prefixes
@@ -155,6 +167,8 @@ class _CommandReader(_ResponseReader):
         self._line_truncated = False
         self._receipt_count = 0
         self._receipt: bytes | None = None
+        self.independent_receipts = independent_receipts
+        self._receipts: dict[bytes, tuple[int, bytes | None]] = {}
 
     def _read(self) -> None:
         try:
@@ -177,7 +191,13 @@ class _CommandReader(_ResponseReader):
 
     def _finish_line(self) -> None:
         line = bytes(self._line).rstrip(b"\r")
-        if line.startswith(self.receipt_prefixes):
+        if self.independent_receipts:
+            for prefix in self.receipt_prefixes:
+                if line.startswith(prefix):
+                    count, _ = self._receipts.get(prefix, (0, None))
+                    retained = line if not self._line_truncated and len(line) <= 1000 else None
+                    self._receipts[prefix] = (min(2, count + 1), retained)
+        elif line.startswith(self.receipt_prefixes):
             self._receipt_count = min(2, self._receipt_count + 1)
             if not self._line_truncated and len(line) <= 1000:
                 self._receipt = line
@@ -191,6 +211,15 @@ class _CommandReader(_ResponseReader):
         diagnostics = b"\n".join(
             line for line in self.data.splitlines() if not line.startswith(self.receipt_prefixes)
         )
+        if self.independent_receipts:
+            retained = []
+            for prefix in self.receipt_prefixes:
+                count, receipt = self._receipts.get(prefix, (0, None))
+                if count == 1 and receipt is not None:
+                    retained.append(receipt)
+                elif count:
+                    retained.extend([prefix + b"invalid receipt"] * 2)
+            return b"\n".join([diagnostics, *retained])
         if self._receipt_count == 1 and self._receipt is not None:
             return diagnostics + b"\n" + self._receipt
         if self._receipt_count:
@@ -373,12 +402,21 @@ def _retire_later(owned: _OwnedProcess) -> ProcessResult:
 
 
 def _command_readers(
-    owned: _OwnedProcess, limits: WorkerLimits, receipt_prefixes: tuple[bytes, ...]
+    owned: _OwnedProcess,
+    limits: WorkerLimits,
+    receipt_prefixes: tuple[bytes, ...],
+    *,
+    independent_receipts: bool = False,
 ) -> tuple[_CommandReader, _CommandReader]:
     if owned.process.stdout is None or owned.process.stderr is None:
         msg = "owned command output pipes were not created"
         raise RuntimeError(msg)
-    stdout = _CommandReader(owned.process.stdout, limits.max_response_bytes, receipt_prefixes)
+    stdout = _CommandReader(
+        owned.process.stdout,
+        limits.max_response_bytes,
+        receipt_prefixes,
+        independent_receipts=independent_receipts,
+    )
     owned.add_reader(stdout)
     stderr = _CommandReader(owned.process.stderr, limits.max_response_bytes)
     owned.add_reader(stderr)
@@ -393,7 +431,7 @@ def run_owned_command(
     cancel: Event,
     retired: Event,
     limits: WorkerLimits | None = None,
-    receipt_prefixes: tuple[bytes, ...] = (),
+    receipt_prefixes: tuple[bytes, ...] | IndependentReceipts = (),
     request_abort: Callable[[], None] | None = None,
     abort_grace_seconds: float = 0.2,
     stop_reason: Callable[[], str | None] | None = None,
@@ -429,7 +467,11 @@ def run_owned_command(
     stderr = None
     reason = "worker_supervision_failed"
     try:
-        stdout, stderr = _command_readers(owned, limits, receipt_prefixes)
+        if isinstance(receipt_prefixes, IndependentReceipts):
+            prefixes, independent = receipt_prefixes.prefixes, True
+        else:
+            prefixes, independent = receipt_prefixes, False
+        stdout, stderr = _command_readers(owned, limits, prefixes, independent_receipts=independent)
         process.activate()
         for reader in owned.readers:
             reader.thread.start()

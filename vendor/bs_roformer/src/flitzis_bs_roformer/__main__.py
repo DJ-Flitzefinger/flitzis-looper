@@ -23,6 +23,7 @@ from flitzis_looper.stem_cancellation import (
     StemInferenceCancelledError,
     emit_cancellation_ack,
 )
+from flitzis_looper.stem_execution import completed_execution_line
 
 
 def main() -> None:
@@ -76,6 +77,9 @@ def main() -> None:
         "normalize": False,
         "transient_pcm_bytes_bound": plan.transient_pcm_bytes,
     })
+    sys.stdout.write(
+        completed_execution_line("bs-roformer", "BS-RoFormer MUSDB18HQ", args.device) + "\n"
+    )
     sys.stdout.write(input_completion_line() + "\n")
     sys.stdout.flush()
 

@@ -105,6 +105,7 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
+from flitzis_looper.stem_execution import StemExecution, StemExecutionProgress
 from flitzis_looper.stem_intent import transition_stem_intent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
@@ -143,6 +144,7 @@ class _StemBackendEvent:
     result: StemGenerationResult | None = None
     generation_intent: StemGenerationIntent | None = None
     source_path: Path | None = None
+    execution: StemExecution | None = None
 
 
 @dataclass(slots=True)
@@ -1271,6 +1273,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return self._start_requested_generation(sample_id, source_version, interest)
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = source_version
+        self._session.stem_generation_execution.pop(sample_id, None)
         request = self._generation_request(sample_id, source_version)
         if request is None:
             return None
@@ -1606,6 +1609,7 @@ class StemController(BaseController):  # noqa: PLR0904
             owner.mark_failed("Original stem request changed before admission")
             return False
         self._requested_generations[request.sample_id] = requested
+        self._session.stem_generation_execution.pop(request.sample_id, None)
         return True
 
     def _expire_requested_generations(self) -> None:
@@ -1995,6 +1999,7 @@ class StemController(BaseController):  # noqa: PLR0904
         )
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = request.source_version
+        self._session.stem_generation_execution.pop(sample_id, None)
         self._generation_sources[sample_id] = source_lease
         self._generation_intents[sample_id] = intent
         self._jobs[job.request.cache_dir] = job
@@ -2875,6 +2880,19 @@ class StemController(BaseController):  # noqa: PLR0904
             else None
         )
 
+    def stem_execution(self, sample_id: int) -> StemExecution | None:
+        """Separate current completed inference from historical cache metadata."""
+        validate_sample_id(sample_id)
+        if (
+            sample_id in self._session.loading_sample_ids
+            or sample_id in self._requested_generations
+        ):
+            return None
+        if self.is_stem_generation_running(sample_id):
+            return self._session.stem_generation_execution.get(sample_id)
+        entry = self._project.stem_cache[sample_id]
+        return entry.execution if entry is not None else None
+
     def stem_generation_diagnostic(self, sample_id: int) -> str | None:
         """Return an admission or execution diagnostic independently of errors."""
         validate_sample_id(sample_id)
@@ -2997,6 +3015,9 @@ class StemController(BaseController):  # noqa: PLR0904
                 event,
                 percent=event.percent if event.percent is not None else previous.event.percent,
                 stage=event.stage if event.stage is not None else previous.event.stage,
+                execution=event.execution
+                if event.execution is not None
+                else previous.event.execution,
             )
         if event.event_type not in {"progress", "identity"}:
             self._pair_held_generation_events.pop((job, "progress"), None)
@@ -3068,7 +3089,11 @@ class StemController(BaseController):  # noqa: PLR0904
             for subscriber in current:
                 if event.event_type == "progress":
                     self._handle_stem_generation_progress(
-                        subscriber.sample_id, event.percent, event.stage, subscriber.source
+                        subscriber.sample_id,
+                        event.percent,
+                        event.stage,
+                        subscriber.source,
+                        execution=event.execution,
                     )
                 elif event.error is not None:
                     subscriber.interest_owner.mark_failed(event.error)
@@ -3553,6 +3578,8 @@ class StemController(BaseController):  # noqa: PLR0904
         percent: float | None,
         stage: str | None,
         source_lease: OfflineStemSourceLease | None = None,
+        *,
+        execution: StemExecution | None = None,
     ) -> None:
         """Apply a stem-generation progress event from a backend event source."""
         validate_sample_id(sample_id)
@@ -3567,6 +3594,8 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_stage[sample_id] = stage
         if percent is not None:
             self._session.stem_generation_progress[sample_id] = float(percent)
+        if execution is not None:
+            self._session.stem_generation_execution[sample_id] = execution
 
     def _handle_stem_generation_success(
         self,
@@ -3688,6 +3717,11 @@ class StemController(BaseController):  # noqa: PLR0904
         )
         lease = None
         try:
+            delivery = self._pair_held_generation_events.get((job, "terminal")) if job else None
+            result = delivery.event.result if delivery is not None else None
+            # New production overwrites optional history even when its execution
+            # is unknown. Reuse takes its existing immutable entry elsewhere.
+            entry = entry.model_copy(update={"execution": result.execution if result else None})
             if job is not None:
                 entry = entry.model_copy(
                     update={
@@ -4697,6 +4731,7 @@ class StemController(BaseController):  # noqa: PLR0904
         self._restored_stem_candidates.pop(sample_id, None)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
+        self._session.stem_generation_execution.pop(sample_id, None)
 
     def _clear_stem_generation_messages(self, sample_id: int) -> None:
         self._session.stem_generation_errors.pop(sample_id, None)
@@ -4705,6 +4740,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._diagnostics.observe("stem_generation_diagnostic", None, pad_id=sample_id)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
+        self._session.stem_generation_execution.pop(sample_id, None)
 
     def _target_shape_for_pad(self, sample_id: int) -> AudioShape | None:
         fn = getattr(self._audio, "loaded_sample_shape", None)
@@ -4843,7 +4879,9 @@ class StemController(BaseController):  # noqa: PLR0904
             self._put_generation_event(self._settled_job_event(job))
             return
 
-        def report_progress(percent: float, stage: str) -> None:
+        def report_progress(
+            percent: float | None, stage: str | None, execution: StemExecution | None
+        ) -> None:
             self._put_generation_event(
                 _StemBackendEvent(
                     sample_id=request.sample_id,
@@ -4854,6 +4892,7 @@ class StemController(BaseController):  # noqa: PLR0904
                     percent=percent,
                     stage=stage,
                     source_path=request.source_path,
+                    execution=execution,
                 )
             )
 
@@ -4870,7 +4909,9 @@ class StemController(BaseController):  # noqa: PLR0904
             with stem_command_scope(
                 job.cancel_event, directory=request.cache_dir, resources=self._stem_resources
             ):
-                result = self._stem_backend.generate(request, report_progress)
+                result = self._stem_backend.generate(
+                    request, StemExecutionProgress(report_progress)
+                )
             self._verified_original_extent(request, source_lease)
             self._verify_generation_provenance(job, request, processing, result)
             event = _StemBackendEvent(
@@ -5018,6 +5059,10 @@ class StemController(BaseController):  # noqa: PLR0904
     ) -> None:
         if result is None:
             return
+        if result.execution is not None:
+            self._session.stem_generation_execution[sample_id] = result.execution
+        else:
+            self._session.stem_generation_execution.pop(sample_id, None)
         if result.diagnostic:
             self._record_generation_diagnostic(sample_id, result.diagnostic)
         elif result.cpu_fallback:

@@ -76,6 +76,7 @@ def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         package / "analysis" / "windows_job.py",
         package / "analysis" / "contracts.py",
         package / "stem_cancellation.py",
+        package / "stem_execution.py",
         package / "__init__.py",
     )
 

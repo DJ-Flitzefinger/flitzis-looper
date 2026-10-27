@@ -19,6 +19,11 @@ from flitzis_looper.analysis.contracts import (
     BeatModelIdentity,
     BeatPredictions,
 )
+from flitzis_looper.analysis.execution import (
+    CudaBeatComponentResult,
+    CudaBeatModelIdentity,
+    ExecutionReceipt,
+)
 from flitzis_looper.analysis.publication import MAX_ENVELOPE_BYTES
 from flitzis_looper.analysis.worker import WorkerConfiguration
 
@@ -86,6 +91,62 @@ def _run(arguments: tuple[object, ...]) -> dict[str, object]:
     with ThreadPoolExecutor(max_workers=1) as executor:
         encoded = executor.submit(bridge.run_source_map_beat_this, *arguments).result(timeout=5)
     return json.loads(encoded)
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_cuda_bridge_resolves_once_echoes_exact_request_and_never_publishes_cancelled_receipt(
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cancelled: bool,
+) -> None:
+    arguments, old_adapter, probe, configuration = request_fixture
+    model = CudaBeatModelIdentity("a" * 64, "beat-this-1.1.0-soxr-hq-logmel-v1")
+    configuration = replace(configuration, model=model)
+    resolves = []
+
+    def resolve(*_args):
+        resolves.append(1)
+        return configuration
+
+    monkeypatch.setattr(bridge, "load_worker_configuration", resolve)
+    monkeypatch.setattr(bridge, "require_cuda_native_capability", lambda: None)
+
+    class Adapter:
+        retired = Event()
+        retired.set()
+
+        def run_cuda(self, request, _cancel):
+            probe.cancelled = cancelled
+            execution = ExecutionReceipt(
+                1, "auto", "cuda:0", "Fixture GPU", "float32", "2.8.0+cu128", "12.8", None
+            )
+            return CudaBeatComponentResult(
+                request.identity,
+                request.model,
+                "ready",
+                "ready",
+                old_adapter.predictions,
+                execution=execution,
+            )
+
+    monkeypatch.setattr(bridge, "BeatWorkerAdapter", lambda *_args: Adapter())
+    result = _run(arguments)
+    assert resolves == [1]
+    assert result["schema_version"] == 2
+    request = json.loads(result["request_json"])
+    assert request["identity"] == json.loads(str(arguments[4]))
+    assert request["pcm"]["path"] == arguments[0]
+    assert request["pcm"]["sample_rate_hz"] == arguments[1]
+    assert request["pcm"]["frame_count"] == arguments[2]
+    assert request["model"] == asdict(model)
+    assert request["execution_policy"] == "auto"
+    if cancelled:
+        assert result["status"] == "cancelled"
+        assert result["predictions"] is result["execution"] is None
+    else:
+        assert result["status"] == "ready"
+        assert result["execution"]["device"] == "cuda:0"
 
 
 def test_bridge_retains_all_four_arrays_and_actual_input_without_frontend_fiction(

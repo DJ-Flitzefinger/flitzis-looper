@@ -37,6 +37,12 @@ from flitzis_looper.encoder_provenance import (
     verified_encoder_output,
 )
 from flitzis_looper.models import STEM_KINDS, StemSeparator
+from flitzis_looper.stem_execution import (
+    STEM_EXECUTION_RESULT,
+    StemExecution,
+    completed_execution,
+    report_execution,
+)
 
 __all__ = ["StemGenerationError", "_write_project_cache_artifacts"]
 
@@ -105,6 +111,7 @@ class StemGenerationResult:
     diagnostic: str | None = None
     encoder_verified: bool = False
     decoder_verified: bool = False
+    execution: StemExecution | None = None
 
 
 class CommandRunner(Protocol):
@@ -258,6 +265,14 @@ class DemucsStemGenerationBackend:
                         continue
                     raise StemGenerationError(failure_diagnostic)
 
+                execution = completed_execution(
+                    result.stdout,
+                    backend="demucs",
+                    model_name=self._model_name,
+                    device=device,
+                    cpu_fallback=cuda_error is not None and device == "cpu",
+                )
+                report_execution(progress, execution)
                 progress(0.85, "Aligning stem cache")
                 _write_project_cache_artifacts(
                     output_root=temp_dir,
@@ -283,6 +298,7 @@ class DemucsStemGenerationBackend:
                 artifact_count=len(STEM_KINDS),
                 diagnostic=_bounded_text(diagnostic) if diagnostic is not None else None,
                 encoder_verified=encoder_verified,
+                execution=execution,
             )
 
         msg = "Demucs did not run"
@@ -546,14 +562,16 @@ def _bounded_text(text: str | None, *, limit: int = 1000) -> str:
 def _command_stdout(text: str | None) -> str:
     if text is None:
         return ""
-    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT)
+    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT, STEM_EXECUTION_RESULT)
     diagnostic = _bounded_text(
         "\n".join(line for line in text.splitlines() if not line.startswith(prefixes))
     )
-    receipts = [line for line in text.splitlines() if line.startswith(prefixes)]
-    if len(receipts) == 1 and len(receipts[0]) <= 1000:
-        return diagnostic + "\n" + receipts[0]
-    return diagnostic
+    receipts = []
+    for prefix in prefixes:
+        matches = [line for line in text.splitlines() if line.startswith(prefix)]
+        if len(matches) == 1 and len(matches[0]) <= 1000:
+            receipts.append(matches[0])
+    return "\n".join([diagnostic, *receipts])
 
 
 def _read_pcm16_wav(path: Path) -> AudioData:

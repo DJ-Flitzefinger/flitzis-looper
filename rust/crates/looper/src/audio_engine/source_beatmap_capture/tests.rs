@@ -60,6 +60,114 @@ fn capture() -> RawCapture {
         .into()
 }
 
+fn cuda_fixture() -> (BeatThisSourceInput, Value, Value) {
+    let (source, mut request, mut result) = fixture();
+    request["schema_version"] = json!(2);
+    request["model"] = beat_this::pinned_cuda_model();
+    request["execution_policy"] = json!("auto");
+    result["schema_version"] = json!(2);
+    result["encoding"] = json!("source-map-beat-this-worker-v2");
+    result["model"] = request["model"].clone();
+    result["request_json"] = json!(request.to_string());
+    result["execution"] = json!({"schema_version":1,"requested_policy":"auto","device":"cuda:0",
+        "device_name":"Fixture GPU","precision":"float32","torch_version":"2.8.0+cu128",
+        "cuda_build_version":"12.8","fallback_reason":null});
+    (source, request, result)
+}
+
+#[test]
+fn cuda_capture_requires_native_expected_request_and_actual_receipt_without_relabeling_cpu() {
+    let (source, request, result) = cuda_fixture();
+    let raw =
+        BeatThisRawData::from_worker(source, &request.to_string(), &result.to_string()).unwrap();
+    assert_eq!(raw.execution().unwrap()["device"], "cuda:0");
+    let encoded = raw.encode().unwrap();
+    assert_eq!(
+        BeatThisRawData::decode(&encoded).unwrap().encode().unwrap(),
+        encoded
+    );
+    let old = capture().encode().unwrap();
+    let (source, request, result) = fixture();
+    let legacy =
+        BeatThisRawData::from_worker(source, &request.to_string(), &result.to_string()).unwrap();
+    assert_eq!(legacy.execution().unwrap()["torch_version"], "2.8.0+cpu");
+    assert_eq!(
+        legacy.execution().unwrap()["cuda_build_version"],
+        Value::Null
+    );
+    let old_json: Value = serde_json::from_slice(&old).unwrap();
+    assert!(
+        old_json["data"]["request"]
+            .get("execution_policy")
+            .is_none()
+    );
+    assert!(old_json["data"]["result"].get("execution").is_none());
+    assert!(old_json["data"]["result"].get("request_json").is_none());
+    assert_eq!(RawCapture::decode(&old).unwrap().encode().unwrap(), old);
+}
+
+#[test]
+fn cuda_capture_rejects_cross_profile_unconfirmed_foreign_and_diagnostic_policy_receipts() {
+    for mutation in [
+        "missing",
+        "foreign_request",
+        "cpu_model",
+        "diagnostic_policy",
+        "impossible_gpu",
+        "cpu_without_fallback",
+        "wrong_build",
+        "legacy_extra",
+    ] {
+        let (source, mut request, mut result) = cuda_fixture();
+        match mutation {
+            "missing" => {
+                result.as_object_mut().unwrap().remove("execution");
+            }
+            "foreign_request" => {
+                let mut foreign = request.clone();
+                foreign["identity"]["source_generation"] = json!(99);
+                result["request_json"] = json!(foreign.to_string());
+            }
+            "cpu_model" => {
+                result["model"] = pinned_model();
+            }
+            "diagnostic_policy" => {
+                request["execution_policy"] = json!("cuda");
+                result["request_json"] = json!(request.to_string());
+            }
+            "impossible_gpu" => result["execution"]["device"] = json!("cuda:999"),
+            "cpu_without_fallback" => {
+                result["execution"]["device"] = json!("cpu");
+                result["execution"]["device_name"] = Value::Null;
+            }
+            "wrong_build" => result["execution"]["torch_version"] = json!("2.8.0+cpu"),
+            "legacy_extra" => {
+                let (_, old_request, old_result) = fixture();
+                request = old_request;
+                let receipt = result["execution"].clone();
+                result = old_result;
+                result["execution"] = receipt;
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            BeatThisRawData::from_worker(source, &request.to_string(), &result.to_string())
+                .is_err(),
+            "{mutation}"
+        );
+    }
+    let (source, request, mut result) = cuda_fixture();
+    result["execution"]["device"] = json!("cpu");
+    result["execution"]["device_name"] = Value::Null;
+    result["execution"]["fallback_reason"] = json!("cuda_inference_error");
+    let raw =
+        BeatThisRawData::from_worker(source, &request.to_string(), &result.to_string()).unwrap();
+    assert_eq!(
+        raw.execution().unwrap()["fallback_reason"],
+        "cuda_inference_error"
+    );
+}
+
 #[test]
 fn complete_four_arrays_preserve_bits_independent_downbeats_and_truthful_input() {
     let raw = capture();

@@ -53,6 +53,7 @@ from flitzis_looper.material_migration_model import (
 )
 from flitzis_looper.recording_options import RecordingOptions
 from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
+from flitzis_looper.stem_execution import StemExecution
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
 from flitzis_looper.timing_policy import (
@@ -276,6 +277,18 @@ class StemCacheEntry(BaseModel):
 
     producer_identity: str | None = Field(default=None, strict=True, pattern=r"\A[0-9a-f]{64}\z")
     """Full verified model/config bytes held throughout actual successful production."""
+
+    execution: StemExecution | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Historical inference device observation; never cache/publication authority."""
+
+    @field_validator("execution", mode="before")
+    @classmethod
+    def _validate_execution(cls, value: object) -> StemExecution | None:
+        # A damaged optional diagnostic must not invalidate genuine stem PCM.
+        try:
+            return None if value is None else StemExecution.model_validate(value)
+        except ValidationError:
+            return None
 
     @field_validator("pair", mode="before")
     @classmethod
@@ -1024,6 +1037,9 @@ class SessionState(BaseModel):
     stem_generation_stage: dict[int, str] = Field(default_factory=dict)
     """Human-readable stem generation stage per pad."""
 
+    stem_generation_execution: dict[int, StemExecution] = Field(default_factory=dict)
+    """Current source-fenced completed inference observation, retained during alignment."""
+
     stem_generation_errors: dict[int, str] = Field(default_factory=dict)
     """Last stem generation error message per pad."""
 
@@ -1210,6 +1226,7 @@ class SessionState(BaseModel):
         "stem_generation_source_versions",
         "stem_generation_progress",
         "stem_generation_stage",
+        "stem_generation_execution",
         "stem_generation_errors",
         "stem_generation_diagnostics",
         mode="after",

@@ -115,8 +115,10 @@ correct them. The latest user decision selects Beat This as the sole future
 automatic analyzer after acceptance, without a QM-versus-neural Settings
 selector. Verified GPU and same-model CPU execution are device policies, not
 different analysis methods. Existing CPU diagnostic setup remains unchanged;
-GPU adoption and Rust-native inference still require bounded implementation
-and parity/resource validation. Manual/TAP and saved legacy results remain
+The 2026-10-27 CUDA profile adds verified GPU/CPU execution to the existing worker
+path; it retains separate device provenance and requires measured cross-device
+comparison rather than assuming bit equality. Rust-native inference remains
+deferred. Manual/TAP and saved legacy results remain
 authoritative under the existing preservation contracts.
 
 The user's 2026-10-06 feedback requests improved automatic BPM estimation while
@@ -195,7 +197,9 @@ One native slot per engine and one process globally remain occupied while work i
 there is no pending queue. The native PCM staging cap is 512 MiB, excluding FFT/CQT/model
 workspace. Small versioned messages describe the full-track file. A real lazy offline worker
 owns model loading/inference. Its locked Python 3.12.13 Windows CPU environment is separate
-from the app's Python >=3.14 environment. CPU FP32 is the reference; GPU is not enabled.
+from the app's Python >=3.14 environment. CPU FP32 remains the reference. The
+separate CUDA-auto profile now uses Torch2.8.0+cu128, the same CPU frontend and
+float32 inference with TF32 disabled; only its actual receipt identifies GPU use.
 No Python inference or PCM export occurs in the audio callback.
 Worker count, Torch thread count, queued bytes and retained snapshots need explicit limits.
 

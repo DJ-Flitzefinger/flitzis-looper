@@ -23,6 +23,14 @@ from flitzis_looper.analysis.contracts import (
     WorkerLimits,
     validate_component_result,
 )
+from flitzis_looper.analysis.execution import (
+    CUDA_REQUEST_ADAPTER,
+    CudaBeatComponentResult,
+    CudaBeatModelIdentity,
+    CudaBeatWorkerRequest,
+    require_cuda_native_capability,
+    validate_cuda_component_result,
+)
 from flitzis_looper.analysis.publication import _pack
 from flitzis_looper.analysis.setup import load_worker_configuration
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
@@ -156,6 +164,63 @@ def _run_retired(
     return result
 
 
+def _run_cuda_retired(
+    request: CudaBeatWorkerRequest,
+    configuration: WorkerConfiguration,
+    cancel: _NativeCancellationEvent,
+) -> CudaBeatComponentResult:
+    adapter = BeatWorkerAdapter(configuration)
+    try:
+        result = adapter.run_cuda(request, cancel)
+        validate_cuda_component_result(result, request, WorkerLimits())
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        result = CudaBeatComponentResult(
+            request.identity, request.model, "failed", str(error)[:1024]
+        )
+    finally:
+        while not adapter.retired.wait(_POLL_SECONDS):
+            pass
+    if cancel.is_set():
+        return CudaBeatComponentResult(request.identity, request.model, "cancelled", "cancelled")
+    return replace(result, resources_released=True)
+
+
+def _cuda_envelope(
+    request: CudaBeatWorkerRequest,
+    input_metadata: dict[str, object],
+    result: CudaBeatComponentResult,
+) -> str:
+    packed = None
+    if result.status == "ready" and result.predictions is not None:
+        packed = {
+            "encoding": "float64-le/base64",
+            **{name: _pack(getattr(result.predictions, name)) for name in _ARRAY_NAMES},
+        }
+    envelope = {
+        "schema_version": 2,
+        "encoding": "source-map-beat-this-worker-v2",
+        "identity": asdict(request.identity),
+        "input": input_metadata,
+        "model": asdict(request.model),
+        "status": result.status,
+        "reason": result.reason[:1024],
+        "resources_released": True,
+        "predictions": packed,
+        "request_json": CUDA_REQUEST_ADAPTER.dump_json(request).decode("utf-8"),
+        "execution": None if result.execution is None else asdict(result.execution),
+    }
+    encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > MAX_SOURCE_MAP_WORKER_BYTES:
+        envelope.update(
+            status="failed",
+            reason="source_map_worker_response_limit",
+            predictions=None,
+            execution=None,
+        )
+        encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
+    return encoded
+
+
 def run_source_map_beat_this(
     pcm_path: str,
     sample_rate_hz: int,
@@ -191,6 +256,12 @@ def run_source_map_beat_this(
         )
         return _envelope(identity, input_metadata, None, status, reason)
     model = configuration.model
+    if isinstance(model, CudaBeatModelIdentity):
+        require_cuda_native_capability()
+        request = CudaBeatWorkerRequest(identity, pcm, model)
+        return _cuda_envelope(
+            request, input_metadata, _run_cuda_retired(request, configuration, cancel)
+        )
     if cancel.is_set():
         return _envelope(identity, input_metadata, model, "cancelled", "cancelled")
     result = _run_retired(BeatWorkerRequest(identity, pcm, model), configuration, cancel)

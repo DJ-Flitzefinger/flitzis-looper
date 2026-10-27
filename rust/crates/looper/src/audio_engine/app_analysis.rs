@@ -347,6 +347,9 @@ pub(super) fn analyze(
             "frontend_id":pinned_model()["frontend_id"],"source_sha256":source_digest,
             "mono_sha256":mono_sha256,"sample_rate_hz":rate,"frame_count":frames,
             "raw_beats":predictions.beat_seconds,"raw_downbeats":predictions.downbeat_seconds}).as_object().unwrap().clone());
+        if let Some(execution) = raw.execution() {
+            object.insert("execution".into(), execution);
+        }
         let method_tree = super::source_beatmap::budget::value_tree(&method)?;
         let method_len = super::source_beatmap::budget::serialized_len(&method)?;
         let grid_bytes = super::source_beatmap::budget::sum(&[

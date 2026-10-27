@@ -928,6 +928,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._session.stem_generation_diagnostics.pop(sample_id, None)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
+        self._session.stem_generation_execution.pop(sample_id, None)
 
     def _clear_stem_cache(self, sample_id: int) -> None:
         self._project.stem_cache[sample_id] = None
@@ -1695,6 +1696,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._session.stem_generation_source_versions.pop(sample_id, None)
             self._session.stem_generation_progress.pop(sample_id, None)
             self._session.stem_generation_stage.pop(sample_id, None)
+            self._session.stem_generation_execution.pop(sample_id, None)
 
             msg = event.get("msg")
             if isinstance(msg, str):
