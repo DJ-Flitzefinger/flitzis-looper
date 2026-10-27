@@ -9,6 +9,7 @@ from imgui_bundle import hello_imgui, imgui, immapp
 
 from flitzis_looper.ui import run
 from flitzis_looper.ui.context import UiContext
+from flitzis_looper.ui.render import file_dialog
 from tests.flitzis_looper.controller.test_stem_delete_backend import _loaded
 
 if TYPE_CHECKING:
@@ -67,6 +68,95 @@ def test_close_waits_across_frames_and_notifies_exit_only_after_settlement(
     monkeypatch.setattr(immapp, "run", frames)
 
     run.run_ui(controller, on_exit=exited)
+
+
+def test_closing_continues_controller_settlement_while_owned_picker_retires(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare = Mock(return_value=True)
+    shutdown = Mock()
+    picker = Mock(side_effect=[False, True, True, True])
+    monkeypatch.setattr(controller, "prepare_shutdown", prepare)
+    monkeypatch.setattr(controller, "shut_down", shutdown)
+    monkeypatch.setattr(run, "cancel_file_dialog", picker)
+    monkeypatch.setattr(run, "UiContext", Mock())
+
+    def frames(params: RunnerParams, _addons: object) -> None:
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
+        params.app_shall_exit = True
+        params.callbacks.after_swap()
+        assert not params.app_shall_exit
+        assert prepare.call_count == 1
+        shutdown.assert_not_called()
+        params.callbacks.after_swap()
+        assert params.app_shall_exit
+        assert prepare.call_count == 2
+        params.callbacks.before_exit()
+
+    monkeypatch.setattr(immapp, "run", frames)
+    run.run_ui(controller)
+    assert picker.call_args_list == [call(), call(), call(wait=True), call(wait=True)]
+    shutdown.assert_called_once()
+
+
+def test_exit_hook_failure_still_shuts_down_controller(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shutdown = Mock()
+    monkeypatch.setattr(controller, "shut_down", shutdown)
+    monkeypatch.setattr(run, "cancel_file_dialog", Mock(return_value=True))
+    monkeypatch.setattr(run, "UiContext", Mock())
+    monkeypatch.setattr(immapp, "run", lambda params, _addons: params.callbacks.before_exit())
+    with pytest.raises(RuntimeError, match="exit hook"):
+        run.run_ui(controller, on_exit=Mock(side_effect=RuntimeError("exit hook")))
+    shutdown.assert_called_once()
+
+
+def test_picker_cancel_error_cannot_skip_controller_settlement(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker = Mock(cleanup_error=None)
+    picker.cancel.side_effect = [PermissionError("owned terminate denied"), True]
+    monkeypatch.setattr(
+        file_dialog, "_state", file_dialog._DialogState(file_dialog._PendingDialog(0, picker))
+    )
+    prepare, shutdown = Mock(return_value=True), Mock()
+    monkeypatch.setattr(controller, "prepare_shutdown", prepare)
+    monkeypatch.setattr(controller, "shut_down", shutdown)
+    monkeypatch.setattr(run, "UiContext", Mock())
+
+    def frames(params: RunnerParams, _addons: object) -> None:
+        monkeypatch.setattr(hello_imgui, "get_runner_params", lambda: params)
+        params.app_shall_exit = True
+        params.callbacks.after_swap()
+        assert prepare.call_count == 1
+        assert not params.app_shall_exit
+        assert file_dialog._state.pending is not None
+        params.callbacks.after_swap()
+        assert prepare.call_count == 2
+        assert params.app_shall_exit
+        params.callbacks.before_exit()
+
+    monkeypatch.setattr(immapp, "run", frames)
+    run.run_ui(controller)
+    shutdown.assert_called_once()
+
+
+def test_unexpected_runner_failure_attempts_guarded_controller_teardown(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shutdown = Mock()
+    monkeypatch.setattr(controller, "shut_down", shutdown)
+    monkeypatch.setattr(run, "cancel_file_dialog", Mock(return_value=True))
+    monkeypatch.setattr(run, "UiContext", Mock())
+    monkeypatch.setattr(immapp, "run", Mock(side_effect=RuntimeError("runner failure")))
+    with pytest.raises(RuntimeError, match="runner failure"):
+        run.run_ui(controller)
+    shutdown.assert_called_once()
 
 
 def test_close_without_copy_can_exit_in_the_requested_frame(

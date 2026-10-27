@@ -541,6 +541,10 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
         self._controller.diagnostics.begin_attempt("load", pad_id)
         self._controller.loader.load_sample_async(pad_id, path)
 
+    def report_load_error(self, pad_id: int, reason: str) -> None:
+        self._controller.diagnostics.begin_attempt("load", pad_id)
+        self._controller.loader._report_picker_error(pad_id, reason)
+
     def unload_sample(self, pad_id: int) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.unload_pad(pad_id),

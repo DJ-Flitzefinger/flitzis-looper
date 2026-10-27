@@ -594,6 +594,7 @@ class TestAudioActions:  # noqa: PLR0904
 
     def test_toggle_bpm_lock(self, controller: AppController) -> None:
         """Test toggle_bpm_lock toggles bpm_lock mode."""
+        controller.project.multi_loop = True  # BPM Lock requires its requested parent.
         audio_actions = AudioActions(controller)
         initial_state = controller.project.bpm_lock
 

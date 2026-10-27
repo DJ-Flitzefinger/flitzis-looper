@@ -6,6 +6,7 @@ from flitzis_looper.controller import AppController
 from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render_ui
+from flitzis_looper.ui.render.file_dialog import cancel_file_dialog, file_dialog_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,24 +54,67 @@ def run_ui(
         # Pinned HelloImGui 902dd7d runs AfterSwap after event/menu handling and
         # checks appShallExit between complete frames. Keep clearing a sticky OS
         # close until actual Copy settlement permits BeforeExit teardown.
-        live_params.app_shall_exit = controller.prepare_shutdown(
+        context.ui.close_file_dialog()
+        picker_closed = cancel_file_dialog()
+        _observe_picker_error(controller)
+        controller_ready = controller.prepare_shutdown(
             holds_polled=True, deletion_polled=deletion_polled
         )
+        live_params.app_shall_exit = controller_ready and picker_closed
         controller.diagnostics.observe("shutdown", controller.pending_shutdown_error)
 
     runner_params.callbacks.show_gui = show_gui
     runner_params.callbacks.after_swap = after_swap
 
-    def before_exit() -> None:
-        if on_exit is not None:
-            on_exit()
-        controller.shut_down()
-
-    runner_params.callbacks.before_exit = before_exit
     runner_params.callbacks.load_additional_fonts = lambda: load_fonts(context)
     add_ons_params = immapp.AddOnsParams(with_implot=True)
+    _run_ui_loop(controller, runner_params, add_ons_params, on_exit)
 
-    immapp.run(runner_params, add_ons_params)
+
+def _observe_picker_error(controller: AppController) -> None:
+    error = file_dialog_error()
+    controller.diagnostics.observe(
+        "file_dialog",
+        None if error is None else error[1],
+        pad_id=None if error is None else error[0],
+    )
+
+
+def _run_ui_loop(
+    controller: AppController,
+    params: hello_imgui.RunnerParams,
+    addons: immapp.AddOnsParams,
+    on_exit: Callable[[], None] | None,
+) -> None:
+    exit_called = False
+
+    def before_exit() -> None:
+        nonlocal exit_called
+        exit_called = True
+        _finish_ui_shutdown(controller, on_exit)
+
+    params.callbacks.before_exit = before_exit
+    try:
+        immapp.run(params, addons)
+    except BaseException:
+        if not exit_called:
+            # The controller still enforces its own recording/Copy settlement
+            # gate. Never bypass that gate after an unexpected runner failure.
+            _finish_ui_shutdown(controller, None)
+        raise
+    finally:
+        cancel_file_dialog(wait=True)
+        _observe_picker_error(controller)
+
+
+def _finish_ui_shutdown(controller: AppController, on_exit: Callable[[], None] | None) -> None:
+    try:
+        cancel_file_dialog(wait=True)
+        _observe_picker_error(controller)
+        if on_exit is not None:
+            on_exit()
+    finally:
+        controller.shut_down()
 
 
 def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:

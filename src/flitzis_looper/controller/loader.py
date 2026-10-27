@@ -641,6 +641,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._session.sample_load_errors[sample_id] = message
         return True
 
+    def _report_picker_error(self, sample_id: int, reason: str) -> None:
+        """Report a pre-admission picker error without changing the assignment."""
+        validate_sample_id(sample_id)
+        self._session.sample_load_errors[sample_id] = reason
+        self._observe_pad_diagnostics(sample_id)
+
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
 
