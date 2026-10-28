@@ -4,7 +4,7 @@
 use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, key_input_from_f32_le};
 use super::neural_analysis::raw::{BeatThisSourceInput, expected_logit_count, pinned_model};
 use super::neural_analysis::{MonoWriter, invoke_worker, verify_staged};
-use crate::messages::{LoadedAnalysis, SampleBuffer};
+use crate::messages::{AnalysisKeyStatus, LoadedAnalysis, SampleBuffer};
 use pyo3::prelude::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
-/// Preflight known geometry before the caller materializes complete PCM.
+/// Preflight mandatory BPM geometry before the caller materializes complete PCM.
 pub(super) fn prepare_input(
     frames: usize,
     channels: usize,
@@ -34,9 +34,13 @@ mod tests {
     #[test]
     fn full_neural_and_tempo_only_preparations_have_bounded_geometry_admission() {
         for seconds in [18, 109, 297] {
-            let full = admission_peak(seconds * 48_000, 2, 48_000, 0, false).unwrap();
-            let tempo = admission_peak(seconds * 48_000, 2, 48_000, 0, true).unwrap();
-            assert!(tempo < full && full <= LIMIT);
+            let full = admission_plan(seconds * 48_000, 2, 48_000, 0, false).unwrap();
+            let tempo = admission_plan(seconds * 48_000, 2, 48_000, 0, true).unwrap();
+            assert_eq!(tempo.primary_peak_bytes, full.primary_peak_bytes);
+            assert!(full.primary_peak_bytes < full.key_peak_bytes.unwrap());
+            assert!(full.key_peak_bytes.unwrap() <= LIMIT);
+            assert!(full.key_skip_reason.is_none());
+            assert!(tempo.key_peak_bytes.is_none() && tempo.key_skip_reason.is_none());
         }
         assert!(admission_peak(usize::MAX, 2, 48_000, 0, false).is_err());
         assert!(admission_peak(1, 0, 48_000, 0, false).is_err());
@@ -46,16 +50,89 @@ mod tests {
 
     #[test]
     fn oversized_finite_source_is_refused_before_complete_pcm_read() {
+        for tempo_only in [false, true] {
+            let read_started = std::cell::Cell::new(false);
+            let result = prepare_input(200_000_000, 2, 48_000, 48_000 * 8, tempo_only, || {
+                read_started.set(true);
+                panic!("oversized complete PCM must not be materialized");
+            });
+            assert!(result.is_err());
+            assert!(!read_started.get());
+        }
+    }
+
+    #[test]
+    fn optional_key_overflow_does_not_refuse_complete_bpm_input() {
+        let frames = 600 * 48_000;
+        let full = admission_plan(frames, 2, 48_000, 0, false).unwrap();
+        assert!(full.primary_peak_bytes < LIMIT);
+        assert!(full.key_peak_bytes.unwrap() > LIMIT);
+        assert!(full.key_skip_reason.as_deref().unwrap().contains("512 MiB"));
+        assert_eq!(
+            admission_peak(frames, 2, 48_000, 0, false).unwrap(),
+            admission_peak(frames, 2, 48_000, 0, true).unwrap()
+        );
         let read_started = std::cell::Cell::new(false);
-        let result = prepare_input(200_000_000, 2, 48_000, 48_000 * 8, true, || {
+        let result = prepare_input(frames, 2, 48_000, 0, false, || {
             read_started.set(true);
-            panic!("oversized complete PCM must not be materialized");
+            Err("read reached after mandatory admission".into())
         });
-        assert!(result.is_err());
-        assert!(!read_started.get());
+        assert!(read_started.get());
+        assert_eq!(
+            result.unwrap_err(),
+            "read reached after mandatory admission"
+        );
+    }
+
+    #[test]
+    fn primary_peak_counts_held_and_wire_at_the_exact_limit() {
+        let frames = 18 * 48_000;
+        let base = admission_plan(frames, 2, 48_000, 0, true).unwrap();
+        let extra = LIMIT - base.primary_peak_bytes;
+        let at_limit = admission_plan(frames, 2, 48_000, extra, false).unwrap();
+        assert_eq!(at_limit.primary_peak_bytes, LIMIT);
+        assert!(at_limit.key_skip_reason.is_some());
+        assert_eq!(at_limit.held_bytes + at_limit.wire_bytes, LIMIT);
+        assert!(admission_plan(frames, 2, 48_000, extra + 1, true).is_err());
+        assert!(admission_plan(frames, 2, 48_000, usize::MAX, true).is_err());
+    }
+
+    #[test]
+    fn skipped_unrequested_failed_and_completed_unknown_keys_remain_distinct() {
+        let large = admission_plan(600 * 48_000, 2, 48_000, 0, false).unwrap();
+        let skipped = optional_key(&large, false, || panic!("unadmitted key must not run"));
+        assert_eq!(skipped.status, AnalysisKeyStatus::SkippedBudget);
+        assert!(skipped.key.is_none() && skipped.error.is_some());
+        let ordinary = admission_plan(18 * 48_000, 2, 48_000, 0, false).unwrap();
+        let unrequested = optional_key(&ordinary, true, || panic!("tempo-only key must not run"));
+        assert_eq!(unrequested.status, AnalysisKeyStatus::NotRequested);
+        assert!(unrequested.key.is_none() && unrequested.error.is_none());
+        let failed = optional_key(&ordinary, false, || Err("model unavailable".into()));
+        assert_eq!(failed.status, AnalysisKeyStatus::Failed);
+        assert_eq!(failed.error.as_deref(), Some("model unavailable"));
+        let panicked = optional_key(&ordinary, false, || panic!("optional frontend panic"));
+        assert_eq!(panicked.status, AnalysisKeyStatus::Failed);
+        assert_eq!(
+            panicked.error.as_deref(),
+            Some("Key analysis worker panicked")
+        );
+        let unknown = optional_key(&ordinary, false, || Ok("unknown".into()));
+        assert_eq!(unknown.status, AnalysisKeyStatus::Ready);
+        assert_eq!(unknown.key.as_deref(), Some("unknown"));
+        assert!(unknown.error.is_none());
     }
 }
 
+/// Shared mandatory/optional geometry at both pre-read admission and execution.
+pub(super) struct AdmissionPlan {
+    pub primary_peak_bytes: usize,
+    pub key_peak_bytes: Option<usize>,
+    pub key_skip_reason: Option<String>,
+    held_bytes: usize,
+    wire_bytes: usize,
+}
+
+/// Return the mandatory BPM peak; optional key work cannot veto this admission.
 pub(super) fn admission_peak(
     frames: usize,
     channels: usize,
@@ -63,6 +140,16 @@ pub(super) fn admission_peak(
     extra_held: usize,
     tempo_only: bool,
 ) -> Result<usize, String> {
+    Ok(admission_plan(frames, channels, rate, extra_held, tempo_only)?.primary_peak_bytes)
+}
+
+pub(super) fn admission_plan(
+    frames: usize,
+    channels: usize,
+    rate: u32,
+    extra_held: usize,
+    tempo_only: bool,
+) -> Result<AdmissionPlan, String> {
     if frames == 0 || !(1..=32).contains(&channels) || !(8_000..=384_000).contains(&rate) {
         return Err("invalid neural source geometry".into());
     }
@@ -78,40 +165,109 @@ pub(super) fn admission_peak(
         .checked_mul(512)
         .and_then(|v| v.checked_add(16 * 1024 * 1024))
         .ok_or("neural wire budget overflow")?;
-    let converted = usize::try_from((frames as u128 * 44_100).div_ceil(u128::from(rate)))
-        .map_err(|_| "neural key extent overflow")?;
-    let key = if tempo_only {
-        0
-    } else {
-        let cqt =
-            flitzis_looper_analysis::key_detection::librosa_cqt::cqt::default_cqt_working_bytes(
-                converted,
-            )
-            .ok_or("neural key workspace overflow")?;
-        let (input, output) = super::analysis_pcm::fft::fft_dimensions(rate, 44_100);
-        let fft = input
-            .checked_add(output)
-            .and_then(|v| v.checked_mul(256))
-            .ok_or("neural FFT workspace overflow")?;
-        plan.key_peak_bytes
-            .checked_add(fft)
-            .ok_or("neural key workspace overflow")?
-            .max(
-                converted
-                    .checked_mul(12)
-                    .and_then(|v| v.checked_add(cqt))
-                    .ok_or("neural key workspace overflow")?,
-            )
-    };
-    let peak = retained
+    let primary_peak_bytes = retained
         .checked_add(wire)
-        .and_then(|v| v.checked_add(key))
         .ok_or("neural analysis budget overflow")?
         .max(plan.export_peak_bytes);
-    if peak > LIMIT {
+    if primary_peak_bytes > LIMIT {
         return Err("neural analysis exceeds complete-source preparation budget".into());
     }
-    Ok(peak)
+    let mut admission = AdmissionPlan {
+        primary_peak_bytes,
+        key_peak_bytes: None,
+        key_skip_reason: None,
+        held_bytes: retained,
+        wire_bytes: wire,
+    };
+    if !tempo_only {
+        match optional_key_peak(frames, rate, retained, wire, plan.key_peak_bytes) {
+            Ok(peak) => {
+                admission.key_peak_bytes = Some(peak);
+                if peak > LIMIT {
+                    admission.key_skip_reason = Some(format!(
+                        "Key analysis skipped: complete-source preparation needs {peak} bytes, exceeding 512 MiB"
+                    ));
+                }
+            }
+            Err(error) => {
+                admission.key_skip_reason = Some(format!("Key analysis skipped: {error}"));
+            }
+        }
+    }
+    Ok(admission)
+}
+
+fn optional_key_peak(
+    frames: usize,
+    rate: u32,
+    held: usize,
+    wire: usize,
+    key_pcm_peak: usize,
+) -> Result<usize, String> {
+    let converted = usize::try_from((frames as u128 * 44_100).div_ceil(u128::from(rate)))
+        .map_err(|_| "neural key extent overflow")?;
+    let cqt = flitzis_looper_analysis::key_detection::librosa_cqt::cqt::default_cqt_working_bytes(
+        converted,
+    )
+    .ok_or("neural key workspace overflow")?;
+    let (input, output) = super::analysis_pcm::fft::fft_dimensions(rate, 44_100);
+    let fft = input
+        .checked_add(output)
+        .and_then(|v| v.checked_mul(256))
+        .ok_or("neural FFT workspace overflow")?;
+    let key = key_pcm_peak
+        .checked_add(fft)
+        .ok_or("neural key workspace overflow")?
+        .max(
+            converted
+                .checked_mul(12)
+                .and_then(|v| v.checked_add(cqt))
+                .ok_or("neural key workspace overflow")?,
+        );
+    held.checked_add(wire)
+        .and_then(|value| value.checked_add(key))
+        .ok_or_else(|| "neural key workspace overflow".into())
+}
+
+struct KeyOutcome {
+    key: Option<String>,
+    status: AnalysisKeyStatus,
+    error: Option<String>,
+}
+
+fn optional_key(
+    admission: &AdmissionPlan,
+    tempo_only: bool,
+    run: impl FnOnce() -> Result<String, String>,
+) -> KeyOutcome {
+    if tempo_only {
+        return KeyOutcome {
+            key: None,
+            status: AnalysisKeyStatus::NotRequested,
+            error: None,
+        };
+    }
+    if let Some(error) = &admission.key_skip_reason {
+        return KeyOutcome {
+            key: None,
+            status: AnalysisKeyStatus::SkippedBudget,
+            error: Some(error.clone()),
+        };
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+        .unwrap_or_else(|_| Err("Key analysis worker panicked".into()))
+    {
+        Ok(key) => KeyOutcome {
+            key: Some(key),
+            status: AnalysisKeyStatus::Ready,
+            error: None,
+        },
+        Err(error) => KeyOutcome {
+            key: None,
+            status: AnalysisKeyStatus::Failed,
+            error: Some(error),
+        },
+    }
 }
 
 #[pyclass(frozen)]
@@ -140,7 +296,7 @@ pub(super) fn analyze(
     tempo_only: bool,
 ) -> Result<LoadedAnalysis, String> {
     let Some(context) = context else {
-        // Compatibility callers deliberately retain their original backend.
+        // Callers without a configured neural installation retain the scientific backend.
         return super::analyze_sample(sample, rate).map(Into::into);
     };
     let cancelled = || (context.cancelled)();
@@ -155,7 +311,7 @@ pub(super) fn analyze(
         &decoder_identity,
     )?;
     let frames = sample.frame_count();
-    admission_peak(
+    let admission = admission_plan(
         frames,
         sample.channels,
         rate,
@@ -165,18 +321,11 @@ pub(super) fn analyze(
     let snapshot = LoadedPcmSnapshot::new(sample.clone(), rate, context.identity.clone(), LIMIT)
         .map_err(|e| e.to_string())?;
     let plan = snapshot.staging_plan().map_err(|e| e.to_string())?;
-    let logits = expected_logit_count(frames, rate)?;
     // Bounded main-process protocol/tuples/codec workspace, scaled to this actual
     // complete observation extent. Model subprocess RSS is separately bounded by
     // the existing worker adapter; this is not a whole process-tree RAM claim.
-    let wire = logits
-        .checked_mul(512)
-        .and_then(|v| v.checked_add(16 * 1024 * 1024))
-        .ok_or("neural wire budget overflow")?;
-    let held = snapshot
-        .retained_bytes()
-        .checked_add(context.additional_held_bytes)
-        .ok_or("neural held budget overflow")?;
+    let wire = admission.wire_bytes;
+    let held = admission.held_bytes;
     let temporary = tempfile::Builder::new()
         .prefix(".beat-this-app-")
         .tempdir_in(&context.staging_root)
@@ -191,8 +340,6 @@ pub(super) fn analyze(
         if writer.bytes != plan.export_bytes { return Err("neural staged extent differs".into()); }
         let mono_sha256 = format!("{:x}", writer.digest.finalize());
         file.sync_all().map_err(|e| e.to_string())?;
-        let mut key_reader = file.try_clone().map_err(|e| e.to_string())?;
-        key_reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let source = BeatThisSourceInput { decoder_identity, source_descriptor: context.descriptor.clone(),
             source_sample_rate_hz: rate, source_frame_count: frames, source_zero_frame: 0,
             mono_sha256: mono_sha256.clone(), mono_rule: super::analysis_pcm::MONO_RULE.into() };
@@ -200,35 +347,36 @@ pub(super) fn analyze(
             "source_id":context.identity.source_id,"source_generation":context.identity.source_generation});
         let probe = Python::attach(|py| Py::new(py, AnalysisCancellation(context.cancelled.clone())))
             .map_err(|e| e.to_string())?.into_any();
-        let (beat, key) = std::thread::scope(|scope| {
+        let (beat, key_outcome) = std::thread::scope(|scope| {
             let beat = scope.spawn(|| invoke_worker(source, identity, path_text, &context.installation, probe));
-            let key = if tempo_only { None } else {
+            let key = optional_key(&admission, tempo_only, || {
+                let mut key_reader = file.try_clone().map_err(|e| e.to_string())?;
+                key_reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
                 let input = key_input_from_f32_le(&mut key_reader, frames, rate, LIMIT - held - wire, &cancelled)
-                    .map_err(|e| e.to_string());
-                Some(match input {
-                    Ok(input) => {
-                        let widened: Vec<_> = input.samples.iter().map(|&v| f64::from(v)).collect();
-                        drop(input);
-                        super::run_key_detection(&widened)
-                    }
-                    Err(_) => "unknown".into(),
-                })
-            };
+                    .map_err(|e| e.to_string())?;
+                let mut widened = Vec::new();
+                widened.try_reserve_exact(input.samples.len())
+                    .map_err(|_| "Key widened input allocation unavailable".to_owned())?;
+                widened.extend(input.samples.iter().map(|&value| f64::from(value)));
+                drop(input);
+                super::run_key_detection_result(&widened)
+            });
             (beat.join().unwrap_or_else(|_| Err("neural worker panicked".into())), key)
         });
-        drop(key_reader);
         verify_staged(&mut file, plan.export_bytes, &mono_sha256, &cancelled)?;
         if cancelled() { return Err("neural analysis request superseded".into()); }
+        let KeyOutcome { key, status: key_status, error: key_error } = key_outcome;
         let (raw, _) = match beat {
             Ok(raw) => raw,
             Err(error) if tempo_only => return Err(error),
-            Err(error) => return Ok(LoadedAnalysis { bpm: 0.0, key,
+            Err(error) => return Ok(LoadedAnalysis { bpm: 0.0, key, key_status, key_error,
                 beat_grid: flitzis_looper_analysis::BeatGrid { beats: vec![], downbeats: vec![], bars: vec![] },
                 bpm_method_json: None, beat_error: Some(error) }),
         };
         let descriptor_bytes = super::neural_analysis::budget::value_tree(&context.descriptor)?;
         let source_live = super::neural_analysis::budget::sum(&[held, descriptor_bytes,
-            source_digest.capacity(), mono_sha256.capacity(), key.as_ref().map_or(0, String::capacity)])?;
+            source_digest.capacity(), mono_sha256.capacity(), key.as_ref().map_or(0, String::capacity),
+            key_error.as_ref().map_or(0, String::capacity)])?;
         let predictions = raw.predictions();
         let estimate = super::app_tempo::estimate(&predictions.beat_seconds, frames as f64 / f64::from(rate));
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
@@ -254,7 +402,7 @@ pub(super) fn analyze(
         drop(method);
         let beats = predictions.beat_seconds.iter().map(|&v| v as f32).collect();
         let downbeats: Vec<_> = predictions.downbeat_seconds.iter().map(|&v| v as f32).collect();
-        Ok(LoadedAnalysis { bpm: estimate.bpm.unwrap_or(0.0), key,
+        Ok(LoadedAnalysis { bpm: estimate.bpm.unwrap_or(0.0), key, key_status, key_error,
             beat_grid: flitzis_looper_analysis::BeatGrid { beats, bars: downbeats.clone(), downbeats },
             bpm_method_json: Some(method_json),
             beat_error: estimate.bpm.is_none().then(|| format!("Neural tempo estimate {}", estimate.status)) })

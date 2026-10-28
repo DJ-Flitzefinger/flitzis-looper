@@ -915,6 +915,49 @@ def _admit_predecessor_analysis(
     return previous
 
 
+@pytest.mark.parametrize("incoming", [False, True])
+def test_loaded_bpm_survives_skipped_key_without_fabricated_source_key(
+    controller: AppController, audio_engine_mock: Mock, *, incoming: bool
+) -> None:
+    if incoming:
+        audio_engine_mock.load_incoming_sample_async.return_value = 17
+        controller.loader.load_sample_async(0, "long-source.mp3")
+    else:
+        controller.loader._load_request_ids[0] = 17
+        controller.session.loading_sample_ids.add(0)
+        controller.session.pending_sample_paths[0] = "long-source.mp3"
+    audio_engine_mock.waveform_source_identity.return_value = (17, "b" * 64, 48_000 * 600, 48_000)
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "request_id": 17,
+            "cached_path": "samples/long-source.wav",
+            "duration_s": 600.0,
+            **({"incoming_defaults": _native_defaults(period=0.5)} if incoming else {}),
+            "analysis_error": "Independent beat support diagnostic",
+            "analysis": {
+                "bpm": 120.0,
+                "key": "unknown",
+                "key_status": "skipped_budget",
+                "key_error": "optional key preparation exceeds 512 MiB",
+                "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0], "bars": [0.0]},
+            },
+        },
+        None,
+    ]
+    controller.loader.poll_loader_events()
+    analysis = controller.project.sample_analysis[0]
+    assert analysis is not None
+    assert (analysis.bpm, analysis.key) == (120.0, "unknown")
+    assert controller.project.pad_key_intent[0].source is None
+    assert 0 not in controller.session.sample_load_errors
+    assert 0 not in controller.session.loading_sample_ids
+    error = controller.session.sample_analysis_errors[0]
+    assert "optional key preparation exceeds 512 MiB" in error
+    assert "Independent beat support diagnostic" in error
+
+
 @pytest.mark.parametrize(
     ("timing_stale", "analysis_error"),
     [

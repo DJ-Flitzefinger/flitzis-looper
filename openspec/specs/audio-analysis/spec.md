@@ -3,6 +3,34 @@
 ## Purpose
 To define background audio analysis for BPM, key, beat grid, and downbeat metadata used by UI display, snapping, and Rust timing metadata publication.
 ## Requirements
+
+### Requirement: Primary BPM and optional key have independent admission
+Configured primary-neural analysis SHALL admit full-source BPM independently of
+optional key work at every pre-read and execution gate, retaining512MiB and all
+source/request/cancellation/publication guards. Optional concurrent key admission
+SHALL include held PCM, wire, conversion, FFT, CQT and widened working storage.
+No source cropping or limit increase SHALL substitute for independent admission.
+Both current loader DTO routes SHALL keep the required key string and explicit
+key_status ready/skipped_budget/not_requested/failed plus available key_error.
+An actual completed unknown classification SHALL remain distinct from skipped work.
+
+#### Scenario: Optional key exceeds preparation capacity
+- **WHEN** mandatory full-source BPM fits but optional concurrent key work exceeds512MiB
+- **THEN** BPM SHALL proceed while the key outcome explicitly reports skipped_budget
+- **AND** a fresh source SHALL display unknown without publishing a detected key version
+- **AND** same-source reanalysis SHALL preserve prior detected key, correction and numeric shifts
+
+#### Scenario: Key fails, was not requested or lacks a metadata epoch
+- **WHEN** optional key work fails, is unrequested or cannot reserve its metadata epoch
+- **THEN** independently valid BPM SHALL remain publishable with an understandable component outcome
+- **AND** prior key intent SHALL remain unchanged
+- **AND** whole-request source replacement, cancellation and stale feedback SHALL retain their existing fences
+
+#### Scenario: Matching successful key completion
+- **WHEN** genuinely admitted key work successfully completes for its captured current source and request
+- **THEN** completion MAY publish a detected source version and clear only the captured old correction
+- **AND** admission alone SHALL NOT clear correction and a newer correction SHALL remain authoritative
+
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
 The system SHALL analyze a loaded audio sample to determine its BPM, musical key, and beat grid.
 

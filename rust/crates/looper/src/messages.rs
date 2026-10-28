@@ -931,11 +931,33 @@ impl ControlMessage {
 /// Re-export from the analysis crate.
 pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 
+/// Outcome of the optional key component, independent of scalar BPM availability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnalysisKeyStatus {
+    Ready,
+    SkippedBudget,
+    NotRequested,
+    Failed,
+}
+
+impl AnalysisKeyStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::SkippedBudget => "skipped_budget",
+            Self::NotRequested => "not_requested",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// Ordinary App estimate. No accepted timing/map or current Native authority.
 #[derive(Clone, Debug)]
 pub struct LoadedAnalysis {
     pub bpm: f64,
     pub key: Option<String>,
+    pub key_status: AnalysisKeyStatus,
+    pub key_error: Option<String>,
     pub beat_grid: flitzis_looper_analysis::BeatGrid,
     pub bpm_method_json: Option<String>,
     pub beat_error: Option<String>,
@@ -946,6 +968,8 @@ impl From<SampleAnalysis> for LoadedAnalysis {
         Self {
             bpm: f64::from(value.bpm),
             key: Some(value.key),
+            key_status: AnalysisKeyStatus::Ready,
+            key_error: None,
             beat_grid: value.beat_grid,
             bpm_method_json: None,
             beat_error: None,

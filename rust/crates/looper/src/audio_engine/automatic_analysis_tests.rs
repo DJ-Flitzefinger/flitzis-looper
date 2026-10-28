@@ -136,6 +136,16 @@ fn import_and_ack_with_backend(
     public_incoming: bool,
     backend: Option<String>,
 ) -> Value {
+    import_and_ack_with_backend_mode(source, output_rate, public_incoming, backend, false)
+}
+
+fn import_and_ack_with_backend_mode(
+    source: &Path,
+    output_rate: u32,
+    public_incoming: bool,
+    backend: Option<String>,
+    single_pass: bool,
+) -> Value {
     Python::initialize();
     let mut engine = AudioEngine::new().unwrap();
     if let Some(backend) = &backend {
@@ -280,7 +290,9 @@ fn import_and_ack_with_backend(
         panic!("actual import failed: {event:?}");
     };
     assert_eq!((id, request_id), (0, request));
-    assert!(analysis_error.is_none(), "{analysis_error:?}");
+    if !single_pass {
+        assert!(analysis_error.is_none(), "{analysis_error:?}");
+    }
     assert_eq!(incoming_defaults.is_some(), public_incoming);
     if let Some(defaults) = incoming_defaults {
         let expected = expected_defaults.unwrap();
@@ -291,14 +303,27 @@ fn import_and_ack_with_backend(
         assert_eq!(defaults.end_frame, expected.end_frame);
     }
     let analysis = analysis.expect("complete automatic analysis result");
-    assert!(analysis.bpm.is_finite() && analysis.bpm > 0.0);
-    assert!(
-        analysis.key.as_ref().is_some_and(|key| !key.is_empty()),
-        "key result must retain truthful unknown"
-    );
-    assert_grid(&analysis.beat_grid.beats, duration_s, "beats");
-    assert_grid(&analysis.beat_grid.downbeats, duration_s, "downbeats");
-    assert_grid(&analysis.beat_grid.bars, duration_s, "bars");
+    if single_pass {
+        for grid in [
+            &analysis.beat_grid.beats,
+            &analysis.beat_grid.downbeats,
+            &analysis.beat_grid.bars,
+        ] {
+            assert!(grid.iter().all(|value| value.is_finite()
+                && *value >= 0.0
+                && f64::from(*value) <= duration_s));
+            assert!(grid.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+    } else {
+        assert!(analysis.bpm.is_finite() && analysis.bpm > 0.0);
+        assert!(
+            analysis.key.as_ref().is_some_and(|key| !key.is_empty()),
+            "key result must retain truthful unknown"
+        );
+        assert_grid(&analysis.beat_grid.beats, duration_s, "beats");
+        assert_grid(&analysis.beat_grid.downbeats, duration_s, "downbeats");
+        assert_grid(&analysis.beat_grid.bars, duration_s, "bars");
+    }
     wait_until(|| engine.cold_loading[0].load(Ordering::Acquire) == 0);
     assert_eq!(
         engine.input_runtime_ownership.cold_status(0, request),
@@ -308,7 +333,7 @@ fn import_and_ack_with_backend(
         engine.loaded_source_generations.lock().unwrap()[0],
         (request, output_rate)
     );
-    if backend.is_some() {
+    if backend.is_some() && !single_pass {
         let method: Value = serde_json::from_str(
             analysis
                 .bpm_method_json
@@ -426,13 +451,39 @@ fn import_and_ack_with_backend(
         assert_eq!(hash_file(&path), pcm["interleaved_sha256"]);
     }
     assert_eq!(hash_file(&lease.original_path), hash_file(source));
+    let admission = if backend.is_some() {
+        // The public incoming path analyzes before allocating its live resident
+        // view, so this exact full-source preparation has no extra held view.
+        let plan = crate::audio_engine::app_analysis::admission_plan(
+            usize::try_from(frames).unwrap(),
+            2,
+            output_rate,
+            0,
+            false,
+        )
+        .unwrap();
+        Some(json!({
+            "limit_bytes":512 * 1024 * 1024,
+            "primary_peak_bytes":plan.primary_peak_bytes,
+            "optional_key_peak_bytes":plan.key_peak_bytes,
+            "key_skip_reason":plan.key_skip_reason,
+            "additional_held_bytes":0,
+            "scope":"Complete-source incoming preparation; model subprocess RSS accounted separately",
+        }))
+    } else {
+        None
+    };
     let result = json!({
         "test":"complete-automatic-analysis-own-import-ack-v1",
         "pid":std::process::id(), "public_incoming_api":public_incoming,
-        "request_id":request, "own_source_ack":true, "analysis_error":null,
+        "request_id":request, "own_source_ack":true, "analysis_error":analysis_error,
+        "beat_error":analysis.beat_error,
+        "single_pass":single_pass,
+        "preparation_admission":admission,
         "elapsed_seconds":started.elapsed().as_secs_f64(), "duration_seconds":duration_s,
         "actual_symphonia_decoder_pcm":decoder, "actual_playback_pcm":playback,
         "bpm":analysis.bpm, "key":analysis.key,
+        "key_status":analysis.key_status.as_str(), "key_error":analysis.key_error,
         "bpm_method":analysis.bpm_method_json,
         "key_scope":"actual result; unknown remains unknown; no model substitution or musical label acceptance",
         "beats":analysis.beat_grid.beats, "downbeats":analysis.beat_grid.downbeats,
@@ -445,6 +496,105 @@ fn import_and_ack_with_backend(
     drop(leases);
     engine.shut_down().unwrap();
     result
+}
+
+#[test]
+#[ignore = "explicit read-only authorized corpus source, pinned backend and owned report root"]
+fn primary_neural_authorized_corpus_single_pass_import_and_own_ack() {
+    let source =
+        PathBuf::from(std::env::var_os("FLITZI_CORPUS_SOURCE").expect("explicit corpus source"))
+            .canonicalize()
+            .unwrap();
+    let corpus = Path::new("C:/SCRATCHBEATS").canonicalize().unwrap();
+    assert!(source.is_file() && source.starts_with(&corpus));
+    assert!(matches!(
+        source
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("mp3" | "flac" | "wav")
+    ));
+    let expected =
+        std::env::var("FLITZI_CORPUS_SOURCE_SHA256").expect("explicit corpus source digest");
+    assert!(
+        expected.len() == 64
+            && expected
+                .bytes()
+                .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+    );
+    assert_eq!(hash_file(&source), expected);
+    let backend = std::env::var("FLITZI_PRIMARY_BEAT_INSTALLATION")
+        .expect("explicit pinned installed backend");
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_NEURAL_TEST_ROOT").expect("explicit owned artifact root"),
+    )
+    .canonicalize()
+    .unwrap();
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let artifacts = workspace.join("test-artifacts").canonicalize().unwrap();
+    assert!(root.is_dir() && root.starts_with(&artifacts) && !root.starts_with(&corpus));
+    let (_directory, _cwd) = owned_directory_at(&root);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        import_and_ack_with_backend_mode(&source, 48_000, true, Some(backend), true)
+    }));
+    assert_eq!(hash_file(&source), expected);
+    let mut result = match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            fs::write(
+                root.join(format!("{expected}.json")),
+                serde_json::to_vec_pretty(&json!({
+                    "source_sha256":expected, "source":source.to_str(),
+                    "status":"productive_probe_failed", "raw_observations_available":false,
+                    "app_or_device_started":false,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            std::panic::resume_unwind(payload);
+        }
+    };
+    result["authorized_source_sha256"] = json!(expected);
+    result["exact_source_path"] = json!(source.to_str().unwrap());
+    result["compiled_helper_sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(include_bytes!("automatic_analysis_tests.rs"))
+    ));
+    result["scope"] = json!(
+        "One productive full-source Native import/OwnACK; raw observations and component outcomes, not reference accuracy or hearing acceptance"
+    );
+    fs::write(
+        root.join(format!("{expected}.json")),
+        serde_json::to_vec_pretty(&result).unwrap(),
+    )
+    .unwrap();
+    // Persist outcomes before asserting classification so a detector defect or
+    // ambiguous source remains visible and reusable instead of losing its data.
+    let method: Value = serde_json::from_str(
+        result["bpm_method"]
+            .as_str()
+            .expect("primary observation provenance"),
+    )
+    .unwrap();
+    assert_eq!(method["source_sha256"], expected);
+    assert_eq!(method["backend"], "beat_this");
+    assert!(matches!(
+        result["key_status"].as_str(),
+        Some("ready" | "skipped_budget" | "not_requested" | "failed")
+    ));
+    if result["key_status"] == "ready" {
+        assert!(result["key"].as_str().is_some_and(|key| !key.is_empty()));
+    }
+    println!(
+        "CORPUS_SINGLE_PASS {}",
+        root.join(format!("{expected}.json")).display()
+    );
 }
 
 #[test]

@@ -131,6 +131,26 @@ def _parse_sample_analysis(analysis: object) -> SampleAnalysis | None:
         return None
 
 
+def _key_component_result(analysis: object) -> tuple[bool, str | None]:
+    """Read an ephemeral component outcome without changing the saved analysis schema."""
+    if not isinstance(analysis, dict):
+        return False, None
+    status = analysis.get("key_status", "ready")
+    if status == "ready":
+        return True, None
+    if status == "not_requested":
+        return False, None
+    detail = analysis.get("key_error")
+    detail = detail if isinstance(detail, str) and detail else None
+    if status == "skipped_budget":
+        message = "Key analysis skipped because its preparation exceeds the memory budget"
+    elif status == "failed":
+        message = "Key analysis failed"
+    else:
+        message = "Key analysis result has an invalid component status"
+    return False, f"{message}: {detail}" if detail is not None else message
+
+
 class _RestoredLoadOptions(TypedDict):
     run_analysis: bool
     replace_assignment: bool
@@ -720,8 +740,13 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._session.sample_analysis_errors[sample_id] = "sample is not loaded"
             return
 
+        key_error: str | None = None
         try:
             key_admission = self._key_analysis.prepare(sample_id)
+        except (RuntimeError, ValueError) as error:
+            key_admission = None
+            key_error = f"Analysis key metadata admission failed: {error}"
+        try:
             request_id = self._audio.analyze_sample_async(sample_id)
         except (RuntimeError, ValueError) as err:
             self._session.sample_analysis_errors[sample_id] = str(err)
@@ -730,8 +755,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._session.analyzing_sample_ids.add(sample_id)
             self._analysis_request_ids.pop(sample_id, None)
             self._record_analysis_request_id(sample_id, request_id)
+            self._key_analysis.cancel(sample_id)
             try:
-                if self._key_analysis.admit(sample_id, key_admission, request_id):
+                if key_error is not None:
+                    self._key_analysis.record_error(sample_id, request_id, key_error)
+                    self._session.sample_analysis_errors[sample_id] = key_error
+                elif self._key_analysis.admit(sample_id, key_admission, request_id):
                     self._mark_project_changed()
             except (RuntimeError, ValueError) as error:
                 message = f"Analysis key metadata admission failed: {error}"
@@ -1257,14 +1286,19 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     ) -> None:
         """Finish source bookkeeping without republishing the already adopted defaults."""
         parsed = self._project.sample_analysis[sample_id]
-        if parsed is not None and self._key_analysis.loaded(
-            sample_id, event.get("request_id"), parsed.key
-        ):
-            self._mark_project_changed()
+        key_ready, _ = _key_component_result(event.get("analysis"))
+        key_error: str | None = None
+        if parsed is not None and key_ready:
+            try:
+                if self._key_analysis.loaded(sample_id, event.get("request_id"), parsed.key):
+                    self._mark_project_changed()
+            except (RuntimeError, ValueError) as error:
+                key_error = f"Analysis key metadata completion failed: {error}"
+                self._project.sample_analysis[sample_id] = parsed.model_copy(
+                    update={"key": "unknown"}
+                )
         self._clear_analysis_task_state(sample_id)
-        analysis_error = event.get("analysis_error")
-        if isinstance(analysis_error, str):
-            self._session.sample_analysis_errors[sample_id] = analysis_error
+        self._record_analysis_errors(sample_id, event, key_error=key_error)
         if self._on_incoming_sample_loaded is not None:
             self._on_incoming_sample_loaded(sample_id)
         if refresh[0] and self._on_loaded_key_lock is not None:
@@ -1345,8 +1379,9 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 sample_id, detected_start if isinstance(detected_start, float) else None
             )
 
+        key_error: str | None = None
         if not timing_stale:
-            self._apply_loaded_analysis(
+            key_error = self._apply_loaded_analysis(
                 sample_id,
                 event.get("analysis"),
                 key_request_id=event.get("request_id") if new_assignment else None,
@@ -1354,9 +1389,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             )
             if not tempo_only:
                 self._clear_analysis_task_state(sample_id)
-        analysis_error = event.get("analysis_error")
-        if isinstance(analysis_error, str):
-            self._session.sample_analysis_errors[sample_id] = analysis_error
+        self._record_analysis_errors(sample_id, event, key_error=key_error)
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
@@ -1405,17 +1438,29 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         *,
         key_request_id: object = None,
         tempo_only: bool = False,
-    ) -> None:
+    ) -> str | None:
         if tempo_only:
             self._apply_tempo_only_analysis(sample_id, analysis)
-            return
+            return None
         if analysis is not None:
-            parsed = self._store_sample_analysis(sample_id, analysis)
-            if parsed is not None and self._key_analysis.loaded(
-                sample_id, key_request_id, parsed.key
+            parsed = _parse_sample_analysis(analysis)
+            key_ready, _ = _key_component_result(analysis)
+            key_completed = False
+            key_error: str | None = None
+            if parsed is not None and key_ready:
+                try:
+                    key_completed = self._key_analysis.loaded(sample_id, key_request_id, parsed.key)
+                except (RuntimeError, ValueError) as error:
+                    key_error = f"Analysis key metadata completion failed: {error}"
+            if not key_ready or (
+                self._valid_analysis_request_id(key_request_id) and not key_completed
             ):
+                analysis = self._analysis_preserving_key(sample_id, analysis)
+            self._store_sample_analysis(sample_id, analysis)
+            if key_completed:
                 self._mark_project_changed()
-        elif (
+            return key_error
+        if (
             self._project.sample_analysis[sample_id] is not None
             or self._project.manual_bpm[sample_id] is not None
             or self._project.pad_grid_offset_samples[sample_id] != 0
@@ -1423,6 +1468,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
         ):
             self._on_pad_bpm_changed(sample_id)
+        return None
 
     def _apply_tempo_only_analysis(self, sample_id: int, analysis: object) -> None:
         """Merge an optional current estimate without changing key or manual intent."""
@@ -1568,11 +1614,13 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
         analysis = event.get("analysis")
         parsed = _parse_sample_analysis(analysis)
+        key_ready, _ = _key_component_result(analysis)
         key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))
         key_completed = False
         try:
             if (
                 parsed is not None
+                and key_ready
                 and key_error is None
                 and self._key_analysis.complete(sample_id, event.get("request_id"), parsed.key)
             ):
@@ -1583,22 +1631,46 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         control_error: str | None = None
         try:
             if event.get("timing_stale") is not True:
-                self._store_analysis_completion(sample_id, analysis, key_completed=key_completed)
+                self._store_analysis_completion(
+                    sample_id,
+                    analysis,
+                    key_completed=key_completed,
+                    preserve_key=not key_ready
+                    or (
+                        self._valid_analysis_request_id(event.get("request_id"))
+                        and not key_completed
+                    ),
+                )
         except (RuntimeError, ValueError) as error:
             control_error = f"Analysis control refresh failed: {error}"
         self._clear_analysis_task_state(sample_id)
+        self._record_analysis_errors(
+            sample_id, event, key_error=key_error, control_error=control_error
+        )
+
+    def _record_analysis_errors(
+        self,
+        sample_id: int,
+        event: dict[str, object],
+        *,
+        key_error: str | None = None,
+        control_error: str | None = None,
+    ) -> None:
+        """Keep component diagnostics visible without invalidating another result."""
+        _, component_error = _key_component_result(event.get("analysis"))
         beat_error = event.get("analysis_error")
         errors = [
             message
             for message in (
                 key_error,
+                component_error,
                 control_error,
                 beat_error if isinstance(beat_error, str) else None,
             )
             if message is not None
         ]
         if errors:
-            self._session.sample_analysis_errors[sample_id] = "\n".join(errors)
+            self._session.sample_analysis_errors[sample_id] = "\n".join(dict.fromkeys(errors))
 
     def _handle_stem_generation_success(self, sample_id: int) -> None:
         if sample_id not in self._session.stem_generating_sample_ids:
@@ -1651,7 +1723,12 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             self._session.sample_analysis_errors[sample_id] = msg
 
     def _store_analysis_completion(
-        self, sample_id: int, analysis: object, *, key_completed: bool
+        self,
+        sample_id: int,
+        analysis: object,
+        *,
+        key_completed: bool,
+        preserve_key: bool,
     ) -> None:
         """A failed beat component may complete key data without clearing valid tempo."""
         parsed = _parse_sample_analysis(analysis)
@@ -1665,7 +1742,19 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 )
                 self._mark_project_changed()
             return
-        self._store_sample_analysis(sample_id, analysis)
+        self._store_sample_analysis(
+            sample_id,
+            self._analysis_preserving_key(sample_id, analysis) if preserve_key else analysis,
+        )
+
+    def _analysis_preserving_key(self, sample_id: int, analysis: object) -> object:
+        """Merge independent BPM output with the current source's detected key."""
+        if not isinstance(analysis, dict):
+            return analysis
+        source = self._project.pad_key_intent[sample_id].source
+        previous = self._project.sample_analysis[sample_id]
+        key = source.raw_key if source is not None else previous.key if previous else "unknown"
+        return analysis | {"key": key}
 
     def _store_sample_analysis(self, sample_id: int, analysis: object) -> SampleAnalysis | None:
         parsed = _parse_sample_analysis(analysis)
@@ -1900,6 +1989,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             return
         self._analysis_request_ids[sample_id] = request_id
 
+    @staticmethod
+    def _valid_analysis_request_id(request_id: object) -> bool:
+        """Recognize an integer Native request without treating booleans as IDs."""
+        return isinstance(request_id, int) and not isinstance(request_id, bool)
+
     def _matches_load_request(self, sample_id: int, event: dict[str, object]) -> bool:
         request_id = event.get("request_id")
         incoming = self._incoming_loads.get(sample_id)
@@ -1916,5 +2010,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     def _matches_analysis_request(self, sample_id: int, event: dict[str, object]) -> bool:
         request_id = event.get("request_id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
-            return not self._key_analysis.has_request(sample_id)
+            return (
+                sample_id not in self._analysis_request_ids
+                and not self._key_analysis.has_request(sample_id)
+            )
         return self._analysis_request_ids.get(sample_id) == request_id

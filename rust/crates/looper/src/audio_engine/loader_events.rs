@@ -356,8 +356,10 @@ pub(super) fn poll(
             if let Some(analysis) = analysis {
                 let analysis_dict = PyDict::new(py);
                 analysis_dict.set_item("bpm", analysis.bpm)?;
-                if let Some(key) = analysis.key {
-                    analysis_dict.set_item("key", key)?;
+                analysis_dict.set_item("key", analysis.key.as_deref().unwrap_or("unknown"))?;
+                analysis_dict.set_item("key_status", analysis.key_status.as_str())?;
+                if let Some(error) = analysis.key_error {
+                    analysis_dict.set_item("key_error", error)?;
                 }
                 if let Some(method) = analysis.bpm_method_json {
                     analysis_dict.set_item("bpm_method", method)?;
@@ -423,8 +425,10 @@ pub(super) fn poll(
             if let Some(analysis) = analysis {
                 let analysis_dict = PyDict::new(py);
                 analysis_dict.set_item("bpm", analysis.bpm)?;
-                if let Some(key) = analysis.key {
-                    analysis_dict.set_item("key", key)?;
+                analysis_dict.set_item("key", analysis.key.as_deref().unwrap_or("unknown"))?;
+                analysis_dict.set_item("key_status", analysis.key_status.as_str())?;
+                if let Some(error) = analysis.key_error {
+                    analysis_dict.set_item("key_error", error)?;
                 }
                 if let Some(method) = analysis.bpm_method_json {
                     analysis_dict.set_item("bpm_method", method)?;

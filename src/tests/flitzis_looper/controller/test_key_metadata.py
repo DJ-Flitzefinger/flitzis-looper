@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.key_intent import MAX_KEY_EPOCH, MusicalKey, PadKeyIntent, SourceKeyVersion
-from flitzis_looper.models import PadContentIdentity
+from flitzis_looper.models import BeatGrid, PadContentIdentity, SampleAnalysis
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
@@ -33,7 +33,14 @@ def _seed(controller: AppController, audio: Mock) -> PadKeyIntent:
     return intent
 
 
-def _success(request_id: object = 11, *, timing_stale: bool = False) -> dict[str, object]:
+def _success(
+    request_id: object = 11,
+    *,
+    timing_stale: bool = False,
+    key_status: str = "ready",
+    key: str = "Bm",
+    key_error: str | None = None,
+) -> dict[str, object]:
     return {
         "type": "task_success",
         "task": "analysis",
@@ -42,7 +49,9 @@ def _success(request_id: object = 11, *, timing_stale: bool = False) -> dict[str
         "timing_stale": timing_stale,
         "analysis": {
             "bpm": 120.0,
-            "key": "Bm",
+            "key": key,
+            "key_status": key_status,
+            **({"key_error": key_error} if key_error is not None else {}),
             "beat_grid": {"beats": [], "downbeats": [], "bars": []},
         },
     }
@@ -90,7 +99,7 @@ def test_metadata_edits_and_three_resets_issue_no_audio_commands(
     assert audio_engine_mock.mock_calls == []
 
 
-def test_deliberate_analysis_removes_old_correction_only_at_real_admission(
+def test_deliberate_analysis_removes_old_correction_only_after_ready_completion(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     before = _seed(controller, audio_engine_mock)
@@ -101,14 +110,114 @@ def test_deliberate_analysis_removes_old_correction_only_at_real_admission(
     audio_engine_mock.analyze_sample_async.side_effect = None
     controller.loader.analyze_sample_async(0)
     admitted = controller.project.pad_key_intent[0]
-    assert admitted.correction is None
+    assert admitted.correction == before.correction
     assert admitted.analysis_epoch == 5
-    assert admitted.correction_epoch == 10
+    assert admitted.correction_epoch == before.correction_epoch
     assert (admitted.base_shift, admitted.extra_shift, admitted.retrigger) == (-4, 2, True)
     _poll(controller, audio_engine_mock, _success())
     result = controller.project.pad_key_intent[0]
     assert result.source == SourceKeyVersion(version=4, raw_key="Bm")
     assert result.correction is None
+    assert result.correction_epoch == 10
+
+
+@pytest.mark.parametrize("key_status", ["skipped_budget", "failed", "not_requested"])
+def test_unavailable_key_component_preserves_metadata_and_accepts_bpm(
+    controller: AppController, audio_engine_mock: Mock, key_status: str
+) -> None:
+    before = _seed(controller, audio_engine_mock)
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=94.0, key="Em", beat_grid=BeatGrid(beats=[0.1], downbeats=[], bars=[])
+    )
+    controller.loader.analyze_sample_async(0)
+    admitted = controller.project.pad_key_intent[0]
+    assert admitted == before.changed(analysis_epoch=5)
+    detail = None if key_status == "not_requested" else "optional key component unavailable"
+    _poll(
+        controller,
+        audio_engine_mock,
+        _success(key_status=key_status, key="unknown", key_error=detail),
+    )
+    assert controller.project.pad_key_intent[0] == admitted
+    analysis = controller.project.sample_analysis[0]
+    assert analysis is not None
+    assert (analysis.bpm, analysis.key) == (120.0, "Em")
+    assert analysis.beat_grid == BeatGrid(beats=[], downbeats=[], bars=[])
+    assert controller.loader._key_analysis.has_request(0) is False
+    assert 0 not in controller.session.analyzing_sample_ids
+    if detail is None:
+        assert 0 not in controller.session.sample_analysis_errors
+    else:
+        assert detail in controller.session.sample_analysis_errors[0]
+
+
+def test_skipped_key_keeps_a_correction_made_during_analysis(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _seed(controller, audio_engine_mock)
+    controller.loader.analyze_sample_async(0)
+    controller.transport.pad.set_manual_key(0, "new performer correction")
+    corrected = controller.project.pad_key_intent[0]
+    _poll(controller, audio_engine_mock, _success(key_status="skipped_budget", key="unknown"))
+    assert controller.project.pad_key_intent[0] == corrected
+    analysis = controller.project.sample_analysis[0]
+    assert analysis is not None
+    assert (analysis.bpm, analysis.key) == (120.0, "Em")
+
+
+def test_ready_unknown_is_a_real_key_result_and_clears_only_old_correction(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _seed(controller, audio_engine_mock)
+    controller.loader.analyze_sample_async(0)
+    _poll(controller, audio_engine_mock, _success(key="unknown"))
+    current = controller.project.pad_key_intent[0]
+    assert current.source == SourceKeyVersion(version=4, raw_key="unknown")
+    assert current.correction is None
+    assert current.correction_epoch == 10
+    assert (current.base_shift, current.extra_shift, current.retrigger) == (-4, 2, True)
+
+
+def test_cancelled_analysis_preserves_preexisting_source_key_and_correction(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    before = _seed(controller, audio_engine_mock)
+    controller.loader.analyze_sample_async(0)
+    _poll(
+        controller,
+        audio_engine_mock,
+        {
+            "type": "task_error",
+            "task": "analysis",
+            "id": 0,
+            "request_id": 11,
+            "msg": "analysis request cancelled",
+        },
+    )
+    assert controller.project.pad_key_intent[0] == before.changed(analysis_epoch=5)
+    assert controller.loader._key_analysis.has_request(0) is False
+    assert 0 not in controller.session.analyzing_sample_ids
+
+
+@pytest.mark.parametrize("request_id", [None, True, "11"])
+def test_bpm_request_stays_bound_when_optional_key_has_no_source_capture(
+    controller: AppController, audio_engine_mock: Mock, request_id: object
+) -> None:
+    before = _seed(controller, audio_engine_mock)
+    audio_engine_mock.waveform_source_identity.return_value = None
+    controller.loader.analyze_sample_async(0)
+    assert controller.loader._key_analysis.has_request(0) is False
+    _poll(controller, audio_engine_mock, _success(request_id))
+    assert controller.loader._analysis_request_ids[0] == 11
+    assert 0 in controller.session.analyzing_sample_ids
+    assert controller.project.sample_analysis[0] is None
+    assert controller.project.pad_key_intent[0] == before
+    _poll(controller, audio_engine_mock, _success())
+    assert controller.project.pad_key_intent[0] == before
+    analysis = controller.project.sample_analysis[0]
+    assert analysis is not None
+    assert analysis.key == "Em"
+    assert 0 not in controller.loader._analysis_request_ids
 
 
 @pytest.mark.parametrize("timing_stale", [False, True])
@@ -244,7 +353,7 @@ def test_out_of_order_and_duplicate_results_do_not_republish_versions(
 
 
 @pytest.mark.parametrize("exhausted", ["analysis_epoch", "correction_epoch", "source"])
-def test_epoch_capacity_failure_occurs_before_native_admission(
+def test_key_epoch_capacity_does_not_prevent_independent_bpm_admission(
     controller: AppController, audio_engine_mock: Mock, exhausted: str
 ) -> None:
     before = _seed(controller, audio_engine_mock)
@@ -255,8 +364,15 @@ def test_epoch_capacity_failure_occurs_before_native_admission(
     controller.project.pad_key_intent[0] = before
     controller.loader.analyze_sample_async(0)
     assert controller.project.pad_key_intent[0] == before
-    audio_engine_mock.analyze_sample_async.assert_not_called()
+    audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
     assert "capacity exhausted" in controller.session.sample_analysis_errors[0]
+    _poll(controller, audio_engine_mock, _success())
+    assert controller.project.pad_key_intent[0] == before
+    result = controller.project.sample_analysis[0]
+    assert result is not None
+    assert (result.bpm, result.key) == (120.0, "Em")
+    assert "capacity exhausted" in controller.session.sample_analysis_errors[0]
+    assert 0 not in controller.loader._analysis_request_ids
 
 
 @pytest.mark.parametrize("timing_stale", [False, True])
@@ -339,15 +455,20 @@ def test_failed_load_keeps_all_source_bound_key_intent(
     assert controller.project.pad_key_intent[0] == before
 
 
-def test_prepare_getter_failure_preserves_correction_before_native_admission(
+def test_prepare_key_getter_failure_does_not_prevent_bpm_admission(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     before = _seed(controller, audio_engine_mock)
     audio_engine_mock.waveform_source_identity.side_effect = RuntimeError("source identity lock")
     controller.loader.analyze_sample_async(0)
     assert controller.project.pad_key_intent[0] == before
-    audio_engine_mock.analyze_sample_async.assert_not_called()
-    assert controller.session.sample_analysis_errors[0] == "source identity lock"
+    audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
+    assert "source identity lock" in controller.session.sample_analysis_errors[0]
+    _poll(controller, audio_engine_mock, _success())
+    assert controller.project.pad_key_intent[0] == before
+    result = controller.project.sample_analysis[0]
+    assert result is not None
+    assert (result.bpm, result.key) == (120.0, "Em")
 
 
 def test_post_admission_getter_failure_preserves_intent_and_settles_real_request(

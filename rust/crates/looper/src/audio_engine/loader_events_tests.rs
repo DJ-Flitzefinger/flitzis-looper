@@ -297,6 +297,8 @@ fn original_native_source_event_survives_timing_advance_without_stale_analysis()
             analysis: Some(crate::messages::LoadedAnalysis {
                 bpm: 119.75,
                 key: None,
+                key_status: crate::messages::AnalysisKeyStatus::NotRequested,
+                key_error: None,
                 beat_grid: flitzis_looper_analysis::BeatGrid {
                     beats: vec![0.0],
                     downbeats: vec![],
@@ -332,6 +334,131 @@ fn original_native_source_event_survives_timing_advance_without_stale_analysis()
         assert_success(py, event, None, true);
         assert!(fixture.engine.poll_loader_events(py).unwrap().is_none());
     });
+}
+
+#[test]
+fn key_component_outcomes_preserve_bpm_in_load_and_task_success_events() {
+    use crate::messages::{AnalysisKeyStatus, LoadedAnalysis};
+
+    for status in [
+        AnalysisKeyStatus::Ready,
+        AnalysisKeyStatus::SkippedBudget,
+        AnalysisKeyStatus::NotRequested,
+        AnalysisKeyStatus::Failed,
+    ] {
+        for task_success in [false, true] {
+            let fixture = Fixture::new();
+            let owner =
+                crate::audio_engine::complete_context::NativeAnalysisOwner::from_publication(
+                    &fixture.publication,
+                    &fixture.sample,
+                    RATE,
+                );
+            let detail = matches!(
+                status,
+                AnalysisKeyStatus::SkippedBudget | AnalysisKeyStatus::Failed
+            )
+            .then(|| "retained optional key diagnostic".to_owned());
+            let analysis = LoadedAnalysis {
+                bpm: 119.75,
+                key: (status == AnalysisKeyStatus::Ready).then(|| "unknown".into()),
+                key_status: status,
+                key_error: detail.clone(),
+                beat_grid: flitzis_looper_analysis::BeatGrid {
+                    beats: vec![0.0, 0.5],
+                    downbeats: vec![0.0],
+                    bars: vec![0.0],
+                },
+                bpm_method_json: Some("retained scalar method".into()),
+                beat_error: None,
+            };
+            let event = if task_success {
+                LoaderEvent::TaskSuccess {
+                    id: SLOT,
+                    request_id: REQUEST,
+                    task: BackgroundTaskKind::Analysis,
+                    analysis: Some(analysis),
+                }
+            } else {
+                LoaderEvent::Success {
+                    id: SLOT,
+                    request_id: REQUEST,
+                    timing_epoch: Some(EPOCH),
+                    duration_s: 1.0,
+                    detected_loop_start_s: Some(0.0),
+                    cached_path: "samples/current.wav".into(),
+                    original_lease: None,
+                    analysis: Some(analysis),
+                    analysis_error: None,
+                    analysis_tempo_only: status == AnalysisKeyStatus::NotRequested,
+                    incoming_defaults: None,
+                }
+            };
+            fixture.engine.loader_tx.send(owner.event(event)).unwrap();
+            Python::attach(|py| {
+                let event = fixture.engine.poll_loader_events(py).unwrap().unwrap();
+                let event = event.bind(py).cast::<PyDict>().unwrap();
+                let analysis = event.get_item("analysis").unwrap().unwrap();
+                let analysis = analysis.cast::<PyDict>().unwrap();
+                assert_eq!(
+                    analysis
+                        .get_item("bpm")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<f64>()
+                        .unwrap(),
+                    119.75
+                );
+                assert_eq!(
+                    analysis
+                        .get_item("key")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "unknown"
+                );
+                assert_eq!(
+                    analysis
+                        .get_item("key_status")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    status.as_str()
+                );
+                assert_eq!(
+                    analysis
+                        .get_item("key_error")
+                        .unwrap()
+                        .map(|value| value.extract::<String>().unwrap()),
+                    detail
+                );
+                assert_eq!(
+                    analysis
+                        .get_item("bpm_method")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "retained scalar method"
+                );
+                let grid = analysis.get_item("beat_grid").unwrap().unwrap();
+                assert_eq!(
+                    grid.cast::<PyDict>()
+                        .unwrap()
+                        .get_item("beats")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<Vec<f32>>()
+                        .unwrap(),
+                    vec![0.0, 0.5]
+                );
+                assert!(event.get_item("analysis_error").unwrap().is_none());
+            });
+            fixture.assert_source_unchanged();
+        }
+    }
 }
 
 fn assert_success(py: Python<'_>, event: Py<PyAny>, expected_error: Option<&str>, stale: bool) {

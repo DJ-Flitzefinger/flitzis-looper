@@ -15,8 +15,10 @@ invent current per-device binding support.
 Persist recognized SourceKeyVersion, separate optional correction+epoch, numeric
 base_shift, numeric extra_shift and retrigger flag. Labels derive from corrected
 source root+base and root+base+extra. Correction/removal preserves both numbers;
-successful deliberate analysis admission advances epoch and removes only the
-preexisting correction. A correction made after admission wins against late results.
+successful deliberate analysis admission advances the captured epoch without
+clearing correction. Matching successful key completion removes only its captured
+preexisting correction; skipped, failed or unrequested key work preserves key
+intent while valid BPM proceeds. A correction made after admission wins against late results.
 Failed admission preserves state; restore is not analysis. Accepted true source
 replacement creates fresh lifetime and neutral source-bound values; copy/move/restore
 preserve them. Legacy manual_key becomes metadata with base=extra=0, retriggerOFF.

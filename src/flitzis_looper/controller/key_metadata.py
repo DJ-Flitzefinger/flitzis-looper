@@ -78,7 +78,7 @@ class KeyMetadataAnalysis:
     def admit(
         self, sample_id: int, capture: KeyAnalysisAdmission | None, request_id: object
     ) -> bool:
-        """Remove the preexisting correction only after real matching native admission."""
+        """Bind a real request without changing its source metadata or correction."""
         if capture is None or not self._valid_request_id(request_id):
             return False
         if not self._matches_source(sample_id, capture):
@@ -86,8 +86,6 @@ class KeyMetadataAnalysis:
         current = self._project.pad_key_intent[sample_id]
         if current.analysis_epoch != capture.analysis_epoch:
             return False
-        if current.correction_epoch == capture.correction_epoch:
-            current = current.corrected(None)
         updated = current.changed(analysis_epoch=next_key_epoch(capture.analysis_epoch))
         self._project.pad_key_intent[sample_id] = updated
         self._errors.pop(sample_id, None)
@@ -110,7 +108,12 @@ class KeyMetadataAnalysis:
             sample_id, record.capture
         ):
             return False
-        updated = current.changed(
+        updated = (
+            current.corrected(None)
+            if current.correction_epoch == record.capture.correction_epoch
+            else current
+        )
+        updated = updated.changed(
             source=SourceKeyVersion(version=record.capture.next_source_version, raw_key=raw_key)
         )
         self._project.pad_key_intent[sample_id] = updated

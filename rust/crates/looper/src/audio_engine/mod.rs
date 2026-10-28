@@ -961,6 +961,11 @@ fn run_bpm_pipeline(
 ///
 /// Returns the key string (e.g., "Am", "C", or "unknown" on failure).
 fn run_key_detection(mono_44100: &[f64]) -> String {
+    run_key_detection_result(mono_44100).unwrap_or_else(|_| "unknown".into())
+}
+
+/// Preserve genuine optional-component failures without changing the scientific wrapper.
+fn run_key_detection_result(mono_44100: &[f64]) -> Result<String, String> {
     #[cfg(debug_assertions)]
     let _timer = std::time::Instant::now();
 
@@ -973,19 +978,20 @@ fn run_key_detection(mono_44100: &[f64]) -> String {
                 result.confidence * 100.0,
                 _timer.elapsed()
             );
-            result.key_name
+            Ok(result.key_name)
         }
-        Err(analysis::KeyError::InsufficientData) => "unknown".to_string(),
-        Err(analysis::KeyError::SilentAudio) => "unknown".to_string(),
-        Err(analysis::KeyError::ModelError(_msg)) => {
-            #[cfg(debug_assertions)]
-            eprintln!("[analysis] key detection model error: {_msg}");
-            "unknown".to_string()
+        Err(analysis::KeyError::InsufficientData | analysis::KeyError::SilentAudio) => {
+            Ok("unknown".into())
         }
-        Err(analysis::KeyError::CqtError(_msg)) => {
+        Err(analysis::KeyError::ModelError(message)) => {
             #[cfg(debug_assertions)]
-            eprintln!("[analysis] key detection CQT error: {_msg}");
-            "unknown".to_string()
+            eprintln!("[analysis] key detection model error: {message}");
+            Err(format!("Key model failed: {message}"))
+        }
+        Err(analysis::KeyError::CqtError(message)) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[analysis] key detection CQT error: {message}");
+            Err(format!("Key frontend failed: {message}"))
         }
     }
 }

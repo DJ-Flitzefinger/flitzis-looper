@@ -175,11 +175,16 @@ SHALL be three independent actions.
 - **AND** the editor SHALL preserve the central piano, Piano toggle, independent offset Reset and all-modification Original Key semantics without restoring the removed Correction dropdown
 
 ### Requirement: Analysis epochs preserve newer correction intent
-The system SHALL remove only a preexisting correction at successful deliberate new analysis admission and SHALL fence late analysis metadata by source/lifetime/analysis and correction epochs.
+The system SHALL capture deliberate analysis admission without removing correction.
+Only matching successful key-component completion SHALL remove its preexisting
+correction and publish the detected key version. Skipped, failed or unrequested
+key work SHALL preserve prior key intent while independently valid BPM remains
+publishable. Late key metadata SHALL remain fenced by source/lifetime/request,
+analysis and correction epochs.
 
 #### Scenario: New correction after analysis admission wins
 - **GIVEN** old correction C1 and successful new analysis epochE
-- **WHEN** C1 is removed at admission, C2 is set afterward and E's result arrives late
+- **WHEN** C2 is set after admission and E's successful key result arrives late
 - **THEN** C2 remains authoritative and saved numeric shifts stay unchanged
 
 #### Scenario: Failed analysis admission or project reopen
@@ -190,7 +195,9 @@ The system SHALL remove only a preexisting correction at successful deliberate n
 #### Scenario: Real admission and metadata-only version publication
 - **GIVEN** the current content instance and native waveform source generation, digest and shape
 - **WHEN** deliberate analysis returns a real integer request ID after successful native admission
-- **THEN** analysis epoch advances and only its preexisting correction is removed
+- **THEN** analysis epoch advances without removing its preexisting correction
+- **AND** only matching successful key completion may remove that captured correction
+- **AND** skipped, failed or unrequested key work preserves detected key, correction and shifts
 - **AND** the result may update a source key version only while that captured content, native source, request and analysis epoch still match
 - **AND** missing or boolean request IDs and duplicated, older or equal-byte replacement results grant no new key metadata authority
 - **AND** a later correction is retained, independently of whether a newer timing edit has made the analysis timing projection stale
