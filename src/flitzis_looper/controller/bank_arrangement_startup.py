@@ -23,7 +23,6 @@ from flitzis_looper.controller.bank_arrangement_recovery import inspect_bank_rec
 from flitzis_looper.controller.copy_arrangement_custody import (
     CopyJournalCustody,
     journal_project_images,
-    prepare_recovery_map_publication,
 )
 from flitzis_looper.controller.material_migration_recovery import (
     config_reference_matches,
@@ -42,7 +41,6 @@ from flitzis_looper.models import ProjectState
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
-    from flitzis_looper.controller.copy_arrangement_custody import MapRecoveryPublication
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper_audio import BankParticipants, RecoveredBankAcceptance
 
@@ -70,7 +68,6 @@ class _RestoredBank:
     receipt: ConfigCommitReceipt | None = None
     native_owner: int | None = None
     released: bool = False
-    map_publication: MapRecoveryPublication | None = None
 
 
 class BankArrangementStartup:
@@ -665,20 +662,12 @@ class BankArrangementStartup:
                     message = "Fresh Bank acceptance changed across recorded Config intent"
                     raise PersistenceFenceError(message)
                 assert self._retirement is not None
-                with self._retirement.activate():
-                    recovery.map_publication = prepare_recovery_map_publication(
-                        app._assets, app.project, recovery.map_publication
-                    )
                 recovery.receipt = app.persistence.commit_migration_receipt(
                     self._fence, app.persistence.revision, app.project.model_copy(deep=True)
                 )
             recovery.owner.append(record.committed(recovery.receipt))
             if app.persistence.revision != recovery.receipt.revision:
                 return False
-            if recovery.map_publication is not None:
-                assert self._retirement is not None
-                with self._retirement.activate():
-                    recovery.map_publication[1].apply()
         current = recovery.owner.journal
         assert current is not None
         self._validate_current_after(current, terminal=True)

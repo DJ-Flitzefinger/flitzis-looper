@@ -105,7 +105,6 @@ impl CapturedInputPadTrigger {
                 enabled.clone(),
                 learn_capture_active.clone(),
             )),
-            pad.source_map.snapshot(ownership, binding),
         )
         .ok()?;
         let token = Self {

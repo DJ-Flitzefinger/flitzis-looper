@@ -83,14 +83,6 @@ impl VoiceSourceTiming {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct PhaseReadWitness {
-    playback: SourcePlayback,
-    request: super::source_sync_policy::SourceSyncRequest,
-    policy_revision: Option<(u64, u64)>,
-    generation: u64,
-}
-
 pub struct VoiceSlot {
     pub active: bool,
     pub sample_id: usize,
@@ -100,18 +92,13 @@ pub struct VoiceSlot {
     pub(crate) source_playback: SourcePlayback,
     // The exact original launch and separately shared effective immutable map retire together.
     // Stop/restart transfers the aggregate through one existing off-thread retirement slot.
-    pub(crate) mapped_start: Option<super::pad_start::PadStartCustody>,
-    pub(crate) mapped_birth: Option<super::mapped_birth::MappedBirth>,
-    pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
     /// Full original snapshot claim, separate from the immutable numeric epoch.
-    pub(crate) phase_policy_revision: Option<(u64, u64)>,
     /// A complete settled dry interval was actually mixed under these exact owners.
-    pub(crate) phase_read: Option<PhaseReadWitness>,
-    pub(crate) diagnostic_read: Option<super::sync_diagnostics::DiagnosticRead>,
     /// Original birth effect validated the captured scheduler projection at T.
-    pub(crate) phase_launch_qualified: bool,
     /// Only actual live rendering consumes this; copied preparation never does.
-    pub(crate) phase_birth_unadvanced: bool,
+    /// Original ordinary launch metadata; this never changes source phase or rate.
+    pub(crate) launch_qualified: bool,
+    pub(crate) launch_unadvanced: bool,
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
@@ -138,14 +125,8 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
-            mapped_start: None,
-            mapped_birth: None,
-            sync_request: super::source_sync_policy::SourceSyncRequest::default(),
-            phase_policy_revision: None,
-            phase_read: None,
-            diagnostic_read: None,
-            phase_launch_qualified: false,
-            phase_birth_unadvanced: false,
+            launch_qualified: false,
+            launch_unadvanced: false,
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
             frozen_stems: None,
@@ -172,17 +153,12 @@ impl VoiceSlot {
             retirement.retire_sample(old_sample);
         }
         self.retire_frozen_stems(retirement);
-        self.retire_mapped_start(retirement);
         self.start_inner(config);
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
-        self.phase_read = None;
-        self.mapped_birth = None;
-        self.phase_birth_unadvanced = false;
-        self.phase_launch_qualified = false;
-        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
-        self.phase_policy_revision = None;
+        self.launch_qualified = false;
+        self.launch_unadvanced = false;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -220,7 +196,6 @@ impl VoiceSlot {
         self.stretch.reset();
         self.sample = None;
         self.frozen_stems = None;
-        self.mapped_start = None;
         self.stop_inner();
     }
 
@@ -231,17 +206,12 @@ impl VoiceSlot {
             retirement.retire_sample(sample);
         }
         self.retire_frozen_stems(retirement);
-        self.retire_mapped_start(retirement);
         self.stop_inner();
     }
 
     fn stop_inner(&mut self) {
-        self.phase_read = None;
-        self.mapped_birth = None;
-        self.phase_birth_unadvanced = false;
-        self.phase_launch_qualified = false;
-        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
-        self.phase_policy_revision = None;
+        self.launch_qualified = false;
+        self.launch_unadvanced = false;
         self.source_control_epoch.reset();
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime.store(0, Ordering::Release);
@@ -267,12 +237,6 @@ impl VoiceSlot {
         }
     }
 
-    fn retire_mapped_start(&mut self, retirement: &mut impl AudioBufferRetirement) {
-        if let Some(owner) = self.mapped_start.take() {
-            retirement.retire_pad_start_target(owner);
-        }
-    }
-
     pub(crate) fn restart(
         &mut self,
         initial_frame_pos: usize,
@@ -281,16 +245,11 @@ impl VoiceSlot {
         _start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
-        self.phase_read = None;
-        self.mapped_birth = None;
-        self.phase_birth_unadvanced = false;
-        self.phase_launch_qualified = false;
-        self.sync_request = super::source_sync_policy::SourceSyncRequest::default();
+        self.launch_qualified = false;
+        self.launch_unadvanced = false;
         self.source_feed_history.reset();
-        self.phase_policy_revision = None;
         self.source_control_epoch.reset();
         self.retire_frozen_stems(retirement);
-        self.retire_mapped_start(retirement);
         self.source_loop_region = None;
         self.generation = self.generation.saturating_add(1);
         self.history_lifetime
@@ -313,6 +272,8 @@ impl VoiceSlot {
         mode: ExplicitSeekMode,
         _output_frame: Option<u64>,
     ) -> bool {
+        self.launch_qualified = false;
+        self.launch_unadvanced = false;
         let mut playback = self.source_playback;
         if !playback.seek(frame_pos, mode) {
             return false;
@@ -326,11 +287,7 @@ impl VoiceSlot {
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
         self.source_playback = playback;
-        self.phase_read = None;
-        self.mapped_birth = None;
-        self.phase_launch_qualified = false;
         self.stretch.reset();
-        self.phase_birth_unadvanced = false;
         true
     }
 
@@ -342,39 +299,9 @@ impl VoiceSlot {
 
     /// Source controls fence captured future reads separately from DSP-only mode preparation.
     pub(crate) fn invalidate_source_preparation(&mut self) {
-        self.phase_read = None;
-        self.phase_policy_revision = None;
         self.source_control_epoch.invalidate();
         self.source_feed_history.invalidate_captures();
         self.stretch.invalidate_prepared();
-    }
-
-    pub(crate) fn phase_clock_settled(&self, playback: &SourcePlayback) -> bool {
-        playback.static_phase_settled()
-            || (playback.is_mapped_phase()
-                && self
-                    .mapped_start
-                    .as_ref()
-                    .and_then(|owner| owner.mapped_geometry())
-                    .is_some_and(|geometry| playback.mapped_phase_settled(geometry) == Ok(true)))
-    }
-
-    pub(crate) fn phase_read_witness(&self, playback: SourcePlayback) -> PhaseReadWitness {
-        PhaseReadWitness {
-            playback,
-            request: self.sync_request,
-            policy_revision: self.phase_policy_revision,
-            generation: self.generation,
-        }
-    }
-
-    pub(crate) fn phase_read_current(&self) -> bool {
-        self.phase_read.is_some_and(|read| {
-            read.generation == self.generation
-                && read.request == self.sync_request
-                && read.policy_revision == self.phase_policy_revision
-                && read.playback.matches_exact(&self.source_playback)
-        })
     }
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {
@@ -384,14 +311,12 @@ impl VoiceSlot {
     /// Pause playback: set the paused flag. Does not change frame_pos.
     pub fn pause(&mut self) {
         // An actual pause keeps this exact cursor, never the old absolute-master program.
-        self.source_playback.dissolve_static();
         self.invalidate_source_preparation();
         self.paused = true;
     }
 
     /// Resume playback: clear the paused flag.
     pub fn resume(&mut self) {
-        self.source_playback.dissolve_static();
         self.invalidate_source_preparation();
         self.paused = false;
     }

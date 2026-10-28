@@ -76,29 +76,6 @@ fn apply_rows(project: &Value, slots: &[Value], role: &str) -> Value {
         for (name, field) in validators::CONTENT {
             projected[*field][id] = row[role][*name].clone();
         }
-        if projected.get("pad_source_beatmap_intent").is_some()
-            || row[role].get("source_beatmap_intent").is_some()
-        {
-            if projected.get("pad_source_beatmap_intent").is_none() {
-                projected["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
-            }
-            projected["pad_source_beatmap_intent"][id] = row[role]
-                .get("source_beatmap_intent")
-                .cloned()
-                .unwrap_or(Value::Null);
-        }
-        if projected.get("pad_source_sync_intent").is_some()
-            || row[role].get("source_sync_intent").is_some()
-        {
-            if projected.get("pad_source_sync_intent").is_none() {
-                projected["pad_source_sync_intent"] =
-                    json!(vec![json!({"requested":false,"revision":0}); 216]);
-            }
-            projected["pad_source_sync_intent"][id] = row[role]
-                .get("source_sync_intent")
-                .cloned()
-                .unwrap_or_else(|| json!({"requested":false,"revision":0}));
-        }
     }
     projected
 }

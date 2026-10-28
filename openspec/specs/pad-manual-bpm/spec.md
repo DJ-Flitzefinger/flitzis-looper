@@ -53,7 +53,7 @@ by exactly one half or two without rounding, and use the existing source-fenced
 manual-BPM admission once. Unavailable, nonfinite, nonpositive, overflowed or
 source-stale corrections SHALL not change the stored BPM wish. Clear Manual BPM
 SHALL restore the detected estimate. These numeric corrections SHALL NOT rewrite
-detector observations or selected map quarter coordinates or certify SYNC.
+detector observations or certify musical alignment.
 
 #### Scenario: Fractional double-tempo detection is corrected
 - **GIVEN** a current fractional effective BPM

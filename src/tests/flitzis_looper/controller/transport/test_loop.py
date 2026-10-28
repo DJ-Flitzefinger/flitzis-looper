@@ -7,7 +7,7 @@ import pytest
 from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     BPM_REFERENCE_SOURCE_IDENTITY,
     _configured,
     _master_provenance,
@@ -1415,7 +1415,6 @@ def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
     assert controller.session.bpm_lock_anchor_revision is None
     audio_engine_mock.set_pad_bpm.assert_called_with(0, 90.0, expected_source_generation=7)
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", ["start", "end", "auto", "bars", "all", "initialize"])

@@ -24,15 +24,12 @@ from flitzis_looper.input_mapping import (
 )
 from flitzis_looper.input_mapping.actions import (
     PitchCcMode,
-    global_realtime_bpm_toggle_action,
-    global_source_sync_toggle_action,
     pitch_base_action,
     pitch_extra_action,
     pitch_note_action,
     pitch_original_action,
     pitch_reset_base_action,
     pitch_step_action,
-    source_sync_toggle_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.stem_execution import device_label as stem_device_label
@@ -50,7 +47,6 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PendingConfirmation
     from flitzis_looper.controller.recording import RecordingStatus
-    from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
     from flitzis_looper.controller.stem_batch import StemBatchSummary
     from flitzis_looper.controller.stem_delete import StemDeleteSummary
     from flitzis_looper.controller.stems import StemResidencySummary
@@ -59,11 +55,6 @@ if TYPE_CHECKING:
         GlobalRateStatus,
     )
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
-    from flitzis_looper.controller.transport.source_sync import SourceSyncStatus
-    from flitzis_looper.controller.transport.timing_policy import (
-        GlobalTimingControlStatus,
-        TimingControl,
-    )
     from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
     from flitzis_looper.models import (
         KeyLockStartBehavior,
@@ -78,7 +69,6 @@ if TYPE_CHECKING:
         TriggerQuantizationStep,
     )
     from flitzis_looper.recording_options import RecordingOptions
-    from flitzis_looper.sync_diagnostics import TimingTrace
     from flitzis_looper_audio import WaveFormRenderData
 
 T = TypeVar("T", bound=BaseModel)
@@ -348,13 +338,6 @@ class GlobalSelectors:
         """Return the aggregate confirmed/pending/mixed state of loaded targets."""
         return self._controller.transport.global_params.key_lock_status()
 
-    def timing_policy_status(self, control: TimingControl) -> GlobalTimingControlStatus:
-        return self._controller.transport.timing_policy.status(control)
-
-    def timing_trace(self) -> TimingTrace:
-        """Transient observer status; never changes performer intent."""
-        return self._controller.timing_trace
-
     def global_rate_status(self) -> GlobalRateStatus:
         """Return the last coherent callback rate confirmation from the runtime tick."""
         return self._controller.transport.global_params.global_rate_status()
@@ -418,28 +401,6 @@ class UiState:
 class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad controls.
     def __init__(self, controller: AppController):
         self._controller = controller
-
-    def source_sync_status(self, pad_id: int) -> SourceSyncStatus:
-        """Read callback confirmation independently of requested SYNC/map readiness."""
-        return self._controller.transport.source_sync.status(pad_id)
-
-    def source_sync_preference(self, pad_id: int) -> bool:
-        return self._controller.project.pad_source_sync_preference(pad_id)
-
-    def toggle_source_sync(self, pad_id: int) -> None:
-        """Learn or execute the same fixed-target SYNC request action."""
-
-        def execute() -> None:
-            perform_pad_action(
-                self._controller,
-                pad_id,
-                lambda: self._controller.transport.source_sync.toggle(pad_id),
-                operation="source_sync",
-            )
-
-        self._controller.input_mapping.perform_learnable_action(
-            source_sync_toggle_action(pad_id), execute
-        )
 
     def residency_status(self, pad_id: int) -> tuple[str | None, str | None]:
         """Read requested control readiness separately from effective playback."""
@@ -512,24 +473,6 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             pad_id,
             lambda: self._controller.transport.loop.set_start(pad_id, start_s),
             operation="set_pad_loop_start",
-        )
-
-    def apply_source_map_bars(self, pad_id: int) -> None:
-        """Materialize one explicit supported map bar interval as physical markers."""
-        perform_pad_action(
-            self._controller,
-            pad_id,
-            lambda: self._controller.transport.loop.apply_source_map_bars(pad_id),
-            operation="apply_source_map_bars",
-        )
-
-    def snap_source_map_markers(self, pad_id: int) -> None:
-        """Explicitly snap both physical markers through the selected map revision."""
-        perform_pad_action(
-            self._controller,
-            pad_id,
-            lambda: self._controller.transport.loop.snap_source_map_markers(pad_id),
-            operation="snap_source_map_markers",
         )
 
     def set_pad_loop_end(self, pad_id: int, end_s: float | None) -> None:
@@ -986,21 +929,6 @@ class GlobalAudioActions:
             ),
         )
 
-    def toggle_source_sync(self) -> None:
-        self._toggle_timing_policy("sync", global_source_sync_toggle_action())
-
-    def toggle_realtime_bpm(self) -> None:
-        self._toggle_timing_policy("sync", global_realtime_bpm_toggle_action())
-
-    def _toggle_timing_policy(self, control: TimingControl, action: LooperAction) -> None:
-        self._controller.input_mapping.perform_learnable_action(
-            action,
-            lambda: self._perform_playback_action(
-                lambda: self._controller.transport.timing_policy.toggle(control),
-                operation=f"global_toggle_{control}",
-            ),
-        )
-
     def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.trigger_quantization(mode),
@@ -1041,44 +969,6 @@ class AudioActions:
         self.stems = StemAudioActions(controller)
         self.global_ = GlobalAudioActions(controller)
         self.poll = PollActions(controller)
-
-
-class SourceMapEditorActions:
-    """Use the existing map owner with actual transient source identity fencing."""
-
-    def __init__(self, controller: AppController) -> None:
-        self._controller = controller
-
-    @property
-    def selection(self) -> SourceBeatmapSelection:
-        """Return the Loader's original source-qualified map selection owner."""
-        return self._controller.loader.source_beatmaps
-
-    def report_error(self, pad_id: int, reason: str | None) -> None:
-        """Report one explicit editor attempt through the original console sink."""
-        sink = self._controller.diagnostics
-        sink.begin_attempt("source_map_edit", pad_id)
-        sink.observe("source_map_edit", reason, pad_id=pad_id)
-
-    def report_raw_error(self, pad_id: int, reason: str | None) -> None:
-        """Keep raw analysis diagnostics separate from accepted map editing."""
-        sink = self._controller.diagnostics
-        sink.begin_attempt("source_map_analysis", pad_id)
-        sink.observe("source_map_analysis", reason, pad_id=pad_id)
-
-    def identity(self, pad_id: int) -> object:
-        """Capture actual content/source generation for transient editor inputs."""
-        content = self._controller.project.pad_content[pad_id]
-        if content is None:
-            return None
-        try:
-            generation = self._controller.transport.capture_current_pad_edit_generation(pad_id)
-            source = self._controller._audio.waveform_source_identity(pad_id)
-        except RuntimeError, ValueError:
-            return None
-        if generation is None or source is None:
-            return None
-        return content.instance_id, generation, source
 
 
 class WaveformEditorActions:
@@ -1587,7 +1477,6 @@ class UiActions:
     stem_batch: StemBatchActions
     stem_delete: StemDeleteActions
     waveform: WaveformEditorActions
-    source_map: SourceMapEditorActions
 
     def __init__(self, controller: AppController, state: UiState | None = None):
         self._controller = controller
@@ -1596,7 +1485,6 @@ class UiActions:
         self.source_key = SourceKeyEditorActions(controller)
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
-        self.source_map = SourceMapEditorActions(controller)
         self.confirmation = PerformanceConfirmationActions(controller)
         self.stem_batch = StemBatchActions(controller)
         self.stem_delete = StemDeleteActions(controller)
@@ -1691,15 +1579,6 @@ class SettingsActions:
 
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
-
-    def start_timing_trace(self) -> None:
-        self._controller.timing_trace.start()
-
-    def stop_timing_trace(self) -> None:
-        self._controller.timing_trace.stop()
-
-    def mark_timing_drift(self) -> None:
-        self._controller.timing_trace.mark_drift()
 
     def open(self) -> None:
         self._controller.session.settings_open = True

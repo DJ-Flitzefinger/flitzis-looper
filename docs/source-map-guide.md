@@ -1,3 +1,6 @@
+> Historical documentation for the archived SYNC-REALTIME-BPM branch. These
+> controls are removed from main. Use the [current BPM guide](constant-bpm-guide.md).
+
 # BPM, SYNC and source maps
 
 BPM describes an average tempo. A source map also describes where detected beats

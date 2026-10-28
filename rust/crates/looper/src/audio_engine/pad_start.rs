@@ -10,14 +10,9 @@ use super::input_runtime_binding::{
     InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
 };
 use super::key_lock_start_policy::{KeyLockStartBehavior, KeyLockStartLease};
-use super::mapped_source_clock::MappedLoopGeometry;
 use super::ordinary_start::OrdinaryStartWork;
 use super::pitch_actions::PitchActionReject;
 use super::resident_relocation::{ResidentLaunchGuard, ResidentWindowTicket};
-use super::source_map_admission::{
-    QualifiedSourceMap, RuntimeMapClass, RuntimeMapPreparation, SourceMapLaunchSnapshot,
-};
-use super::source_reader::{FrameRange, effective_loop_region};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::{
@@ -33,342 +28,8 @@ struct PublishedBinding {
     resident_guard: Option<ResidentLaunchGuard>,
 }
 
-pub(crate) struct MappedStartSource {
-    qualified: QualifiedSourceMap,
-    geometry: MappedLoopGeometry,
-}
-
-/// One voice/retirement payload retains its effective immutable map and any genuine launch.
-/// Runtime conversion creates no launch. Pending start work uses only its own original geometry.
-pub(crate) struct PadStartCustody {
-    original: Option<CapturedPadStart>,
-    effective: Option<Arc<MappedStartSource>>,
-}
-
-impl PadStartCustody {
-    /// Called only after the existing complete mapped launch claim succeeds.
-    pub(crate) fn for_mapped_voice(original: &CapturedPadStart) -> Self {
-        Self {
-            original: Some(original.clone()),
-            effective: Some(
-                original
-                    .mapped_source_owner()
-                    .expect("claimed mapped launch retains original immutable map"),
-            ),
-        }
-    }
-
-    pub(crate) fn original_launch(&self) -> Option<&CapturedPadStart> {
-        self.original.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn original(&self) -> &CapturedPadStart {
-        self.original_launch()
-            .expect("original mapped launch fixture retains its genuine launch")
-    }
-
-    /// The actual policy claim already owns the snapshot's original prepared map.
-    /// A living scalar birth gains immutable map custody without inventing a launch action.
-    pub(crate) fn for_runtime_map(source: &Arc<MappedStartSource>) -> Self {
-        Self {
-            original: None,
-            effective: Some(source.clone()),
-        }
-    }
-
-    /// Keep the genuine original launch and move only a displaced effective map to retirement.
-    /// The caller reserves that existing worker-retirement slot before its atomic effect.
-    pub(crate) fn replace_effective_map(
-        &mut self,
-        source: &Arc<MappedStartSource>,
-    ) -> Option<Self> {
-        if self
-            .effective
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, source))
-        {
-            return None;
-        }
-        self.effective
-            .replace(source.clone())
-            .map(|effective| Self {
-                original: None,
-                effective: Some(effective),
-            })
-    }
-
-    pub(crate) fn effective_source(&self) -> Option<&Arc<MappedStartSource>> {
-        self.effective.as_ref()
-    }
-
-    pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
-        self.effective_source().map(|source| source.geometry())
-    }
-
-    pub(crate) fn source_sync_witness(
-        &self,
-        key: ContentKey,
-        source_generation: u64,
-    ) -> Option<super::input_runtime_binding::SourceSyncWitness> {
-        self.effective_source()?
-            .qualified
-            .sync_witness_for(key, source_generation)
-    }
-}
-
-impl From<CapturedPadStart> for PadStartCustody {
-    /// A raw target has no effective voice map, but still retires through the same one slot.
-    fn from(original: CapturedPadStart) -> Self {
-        Self {
-            original: Some(original),
-            effective: None,
-        }
-    }
-}
-
-/// Scalar pending-admission witness. It holds no Work and cannot create a map owner.
-pub(crate) struct MappedStartPendingGuard {
-    pub(crate) status: Arc<AtomicU8>,
-    pub(crate) rejected_status: u8,
-    pub(crate) ownership: Arc<InputRuntimeOwnership>,
-    pub(crate) binding: InputPadBinding,
-    pub(crate) key: ContentKey,
-    pub(crate) launch_cancel_revision: u64,
-}
-
-impl MappedStartPendingGuard {
-    pub(crate) fn current(&self, source: &MappedStartSource) -> bool {
-        self.status.load(Ordering::Acquire) != self.rejected_status
-            && self
-                .ownership
-                .launch_revision_for_cell(self.key.cell())
-                .load(Ordering::Acquire)
-                == self.launch_cancel_revision
-            && source.qualified.current_for(&self.ownership, self.binding)
-    }
-}
-
-impl MappedStartSource {
-    /// One control-owned admission shared by ordinary and fresh pitch births.
-    pub(crate) fn capture_launch(
-        snapshot: &SourceMapLaunchSnapshot,
-        ownership: &Arc<InputRuntimeOwnership>,
-        binding: InputPadBinding,
-        start_s: f64,
-        end_s: Option<f64>,
-    ) -> Result<Option<Arc<Self>>, PitchActionReject> {
-        let Some(qualified) = snapshot.admit(ownership, binding)? else {
-            return Ok(None);
-        };
-        let (preparation, source) = Self::prepare_runtime_map(&qualified, binding, start_s, end_s);
-        if preparation.class != RuntimeMapClass::Ready {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
-        let source = source.ok_or(PitchActionReject::MappedTimingUnavailable)?;
-        let (rate, sample_frames, region) =
-            Self::loaded_region(&qualified, binding, start_s, end_s)?;
-        let scalar_domain = super::voice_slot::VoiceSourceTiming {
-            accepted: binding.accepted,
-            ..Default::default()
-        }
-        .loop_domain(sample_frames, region);
-        if source.geometry.has_general_continuation()
-            || source
-                .geometry
-                .exact_continuation_matches_domain(scalar_domain)
-        {
-            return Ok(Some(source));
-        }
-        // A fresh physical beginning must retain its actual scalar provenance.
-        // Compact continuation requires full domain identity; selecting the
-        // existing General class here does not relax that live-continuation guard.
-        let geometry = Self::prepare_general_geometry(&qualified, rate, sample_frames, region)
-            .map_err(|_| PitchActionReject::MappedTimingUnavailable)?;
-        Ok(Some(Arc::new(Self {
-            qualified,
-            geometry,
-        })))
-    }
-    pub(crate) fn geometry(&self) -> &MappedLoopGeometry {
-        &self.geometry
-    }
-
-    pub(crate) fn sync_witness(&self) -> super::input_runtime_binding::SourceSyncWitness {
-        self.qualified.sync_witness()
-    }
-
-    pub(crate) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
-        self.qualified.belongs_to(ownership)
-    }
-
-    pub(crate) fn current_for(
-        &self,
-        ownership: &Arc<InputRuntimeOwnership>,
-        binding: InputPadBinding,
-    ) -> bool {
-        self.qualified.current_for(ownership, binding)
-    }
-
-    pub(crate) fn same_source(&self, other: &Self) -> bool {
-        self.qualified.same_projection(&other.qualified)
-            && self.geometry.domain() == other.geometry.domain()
-    }
-
-    /// Prepare the shared exact runtime/physical-birth geometry off realtime.
-    /// Numeric readiness does not replace the original source/launch admission.
-    pub(crate) fn prepare_runtime_map(
-        qualified: &QualifiedSourceMap,
-        binding: InputPadBinding,
-        start_s: f64,
-        end_s: Option<f64>,
-    ) -> (RuntimeMapPreparation, Option<Arc<Self>>) {
-        let mut preparation = RuntimeMapPreparation {
-            class: RuntimeMapClass::Unsupported,
-            domain: None,
-            witness: Some(qualified.sync_witness()),
-        };
-        if let Ok(mut source) = Self::prepare(qualified.clone(), binding, start_s, end_s) {
-            preparation.domain = Some(source.geometry.domain().into());
-            if let Ok(geometry) = source.geometry.clone().qualify_exact_continuation()
-                && geometry.has_compact_continuation()
-            {
-                source.geometry = geometry;
-                if let Some(origin) = qualified.phase_origin() {
-                    source.geometry = match source.geometry.with_grid_phase_origin(Some(origin)) {
-                        Ok(geometry) => geometry,
-                        Err(_) => return (preparation, None),
-                    };
-                } else {
-                    source.geometry.prepare_common_phase();
-                }
-                preparation.class = RuntimeMapClass::Ready;
-                return (preparation, Some(Arc::new(source)));
-            }
-        }
-        // The old displayed inverse and rounded endpoint are not a prerequisite
-        // of this separate exact original-map class. A failed legacy attempt must
-        // not narrow either general extent class.
-        let Ok((rate, sample_frames, region)) =
-            Self::loaded_region(qualified, binding, start_s, end_s)
-        else {
-            return (preparation, None);
-        };
-        let Ok(geometry) = Self::prepare_general_geometry(qualified, rate, sample_frames, region)
-        else {
-            return (preparation, None);
-        };
-        preparation.domain = Some(geometry.domain().into());
-        preparation.class = RuntimeMapClass::Ready;
-        let source = Self {
-            qualified: qualified.clone(),
-            geometry,
-        };
-        (preparation, Some(Arc::new(source)))
-    }
-
-    fn prepare_general_geometry(
-        qualified: &QualifiedSourceMap,
-        rate: u32,
-        sample_frames: usize,
-        region: FrameRange,
-    ) -> Result<MappedLoopGeometry, super::mapped_source_clock::MappedClockError> {
-        let mut geometry = match qualified.exact_quarters() {
-            Some(quarters) => MappedLoopGeometry::new_general_declared(
-                qualified.map().clone(),
-                sample_frames,
-                rate,
-                region,
-                quarters,
-                !qualified.operational_four_quarter_bars(),
-            ),
-            // Manual physical intent retains its existing meter contract and
-            // never inherits saved bars or a displayed inverse difference.
-            None => MappedLoopGeometry::new_general_physical(
-                qualified.map().clone(),
-                sample_frames,
-                rate,
-                region,
-                false,
-            ),
-        }?;
-        if let Some(origin) = qualified.phase_origin() {
-            geometry = geometry.with_grid_phase_origin(Some(origin))?;
-        } else {
-            geometry.prepare_common_phase();
-        }
-        Ok(geometry)
-    }
-
-    /// Reuse the same persisted integer-marker interpretation for both classes.
-    fn loaded_region(
-        qualified: &QualifiedSourceMap,
-        binding: InputPadBinding,
-        start_s: f64,
-        end_s: Option<f64>,
-    ) -> Result<(u32, usize, FrameRange), PitchActionReject> {
-        let rate = qualified.loaded_rate();
-        if rate == 0
-            || binding.sample_rate_hz != rate
-            || binding.channels == 0
-            || !binding.sample_count.is_multiple_of(binding.channels)
-        {
-            return Err(PitchActionReject::SourceChanged);
-        }
-        let sample_frames = binding.sample_count / binding.channels;
-        let start = start_s * f64::from(rate);
-        let end = end_s.map(|end| end * f64::from(rate));
-        if !start.is_finite() || end.is_some_and(|end| !end.is_finite()) {
-            return Err(PitchActionReject::InvalidAction);
-        }
-        let region = effective_loop_region(
-            start.round() as usize,
-            end.map(|end| end.round() as usize),
-            sample_frames,
-        )
-        .ok_or(PitchActionReject::InvalidAction)?;
-        Ok((rate, sample_frames, region))
-    }
-
-    /// Control/MIDI capture only. Coverage scans and owning geometry never originate on RT.
-    fn prepare(
-        qualified: QualifiedSourceMap,
-        binding: InputPadBinding,
-        start_s: f64,
-        end_s: Option<f64>,
-    ) -> Result<Self, PitchActionReject> {
-        let (rate, sample_frames, region) =
-            Self::loaded_region(&qualified, binding, start_s, end_s)?;
-        let exact = qualified.exact_quarters();
-        let quarters = match exact {
-            Some(quarters) => quarters,
-            None => {
-                let start = qualified
-                    .map()
-                    .canonical_beat_at_source(region.start as f64 / f64::from(rate));
-                let end = qualified
-                    .map()
-                    .canonical_beat_at_source(region.end as f64 / f64::from(rate));
-                end.zip(start)
-                    .map(|(end, start)| end - start)
-                    .ok_or(PitchActionReject::TimingUnavailable)?
-            }
-        };
-        let geometry = MappedLoopGeometry::new(
-            qualified.map().clone(),
-            sample_frames,
-            rate,
-            region,
-            quarters,
-            exact.is_some(),
-        )
-        .map_err(|_| PitchActionReject::TimingUnavailable)?;
-        Ok(Self {
-            qualified,
-            geometry,
-        })
-    }
-}
+/// Original ordinary launch owner retained through off-thread retirement.
+pub(crate) type PadStartCustody = CapturedPadStart;
 
 struct PadStartOwner {
     start_policy: KeyLockStartLease,
@@ -386,8 +47,6 @@ struct PadStartOwner {
     exclusive: bool,
     received_at_ns: u64,
     sequence: u64,
-    mapped: Option<Arc<MappedStartSource>>,
-    sync_request: super::source_sync_policy::SourceSyncRequest,
     input_owners: InputOwners,
     work: Mutex<Option<Box<OrdinaryStartWork>>>,
     publication: OnceLock<PublishedBinding>,
@@ -543,7 +202,6 @@ impl CapturedPadStart {
             received_at_ns,
             render_format,
             input_owners,
-            binding.source_map_launch_snapshot(),
         )
     }
 
@@ -560,7 +218,6 @@ impl CapturedPadStart {
         received_at_ns: u64,
         render_format: (u32, usize),
         input_owners: InputOwners,
-        source_map: SourceMapLaunchSnapshot,
     ) -> Result<Self, PitchActionReject> {
         if !start_s.is_finite()
             || start_s < 0.0
@@ -592,9 +249,6 @@ impl CapturedPadStart {
         let launch_cancel_revision = ownership
             .launch_revision_for_cell(key.cell())
             .load(Ordering::Acquire);
-        let sync_request = source_map.request();
-        let mapped =
-            MappedStartSource::capture_launch(&source_map, &ownership, binding, start_s, end_s)?;
         let start_policy = ownership
             .register_key_lock_start_owner()
             .map_err(PitchActionReject::from_start_policy_admission)?;
@@ -618,8 +272,6 @@ impl CapturedPadStart {
                 exclusive,
                 received_at_ns,
                 sequence,
-                mapped,
-                sync_request,
                 input_owners,
                 work: Mutex::new(Some(work)),
                 publication: OnceLock::new(),
@@ -651,95 +303,7 @@ impl CapturedPadStart {
     pub(crate) fn sequence(&self) -> u64 {
         self.owner.sequence
     }
-    /// Borrow immutable admitted geometry; its original owner retains all source/artifact pins.
-    pub(crate) fn mapped_geometry(&self) -> Option<&MappedLoopGeometry> {
-        self.owner.mapped.as_ref().map(|mapped| &mapped.geometry)
-    }
 
-    pub(crate) fn sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
-        let mut actual = self.requested_sync_request();
-        if actual.mode == super::source_sync_policy::SourceSyncMode::Mapped
-            && self.owner.mapped.is_none()
-        {
-            // Only explicit missing-map admission can create this tuple. Retain
-            // the desired request on the owner; ordinary audio confirms no map.
-            actual.mode = super::source_sync_policy::SourceSyncMode::Legacy;
-        }
-        actual
-    }
-
-    pub(crate) fn requested_sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
-        self.owner.sync_request
-    }
-
-    /// Share only the original immutable qualified map, never this owner's mutable Work.
-    pub(crate) fn mapped_source_owner(&self) -> Option<Arc<MappedStartSource>> {
-        self.owner.mapped.clone()
-    }
-
-    pub(crate) fn mapped_pending_guard(
-        &self,
-    ) -> Result<MappedStartPendingGuard, PitchActionReject> {
-        let guard = self.callback_guard()?;
-        Ok(MappedStartPendingGuard {
-            status: self.owner.status.clone(),
-            rejected_status: REJECTED,
-            ownership: self.owner.ownership.clone(),
-            binding: guard.binding,
-            key: self.owner.key,
-            launch_cancel_revision: self.owner.launch_cancel_revision,
-        })
-    }
-    pub(crate) fn birth_observation(
-        &self,
-        execution: u64,
-        qualified: bool,
-        start: usize,
-        native: bool,
-        key_lock_request: u64,
-    ) -> super::mapped_birth::MappedBirth {
-        super::mapped_birth::MappedBirth::new(
-            super::mapped_birth::BirthStatus {
-                requested: self.start_behavior(),
-                mixed: false,
-                original: self.target_frame(),
-                execution: Some(execution),
-                reference_qualified: qualified,
-                emitted: false,
-            },
-            self.owner.key,
-            self.owner.source_generation,
-            self.owner.source_request_incarnation,
-            start,
-            native,
-            key_lock_request,
-        )
-    }
-
-    /// Actual immutable launch witness; later requested runtime/map changes do not rewrite it.
-    #[cfg(test)]
-    pub(crate) fn source_sync_witness(
-        &self,
-        key: ContentKey,
-        source_generation: u64,
-    ) -> Option<super::input_runtime_binding::SourceSyncWitness> {
-        (self.owner.key == key && self.owner.source_generation == source_generation)
-            .then(|| {
-                self.owner
-                    .mapped
-                    .as_ref()
-                    .and_then(|mapped| mapped.qualified.sync_witness_for(key, source_generation))
-            })
-            .flatten()
-    }
-
-    /// Admission/claim only. An already effective reader never polls the old job token.
-    pub(crate) fn mapped_source_current(&self, binding: InputPadBinding) -> bool {
-        self.owner
-            .mapped
-            .as_ref()
-            .is_none_or(|mapped| mapped.qualified.current_for(&self.owner.ownership, binding))
-    }
     pub(crate) fn start_behavior(&self) -> KeyLockStartBehavior {
         self.owner.start_policy.behavior()
     }
@@ -808,9 +372,6 @@ impl CapturedPadStart {
         }
         if !self.input_current() {
             return Err(PitchActionReject::InputDisabled);
-        }
-        if owner.status.load(Ordering::Acquire) != APPLIED && !self.mapped_source_current(binding) {
-            return Err(PitchActionReject::SourceChanged);
         }
         if !ownership.content_key_current(owner.key)
             || binding
@@ -1391,7 +952,6 @@ impl CapturedPadStart {
             16 => Some("already_published"),
             17 => Some("sequence_exhausted"),
             18 => Some("launch_cancelled"),
-            19 => Some("mapped_timing_unavailable"),
             _ => None,
         }
     }

@@ -10,9 +10,9 @@ from unittest.mock import Mock
 import pytest
 
 from tests.test_portable_bank_api import bank_native_module
+from tests.test_portable_bpm_runtime_api import bpm_runtime_native_module
 from tests.test_portable_mix_capture_api import mix_capture_native_module
 from tests.test_portable_ordinary_transport_api import ordinary_transport_native_module
-from tests.test_portable_source_beatmap_editor_api import source_beatmap_editor_native_module
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -217,9 +217,8 @@ def _pitch_runtime_state(
     self: object,
     *arguments: object,
     pitch_rows: object = None,
-    source_map_rows: object = None,
 ) -> None:
-    _forbidden_native_work(self, *arguments, pitch_rows=pitch_rows, source_map_rows=source_map_rows)
+    _forbidden_native_work(self, *arguments, pitch_rows=pitch_rows)
 
 
 def _pitch_restore_source(
@@ -298,7 +297,6 @@ def test_incomplete_pitch_receipt_cannot_activate(attribute: str) -> None:
     ("method", "keyword"),
     [
         ("set_input_runtime_state", "pitch_rows"),
-        ("set_input_runtime_state", "source_map_rows"),
         ("capture_pad_pitch_action", "received_at_ns"),
         ("capture_selected_pitch_action", "received_at_ns"),
         ("load_sample_async", "initial_base_shift"),
@@ -980,9 +978,7 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     monkeypatch.setattr(bootstrap["sys"], "executable", str(runtime / "python/python.exe"))
     complete_native = bank_native_module(_CompatibleOrdinaryEngine)
     vars(complete_native).update(vars(mix_capture_native_module(complete_native.AudioEngine)))
-    vars(complete_native).update(
-        vars(source_beatmap_editor_native_module(complete_native.AudioEngine))
-    )
+    vars(complete_native).update(vars(bpm_runtime_native_module(complete_native.AudioEngine)))
     vars(complete_native).update(
         vars(ordinary_transport_native_module(complete_native.AudioEngine))
     )

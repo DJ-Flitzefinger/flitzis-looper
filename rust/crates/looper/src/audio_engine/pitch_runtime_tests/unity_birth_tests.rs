@@ -812,6 +812,7 @@ fn actual_parameter_only_drain_cannot_borrow_a_previous_command_drain_revision()
 
 #[test]
 fn completed_publisher_cannot_lend_its_unread_control_payload_to_a_late_drain_finish() {
+    use crate::audio_engine::BpmLockTarget;
     use crate::messages::ControlMessage;
 
     let (mut fixture, mut parameters) = parameter_fixture();
@@ -860,12 +861,21 @@ fn completed_publisher_cannot_lend_its_unread_control_payload_to_a_late_drain_fi
     assert_eq!(drained_revision, published_revision);
     assert!(observed_empty);
     assert!(ownership.global_timing_publishing.load(Ordering::SeqCst));
+    ownership
+        .global_rate_status
+        .publish_bpm_requested(published_revision, false);
     fixture
         .control
         .producer
         .lock()
         .unwrap()
-        .push(ControlMessage::BootstrapTransportFromPad { id: 0 })
+        .push(ControlMessage::SetBpmLockTarget(BpmLockTarget {
+            enabled: false,
+            revision: published_revision,
+            anchor: None,
+            source_identity: None,
+            hierarchy_stamp: ownership.hierarchy_stamp.load(Ordering::Acquire),
+        }))
         .unwrap();
     ownership
         .global_timing_publishing
@@ -876,7 +886,8 @@ fn completed_publisher_cannot_lend_its_unread_control_payload_to_a_late_drain_fi
     drain_parameter_messages(&mut parameters, &mut fixture.mixer, &mut fixture.transport);
     assert!(matches!(
         fixture.control.consumer.peek(),
-        Ok(ControlMessage::BootstrapTransportFromPad { id: 0 })
+        Ok(ControlMessage::SetBpmLockTarget(target))
+            if !target.enabled && target.revision == published_revision
     ));
     fixture
         .mixer
@@ -891,11 +902,16 @@ fn completed_publisher_cannot_lend_its_unread_control_payload_to_a_late_drain_fi
     );
 
     // After genuine subsequent drains, the exact queued payload takes effect and
-    // both sides may settle. A timing-only publication is never a new rate ID.
+    // both sides may settle. A BPM-lock publication is never a new rate ID.
     fixture.drain();
     drain_parameter_messages(&mut parameters, &mut fixture.mixer, &mut fixture.transport);
     assert!(fixture.control.consumer.is_empty() && parameters.is_empty());
-    assert_eq!(fixture.transport.bootstrap_reference(), Some(0));
+    fixture.render(0);
+    let (requested_revision, effect) = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!(requested_revision, published_revision);
+    assert_eq!(effect.revision, published_revision);
+    assert!(!effect.requested && !effect.effective && effect.applied);
+    assert_eq!(fixture.transport.bootstrap_reference(), None);
     assert!(fixture.mixer.global_rate_drains_settled());
     let consumed_rate = rate_status(&fixture);
     assert_eq!(consumed_rate.state, "applied", "{consumed_rate:?}");

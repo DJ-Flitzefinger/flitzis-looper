@@ -43,15 +43,6 @@ mod flitzis_looper_audio {
     use super::audio_engine::OrdinaryTransportObservation;
 
     #[pymodule_export]
-    use super::audio_engine::SourceBeatmap;
-
-    #[pymodule_export]
-    use super::audio_engine::SourceBeatmapArtifact;
-
-    #[pymodule_export]
-    use super::audio_engine::SourceBeatmapRawCandidate;
-
-    #[pymodule_export]
     use super::audio_engine::MixCaptureTicket;
 
     #[pymodule_export]

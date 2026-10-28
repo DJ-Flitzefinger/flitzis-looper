@@ -69,7 +69,6 @@ pub(crate) enum ScheduledCommand {
     },
     RefreshAcceptedTiming(std::sync::Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
-    AdoptRuntimePolicy(super::input_mapping::RuntimePolicyWork),
     TriggerInputPad {
         id: usize,
         start_s: f64,

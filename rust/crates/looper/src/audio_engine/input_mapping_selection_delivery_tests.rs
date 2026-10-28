@@ -41,7 +41,6 @@ fn fixture() -> DispatcherFixture {
     for id in [0, 1] {
         let native = InputRuntimePadBinding::for_test(id, ownership.clone());
         state.pads[id] = RuntimePadState {
-            source_map: Default::default(),
             loaded: true,
             binding: Some(native.binding),
             acknowledgements: Some(native.acknowledgements.clone()),

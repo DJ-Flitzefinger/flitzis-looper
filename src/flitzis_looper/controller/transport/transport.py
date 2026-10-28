@@ -9,9 +9,7 @@ from flitzis_looper.controller.transport.pad import PadController
 from flitzis_looper.controller.transport.pitch import PitchController
 from flitzis_looper.controller.transport.playback import PadPlaybackController
 from flitzis_looper.controller.transport.residency import ResidencyController
-from flitzis_looper.controller.transport.source_sync import SourceSyncController
 from flitzis_looper.controller.transport.state import ApplyProjectState
-from flitzis_looper.controller.transport.timing_policy import TimingPolicyController
 from flitzis_looper.controller.transport.waveform import WaveformController
 
 if TYPE_CHECKING:
@@ -71,8 +69,6 @@ class TransportController(BaseController):
         self.playback = PadPlaybackController(self)
         self.pad = PadController(self)
         self.pitch = PitchController(self)
-        self.source_sync = SourceSyncController(self)
-        self.timing_policy = TimingPolicyController(self)
         self.waveform = WaveformController(self)
 
     def bind_input_runtime_refresh(self, refresh: Callable[[], bool]) -> None:

@@ -11,7 +11,6 @@ from uuid import uuid4
 from flitzis_looper.controller.copy_arrangement_custody import (
     CopyJournalCustody,
     journal_project_images,
-    prepare_recovery_map_publication,
 )
 from flitzis_looper.controller.material_migration_recovery import (
     config_reference_matches,
@@ -40,7 +39,6 @@ from flitzis_looper.pair_snapshot import capture_pair_snapshot, project_with_pai
 if TYPE_CHECKING:
     from flitzis_looper.controller.app import AppController
     from flitzis_looper.controller.asset_lifecycle import AssetRetirementReservation
-    from flitzis_looper.controller.copy_arrangement_custody import MapRecoveryPublication
     from flitzis_looper.controller.persistence import ConfigCommitReceipt
     from flitzis_looper.pair_snapshot import PairSnapshot
     from flitzis_looper_audio import RecoveredPairAcceptance
@@ -72,7 +70,6 @@ class _AfterRecovery:
     acceptance: RecoveredPairAcceptance | None = None
     receipt: ConfigCommitReceipt | None = None
     acceptance_released: bool = False
-    map_publication: MapRecoveryPublication | None = None
 
 
 def _before_image(snapshot: PairSnapshot) -> PairArrangementAfterImage:
@@ -621,19 +618,12 @@ class PairArrangementStartup:
                 (),
                 project_images=(app.project.model_dump_json(),),
             )
-            with self._retirement.activate():
-                recovery.map_publication = prepare_recovery_map_publication(
-                    app._assets, app.project, recovery.map_publication
-                )
             recovery.receipt = app.persistence.commit_migration_receipt(
                 self._fence, app.persistence.revision, app.project.model_copy(deep=True)
             )
         recovery.journal.append(record.committed(recovery.receipt))
         if app.persistence.revision != recovery.receipt.revision:
             return False
-        if recovery.map_publication is not None:
-            with self._retirement.activate():
-                recovery.map_publication[1].apply()
         if not app._audio.validate_recovered_pad_pair(recovery.acceptance):
             message = "Fresh Pair recovery acceptance changed after actual Config commit"
             raise PersistenceFenceError(message)

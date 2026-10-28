@@ -1,3 +1,64 @@
+## Latest direct Human plan — 2026-10-28: waiting BPM-first successor
+
+This chat is planning only. The Human opens the next LOOPER chat and writes
+`weiter`; only that actual start activates/reuses ONE NEW matching Goal without
+a token budget or another confirmation. Startup3: codex-meta/handoff/next-step.md,
+current-state.md, workflow.md. Full binding current plan:
+codex-meta/handoff/constant-bpm-successor-20261028.md; exact objective:
+codex-meta/goal-objective.txt; focused checks:
+codex-meta/quality/goal-verification-20261028.md. In repo use ../codex-meta.
+Use actual Goal tools on start, inspect result; no false completion of obsolete
+SYNC Goal, no old-chat messaging or automatic model/chat/stage switch.
+
+Order: FIRST finish/check/review/commit/normally push the existing removal/grid
+WIP with safe matching Native and fresh clean actual remote equality. NEXT fix
+BPM budget/insufficient/uncorroborated cases and improve generic analysis on ALL
+C:\SCRATCHBEATS audio (39 files at planning). THEN fix single-PAD START/STOP and
+MultiLoop ON->OFF peer stopping, make BPM Lock independent of MultiLoop with
+stable master tempo, and set fresh defaults:1/16 quantize step, FLAC24/compression8,
+existing BS-RoFormer MUSDB18HQ. Other settings unchanged. No compatibility,
+migration/tombstones or private-data deletion; Human emptied samples/record.
+
+Retain ordinary sample-frame masterclock/TransportTimeline/Scheduler, quantization,
+scalar BPM Lock/loops/grid, pitch/Key Lock/stems and source/OwnACK/lifetimes.
+Retire feature-specific SYNC/REALTIME/map/adoption/phase-following paths; no dead
+SYNC infrastructure for hypothetical reuse. Archive branch is its recovery source.
+Old FULL feature queue/counts/model stages and independent historical expansions
+are DEFERRED, not reactivated by this Goal. Only necessary adjacent blockers join.
+
+Recreate dedicated read-only systems_interactions AND methods_efficiency.
+The latter critically reviews approach, scope, duplicate work, test proportionality
+before substantial phases and repeated unproductive attempts; it supplements,
+not duplicates, Systems PRE/frozenPOST and ONE independent final-diff review.
+Reuse compatible checks/NN observations; no repeated full suites/builds/inference
+without new risk. Role: codex-meta/quality/looper-methods-efficiency.md.
+
+Autonomous Human absence, existing local-main exception, checked coherent English
+commit+normalmainpush+freshcleanremote before each independent next step, serial
+Native/Root coordination, protected App/held Native/private/sourceACK/RT/retirement,
+2/4/6productive/stressmax10/internal32whereaffected, no fullRustport/Slice8 remain.
+No total download/install deadline; preserve/resume bytes and verify pinned hashes.
+Capacity alone: interruptible20/40/max60s unlimited same-step effects-first retries;
+no voluntary Goal stop/status/model/scope change solely capacity. No destructive
+Git/remote/config/credential/PR rights. Historical instructions below are superseded
+where their execution/order/scope conflicts with this latest direct Human plan.
+
+## Latest direct Human scope — 2026-10-27: archive and remove source SYNC
+
+The Human accepts the current constant-BPM/Tap baseline after more than100 bars
+without audible drift, and explicitly requests complete removal of SYNC,
+REALTIME BPM and linked editor/engine functions from main. The remote branch
+SYNC-REALTIME-BPM preserves949cff1d (accepted baseline) and27ef7f87 (unpublished
+regional-probe work, not installed/accepted). Preserve accepted detector policy4,
+CPU/CUDA receipts, robust Tap/half-double, ordinary BPM Lock/scalar loops/grid,
+source/OwnACK/lifetimes/KeyLock. Latest Human explicitly requires NO backwards
+compatibility or migration work; he will clear samples himself. Do not delete
+Human samples or historical artifacts. No new SYNC work on main.
+This later direct scope supersedes older requirements to complete that feature.
+Commit+normalmainpush/freshcleanremote, Systems PRE/POST, final independent review,
+protected Human App/Native and unlimited capacity20/40/max60effects-first rules remain.
+No total download/install deadline. STOP before full Rust-port/Slice8.
+
 ## Latest direct Human download rule — 2026-10-27
 
 Slow Internet is not a reason to cancel downloads or package installation after

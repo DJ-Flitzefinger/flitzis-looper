@@ -1,3 +1,5 @@
+> Historical source-SYNC research, outside the current runtime. See [the archive](sync-archive.md).
+
 # Variable beatmaps, Quantize and SYNC: feasibility decision
 
 Research date: 2026-10-05. Inspected implementation: `062fe8518e4cbb2021180ad5eac1c7af2abc9102`.

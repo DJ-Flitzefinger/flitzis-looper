@@ -49,49 +49,13 @@ class FakeProjectAssetLease:
     def __init__(self, path: str) -> None:
         self.path = path
         self.released = False
-        self.source_beatmap_receipt: dict[str, object] | None = None
-        self.source_beatmap_acknowledgements = 0
-        self.source_beatmap_retirements = 0
 
     def release(self) -> None:
         self.released = True
 
-    @property
-    def source_beatmap_bound(self) -> bool:
-        """Expose cached fixture binding, never a current file/source qualification."""
-        return not self.released and self.source_beatmap_receipt is not None
-
     def reclaim_stems(self, expected_path: str) -> None:
         assert expected_path == self.path
         assert not self.released
-
-    def bind_source_beatmap(self, receipt_json: str) -> None:
-        """Track receipt identity only; no filesystem or source proof is simulated."""
-        assert not self.released
-        receipt = json.loads(receipt_json)
-        assert set(receipt) == {
-            "schema_version",
-            "kind",
-            "reference",
-            "bytes",
-            "sha256",
-            "map_revision",
-            "decoder_identity",
-        }
-        if self.source_beatmap_receipt is not None and self.source_beatmap_receipt != receipt:
-            message = "map lease already has a different immutable receipt"
-            raise ValueError(message)
-        self.source_beatmap_receipt = receipt
-
-    def acknowledge_source_beatmap(self) -> None:
-        assert not self.released
-        assert self.source_beatmap_receipt is not None
-        self.source_beatmap_acknowledgements += 1
-
-    def retire_source_beatmap(self) -> None:
-        assert not self.released
-        assert self.source_beatmap_receipt is not None
-        self.source_beatmap_retirements += 1
 
 
 @dataclass(frozen=True)
@@ -583,9 +547,6 @@ class FakeInputSelection:
         loop_ends: list[float | None],
         bindings: list[object] | None = None,
         pitch_rows: list[dict[str, object]] | None = None,
-        source_map_rows: list[dict[str, object]] | None = None,
-        *,
-        timing_policy_json: str | None = None,
     ) -> object:
         """Record only explicit ready bindings; preserve the caller's mock return value."""
         rows = bindings if bindings is not None else [None] * len(loaded)

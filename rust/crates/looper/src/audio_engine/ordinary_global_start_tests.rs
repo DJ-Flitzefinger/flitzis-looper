@@ -105,50 +105,6 @@ fn full_initial_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
     pcm
 }
 
-#[test]
-fn missing_map_global_start_keeps_two_ordinary_native_beginnings_and_pending_requests() {
-    let mut pending = Fixture::new(true);
-    let mut reference = Fixture::new(true);
-    restore_nonzero_bank(&mut pending);
-    restore_nonzero_bank(&mut reference);
-    super::ordinary_start_tests::publish_missing_map_intent(&pending);
-    let actual = public_start(&pending);
-    let expected = public_start(&reference);
-    pending.drain();
-    reference.drain();
-    wait_group(&mut pending, &actual);
-    wait_group(&mut reference, &expected);
-    let execution = pending.scheduler.peek_next_target_frame().unwrap();
-    assert_eq!(
-        reference.scheduler.peek_next_target_frame(),
-        Some(execution)
-    );
-    let pcm = full_initial_attack(&mut pending, execution);
-    assert_eq!(pcm, full_initial_attack(&mut reference, execution));
-    assert!(pcm.iter().any(|value| value.abs() > 0.01));
-    assert_eq!(actual.publication_status(), "accepted");
-    for id in 0..2 {
-        let voice = pending.voice(id);
-        assert_eq!(pending.starts(id), 1);
-        assert_eq!(
-            voice.sync_request.mode,
-            super::source_sync_policy::SourceSyncMode::Legacy
-        );
-        assert_eq!(voice.sync_request.intent_revision, 19);
-        assert!(voice.mapped_start.is_none());
-        assert!(
-            voice
-                .stretch
-                .owns_pitch_contract(PitchIntent::new(0, SHIFTS[id]).unwrap(), true)
-        );
-        assert_ne!(voice.stretch.native_state_address(), 0);
-    }
-    assert_ne!(
-        pending.voice(0).stretch.native_state_address(),
-        pending.voice(1).stretch.native_state_address()
-    );
-}
-
 fn spectral_amplitude(pcm: &[f32], frequency: f64) -> f64 {
     let (sine, cosine) =
         pcm.iter()
@@ -429,8 +385,8 @@ pub(super) fn phase_group(lock: bool) -> (Fixture, GlobalPlaybackBatchTicket) {
     }
     assert_eq!(ticket.publication_status(), "accepted");
     for id in [0, 1] {
-        assert!(fixture.voice(id).phase_launch_qualified);
-        assert!(fixture.voice(id).phase_birth_unadvanced);
+        assert!(fixture.voice(id).launch_qualified);
+        assert!(fixture.voice(id).launch_unadvanced);
         assert!(
             fixture
                 .voice(id)
@@ -442,16 +398,7 @@ pub(super) fn phase_group(lock: bool) -> (Fixture, GlobalPlaybackBatchTicket) {
 }
 
 fn request_phase_bootstrap(fixture: &mut Fixture) {
-    super::audio_stream::process_control_message(
-        crate::messages::ControlMessage::BootstrapTransportFromPad { id: 0 },
-        &mut fixture.scheduler,
-        fixture.transport.output_frame(),
-        &mut crate::messages::TriggerQuantization::Immediate,
-        &mut fixture.transport,
-        &mut fixture.mixer,
-        &mut fixture.feedback,
-        &mut fixture.retirement,
-    );
+    fixture.transport.request_bootstrap(0);
 }
 
 #[test]
@@ -463,14 +410,14 @@ fn genuine_global_dry_births_rebind_same_boundary_bootstrap_without_moving_eithe
     let old = actual.transport;
     request_phase_bootstrap(&mut actual);
     assert!(actual.render(0).is_empty());
-    assert!(actual.voice(0).phase_birth_unadvanced);
+    assert!(actual.voice(0).launch_unadvanced);
     assert_eq!(actual.transport.phase_generation(), old.phase_generation());
     assert_eq!(actual.render(1), reference.render(1));
     assert_ne!(actual.transport.phase_generation(), old.phase_generation());
     for id in [0, 1] {
         let voice = actual.voice(id);
-        assert!(voice.phase_launch_qualified);
-        assert!(!voice.phase_birth_unadvanced);
+        assert!(voice.launch_qualified);
+        assert!(!voice.launch_unadvanced);
         assert!(
             voice
                 .source_playback
@@ -491,8 +438,8 @@ fn same_boundary_loop_aba_fences_only_changed_birth_and_noop_keeps_custody() {
     let start = LOOP_START as f64 / f64::from(RATE);
     let end = Some(LOOP_END as f64 / f64::from(RATE));
     fixture.mixer.set_pad_loop_region(0, start, end);
-    assert!(fixture.voice(0).phase_launch_qualified);
-    assert!(fixture.voice(0).phase_birth_unadvanced);
+    assert!(fixture.voice(0).launch_qualified);
+    assert!(fixture.voice(0).launch_unadvanced);
     assert!(fixture.voice(0).source_playback.matches_exact(&original));
     for next in [LOOP_START + 1, LOOP_START] {
         let edit = fixture
@@ -501,10 +448,10 @@ fn same_boundary_loop_aba_fences_only_changed_birth_and_noop_keeps_custody() {
             .unwrap();
         fixture.mixer.apply_loop_edit_claimed(edit);
     }
-    assert!(!fixture.voice(0).phase_launch_qualified);
-    assert!(!fixture.voice(0).phase_birth_unadvanced);
-    assert!(fixture.voice(1).phase_launch_qualified);
-    assert!(fixture.voice(1).phase_birth_unadvanced);
+    assert!(!fixture.voice(0).launch_qualified);
+    assert!(!fixture.voice(0).launch_unadvanced);
+    assert!(fixture.voice(1).launch_qualified);
+    assert!(fixture.voice(1).launch_unadvanced);
     request_phase_bootstrap(&mut fixture);
     fixture.render(1);
     assert!(
@@ -541,7 +488,7 @@ fn replacement_bank_loop_edit_preserves_foreign_retained_birth_custody() {
     let voice = fixture.voice(0);
     assert_eq!(voice.sample.as_ref().unwrap().source_address(), address);
     assert!(voice.source_playback.matches_exact(&original));
-    assert!(voice.phase_launch_qualified && voice.phase_birth_unadvanced);
+    assert!(voice.launch_qualified && voice.launch_unadvanced);
 }
 
 #[test]
@@ -609,14 +556,14 @@ fn resident_executor_claims_preserve_noop_and_foreign_birth_but_fence_changed_re
     let sample = fixture.voice(0).sample.as_ref().unwrap().clone();
     let revision = sample.window_revision();
     relocate(&mut fixture, &sample, LOOP_END, revision);
-    assert!(fixture.voice(0).phase_launch_qualified && fixture.voice(0).phase_birth_unadvanced);
+    assert!(fixture.voice(0).launch_qualified && fixture.voice(0).launch_unadvanced);
     assert!(fixture.voice(0).source_playback.matches_exact(&original));
     for (offset, end) in [LOOP_END - 1, LOOP_END].into_iter().enumerate() {
         relocate(&mut fixture, &sample, end, revision + 1 + offset as u64);
-        assert!(!fixture.voice(0).phase_launch_qualified);
-        assert!(!fixture.voice(0).phase_birth_unadvanced);
+        assert!(!fixture.voice(0).launch_qualified);
+        assert!(!fixture.voice(0).launch_unadvanced);
         assert!(fixture.voice(0).source_playback.matches_exact(&original));
-        assert!(fixture.voice(1).phase_launch_qualified && fixture.voice(1).phase_birth_unadvanced);
+        assert!(fixture.voice(1).launch_qualified && fixture.voice(1).launch_unadvanced);
     }
 
     let (mut foreign, _) = phase_group(false);
@@ -640,7 +587,7 @@ fn resident_executor_claims_preserve_noop_and_foreign_birth_but_fence_changed_re
         address
     );
     assert!(foreign.voice(0).source_playback.matches_exact(&original));
-    assert!(foreign.voice(0).phase_launch_qualified && foreign.voice(0).phase_birth_unadvanced);
+    assert!(foreign.voice(0).launch_qualified && foreign.voice(0).launch_unadvanced);
 }
 
 #[test]
@@ -670,8 +617,8 @@ fn native_birth_bootstrap_and_no_cut_loop_aba_preserve_complete_first_pcm_and_ow
                     .unwrap();
                 actual.mixer.apply_loop_edit_claimed(change);
             }
-            assert!(!actual.voice(0).phase_launch_qualified);
-            assert!(!actual.voice(0).phase_birth_unadvanced);
+            assert!(!actual.voice(0).launch_qualified);
+            assert!(!actual.voice(0).launch_unadvanced);
         }
         for (id, snapshot) in snapshots.iter().enumerate() {
             let voice = actual.voice(id);

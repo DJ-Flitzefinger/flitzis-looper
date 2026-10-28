@@ -8,7 +8,6 @@ use crate::audio_engine::stem_cache::{project_stem_cache_dir, source_version_has
 use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
 use crate::audio_engine::transport::QuantizeGrid;
 use flitzis_looper_analysis as analysis;
-pub(crate) use input_mapping::RuntimePolicyWork;
 
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
@@ -35,6 +34,7 @@ mod analysis_predictions;
 mod app_analysis;
 mod app_tempo;
 mod audio_stream;
+mod neural_analysis;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
 #[cfg(test)]
@@ -104,18 +104,6 @@ mod loop_acceptance;
 pub(crate) mod master_provenance;
 pub(crate) mod mix_capture;
 mod mix_capture_api;
-mod source_beatmap;
-mod sync_diagnostics;
-pub use source_beatmap::SourceBeatmap;
-mod source_beatmap_artifact;
-pub use source_beatmap_artifact::SourceBeatmapArtifact;
-pub(crate) use source_beatmap_artifact::SourceBeatmapRawArtifact;
-mod source_beatmap_capture;
-mod source_beatmap_raw;
-mod source_beatmap_raw_data;
-#[cfg(all(test, windows))]
-mod source_map_test_support;
-pub use source_beatmap_raw::SourceBeatmapRawCandidate;
 mod mixer;
 pub(crate) use input_runtime_binding::TimingAnchor;
 pub use mix_capture_api::MixCaptureTicket;
@@ -200,31 +188,17 @@ pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
-mod bounded_source_integer;
-mod compact_source_numerics;
-mod full_fraction_source_numerics;
-mod general_source_numerics;
 #[cfg(test)]
 mod l3_source_reader_tests;
 mod loop_phase_reference;
-mod mapped_birth;
-mod mapped_source_clock;
-mod runtime_policy_retry;
 mod scheduler;
 mod source_control_epoch;
 mod source_feed_history;
 mod source_grid;
-mod source_map_admission;
-mod source_map_api;
-mod source_numerics;
 mod source_playback;
-mod static_source_clock;
 
 mod source_reader;
 mod source_reader_period;
-mod source_sync_policy;
-#[cfg(test)]
-mod static_source_clock_regression_tests;
 mod stem_cache;
 mod stem_pair;
 mod stem_pair_preparation;
@@ -1669,14 +1643,10 @@ impl AudioEngine {
     #[classattr]
     const RESIDENT_PCM_ADMISSION_VERSION: u32 = 2;
     #[classattr]
-    const GLOBAL_TIMING_POLICY_API_VERSION: u32 = 1;
-    #[classattr]
     const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 1;
     #[classattr]
     const ORDINARY_TRANSPORT_API_VERSION: u32 = 2;
 
-    #[classattr]
-    const GRID_PHASE_ORIGIN_API_VERSION: u32 = 1;
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
         &self,
@@ -1977,40 +1947,11 @@ impl AudioEngine {
         self.loop_acceptance.request(sample_id)
     }
 
-    #[classattr]
-    const SYNC_DIAGNOSTIC_API_VERSION: u32 = 1;
-
-    pub fn request_sync_diagnostic_snapshot(&self) -> PyResult<u64> {
-        self.loop_acceptance.diagnostics.request()
-    }
-
-    /// Capability for source-bound automatic map-only worker jobs.
-    #[classattr]
-    const AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: u32 = 1;
-
-    #[classattr]
-    const AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION: u32 = 1;
-
     /// Closed CPU-v1 and CUDA-auto-v2 analysis execution receipts.
     #[classattr]
     const BEAT_THIS_EXECUTION_API_VERSION: u32 = 2;
-
-    /// Data-only export under the genuine original analysis/source admission.
-    pub fn consume_automatic_source_beatmap(
-        &self,
-        py: Python<'_>,
-        delivery: &loader_events::LoaderEventDelivery,
-    ) -> PyResult<Option<Py<pyo3::types::PyTuple>>> {
-        loader_events::consume_automatic_map(self, py, delivery)
-    }
-
-    pub fn sync_diagnostic_snapshot(
-        &self,
-        py: Python<'_>,
-        request_id: u64,
-    ) -> PyResult<Option<Py<PyDict>>> {
-        sync_diagnostics::metadata(self, py, request_id)
-    }
+    #[classattr]
+    const BPM_ONLY_RUNTIME_API_VERSION: u32 = 1;
 
     /// One nonblocking read; None means pending, superseded or a busy writer.
     pub fn loop_acceptance_snapshot(
@@ -2283,7 +2224,7 @@ impl AudioEngine {
         Ok(())
     }
 
-    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None, source_map_rows=None, *, timing_policy_json=None))]
+    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None, pitch_rows=None))]
     pub fn set_input_runtime_state(
         &self,
         py: Python<'_>,
@@ -2293,8 +2234,6 @@ impl AudioEngine {
         loop_ends: Vec<Option<f64>>,
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
         pitch_rows: Option<Vec<Py<PyDict>>>,
-        source_map_rows: Option<Vec<Py<PyDict>>>,
-        timing_policy_json: Option<String>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -2311,7 +2250,7 @@ impl AudioEngine {
             .collect();
         let bindings = borrowed.iter().map(|binding| binding.as_deref()).collect();
         runtime
-            .set_runtime_state_with_policy(
+            .set_runtime_state_with_pitch_projection(
                 multi_loop,
                 loaded,
                 loop_starts,
@@ -2320,11 +2259,6 @@ impl AudioEngine {
                 pitch_rows
                     .map(|rows| pitch_api::parse_rows(py, rows))
                     .transpose()?,
-                source_map_rows
-                    .map(|rows| source_map_api::parse_rows(py, rows))
-                    .transpose()?,
-                source_sync_policy::GlobalTimingPolicy::parse(timing_policy_json.as_deref())
-                    .map_err(PyValueError::new_err)?,
             )
             .map_err(PyValueError::new_err)
     }
@@ -2942,136 +2876,6 @@ impl AudioEngine {
                 self.loader_tx.clone(),
             )
             .map_err(PyRuntimeError::new_err)
-    }
-
-    /// Validate map data against an original loaded source without PCM export.
-    /// The existing offline reservation owns request freshness and actual retirement.
-    pub fn begin_source_beatmap(&self, sample_id: usize) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_admitted(sample_id, None)
-    }
-
-    /// Acquire only unverified complete-original legacy QM observations.
-    #[pyo3(signature=(sample_id,*,expected_source_generation))]
-    pub fn begin_source_beatmap_raw_async(
-        &self,
-        sample_id: usize,
-        expected_source_generation: u64,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_raw_async_with(sample_id, expected_source_generation, || {})
-    }
-
-    /// Analyze complete original fullmix with the explicitly installed Beat This worker.
-    #[pyo3(signature=(sample_id,installation_root,*,expected_source_generation))]
-    pub fn begin_source_beatmap_beat_this_raw_async(
-        &self,
-        sample_id: usize,
-        installation_root: String,
-        expected_source_generation: u64,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_beat_this_raw_async_with(
-            sample_id,
-            expected_source_generation,
-            installation_root,
-            || {},
-        )
-    }
-
-    /// Build an accepted map from explicit labels on a genuine original capture.
-    #[pyo3(signature=(sample_id,candidate,review_json,*,expected_source_generation))]
-    pub fn begin_source_beatmap_review_async(
-        &self,
-        sample_id: usize,
-        candidate: &SourceBeatmapRawCandidate,
-        review_json: String,
-        expected_source_generation: u64,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_review_async_with(
-            sample_id,
-            candidate,
-            review_json,
-            expected_source_generation,
-            || {},
-        )
-    }
-
-    /// Queue source-bound map verification on the existing bounded cold worker lane.
-    pub fn begin_source_beatmap_async(
-        &self,
-        sample_id: usize,
-        record_json: String,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_async_with(sample_id, record_json, || {})
-    }
-
-    /// Export immutable map data without changing project or playback selection.
-    pub fn begin_source_beatmap_store_async(
-        &self,
-        sample_id: usize,
-        record_json: String,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_store_async_with(sample_id, record_json, || {})
-    }
-
-    /// Restore a compact historical receipt under newly captured source custody.
-    #[pyo3(signature=(sample_id,origin_seconds,period_seconds,*,expected_source_generation=None))]
-    pub fn begin_source_beatmap_create_async(
-        &self,
-        sample_id: usize,
-        origin_seconds: f64,
-        period_seconds: f64,
-        expected_source_generation: Option<u64>,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_create_async_with(
-            sample_id,
-            origin_seconds,
-            period_seconds,
-            expected_source_generation,
-            || {},
-        )
-    }
-
-    /// Correct one exact receipt under the original source-bound worker job.
-    pub fn begin_source_beatmap_edit_async(
-        &self,
-        sample_id: usize,
-        receipt_json: String,
-        operation_json: String,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_edit_async_with(sample_id, receipt_json, operation_json, || {})
-    }
-
-    /// Restore a compact historical receipt under newly captured source custody.
-    pub fn begin_source_beatmap_restore_async(
-        &self,
-        sample_id: usize,
-        receipt_json: String,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_source_beatmap_restore_async_with(sample_id, receipt_json, || {})
-    }
-
-    /// Restore an unedited automatic-v4 map without changing performer timing.
-    pub fn begin_automatic_source_beatmap_restore_async(
-        &self,
-        sample_id: usize,
-        receipt_json: String,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_automatic_source_beatmap_restore_async_with(sample_id, receipt_json, || {})
-    }
-
-    /// Acquire only automatic map data through the existing source-bound worker.
-    #[pyo3(signature=(sample_id,installation_root,*,expected_source_generation))]
-    pub fn begin_automatic_source_beatmap_async(
-        &self,
-        sample_id: usize,
-        installation_root: String,
-        expected_source_generation: u64,
-    ) -> PyResult<OfflineAnalysisJob> {
-        self.begin_automatic_source_beatmap_async_with(
-            sample_id,
-            expected_source_generation,
-            installation_root,
-            || {},
-        )
     }
 
     /// Declare automatic/manual/TAP/legacy timing authority under the native owner.
@@ -4381,31 +4185,6 @@ impl AudioEngine {
         key_lock_feedback::status(self, py, id)
     }
 
-    /// Observe the actual current-source mapped voices, independently of requested SYNC intent.
-    pub fn pad_source_sync_status(
-        &self,
-        py: Python<'_>,
-        id: usize,
-    ) -> PyResult<Option<Py<PyDict>>> {
-        key_lock_feedback::source_sync_status(self, py, id)
-    }
-
-    /// Retry one original Native runtime policy snapshot; normal refusal is feedback.
-    #[pyo3(signature = (*, service=false))]
-    pub fn request_input_runtime_policy_adoption(&self, service: bool) -> PyResult<()> {
-        let runtime = self
-            .input_runtime
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        runtime
-            .request_runtime_policy_adoption_with_service(service)
-            .map_err(PyRuntimeError::new_err)
-    }
-
     /// Observe queued global rate intent separately from the callback-confirmed effect.
     pub fn global_rate_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         use global_rate_status::RateState;
@@ -4624,60 +4403,6 @@ impl AudioEngine {
             id,
             phase_anchor_s,
             expected_source_generation,
-        )
-    }
-
-    pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        self.input_runtime_ownership
-            .ensure_no_copy_reservation(id)?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        push_global_timing_message(
-            &self.global_timing_revision,
-            &self.input_runtime_ownership.global_timing_publishing,
-            &mut producer_guard,
-            ControlMessage::AnchorTransportPhaseFromPad { id },
-            "AnchorTransportPhaseFromPad",
-        )
-    }
-
-    /// Arm the selected BPM-lock reference once per audio-stream session.
-    pub fn bootstrap_transport_from_pad(&mut self, id: usize) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err("id out of range"));
-        }
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        self.input_runtime_ownership
-            .ensure_no_copy_reservation(id)?;
-        let mut producer = self
-            .control_producer()?
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-        push_global_timing_message(
-            &self.global_timing_revision,
-            &self.input_runtime_ownership.global_timing_publishing,
-            &mut producer,
-            ControlMessage::BootstrapTransportFromPad { id },
-            "BootstrapTransportFromPad",
         )
     }
 

@@ -27,7 +27,6 @@ fn retrigger_needs_native(
     // A momentary ON unity point during smoothing is not a dry future trajectory.
     // A fresh endpoint must prove its own rate-epoch and reset-phase history.
     Ok(pitch != 1.0
-        || (snapshot.playback.is_mapped() && render.key_lock)
         || (render.key_lock
             && snapshot.playback.tempo_ratio().to_bits()
                 != snapshot.playback.rate_target().to_bits()))
@@ -89,42 +88,7 @@ impl RtMixer {
         // This current snapshot validates the retained data contract; it never supplies
         // a new source, request, permit or reset origin to the original worker.
         let (start, end) = work.action.loop_region();
-        let mut snapshot = self.normal_start_snapshot_with_policy(
-            guard.id,
-            start,
-            end,
-            work.action.sync_request(),
-        )?;
-        if let Some(geometry) = work.action.mapped_geometry() {
-            if !work
-                .action
-                .sync_request()
-                .mapped_matching_enabled(self.bpm_lock_enabled)
-            {
-                return Err(PitchActionReject::MappedTimingUnavailable);
-            }
-            let endpoint = super::super::mapped_birth::playback_at_birth(
-                geometry,
-                work.action.sequence(),
-                timeline.ok_or(PitchActionReject::MappedTimingUnavailable)?,
-                super::super::prepared_native_history::SourceReadCheckpoint {
-                    playback: snapshot.playback,
-                    plan: snapshot.plan,
-                },
-                execution,
-                work.launch_reference,
-            )?;
-            let dsp = self.capture_fresh_start_dsp_intent(
-                work.action.content_key(),
-                work.action.original_due_frame(),
-                guard.id,
-                callback,
-                work.dsp_intent,
-            )?;
-            work.plan_late_reprepare(endpoint, dsp, execution)?;
-            work.mapped_timeline = timeline;
-            return Ok(());
-        }
+        let mut snapshot = self.normal_start_snapshot(guard.id, start, end)?;
         if !snapshot.plan.matches_source_contract(origin.plan)
             || snapshot.playback.tempo_ratio().to_bits() != origin.playback.tempo_ratio().to_bits()
             || snapshot.playback.rate_target().to_bits() != origin.playback.rate_target().to_bits()
@@ -178,9 +142,6 @@ impl RtMixer {
         snapshot: &PitchSourceSnapshot,
         index: usize,
     ) -> Result<bool, PitchActionReject> {
-        if snapshot.playback.is_mapped() || snapshot.playback.has_phase_program() {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
         let render = work.action.render();
         let id = self.voices[index].sample_id;
         let same_owned = self.pad_pitch_intent[id] == render.pitch
@@ -205,16 +166,6 @@ impl RtMixer {
             return Err(PitchActionReject::StaleContent);
         }
         let guard = work.current_guard()?;
-        if work.action.mapped_geometry().is_some()
-            && self.pad_key_lock_request_id[guard.id] != work.action.key_lock_request()
-        {
-            return Err(PitchActionReject::PreparedMismatch);
-        }
-        if work.action.variant() != PitchActionVariant::SetRetrigger
-            && !self.mapped_pitch_action_available(guard.id)
-        {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
         if !self.admitted_source_binding_current(guard.id, guard.binding) {
             return Err(PitchActionReject::SourceChanged);
         }
@@ -224,14 +175,6 @@ impl RtMixer {
             return Err(PitchActionReject::TimingChanged);
         }
         Ok(guard)
-    }
-
-    fn mapped_pitch_action_available(&self, id: usize) -> bool {
-        !self.voices.iter().any(|voice| {
-            voice.active
-                && voice.sample_id == id
-                && (voice.source_playback.is_mapped() || voice.source_playback.has_phase_program())
-        })
     }
 
     fn pitch_action_voice(
@@ -312,71 +255,16 @@ impl RtMixer {
         projection_frames: u64,
     ) -> Result<PitchSourceSnapshot, PitchActionReject> {
         let (start_s, end_s) = work.action.loop_region();
-        if work.action.sync_request().mode
-            == super::super::source_sync_policy::SourceSyncMode::Mapped
-            && work.action.mapped_geometry().is_none()
-        {
-            return Err(PitchActionReject::MappedTimingUnavailable);
-        }
-        let mut snapshot =
-            self.normal_start_snapshot_with_policy(id, start_s, end_s, work.action.sync_request())?;
-        if let Some(geometry) = work.action.mapped_geometry() {
-            let timeline = work
-                .mapped_timeline
-                .ok_or(PitchActionReject::MappedTimingUnavailable)?;
-            if !work
-                .action
-                .sync_request()
-                .mapped_matching_enabled(self.bpm_lock_enabled)
-                || timeline.master_period_seconds().map(f64::to_bits)
-                    != self.master_period_seconds.map(f64::to_bits)
-            {
-                return Err(PitchActionReject::MappedTimingUnavailable);
-            }
-            let execution = if work.normal_launch_origin.is_some() {
-                work.action.execution_target()
-            } else {
-                work.action
-                    .execution_target()
-                    .max(timeline.output_frame().saturating_add(projection_frames))
-            };
-            let birth = super::super::mapped_birth::playback_at_birth(
-                geometry,
-                work.action.sequence(),
-                timeline,
-                super::super::prepared_native_history::SourceReadCheckpoint {
-                    playback: snapshot.playback,
-                    plan: snapshot.plan,
-                },
-                execution,
-                work.launch_reference,
-            )?;
-            if work
-                .normal_launch_origin
-                .is_some_and(|original| !original.matches_exact(birth))
-            {
-                return Err(PitchActionReject::PreparedMismatch);
-            }
-            snapshot.playback = birth.playback;
-            snapshot.plan = birth.plan;
-            return Ok(snapshot);
-        }
+        let mut snapshot = self.normal_start_snapshot(id, start_s, end_s)?;
         let guard = self.pitch_action_guard(work)?;
-        let active = match work
-            .action
-            .ordinary_pending_birth()
-            .then_some(Ok(None))
-            .unwrap_or_else(|| self.pitch_action_voice(id, guard.binding))
-        {
+        let active = match self.pitch_action_voice(id, guard.binding) {
             Ok(active) => active,
             // A fresh source can replace a still audible old source at this slot.
             // Its new launch retains ordinary bank-source start semantics.
             Err(PitchActionReject::SourceChanged) => None,
             Err(reason) => return Err(reason),
         };
-        if let Some(index) =
-            active.filter(|&index| self.voices[index].sync_request == work.action.sync_request())
-        {
+        if let Some(index) = active {
             let mut current = self
                 .capture_pitch_voice_snapshot(index)
                 .ok_or(PitchActionReject::TimingUnavailable)?;
@@ -392,7 +280,7 @@ impl RtMixer {
                         .loop_domain(snapshot.sample.frame_count(), snapshot.plan.loop_region),
                 )
             {
-                return Err(PitchActionReject::MappedTimingUnavailable);
+                return Err(PitchActionReject::PreparedMismatch);
             }
             snapshot.playback = playback;
             snapshot.plan.loop_period = playback.reader_period();
@@ -428,46 +316,6 @@ impl RtMixer {
         }
         let guard = self.pitch_action_guard(work)?;
         let render = work.action.render();
-        if work.action.variant() == PitchActionVariant::SetRetrigger
-            && (work.action.mapped_geometry().is_some() || work.action.ordinary_pending_birth())
-        {
-            work.source_control_revision =
-                Some(self.source_control_revision(work.action.content_key())?);
-            let snapshot =
-                self.pitch_action_start_snapshot(work, guard.id, execution_frame - callback_frame)?;
-            work.normal_launch_origin = Some(
-                super::super::prepared_native_history::SourceReadCheckpoint {
-                    playback: snapshot.playback,
-                    plan: snapshot.plan,
-                },
-            );
-            work.launch_delay_frames = execution_frame
-                .checked_sub(work.action.original_due_frame())
-                .ok_or(PitchActionReject::PreparedMismatch)?;
-            if work.launch_delay_frames != 0 {
-                work.dsp_intent = Some(self.capture_fresh_start_dsp_intent(
-                    work.action.content_key(),
-                    work.action.original_due_frame(),
-                    guard.id,
-                    callback_frame,
-                    work.dsp_intent,
-                )?);
-            }
-            let permit = work
-                .capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
-                .ok_or(PitchActionReject::SourceChanged)?;
-            return snapshot
-                .into_request(
-                    permit,
-                    render.pitch,
-                    render.key_lock,
-                    execution_frame,
-                    work.action.sequence(),
-                    work.action.epoch(),
-                )
-                .map(Some)
-                .ok_or(PitchActionReject::PreparationFailed);
-        }
         let snapshot = match work.action.variant() {
             PitchActionVariant::Set => {
                 let Some(index) = self.pitch_action_voice(guard.id, guard.binding)? else {
@@ -544,12 +392,7 @@ impl RtMixer {
                     .ok_or(PitchActionReject::PreparedMismatch)?;
                 if active.is_none() {
                     let (start, end) = work.action.loop_region();
-                    let mut original = self.normal_start_snapshot_with_policy(
-                        guard.id,
-                        start,
-                        end,
-                        work.action.sync_request(),
-                    )?;
+                    let mut original = self.normal_start_snapshot(guard.id, start, end)?;
                     original
                         .playback
                         .install_launch_reference(work.launch_reference);
@@ -738,12 +581,6 @@ impl RtMixer {
         index: usize,
         output_frame: u64,
     ) -> bool {
-        if work.action.variant() != PitchActionVariant::SetRetrigger
-            && (snapshot.playback.is_mapped()
-                || !self.mapped_pitch_action_available(self.voices[index].sample_id))
-        {
-            return false;
-        }
         if !work.native_required() {
             return work.dry_source_matches(snapshot);
         }
@@ -885,7 +722,7 @@ impl RtMixer {
         }
         let retirement_needed = 1 + if retrigger {
             if work.action.exclusive() {
-                3 * MAX_VOICES + self.mapped_owner_retirement_slots()
+                3 * MAX_VOICES
             } else {
                 3
             }
@@ -965,30 +802,6 @@ impl RtMixer {
         } else {
             None
         };
-        let staged_voice = if retrigger
-            && work.native_required()
-            && snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.playback.is_mapped())
-        {
-            let voice = &self.voices[index.unwrap()];
-            let increments = 1 + u64::from(work.action.exclusive() && voice.active);
-            Some(
-                work.candidate
-                    .as_ref()
-                    .ok_or(PitchActionReject::PreparedMismatch)?
-                    .stage_mapped_voice(
-                        &voice.history_lifetime,
-                        voice.generation,
-                        voice.active,
-                        increments,
-                    )
-                    .ok_or(PitchActionReject::PreparedMismatch)?,
-            )
-        } else {
-            None
-        };
-        let staged_voice = RefCell::new(staged_voice);
         let config = RefCell::new(config);
         let mixer = RefCell::new(self);
         let work = RefCell::new(work);
@@ -1002,9 +815,6 @@ impl RtMixer {
                     let mixer = mixer.borrow();
                     let work = work.borrow();
                     work.claim_current(guard)
-                        && (retrigger || mixer.mapped_pitch_action_available(id))
-                        && (work.action.mapped_geometry().is_none()
-                            || mixer.pad_key_lock_request_id[id] == work.action.key_lock_request())
                         && mixer.admitted_source_binding_current(id, guard.binding)
                         && work.source_control_revision.is_none_or(|revision| {
                             mixer.source_control_revision_matches(
@@ -1034,14 +844,6 @@ impl RtMixer {
                                     index.unwrap(),
                                     output_frame,
                                 )
-                        })
-                        && staged_voice.borrow().as_ref().is_none_or(|staged| {
-                            mixer.mapped_birth_witness_current(
-                                index.unwrap(),
-                                work.candidate.as_ref().unwrap(),
-                                config.borrow().as_ref().unwrap(),
-                                staged,
-                            )
                         })
                         && work.claim_effect()
                 },
@@ -1106,22 +908,8 @@ impl RtMixer {
                             voice.start_rt(config, retirement);
                         }
                         voice.source_playback = snapshot.playback;
-                        voice.phase_launch_qualified = work.phase_launch_qualified;
-                        voice.phase_birth_unadvanced = true;
-                        voice.sync_request = work.action.sync_request();
-                        voice.mapped_start = work
-                            .action
-                            .mapped_source_owner()
-                            .as_ref()
-                            .map(super::super::pad_start::PadStartCustody::for_runtime_map);
-                        voice.mapped_birth = snapshot.playback.is_mapped().then(|| {
-                            work.action.birth_observation(
-                                output_frame,
-                                work.phase_launch_qualified,
-                                snapshot.plan.loop_region.start,
-                                work.native_required(),
-                            )
-                        });
+                        voice.launch_qualified = work.launch_qualified;
+                        voice.launch_unadvanced = true;
                         if let Some(continued_controls) = continued_controls {
                             voice.source_control_epoch = continued_controls;
                         }
@@ -1129,12 +917,6 @@ impl RtMixer {
                     if let (Some(index), Some(snapshot)) = (index, snapshot.as_ref())
                         && work.native_required()
                     {
-                        if let Some(staged) = staged_voice.borrow_mut().take() {
-                            work.candidate
-                                .as_mut()
-                                .unwrap()
-                                .install_mapped_voice_claimed(staged);
-                        }
                         mixer.pitch_action_adopt(&mut work, snapshot, index, output_frame);
                     }
                     // All source/native/context/capacity checks preceded the true claim. These fixed
@@ -1148,20 +930,12 @@ impl RtMixer {
                     if mixer.pending_key_lock_tuples[id].is_none()
                         && mixer.queued_key_lock_tuples[id].is_none()
                     {
-                        mixer.pad_key_lock_request_id[id] =
-                            if work.action.mapped_geometry().is_some() {
-                                work.action.key_lock_request()
-                            } else {
-                                0
-                            };
+                        mixer.pad_key_lock_request_id[id] = 0;
                         mixer.pad_key_lock_rejected[id] = false;
                     }
                     if let Some(index) = index {
                         mixer.voice_pitch_intent[index] = render.pitch;
                         mixer.voice_key_lock[index] = render.key_lock;
-                        if retrigger && work.action.mapped_geometry().is_some() {
-                            mixer.rearm_key_lock_after_voice_start(id, index);
-                        }
                     }
                     mixer.publish_key_lock_status(id);
                     if retrigger {

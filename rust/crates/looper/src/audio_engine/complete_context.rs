@@ -5,9 +5,7 @@
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_store::CommittedColdLease;
 use super::content_placement::{ContentKey, PlacementObservation, SlotSnapshot};
-use super::input_runtime_binding::{
-    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding, SourcePublication,
-};
+use super::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership, SourcePublication};
 use super::progress::LoadProgressStage;
 use super::{AudioEngine, PadTaskGuard, admit_sample_analysis};
 use crate::messages::SampleBuffer;
@@ -86,12 +84,6 @@ impl NativeAnalysisOwner {
         }
     }
 
-    /// Map-only terminal delivery keeps the exact original request's cancellation.
-    pub(super) fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
-        self.cancellation = Some(cancellation);
-        self
-    }
-
     /// The actual source publisher carries its original Native permit into delivery.
     /// Later timing requests may stale its analysis without losing source metadata.
     pub(super) fn from_publication(
@@ -112,32 +104,12 @@ impl NativeAnalysisOwner {
         }
     }
 
-    pub(super) fn has_analysis_epoch(&self) -> bool {
-        self.epoch.is_some()
-    }
-
-    /// Derive data-only map custody from this exact original admission. The
-    /// request-locked caller must first validate the original strict epoch.
-    pub(super) fn source_only(&self) -> Self {
-        Self {
-            source: self.source.clone(),
-            epoch: None,
-            cancellation: self.cancellation.clone(),
-        }
-    }
-
     pub(super) fn current(&self) -> bool {
         !self
             .cancellation
             .as_ref()
             .is_some_and(|flag| flag.load(Ordering::Acquire))
             && self.request_current()
-    }
-
-    pub(super) fn cancellation_requested(&self) -> bool {
-        self.cancellation
-            .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::Acquire))
     }
 
     fn request_current(&self) -> bool {
@@ -150,36 +122,6 @@ impl NativeAnalysisOwner {
 
     pub(super) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
         Arc::ptr_eq(&self.source.ownership, ownership)
-    }
-
-    /// Genuine immutable source geometry may outlive a physical resident window.
-    /// Matching metadata alone never substitutes for this original Native owner.
-    pub(super) fn source_map_binding_current(
-        &self,
-        ownership: &Arc<InputRuntimeOwnership>,
-        binding: InputPadBinding,
-    ) -> bool {
-        let original = self.source.binding;
-        self.belongs_to(ownership)
-            && self.current()
-            && self.source.key().is_some()
-            && self.source.key()
-                == binding
-                    .placement
-                    .and_then(|placement| placement.content_key())
-            && binding.source_address == original.source_address
-            && binding.sample_count == original.sample_count
-            && binding.channels == original.channels
-            && binding.sample_rate_hz == self.source.rate
-            && binding.placement.is_some_and(|placement| {
-                ownership.binding_source_generation(placement.slot(), binding)
-                    == Some(self.source.generation)
-            })
-    }
-
-    pub(super) fn source_map_admission_current(&self, binding: &InputRuntimePadBinding) -> bool {
-        self.source.generation == binding.source_generation
-            && self.source_map_binding_current(&binding.ownership, binding.binding)
     }
 
     pub(super) fn observe_control(&self) -> PlacementObservation<SlotSnapshot> {
@@ -372,32 +314,32 @@ impl CompleteSourceReader {
         })
     }
 
-    /// Map-only bounded admission checks; JSON metadata is never a custody permit.
-    pub(super) fn require_map_custody(&self) -> Result<(), String> {
+    /// Bounded analysis admission checks; JSON metadata is never a custody permit.
+    pub(super) fn require_analysis_custody(&self) -> Result<(), String> {
         let lease = self
             .lease
             .as_ref()
-            .ok_or("source beatmap cold lease unavailable")?;
+            .ok_or("analysis source cold lease unavailable")?;
         let guard = self
             .guard
             .as_ref()
-            .ok_or("source beatmap owner unavailable")?;
+            .ok_or("analysis source owner unavailable")?;
         if !guard.current() || self.lease_generation != guard.generation {
-            return Err("source beatmap cold lease generation is stale".into());
+            return Err("analysis source cold lease generation is stale".into());
         }
         lease
             .verify_reference(&self.reference)
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn map_artifact_paths(
+    pub(super) fn analysis_artifact_paths(
         &self,
     ) -> Result<(&std::path::Path, &std::path::Path), String> {
-        self.require_map_custody()?;
+        self.require_analysis_custody()?;
         let lease = self
             .lease
             .as_ref()
-            .ok_or("source beatmap cold lease unavailable")?;
+            .ok_or("analysis source cold lease unavailable")?;
         Ok((lease.samples_root(), &lease.original_path))
     }
 
@@ -407,7 +349,7 @@ impl CompleteSourceReader {
         expected_generation: u64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(serde_json::Value, String), String> {
-        self.require_map_custody()?;
+        self.require_analysis_custody()?;
         if self
             .guard
             .as_ref()
@@ -419,14 +361,14 @@ impl CompleteSourceReader {
             .lease
             .as_ref()
             .ok_or("raw original cold lease unavailable")?;
-        super::source_beatmap_raw_data::validate_source_descriptor(
+        super::neural_analysis::descriptor::validate_source_descriptor(
             &lease.manifest.descriptor["decoder"],
             &lease.manifest.decoder_identity,
         )?;
         lease
             .verify_original_for_offline_cancellable(cancelled)
             .map_err(|error| error.to_string())?;
-        self.require_map_custody()?;
+        self.require_analysis_custody()?;
         Ok((
             lease.manifest.descriptor["decoder"].clone(),
             lease.manifest.decoder_identity.clone(),
@@ -434,73 +376,8 @@ impl CompleteSourceReader {
     }
 
     /// Worker-only actual original verification under the same captured assignment.
-    pub(super) fn manual_source_beatmap(
-        &self,
-        origin: f64,
-        period: f64,
-        expected_generation: Option<u64>,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<super::source_beatmap::SourceBeatmap, String> {
-        self.require_map_custody()?;
-        if expected_generation.is_some_and(|expected| {
-            self.guard
-                .as_ref()
-                .is_none_or(|guard| guard.generation != expected)
-        }) {
-            return Err("manual source beatmap captured source generation is stale".into());
-        }
-        let lease = self
-            .lease
-            .as_ref()
-            .ok_or("source beatmap cold lease unavailable")?;
-        super::source_beatmap_raw_data::validate_source_descriptor(
-            &lease.manifest.descriptor["decoder"],
-            &lease.manifest.decoder_identity,
-        )?;
-        // The existing decoder is borrowed throughout density counting. Charge
-        // the fixed two-anchor/manual envelope before cloning that descriptor.
-        let descriptor = &lease.manifest.descriptor["decoder"];
-        super::source_beatmap::budget::tree_admission(
-            super::source_beatmap::budget::sum(&[
-                super::source_beatmap::budget::serialized_len(descriptor)?,
-                128 * 1024,
-            ])?,
-            super::source_beatmap::budget::sum(&[
-                super::source_beatmap::budget::value_tree(descriptor)?,
-                32 * 8192,
-            ])?,
-            self.held_bytes()?,
-            0,
-        )?;
-        let map = super::source_beatmap::SourceBeatmap::manual_with_held(
-            lease.manifest.descriptor["decoder"].clone(),
-            origin,
-            period,
-            self.held_bytes()?,
-        )?;
-        self.verify_source_beatmap(&map, cancelled)?;
-        Ok(map)
-    }
 
     /// Worker-only actual original verification under the same captured assignment.
-    pub(super) fn verify_source_beatmap(
-        &self,
-        map: &super::source_beatmap::SourceBeatmap,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<(), String> {
-        self.require_map_custody()?;
-        let lease = self
-            .lease
-            .as_ref()
-            .ok_or("source beatmap cold lease unavailable")?;
-        if map.source_identity() != lease.manifest.decoder_identity.as_str() {
-            return Err("source beatmap decoder identity differs from held source".into());
-        }
-        lease
-            .verify_original_for_offline_cancellable(cancelled)
-            .map_err(|error| error.to_string())?;
-        self.require_map_custody()
-    }
 
     pub(super) fn held_bytes(&self) -> Result<usize, String> {
         self.reference
@@ -722,7 +599,7 @@ fn start_analysis_with(
                                 .generation;
                             let (descriptor, _) =
                                 reader.raw_source_descriptor(generation, &cancelled)?;
-                            let (root, _) = reader.map_artifact_paths()?;
+                            let (root, _) = reader.analysis_artifact_paths()?;
                             let source_id = descriptor["original"]["sha256"]
                                 .as_str()
                                 .ok_or("analysis original digest missing")?
@@ -758,7 +635,7 @@ fn start_analysis_with(
                     })
             }))
             .unwrap_or_else(|_| Err("Analysis worker failed".into()));
-            let mut analysis = match result {
+            let analysis = match result {
                 Ok(result) => result,
                 Err(error) => {
                     if cancelled() {
@@ -780,22 +657,6 @@ fn start_analysis_with(
                 }
             };
 
-            if analysis.automatic_source_map.is_some() {
-                match (reader.map_artifact_paths(), reader.held_bytes()) {
-                    (Ok((root, original)), Ok(held)) => super::app_analysis::store_automatic_map(
-                        &mut analysis,
-                        root,
-                        original,
-                        held,
-                        &cancelled,
-                        |map| reader.verify_source_beatmap(map, &cancelled),
-                    ),
-                    (Err(error), _) | (_, Err(error)) => {
-                        analysis.automatic_source_map = None;
-                        analysis.automatic_source_map_error = Some(error);
-                    }
-                }
-            }
             if cancelled() {
                 let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
                     id,

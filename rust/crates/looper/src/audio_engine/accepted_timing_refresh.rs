@@ -148,7 +148,7 @@ pub(super) fn enqueue(
     master_period_seconds: Option<f64>,
 ) -> PyResult<AcceptedTimingRefreshTicket> {
     // Retain the supplied capture's cancellation witness before geometry/authority rebasing.
-    let launch_revision = binding.source_map_launch_snapshot().launch_revision();
+    let launch_revision = binding.launch_revision();
     if !start_s.is_finite()
         || start_s < 0.0
         || end_s.is_some_and(|end| !end.is_finite() || end < 0.0)

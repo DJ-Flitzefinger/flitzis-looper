@@ -1,3 +1,7 @@
+<!-- Historical implementation record. The public explicit-sync/bootstrap commands
+     below were retired by remove-source-sync on 2026-10-28. The current design and
+     specs retain only qualified internal session bootstrap. -->
+
 ## 1. Context and contract
 
 - [x] 1.1 Inspect current editor/persistence/reference, transport/source timing and tests.

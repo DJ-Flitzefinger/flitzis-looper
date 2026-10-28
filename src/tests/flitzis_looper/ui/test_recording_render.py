@@ -112,7 +112,6 @@ def test_actual_center_reserves_wrapped_controls_and_full_record_transport_label
 
     labels = [
         "##master_volume",
-        "MULTI LOOP",
         "L",
         "Q",
         "V",
@@ -140,7 +139,7 @@ def test_actual_center_reserves_wrapped_controls_and_full_record_transport_label
     record, transport = observer.one("RECORD"), observer.one("START/STOP")
     assert record.rectangle[1] == transport.rectangle[1]
     assert transport.rectangle[0] - record.rectangle[2] >= bottom_bar.CONTROL_GROUP_GAP
-    for label in ("RECORD", "START/STOP", "MULTI LOOP"):
+    for label in ("RECORD", "START/STOP"):
         item = observer.one(label)
         assert len(item.glyphs) == len(label.replace(" ", ""))
         assert all(action_layout._contained(glyph, item.rectangle) for glyph in item.glyphs)

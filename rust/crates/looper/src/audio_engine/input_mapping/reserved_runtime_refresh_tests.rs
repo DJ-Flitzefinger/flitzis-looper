@@ -131,8 +131,7 @@ fn explicit_multi_loop_change_supersedes_reserved_originals_and_all_runtime_epoc
     assert!(runtime.ownership.hierarchy_stamp.load(Ordering::Acquire) > hierarchy);
     let after = runtime.runtime_state.lock().unwrap();
     for (old, new) in previous_rows.iter().zip(&after.pads) {
-        assert_eq!(old.source_map.request(), new.source_map.request());
-        assert!(old.source_map.same_projection(&new.source_map));
+        assert_eq!(old.pitch, new.pitch);
     }
     drop(after);
 
@@ -176,78 +175,6 @@ fn runtime_refresh_rejects_reservation_acquire_release_and_replacement_without_p
             assert!(result.is_err(), "copy={copy}, change={change}");
             assert_eq!(runtime.runtime_state.lock().unwrap().pads, previous);
             assert_eq!(revisions(&runtime), before);
-        }
-    }
-}
-
-#[test]
-fn global_policy_change_refuses_reserved_rows_and_reservation_race_without_any_snapshot_prefix() {
-    use crate::audio_engine::source_sync_policy::GlobalTimingPolicy;
-    for copy in [false, true] {
-        for reserve_before in [false, true] {
-            let (runtime, rows, _consumer) = fixture();
-            let slots = participants(&runtime);
-            let previous = runtime.runtime_state.lock().unwrap().pads.clone();
-            let before = revisions(&runtime);
-            let launches = (0..NUM_SAMPLES)
-                .map(|id| runtime.ownership.launch_revision(id))
-                .collect::<Vec<_>>();
-            if reserve_before {
-                reserve(&runtime, &slots, copy, OWNER);
-            }
-            let policy = GlobalTimingPolicy::parse(Some(
-                r#"{"schema_version":1,"sync":false,"realtime_bpm":false,"revision":1}"#,
-            ))
-            .unwrap();
-            let result = runtime.set_runtime_state_with_policy_before_commit(
-                true,
-                rows.loaded.clone(),
-                rows.starts.clone(),
-                vec![None; NUM_SAMPLES],
-                rows.bindings.iter().map(Option::as_ref).collect(),
-                Some(rows.pitch.clone()),
-                None,
-                policy,
-                || {
-                    if !reserve_before {
-                        reserve(&runtime, &slots, copy, OWNER);
-                    }
-                },
-            );
-            assert!(
-                result.is_err(),
-                "copy={copy}, reserve_before={reserve_before}"
-            );
-            assert_eq!(runtime.runtime_state.lock().unwrap().pads, previous);
-            assert_eq!(revisions(&runtime), before);
-            assert_eq!(
-                (0..NUM_SAMPLES)
-                    .map(|id| runtime.ownership.launch_revision(id))
-                    .collect::<Vec<_>>(),
-                launches
-            );
-            release(&runtime, &slots, copy, OWNER);
-            runtime
-                .set_runtime_state_with_policy(
-                    true,
-                    rows.loaded.clone(),
-                    rows.starts.clone(),
-                    vec![None; NUM_SAMPLES],
-                    rows.bindings.iter().map(Option::as_ref).collect(),
-                    Some(rows.pitch.clone()),
-                    None,
-                    policy,
-                )
-                .unwrap();
-            assert!(
-                runtime
-                    .runtime_state
-                    .lock()
-                    .unwrap()
-                    .pads
-                    .iter()
-                    .all(|pad| pad.source_map.policy() == policy)
-            );
         }
     }
 }

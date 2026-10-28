@@ -35,9 +35,6 @@ from flitzis_looper.controller.timing_persistence import (
 )
 from flitzis_looper.material_migration_model import MaterialMigrationAlias
 from flitzis_looper.models import ProjectState
-from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
-from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
-from flitzis_looper.timing_policy import GlobalTimingPolicy, neutral_global_timing_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -74,61 +71,6 @@ def _validate_transaction_id(transaction_id: str) -> None:
     if type(transaction_id) is not str or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None:
         message = "material migration transaction ID must be 32 lowercase hex characters"
         raise ValueError(message)
-
-
-def _recover_source_beatmap_intent(recovered: dict[str, object]) -> None:
-    if "pad_source_beatmap_intent" not in recovered:
-        return
-    rows = recovered["pad_source_beatmap_intent"]
-    valid_rows: list[PadSourceBeatmapIntent | None] = [None] * len(ProjectState().sample_paths)
-    if isinstance(rows, list):
-        for index, row in enumerate(rows[: len(valid_rows)]):
-            try:
-                valid_rows[index] = (
-                    None if row is None else PadSourceBeatmapIntent.model_validate(row)
-                )
-            except ValidationError:
-                continue
-    recovered["pad_source_beatmap_intent"] = valid_rows
-
-
-def _recover_source_sync_intent(recovered: dict[str, object]) -> None:
-    if "pad_source_sync_intent" not in recovered:
-        return
-    rows = recovered["pad_source_sync_intent"]
-    policy = GlobalTimingPolicy.model_validate(
-        recovered.get("global_timing_policy", neutral_global_timing_policy())
-    )
-    # Unknown PAD intent must not become inherited ON after global activation.
-    # This is a transient safe recovery; original bytes stay behind the save fence.
-    valid_rows = [
-        PadSourceSyncIntent(requested=False, revision=1)
-        if policy.sync is True
-        else neutral_source_sync_intent()
-        for _ in range(len(ProjectState().sample_paths))
-    ]
-    if isinstance(rows, list):
-        for index, row in enumerate(rows[: len(valid_rows)]):
-            try:
-                valid_rows[index] = PadSourceSyncIntent.model_validate(row)
-            except ValidationError:
-                continue
-    recovered["pad_source_sync_intent"] = valid_rows
-
-
-def _recover_global_timing_policy(recovered: dict[str, object]) -> None:
-    if "global_timing_policy" not in recovered:
-        return
-    try:
-        recovered["global_timing_policy"] = GlobalTimingPolicy.model_validate(
-            recovered["global_timing_policy"]
-        )
-    except ValidationError:
-        # Neutral legacy mode could inherit an old explicit PAD ON despite unknown
-        # global OFF metadata. Recover safely without claiming the invalid choice.
-        recovered["global_timing_policy"] = GlobalTimingPolicy(
-            schema_version=1, sync=False, realtime_bpm=False, revision=0
-        )
 
 
 class ProjectPersistence:
@@ -327,43 +269,6 @@ class ProjectPersistence:
                 before_replace=check_current,
             )
 
-    def commit_source_beatmap_selection(
-        self,
-        sample_id: int,
-        previous: PadSourceBeatmapIntent | None,
-        selected: PadSourceBeatmapIntent,
-        current: Callable[[], bool],
-    ) -> None:
-        """Write a compact map selection before transferring its assignment owners."""
-        if type(sample_id) is not int or not 0 <= sample_id < len(self.project.sample_paths):
-            message = "source beatmap sample ID is out of range"
-            raise ValueError(message)
-        selected = PadSourceBeatmapIntent.model_validate(selected)
-        with self._writer:
-            expected_revision = self._revision
-
-            def check_current() -> None:
-                if self._migration_owner is not None or self._revision != expected_revision:
-                    message = "project writer changed before source beatmap commit"
-                    raise PersistenceFenceError(message)
-                if (
-                    self.project.pad_source_beatmap_intent[sample_id] is not previous
-                    or not current()
-                ):
-                    message = "source beatmap intent changed before config commit"
-                    raise PersistenceFenceError(message)
-
-            check_current()
-            candidate = self.project.model_copy(deep=True)
-            candidate.pad_source_beatmap_intent[sample_id] = selected
-            self._write_snapshot(
-                candidate,
-                expected_revision + 1,
-                monotonic(),
-                expected_revision=expected_revision,
-                before_replace=check_current,
-            )
-
     def maybe_flush(self, *, now: float | None = None) -> bool:
         """Write config if dirty and the debounce window has elapsed."""
         if not self._dirty or self._migration_owner is not None:
@@ -528,7 +433,7 @@ class ProjectPersistence:
             except json.JSONDecodeError:
                 state = ProjectState()
             except ValidationError as error:
-                state = ProjectPersistence._recover_project_with_timing_quarantine(raw, error)
+                state = ProjectPersistence._recover_project_metadata(raw, error)
                 persistence = ProjectPersistence(state)
                 persistence.recording_settings_warning = recording_warning
                 if any(
@@ -553,27 +458,6 @@ class ProjectPersistence:
                         if persistence.load_error is not None
                         else selection_error
                     )
-                if any(
-                    item["loc"]
-                    and item["loc"][0] in {"pad_source_beatmap_intent", "pad_source_sync_intent"}
-                    for item in error.errors()
-                ):
-                    selection_error = "Unsupported source beatmap metadata retained on disk"
-                    persistence.load_error = (
-                        f"{persistence.load_error}; {selection_error}"
-                        if persistence.load_error is not None
-                        else selection_error
-                    )
-                if any(
-                    item["loc"] and item["loc"][0] == "global_timing_policy"
-                    for item in error.errors()
-                ):
-                    policy_error = "Unsupported global timing metadata retained on disk"
-                    persistence.load_error = (
-                        f"{persistence.load_error}; {policy_error}"
-                        if persistence.load_error is not None
-                        else policy_error
-                    )
                 return persistence
 
         persistence = ProjectPersistence(state)
@@ -581,12 +465,9 @@ class ProjectPersistence:
         return persistence
 
     @staticmethod
-    def _recover_project_with_timing_quarantine(raw: str, error: ValidationError) -> ProjectState:
-        """Latch only an actual malformed global policy before any restore can use the model."""
-        state = ProjectPersistence._recover_metadata_fields(raw, error)
-        if any(item["loc"] and item["loc"][0] == "global_timing_policy" for item in error.errors()):
-            state.quarantine_timing_policy()
-        return state
+    def _recover_project_metadata(raw: str, error: ValidationError) -> ProjectState:
+        """Recover supported live metadata without interpreting retired settings."""
+        return ProjectPersistence._recover_metadata_fields(raw, error)
 
     @staticmethod
     def _recover_metadata_fields(raw: str, error: ValidationError) -> ProjectState:
@@ -596,9 +477,6 @@ class ProjectPersistence:
             not in {
                 "pad_key_intent",
                 "pad_stem_intent",
-                "pad_source_beatmap_intent",
-                "pad_source_sync_intent",
-                "global_timing_policy",
                 "material_migrations",
                 "config_revision",
             }
@@ -615,9 +493,6 @@ class ProjectPersistence:
                 recovered = recover_project_key_intent(recovered)
             recovered = recover_project_stem_intent(recovered)
             recover_stem_pair_metadata(recovered, error)
-            _recover_source_beatmap_intent(recovered)
-            _recover_global_timing_policy(recovered)
-            _recover_source_sync_intent(recovered)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:
                 recovered["config_revision"] = 0

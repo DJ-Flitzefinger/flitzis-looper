@@ -1,6 +1,6 @@
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
@@ -39,7 +39,6 @@ from flitzis_looper.models import (
     StemMixMode,
     validate_sample_id,
 )
-from flitzis_looper.timing_policy import effective_runtime_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,14 +50,9 @@ if TYPE_CHECKING:
         CapturedInputPadTrigger,
         CapturedPitchAction,
         InputRuntimePadBinding,
-        LoaderEventDelivery,
     )
 
 type InputSource = Literal["midi", "keyboard"]
-
-
-class _TimingPolicyOptions(TypedDict, total=False):
-    timing_policy_json: str
 
 
 @dataclass(frozen=True)
@@ -90,33 +84,6 @@ class _InputPitchProjection:
 
 
 @dataclass(frozen=True)
-class _InputSourceMapProjection:
-    requested: bool = False
-    revision: int = 0
-    delivery: LoaderEventDelivery | None = None
-    exact_quarters: float | None = None
-    ordinary_pending: bool = False
-    phase_origin_seconds: float | None = None
-    operational_four_quarter_bars: bool = False
-    grid_origin_supported: bool = False
-
-    def payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "sync_requested": self.requested,
-            "intent_revision": self.revision,
-            "delivery": self.delivery,
-            "exact_quarters": self.exact_quarters,
-            "ordinary_pending": self.ordinary_pending,
-        }
-        if self.grid_origin_supported:
-            payload.update(
-                phase_origin_seconds=self.phase_origin_seconds,
-                operational_four_quarter_bars=self.operational_four_quarter_bars,
-            )
-        return payload
-
-
-@dataclass(frozen=True)
 class _InputRuntimePadSignature:
     sample_path: str | None = None
     duration_seconds: float | None = None
@@ -127,13 +94,10 @@ class _InputRuntimePadSignature:
     source_signature: tuple[object, ...] | None = None
     ready: bool = False
     pitch: _InputPitchProjection = field(default_factory=_InputPitchProjection)
-    source_map: _InputSourceMapProjection = field(default_factory=_InputSourceMapProjection)
     binding: InputRuntimePadBinding | None = field(default=None, compare=False)
 
 
-type _InputRuntimeStateSignature = tuple[
-    bool, int | None, tuple[_InputRuntimePadSignature, ...], str | None
-]
+type _InputRuntimeStateSignature = tuple[bool, int | None, tuple[_InputRuntimePadSignature, ...]]
 PAD_EQ_BANDS: tuple[PadEqBand, ...] = ("low", "mid", "high")
 MIDI_RELATIVE_VOLUME_STEP = 0.01
 MIDI_RELATIVE_GAIN_STEP_DB = 0.1
@@ -402,10 +366,6 @@ class InputMappingController(BaseController):
         return {
             "global.multi_loop.toggle": self._toggle_multi_loop,
             "global.key_lock.toggle": self._toggle_key_lock,
-            "global.source_sync.toggle": lambda: self._app.transport.timing_policy.toggle("sync"),
-            "global.realtime_bpm.toggle": lambda: self._app.transport.timing_policy.toggle(
-                "realtime_bpm"
-            ),
             "global.bpm_lock.toggle": self._toggle_bpm_lock,
             "global.trigger_quantization.toggle": self._toggle_trigger_quantization,
             "global.stop_all": lambda: self._app.transport.playback.stop_all_pads(
@@ -434,7 +394,6 @@ class InputMappingController(BaseController):
             ("pad.unload:", self._execute_unload_pad),
             ("pad.analyze:", self._execute_analyze_pad),
             ("pad.adjust_loop:", self._execute_adjust_loop),
-            ("pad.source_sync.toggle:", self._execute_source_sync_toggle),
             ("pad.tap_bpm:", self._execute_tap_bpm),
             ("pad.gain_db:", self._execute_pad_gain_db),
             ("pad.gain:", self._execute_legacy_pad_gain),
@@ -830,11 +789,13 @@ class InputMappingController(BaseController):
             self._last_input_runtime_state_error = str(error)
             return False
         if signature == self._last_input_runtime_state_signature:
-            return self._request_runtime_policy_adoption()
+            self._last_input_runtime_state_error = None
+            return True
 
         if not self._publish_runtime_signature(signature):
             return False
-        return self._request_runtime_policy_adoption()
+        self._last_input_runtime_state_error = None
+        return True
 
     def _stage_multi_loop_cancellation(self, *, enabled: bool) -> bool:
         """Change only Multi Loop in the last complete image, without policy adoption."""
@@ -847,15 +808,12 @@ class InputMappingController(BaseController):
             except (RuntimeError, ValueError, TypeError) as error:
                 self._last_input_runtime_state_error = str(error)
                 return False
-        signature = (enabled, previous[1], previous[2], previous[3])
+        signature = (enabled, previous[1], previous[2])
         return self._publish_runtime_signature(signature)
 
     def _publish_runtime_signature(self, signature: _InputRuntimeStateSignature) -> bool:
         """Publish an already captured complete image; never recapture reserved rows."""
-        multi_loop, _sample_rate_hz, pad_signatures, policy_json = signature
-        policy_options: _TimingPolicyOptions = (
-            {"timing_policy_json": policy_json} if policy_json is not None else {}
-        )
+        multi_loop, _sample_rate_hz, pad_signatures = signature
         loaded = [pad.ready for pad in pad_signatures]
         loop_starts = [pad.start_seconds for pad in pad_signatures]
         loop_ends = [pad.end_seconds for pad in pad_signatures]
@@ -870,8 +828,6 @@ class InputMappingController(BaseController):
                     loop_ends,
                     bindings,
                     pitch_rows=[pad.pitch.payload() for pad in pad_signatures],
-                    source_map_rows=[pad.source_map.payload() for pad in pad_signatures],
-                    **policy_options,
                 )
             else:
                 self._audio.set_input_runtime_state(
@@ -880,7 +836,6 @@ class InputMappingController(BaseController):
                     loop_starts,
                     loop_ends,
                     bindings,
-                    **policy_options,
                 )
         except (RuntimeError, ValueError, TypeError) as error:
             self._last_input_runtime_state_error = str(error)
@@ -889,22 +844,7 @@ class InputMappingController(BaseController):
         self._last_input_runtime_state_signature = signature
         return True
 
-    def _request_runtime_policy_adoption(self) -> bool:
-        """Service the current Native-owned request without replacing published rows."""
-        try:
-            request = getattr(self._audio, "request_input_runtime_policy_adoption", None)
-            if callable(request):
-                # Native deduplicates before owning work. Ordinary pending/refusal
-                # returns normally; only callback feedback can confirm adoption.
-                request(service=True)
-        except (RuntimeError, ValueError, TypeError) as error:
-            self._last_input_runtime_state_error = str(error)
-            return False
-        self._last_input_runtime_state_error = None
-        return True
-
     def _input_runtime_state_signature(self) -> _InputRuntimeStateSignature:
-        policy_json = self._timing_policy_projection()
         pad_signatures: list[_InputRuntimePadSignature] = []
         deferred = self._app.transport._pair_deferred_sample_ids
         previous = self._last_input_runtime_state_signature
@@ -937,33 +877,7 @@ class InputMappingController(BaseController):
 
             timing = self._app.transport.bpm.current_timing(sample_id)
             snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
-            sync_intent = self._project.pad_source_sync_intent[sample_id]
-            requested_sync = self._project.resolve_pad_source_sync(sample_id)
-            delivery = None
-            ordinary_pending = False
-            try:
-                if (
-                    requested_sync
-                    or sync_intent.revision > 0
-                    or not effective_runtime_policy(self._project.global_timing_policy).is_neutral
-                ):
-                    launch = self._app.transport.loop._capture_launch_region(
-                        sample_id, timing=timing
-                    )
-                    start_s, end_s = launch.region
-                    delivery = launch.delivery
-                    ordinary_pending = launch.ordinary_pending and snapshot is not None
-                else:
-                    start_s, end_s = self._app.transport.loop.effective_region(
-                        sample_id, timing=timing
-                    )
-            except RuntimeError, ValueError:
-                if not requested_sync:
-                    raise
-                # An unavailable mapped extent must not block unrelated PAD rows.
-                # The independent request below withholds delivery and refuses launch.
-                start_s = self._project.pad_loop_start_s[sample_id]
-                end_s = self._project.pad_loop_end_s[sample_id]
+            start_s, end_s = self._app.transport.loop.effective_region(sample_id, timing=timing)
             pad_signatures.append(
                 _InputRuntimePadSignature(
                     sample_path=sample_path,
@@ -975,9 +889,6 @@ class InputMappingController(BaseController):
                     source_signature=snapshot.source_signature if snapshot else None,
                     ready=snapshot is not None,
                     pitch=self._input_pitch_projection(sample_id),
-                    source_map=self._input_source_map_projection(
-                        sample_id, delivery=delivery, ordinary_pending=ordinary_pending
-                    ),
                     binding=snapshot.binding if snapshot else None,
                 )
             )
@@ -985,20 +896,7 @@ class InputMappingController(BaseController):
             self._project.multi_loop,
             self._app.transport._output_sample_rate_hz(),
             tuple(pad_signatures),
-            policy_json,
         )
-
-    def _timing_policy_projection(self) -> str | None:
-        """Fence an entire changed global request while any cohort row is reserved."""
-        policy = effective_runtime_policy(self._project.global_timing_policy)
-        encoded = None if policy.is_neutral else policy.model_dump_json()
-        previous = self._last_input_runtime_state_signature
-        if self._app.transport._pair_deferred_sample_ids and (
-            previous is None or previous[3] != encoded
-        ):
-            message = "Global timing policy is waiting for reserved pad observers."
-            raise RuntimeError(message)
-        return encoded
 
     def _input_pitch_projection(self, sample_id: int) -> _InputPitchProjection:
         intent = self._project.pad_key_intent[sample_id]
@@ -1019,44 +917,6 @@ class InputMappingController(BaseController):
             quantize_step_64ths=quantize_step,
             sync=self._project.resolve_bpm_lock(),
             request_sequence=self._app.transport.pitch.projection_sequence(sample_id),
-        )
-
-    def _execute_source_sync_toggle(self, key: str) -> bool:
-        target = key.removeprefix("pad.source_sync.toggle:")
-        if not target.isascii() or not target.isdecimal():
-            return False
-        sample_id = int(target)
-        if not 0 <= sample_id < len(self._project.sample_paths):
-            return False
-        self._app.transport.source_sync.toggle(sample_id)
-        return True
-
-    def _input_source_map_projection(
-        self,
-        sample_id: int,
-        *,
-        delivery: LoaderEventDelivery | None,
-        ordinary_pending: bool,
-    ) -> _InputSourceMapProjection:
-        intent = self._project.pad_source_sync_intent[sample_id]
-        requested = self._project.resolve_pad_source_sync(sample_id)
-        variable = self._project.resolve_pad_realtime_bpm(sample_id)
-        exact = (
-            self._project.pad_loop_bars[sample_id] * 4.0
-            if requested and variable and self._project.pad_loop_auto[sample_id]
-            else None
-        )
-        return _InputSourceMapProjection(
-            self._project.pad_source_sync_preference(sample_id),
-            intent.revision,
-            delivery,
-            exact,
-            ordinary_pending,
-            self._app.transport.loop.grid_anchor_sec(sample_id)
-            if requested and delivery is not None
-            else None,
-            exact is not None,
-            getattr(self._audio, "GRID_PHASE_ORIGIN_API_VERSION", None) == 1,
         )
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:

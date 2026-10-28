@@ -3,21 +3,11 @@
 use super::*;
 use crate::audio_engine::audio_stream::{drain_parameter_messages, render_scheduled_audio};
 use crate::audio_engine::pad_start::CapturedPadStart;
-use crate::audio_engine::sync_diagnostics::{HEADER_WORDS, ROW_WORDS};
+use crate::audio_engine::prepared_native_history::SourceReadCheckpoint;
+use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
+use crate::audio_engine::source_feed_history::SourceFeedSnapshot;
 use crate::audio_engine::{NUM_SAMPLES, resident_relocation};
 use crate::messages::ControlParameterMessage;
-use pyo3::types::PyModule;
-
-mod maps {
-    use super::*;
-    include!("actual_music_map_tests.rs");
-}
-
-mod mapped_playback {
-    use super::*;
-    include!("actual_mapped_music_playback_tests.rs");
-    include!("actual_music_sync_toggle_tests.rs");
-}
 
 struct Path {
     engine: AudioEngine,
@@ -129,23 +119,6 @@ fn complete_neural_coverage(source: &Value, start: f64, end: f64) -> bool {
                 ((pair[1].as_f64().unwrap() - pair[0].as_f64().unwrap()) / period - 1.0).abs()
                     <= 0.15
             })
-}
-
-fn snapshot_json(path: &Path, request: u64) -> Value {
-    Python::attach(|py| {
-        let snapshot = path
-            .engine
-            .sync_diagnostic_snapshot(py, request)
-            .unwrap()
-            .unwrap();
-        let wire: String = PyModule::import(py, "json")
-            .unwrap()
-            .call_method1("dumps", (snapshot,))
-            .unwrap()
-            .extract()
-            .unwrap();
-        serde_json::from_str(&wire).unwrap()
-    })
 }
 
 #[test]
@@ -267,7 +240,6 @@ fn authorized_music_8_against_32_and_64_bars() {
     path.drain();
     path.engine.set_bpm_lock_with_binding(true, None).unwrap();
     path.drain();
-    let slot = path.engine.loop_acceptance.diagnostics.register().unwrap();
     let mut cases = Vec::new();
     for origin_key in ["saved_start", "aligned_start"] {
         for long_bars in [32, 64] {
@@ -349,6 +321,8 @@ fn authorized_music_8_against_32_and_64_bars() {
             let main_horizon = (64.0_f64 * 240.0 / 94.0 * 48_000.0).ceil() as u64;
             let total = main_horizon + 512; // Explicit post-64 tail observes the long seam.
             let mut previous: [f64; 2] = starts.map(|s| (s * 48_000.0).round());
+            let mut actual_reads: [SourceFeedSnapshot; 2] =
+                std::array::from_fn(|_| SourceFeedSnapshot::new());
             let mut wraps = [0_u64; 2];
             let initial: [Option<f64>; 2] = std::array::from_fn(|id| {
                 oracle[id]
@@ -383,87 +357,126 @@ fn authorized_music_8_against_32_and_64_bars() {
                     total
                 };
                 let frames = (next_boundary - elapsed_before).min(512) as usize;
-                let request = path.engine.request_sync_diagnostic_snapshot().unwrap();
-                path.callback.mixer.begin_sync_diagnostic_capture(request);
                 let output = path.render(frames);
                 assert!(output.iter().all(|s| s.is_finite()));
                 energy += output.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>();
-                slot.observe(
-                    &path.callback.mixer,
-                    &path.callback.transport,
-                    path.engine.input_clock.capture_ns(),
-                    frames,
-                );
-                let snapshot = path
+                let voices: Vec<_> = path
                     .callback
                     .mixer
-                    .sync_diagnostic_snapshot(
-                        request,
-                        slot.birth,
-                        &path.callback.transport,
-                        path.engine.input_clock.capture_ns(),
-                        frames,
-                    )
-                    .unwrap();
-                let words = &snapshot.0;
-                assert_eq!(words[11], 2, "both real voices must remain active");
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.active && !voice.paused)
+                    .collect();
+                assert_eq!(voices.len(), 2, "both real voices must remain active");
                 assert!(
-                    (f64::from_bits(words[8]) - 60.0 / 94.0).abs() < 1e-12,
+                    (path.callback.transport.master_period_seconds().unwrap() - 60.0 / 94.0).abs()
+                        < 1e-12,
                     "actual master did not apply94 BPM"
                 );
+                let mut actual_snapshots = Vec::new();
                 let mut progress = [None; 2];
                 let mut observed_nn = [None; 2];
                 let mut unwrapped_source = [0.0; 2];
                 let mut seen = [false; 2];
                 let mut seam = false;
-                for row in words[HEADER_WORDS..].chunks_exact(ROW_WORDS).take(2) {
-                    let id = row[0] as usize;
+                for voice in voices {
+                    let id = voice.sample_id;
                     assert!(id < 2);
                     assert!(
                         !seen[id],
                         "two voices of the same PAD are not the intended pair"
                     );
                     seen[id] = true;
-                    assert_eq!(row[4], generations[id]);
+                    assert_eq!(path.generation(id), generations[id]);
+                    let sample = voice.sample.as_ref().unwrap();
+                    assert!(
+                        sample.same_source(
+                            path.callback.mixer.bank_for_measurement()[id]
+                                .as_ref()
+                                .unwrap()
+                        )
+                    );
                     assert_eq!(
-                        row[40],
+                        sample.frame_count() as u64,
                         fingerprints[id]["playback"]["full_frames"]
                             .as_u64()
                             .unwrap()
                     );
-                    assert_eq!(row[17], 0, "single SYNC must be OFF / Legacy");
+                    assert!(!path.callback.mixer.key_lock_for_measurement(id));
+                    assert!(
+                        !voice.stretch.has_active_native_ownership(),
+                        "Native must remain off for the scalar dry read"
+                    );
+                    // This is the existing successful-read journal, independent of the
+                    // control cursor. A missing/refused read cannot publish a complete
+                    // endpoint merely because the voice's requested clock advanced.
+                    assert!(
+                        voice
+                            .source_feed_history
+                            .capture_into(&mut actual_reads[id])
+                    );
+                    let history = &actual_reads[id];
+                    assert!(history.is_current());
+                    let actual = *history
+                        .spans()
+                        .next_back()
+                        .expect("missing actual complete read");
+                    assert_eq!(
+                        actual.active_end(),
+                        history.active_frames(),
+                        "actual dry read ended before the render boundary"
+                    );
+                    assert_eq!(
+                        actual.context.binding,
+                        ProductiveSourceBinding::new(
+                            sample,
+                            48_000,
+                            path.callback
+                                .mixer
+                                .accepted_voice_timing_for_measurement(id, sample)
+                        )
+                    );
+                    let mut endpoint = SourceReadCheckpoint {
+                        playback: actual.playback,
+                        plan: actual.plan,
+                    };
+                    assert!(endpoint.project_output_frames(actual.frames as u64));
+                    assert!(
+                        endpoint.playback.matches_exact(&voice.source_playback),
+                        "actual read journal and voice endpoint differ"
+                    );
                     let expected_rate = 94.0 / sources[id]["bpm"].as_f64().unwrap();
-                    for field in [14, 15] {
-                        let rate = f64::from_bits(row[field]);
+                    for rate in [actual.playback.tempo_ratio(), actual.playback.rate_target()] {
                         assert!(
                             rate.is_finite() && (rate / expected_rate - 1.0).abs() < 0.00002,
                             "actual source rate {rate} vs {expected_rate}"
                         );
                     }
-                    assert_ne!(row[16] & (1 << 7), 0, "missing actual complete read");
-                    assert_eq!(row[33], 1, "NativeInput is not dry audible phase");
-                    assert_eq!(
-                        row[16] & ((1 << 1) | (1 << 12)),
-                        0,
-                        "KL/Native must remain off"
-                    );
-                    assert_eq!(row[30], path.callback.transport.output_frame());
-                    let current = row[31] as f64 + f64::from_bits(row[32]);
+                    let position = endpoint.playback.position();
+                    let current = position.frame as f64 + position.fraction;
                     assert!(current.is_finite());
-                    last_physical[id] = [row[34], row[35]];
+                    let range = actual.plan.loop_region;
+                    let lower = range.start as u64;
+                    let upper = range.end as u64;
+                    last_physical[id] = [lower, upper];
+                    actual_snapshots.push(json!({"pad_id":id,"source_generation":generations[id],
+                        "output_frame":path.callback.transport.output_frame(),"successful_read_active_end":actual.active_end(),
+                        "last_read_frames":actual.frames,"source_frame":position.frame,"source_fraction":position.fraction,
+                        "rate":actual.playback.tempo_ratio(),"rate_target":actual.playback.rate_target(),
+                        "physical_loop":[lower,upper],"scope":"actual successful dry read journal projected to its exclusive rendered endpoint; no musical/hearing acceptance"}));
                     let ideal_period = f64::from(bars[id]) * 240.0
                         / sources[id]["bpm"].as_f64().unwrap()
                         * 48_000.0;
                     assert!(
-                        ((row[35] - row[34]) as f64 - ideal_period).abs() <= 1.000001,
+                        ((upper - lower) as f64 - ideal_period).abs() <= 1.000001,
                         "requested bars lost physical extent"
                     );
                     let complete = *loop_oracle[id].get_or_insert_with(|| {
                         oracle[id]
                             && complete_neural_coverage(
                                 &sources[id],
-                                row[34] as f64 / 48_000.0,
-                                row[35] as f64 / 48_000.0,
+                                lower as f64 / 48_000.0,
+                                upper as f64 / 48_000.0,
                             )
                     });
                     if current < previous[id] {
@@ -472,7 +485,7 @@ fn authorized_music_8_against_32_and_64_bars() {
                     }
                     previous[id] = current;
                     unwrapped_source[id] =
-                        current - row[34] as f64 + wraps[id] as f64 * (row[35] - row[34]) as f64;
+                        current - lower as f64 + wraps[id] as f64 * (upper - lower) as f64;
                     observed_nn[id] = oracle[id]
                         .then(|| neural_phase(&sources[id], current / 48_000.0))
                         .flatten();
@@ -517,10 +530,9 @@ fn authorized_music_8_against_32_and_64_bars() {
                 if elapsed >= next_checkpoint || elapsed == main_horizon || elapsed == total || seam
                 {
                     checkpoints.push(json!({"elapsed_frames":elapsed,"wraps":wraps,"unwrapped_source_frames":unwrapped_source,"pointwise_nn_ordinals":observed_nn,
-                        "relative_nn_advancement_seconds":last_relative,"actual":snapshot_json(&path, request)}));
+                        "relative_nn_advancement_seconds":last_relative,"actual":actual_snapshots}));
                     next_checkpoint = elapsed + (4.0 * 240.0 / 94.0 * 48_000.0) as u64;
                 }
-                path.callback.mixer.end_sync_diagnostic_capture();
             }
             assert!(energy > 0.0);
             let physical_rounding: Vec<_> = (0..2).map(|id| {
@@ -529,7 +541,7 @@ fn authorized_music_8_against_32_and_64_bars() {
                 json!({"pad_id":id,"physical_a":a,"physical_b":b,"period_rounding_frames":(b-a) as f64-ideal,"wraps":wraps[id]})
             }).collect();
             cases.push(json!({"origin_hypothesis":origin_key,"bars":bars,"starts_seconds":starts,"ends_seconds":ends,
-                "master_bpm":94.0,"speed":1.0,"bpm_lock":true,"sync":false,"key_lock":false,"read_mode":"original_mix_dry",
+                "master_bpm":94.0,"speed":1.0,"bpm_lock":true,"key_lock":false,"read_mode":"original_mix_dry",
                 "source_ids":[0,1],"initial_nn_ordinals":initial,"requested_initial_estimated_beat_phase_seconds":initial_requested_phase,
                 "first_observed_initial_estimated_beat_phase":first_observed_initial_phase,
                 "output_start_frame":start_frame,"rendered_frames":total,"horizon_master_bars":64,"post_horizon_tail_frames":512,

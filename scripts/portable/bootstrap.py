@@ -381,7 +381,6 @@ def check_pitch_action_api(native_module: object) -> None:
         )
     for method, keyword in (
         ("set_input_runtime_state", "pitch_rows"),
-        ("set_input_runtime_state", "source_map_rows"),
         ("capture_pad_pitch_action", "received_at_ns"),
         ("capture_selected_pitch_action", "received_at_ns"),
         ("load_sample_async", "initial_base_shift"),
@@ -597,235 +596,31 @@ def check_mix_capture_api(native_module: object) -> None:
         _check_mix_capture_signature(owner, method, label, arguments)
 
 
-def _check_global_timing_policy_api(engine: type) -> None:
-    """Reject stale timing publication/adoption APIs using reflection alone."""
-    timing_version = getattr(engine, "GLOBAL_TIMING_POLICY_API_VERSION", None)
-    assert type(timing_version) is int, (
-        "Native timing API requires GLOBAL_TIMING_POLICY_API_VERSION=1"
-    )
-    assert timing_version == 1, "Native timing API requires GLOBAL_TIMING_POLICY_API_VERSION=1"
-    runtime = getattr(engine, "set_input_runtime_state", None)
-    assert callable(runtime), "Native timing API missing: set_input_runtime_state"
-    timing_parameter = inspect.signature(runtime).parameters.get("timing_policy_json")
-    timing_error = "Native timing API requires optional keyword-only timing_policy_json=None"
-    assert timing_parameter is not None, timing_error
-    assert timing_parameter.kind == inspect.Parameter.KEYWORD_ONLY, timing_error
-    assert timing_parameter.default is None, timing_error
-    adoption = getattr(engine, "request_input_runtime_policy_adoption", None)
-    adoption_error = (
-        "Native timing API requires "
-        "AudioEngine.request_input_runtime_policy_adoption(self, *, service=False)"
-    )
-    assert callable(adoption), adoption_error
-    parameters = inspect.signature(adoption).parameters
-    assert tuple(parameters) == ("self", "service"), adoption_error
-    receiver = parameters["self"]
-    assert receiver.kind in {
-        inspect.Parameter.POSITIONAL_ONLY,
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    }, adoption_error
-    assert receiver.default is inspect.Parameter.empty, adoption_error
-    service = parameters["service"]
-    assert service.kind == inspect.Parameter.KEYWORD_ONLY, adoption_error
-    assert service.default is False, adoption_error
-
-
-def check_source_beatmap_editor_api(native_module: object) -> None:
-    """Reflect the source-qualified editor contract without starting Native work."""
+def check_bpm_only_runtime_api(native_module: object) -> None:
+    """Reject a stale Native without opening an audio device or starting work."""
     engine = getattr(native_module, "AudioEngine", None)
-    beatmap = getattr(native_module, "SourceBeatmap", None)
-    raw_candidate = getattr(native_module, "SourceBeatmapRawCandidate", None)
-    job = getattr(native_module, "OfflineAnalysisJob", None)
-    assert isinstance(engine, type), "Native source beatmap editor API missing type: AudioEngine"
-    _check_global_timing_policy_api(engine)
-    assert isinstance(beatmap, type), "Native source beatmap editor API missing type: SourceBeatmap"
-    assert isinstance(raw_candidate, type), (
-        "Native source beatmap editor API missing type: SourceBeatmapRawCandidate"
+    version = getattr(engine, "BPM_ONLY_RUNTIME_API_VERSION", None)
+    assert type(version) is int, (
+        "Native constant-BPM runtime requires a current Release build; use start-release.bat"
     )
-    assert isinstance(job, type), (
-        "Native source beatmap editor API missing type: OfflineAnalysisJob"
+    assert version == 1, (
+        "Native constant-BPM runtime requires a current Release build; use start-release.bat"
     )
-    raw_version = getattr(raw_candidate, "RAW_REVIEW_API_VERSION", None)
-    assert type(raw_version) is int, (
-        "Native source beatmap editor API requires RAW_REVIEW_API_VERSION=2"
+    runtime = getattr(engine, "set_input_runtime_state", None)
+    assert callable(runtime), "Native constant-BPM runtime is missing set_input_runtime_state"
+    parameters = inspect.signature(runtime).parameters
+    assert "source_map_rows" not in parameters, (
+        "Native runtime still exposes the retired source-SYNC policy"
     )
-    assert raw_version == 2, "Native source beatmap editor API requires RAW_REVIEW_API_VERSION=2"
-    correction_version = getattr(beatmap, "EDITOR_CORRECTION_API_VERSION", None)
-    assert type(correction_version) is int, (
-        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=4"
+    assert "timing_policy_json" not in parameters, (
+        "Native runtime still exposes the retired source-SYNC policy"
     )
-    assert correction_version == 4, (
-        "Native source beatmap editor API requires EDITOR_CORRECTION_API_VERSION=4"
+    assert not hasattr(native_module, "SourceBeatmap"), "Native still exposes source-map editing"
+    assert not hasattr(engine, "request_input_runtime_policy_adoption"), (
+        "Native still exposes source-SYNC adoption"
     )
-    for method in (
-        "revision",
-        "source_identity",
-        "evaluate_source",
-        "evaluate_beat",
-        "local_tempo_at_source",
-        "nearest_grid_source",
-    ):
-        assert callable(inspect.getattr_static(beatmap, method, None)), (
-            f"Native source beatmap editor API missing: SourceBeatmap.{method}"
-        )
-    required = inspect.Parameter.empty
-    for owner, method, arguments, keyword_only in (
-        (
-            engine,
-            "begin_source_beatmap_review_async",
-            (
-                ("self", required),
-                ("sample_id", required),
-                ("candidate", required),
-                ("review_json", required),
-                ("expected_source_generation", required),
-            ),
-            {"expected_source_generation"},
-        ),
-        (
-            engine,
-            "begin_source_beatmap_beat_this_raw_async",
-            (
-                ("self", required),
-                ("sample_id", required),
-                ("installation_root", required),
-                ("expected_source_generation", required),
-            ),
-            {"expected_source_generation"},
-        ),
-        (
-            engine,
-            "begin_source_beatmap_raw_async",
-            (
-                ("self", required),
-                ("sample_id", required),
-                ("expected_source_generation", required),
-            ),
-            {"expected_source_generation"},
-        ),
-        (
-            job,
-            "resolve_source_beatmap_raw_completion",
-            (("self", required), ("delivery", required)),
-            set(),
-        ),
-        (job, "source_beatmap_async_status", (("self", required),), set()),
-        (raw_candidate, "info", (("self", required),), set()),
-        (
-            raw_candidate,
-            "inspect",
-            (("self", required), ("start_index", required), ("max_events", 128)),
-            set(),
-        ),
-        (
-            raw_candidate,
-            "inspect_downbeats",
-            (("self", required), ("start_index", required), ("max_events", 128)),
-            set(),
-        ),
-        (
-            engine,
-            "pad_source_sync_status",
-            (("self", required), ("id", required)),
-            set(),
-        ),
-        (
-            engine,
-            "begin_source_beatmap_create_async",
-            (
-                ("self", required),
-                ("sample_id", required),
-                ("origin_seconds", required),
-                ("period_seconds", required),
-                ("expected_source_generation", None),
-            ),
-            {"expected_source_generation"},
-        ),
-        (
-            engine,
-            "begin_source_beatmap_edit_async",
-            (
-                ("self", required),
-                ("sample_id", required),
-                ("receipt_json", required),
-                ("operation_json", required),
-            ),
-            set(),
-        ),
-        (beatmap, "editor_info", (("self", required),), set()),
-        (beatmap, "editor_review_info", (("self", required),), set()),
-        (
-            beatmap,
-            "editor_review_page",
-            (
-                ("self", required),
-                ("first_anchor_index", required),
-                ("last_anchor_index", required),
-                ("start_index", required),
-                ("max_events", 128),
-            ),
-            set(),
-        ),
-        (
-            beatmap,
-            "editor_span",
-            (
-                ("self", required),
-                ("first_anchor_index", required),
-                ("last_anchor_index", required),
-            ),
-            set(),
-        ),
-        (
-            beatmap,
-            "editor_view",
-            (
-                ("self", required),
-                ("start_s", required),
-                ("end_s", required),
-                ("loop_start_s", required),
-                ("px_per_s", required),
-                ("max_points", 2048),
-            ),
-            set(),
-        ),
-        (
-            beatmap,
-            "source_after_beats",
-            (
-                ("self", required),
-                ("source_seconds", required),
-                ("beats", required),
-                ("require_four_four", True),
-            ),
-            set(),
-        ),
-    ):
-        label = f"{owner.__name__}.{method}"
-        implementation = inspect.getattr_static(owner, method, None)
-        assert callable(implementation), f"Native source beatmap editor API missing: {label}"
-        parameters = inspect.signature(implementation).parameters
-        assert list(parameters) == [name for name, _default in arguments], (
-            f"Native source beatmap editor API invalid signature: {label}"
-        )
-        for name, default in arguments:
-            parameter = parameters[name]
-            kinds: set[int] = (
-                {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
-                if name == "self"
-                else {inspect.Parameter.KEYWORD_ONLY}
-                if name in keyword_only
-                else {inspect.Parameter.POSITIONAL_OR_KEYWORD}
-            )
-            assert parameter.kind in kinds, (
-                f"Native source beatmap editor API invalid argument: {label}.{name}"
-            )
-            assert type(parameter.default) is type(default), (
-                f"Native source beatmap editor API invalid default: {label}.{name}"
-            )
-            assert parameter.default == default, (
-                f"Native source beatmap editor API invalid default: {label}.{name}"
-            )
+    for method in ("anchor_transport_phase_from_pad", "bootstrap_transport_from_pad"):
+        assert not hasattr(engine, method), f"Native still exposes retired phase control: {method}"
 
 
 def check_beat_this_execution_api(engine_type: object, installation_root: Path) -> None:
@@ -856,7 +651,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_key_lock_start_behavior_api(native_module.AudioEngine)
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
-    check_source_beatmap_editor_api(native_module)
+    check_bpm_only_runtime_api(native_module)
     check_beat_this_execution_api(
         native_module.AudioEngine, checkout.parent / "analysis-runtime" / "beat-this"
     )

@@ -4,7 +4,6 @@ use crate::audio_engine::content_placement::ContentKey;
 use crate::audio_engine::global_rate_status::{BpmEffect, BpmReason};
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::master_provenance::MasterProvenance;
-use crate::audio_engine::source_sync_policy::SourceSyncMode;
 use crate::audio_engine::transport::TransportTimeline;
 use std::cell::RefCell;
 
@@ -121,50 +120,6 @@ mod tests {
     }
 
     #[test]
-    fn off_waits_for_paused_and_fading_fixed_voice_policy_or_real_retirement() {
-        let mut mixer = RtMixer::new(1, 48_000.0);
-        let mut transport = TransportTimeline::new(48_000);
-        mixer.load_sample(
-            0,
-            SampleBuffer {
-                samples: Arc::from([0.25; 4096]),
-                channels: 1,
-                residency: None,
-            },
-        );
-        mixer.set_pad_key_lock(0, false);
-        mixer.set_bpm_lock(true);
-        mixer.set_master_period(0.5);
-        mixer.set_pad_bpm(0, Some(120.0));
-        assert!(mixer.play_sample(0, 1.0));
-        mixer.voices[0].sync_request.mode = SourceSyncMode::Fixed;
-        mixer.pause_sample(0);
-        let request = target(&mut mixer, 2, false);
-        mixer.stage_bpm_lock(request);
-        settle(&mut mixer);
-        mixer.service_bpm_lock(10, &mut transport);
-        assert_eq!(reason(&mixer), BpmReason::PolicyPending);
-        assert!(mixer.bpm_lock_enabled);
-        mixer.stop_sample(0);
-        mixer.service_bpm_lock(11, &mut transport);
-        if mixer.voices[0].active {
-            assert_eq!(reason(&mixer), BpmReason::PolicyPending);
-        }
-        mixer.render(&mut [0.0; 1024], &mut [0.0; NUM_SAMPLES]);
-        mixer.service_bpm_lock(1035, &mut transport);
-        assert!(!mixer.bpm_lock_enabled);
-        assert!(
-            mixer
-                .input_runtime_ownership
-                .global_rate_status
-                .read_bpm()
-                .unwrap()
-                .1
-                .applied
-        );
-    }
-
-    #[test]
     fn global_lease_contention_retains_original_target_without_false_effect() {
         let mut mixer = RtMixer::new(1, 48_000.0);
         let mut transport = TransportTimeline::new(48_000);
@@ -267,8 +222,8 @@ mod tests {
             for (id, copy) in copies.iter().enumerate() {
                 let voice = fixture.voice(id);
                 assert!(voice.source_playback.matches_exact(copy));
-                assert!(voice.phase_launch_qualified);
-                assert_eq!(voice.phase_birth_unadvanced, !advanced);
+                assert!(voice.launch_qualified);
+                assert_eq!(voice.launch_unadvanced, !advanced);
             }
             settle(&mut fixture.mixer);
             fixture
@@ -506,17 +461,6 @@ impl RtMixer {
         if self.has_pending_global_rate() {
             return Err(BpmReason::RatePending);
         }
-        if self.has_mapped_voice() {
-            return Err(BpmReason::MappedActive);
-        }
-        if !target.enabled
-            && self
-                .voices
-                .iter()
-                .any(|voice| voice.active && voice.sync_request.mode == SourceSyncMode::Fixed)
-        {
-            return Err(BpmReason::PolicyPending);
-        }
         self.prospective_scalar_targets(target.enabled, self.speed, period, frame)
             .map(|targets| (targets, period, anchor_id))
     }
@@ -526,7 +470,7 @@ impl RtMixer {
         period: f64,
         frame: u64,
     ) -> Option<[Option<f64>; MAX_VOICES]> {
-        if !self.bpm_lock_enabled || self.has_mapped_voice() || self.has_pending_global_rate() {
+        if !self.bpm_lock_enabled || self.has_pending_global_rate() {
             return None;
         }
         self.prospective_scalar_targets(self.bpm_lock_enabled, self.speed, Some(period), frame)
@@ -546,15 +490,12 @@ impl RtMixer {
             if !voice.active {
                 continue;
             }
-            let ratio = voice
-                .sync_request
-                .scalar_ratio(
-                    self.timing_for_voice(voice).period_seconds(),
-                    speed,
-                    period,
-                    enabled,
-                )
-                .ok_or(BpmReason::HistoryPending)?;
+            let ratio = Self::scalar_tempo_ratio(
+                self.timing_for_voice(voice).period_seconds(),
+                speed,
+                period,
+                enabled,
+            );
             let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
             if voice.stretch.has_retained_source_input() {
                 let snapshot = self
@@ -692,7 +633,7 @@ impl RtMixer {
                 mixer.bpm_lock_enabled = target.enabled;
                 if tuple_changed {
                     mixer.master_period_seconds = period;
-                    mixer.rebind_dry_phase_births(transport, &candidate, frame);
+                    mixer.rebind_launch_births(transport, &candidate, frame);
                     *transport = candidate;
                 }
                 let provenance = if !target.enabled || period.is_none() {

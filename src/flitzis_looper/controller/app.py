@@ -27,7 +27,6 @@ from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
 from flitzis_looper.recording_paths import hold_live_recording_spool
-from flitzis_looper.sync_diagnostics import TimingTrace
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
@@ -218,26 +217,6 @@ class AppController:
         self.loader.bind_asset_lifecycle(
             self._assets, beat_this_installation_root=self._beat_this_installation_root
         )
-        self.loader.source_beatmaps.bind(
-            self._persistence.commit_source_beatmap_selection,
-            blocked=lambda: (
-                self._persistence.stem_selection_write_blocked()
-                or self._persistence.load_error is not None
-            ),
-            edit_guard=self.ensure_not_copy_target,
-            source_generation=self.transport.capture_current_pad_edit_generation,
-            beat_this_installation_root=self._beat_this_installation_root,
-            on_effective=self._on_source_map_effective,
-        )
-        self.transport.loop.bind_source_maps(self.loader.source_beatmaps)
-        self.transport.source_sync.bind_source_maps(self.loader.source_beatmaps)
-
-    def _on_source_map_effective(self, sample_id: int) -> None:
-        """Refresh derived loop residency without rewriting tempo or grid intent."""
-        self.transport.loop._apply_effective_pad_loop_region_to_audio(
-            sample_id, defer_unavailable_map=True
-        )
-        self.transport.refresh_input_runtime()
 
     def _init_recording_control(self) -> None:
         """Bind one original Engine and project namespace before restore and UI work."""
@@ -297,13 +276,6 @@ class AppController:
             )
         )
         self.transport.pitch.bind_diagnostics(self.diagnostics)
-        self.timing_trace = TimingTrace(
-            self._audio,
-            self._project,
-            self._session,
-            self._persistence.config_path.parent / "diagnostics",
-        )
-        self.transport.source_sync.bind_diagnostics(self.diagnostics)
         self.transport.residency._bind_diagnostics(self.diagnostics)
         self.transport.waveform.bind_diagnostics(self.diagnostics)
         self.loader._bind_diagnostics(self.diagnostics)
@@ -469,7 +441,6 @@ class AppController:
             if not holds_polled:
                 self.transport.waveform.poll_holds()
             if not self._close_requested:
-                self.timing_trace.stop("shutdown")
                 self._audio.set_input_mapping_enabled(False)
                 self._close_requested = True
                 self.stem_batch.cancel()
@@ -499,7 +470,6 @@ class AppController:
                 message = "Application close is waiting for recording or arrangement settlement"
                 raise RuntimeError(message)
             self.recording.shut_down()
-            self.timing_trace.close()
             self.material_migration.shut_down()
             self.transport.pitch.shut_down()
             self.transport.residency.shut_down()
@@ -559,7 +529,6 @@ class AppController:
         self._sync_arrangement_observers()
 
         poll_control_diagnostics(self)
-        self.timing_trace.poll()
 
     def _sync_arrangement_observers(self) -> None:
         deferred = (

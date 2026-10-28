@@ -1,0 +1,59 @@
+# BPM and constant-tempo loops
+
+The current runtime uses accurate BPM estimates and constant-rate BPM Lock.
+Source SYNC, REALTIME BPM, source-map editing and live beat-phase correction have
+been removed. The complete previous implementation is preserved in the remote
+`SYNC-REALTIME-BPM` branch. See [the archive record](sync-archive.md).
+
+BPM analysis checks stable interior sections and tests a nearby integer tempo
+against separate sections. It retains the fractional estimate when the evidence
+does not support that integer. The accepted detector and its method schema 4
+remain unchanged by this removal. More decimal places alone do not establish
+accuracy. Finite segment checks cannot guarantee exact tempo for every song.
+
+The selected fractional estimate and integer candidate share separate probe
+windows and one original-event phase. Each window retains ten seconds when enough
+complete-source material is available. Short original audio uses the existing
+adaptive check. Intro/outro and unstable sections are excluded by the established
+quality criteria; a short resident loop does not shorten an available full song.
+
+## Normal use
+
+1. After this Native change, close the Looper and use **start-release.bat** once
+   to rebuild and start the matching Release version. Later **start.bat** starts
+   that installed build without rebuilding it.
+2. Load the songs and let BPM analysis finish. Use half or double when the
+   detector chooses the wrong rhythmic level. Tap BPM or manual BPM provides a
+   correction for difficult material.
+3. Set Grid Offset and each loop's start/end in Adjust Loop. A bar is four beats.
+   For example, choose 8 bars on one PAD and 64 bars on another.
+4. Enable Multi Loop and BPM Lock with the intended reference PAD selected, then
+   start the PADs using the ordinary quantized controls.
+
+Grid Offset sets the source grid's phase; loop start selects the musical entry.
+Grid lines and physical loop markers use the same loaded sample positions.
+Analytical BPM and musical loop periods keep their full precision. Wrong phase,
+wrong rhythmic level, incorrect BPM or actual tempo fluctuations can still
+produce audible disagreement. This runtime does not correct changing recording
+speed during playback.
+
+Tap BPM keeps the full current sequence and iteratively fits its beat grid,
+rejecting strongly misplaced taps while allowing previous exclusions to return
+when later evidence supports them. A pause longer than three seconds or a source
+change starts a fresh sequence. More independent accurate taps improve the fit;
+systematic human timing drift cannot be inferred away automatically.
+
+## Processing device
+
+The sidebar shows the last confirmed BPM inference device separately from its
+processing stage. CUDA inference can fall back once to a fresh CPU run after a
+CUDA execution failure. **CPU (CUDA fallback)** identifies that result; old data
+without a device receipt shows **Device unknown**. STEM inference device remains
+visible while the later alignment stage runs. Availability or a queued job alone
+is not evidence that a GPU processed the source.
+
+## Fresh project
+
+This architecture change intentionally provides no backward compatibility. The
+Human starts with a fresh samples directory. Development tooling does not delete
+private samples, settings or previous artifacts.

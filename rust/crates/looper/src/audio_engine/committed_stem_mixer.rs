@@ -114,12 +114,6 @@ impl RtMixer {
 
     fn committed_stem_capture_current(&self, capture: &StemVoiceCapture, id: usize) -> bool {
         if id >= NUM_SAMPLES
-            || self.voices.iter().any(|voice| {
-                voice.active
-                    && voice.sample_id == id
-                    && (voice.source_playback.is_mapped()
-                        || voice.source_playback.has_phase_program())
-            })
             || !capture.status.preparation_current()
             || !self.admitted_source_binding_current(id, capture.binding)
             || !self.admitted_launch_current(id, capture.binding, capture.launch_revision)
@@ -292,14 +286,6 @@ impl RtMixer {
             || (transaction.candidate.is_some()
                 && transaction.operation_timing_revision
                     != Some(self.global_rate_timing_revision()))
-            || pin.playback.is_mapped()
-            || pin.playback.has_phase_program()
-            || self.voices.iter().any(|voice| {
-                voice.active
-                    && voice.sample_id == id
-                    && (voice.source_playback.is_mapped()
-                        || voice.source_playback.has_phase_program())
-            })
             || !transaction.status.publication.current()
             || !transaction.status.preparation_current()
             || !self.admitted_source_binding_current(id, transaction.binding)

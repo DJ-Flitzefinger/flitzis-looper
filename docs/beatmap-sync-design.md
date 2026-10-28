@@ -1,3 +1,5 @@
+> Historical source-SYNC design, removed from main. See [the archive](sync-archive.md).
+
 # Beat This migration and independent pad pitch: implementation design
 
 For control meanings and step-by-step use, see the [Source Map guide](source-map-guide.md).

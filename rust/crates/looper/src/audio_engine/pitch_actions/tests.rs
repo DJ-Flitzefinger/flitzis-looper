@@ -9,10 +9,7 @@ fn action(ownership: Arc<InputRuntimeOwnership>, key: &str) -> CapturedPitchActi
         key_lock_request: ownership
             .key_lock_request_for_cell(binding.placement.unwrap().cell())
             .load(Ordering::Acquire),
-        sync_request: Default::default(),
-        source_map: super::super::source_map_admission::SourceMapLaunchSnapshot::scalar(
-            &ownership, binding,
-        ),
+
         key: binding.placement.unwrap().content_key().unwrap(),
         binding,
         ownership,
@@ -56,10 +53,7 @@ fn source_action(
         key_lock_request: ownership
             .key_lock_request_for_cell(binding.placement.unwrap().cell())
             .load(Ordering::Acquire),
-        sync_request: Default::default(),
-        source_map: super::super::source_map_admission::SourceMapLaunchSnapshot::scalar(
-            ownership, binding,
-        ),
+
         key: binding.placement.unwrap().content_key().unwrap(),
         binding,
         ownership: ownership.clone(),
@@ -594,9 +588,8 @@ fn worker_returns_failed_original_owner_and_callback_lane_retires_intact() {
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,
@@ -652,9 +645,8 @@ fn deferred_execution_coordinate_is_once_only_and_original_input_target_is_uncha
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,
@@ -729,7 +721,6 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         playback,
         plan,
         actual_feed: None,
-        mapped_input: None,
         target_output_frame: second.execution_target(),
         request_id: second.sequence(),
         epoch: second.epoch(),
@@ -744,9 +735,8 @@ fn action_capture_requires_own_epoch_arc_even_when_all_scalar_pitch_source_and_d
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,
@@ -787,9 +777,8 @@ fn no_preparation_completion_keeps_set_pending_until_actual_application() {
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,
@@ -839,9 +828,8 @@ fn fixed_claim_guard_remains_valid_inside_existing_placement_marker() {
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,
@@ -883,9 +871,8 @@ fn history_mode_is_explicit_and_cannot_be_changed_after_preparation_free_complet
         execution_frozen: false,
         launch_reference: Default::default(),
         launch_qualification: Default::default(),
-        mapped_timeline: None,
-        mapped_ready: None,
-        phase_launch_qualified: false,
+
+        launch_qualified: false,
         launch_delay_frames: 0,
         source_control_revision: None,
         own_window: None,

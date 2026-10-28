@@ -17,13 +17,13 @@ from flitzis_looper.controller.accepted_publication import (
 from flitzis_looper.models import BeatGrid, PadContentIdentity, SampleAnalysis
 from flitzis_looper.pair_snapshot import capture_pair_snapshot
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
-from tests.flitzis_looper.controller.test_pair_control_mirror import _bundle
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     BPM_REFERENCE_SOURCE_IDENTITY,
     _acknowledged_bpm_reference,
     _bind_fixture_source_identity,
     _master_provenance,
 )
+from tests.flitzis_looper.controller.test_pair_control_mirror import _bundle
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -334,7 +334,6 @@ def test_accepted_refresh_cannot_overwrite_a_later_actual_master_image(
         assert parameters._bpm_lock_application_status().pending
     audio_engine_mock.set_master_period.assert_not_called()
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 @pytest.mark.parametrize("pending", ["queued", "preparing", "unobserved", "missing_speed"])
@@ -448,7 +447,6 @@ def test_productive_general_publication_needs_both_native_acknowledgements(
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.set_master_period.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", ["rejected", "worker", "unavailable", "historical", "newer"])

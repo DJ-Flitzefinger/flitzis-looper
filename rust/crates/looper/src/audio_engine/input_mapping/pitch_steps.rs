@@ -152,7 +152,6 @@ mod tests {
             let mut state = runtime.runtime_state.lock().unwrap();
             state.pitch_clock = Some(clock);
             state.pads[0] = RuntimePadState {
-                source_map: Default::default(),
                 loaded: true,
                 binding: Some(native.binding),
                 acknowledgements: Some(native.acknowledgements.clone()),

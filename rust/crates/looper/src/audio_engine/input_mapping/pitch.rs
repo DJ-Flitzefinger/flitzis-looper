@@ -381,9 +381,7 @@ impl RequestedPitchJournal {
 
 impl RuntimeState {
     fn reconcile_policy_pitch(&mut self, ownership: &InputRuntimeOwnership) {
-        if self.pitch_shadow.reconcile(&mut self.pads, ownership) {
-            ownership.publish_runtime_policy_revision();
-        }
+        if self.pitch_shadow.reconcile(&mut self.pads, ownership) {}
     }
 }
 
@@ -660,8 +658,6 @@ fn capture_row(
         key_lock_request: ownership
             .key_lock_request_for_cell(key.cell())
             .load(Ordering::Acquire),
-        sync_request: pad.source_map.request(),
-        source_map: pad.source_map.snapshot(ownership, binding),
         key,
         binding,
         ownership: ownership.clone(),
@@ -704,7 +700,7 @@ fn capture_row(
     correction.apply(&mut state.pads[id].pitch);
     state.pads[id].pitch.request_sequence = action.sequence();
     state.pads[id].latest_request_sequence = action.sequence();
-    ownership.publish_runtime_policy_revision();
+
     Ok(action)
 }
 
@@ -894,12 +890,8 @@ impl InputRuntime {
             changed |= before != (row.pitch, row.latest_request_sequence, row.pitch_anchor);
         }
         let multi_loop = state.multi_loop;
-        for row in &mut state.pads {
-            row.source_map.remask_parents(multi_loop, row.pitch.sync);
-        }
-        if changed {
-            self.ownership.publish_runtime_policy_revision();
-        }
+        for row in &mut state.pads {}
+        if changed {}
         Ok(())
     }
 
@@ -996,7 +988,6 @@ mod tests {
         for id in [0, 1] {
             let native = InputRuntimePadBinding::for_test(id, ownership.clone());
             state.pads[id] = RuntimePadState {
-                source_map: Default::default(),
                 loaded: true,
                 binding: Some(native.binding),
                 acknowledgements: Some(native.acknowledgements.clone()),

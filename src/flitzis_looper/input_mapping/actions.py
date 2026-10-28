@@ -121,23 +121,6 @@ class LooperAction(BaseModel):
         return cls(key=key, source="direct" if parse_pitch_action(key) is not None else "python")
 
 
-def global_source_sync_toggle_action() -> LooperAction:
-    """Toggle the global gate while retaining independent PAD preferences."""
-    return LooperAction(key="global.source_sync.toggle", label="Toggle global SYNC")
-
-
-def global_realtime_bpm_toggle_action() -> LooperAction:
-    """Toggle variable source timing independently of the global SYNC gate."""
-    return LooperAction(key="global.realtime_bpm.toggle", label="Toggle SYNC (legacy binding)")
-
-
-def source_sync_toggle_action(pad_id: int) -> LooperAction:
-    """Toggle the independent content request at the captured PAD target."""
-    return LooperAction(
-        key=f"pad.source_sync.toggle:{pad_id}", label=f"Toggle SYNC pad {pad_id + 1}"
-    )
-
-
 def pitch_base_action(target: MusicalKey, *, retrigger: bool) -> LooperAction:
     """Return an absolute same-mode target, independent of menu and selected content."""
     variant = _pitch_variant(retrigger=retrigger)

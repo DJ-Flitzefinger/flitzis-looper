@@ -664,23 +664,10 @@ pub enum ControlMessage {
     RefreshAcceptedTiming(
         std::sync::Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
     ),
-    /// Original Native runtime request; phase is captured only at actual execution.
-    AdoptRuntimePolicy(crate::audio_engine::RuntimePolicyWork),
-
     /// Adopt a fixed precise projection after actual current source and permit checks.
     PublishConstantTiming {
         id: usize,
         timing: PreparedConstantTiming,
-    },
-
-    /// Request transport downbeat anchoring from a selected playing pad.
-    AnchorTransportPhaseFromPad {
-        id: usize,
-    },
-
-    /// Arm one selected reference for one-time session grid bootstrap.
-    BootstrapTransportFromPad {
-        id: usize,
     },
 
     /// Set per-pad loop region in seconds.
@@ -920,8 +907,7 @@ impl ControlMessage {
             | ControlMessage::CommittedStemWork(_)
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
-            | ControlMessage::RefreshAcceptedTiming(_)
-            | ControlMessage::AdoptRuntimePolicy(_) => ControlMessageClass::Publication,
+            | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,
             #[cfg(test)]
             ControlMessage::SetBpmLock(_) => ControlMessageClass::OrderedState,
             ControlMessage::SetBpmLockTarget(_)
@@ -932,8 +918,6 @@ impl ControlMessage {
             | ControlMessage::SetPadTimingMetadata { .. }
             | ControlMessage::SetLegacyPadTimingMetadata { .. }
             | ControlMessage::ClearPadConstantTiming { .. }
-            | ControlMessage::AnchorTransportPhaseFromPad { .. }
-            | ControlMessage::BootstrapTransportFromPad { .. }
             | ControlMessage::SetPadLoopRegion { .. }
             | ControlMessage::SetTriggerQuantization(_)
             | ControlMessage::SetStemMixMode { .. }
@@ -947,17 +931,6 @@ impl ControlMessage {
 /// Re-export from the analysis crate.
 pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 
-/// Private optional geometry; a stored claim belongs to one original admission.
-#[derive(Clone, Debug)]
-pub(crate) enum AutomaticSourceMap {
-    Pending(crate::audio_engine::SourceBeatmap),
-    Stored {
-        artifact: crate::audio_engine::SourceBeatmapArtifact,
-        /// Per source admission, never shared merely because analysis was cached.
-        consumed: Arc<std::sync::atomic::AtomicBool>,
-    },
-}
-
 /// Ordinary App estimate. No accepted timing/map or current Native authority.
 #[derive(Clone, Debug)]
 pub struct LoadedAnalysis {
@@ -966,8 +939,6 @@ pub struct LoadedAnalysis {
     pub beat_grid: flitzis_looper_analysis::BeatGrid,
     pub bpm_method_json: Option<String>,
     pub beat_error: Option<String>,
-    pub(crate) automatic_source_map: Option<AutomaticSourceMap>,
-    pub(crate) automatic_source_map_error: Option<String>,
 }
 
 impl From<SampleAnalysis> for LoadedAnalysis {
@@ -978,8 +949,6 @@ impl From<SampleAnalysis> for LoadedAnalysis {
             beat_grid: value.beat_grid,
             bpm_method_json: None,
             beat_error: None,
-            automatic_source_map: None,
-            automatic_source_map_error: None,
         }
     }
 }
@@ -1028,21 +997,6 @@ pub enum LoaderEvent {
         id: usize,
         request_id: u64,
         result_json: String,
-    },
-    /// Source-verified immutable data, never a current audio or project selection.
-    SourceBeatmapCompleted {
-        id: usize,
-        request_id: u64,
-        map: crate::audio_engine::SourceBeatmap,
-        artifact: Option<crate::audio_engine::SourceBeatmapArtifact>,
-        /// Private one-shot claim from a verified automatic map-only input.
-        automatic_claim: Option<Arc<std::sync::atomic::AtomicBool>>,
-    },
-    /// Unverified original observations, never accepted geometry or durable selection.
-    SourceBeatmapRawCompleted {
-        id: usize,
-        request_id: u64,
-        artifact: crate::audio_engine::SourceBeatmapRawArtifact,
     },
     /// Loading started for the given sample slot id.
     Started { id: usize, request_id: u64 },
@@ -1235,16 +1189,6 @@ mod tests {
                 id: 3,
                 metadata: PadTimingMetadata { phase_anchor_s }
             } if phase_anchor_s == 1.25
-        ));
-    }
-
-    #[test]
-    fn anchor_transport_phase_message_carries_fixed_size_pad_id() {
-        let message = ControlMessage::AnchorTransportPhaseFromPad { id: 3 };
-
-        assert!(matches!(
-            message,
-            ControlMessage::AnchorTransportPhaseFromPad { id: 3 }
         ));
     }
 

@@ -1,3 +1,5 @@
+> Historical source-SYNC diagnostic, removed from main. See [the archive](sync-archive.md).
+
 # Timing log for a listening test
 
 This diagnostic build records timing observations so a reported drift can be

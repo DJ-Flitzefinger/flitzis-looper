@@ -984,19 +984,6 @@ fn acknowledged_accepted_period_drives_native_bootstrap_reference_and_fractional
         Some(f64::from(RATE) * binary32_roundtrip_period)
     );
 
-    // Explicit phase anchoring consumes the same native period as bootstrap.
-    assert!(anchor_transport_phase_from_pad_at_frame(
-        &mut state.mixer,
-        &mut state.transport,
-        0,
-        431
-    ));
-    assert_eq!(state.transport.master_period_seconds(), Some(output_period));
-    assert_eq!(
-        state.transport.beat_position_at_frame(431),
-        state.mixer.active_pad_beat_position(0)
-    );
-
     // BPMLOCK derives source-period/output-period once in binary64 at start/render.
     state.mixer.stop_sample(0);
     let master_bpm = 129.987_654_321_098_76;

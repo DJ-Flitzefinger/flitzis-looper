@@ -1,3 +1,5 @@
+> Historical renderer evidence for the removed source-SYNC feature. See [the archive](sync-archive.md).
+
 # Accepted-map renderer comparison
 
 The first comparison using the actual shared SourceBeatmap inverse does **not**

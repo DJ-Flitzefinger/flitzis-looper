@@ -269,23 +269,11 @@ impl NativeAdapterState {
         future: (SourcePlayback, SourceReadPlan, u64, SourceFeedContext),
         endpoint_reset: Option<EndpointResetHistory>,
     ) -> Result<(), RubberBandError> {
-        if request.plan.loop_period.is_mapped()
-            || request.playback.has_phase_program()
-            || request.actual_feed.is_some_and(|checkpoint| checkpoint.playback.has_phase_program())
-            || future.0.has_phase_program()
-            || future.1.loop_period.is_mapped()
-            || history.spans().any(|span| {
-                span.plan.loop_period.is_mapped() || span.playback.has_phase_program()
-            })
-            || !history.is_current()
-            || request.mapped_input.is_some()
+        if !history.is_current()
             || !request
                 .permit
                 .current(&request.sample, request.binding.sample_rate_hz)
             || !future_continues_actual_history(history, future)
-            // This scalar future builder holds no map owner with which to refresh
-            // copied spans. Genuine mapped receipts remain replayable below.
-            || (future.0.is_mapped() && future.2 != 0)
         {
             return Err(unavailable());
         }

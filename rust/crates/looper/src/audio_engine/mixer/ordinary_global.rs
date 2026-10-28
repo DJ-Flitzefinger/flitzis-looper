@@ -73,10 +73,7 @@ impl RtMixer {
         }
         // Reserve the whole transaction before cloning source pins or claiming any owner.
         if retirement.available_retirement_slots()
-            < 3 * MAX_VOICES
-                + self.mapped_owner_retirement_slots()
-                + 1
-                + usize::from(batch.capture_publication.is_some())
+            < 3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
             || audio_messages.available_audio_message_slots() < count
         {
             return Err(PitchActionReject::Capacity);
@@ -86,8 +83,6 @@ impl RtMixer {
         let mut snapshots: [Option<PitchSourceSnapshot>; MAX_VOICES] =
             std::array::from_fn(|_| None);
         let mut configs: [Option<VoiceStartConfig>; MAX_VOICES] = std::array::from_fn(|_| None);
-        let mut staged_voices: [Option<super::super::prepared_native_history::PreparedMappedVoice>;
-            MAX_VOICES] = std::array::from_fn(|_| None);
         let mut voice_indices = [usize::MAX; MAX_VOICES];
         let mut loop_intents = [(0, None); MAX_VOICES];
         let mut seen = [false; NUM_SAMPLES];
@@ -180,21 +175,6 @@ impl RtMixer {
                 )
                 .ok_or(PitchActionReject::SourceChanged)?;
             config.initial_frame_pos = snapshot.plan.frame_pos;
-            if work.native_required() && snapshot.playback.is_mapped() {
-                let voice = &self.voices[index];
-                staged_voices[position] = Some(
-                    work.candidate
-                        .as_ref()
-                        .ok_or(PitchActionReject::PreparedMismatch)?
-                        .stage_mapped_voice(
-                            &voice.history_lifetime,
-                            voice.generation,
-                            voice.active,
-                            1,
-                        )
-                        .ok_or(PitchActionReject::PreparedMismatch)?,
-                );
-            }
             loop_intents[position] = self
                 .loop_intent_frames(id, entry.start_s, entry.end_s)
                 .ok_or(PitchActionReject::InvalidAction)?;
@@ -228,7 +208,6 @@ impl RtMixer {
         let capture_work = RefCell::new(capture_owner.as_deref_mut());
         let capture_claim = RefCell::new(None);
         let configs = RefCell::new(configs);
-        let staged_voices = RefCell::new(staged_voices);
         let mixer = RefCell::new(self);
         let works = RefCell::new(works);
         let mut feedback: [Option<AudioMessage>; MAX_VOICES] = std::array::from_fn(|_| None);
@@ -262,16 +241,6 @@ impl RtMixer {
                                 voice_indices[position],
                                 output_frame,
                             ))
-                        || staged_voices.borrow()[position]
-                            .as_ref()
-                            .is_some_and(|staged| {
-                                !mixer.mapped_birth_witness_current(
-                                    voice_indices[position],
-                                    work.candidate.as_ref().unwrap(),
-                                    configs[position].as_ref().unwrap(),
-                                    staged,
-                                )
-                            })
                     {
                         return false;
                     }
@@ -348,28 +317,9 @@ impl RtMixer {
                         voice.start_rt(config, retirement);
                     }
                     voice.source_playback = snapshot.playback;
-                    voice.phase_launch_qualified = work.phase_launch_qualified;
-                    voice.phase_birth_unadvanced = true;
-                    voice.sync_request = work.origin().sync_request();
-                    voice.mapped_birth = snapshot.playback.is_mapped().then(|| {
-                        work.origin().birth_observation(
-                            output_frame,
-                            work.phase_launch_qualified,
-                            snapshot.plan.loop_region.start,
-                            work.native_required(),
-                            work.key_lock_request.unwrap_or(0),
-                        )
-                    });
-                    voice.mapped_start = snapshot.playback.is_mapped().then(|| {
-                        super::super::pad_start::PadStartCustody::for_mapped_voice(work.origin())
-                    });
+                    voice.launch_qualified = work.launch_qualified;
+                    voice.launch_unadvanced = true;
                     if work.native_required() {
-                        if let Some(staged) = staged_voices.borrow_mut()[position].take() {
-                            work.candidate
-                                .as_mut()
-                                .unwrap()
-                                .install_mapped_voice_claimed(staged);
-                        }
                         let feed = ProductiveSourceFeed {
                             sample: &snapshot.sample,
                             stems: snapshot.stems.as_ref(),

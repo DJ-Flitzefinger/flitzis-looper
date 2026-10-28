@@ -13,8 +13,8 @@ The system SHALL allow Rust to derive musical transport phase for an arbitrary s
 output frame using the Rust-owned transport timeline.
 
 When master BPM is valid, Rust SHALL compute the target frame's bar phase in 4/4 as beats
-relative to the transport downbeat anchor. This phase SHALL be available for explicit transport
-sync features and diagnostics, but normal newly triggered pad playback SHALL still start from the
+relative to the transport downbeat anchor. This phase SHALL be available for ordinary quantization
+and diagnostics, but normal newly triggered pad playback SHALL still start from the
 pad's effective loop start unless a future OpenSpec change explicitly re-enables source-frame
 phase alignment.
 
@@ -37,44 +37,29 @@ behavior.
 
 
 <!-- From add-phase-aware-playback-sync -->
-### Requirement: Explicit Sync Can Anchor Transport Downbeat From A Playing Pad
-The system SHALL support anchoring the Rust transport downbeat to a selected active pad's current
-musical phase only through an explicit sync request.
+### Requirement: Qualified Session Bootstrap Retains The Ordinary Master Clock
+The system SHALL retain one internal source-qualified BPMLOCK session bootstrap.
+Only qualified BPM-lock setup or acknowledged accepted-timing refreshes MAY arm its
+reference through the existing source/content/ownership guards. The system SHALL NOT
+expose an unqualified or repeatable pad-derived phase-anchor command.
 
-The audio thread SHALL use only bounded, audio-thread-owned state:
+When the qualified reference is active with valid BPM/rate and signed timing metadata,
+Rust MAY establish its complete master musical position once per stream without
+resetting output-frame time or seeking, restarting or retriggering active voices.
+Unavailable reference state SHALL defer bootstrap while ordinary playback continues.
+Successful bootstrap SHALL NOT rearm after silence, wraps or stem changes.
 
-- selected anchor pad id,
-- current transport output frame,
-- transport master BPM,
-- anchor pad BPM,
-- anchor pad timing anchor,
-- anchor pad current playhead frame,
-- output sample rate.
+#### Scenario: Qualified reference completes internal bootstrap
+- **GIVEN** a source-qualified BPMLOCK owner armed an unused session bootstrap
+- **WHEN** that same reference becomes active with valid timing metadata
+- **THEN** Rust establishes the master musical position from its complete source beat
+- **AND** output-frame time and existing source playheads are preserved
 
-If the selected pad is not active or required metadata is unavailable, Rust SHALL leave the
-transport downbeat unchanged and SHALL preserve existing BPM-lock tempo matching behavior. Starting,
-stopping, pausing, retriggering, unloading, or metadata-updating a pad SHALL NOT invoke this sync
-implicitly.
-
-#### Scenario: Explicit request from playing anchor pad sets transport phase
-- **GIVEN** the permanent Rust transport has a valid master BPM
-- **AND** the selected anchor pad is playing
-- **AND** the anchor pad has valid BPM and timing-anchor metadata
-- **WHEN** Rust handles a fixed-size request to anchor transport phase from that pad
-- **THEN** Rust updates the transport downbeat frame so the transport bar phase matches the pad's current bar phase
-
-#### Scenario: Inactive anchor pad leaves transport phase unchanged
-- **GIVEN** the permanent Rust transport has an existing downbeat anchor
-- **AND** the selected anchor pad is not currently playing
-- **WHEN** Rust handles a request to anchor transport phase from that pad
-- **THEN** Rust leaves the transport downbeat frame unchanged
-- **AND** BPM lock continues to tempo-match pads by BPM ratio when metadata is available
-
-#### Scenario: Pad stop does not implicitly anchor transport phase
-- **GIVEN** pad 1 and pad 2 are playing
-- **WHEN** pad 1 is stopped without an explicit transport sync request
-- **THEN** Rust leaves the transport downbeat frame unchanged
-- **AND** later quantized triggers use the same global transport grid
+#### Scenario: Pad stop does not select a new master
+- **GIVEN** two pads are playing after master bootstrap
+- **WHEN** either pad stops
+- **THEN** master time and musical progression remain continuous
+- **AND** the remaining pad does not become a new phase reference
 
 
 <!-- From add-phase-aware-playback-sync -->
@@ -86,7 +71,7 @@ logging, heap allocation, neural network inference, real-time stem separation, o
 long-running work while computing phase.
 
 #### Scenario: Phase anchoring uses bounded scalar state
-- **WHEN** the audio callback handles a transport phase-anchor request
+- **WHEN** the audio callback completes a qualified internal session bootstrap
 - **THEN** it reads only fixed-size audio-thread-owned state
 - **AND** it performs only bounded scalar arithmetic
 - **AND** it does not allocate, block, log, touch disk, acquire the GIL, or run analysis
@@ -113,7 +98,7 @@ The transport timeline SHALL store:
 
 Pad playback state SHALL NOT own, reset, reselect, or invalidate the global transport timeline.
 Starting, stopping, pausing, retriggering, or unloading pads SHALL NOT change the transport clock
-or downbeat anchor unless an explicit transport/sync command requests that change.
+or downbeat anchor except when the already-qualified internal session bootstrap completes.
 
 #### Scenario: Timeline advances by rendered output frames
 - **GIVEN** the Rust audio callback begins with `output_frame = F`
@@ -172,7 +157,7 @@ playback, but SHALL NOT claim musical quantization is available.
 The system SHALL store transport master BPM in Rust audio-thread-owned transport state.
 
 Transport master BPM updates SHALL be explicit controlled transport operations, accepted
-performance master-BPM parameter updates, or sync operations. Accepted performance master-BPM
+performance master-BPM parameter updates, or qualified one-time session bootstrap. Accepted performance master-BPM
 updates SHALL use the same validated scalar for transport-grid timing and BPM-lock tempo matching.
 
 When a performance master-BPM update changes the transport BPM, Rust SHALL preserve the current
@@ -181,8 +166,9 @@ transport downbeat anchor, but it SHALL NOT reset the output-frame clock, stop, 
 or time-slip active voices.
 
 BPM-lock mode toggles, pitch, key-lock, pad playback, pad stop, and per-pad metadata updates SHALL
-NOT implicitly redefine the transport master BPM or anchor the transport phase to a pad. Pad-derived
-phase anchoring SHALL remain an explicit sync operation.
+NOT implicitly redefine the transport master BPM or anchor the transport phase to a pad. A
+qualified BPMLOCK setup MAY arm the internal one-time session bootstrap; no unqualified or
+repeatable phase-anchor command SHALL be exposed.
 
 Master BPM updates SHALL reject non-finite and non-positive values. Invalid master BPM updates
 SHALL NOT corrupt existing transport state.
@@ -207,7 +193,7 @@ SHALL NOT corrupt existing transport state.
 
 #### Scenario: BPM lock mode changes do not anchor transport phase
 - **GIVEN** BPM lock is enabled or disabled
-- **WHEN** no accepted master-BPM parameter update or explicit transport sync operation is applied
+- **WHEN** no accepted master-BPM parameter update or qualified session bootstrap is applied
 - **THEN** the transport master BPM and downbeat anchor remain unchanged
 - **AND** the transport output-frame clock continues monotonically
 
@@ -356,7 +342,7 @@ Only finite non-negative anchors SHALL be published to the audio thread. Invalid
 negative metadata SHALL fall back before publication or be clamped to zero by Rust-side validation.
 
 Per-pad timing metadata SHALL describe the pad's source-side grid/loop anchor for loop editing and
-future explicit sync behavior. Publishing metadata SHALL NOT redefine the permanent transport
+qualified internal session bootstrap. Publishing metadata SHALL NOT redefine the permanent transport
 masterclock or move already playing pads.
 
 #### Scenario: Downbeat metadata anchors the pad grid

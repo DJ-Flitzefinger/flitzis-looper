@@ -414,16 +414,6 @@ fn stem_cache(value: &Value) -> io::Result<()> {
 
 pub(super) fn slot(value: &Value) -> io::Result<()> {
     let mut keys: Vec<&str> = CONTENT.iter().map(|(key, _)| *key).collect();
-    if let Some(intent) = value.get("source_beatmap_intent") {
-        keys.push("source_beatmap_intent");
-        crate::audio_engine::source_beatmap_artifact::validate_intent_value(intent)
-            .map_err(io::Error::other)?;
-    }
-    if let Some(intent) = value.get("source_sync_intent") {
-        keys.push("source_sync_intent");
-        crate::audio_engine::source_map_admission::validate_source_sync_intent(intent)
-            .map_err(io::Error::other)?;
-    }
     exact_keys(value, &keys)?;
     if value["source_path"].is_null() != value["source_identity"].is_null()
         || !value["source_path"].is_null() && !text(&value["source_path"])
@@ -481,28 +471,6 @@ pub(super) fn project_slot(project: &Value, sample: usize) -> io::Result<Value> 
             .ok_or_else(|| invalid("portable project lacks complete216 musical table"))?;
         result.insert((*name).to_owned(), array[sample].clone());
     }
-    if let Some(rows) = project.get("pad_source_beatmap_intent") {
-        let rows = rows
-            .as_array()
-            .filter(|rows| rows.len() == 216)
-            .ok_or_else(|| invalid("portable project lacks complete216 source map intent table"))?;
-        if !rows[sample].is_null() {
-            result.insert("source_beatmap_intent".into(), rows[sample].clone());
-        }
-    }
-    if let Some(rows) = project.get("pad_source_sync_intent") {
-        let rows = rows
-            .as_array()
-            .filter(|rows| rows.len() == 216)
-            .ok_or_else(|| {
-                invalid("portable project lacks complete216 source SYNC intent table")
-            })?;
-        crate::audio_engine::source_map_admission::validate_source_sync_intent(&rows[sample])
-            .map_err(io::Error::other)?;
-        if rows[sample] != json!({"requested":false,"revision":0}) {
-            result.insert("source_sync_intent".into(), rows[sample].clone());
-        }
-    }
     let mut result = Value::Object(result);
     if result["stem_cache"].is_object() {
         result["stem_cache"]["available"] = json!(false);
@@ -523,16 +491,6 @@ pub(super) fn project(text: &str) -> io::Result<Value> {
     // predate it and retain their established omission semantics.
     if project.get("key_lock_start_behavior").is_some() {
         keys.push("key_lock_start_behavior");
-    }
-    if project.get("pad_source_beatmap_intent").is_some() {
-        keys.push("pad_source_beatmap_intent");
-    }
-    if project.get("pad_source_sync_intent").is_some() {
-        keys.push("pad_source_sync_intent");
-    }
-    if let Some(policy) = project.get("global_timing_policy") {
-        keys.push("global_timing_policy");
-        global_timing_policy(policy)?;
     }
     exact_keys(&project, &keys)?;
     let mut instances = BTreeSet::new();
@@ -662,12 +620,6 @@ fn path_key(samples: &Path, record: &Value, path: &str) -> io::Result<String> {
     Ok(reference_key(&mapped))
 }
 fn normalized_slot(mut image: Value) -> Value {
-    if image.get("source_beatmap_intent").is_none() {
-        image["source_beatmap_intent"] = Value::Null;
-    }
-    if image.get("source_sync_intent").is_none() {
-        image["source_sync_intent"] = json!({"requested":false,"revision":0});
-    }
     if image["analysis"].is_object() {
         image["analysis"]["accepted_timing"] = Value::Null;
         if image["analysis"]
@@ -703,37 +655,11 @@ pub(super) fn slot_matches(
     }
     Ok(actual == expected)
 }
-fn global_timing_policy(policy: &Value) -> io::Result<()> {
-    exact_keys(
-        policy,
-        &["schema_version", "sync", "realtime_bpm", "revision"],
-    )?;
-    if policy["schema_version"].as_u64() != Some(1)
-        || policy["revision"].as_u64().is_none()
-        || ["sync", "realtime_bpm"]
-            .iter()
-            .any(|key| !policy[*key].is_null() && !policy[*key].is_boolean())
-    {
-        return Err(invalid("portable global timing policy invalid"));
-    }
-    Ok(())
-}
 
 pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value> {
     let mut project = project(record["project_image_json"].as_str().unwrap())?;
     // Comparison-only migration. Raw historical images/seals and their SHA bytes
     // remain untouched; only the previously absent neutral table is supplied here.
-    if project.get("pad_source_beatmap_intent").is_none() {
-        project["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
-    }
-    if project.get("pad_source_sync_intent").is_none() {
-        project["pad_source_sync_intent"] =
-            json!(vec![json!({"requested":false,"revision":0}); 216]);
-    }
-    if project.get("global_timing_policy").is_none() {
-        project["global_timing_policy"] =
-            json!({"schema_version":1,"sync":null,"realtime_bpm":null,"revision":0});
-    }
     project.as_object_mut().unwrap().remove("manual_key");
     for sample in 0..216 {
         if let Some(path) = project["sample_paths"][sample].as_str() {
@@ -751,19 +677,8 @@ pub(super) fn project_intent(samples: &Path, record: &Value) -> io::Result<Value
 }
 
 #[cfg(test)]
-#[path = "timing_policy_tests.rs"]
-mod timing_policy_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
-
-    fn map_intent() -> Value {
-        json!({"schema_version":1,"revision":7,"selected":{
-            "schema_version":1,"kind":"source-beatmap-v1",
-            "reference":"samples/Owned/.pcm-cache/source-beatmaps/v1/.ready-0123456789abcdef0123456789abcdef/map.json",
-            "bytes":1024,"sha256":"a".repeat(64),"map_revision":"b".repeat(64),"decoder_identity":"c".repeat(64)}})
-    }
 
     pub(super) fn complete_project() -> Value {
         let empty = empty_slot();
@@ -777,163 +692,6 @@ mod tests {
             project[*field] = json!(vec![empty[*name].clone(); 216]);
         }
         project
-    }
-
-    #[test]
-    fn portable_map_intent_keeps_raw_legacy_project_and_omitted_neutral_seals() {
-        let legacy = complete_project();
-        let raw = legacy.to_string();
-        let digest = Sha256::digest(raw.as_bytes());
-        assert_eq!(project(&raw).unwrap(), legacy);
-        assert_eq!(
-            project_slot(&legacy, 0).unwrap().as_object().unwrap().len(),
-            21
-        );
-        let mut current = legacy.clone();
-        current["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
-        assert!(project(&current.to_string()).is_ok());
-        assert_eq!(
-            project_slot(&current, 0).unwrap(),
-            project_slot(&legacy, 0).unwrap()
-        );
-        let samples = Path::new("samples");
-        let old_record = json!({"project_image_json":raw});
-        let mut new_record = json!({"project_image_json":current.to_string()});
-        assert_eq!(
-            project_intent(samples, &old_record).unwrap(),
-            project_intent(samples, &new_record).unwrap()
-        );
-        current["pad_source_beatmap_intent"][215] = map_intent();
-        new_record["project_image_json"] = json!(current.to_string());
-        assert!(project(&current.to_string()).is_ok());
-        assert_eq!(
-            project_slot(&current, 215)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .len(),
-            22
-        );
-        assert_ne!(
-            project_intent(samples, &old_record).unwrap(),
-            project_intent(samples, &new_record).unwrap()
-        );
-        assert_eq!(
-            Sha256::digest(
-                old_record["project_image_json"]
-                    .as_str()
-                    .unwrap()
-                    .as_bytes()
-            ),
-            digest
-        );
-    }
-
-    #[test]
-    fn portable_map_table_checks_all216_rows_and_rejects_partial_unknown_or_native_authority() {
-        let mut current = complete_project();
-        current["pad_source_beatmap_intent"] = json!(vec![Value::Null; 216]);
-        for row in [0, 73, 215] {
-            let mut damaged = current.clone();
-            damaged["pad_source_beatmap_intent"][row] = map_intent();
-            damaged["pad_source_beatmap_intent"][row]["selected"]["identity"] = json!([1, 2, 3]);
-            assert!(project(&damaged.to_string()).is_err());
-        }
-        for invalid in [Value::Null, json!([]), json!(vec![Value::Null; 215])] {
-            let mut damaged = current.clone();
-            damaged["pad_source_beatmap_intent"] = invalid;
-            assert!(project(&damaged.to_string()).is_err());
-        }
-        let mut occupied = empty_slot();
-        occupied["source_beatmap_intent"] = map_intent();
-        assert!(slot(&occupied).is_ok());
-        let mut changed = occupied.clone();
-        changed["source_beatmap_intent"]["revision"] = json!(8);
-        assert_ne!(normalized_slot(occupied.clone()), normalized_slot(changed));
-        occupied["source_beatmap_intent"]["unexpected"] = json!(false);
-        assert!(slot(&occupied).is_err());
-    }
-
-    #[test]
-    fn portable_sync_intent_preserves_historical_bytes_neutral_omission_and_disabled_epochs() {
-        let legacy = complete_project();
-        let raw = legacy.to_string();
-        let digest = Sha256::digest(raw.as_bytes());
-        let mut current = legacy.clone();
-        current["pad_source_sync_intent"] =
-            json!(vec![json!({"requested":false,"revision":0}); 216]);
-        assert_eq!(project(&raw).unwrap(), legacy);
-        assert!(project(&current.to_string()).is_ok());
-        assert_eq!(
-            project_slot(&legacy, 0).unwrap(),
-            project_slot(&current, 0).unwrap()
-        );
-        let samples = Path::new("samples");
-        let old = json!({"project_image_json":raw});
-        let neutral = json!({"project_image_json":current.to_string()});
-        assert_eq!(
-            project_intent(samples, &old).unwrap(),
-            project_intent(samples, &neutral).unwrap()
-        );
-        for requested in [false, true] {
-            current["pad_source_sync_intent"][215] =
-                json!({"requested":requested,"revision":u64::MAX});
-            let snapshot = project_slot(&current, 215).unwrap();
-            assert!(slot(&snapshot).is_ok());
-            assert_eq!(
-                snapshot["source_sync_intent"],
-                current["pad_source_sync_intent"][215]
-            );
-            let nonneutral = json!({"project_image_json":current.to_string()});
-            assert_ne!(
-                project_intent(samples, &old).unwrap(),
-                project_intent(samples, &nonneutral).unwrap()
-            );
-        }
-        assert_eq!(
-            Sha256::digest(old["project_image_json"].as_str().unwrap().as_bytes()),
-            digest
-        );
-        let mut explicit = empty_slot();
-        explicit["source_sync_intent"] = json!({"requested":false,"revision":0});
-        assert!(slot(&explicit).is_ok());
-        assert_eq!(normalized_slot(explicit), normalized_slot(empty_slot()));
-    }
-
-    #[test]
-    fn portable_sync_table_validates_every_row_without_repairing_invalid_or_extra_fields() {
-        let neutral = json!({"requested":false,"revision":0});
-        let mut current = complete_project();
-        current["pad_source_sync_intent"] = json!(vec![neutral.clone(); 216]);
-        for invalid in [Value::Null, json!([]), json!(vec![neutral.clone(); 215])] {
-            let mut damaged = current.clone();
-            damaged["pad_source_sync_intent"] = invalid;
-            assert!(project(&damaged.to_string()).is_err());
-        }
-        for row in [0, 73, 215] {
-            for invalid in [
-                Value::Null,
-                json!({}),
-                json!({"requested":true}),
-                json!({"revision":1}),
-                json!({"requested":1,"revision":1}),
-                json!({"requested":true,"revision":true}),
-                json!({"requested":false,"revision":-1}),
-                json!({"requested":true,"revision":1.0}),
-                json!({"requested":false,"revision":1,"effective":false}),
-                json!({"requested":false,"revision":18446744073709551616.0_f64}),
-            ] {
-                let mut damaged = current.clone();
-                damaged["pad_source_sync_intent"][row] = invalid.clone();
-                assert!(
-                    project(&damaged.to_string()).is_err(),
-                    "row {row}: {invalid}"
-                );
-                let mut image = empty_slot();
-                image["source_sync_intent"] = invalid;
-                assert!(slot(&image).is_err());
-            }
-        }
     }
 
     #[test]

@@ -1,3 +1,7 @@
+> Historical diagnostic workflow. Source-map and raw-review editor integration
+> described below is removed from main. Current App BPM uses the verified neural
+> bridge described in [worker setup](beat-this-setup.md).
+
 # Offline analysis boundary
 
 B1a/B1b provide an explicitly invoked diagnostic boundary and real optional Beat

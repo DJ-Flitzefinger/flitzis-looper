@@ -31,9 +31,6 @@ const THREADING_NEVER: c_int = 0x0001_0000;
 const CHANNELS_TOGETHER: c_int = 0x1000_0000;
 const ENGINE_FINER: c_int = 0x2000_0000;
 
-#[path = "key_lock_stretcher_probe/accepted_map_comparison.rs"]
-mod accepted_map_comparison;
-
 #[derive(Clone, Copy)]
 struct OfflineKeyFrames {
     from: [u32; 2],

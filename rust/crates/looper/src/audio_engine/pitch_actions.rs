@@ -234,7 +234,6 @@ pub(crate) enum PitchActionReject {
     AlreadyPublished,
     SequenceExhausted,
     LaunchCancelled,
-    MappedTimingUnavailable,
 }
 
 impl PitchActionReject {
@@ -269,7 +268,6 @@ impl PitchActionReject {
             Self::AlreadyPublished => "already_published",
             Self::SequenceExhausted => "sequence_exhausted",
             Self::LaunchCancelled => "launch_cancelled",
-            Self::MappedTimingUnavailable => "mapped_timing_unavailable",
         }
     }
 
@@ -293,7 +291,6 @@ impl PitchActionReject {
             16 => Self::AlreadyPublished,
             17 => Self::SequenceExhausted,
             18 => Self::LaunchCancelled,
-            19 => Self::MappedTimingUnavailable,
             _ => return None,
         })
     }
@@ -308,8 +305,6 @@ impl std::fmt::Display for PitchActionReject {
 /// Source/scalar capture is control-owned; it grants no PCM custody by itself.
 pub(crate) struct PitchActionAdmission {
     pub(crate) key_lock_request: u64,
-    pub(crate) sync_request: super::source_sync_policy::SourceSyncRequest,
-    pub(crate) source_map: super::source_map_admission::SourceMapLaunchSnapshot,
     pub(crate) key: ContentKey,
     pub(crate) binding: InputPadBinding,
     pub(crate) ownership: Arc<InputRuntimeOwnership>,
@@ -330,7 +325,6 @@ pub(crate) struct PitchActionAdmission {
 
 struct PitchActionOwner {
     start_policy: Option<KeyLockStartLease>,
-    mapped: Option<Arc<super::pad_start::MappedStartSource>>,
     key_lock_request: u64,
     admission: PitchActionAdmission,
     sequence: u64,
@@ -432,73 +426,6 @@ impl CapturedPitchAction {
     pub(crate) fn key_lock_request(&self) -> u64 {
         self.owner.key_lock_request
     }
-    pub(crate) fn sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
-        let mut actual = self.requested_sync_request();
-        if self.variant() == PitchActionVariant::SetRetrigger
-            && actual.mode == super::source_sync_policy::SourceSyncMode::Mapped
-            && self.owner.mapped.is_none()
-        {
-            // Only the successful original fresh-birth admission can create this case.
-            actual.mode = super::source_sync_policy::SourceSyncMode::Legacy;
-        }
-        actual
-    }
-    pub(crate) fn requested_sync_request(&self) -> super::source_sync_policy::SourceSyncRequest {
-        self.owner.admission.sync_request
-    }
-    pub(crate) fn ordinary_pending_birth(&self) -> bool {
-        self.variant() == PitchActionVariant::SetRetrigger
-            && self.requested_sync_request().mode
-                == super::source_sync_policy::SourceSyncMode::Mapped
-            && self.owner.mapped.is_none()
-    }
-    pub(crate) fn mapped_source_owner(&self) -> Option<Arc<super::pad_start::MappedStartSource>> {
-        self.owner.mapped.clone()
-    }
-    pub(crate) fn mapped_geometry(
-        &self,
-    ) -> Option<&super::mapped_source_clock::MappedLoopGeometry> {
-        self.owner.mapped.as_ref().map(|source| source.geometry())
-    }
-    pub(crate) fn birth_observation(
-        &self,
-        execution: u64,
-        qualified: bool,
-        start: usize,
-        native: bool,
-    ) -> super::mapped_birth::MappedBirth {
-        super::mapped_birth::MappedBirth::new(
-            super::mapped_birth::BirthStatus {
-                requested: self
-                    .start_behavior()
-                    .expect("fresh birth holds its requested policy"),
-                mixed: false,
-                original: Some(self.original_due_frame()),
-                execution: Some(execution),
-                reference_qualified: qualified,
-                emitted: false,
-            },
-            self.content_key(),
-            self.owner.source_generation,
-            self.owner.source_request_incarnation,
-            start,
-            native,
-            self.owner.key_lock_request,
-        )
-    }
-    pub(crate) fn mapped_pending_guard(
-        &self,
-    ) -> Result<super::pad_start::MappedStartPendingGuard, PitchActionReject> {
-        let guard = self.callback_guard(None)?;
-        Ok(super::pad_start::MappedStartPendingGuard {
-            status: self.owner.status.clone(),
-            rejected_status: REJECTED,
-            ownership: self.owner.admission.ownership.clone(),
-            binding: guard.binding,
-            key: self.content_key(),
-            launch_cancel_revision: self.owner.launch_cancel_revision,
-        })
-    }
     pub(crate) fn capture(admission: PitchActionAdmission) -> Result<Self, PitchActionReject> {
         let id = admission
             .binding
@@ -529,20 +456,6 @@ impl CapturedPitchAction {
         let sequence =
             super::scheduler::reserve_input_order().ok_or(PitchActionReject::SequenceExhausted)?;
         let due_frame = admission.due_frame;
-        if admission.source_map.request() != admission.sync_request {
-            return Err(PitchActionReject::PreparedMismatch);
-        }
-        let mapped = if admission.spec.variant == PitchActionVariant::SetRetrigger {
-            super::pad_start::MappedStartSource::capture_launch(
-                &admission.source_map,
-                &admission.ownership,
-                admission.binding,
-                admission.loop_start_s,
-                admission.loop_end_s,
-            )?
-        } else {
-            None
-        };
         let start_policy = if admission.spec.variant == PitchActionVariant::SetRetrigger {
             Some(
                 admission
@@ -557,7 +470,6 @@ impl CapturedPitchAction {
             owner: Arc::new(PitchActionOwner {
                 key_lock_request: admission.key_lock_request,
                 start_policy,
-                mapped,
                 admission,
                 sequence,
                 source_generation,
@@ -664,15 +576,6 @@ impl CapturedPitchAction {
         let owner = &self.owner;
         let original = owner.admission.binding;
         let ownership = &owner.admission.ownership;
-        if owner.status.load(Ordering::Acquire) != APPLIED
-            && owner.mapped.is_some()
-            && ownership
-                .key_lock_request_for_cell(owner.admission.key.cell())
-                .load(Ordering::Acquire)
-                != owner.key_lock_request
-        {
-            return Err(PitchActionReject::PreparedMismatch);
-        }
         if owner.status.load(Ordering::Acquire) == REJECTED {
             return Err(PitchActionReject::StaleContent);
         }
@@ -733,13 +636,6 @@ impl CapturedPitchAction {
         }
         if !ownership.binding_window_current(id, binding) {
             return Err(PitchActionReject::WindowPending);
-        }
-        if owner
-            .mapped
-            .as_ref()
-            .is_some_and(|source| !source.current_for(ownership, binding))
-        {
-            return Err(PitchActionReject::SourceChanged);
         }
         // Pitch requests have separate epochs. Only the actual current source/window scalar
         // is projected into a new history permit; the captured pitch/attack never changes.
@@ -1037,9 +933,7 @@ pub(crate) enum PitchActionPreparationMode {
 pub(crate) struct PitchActionWork {
     pub(crate) launch_reference: super::loop_phase_reference::LoopPhaseReference,
     pub(crate) launch_qualification: super::loop_phase_reference::LaunchQualification,
-    pub(crate) mapped_timeline: Option<super::transport::TransportTimeline>,
-    mapped_ready: Option<super::mapped_birth::MappedFullBeginningReady>,
-    pub(crate) phase_launch_qualified: bool,
+    pub(crate) launch_qualified: bool,
     pub(crate) action: CapturedPitchAction,
     pub(crate) candidate: Option<Box<NativeAdapterState>>,
     render_format: (u32, usize),
@@ -1088,9 +982,7 @@ impl PitchActionWork {
         let work = Box::new(Self {
             launch_reference: super::loop_phase_reference::LoopPhaseReference::Unavailable,
             launch_qualification: super::loop_phase_reference::LaunchQualification::default(),
-            mapped_timeline: None,
-            mapped_ready: None,
-            phase_launch_qualified: false,
+            launch_qualified: false,
             action,
             candidate: None,
             render_format: (sample_rate_hz, channels),
@@ -1177,7 +1069,6 @@ impl PitchActionWork {
             .ok_or(PitchActionReject::PreparedMismatch)?;
         self.late_replan = Some((endpoint, dsp));
         self.normal_launch_origin = Some(endpoint);
-        self.mapped_ready = None;
         self.preparation_required = true;
         Ok(())
     }
@@ -1374,7 +1265,6 @@ impl PitchActionWork {
         self.execution_frozen = true;
         self.native_required = self.action.variant() == PitchActionVariant::Set
             || self.source_feed_future.is_some()
-            || (request.playback.is_mapped() && render.key_lock)
             || render
                 .pitch
                 .native_pitch_scale(request.playback.tempo_ratio(), render.key_lock)
@@ -1444,26 +1334,7 @@ impl PitchActionWork {
             {
                 return Err(PitchActionReject::SourceChanged);
             }
-            let mapped_coverage = if endpoint.playback.is_mapped() {
-                Some(
-                    request
-                        .coverage_for_replanned_mapped_birth(endpoint)
-                        .map_err(|_| PitchActionReject::PreparationFailed)?,
-                )
-            } else {
-                None
-            };
-            request.playback = endpoint.playback;
-            request.plan = endpoint.plan;
-            if let Some(coverage) = mapped_coverage {
-                request.coverage = coverage;
-            }
-            request.actual_feed = None;
             request.target_output_frame = self.action.execution_target();
-            if request.playback.is_mapped() {
-                request.mapped_input = None;
-                self.candidate = None;
-            }
             self.request = Some(request);
             self.dsp_intent = Some(dsp);
             self.attack_measurement = None;
@@ -1521,14 +1392,7 @@ impl PitchActionWork {
             self._custody.record_native_creation();
             self.candidate = Some(Box::new(NativeAdapterState::new(Some(native), channels)));
         }
-        if self.native_required && request.playback.is_mapped() {
-            request.mapped_input = Some(Box::new(
-                super::prepared_native_history::MappedNativeInput::capture_pitch(self, &request)
-                    .map_err(|_| PitchActionReject::PreparationFailed)?,
-            ));
-        }
         if self.native_required
-            && !request.playback.is_mapped()
             && self.action.start_behavior() == Some(KeyLockStartBehavior::AttackAtGrid)
             && self.preparation_mode == PitchActionPreparationMode::Endpoint
         {
@@ -1565,11 +1429,6 @@ impl PitchActionWork {
                 PitchActionPreparationMode::ForwardHistory => candidate.prepare_source(request),
             }
             .map_err(|_| PitchActionReject::PreparationFailed)?;
-            self.mapped_ready = self
-                .candidate
-                .as_ref()
-                .and_then(|candidate| candidate.source.as_ref())
-                .and_then(super::mapped_birth::MappedFullBeginningReady::capture);
         } else {
             self.request = Some(request);
         }
@@ -1635,13 +1494,6 @@ impl PitchActionWork {
             || source.epoch != self.action.epoch()
             || source.target_output_frame != output_frame
             || (self.native_required
-                && source.playback.is_mapped()
-                && self
-                    .mapped_ready
-                    .as_ref()
-                    .is_none_or(|ready| !ready.matches(source)))
-            || (self.native_required
-                && !source.playback.is_mapped()
                 && self.action.start_behavior() == Some(KeyLockStartBehavior::AttackAtGrid)
                 && self.preparation_mode == PitchActionPreparationMode::Endpoint
                 && self

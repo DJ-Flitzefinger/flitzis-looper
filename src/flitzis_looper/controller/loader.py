@@ -19,7 +19,6 @@ from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.committed_stem_residency import resident_pcm_budget_pressure
 from flitzis_looper.controller.key_metadata import KeyMetadataAnalysis
 from flitzis_looper.controller.saved_residency import saved_resident_loop
-from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.material_migration_model import MaterialCreationReceipt
@@ -33,7 +32,6 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
-from flitzis_looper.source_sync_intent import neutral_source_sync_intent
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import ProjectAssetLease
 
@@ -41,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.control_diagnostics import ConsoleDiagnostics
-    from flitzis_looper_audio import AudioEngine, LoaderEventDelivery, SourceBeatmapArtifact
+    from flitzis_looper_audio import AudioEngine, LoaderEventDelivery
 
 
 _PadValue = TypeVar("_PadValue")
@@ -489,9 +487,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._accepted_restore = AcceptedTimingRestore(
             project, session, audio, self._finish_accepted_restore
         )
-        self.source_beatmaps = SourceBeatmapSelection(
-            project, audio, self._assets, self._mark_project_changed
-        )
 
     def _bind_diagnostics(self, diagnostics: ConsoleDiagnostics) -> None:
         """Bind control diagnostics before restoration and event dispatch."""
@@ -505,14 +500,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 ("stem_generation", self._session.stem_generation_errors),
             ):
                 self._diagnostics.observe(operation, messages.get(sample_id), pad_id=sample_id)
-            self._diagnostics.observe(
-                "source_beatmap", self.source_beatmaps.errors.get(sample_id), pad_id=sample_id
-            )
-            self._diagnostics.observe(
-                "source_map_analysis",
-                self.source_beatmaps.raw_state(sample_id).error,
-                pad_id=sample_id,
-            )
 
     def _finish_accepted_restore(self, sample_id: int) -> None:
         if self._on_accepted_timing_refresh is not None:
@@ -536,7 +523,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         for sample_id in list(self._deferred_restores):
             self._cancel_deferred_restore(sample_id)
         self._accepted_restore.shut_down()
-        self.source_beatmaps.shut_down()
         for reservation in self._load_retirements.values():
             reservation.close()
         self._load_retirements.clear()
@@ -559,7 +545,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     ) -> None:
         """Share assignment and separator owners with the application controller."""
         self._assets = lifecycle
-        self.source_beatmaps.assets = lifecycle
         configure = getattr(self._audio, "configure_primary_beat_analysis", None)
         if beat_this_installation_root is not None and callable(configure):
             configure(str(beat_this_installation_root.absolute()))
@@ -758,7 +743,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         deferred = self._pair_deferred_sample_ids
         self._refresh_incoming_global_intent()
         self._accepted_restore.poll(deferred_sample_ids=deferred)
-        self.source_beatmaps.poll(deferred, admit_restore=False)
         self._poll_material_creation()
         self._assets.retry_retirements()
         handlers: dict[str, Callable[[int, dict[str, object]], None]] = {
@@ -770,8 +754,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             "task_progress": self._handle_task_progress,
             "task_success": self._handle_task_success,
             "task_error": self._handle_task_error,
-            "source_beatmap_completed": self.source_beatmaps.completed,
-            "source_beatmap_raw_completed": self.source_beatmaps.raw_completed,
         }
 
         held, self._pair_held_loader_events = self._pair_held_loader_events, []
@@ -788,10 +770,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._retry_deferred_restores()
         # Native readiness can precede this control-side source ACK's complete
         # timing/runtime refresh. Admit only after its original success delivery.
-        self.source_beatmaps.poll(
-            deferred | frozenset(self._session.loading_sample_ids),
-            automatic_deferred=frozenset(self._session.analyzing_sample_ids),
-        )
 
     def _deliver_loader_event(
         self,
@@ -860,8 +838,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                     not in {
                         "success",
                         "task_success",
-                        "source_beatmap_completed",
-                        "source_beatmap_raw_completed",
                     }
                     or str(error) != "loader event content placement pending"
                 ):
@@ -950,16 +926,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._project.sample_paths, sample_id, defaults.sample_paths[sample_id]
             ),
             _reset_pad_value(self._project.pad_content, sample_id, defaults.pad_content[sample_id]),
-            _reset_pad_value(
-                self._project.pad_source_beatmap_intent,
-                sample_id,
-                defaults.pad_source_beatmap_intent[sample_id],
-            ),
-            _reset_pad_value(
-                self._project.pad_source_sync_intent,
-                sample_id,
-                defaults.pad_source_sync_intent[sample_id],
-            ),
             _reset_pad_value(
                 self._project.sample_durations,
                 sample_id,
@@ -1112,10 +1078,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             )
             return
 
-        automatic_map = self._capture_loaded_map(event, prepared)
-        previous_map_intent = (
-            None if new_assignment else self._project.pad_source_beatmap_intent[sample_id]
-        )
         self._settle_load_request(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
         restored_assignment = not new_assignment
@@ -1126,8 +1088,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 sample_id, event, incoming, adopted, timing_stale=timing_stale
             )
             self._project.pad_key_intent[sample_id] = PadKeyIntent()
-            self._project.pad_source_beatmap_intent[sample_id] = None
-            self._project.pad_source_sync_intent[sample_id] = neutral_source_sync_intent()
             self._key_analysis.cancel(sample_id)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
@@ -1139,9 +1099,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         )
 
         self._record_completed_duration(sample_id, event)
-        self.source_beatmaps._adopt_automatic(
-            sample_id, content.instance_id, previous_map_intent, automatic_map
-        )
 
         try:
             self._assets.sync_assignments()
@@ -1173,31 +1130,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             message = "Incoming source receipt refers to an unknown intent revision"
             raise ValueError(message)
         return adopted
-
-    def _capture_loaded_map(
-        self,
-        event: dict[str, object],
-        prepared: tuple[Path, ProjectAssetLease],
-    ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None:
-        try:
-            return self.source_beatmaps._capture_automatic(event)
-        except RuntimeError:
-            if prepared[1] is not event.get("original_lease"):
-                prepared[1].release()
-            raise
-
-    def _capture_analysis_map(self, sample_id: int, event: dict[str, object]) -> None:
-        captured = self.source_beatmaps._capture_automatic(event)
-        content = self._project.pad_content[sample_id]
-        if content is not None:
-            self.source_beatmaps._adopt_automatic(
-                sample_id,
-                content.instance_id,
-                self._project.pad_source_beatmap_intent[sample_id],
-                captured,
-            )
-        elif captured is not None:
-            captured[1].retire_unselected()
 
     def _record_completed_duration(self, sample_id: int, event: dict[str, object]) -> None:
         duration_s = event.get("duration_s")
@@ -1634,7 +1566,6 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         if not self._matches_analysis_request(sample_id, event):
             return
 
-        self._capture_analysis_map(sample_id, event)
         analysis = event.get("analysis")
         parsed = _parse_sample_analysis(analysis)
         key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))

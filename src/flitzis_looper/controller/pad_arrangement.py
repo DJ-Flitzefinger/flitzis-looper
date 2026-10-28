@@ -60,8 +60,6 @@ _COPY_FIELDS = (
     "manual_bpm",
     "pad_timing_intent",
     "pad_key_intent",
-    "pad_source_beatmap_intent",
-    "pad_source_sync_intent",
     "pad_gain_db",
     "pad_eq_low_db",
     "pad_eq_mid_db",
@@ -500,9 +498,6 @@ class PadArrangementController:
     def _ensure_journal(self, copy: _Copy) -> CopyJournalOwner | None:
         initial = copy.initial_journal
         if initial is None:
-            intent = copy.snapshot.projected().source_beatmap_intent
-            if intent is not None and intent.selected is not None:
-                copy.journal_custody.acquire(self._assets, Path.cwd(), (copy.snapshot,))
             return None
         if (
             copy.journal is not None

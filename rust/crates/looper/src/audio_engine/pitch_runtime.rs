@@ -63,15 +63,6 @@ pub(crate) struct PitchRuntime {
     endpoint: OrdinaryEndpointReserve,
 }
 
-#[cfg(test)]
-pub(super) struct PreparedMappedBirthWitness {
-    pub(super) checkpoint: super::prepared_native_history::SourceReadCheckpoint,
-    pub(super) reference: super::loop_phase_reference::LoopPhaseReference,
-    pub(super) permit: super::native_history_permit::NativeHistoryPermitIdentity,
-    pub(super) stamp: (u64, usize, u64, u64, u64),
-    pub(super) complete_beginning: bool,
-}
-
 fn retire(work: PreparedActionWork, retirement: &mut impl AudioBufferRetirement) {
     match work {
         PreparedActionWork::Pitch(work) => retirement.retire_pitch_action(work),
@@ -330,32 +321,6 @@ impl PitchRuntime {
                 .map(|native| native.state_address())
         })
     }
-    #[cfg(test)]
-    pub(super) fn ready_mapped_birth_for_test(
-        &self,
-        sequence: u64,
-    ) -> Option<PreparedMappedBirthWitness> {
-        let slot = self.slots.iter().find(|slot| slot.sequence == sequence)?;
-        let work = slot.work.as_ref().filter(|work| work.is_ready())?;
-        let (candidate, reference) = match work {
-            PreparedActionWork::Ordinary(work) => {
-                (work.candidate.as_ref()?, work.launch_reference())
-            }
-            PreparedActionWork::Pitch(work) => (work.candidate.as_ref()?, work.launch_reference),
-        };
-        let request = candidate.source.as_ref()?;
-        Some(PreparedMappedBirthWitness {
-            checkpoint: super::prepared_native_history::SourceReadCheckpoint {
-                playback: request.playback,
-                plan: request.plan,
-            },
-            reference,
-            permit: request.permit.scalar_identity(),
-            stamp: candidate.mapped_pitch_witness_for_test()?,
-            complete_beginning: candidate
-                .mapped_birth_first_output_ready(&request.playback, request.plan),
-        })
-    }
     pub(crate) fn new() -> std::io::Result<(Self, PitchActionPreparationWorker)> {
         let (preparation, worker) = PitchActionPreparation::new(MAX_PITCH_ACTIONS)?;
         let slots = (0..MAX_PITCH_ACTIONS)
@@ -449,9 +414,6 @@ impl PitchRuntime {
         retirement: &mut impl AudioBufferRetirement,
     ) {
         if work.action.variant() == super::pitch_actions::PitchActionVariant::SetRetrigger {
-            if work.action.mapped_geometry().is_some() {
-                work.mapped_timeline = timeline;
-            }
             work.launch_qualification =
                 super::loop_phase_reference::LaunchQualification::capture(timeline, callback);
             work.launch_reference = super::loop_phase_reference::LoopPhaseReference::capture(
@@ -551,7 +513,7 @@ impl PitchRuntime {
                 .origin()
                 .target_frame()
                 .ok_or(PitchActionReject::TimingUnavailable)?;
-            work.freeze_mapped_clock(timeline, original, callback)?;
+            work.freeze_launch_clock(timeline, original, callback)?;
             let required = mixer.requires_ordinary_start_preparation(&work)?;
             let hit = required
                 && original >= callback
@@ -632,7 +594,7 @@ impl PitchRuntime {
             }
             let mut required = false;
             for work in group.work.iter_mut().flatten() {
-                work.freeze_mapped_clock(timeline, original, callback)?;
+                work.freeze_launch_clock(timeline, original, callback)?;
             }
             for work in &group.work {
                 required |= mixer.requires_ordinary_start_preparation(
@@ -795,12 +757,7 @@ impl PitchRuntime {
             self.slots[index].group = Some(group);
             return false;
         }
-        let projection_changed = group
-            .work
-            .iter()
-            .flatten()
-            .any(|work| work.validate_mapped_timeline(timeline).is_err());
-        if frame > expected || preceding.is_some() || projection_changed {
+        if frame > expected || preceding.is_some() {
             // Plans hold only the retained original physical source checkpoint.
             // No original E/status changes until all member plans have succeeded.
             let mut plans: [Option<(
@@ -863,9 +820,6 @@ impl PitchRuntime {
                     work.as_mut()
                         .unwrap()
                         .plan_late_reprepare(endpoint, intent, execution)?;
-                    if work.as_ref().unwrap().mapped_timeline.is_some() {
-                        work.as_mut().unwrap().mapped_timeline = timeline;
-                    }
                 }
                 Ok(())
             })();
@@ -898,21 +852,14 @@ impl PitchRuntime {
         for work in group.work.iter_mut().flatten() {
             work.qualify_phase_launch_at(timeline, frame);
         }
-        let epoch_current = group
-            .work
-            .iter()
-            .flatten()
-            .try_for_each(|work| work.validate_mapped_timeline(timeline));
-        let result = epoch_current.and_then(|()| {
-            mixer.execute_ordinary_global_start(
-                &mut group.work,
-                &group.batch,
-                key,
-                frame,
-                messages,
-                retirement,
-            )
-        });
+        let result = mixer.execute_ordinary_global_start(
+            &mut group.work,
+            &group.batch,
+            key,
+            frame,
+            messages,
+            retirement,
+        );
         if matches!(
             result,
             Err(PitchActionReject::PlacementPending | PitchActionReject::WindowPending)
@@ -1000,18 +947,7 @@ impl PitchRuntime {
                 frame: expected,
             };
         }
-        let projection_changed = match slot.work.as_ref().unwrap() {
-            PreparedActionWork::Ordinary(work) => work.validate_mapped_timeline(timeline).is_err(),
-            PreparedActionWork::Pitch(work) => work.mapped_timeline.is_some_and(|original| {
-                timeline.is_none_or(|current| {
-                    original
-                        .beat_projection()
-                        .is_none_or(|projection| !projection.matches_timeline(&current))
-                })
-            }),
-        };
-        if (frame > expected && slot.independent_birth) || preceding.is_some() || projection_changed
-        {
+        if (frame > expected && slot.independent_birth) || preceding.is_some() {
             let next = Self::next_replan(slot, frame).and_then(|execution| {
                 if !self.preparation.preparation_available() {
                     return Err(PitchActionReject::Capacity);
@@ -1062,7 +998,7 @@ impl PitchRuntime {
                 if work.action.state() == "rejected" {
                     Err(PitchActionReject::PreparationFailed)
                 } else {
-                    work.phase_launch_qualified =
+                    work.launch_qualified =
                         work.launch_qualification
                             .at_effect(work.launch_reference, timeline, frame);
                     mixer.execute_pitch_action(work, frame, messages, retirement)
@@ -1073,9 +1009,7 @@ impl PitchRuntime {
                     Err(PitchActionReject::PreparationFailed)
                 } else {
                     work.qualify_phase_launch_at(timeline, frame);
-                    work.validate_mapped_timeline(timeline).and_then(|()| {
-                        mixer.execute_ordinary_start(work, frame, messages, retirement)
-                    })
+                    mixer.execute_ordinary_start(work, frame, messages, retirement)
                 }
             }
         };

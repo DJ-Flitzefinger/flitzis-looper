@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from flitzis_looper import source_beatmap_intent, stem_intent
+from flitzis_looper import stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
@@ -52,22 +52,13 @@ from flitzis_looper.material_migration_model import (
     MigrationID,
 )
 from flitzis_looper.recording_options import RecordingOptions
-from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
 from flitzis_looper.stem_execution import StemExecution
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
-from flitzis_looper.timing_policy import (
-    GlobalTimingPolicy,
-    neutral_global_timing_policy,
-    source_sync_preference,
-    source_sync_requested,
-    variable_source_timing,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
 
 MIGRATION_ID_ADAPTER: TypeAdapter[str] = TypeAdapter(MigrationID)
 
@@ -333,16 +324,6 @@ def _default_pad_timing_intent() -> list[TimingIntent]:
 
 def _default_pad_key_intent() -> list[PadKeyIntent]:
     return [PadKeyIntent() for _ in range(NUM_SAMPLES)]
-
-
-def _default_pad_source_beatmap_intent() -> list[
-    source_beatmap_intent.PadSourceBeatmapIntent | None
-]:
-    return [None] * NUM_SAMPLES
-
-
-def _default_pad_source_sync_intent() -> list[PadSourceSyncIntent]:
-    return [neutral_source_sync_intent() for _ in range(NUM_SAMPLES)]
 
 
 def _default_pad_gain_db() -> list[float]:
@@ -631,57 +612,9 @@ class ProjectState(BaseModel):
     )
     """Durable per-content key metadata and neutral pitch intent; no native permits."""
 
-    pad_source_beatmap_intent: list[PadSourceBeatmapIntent | None] = Field(
-        default_factory=_default_pad_source_beatmap_intent,
-        min_length=NUM_SAMPLES,
-        max_length=NUM_SAMPLES,
-    )
-    """Compact content-owned map requests; saved references never grant Native authority."""
-
-    pad_source_sync_intent: list[PadSourceSyncIntent] = Field(
-        default_factory=_default_pad_source_sync_intent,
-        min_length=NUM_SAMPLES,
-        max_length=NUM_SAMPLES,
-    )
-    """Independent content-owned SYNC requests; callback adoption remains separate."""
-
-    global_timing_policy: GlobalTimingPolicy = Field(default_factory=neutral_global_timing_policy)
-    """Global matching/tracking choices; historical absence preserves prior PAD behavior."""
-
-    _timing_policy_recovery: bool = PrivateAttr(default=False)
-
-    @property
-    def timing_policy_recovery(self) -> bool:
-        """Expose the load quarantine without serializing it or deriving it from valid intent."""
-        return self._timing_policy_recovery
-
-    def quarantine_timing_policy(self) -> None:
-        """Latch malformed-policy recovery for this model's lifetime."""
-        self._timing_policy_recovery = True
-
     def resolve_bpm_lock(self) -> bool:
-        """Resolve qualified requested parents, independently of callback acknowledgement."""
-        return self.multi_loop and self.bpm_lock and not self._timing_policy_recovery
-
-    def resolve_pad_source_sync(self, sample_id: int) -> bool:
-        """Resolve the global gate and durable PAD preference without claiming adoption."""
-        validate_sample_id(sample_id)
-        return self.resolve_bpm_lock() and source_sync_requested(
-            self.global_timing_policy, self.pad_source_sync_intent[sample_id]
-        )
-
-    def resolve_pad_realtime_bpm(self, sample_id: int) -> bool:
-        """Resolve variable timing only when the complete requested hierarchy is available."""
-        return self.resolve_pad_source_sync(sample_id) and variable_source_timing(
-            self.global_timing_policy
-        )
-
-    def pad_source_sync_preference(self, sample_id: int) -> bool:
-        """Retain the independent PAD choice while global matching is switched off."""
-        validate_sample_id(sample_id)
-        return source_sync_preference(
-            self.global_timing_policy, self.pad_source_sync_intent[sample_id]
-        )
+        """Resolve ordinary tempo matching under its Multi Loop parent."""
+        return self.multi_loop and self.bpm_lock
 
     # Mypy cannot yet type Pydantic's computed-field decorator over a property.
     @field_validator("material_migrations")
@@ -936,11 +869,6 @@ class ProjectState(BaseModel):
                 msg = f"pad_grid_anchor_s values must be None or finite and >= 0.0, got {anchor_s}"
                 raise ValueError(msg)
         return value
-
-
-ProjectState.model_rebuild(
-    _types_namespace={"PadSourceBeatmapIntent": source_beatmap_intent.PadSourceBeatmapIntent}
-)
 
 
 def _default_pad_playhead_s() -> list[float | None]:

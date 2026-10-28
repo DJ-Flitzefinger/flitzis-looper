@@ -62,7 +62,7 @@ The system SHALL assign deterministic item tags to each pad and bank control to 
 - **THEN** the MultiLoop control exists with tag `multiloop_btn`
 
 ### Requirement: MultiLoop Toggle Control
-The system SHALL provide a MultiLoop toggle control in the right performance sidebar directly below Key Lock. The control group SHALL appear in the order Key Lock, Multi Loop, BPM Lock, SYNC, Realtime BPM, retain the stable MultiLoop tag and use the original controller/Learn actions. Dependent controls SHALL show retained preferences while unavailable under the MultiLoop/BPM-Lock/SYNC hierarchy; actual mode, pending adoption and unconfirmed grid phase SHALL remain separate observations.
+The system SHALL provide a MultiLoop toggle control in the right performance sidebar directly below Key Lock. The control group SHALL appear in the order Key Lock, Multi Loop, BPM Lock, retain the stable MultiLoop tag and use the original controller/Learn actions. BPM Lock SHALL depend on Multi Loop. Source SYNC, REALTIME BPM and their editor controls SHALL be absent.
 
 #### Scenario: MultiLoop control is visible
 - **WHEN** the UI is started
@@ -70,7 +70,7 @@ The system SHALL provide a MultiLoop toggle control in the right performance sid
 
 #### Scenario: Timing controls follow the requested hierarchy
 - **WHEN** the UI is started
-- **THEN** Key Lock, Multi Loop, BPM Lock, SYNC and Realtime BPM SHALL appear in that order in the right sidebar
+- **THEN** Key Lock, Multi Loop and BPM Lock SHALL appear in that order in the right sidebar
 - **AND** the old bottom-bar MultiLoop button SHALL NOT be duplicated
 
 #### Scenario: MultiLoop control indicates enabled state

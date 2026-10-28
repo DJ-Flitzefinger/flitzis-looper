@@ -65,22 +65,20 @@ active source anchors. Any downbeat frame exposed to existing diagnostics is der
 
 ### One-time selected-reference bootstrap
 
-`bootstrap_transport_from_pad(id)` is a dedicated bounded control request emitted by the shared
-BPMLOCK selected-reference setup used on enable and restore. Rust latches the first accepted
-reference per stream. When that pad is active with valid signed grid/BPM metadata, transport
-musical position is anchored to its absolute source beat at the current output frame. If the pad
-or metadata is unavailable, bootstrap remains pending and retries at successful start or relevant
-metadata publication after the bounded callback message/parameter batch; it does not choose another
-playing/oldest pad.
+Source-qualified BPMLOCK setup and acknowledged accepted-timing refreshes arm the internal
+one-time bootstrap through the existing source/ownership checks. No public unqualified phase-anchor
+or bootstrap command remains. When the qualified reference is active with valid signed grid/BPM
+metadata, transport musical position is anchored to its absolute source beat at the current output
+frame. If the pad or metadata is unavailable, bootstrap remains pending and retries at successful
+start or relevant metadata publication after the bounded callback message/parameter batch; it does
+not choose another playing/oldest pad.
 
-Further reference requests cannot replace a latched reference. Unloading an incomplete reference
-clears that pending reference, leaving bootstrap unused; a later explicit reference request can
-select another pad. Successful bootstrap consumes the opportunity permanently for that stream.
-Silence, stop/restart, reference changes, wraps and stem masks cannot rearm it. Explicit
-`anchor_transport_phase_from_pad(id)` remains a deliberate repeatable operation; success also
-consumes bootstrap. A fresh stream has a fresh unused opportunity. Neither runtime latch nor
-transport phase is persisted. Bootstrap changes transport phase without resetting the output-frame
-clock or seeking/retriggering existing voices.
+A qualified accepted-timing refresh may requalify its pending reference through the same owner.
+Unloading an incomplete reference clears that pending reference, leaving bootstrap unused.
+Successful bootstrap consumes the opportunity permanently for that stream. Silence, stop/restart,
+reference changes, wraps and stem masks cannot rearm it. A fresh stream has a fresh unused
+opportunity. Neither runtime latch nor transport phase is persisted. Bootstrap changes transport
+phase without resetting the output-frame clock or seeking/retriggering existing voices.
 
 Accepted loop edits invalidate a voice's old source/output timeline anchor. Bootstrap phase reads
 and rendering share bounded `playhead_before_render` normalization: normal positions outside the
@@ -120,7 +118,7 @@ Test positive/negative origins, near-zero and fractional BPM, 44.1/48 kHz source
 manual overrides/clear and restore. Cover loop-start phase, half-open wrapping, unequal whole-bar
 lengths, evenly tiling short loops, exact musical-period wrapping, one-frame tolerance and unavailable
 metadata. Test bootstrap request latching, delayed
-availability, missing/unloaded reference, no rearm after silence and deliberate sync. Test complete
+availability, missing/unloaded reference and no rearm after silence. Test complete
 beat continuity through BPM changes and stable accepted target/sequence/stamp across metadata edits.
 Run official strict OpenSpec validation plus full project checks and maintained-doc impact review.
 Keep generated audio/logs in local workspace scratch/exports. No commit or push follows automatically.

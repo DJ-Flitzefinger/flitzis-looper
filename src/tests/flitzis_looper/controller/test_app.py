@@ -14,7 +14,7 @@ from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     _bind_fixture_source_identity,
     _master_provenance,
 )
@@ -237,7 +237,6 @@ def test_controller_clears_missing_restored_sample_before_audio_projection(
     assert call(0, 123.0) not in audio_engine_mock.set_pad_bpm.call_args_list
     audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.set_master_period.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_recovery_held_missing_assignment_is_retained_without_startup_control_or_master_projection(
@@ -293,7 +292,6 @@ def test_recovery_held_missing_assignment_is_retained_without_startup_control_or
     assert app.session.bpm_lock_anchor_pad_id is None
     audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.set_master_period.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def _restored_bpm_receipt(audio: Mock, manual_bpm: float | None) -> dict[str, object]:
@@ -399,7 +397,6 @@ def test_restore_republishes_signed_grid_and_preserves_loop_markers(
     audio_engine_mock.set_pad_bpm.assert_called_with(1, manual_bpm)
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(1, expected_origin_s)
     audio_engine_mock.set_bpm_lock.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
     assert restored.session.master_period_seconds is None
     assert restored.transport.loop.grid_anchor_sec(1) == expected_origin_s
     audio_engine_mock.reset_mock()
@@ -430,8 +427,6 @@ def test_restore_republishes_signed_grid_and_preserves_loop_markers(
         _observe_restored_bpm_effect(restored, audio_engine_mock, receipt, manual_bpm)
     audio_engine_mock.set_master_period.assert_not_called()
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_controller_shut_down_flushes_persistence(controller: AppController) -> None:

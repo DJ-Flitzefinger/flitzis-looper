@@ -16,7 +16,6 @@ pub(crate) use bpm_lock::BpmLockTarget;
 #[path = "mixer/hold_action.rs"]
 mod hold_action;
 mod key_lock_tuple;
-mod mapped_continuation;
 mod ordinary_global;
 mod ordinary_start;
 #[path = "mixer/pad_copy.rs"]
@@ -25,9 +24,7 @@ mod pad_copy;
 mod pad_pair;
 #[path = "mixer/pitch_action.rs"]
 mod pitch_action;
-mod policy_retry;
 mod retained_stems;
-mod scalar_policy;
 
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
@@ -81,17 +78,8 @@ type MixerSourceOwners = (
     Vec<Arc<AtomicU64>>,
 );
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SnapshotKind {
-    Pitch,
-    GlobalRate,
-    RawScalarPolicy,
-}
-
 #[path = "mixer_loop_acceptance.rs"]
 mod loop_acceptance_snapshot;
-#[path = "mixer_sync_diagnostics.rs"]
-mod sync_diagnostic_snapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
@@ -301,8 +289,6 @@ pub struct RtMixer {
     /// Fixed accepted binary64 source projection; legacy numbers stay separate.
     pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
-    runtime_policy_retry: Option<Box<policy_retry::PolicyRetryPublisher>>,
-    diagnostic_request_id: u64,
 
     /// Fixed callback-owned publication epochs shared with the control resolver.
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -381,16 +367,6 @@ pub(crate) struct PreparedLoopEdit {
 }
 
 impl RtMixer {
-    /// Each mapped voice retains one original launch owner in addition to the
-    /// existing input and two frozen stem readers. Scalar voices keep their
-    /// established retirement admission, including exclusive preflight retries.
-    pub(crate) fn mapped_owner_retirement_slots(&self) -> usize {
-        self.voices
-            .iter()
-            .filter(|voice| voice.mapped_start.is_some())
-            .count()
-    }
-
     fn observe_dsp_inputs(&mut self, frame: u64) {
         for id in 0..NUM_SAMPLES {
             if let Some(key) = self
@@ -584,20 +560,16 @@ impl RtMixer {
     }
 
     pub(crate) fn capture_pitch_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
-        self.capture_voice_snapshot(index, SnapshotKind::Pitch)
+        self.capture_voice_snapshot(index)
     }
 
     /// The global dry-rate claim alone may capture an existing mapped trajectory.
     /// Generic pitch/Key-Lock/history callers keep their established mapped refusal.
     fn capture_rate_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
-        self.capture_voice_snapshot(index, SnapshotKind::GlobalRate)
+        self.capture_voice_snapshot(index)
     }
 
-    fn capture_voice_snapshot(
-        &self,
-        index: usize,
-        kind: SnapshotKind,
-    ) -> Option<PitchSourceSnapshot> {
+    fn capture_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
         let voice = self.voices.get(index).filter(|voice| voice.active)?;
         let sample = voice.sample.as_ref()?;
         let id = voice.sample_id;
@@ -606,27 +578,12 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
-        if playback.is_mapped() {
-            if !matches!(
-                kind,
-                SnapshotKind::GlobalRate | SnapshotKind::RawScalarPolicy
-            ) {
-                return None;
-            }
-            let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
-            if region != geometry.domain().region
-                || !playback.matches_domain(geometry.domain())
-                || playback.refresh_mapped_span(geometry).is_err()
-            {
-                return None;
-            }
-        } else if kind != SnapshotKind::RawScalarPolicy
-            && (!playback.set_target(self.tempo_ratio_for_voice(voice)?)
-                || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)))
+        if (!playback.set_target(self.tempo_ratio_for_voice(voice)?)
+            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)))
         {
             return None;
         }
-        if kind != SnapshotKind::RawScalarPolicy {
+        {
             playback.chunk(DEFAULT_BLOCK_SAMPLES);
         }
         let frozen = voice.frozen_stems.as_ref().filter(|_| {
@@ -1009,8 +966,6 @@ impl RtMixer {
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_accepted_timing: std::array::from_fn(|_| None),
             input_runtime_ownership,
-            runtime_policy_retry: None,
-            diagnostic_request_id: 0,
             current_timing_acknowledgements,
             prepared_source_epochs,
             source_control_revisions: [0; NUM_SAMPLES],
@@ -1062,7 +1017,6 @@ impl RtMixer {
     ) {
         ownership.key_lock_start_policy.invalidate_admission();
         self.input_runtime_ownership = ownership;
-        self.register_runtime_policy_retry_publisher();
     }
 
     pub(crate) fn begin_key_lock_start_control_drain(&mut self) {
@@ -1389,25 +1343,6 @@ impl RtMixer {
     }
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
-        if self.voices.iter().any(|voice| {
-            voice.is_playing_sample(id)
-                && voice.source_playback.is_mapped()
-                && voice.sample.as_ref().is_some_and(|sample| {
-                    self.sample_bank[id]
-                        .as_ref()
-                        .is_some_and(|bank| bank.same_source(sample))
-                        && voice
-                            .mapped_start
-                            .as_ref()
-                            .and_then(|owner| owner.mapped_geometry())
-                            .is_none_or(|geometry| {
-                                effective_loop_region(start, end, sample.frame_count())
-                                    != Some(geometry.domain().region)
-                            })
-                })
-        }) {
-            return false;
-        }
         if self.outgoing_stems[id].is_some()
             && self.stem_transitions[id].is_active()
             && (self.pad_loop_start_frame[id] != start || self.pad_loop_end_frame[id] != end)
@@ -1547,9 +1482,6 @@ impl RtMixer {
     }
 
     fn key_lock_context_available(&self, id: usize) -> bool {
-        if self.mapped_voice_active(id) {
-            return false;
-        }
         let full = |sample: &SampleBuffer| {
             sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()
         };
@@ -1833,17 +1765,6 @@ impl RtMixer {
 
     /// Fixed voice scan; retirement/readiness admission precedes every physical cut.
     fn loop_cut_available(&self, id: usize, sample: &SampleBuffer, region: FrameRange) -> bool {
-        if self.voices.iter().any(|voice| {
-            voice.is_playing_sample(id)
-                && voice.source_playback.is_mapped()
-                && voice
-                    .mapped_start
-                    .as_ref()
-                    .and_then(|owner| owner.mapped_geometry())
-                    .is_none_or(|geometry| geometry.domain().region != region)
-        }) {
-            return false;
-        }
         !self.pad_pitch_processing_enabled(id)
             || self
                 .voices
@@ -2545,21 +2466,6 @@ impl RtMixer {
             retirement.retire_resident_transaction(transaction);
             return false;
         };
-        if self.mapped_voice_active(id)
-            && (transaction.intent.seek_position_s.is_some()
-                || transaction.intent.loop_region.is_some()
-                || transaction.intent.key_lock.is_some())
-        {
-            transaction.publication.mark_rejected();
-            self.input_runtime_ownership
-                .finish_resident_control_for_binding(
-                    id,
-                    transaction.binding,
-                    transaction.publication.expected,
-                );
-            retirement.retire_resident_transaction(transaction);
-            return false;
-        }
         // A previous storage claim retains its original mode owner through final settlement.
         // Let render polling retire that owner before another storage transaction can claim
         // this pad, including when the normal retirement queue/backlog is saturated.
@@ -3264,8 +3170,9 @@ impl RtMixer {
                             if !unchanged {
                                 // Geometry is claimed now, even if rendering observes it later.
                                 // Keep copied Native checkpoint identity on a no-cut edit.
-                                voice.phase_launch_qualified = false;
-                                voice.phase_birth_unadvanced = false;
+
+                                voice.launch_qualified = false;
+                                voice.launch_unadvanced = false;
                                 voice.clear_explicit_seek();
                             }
                         }
@@ -3759,30 +3666,6 @@ impl RtMixer {
             .any(|voice| voice.active && voice.sample_id == id)
     }
 
-    fn mapped_voice_active(&self, id: usize) -> bool {
-        self.voices
-            .iter()
-            .any(|voice| voice.is_playing_sample(id) && voice.source_playback.is_mapped())
-    }
-
-    pub(crate) fn has_mapped_voice(&self) -> bool {
-        self.voices
-            .iter()
-            .any(|voice| voice.active && voice.source_playback.is_mapped())
-    }
-
-    pub(crate) fn has_static_phase_voice(&self) -> bool {
-        self.voices
-            .iter()
-            .any(|voice| voice.active && voice.source_playback.is_static_phase())
-    }
-
-    fn static_phase_voice_active(&self, id: usize) -> bool {
-        self.voices
-            .iter()
-            .any(|voice| voice.is_playing_sample(id) && voice.source_playback.is_static_phase())
-    }
-
     fn finite_key_lock_voice_active(&self, id: usize) -> bool {
         self.pad_pitch_processing_enabled(id)
             && self.voices.iter().any(|voice| {
@@ -3815,9 +3698,6 @@ impl RtMixer {
         }
         if previous == next {
             return true;
-        }
-        if self.static_phase_voice_active(id) {
-            return false;
         }
         let transition = StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
         if !self.retained_stem_selection_available(id, next, transition) {
@@ -3930,7 +3810,7 @@ impl RtMixer {
                         .frozen_stems
                         .as_ref()
                         .is_some_and(|view| view.outgoing.is_some()),
-                ) + usize::from(voice.mapped_start.is_some())
+                )
             });
         needed == 0 || retirement.available_retirement_slots() >= needed
     }
@@ -4137,9 +4017,6 @@ impl RtMixer {
         start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> Option<VoiceStartConfig> {
-        if self.mapped_voice_active(id) {
-            return None;
-        }
         if id >= NUM_SAMPLES || !self.can_adopt_sample(id, retirement) {
             return None;
         }
@@ -4203,9 +4080,6 @@ impl RtMixer {
         config: VoiceStartConfig,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
-        if self.mapped_voice_active(config.sample_id) {
-            return false;
-        }
         let id = config.sample_id;
         let ordinary_key = config
             .source_admission
@@ -4273,20 +4147,6 @@ impl RtMixer {
         self.voice_pitch_intent[voice_index] = self.pad_pitch_intent[id];
         self.voice_key_lock[voice_index] = self.pad_key_lock_enabled[id];
         if self.pad_key_lock_enabled[id]
-            && self.voices[voice_index].source_playback.is_mapped()
-            && self.voices[voice_index]
-                .mapped_birth
-                .is_some_and(|birth| birth.native)
-        {
-            // The complete birth claim already installed this exact domain and Native/FIFO.
-            // Readiness still waits for its own first successful mixed interval, even at unity.
-            self.pad_key_lock_pending_on[id] = true;
-            self.pad_key_lock_rejected[id] =
-                !self.mapped_birth_key_lock_voice_available(voice_index, true);
-            self.publish_key_lock_status(id);
-            return;
-        }
-        if self.pad_key_lock_enabled[id]
             && self.pad_key_lock_request_id[id] != 0
             && self.pad_pitch_intent[id].total_semitones() == 0
         {
@@ -4353,12 +4213,7 @@ impl RtMixer {
             return;
         }
 
-        if self
-            .voices
-            .iter()
-            .any(|voice| voice.active && voice.source_playback.is_mapped())
-            || self.refuse_legacy_global_rate_if_pending()
-        {
+        if self.refuse_legacy_global_rate_if_pending() {
             return;
         }
 
@@ -4369,12 +4224,7 @@ impl RtMixer {
 
     #[cfg(test)]
     pub fn set_bpm_lock(&mut self, enabled: bool) {
-        if self
-            .voices
-            .iter()
-            .any(|voice| voice.active && voice.source_playback.is_mapped())
-            || self.refuse_legacy_global_rate_if_pending()
-        {
+        if self.refuse_legacy_global_rate_if_pending() {
             return;
         }
         self.invalidate_source_for_all();
@@ -4479,64 +4329,6 @@ impl RtMixer {
         self.publish_key_lock_status(id);
     }
 
-    /// Recheck pending voices at the render boundary. A failed new ON never replaces the dry
-    /// feed, source position, or EQ history; confirmed wet modes retain their own baseline.
-    fn mapped_birth_key_lock_voice_available(&self, index: usize, first_only: bool) -> bool {
-        let voice = &self.voices[index];
-        let id = voice.sample_id;
-        let Some(birth) = voice.mapped_birth else {
-            return false;
-        };
-        let Some(sample) = voice.sample.as_ref() else {
-            return false;
-        };
-        if !voice.active
-            || !birth.native
-            || !self.voice_key_lock[index]
-            || !voice.source_playback.is_mapped()
-            || voice.source_playback.has_phase_program()
-            || self.input_runtime_ownership.callback_key_slot(birth.key) != Some(id)
-            || self
-                .input_runtime_ownership
-                .key_source_request_incarnation(birth.key)
-                != Some(birth.source_request_incarnation)
-            || !voice.source_admission.as_ref().is_some_and(|admission| {
-                admission.content_key() == Some(birth.key)
-                    && admission.retry_identity().source_generation == birth.source_generation
-                    && admission.current_for_birth(
-                        &self.input_runtime_ownership,
-                        &self.current_timing_acknowledgements,
-                        sample,
-                        self.sample_rate_hz as u32,
-                        false,
-                    )
-            })
-            || !voice
-                .stretch
-                .owns_pitch_contract(self.voice_pitch_intent[index], true)
-            || voice.stretch.wet_mode_failed()
-        {
-            return false;
-        }
-        if !first_only && birth.status.emitted {
-            return voice.stretch.wet_render_ready();
-        }
-        if !birth.first_pending()
-            || voice.paused
-            || (first_only && birth.key_lock_request != self.pad_key_lock_request_id[id])
-        {
-            return false;
-        }
-        // Generic pitch capture intentionally refuses mapped voices. Borrow only the
-        // existing raw snapshot and require this owner's exact C0/H/D proof below.
-        self.capture_voice_snapshot(index, SnapshotKind::RawScalarPolicy)
-            .is_some_and(|snapshot| {
-                voice
-                    .stretch
-                    .mapped_birth_first_output_ready(&snapshot.playback, snapshot.plan)
-            })
-    }
-
     fn preflight_pending_key_lock(&mut self) {
         let mut pending = RtRenderPadActivity::default();
         for voice in &self.voices {
@@ -4545,28 +4337,6 @@ impl RtMixer {
             }
         }
         for id in pending.iter() {
-            if self.mapped_voice_active(id) {
-                let current = self
-                    .voices
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, voice)| voice.active && voice.sample_id == id)
-                    .all(|(index, voice)| {
-                        if voice.source_playback.is_mapped() {
-                            self.mapped_birth_key_lock_voice_available(index, false)
-                        } else {
-                            self.normal_key_lock_pinned_voice_available(id, voice)
-                                && voice.stretch.wet_mode_armed()
-                                && !voice.stretch.wet_mode_failed()
-                        }
-                    });
-                if !current {
-                    // A rejected later request or unavailable member cannot destroy old actual audio.
-                    self.pad_key_lock_rejected[id] = true;
-                    self.publish_key_lock_status(id);
-                }
-                continue;
-            }
             if !self.key_lock_context_available(id)
                 || self
                     .voices
@@ -4581,25 +4351,6 @@ impl RtMixer {
 
     fn finish_pending_key_lock(&mut self, id: usize) {
         if !self.pad_key_lock_pending_on[id] {
-            return;
-        }
-        if self.mapped_voice_active(id) {
-            let ready = self
-                .voices
-                .iter()
-                .enumerate()
-                .filter(|(_, voice)| voice.active && voice.sample_id == id)
-                .all(|(index, voice)| {
-                    if voice.source_playback.is_mapped() {
-                        voice.mapped_birth.is_some_and(|birth| birth.status.emitted)
-                            && self.mapped_birth_key_lock_voice_available(index, false)
-                    } else {
-                        !voice.paused && voice.stretch.wet_output_ready()
-                    }
-                });
-            if ready {
-                self.pad_key_lock_pending_on[id] = false;
-            }
             return;
         }
         let mut ready = true;
@@ -4761,14 +4512,6 @@ impl RtMixer {
             .input_runtime_ownership
             .binding_source_generation(id, binding)
             .map(|generation| (generation, binding.source_address));
-        if (self.mapped_voice_active(id) || self.static_phase_voice_active(id))
-            && enabled != self.pad_key_lock_enabled[id]
-        {
-            self.queued_key_lock_tuples[id] = None;
-            self.pad_key_lock_rejected[id] = true;
-            self.publish_key_lock_status(id);
-            return;
-        }
         if self.key_lock_tuple_needs_preparation(id, enabled) {
             self.queued_key_lock_tuples[id] = Some(key_lock_tuple::KeyLockTupleRequest {
                 enabled,
@@ -4832,7 +4575,6 @@ impl RtMixer {
     }
 
     fn publish_key_lock_status(&mut self, id: usize) {
-        self.publish_source_sync_status(id);
         if self.pad_key_lock_ack_source[id].is_none() {
             return;
         }
@@ -4872,13 +4614,6 @@ impl RtMixer {
                 saw_voice = true;
                 all_paused &= voice.paused;
                 native_failed |= voice.stretch.wet_mode_failed();
-                if voice.source_playback.is_mapped() {
-                    ready &= voice.mapped_birth.is_some_and(|birth| {
-                        birth.native
-                            && birth.status.emitted
-                            && birth.key_lock_request == self.pad_key_lock_request_id[id]
-                    });
-                }
                 if voice.paused {
                     ready &= voice.stretch.wet_mode_armed();
                 } else if self.pad_pitch_intent[id]
@@ -4914,16 +4649,7 @@ impl RtMixer {
             source_address: sample.source_address(),
             window_revision: sample.window_revision(),
             request_id: self.pad_key_lock_request_id[id],
-            effective: enabled
-                && (!self.pad_key_lock_pending_on[id] || !saw_voice || all_paused)
-                && !self.voices.iter().any(|voice| {
-                    voice.active
-                        && voice.sample_id == id
-                        && voice.source_playback.is_mapped()
-                        && voice
-                            .mapped_birth
-                            .is_some_and(|birth| birth.native && !birth.status.emitted)
-                }),
+            effective: enabled && (!self.pad_key_lock_pending_on[id] || !saw_voice || all_paused),
             ready,
             state,
             error: (state == "error").then_some("Key Lock native processing is unavailable"),
@@ -4933,285 +4659,6 @@ impl RtMixer {
                 .publish_callback_key_lock_status(id, status);
             self.pad_key_lock_status[id] = Some(status);
         }
-    }
-
-    pub(super) fn publish_source_sync_status(&self, id: usize) {
-        let Some(sample) = self.sample_bank[id].as_ref() else {
-            return;
-        };
-        let Some(key) = self.input_runtime_ownership.callback_feedback_key(id) else {
-            return;
-        };
-        let Some(source_generation) = self.input_runtime_ownership.callback_source_generation(
-            id,
-            sample,
-            self.sample_rate_hz as u32,
-        ) else {
-            return;
-        };
-        let mut active = false;
-        let mut coherent = true;
-        let mut witness = None;
-        let mut policy_coherent = true;
-        let mut policy: Option<super::source_sync_policy::SourceSyncObservation> = None;
-        let birth_source_request_incarnation = self
-            .input_runtime_ownership
-            .key_source_request_incarnation(key);
-        let mut birth = None;
-        let mut birth_unknown = false;
-        for voice in self
-            .voices
-            .iter()
-            .filter(|voice| voice.active && voice.sample_id == id)
-        {
-            let current = voice
-                .sample
-                .as_ref()
-                .is_some_and(|held| held.same_window(sample));
-            let own_birth = voice
-                .mapped_birth
-                .filter(|birth| {
-                    current
-                        && birth.key == key
-                        && birth.source_generation == source_generation
-                        && birth_source_request_incarnation
-                            == Some(birth.source_request_incarnation)
-                        && voice.source_admission.as_ref().is_some_and(|admission| {
-                            admission.content_key() == Some(key)
-                                && admission.current_for_birth(
-                                    &self.input_runtime_ownership,
-                                    &self.current_timing_acknowledgements,
-                                    sample,
-                                    self.sample_rate_hz as u32,
-                                    false,
-                                )
-                        })
-                })
-                .map(|birth| birth.status);
-            match own_birth {
-                None => birth_unknown = true,
-                Some(next) => match birth {
-                    None => birth = Some(next),
-                    Some(previous) if previous == next => {}
-                    Some(_) => birth = Some(super::mapped_birth::BirthStatus::mixed()),
-                },
-            }
-            active |= current;
-            let actual = current
-                .then(|| {
-                    voice
-                        .source_playback
-                        .is_mapped()
-                        .then(|| {
-                            voice
-                                .mapped_start
-                                .as_ref()?
-                                .source_sync_witness(key, source_generation)
-                        })
-                        .flatten()
-                })
-                .flatten();
-            match (witness, actual) {
-                (_, None) => coherent = false,
-                (None, Some(actual)) => witness = Some(actual),
-                (Some(previous), Some(actual)) if previous != actual => coherent = false,
-                _ => {}
-            }
-            if !current {
-                policy_coherent = false;
-                continue;
-            }
-            let request = voice.sync_request;
-            let target_current = match request.mode {
-                super::source_sync_policy::SourceSyncMode::Mapped => {
-                    voice.source_playback.is_mapped() && actual.is_some()
-                }
-                super::source_sync_policy::SourceSyncMode::Legacy => {
-                    !voice.source_playback.is_mapped()
-                        && self.tempo_ratio_for_voice(voice).is_some_and(|ratio| {
-                            voice.source_playback.rate_target().to_bits() == ratio.to_bits()
-                        })
-                }
-                super::source_sync_policy::SourceSyncMode::Off
-                | super::source_sync_policy::SourceSyncMode::Fixed => {
-                    !voice.source_playback.is_mapped()
-                        && self.tempo_ratio_for_voice(voice).is_some_and(|ratio| {
-                            voice.source_playback.rate_target().to_bits() == ratio.to_bits()
-                        })
-                }
-            };
-            let phase_program_current = request.requires_common_phase()
-                && target_current
-                && !voice.paused
-                && match request.mode {
-                    super::source_sync_policy::SourceSyncMode::Fixed => {
-                        self.static_phase_program_current(voice)
-                    }
-                    super::source_sync_policy::SourceSyncMode::Mapped => {
-                        self.mapped_phase_program_current(voice)
-                    }
-                    _ => false,
-                };
-            let phase_program_revision = phase_program_current
-                .then_some(voice.phase_policy_revision.map(|(revision, _)| revision))
-                .flatten();
-            let phase_read_confirmed = phase_program_current
-                && voice.phase_read_current()
-                && voice.source_admission.as_ref().is_some_and(|admission| {
-                    admission.content_key() == Some(key)
-                        && admission.retry_identity().source_generation == source_generation
-                        && admission.current_for_birth(
-                            &self.input_runtime_ownership,
-                            &self.current_timing_acknowledgements,
-                            sample,
-                            self.sample_rate_hz as u32,
-                            false,
-                        )
-                });
-            let settled = match request.mode {
-                super::source_sync_policy::SourceSyncMode::Legacy
-                | super::source_sync_policy::SourceSyncMode::Off
-                | super::source_sync_policy::SourceSyncMode::Fixed => {
-                    target_current
-                        && (phase_program_current
-                            || voice.source_playback.tempo_ratio().to_bits()
-                                == voice.source_playback.rate_target().to_bits())
-                }
-                _ => target_current,
-            };
-            match &mut policy {
-                None => {
-                    policy = Some(super::source_sync_policy::SourceSyncObservation {
-                        request,
-                        target_current,
-                        settled,
-                        phase_program_current,
-                        phase_program_revision,
-                        phase_read_confirmed,
-                    })
-                }
-                Some(previous) if previous.request == request => {
-                    previous.target_current &= target_current;
-                    previous.settled &= settled;
-                    previous.phase_program_current &= phase_program_current;
-                    previous.phase_read_confirmed &= phase_read_confirmed;
-                    if previous.phase_program_revision != phase_program_revision {
-                        previous.phase_program_current = false;
-                        previous.phase_program_revision = None;
-                        previous.phase_read_confirmed = false;
-                    }
-                }
-                Some(_) => policy_coherent = false,
-            }
-        }
-        self.input_runtime_ownership
-            .publish_callback_source_sync_status(
-                id,
-                super::input_runtime_binding::SourceSyncStatus {
-                    birth_source_request_incarnation: birth.and(birth_source_request_incarnation),
-                    birth: if birth.is_some() && birth_unknown {
-                        Some(super::mapped_birth::BirthStatus::mixed())
-                    } else {
-                        birth
-                    },
-                    content_lifetime: key.lifetime(),
-                    source_generation,
-                    source_address: sample.source_address(),
-                    window_revision: sample.window_revision(),
-                    active,
-                    witness: (active
-                        && coherent
-                        && policy_coherent
-                        && policy.is_some_and(|policy| {
-                            policy.request.mode == super::source_sync_policy::SourceSyncMode::Mapped
-                        }))
-                    .then_some(witness)
-                    .flatten(),
-                    policy: (active && policy_coherent).then_some(policy).flatten(),
-                },
-            );
-    }
-
-    /// Service custody only. Actual master mutations dissolve these programs in
-    /// their original successful claims; explicit phase/bootstrap anchors refuse
-    /// while one is active. No returned boolean is public grid-phase acceptance.
-    fn static_phase_program_current(&self, voice: &VoiceSlot) -> bool {
-        if !voice.phase_launch_qualified {
-            return false;
-        }
-        let playback = &voice.source_playback;
-        if !voice.phase_policy_revision.is_some_and(|(_, fence)| {
-            fence == self.global_rate_timing_revision() && self.global_drains_claimed(fence)
-        }) {
-            return false;
-        }
-        let Some(grid) = self
-            .timing_for_voice(voice)
-            .grid(f64::from(self.sample_rate_hz))
-        else {
-            return false;
-        };
-        let Some(domain) = playback.effective_domain() else {
-            return false;
-        };
-        let Some(sample) = &voice.sample else {
-            return false;
-        };
-        let region = voice
-            .source_loop_region
-            .or_else(|| self.effective_loop_region(voice.sample_id, sample.frame_count()));
-        let quarters = grid
-            .loop_metrics(domain.region.start, domain.region.end)
-            .and_then(|metrics| metrics.compatible_cycle_beats);
-        region == Some(domain.region)
-            && domain
-                == self
-                    .timing_for_voice(voice)
-                    .loop_domain(sample.frame_count(), domain.region)
-            && playback.static_master_period().map(f64::to_bits)
-                == self.master_period_seconds.map(f64::to_bits)
-            && quarters.is_some_and(|quarters| {
-                playback.static_grid_matches(grid.frames_per_beat(), grid.origin_frame(), quarters)
-            })
-    }
-
-    /// Current original-map programme service custody, never quarter/bar read proof.
-    fn mapped_phase_program_current(&self, voice: &VoiceSlot) -> bool {
-        if !voice.phase_launch_qualified
-            && !voice
-                .source_playback
-                .mapped_epoch()
-                .is_some_and(|epoch| epoch.is_absolute_grid_phase())
-        {
-            return false;
-        }
-        if !voice.phase_policy_revision.is_some_and(|(_, fence)| {
-            fence == self.global_rate_timing_revision() && self.global_drains_claimed(fence)
-        }) || !voice.source_playback.is_mapped_phase()
-        {
-            return false;
-        }
-        let Some(geometry) = voice
-            .mapped_start
-            .as_ref()
-            .and_then(|owner| owner.mapped_geometry())
-        else {
-            return false;
-        };
-        let Some(epoch) = voice.source_playback.mapped_epoch() else {
-            return false;
-        };
-        let Some(sample) = voice.sample.as_ref() else {
-            return false;
-        };
-        let region = voice
-            .source_loop_region
-            .or_else(|| self.effective_loop_region(voice.sample_id, sample.frame_count()));
-        region == Some(geometry.domain().region)
-            && voice.source_playback.matches_domain(geometry.domain())
-            && voice.source_playback.validate_mapped_reference(geometry)
-            && epoch.master_period_seconds().map(f64::to_bits)
-                == self.master_period_seconds.map(f64::to_bits)
     }
 
     #[cfg(test)]
@@ -5225,12 +4672,7 @@ impl RtMixer {
 
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
-            if self
-                .voices
-                .iter()
-                .any(|voice| voice.active && voice.source_playback.is_mapped())
-                || self.refuse_legacy_global_rate_if_pending()
-            {
+            if self.refuse_legacy_global_rate_if_pending() {
                 return;
             }
             self.invalidate_source_for_all();
@@ -5243,7 +4685,6 @@ impl RtMixer {
 
     fn refresh_global_rate_observation(&mut self) {
         self.refresh_global_rate_intent();
-        self.publish_active_source_sync_status();
         self.input_runtime_ownership
             .global_rate_status
             .refresh_effective_with_master(
@@ -5260,7 +4701,6 @@ impl RtMixer {
         provenance: super::master_provenance::MasterProvenance,
     ) {
         self.refresh_global_rate_intent();
-        self.publish_active_source_sync_status();
         self.input_runtime_ownership
             .global_rate_status
             .refresh_effective_with_master(
@@ -5270,19 +4710,6 @@ impl RtMixer {
                 },
                 Some(provenance),
             );
-    }
-
-    /// Publish actual invalidation before the enclosing rate/master effect ACK.
-    /// Recompute unchanged no-op observations without clearing their read witness.
-    fn publish_active_source_sync_status(&self) {
-        let mut published = [false; NUM_SAMPLES];
-        for voice in self.voices.iter().filter(|voice| voice.active) {
-            let id = voice.sample_id;
-            if !published[id] {
-                self.publish_source_sync_status(id);
-                published[id] = true;
-            }
-        }
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) {
@@ -5355,9 +4782,7 @@ impl RtMixer {
                     .as_ref()
                     .zip(bank)
                     .is_some_and(|(active, bank)| active.same_source(bank))
-                {
-                    voice.source_playback.dissolve_static();
-                }
+                {}
                 voice.invalidate_source_preparation();
             }
         }
@@ -5368,7 +4793,6 @@ impl RtMixer {
             *revision = revision.saturating_add(1);
         }
         for voice in &mut self.voices {
-            voice.source_playback.dissolve_static();
             voice.invalidate_source_preparation();
         }
     }
@@ -5634,8 +5058,9 @@ impl RtMixer {
                 if !unchanged {
                     // Fence same-frame selected-region ABA before lazy domain refresh.
                     // Copied numeric metadata alone never authorizes another phase claim.
-                    voice.phase_launch_qualified = false;
-                    voice.phase_birth_unadvanced = false;
+
+                    voice.launch_qualified = false;
+                    voice.launch_unadvanced = false;
                     voice.clear_explicit_seek();
                 }
             }
@@ -5692,12 +5117,7 @@ impl RtMixer {
 
     /// Immutable source/reader admission, shared by direct and claimed resident seeks.
     fn seek_sample_target(&self, id: usize, position_s: f64) -> Option<(usize, ExplicitSeekMode)> {
-        if id >= NUM_SAMPLES
-            || !position_s.is_finite()
-            || position_s < 0.0
-            || self.channels == 0
-            || self.mapped_voice_active(id)
-        {
+        if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
             return None;
         }
 
@@ -5776,9 +5196,6 @@ impl RtMixer {
     }
 
     fn seek_cut_available(&self, id: usize) -> bool {
-        if self.mapped_voice_active(id) {
-            return false;
-        }
         !self.pad_pitch_processing_enabled(id)
             || self
                 .voices
@@ -5863,13 +5280,6 @@ impl RtMixer {
     }
 
     pub(crate) fn transport_reference_period_for_sample_id(&self, id: usize) -> Option<f64> {
-        if self.voices.iter().any(|voice| {
-            voice.active && voice.sample_id == id && voice.sync_request.global_revision.is_some()
-        }) {
-            // Explicit source policy never turns a source's local/initial period
-            // into a new master. The existing master remains the sole target.
-            return self.master_period_seconds;
-        }
         if self.bpm_lock_enabled {
             // Rate clipping cannot redefine the requested master period.
             self.master_period_seconds
@@ -5903,13 +5313,6 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample_frames))?;
         let mut playback = voice.source_playback;
         let timing = self.timing_for_voice(voice);
-        if playback.is_mapped() {
-            let geometry = voice.mapped_start.as_ref()?.mapped_geometry()?;
-            let position = playback.position();
-            return geometry.map().canonical_beat_at_source(
-                (position.frame as f64 + position.fraction) / f64::from(self.sample_rate_hz),
-            );
-        }
         if !playback.configure_domain(timing.loop_domain(sample_frames, region)) {
             return None;
         }
@@ -5917,6 +5320,63 @@ impl RtMixer {
         timing
             .grid(f64::from(self.sample_rate_hz))?
             .beat_at_source(position.frame as f64 + position.fraction)
+    }
+
+    /// Metadata only, on the original successful master effect. Existing Native
+    /// or pending history owners keep their immutable copied launch reference.
+    pub(crate) fn rebind_launch_births(
+        &mut self,
+        previous: &super::transport::TransportTimeline,
+        next: &super::transport::TransportTimeline,
+        frame: u64,
+    ) {
+        if previous.phase_generation() == next.phase_generation() {
+            return;
+        }
+        for index in 0..MAX_VOICES {
+            let voice = &self.voices[index];
+            let id = voice.sample_id;
+            let Some(key) = voice
+                .source_admission
+                .as_ref()
+                .and_then(|admission| admission.content_key())
+            else {
+                continue;
+            };
+            let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            if !voice.active
+                || !voice.launch_qualified
+                || !voice.launch_unadvanced
+                || voice.paused
+                || key_lock
+                || pitch.total_semitones() != 0
+                || voice.stretch.has_active_native_ownership()
+                || voice.stretch.has_retained_source_input()
+                || voice.stretch.source_lane_busy()
+                || self.pending_key_lock_tuples[id].is_some()
+                || self.queued_key_lock_tuples[id].is_some()
+                || self
+                    .input_runtime_ownership
+                    .resident_control_for_cell(key.cell())
+                    .load(Ordering::Acquire)
+                    != 0
+                || self.hold_actions[id]
+                    .as_ref()
+                    .is_some_and(|work| !work.action.state().terminal())
+                || self
+                    .pitch_runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.has_pending_content(key))
+            {
+                continue;
+            }
+            let mut replacement = voice.source_playback;
+            replacement.rebind_phase_birth(previous, next, frame);
+            if !voice.source_playback.matches_exact(&replacement) {
+                self.voices[index].invalidate_source_preparation();
+                self.voices[index].source_playback = replacement;
+            }
+        }
     }
 
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f64 {
@@ -5937,32 +5397,30 @@ impl RtMixer {
         speed: f64,
         master_period: Option<f64>,
     ) -> f64 {
-        self.tempo_ratio_for_request_with_rate(
-            super::source_sync_policy::SourceSyncRequest::default(),
-            source_period,
-            speed,
-            master_period,
-        )
-        .expect("legacy scalar arithmetic always produces its established bounded ratio")
+        Self::scalar_tempo_ratio(source_period, speed, master_period, self.bpm_lock_enabled)
     }
-
-    fn tempo_ratio_for_request_with_rate(
-        &self,
-        request: super::source_sync_policy::SourceSyncRequest,
+    fn scalar_tempo_ratio(
         source_period: Option<f64>,
         speed: f64,
         master_period: Option<f64>,
-    ) -> Option<f64> {
-        request.scalar_ratio(source_period, speed, master_period, self.bpm_lock_enabled)
+        enabled: bool,
+    ) -> f64 {
+        let mut ratio = speed;
+        if enabled && let (Some(master), Some(source)) = (master_period, source_period) {
+            ratio = source / master;
+        }
+        if !ratio.is_finite() {
+            ratio = 1.0;
+        }
+        ratio.clamp(SPEED_MIN, SPEED_MAX)
     }
 
     fn tempo_ratio_for_voice(&self, voice: &VoiceSlot) -> Option<f64> {
-        self.tempo_ratio_for_request_with_rate(
-            voice.sync_request,
+        Some(self.tempo_ratio_for_source_period_with_rate(
             self.timing_for_voice(voice).period_seconds(),
             self.speed,
             self.master_period_seconds,
-        )
+        ))
     }
 
     /// Stops all voices playing a specific sample.
@@ -6020,7 +5478,7 @@ impl RtMixer {
     }
 
     fn pause_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
-        if id >= NUM_SAMPLES || self.mapped_voice_active(id) {
+        if id >= NUM_SAMPLES {
             return;
         }
 
@@ -6046,7 +5504,7 @@ impl RtMixer {
     }
 
     fn resume_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
-        if id >= NUM_SAMPLES || self.mapped_voice_active(id) {
+        if id >= NUM_SAMPLES {
             return;
         }
 
@@ -6283,10 +5741,8 @@ impl RtMixer {
         let prepared_source_epochs = &self.prepared_source_epochs;
         let source_control_revisions = &self.source_control_revisions;
         let mut ordinary_terminated = [None; MAX_VOICES];
-        let diagnostic_capture = self.diagnostic_request_id != 0;
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
-            voice.phase_read = None;
             if !voice.active {
                 // An in-flight worker may finish after stop/unload. Drain its fenced owner even
                 // when no voice renders again; all large destruction remains on the worker.
@@ -6295,15 +5751,11 @@ impl RtMixer {
             }
             // A real positive callback interval makes this an existing voice,
             // even if its read later refuses. Virtual worker replay never does.
-            voice.phase_birth_unadvanced = false;
+
+            voice.launch_unadvanced = false;
             pad_activity.record(voice.sample_id);
 
             let is_paused = voice.paused;
-            let birth_first = !is_paused
-                && voice
-                    .mapped_birth
-                    .as_mut()
-                    .is_some_and(|birth| birth.take_first_interval(output_start_frame));
             if is_paused {
                 voice.stretch.retire_prepared();
             }
@@ -6375,9 +5827,7 @@ impl RtMixer {
                 let mut source_transition =
                     frozen.map_or(stem_transitions[voice.sample_id], |view| view.transition);
 
-                if !voice.source_playback.is_mapped()
-                    && !voice.source_playback.set_target(tempo_ratios[voice_index])
-                {
+                if !voice.source_playback.set_target(tempo_ratios[voice_index]) {
                     continue;
                 }
 
@@ -6396,15 +5846,7 @@ impl RtMixer {
                     voice.stop_rt(retirement);
                     continue;
                 };
-                let domain = voice
-                    .mapped_start
-                    .as_ref()
-                    .filter(|_| voice.source_playback.is_mapped())
-                    .and_then(|owner| owner.mapped_geometry())
-                    .map_or_else(
-                        || voice.source_timing.loop_domain(sample_frames, loop_region),
-                        |geometry| geometry.domain(),
-                    );
+                let domain = voice.source_timing.loop_domain(sample_frames, loop_region);
                 if !voice.source_playback.configure_domain(domain) {
                     continue;
                 }
@@ -6412,32 +5854,8 @@ impl RtMixer {
                 // Each iteration consumes output frames and crosses at most one fixed rate step.
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
                 while rendered < frames {
-                    voice.phase_read = None;
-                    if diagnostic_capture {
-                        voice.diagnostic_read = None;
-                    }
                     let output_frame =
                         output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
-                    if voice.source_playback.is_static_phase()
-                        && voice.source_playback.static_output_frame() != output_frame
-                    {
-                        break;
-                    }
-                    if voice.source_playback.is_mapped() {
-                        let Some(geometry) = voice
-                            .mapped_start
-                            .as_ref()
-                            .and_then(|owner| owner.mapped_geometry())
-                        else {
-                            break;
-                        };
-                        if voice.source_playback.mapped_output_frame() != output_frame
-                            || (!voice.source_playback.can_read_frames(1)
-                                && voice.source_playback.refresh_mapped_span(geometry).is_err())
-                        {
-                            break;
-                        }
-                    }
                     let remaining = output_frame.map_or(frames - rendered, |frame| {
                         voice
                             .stretch
@@ -6475,7 +5893,7 @@ impl RtMixer {
                         break;
                     };
                     // Validate the complete logical read before Native/FIFO or
-                    // actual-history publication. No partial mapped advancement.
+                    // actual-history publication. No partial source advancement.
                     let mut next_playback = voice.source_playback;
                     if !next_playback.advance(chunk_frames) {
                         break;
@@ -6515,15 +5933,6 @@ impl RtMixer {
                     let outgoing_stem_set = frozen
                         .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
                             view.outgoing.as_ref()
-                        });
-                    let birth_native_ready = birth_first
-                        && rendered == 0
-                        && voice.mapped_birth.is_some_and(|birth| {
-                            birth.native
-                                && voice.stretch.mapped_birth_first_output_ready(
-                                    &voice.source_playback,
-                                    source_plan,
-                                )
                         });
                     let source_read = voice.stretch.process_source(
                         ProductiveSourceFeed {
@@ -6609,88 +6018,9 @@ impl RtMixer {
                                 pad_peaks[voice.sample_id].max(contribution.abs());
                         }
                     }
-                    if diagnostic_capture
-                        && chunk_frames > 0
-                        && let Some(frame) = output_frame
-                        && let Some(receipt) = source_read.filter(|receipt| {
-                            receipt.output_frames == chunk_frames
-                                && receipt.context.binding.source_address == sample.source_address()
-                        })
-                        && let Some(read_end) = receipt.playback.position_at(chunk_frames)
-                    {
-                        voice.diagnostic_read = Some(super::sync_diagnostics::DiagnosticRead {
-                            generation: voice.generation,
-                            output_start: frame,
-                            output_end: frame.saturating_add(chunk_frames as u64),
-                            source_frame: read_end.frame,
-                            source_fraction: read_end.fraction,
-                            domain: if receipt.domain
-                                == super::source_feed_history::SourceReadDomain::DryOutput
-                            {
-                                1
-                            } else {
-                                2
-                            },
-                            loop_start: receipt.plan.loop_region.start,
-                            loop_end: receipt.plan.loop_region.end,
-                            stems: receipt.plan.selection.diagnostic_fields(),
-                            transition: receipt.plan.transition.is_active(),
-                        });
-                    }
                     // Confirm only this birth's first complete output interval, after real mixing.
                     // A failed first attempt consumed birth_first above; a later suffix cannot repair it.
-                    if birth_first
-                        && rendered == 0
-                        && let Some(birth) = voice.mapped_birth.as_mut()
-                    {
-                        let read = source_read.is_some_and(|receipt| {
-                            receipt.output_frames == chunk_frames
-                                && receipt.playback.matches_exact(&voice.source_playback)
-                                && receipt.plan.matches_exact(source_plan)
-                                && if birth.native {
-                                    birth_native_ready && receipt.domain == super::source_feed_history::SourceReadDomain::NativeInput
-                                        && !pending_dry && !voice.stretch.wet_mode_failed() && voice.stretch.wet_render_ready()
-                                } else { receipt.domain == super::source_feed_history::SourceReadDomain::DryOutput }
-                        });
-                        let current = ownership.callback_feedback_key(voice.sample_id)
-                            == Some(birth.key)
-                            && ownership.key_source_request_incarnation(birth.key)
-                                == Some(birth.source_request_incarnation)
-                            && voice.source_admission.as_ref().is_some_and(|admission| {
-                                admission.content_key() == Some(birth.key)
-                                    && admission.retry_identity().source_generation
-                                        == birth.source_generation
-                                    && admission.current_for_birth(
-                                        ownership,
-                                        acknowledgements,
-                                        &sample,
-                                        sample_rate_hz as u32,
-                                        false,
-                                    )
-                            });
-                        birth.status.emitted = read
-                            && current
-                            && position.frame == birth.source_start
-                            && position.fraction.to_bits() == 0.0_f64.to_bits()
-                            && output_frame == birth.status.execution;
-                    }
-                    if chunk_frames > 0
-                        && source_read.is_some_and(|receipt| {
-                            receipt.domain
-                                == super::source_feed_history::SourceReadDomain::DryOutput
-                                && receipt.output_frames == chunk_frames
-                                && receipt.playback.matches_exact(&voice.source_playback)
-                                && receipt.plan.matches_exact(source_plan)
-                        })
-                        && output_frame.is_some_and(|frame| {
-                            voice.source_playback.static_output_frame() == Some(frame)
-                                || voice.source_playback.mapped_output_frame() == Some(frame)
-                        })
-                        && voice.phase_clock_settled(&voice.source_playback)
-                        && voice.phase_clock_settled(&next_playback)
-                    {
-                        voice.phase_read = Some(voice.phase_read_witness(next_playback));
-                    }
+
                     voice.source_playback = next_playback;
                     rendered += chunk_frames;
                 }
@@ -6713,18 +6043,8 @@ impl RtMixer {
                     )
                 }) {
                     let domain = voice
-                        .mapped_start
-                        .as_ref()
-                        .filter(|_| voice.source_playback.is_mapped())
-                        .and_then(|owner| owner.mapped_geometry())
-                        .map_or_else(
-                            || {
-                                voice
-                                    .source_timing
-                                    .loop_domain(sample.frame_count(), region)
-                            },
-                            |geometry| geometry.domain(),
-                        );
+                        .source_timing
+                        .loop_domain(sample.frame_count(), region);
                     if !voice.source_playback.configure_domain(domain) {
                         continue;
                     }
@@ -6852,9 +6172,6 @@ mod committed_stem_mixer;
 
 #[cfg(test)]
 mod tests {
-    mod sync_diagnostic_tests {
-        include!("mixer_sync_diagnostic_tests.rs");
-    }
     mod l3_reader_lifecycle_tests {
         include!("l3_reader_lifecycle_tests.rs");
     }

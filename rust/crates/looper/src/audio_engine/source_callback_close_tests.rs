@@ -90,7 +90,6 @@ impl Fixture {
                         callback_clock: Arc::new(SharedOutputClock::new()),
                         clock_mapper: OutputClockMapper::new(),
                         loop_acceptance: Arc::default(),
-                        sync_diagnostics: None,
                         pad_peaks: [0.0; NUM_SAMPLES],
                         pad_activity: RtRenderPadActivity::default(),
                         last_pad_emit_frame: 0,

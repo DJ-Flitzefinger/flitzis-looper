@@ -688,26 +688,7 @@ class MigrationArtifactReconciler:
         for image in images:
             self._original_references(image, paths, legacy_digests, errors)
             self._stem_references(image, paths, errors)
-            self._map_references(image, paths, errors)
         return paths, legacy_digests, errors
-
-    def _map_references(self, image: ProjectState, paths: set[Path], errors: list[str]) -> None:
-        for intent in image.pad_source_beatmap_intent:
-            if intent is None or intent.selected is None:
-                continue
-            try:
-                self._add_map_reference(intent.selected.reference, paths)
-            except (OSError, RuntimeError, ValueError) as error:
-                errors.append(str(error))
-
-    def _add_map_reference(self, reference: str, paths: set[Path]) -> None:
-        asset = resolve_asset(reference, project_root=self._samples.parent)
-        if asset.kind != "source_beatmap_artifact":
-            message = "Saved map reference is not a typed map artifact"
-            raise ValueError(message)
-        paths.add(asset.path)
-        if asset.material_root is not None:
-            paths.add(asset.material_root)
 
     def _original_references(
         self, image: ProjectState, paths: set[Path], digests: set[str], errors: list[str]

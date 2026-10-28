@@ -1,9 +1,9 @@
 # Beat This worker profiles
 
-The installed worker serves new App BPM analysis, normal Analyze and automatic
-source-map preparation through the existing Native job. Manual/TAP and retained
-cached results keep their existing precedence. Explicit raw review remains a
-separate advanced workflow. Runtime/device checks do not certify musical accuracy.
+The installed worker serves App BPM analysis and normal Analyze through the
+Native neural-analysis job. Manual/TAP and cached results keep their existing
+precedence. Source-map preparation and raw-review editor controls are removed.
+Runtime/device checks do not certify musical accuracy.
 
 The two closed profiles are `legacy-cpu-v1` and `cuda-auto-v2`. The legacy source
 project and its scientific request/raw bytes remain unchanged. The CUDA profile
@@ -56,10 +56,10 @@ selected checkpoint. Normal startup, loading, restoration and analysis never
 invoke it. `uv` uses its normal package/interpreter caches. Setup logs stay in
 the requested scratch directory.
 
-The application binds this documented sibling installation path when binding its
-Source Map controller. **Analyze original full mix** reports a missing or invalid
-installation without falling back to QM. This command captures complete Beat This
-evidence for separate interpretation; it does not complete the B2 default switch.
+The application binds this documented sibling installation for normal BPM
+analysis. Missing or invalid installations are reported without silently falling
+back to QM. Worker inference retains complete Beat This observations for the
+stable-section estimator; it does not create playback maps.
 
 For offline provisioning, supply `--checkpoint-file <absolute-final0-path>`
 and `--offline`; the pinned interpreter and wheels must already be cached.
@@ -148,7 +148,7 @@ the legacy CPU `model=configuration.model` and `adapter=BeatWorkerAdapter(config
 Configuration loading reads local provenance only; it does not install or start
 the worker. See [Offline analysis](offline-analysis.md) for ownership and limits.
 The scientific protocol-one service remains a CPU reference. Protocol-two App
-analysis uses the existing Native source-map bridge, not that historical service.
+analysis uses the Native neural-analysis bridge, not that historical service.
 
 The worker reads complete shared mono at the actual loaded rate, performs
 full-buffer soxr HQ conversion directly to 22050 Hz and uses the pinned centered

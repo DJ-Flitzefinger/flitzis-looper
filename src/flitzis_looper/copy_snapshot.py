@@ -29,8 +29,6 @@ from flitzis_looper.models import (
     TimingIntent,
     validate_sample_id,
 )
-from flitzis_looper.source_beatmap_intent import PadSourceBeatmapIntent
-from flitzis_looper.source_sync_intent import PadSourceSyncIntent, neutral_source_sync_intent
 from flitzis_looper.stem_intent import PadStemIntent
 
 CONTENT_FIELDS = (
@@ -45,8 +43,6 @@ CONTENT_FIELDS = (
     ("manual_bpm", "manual_bpm"),
     ("timing_intent", "pad_timing_intent"),
     ("key_intent", "pad_key_intent"),
-    ("source_beatmap_intent", "pad_source_beatmap_intent"),
-    ("source_sync_intent", "pad_source_sync_intent"),
     ("gain_db", "pad_gain_db"),
     ("eq_low_db", "pad_eq_low_db"),
     ("eq_mid_db", "pad_eq_mid_db"),
@@ -92,13 +88,6 @@ class MusicalSnapshotData(BaseModel):
     manual_bpm: float | None = Field(gt=0, allow_inf_nan=False)
     timing_intent: TimingIntent
     key_intent: PadKeyIntent
-    source_beatmap_intent: PadSourceBeatmapIntent | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
-    source_sync_intent: PadSourceSyncIntent = Field(
-        default_factory=neutral_source_sync_intent,
-        exclude_if=lambda value: not value.requested and value.revision == 0,
-    )
     gain_db: float = Field(ge=PAD_GAIN_DB_MIN, le=PAD_GAIN_DB_MAX, allow_inf_nan=False)
     eq_low_db: float = Field(ge=PAD_EQ_DB_MIN, le=PAD_EQ_DB_MAX, allow_inf_nan=False)
     eq_mid_db: float = Field(ge=PAD_EQ_DB_MIN, le=PAD_EQ_DB_MAX, allow_inf_nan=False)
@@ -110,9 +99,7 @@ class MusicalSnapshotData(BaseModel):
     grid_offset_samples: int
     grid_anchor_s: float | None = Field(ge=0, allow_inf_nan=False)
 
-    @field_validator(
-        "stem_intent", "key_intent", "source_beatmap_intent", "source_sync_intent", mode="before"
-    )
+    @field_validator("stem_intent", "key_intent", mode="before")
     @classmethod
     def _detach_intent_models(cls, value: object) -> object:
         if isinstance(
@@ -121,8 +108,6 @@ class MusicalSnapshotData(BaseModel):
                 PadContentIdentity,
                 PadStemIntent,
                 PadKeyIntent,
-                PadSourceBeatmapIntent,
-                PadSourceSyncIntent,
             ),
         ):
             return _model_data(value)
@@ -206,11 +191,8 @@ class CopySnapshotData(MusicalSnapshotData):
 def musical_snapshot_projection(
     image: MusicalSnapshotData, *, mode: Literal["python", "json"] = "python"
 ) -> dict[str, object]:
-    """Restore neutral table rows for projection without changing legacy sealed bytes."""
-    data = image.model_dump(mode=mode, warnings="error")
-    data.setdefault("source_beatmap_intent", None)
-    data.setdefault("source_sync_intent", neutral_source_sync_intent().model_dump(mode=mode))
-    return data
+    """Project the complete current musical schema."""
+    return image.model_dump(mode=mode, warnings="error")
 
 
 class CopySnapshot(BaseModel):

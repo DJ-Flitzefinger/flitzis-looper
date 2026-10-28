@@ -11,7 +11,7 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     _acknowledged_bpm_reference,
     _configured,
     _master_provenance,
@@ -476,9 +476,7 @@ def test_bpm_lock_mirrors_native_effect_without_unqualified_master_or_bootstrap_
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm == 123.5
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
     controller.project.selected_pad = 2
     controller.transport.bpm.set_manual_bpm(2, 90.0)
@@ -488,9 +486,7 @@ def test_bpm_lock_mirrors_native_effect_without_unqualified_master_or_bootstrap_
     audio_engine_mock.set_speed_and_master_period.assert_called_once_with(
         1.25, pytest.approx(60.0 / (123.5 * 1.25)), anchor_binding=ANY
     )
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_bpm_lock_anchors_master_bpm_to_selected_pad(
@@ -509,7 +505,6 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
 
     audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True, anchor_binding=ANY)
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
     audio_engine_mock.reset_mock()
 
@@ -522,7 +517,6 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
     _confirm_rate(controller, audio_engine_mock, 2.0, 240.0)
     assert controller.session.master_bpm == pytest.approx(240.0)
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_non_finite_volume_nan(controller: AppController) -> None:
@@ -591,7 +585,6 @@ def test_set_bpm_lock_none_effective_bpm(
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm is None
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_set_bpm_lock_non_finite_effective_bpm(
@@ -606,7 +599,6 @@ def test_set_bpm_lock_non_finite_effective_bpm(
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm is None
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_set_bpm_lock_disable_clears_anchor(

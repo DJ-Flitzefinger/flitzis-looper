@@ -6,7 +6,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from flitzis_looper.timing_policy import GlobalTimingPolicy
 from tests.flitzis_looper.conftest import (
     FakeCapturedGlobalStart,
     FakeCapturedPadStart,
@@ -301,7 +300,7 @@ def test_loop_requested_and_effective_separate_until_matching_ack(
     assert controller.transport.residency.status(0) == (None, None)
 
 
-def test_pending_auto_loop_keeps_original_physical_ack_when_a_map_is_missing(
+def test_pending_auto_loop_keeps_original_physical_ack(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     accepted = resident(controller, audio_engine_mock)
@@ -317,9 +316,6 @@ def test_pending_auto_loop_keeps_original_physical_ack_when_a_map_is_missing(
 
     project.multi_loop = True
     project.bpm_lock = True
-    project.global_timing_policy = GlobalTimingPolicy(
-        schema_version=1, sync=True, realtime_bpm=True, revision=2
-    )
     replacement = Ticket()
     audio_engine_mock.prepare_resident_control.return_value = replacement
     residency.remember(0)

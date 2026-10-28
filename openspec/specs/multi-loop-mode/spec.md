@@ -18,7 +18,7 @@ The system SHALL provide a global MultiLoop mode setting that can be enabled or 
 - **THEN** MultiLoop mode becomes disabled
 
 ### Requirement: MultiLoop Enabled Allows Concurrent Loops
-MultiLoop SHALL also gate the requested BPM-Lock/SYNC/Realtime-BPM hierarchy without erasing saved preferences. Parent OFF/ON SHALL freshly qualify dependent actual state through existing control, source and acknowledgement fences. Unavailable representation conversion SHALL remain visibly pending/refused while preserving existing audio, rather than removing publication or retirement guards or resetting Transport/playheads.
+MultiLoop SHALL gate BPM Lock without erasing its saved preference. Parent OFF/ON SHALL preserve existing source and acknowledgement fences, precise scalar loop periods, ordinary scheduling and retirement. Retired source-SYNC and REALTIME BPM preferences SHALL have no runtime effect.
 
 When MultiLoop mode is enabled, the system SHALL allow multiple pads to be active simultaneously. Triggering a pad SHALL start or restart that pad’s loop without stopping other active pads.
 

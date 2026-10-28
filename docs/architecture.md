@@ -228,19 +228,18 @@ phase and the compatibility downbeat frame are derived views.
 and quantized play/stop paths both execute through scheduler logic.
 
 Quantization chooses the output-frame start time. It does not seek inside the
-source loop. Explicit repeatable pad-derived sync uses
-`AudioEngine.anchor_transport_phase_from_pad(id)`. The separate
-`AudioEngine.bootstrap_transport_from_pad(id)` selects a one-time reference for
-the stream through existing selected-pad/BPMLOCK setup. The first request
-latches its reference; unavailable source/BPM metadata defers completion until
+source loop. Source-qualified BPMLOCK setup and acknowledged accepted-timing
+refreshes can arm the internal one-time transport bootstrap. There is no public
+unqualified phase-anchor or bootstrap command. The qualified owner retains its
+reference while source/BPM metadata is unavailable, and completion waits until
 that reference is active and valid. Successful bootstrap anchors complete master
 beat position to the reference source beat without resetting output-frame time
 or moving active source playheads. Callback batch completion and successful
-scheduled starts provide bounded retry points. Further reference requests cannot
-replace the latch. Unloading an incomplete reference clears the pending id so
-a later request can select another; successful bootstrap or deliberate sync
-consumes the opportunity until a new stream. Silence, wraps and stem controls
-never rearm it. Bootstrap state is transient and introduces no performer control.
+scheduled starts provide bounded retry points. A qualified refresh may requalify
+its pending reference through the same source/ownership checks. Unloading an
+incomplete reference clears its pending id. Successful bootstrap consumes the
+opportunity until a new stream; silence, wraps and stem controls never rearm it.
+Bootstrap state is transient and introduces no performer control.
 
 Launch inputs also carry optional `received_at_ns` metadata from one Rust engine
 monotonic epoch created before stream startup. Native MIDI captures at callback
@@ -259,9 +258,8 @@ grid targets, with midpoint ties toward the future. Unavailable observations
 return no diagnostic target and never reset transport. Driver jitter, device
 precision and unaccounted Rubber Band delay limit these estimates; they are not
 measured audible alignment. The source-grid mapping foundation is internal and
-tested; current launches still use the effective loop start. Audible DSP/device
-preparation and the explicit synchronized-launch contract must be validated
-before nearest-target diagnostics or source-phase mapping drive launch execution.
+tested; current launches use the effective loop start. Nearest-target diagnostics
+and source-phase observations provide no permission to change that launch policy.
 
 In CPAL 0.17's Windows WASAPI backend, playback time is an estimate based on
 available buffer frames; additional latency after the device buffer is unknown.
@@ -578,8 +576,9 @@ negative display space adds no source audio. Earlier physical audio remains
 reachable by panning. Numbering is loop-relative and may be fractional for off-grid
 loops; adaptive zoom subdivision indices are not beat identities. Global speed,
 BPMLOCK, KEYLOCK, quantization and other-pad playback do not move source grid or
-stored markers. Existing live source-phase behavior is unchanged; future mapped
-SYNC uses the loop-relative contract in beatmap-sync-design.md.
+stored markers. Source SYNC, REALTIME BPM, selected playback maps and phase adoption
+are removed. The previous implementation is retained in the SYNC-REALTIME-BPM
+branch; see [the archive](sync-archive.md). Scalar rate and loop timing remain.
 
 `source_grid.rs` also supplies a pure binary64-period `ScalarSourceGrid` control
 evaluator. A focused Python wrapper uses it for visible grid, snap and automatic

@@ -295,7 +295,6 @@ class BpmController:
             sample_id,
             timing=timing,
             expected_source_generation=expected_source_generation,
-            defer_unavailable_map=True,
         )
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:

@@ -328,7 +328,6 @@ def test_global_speed_and_bpm_anchor_on_other_pad_remain_editable(
     assert speed_binding.metadata()["pad_id"] == SOURCE
     audio_engine_mock.set_speed.assert_not_called()
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_disabling_bpm_lock_releases_reserved_anchor_without_target_edit(
@@ -377,7 +376,6 @@ def test_disabling_bpm_lock_releases_reserved_anchor_without_target_edit(
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
     audio_engine_mock.set_pad_loop_region.assert_not_called()
     audio_engine_mock.capture_pad_start.assert_not_called()
-    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_own_copy_callback_resets_only_target_runtime_without_native_setters(

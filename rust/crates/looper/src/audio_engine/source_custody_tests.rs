@@ -463,8 +463,4 @@ pub(in crate::audio_engine) mod cold {
                 .is_err()
         );
     }
-
-    mod source_beatmap_custody_tests {
-        include!("source_beatmap_custody_tests.rs");
-    }
 }

@@ -9,7 +9,7 @@ import pytest
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.models import BeatGrid, PadContentIdentity, SampleAnalysis
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     _bind_fixture_source_identity,
     _master_provenance,
 )
@@ -185,7 +185,6 @@ def _assert_no_legacy_lock_effects(audio: Mock) -> None:
     audio.set_pad_timing_metadata.assert_not_called()
     audio.set_master_bpm.assert_not_called()
     audio.set_master_period.assert_not_called()
-    audio.bootstrap_transport_from_pad.assert_not_called()
 
 
 def _assert_pending_lock_publication(controller: AppController, boundary: str) -> None:

@@ -665,7 +665,6 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
     assert_eq!((sample.resident_start(), sample.resident_end()), (32, 64));
     assert_eq!(voices[0].source_playback.tempo_ratio(), 1.0);
     assert_eq!(voices[0].source_playback.rate_target(), 1.0);
-    assert!(!voices[0].source_playback.is_mapped());
     assert_eq!(voices[0].source_playback.position().frame, 32 + 300 % 32);
     assert_eq!(voices[0].source_playback.position().fraction, 0.0);
     assert_eq!(

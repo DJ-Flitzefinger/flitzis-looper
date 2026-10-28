@@ -1,7 +1,7 @@
 # Scalar source coordinates
 
 G1 shares the scalar editor projection and preserves long-file loaded-frame
-addresses. Automatic tempo estimation and variable-map playback/SYNC remain pending.
+addresses. Automatic tempo estimation remains available; source SYNC is archived.
 
 ## Domains and authority
 
@@ -45,7 +45,8 @@ without stream state, scheduling or source reads. Invalid construction raises
 `ValueError`; nonfinite/overflow projection returns unavailable. A focused Python
 scalar wrapper supplies it to visible lines, snapping and automatic loop ends.
 
-Visible lines retain fractional frames. The finest musical snap is 1/16 beat.
+Visible lines and markers use the same nearest-even loaded-frame rounding.
+Analytical grid coordinates remain continuous. The finest musical snap is 1/16 beat.
 Grid midpoint selection and physical marker rounding retain Python nearest-even
 ties. Each physical boundary is evaluated absolutely and rounded once. Auto-loop
 endpoints advance the original selected start by `4*bars` beats before start/end

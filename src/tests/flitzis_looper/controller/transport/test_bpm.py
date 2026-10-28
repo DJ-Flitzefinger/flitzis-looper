@@ -5,7 +5,7 @@ import pytest
 
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     _acknowledged_bpm_reference,
     _configured,
     _rate_image,
@@ -329,7 +329,6 @@ def test_unlocked_request_waits_for_actual_off_before_clearing_master(
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm == 120.0
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_recompute_master_bpm_none_anchor(
@@ -342,7 +341,6 @@ def test_recompute_master_bpm_none_anchor(
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm == 120.0
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_recompute_master_bpm_non_finite_anchor(
@@ -355,7 +353,6 @@ def test_recompute_master_bpm_non_finite_anchor(
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm == 120.0
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_on_pad_bpm_changed_updates_audio(
@@ -515,7 +512,6 @@ def test_on_pad_bpm_changed_updates_master_bpm(
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 100.0)
     audio_engine_mock.set_master_period.assert_called_with(0.6, anchor_binding=ANY)
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_on_pad_bpm_changed_not_anchor(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -531,4 +527,3 @@ def test_on_pad_bpm_changed_not_anchor(controller: AppController, audio_engine_m
 
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 120.0)
     audio_engine_mock.set_master_bpm.assert_not_called()
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()

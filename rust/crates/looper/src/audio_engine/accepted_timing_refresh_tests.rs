@@ -579,7 +579,7 @@ fn accepted_refresh_old_parameter_backlog_rejects_whole_effect_then_fresh_retry_
 
 #[test]
 fn accepted_refresh_newer_global_parameter_or_lock_edit_rejects_loop_and_master() {
-    for change in 0..5 {
+    for change in 0..4 {
         let mut fixture = Fixture::new();
         let before_loop = fixture.mixer.loop_region_frames(0);
         let ticket = fixture.refresh(Some(PERIOD));
@@ -591,7 +591,7 @@ fn accepted_refresh_newer_global_parameter_or_lock_edit_rejects_loop_and_master(
                 speed: 1.25,
                 period_seconds: 0.8,
             }),
-            3 => {
+            _ => {
                 super::super::super::push_global_timing_message(
                     &fixture.engine.global_timing_revision,
                     &fixture
@@ -601,20 +601,6 @@ fn accepted_refresh_newer_global_parameter_or_lock_edit_rejects_loop_and_master(
                     &mut fixture.producer.lock().unwrap(),
                     ControlMessage::SetBpmLock(false),
                     "SetBpmLock",
-                )
-                .unwrap();
-                fixture.process_next();
-            }
-            _ => {
-                super::super::super::push_global_timing_message(
-                    &fixture.engine.global_timing_revision,
-                    &fixture
-                        .engine
-                        .input_runtime_ownership
-                        .global_timing_publishing,
-                    &mut fixture.producer.lock().unwrap(),
-                    ControlMessage::BootstrapTransportFromPad { id: 1 },
-                    "BootstrapTransportFromPad",
                 )
                 .unwrap();
                 fixture.process_next();
@@ -1624,9 +1610,8 @@ fn callback_global_lease_winner_refuses_control_publication_without_receipt_or_p
     assert_eq!(fixture.mixer.loop_region_frames(0), (1000, Some(14000)));
 }
 
-fn publish_refresh_runtime(fixture: &mut Fixture, sync: bool, intent_revision: u64) {
+fn publish_refresh_runtime(fixture: &mut Fixture) {
     use crate::audio_engine::input_mapping::{InputRuntime, PitchPadProjection};
-    use crate::audio_engine::source_map_admission::SourceMapRow;
     if fixture.engine.input_runtime.is_none() {
         fixture.engine.input_runtime = Some(InputRuntime::new_with_ownership(
             fixture.producer.clone(),
@@ -1637,15 +1622,12 @@ fn publish_refresh_runtime(fixture: &mut Fixture, sync: bool, intent_revision: u
     let binding = fixture.binding();
     let mut bindings = vec![None; NUM_SAMPLES];
     bindings[0] = Some(binding);
-    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
-    maps[0].sync_requested = sync;
-    maps[0].intent_revision = intent_revision;
     fixture
         .engine
         .input_runtime
         .as_ref()
         .unwrap()
-        .set_runtime_state_with_source_maps(
+        .set_runtime_state_with_pitch_projection(
             true,
             (0..NUM_SAMPLES).map(|id| id == 0).collect(),
             vec![0.25; NUM_SAMPLES],
@@ -1659,37 +1641,18 @@ fn publish_refresh_runtime(fixture: &mut Fixture, sync: bool, intent_revision: u
                 };
                 NUM_SAMPLES
             ]),
-            Some(maps),
         )
         .unwrap();
 }
 
 #[test]
-fn pad_sync_off_and_aba_runtime_publication_cancel_original_queued_refresh_geometry() {
-    for aba in [false, true] {
-        let mut fixture = Fixture::new();
-        publish_refresh_runtime(&mut fixture, true, 1);
-        let ticket = fixture.refresh(None);
-        fixture.process_next();
-        let before = fixture.state();
-        publish_refresh_runtime(&mut fixture, false, 2);
-        if aba {
-            publish_refresh_runtime(&mut fixture, true, 3);
-        }
-        fixture.render(2);
-        assert_eq!(ticket.publication_status(), "rejected");
-        assert_eq!(fixture.state(), before);
-    }
-}
-
-#[test]
 fn ordinary_trigger_and_own_binding_rebase_keep_precise_refresh_witness_live() {
     let mut fixture = Fixture::new();
-    publish_refresh_runtime(&mut fixture, false, 0);
+    publish_refresh_runtime(&mut fixture);
     let ticket = fixture.refresh(None);
     let launch = fixture.engine.input_runtime_ownership.launch_revision(0);
     // This complete row publication carries the refresh's own authority-rebased binding.
-    publish_refresh_runtime(&mut fixture, false, 0);
+    publish_refresh_runtime(&mut fixture);
     assert_eq!(
         fixture.engine.input_runtime_ownership.launch_revision(0),
         launch
@@ -1791,7 +1754,7 @@ fn qualified_fast_master_rejects_source_and_hierarchy_changes_without_reviving_r
         );
         qualified_rate(&mut fixture, None, PERIOD);
         if hierarchy {
-            publish_refresh_runtime(&mut fixture, false, 0);
+            publish_refresh_runtime(&mut fixture);
         } else {
             let ownership = &fixture.engine.input_runtime_ownership;
             ownership.revoke(0, ownership.next_authority(0).unwrap());
@@ -1859,10 +1822,8 @@ fn qualified_master_speed_only_coalescing_preserves_original_guard_and_new_maste
     );
 }
 
-fn fixed_bpm_reference_fixture() -> Fixture {
+fn constant_bpm_reference_fixture() -> Fixture {
     use crate::audio_engine::input_mapping::PitchPadProjection;
-    use crate::audio_engine::source_map_admission::SourceMapRow;
-    use crate::audio_engine::source_sync_policy::GlobalTimingPolicy;
     let mut fixture = Fixture::with_source_identity(true);
     fixture.engine.test_output_format = Some((RATE, 1));
     fixture.mixer.set_pad_key_lock(0, false);
@@ -1873,17 +1834,14 @@ fn fixed_bpm_reference_fixture() -> Fixture {
         .set_bpm_lock_with_binding(true, Some(&original))
         .unwrap();
     drain_bpm_fixture(&mut fixture);
-    publish_refresh_runtime(&mut fixture, false, 0);
+    publish_refresh_runtime(&mut fixture);
     let runtime = fixture.engine.input_runtime.as_ref().unwrap();
     runtime.set_render_format(RATE, 1).unwrap();
     let original = fixture.binding();
     let mut bindings = vec![None; NUM_SAMPLES];
     bindings[0] = Some(original);
-    let mut maps = vec![SourceMapRow::default(); NUM_SAMPLES];
-    maps[0].sync_requested = true;
-    maps[0].intent_revision = 1;
     runtime
-        .set_runtime_state_with_policy(
+        .set_runtime_state_with_pitch_projection(
             true,
             (0..NUM_SAMPLES).map(|id| id == 0).collect(),
             vec![0.25; NUM_SAMPLES],
@@ -1897,11 +1855,6 @@ fn fixed_bpm_reference_fixture() -> Fixture {
                 };
                 NUM_SAMPLES
             ]),
-            Some(maps),
-            GlobalTimingPolicy::parse(Some(
-                r#"{"schema_version":1,"sync":true,"realtime_bpm":false,"revision":1}"#,
-            ))
-            .unwrap(),
         )
         .unwrap();
     let start = fixture
@@ -1912,17 +1865,15 @@ fn fixed_bpm_reference_fixture() -> Fixture {
     assert!(fixture.engine.publish_pad_start(&start, None).unwrap());
     drain_bpm_fixture(&mut fixture);
     assert_eq!(start.state(), "applied", "{:?}", start.reason());
-    assert_eq!(
-        fixture
-            .mixer
-            .voices
-            .iter()
-            .find(|voice| voice.active)
-            .unwrap()
-            .sync_request
-            .mode,
-        crate::audio_engine::source_sync_policy::SourceSyncMode::Fixed
-    );
+    assert!(fixture.mixer.voices.iter().any(|voice| voice.active));
+    let bpm = fixture
+        .engine
+        .input_runtime_ownership
+        .global_rate_status
+        .read_bpm()
+        .unwrap()
+        .1;
+    assert!(bpm.applied && bpm.effective);
     fixture.render(13);
     assert!(
         fixture.transport.bootstrap_reference().is_none(),
@@ -1932,9 +1883,8 @@ fn fixed_bpm_reference_fixture() -> Fixture {
 }
 
 #[test]
-fn qualified_on_after_blocked_off_reinitializes_different_reference_even_when_actual_flag_stayed_on()
- {
-    let mut fixture = fixed_bpm_reference_fixture();
+fn qualified_on_after_off_reinitializes_different_reference_without_moving_audio() {
+    let mut fixture = constant_bpm_reference_fixture();
     fixture
         .engine
         .set_bpm_lock_with_binding(false, None)
@@ -1947,10 +1897,10 @@ fn qualified_on_after_blocked_off_reinitializes_different_reference_even_when_ac
         .read_bpm()
         .unwrap()
         .1;
-    assert!(!blocked.applied && blocked.effective);
+    assert!(blocked.applied && !blocked.effective);
     assert_eq!(
         blocked.reason,
-        crate::audio_engine::global_rate_status::BpmReason::PolicyPending
+        crate::audio_engine::global_rate_status::BpmReason::None
     );
     assert_eq!(fixture.transport.master_period_seconds(), Some(PERIOD));
 
@@ -2021,7 +1971,7 @@ fn qualified_on_after_blocked_off_reinitializes_different_reference_even_when_ac
 
 #[test]
 fn qualified_equal_on_reinitializes_same_content_new_accepted_period_and_same_period_is_noop() {
-    let mut fixture = fixed_bpm_reference_fixture();
+    let mut fixture = constant_bpm_reference_fixture();
     let original = fixture.binding();
     let key = original.binding.placement.unwrap().content_key().unwrap();
     let timing = crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
@@ -2332,7 +2282,7 @@ fn assert_productive_history_unchanged(
 }
 
 #[test]
-fn sync_diagnostic_public_launch_frame_is_distinct_from_phase_generation() {
+fn ordinary_launch_frame_is_distinct_from_reference_generation() {
     let mut fixture = Fixture::new();
     assert!(fixture.mixer.play_sample(0, 1.0));
     let voice = &mut fixture.mixer.voices[0];
@@ -2357,53 +2307,16 @@ fn sync_diagnostic_public_launch_frame_is_distinct_from_phase_generation() {
                 master: 5.25,
             },
         );
-    let slot = fixture
-        .engine
-        .loop_acceptance
-        .diagnostics
-        .register()
-        .unwrap();
-    let request = fixture.engine.request_sync_diagnostic_snapshot().unwrap();
-    fixture.mixer.begin_sync_diagnostic_capture(request);
-    slot.observe(&fixture.mixer, &fixture.transport, 1, 0);
-    fixture.mixer.end_sync_diagnostic_capture();
-    Python::attach(|py| {
-        let response = fixture
-            .engine
-            .sync_diagnostic_snapshot(py, request)
-            .unwrap()
-            .unwrap();
-        let voices = response.bind(py).get_item("voices").unwrap().unwrap();
-        let voice = voices.get_item(0).unwrap();
-        assert_eq!(
-            voice
-                .get_item("original_launch_frame")
-                .unwrap()
-                .extract::<u64>()
-                .unwrap(),
-            1234
-        );
-        assert_eq!(
-            voice
-                .get_item("original_launch_phase_generation")
-                .unwrap()
-                .extract::<u64>()
-                .unwrap(),
-            7
-        );
-        assert_eq!(
-            voice
-                .get_item("launch_master_beat")
-                .unwrap()
-                .extract::<f64>()
-                .unwrap(),
-            5.25
-        );
-    });
+    assert_eq!(
+        fixture.mixer.voices[0]
+            .source_playback
+            .diagnostic_launch_reference(),
+        Some((7, 1234, 5.25))
+    );
 }
 
 #[test]
-fn sync_diagnostic_retained_native_receipt_preserves_real_divergence_through_public_metadata() {
+fn retained_native_actual_history_preserves_real_divergence_from_logical_clock() {
     let mut fixture = complete_native_history_refresh_fixture(true);
     fixture.engine.resume_sample(0).unwrap();
     drain_bpm_fixture(&mut fixture);
@@ -2418,23 +2331,13 @@ fn sync_diagnostic_retained_native_receipt_preserves_real_divergence_through_pub
     let expected_actual = actual.playback.position_at(17).unwrap();
     let expected_logical = logical.position_at(17).unwrap();
     assert_ne!(expected_actual, expected_logical);
-    let slot = fixture
-        .engine
-        .loop_acceptance
-        .diagnostics
-        .register()
-        .unwrap();
-    let request = fixture.engine.request_sync_diagnostic_snapshot().unwrap();
     let start = fixture.transport.output_frame();
-    fixture.mixer.begin_sync_diagnostic_capture(request);
     fixture.render(17);
-    slot.observe(
-        &fixture.mixer,
-        &fixture.transport,
-        fixture.engine.input_clock.capture_ns(),
-        17,
+    assert_eq!(fixture.transport.output_frame(), start + 17);
+    assert_eq!(
+        fixture.mixer.voices[0].source_playback.position(),
+        expected_logical
     );
-    fixture.mixer.end_sync_diagnostic_capture();
     assert_eq!(
         fixture.mixer.voices[0]
             .stretch
@@ -2443,63 +2346,7 @@ fn sync_diagnostic_retained_native_receipt_preserves_real_divergence_through_pub
             .next_position,
         expected_actual
     );
-    Python::attach(|py| {
-        let response = fixture
-            .engine
-            .sync_diagnostic_snapshot(py, request)
-            .unwrap()
-            .unwrap();
-        let response = response.bind(py);
-        let voices = response.get_item("voices").unwrap().unwrap();
-        let voice = voices.get_item(0).unwrap();
-        assert_eq!(
-            voice
-                .get_item("logical_next_source_frame")
-                .unwrap()
-                .extract::<usize>()
-                .unwrap(),
-            expected_logical.frame
-        );
-        assert_eq!(
-            voice
-                .get_item("logical_next_source_fraction")
-                .unwrap()
-                .extract::<f64>()
-                .unwrap()
-                .to_bits(),
-            expected_logical.fraction.to_bits()
-        );
-        let read = voice.get_item("last_complete_read").unwrap();
-        assert_eq!(
-            read.get_item("domain")
-                .unwrap()
-                .extract::<String>()
-                .unwrap(),
-            "native_input"
-        );
-        assert_eq!(
-            read.get_item("output_end_frame")
-                .unwrap()
-                .extract::<u64>()
-                .unwrap(),
-            start + 17
-        );
-        assert_eq!(
-            read.get_item("next_source_frame")
-                .unwrap()
-                .extract::<usize>()
-                .unwrap(),
-            expected_actual.frame
-        );
-        assert_eq!(
-            read.get_item("next_source_fraction")
-                .unwrap()
-                .extract::<f64>()
-                .unwrap()
-                .to_bits(),
-            expected_actual.fraction.to_bits()
-        );
-    });
+    assert_ne!(expected_actual, expected_logical);
 }
 
 #[test]
@@ -2755,13 +2602,13 @@ fn master_and_loop_cut_preserve_productive_native_and_displaced_feed_owners_with
 
 #[test]
 fn qualified_master_only_after_terminal_unqualified_speed_rejection_uses_actual_speed() {
-    let mut fixture = fixed_bpm_reference_fixture();
+    let mut fixture = constant_bpm_reference_fixture();
     fixture.engine.set_pad_timing_intent(0, "manual").unwrap();
     drain_bpm_fixture(&mut fixture);
     fixture.mixer.set_pad_bpm(0, None);
     let current = fixture.binding();
     assert!(current.current() && current.available() && current.binding.accepted.is_none());
-    fixture.global_parameter(ControlParameterMessage::SetSpeed(1.16));
+    fixture.global_parameter(ControlParameterMessage::SetSpeed(0.0));
     drain_bpm_fixture(&mut fixture);
     let rejected = fixture
         .engine
@@ -2775,9 +2622,9 @@ fn qualified_master_only_after_terminal_unqualified_speed_rejection_uses_actual_
     );
     assert_eq!(
         rejected.effect.error,
-        crate::audio_engine::global_rate_status::RateError::HistoryUnavailable
+        crate::audio_engine::global_rate_status::RateError::InvalidTransport
     );
-    assert_eq!(rejected.effect.requested.speed, 1.16);
+    assert_eq!(rejected.effect.requested.speed, 0.0);
     assert_eq!(rejected.effect.effective.speed, 1.0);
     assert!(!fixture.mixer.has_pending_global_rate());
     let (_, bpm) = fixture

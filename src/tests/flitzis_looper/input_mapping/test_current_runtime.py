@@ -1,7 +1,7 @@
 """Current native source and timing ownership in productive MIDI publication."""
 
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import pytest
 
@@ -42,120 +42,20 @@ def _configure_accepted_pad(controller: AppController, audio: Mock) -> dict[str,
     return metadata
 
 
-def test_policy_adoption_follows_committed_publication_and_retries_unchanged_runtime(
-    controller: AppController, audio_engine_mock: Mock
+def test_constant_runtime_publishes_once_without_source_sync_adoption(
+    controller: AppController,
+    audio_engine_mock: Mock,
 ) -> None:
     _configure_accepted_pad(controller, audio_engine_mock)
-    previous = controller.input_mapping._last_input_runtime_state_signature
-    original_publish = audio_engine_mock.set_input_runtime_state.side_effect
-    assert callable(original_publish)
-    events: list[str] = []
-    observed: list[object] = []
-
-    def publish(*args: object, **kwargs: object) -> object:
-        assert controller.input_mapping._last_input_runtime_state_signature is previous
-        events.append("publish")
-        return original_publish(*args, **kwargs)
-
-    def request(*, service: bool = False) -> None:
-        assert service is True
-        signature = controller.input_mapping._last_input_runtime_state_signature
-        assert signature is not None
-        assert signature is not previous
-        assert signature[2][0].ready
-        observed.append(signature)
-        events.append("request")
-
-    audio_engine_mock.set_input_runtime_state.side_effect = publish
-    audio_engine_mock.request_input_runtime_policy_adoption = Mock(side_effect=request)
     audio_engine_mock.reset_mock()
-
     assert controller.input_mapping._refresh_rust_runtime_state()
-    assert events == ["publish", "request"]
-    committed = controller.input_mapping._last_input_runtime_state_signature
-
     assert controller.input_mapping._refresh_rust_runtime_state()
-    assert events == ["publish", "request", "request"]
-    assert len(observed) == 2
-    assert all(signature is committed for signature in observed)
-    assert controller.input_mapping._last_input_runtime_state_signature is committed
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    assert audio_engine_mock.request_input_runtime_policy_adoption.call_count == 2
-    assert audio_engine_mock.request_input_runtime_policy_adoption.call_args_list == [
-        call(service=True),
-        call(service=True),
-    ]
-
-
-@pytest.mark.parametrize("error_type", [RuntimeError, ValueError, TypeError])
-def test_policy_adoption_error_retains_publication_and_recovers_on_cache_hit(
-    controller: AppController, audio_engine_mock: Mock, error_type: type[Exception]
-) -> None:
-    _configure_accepted_pad(controller, audio_engine_mock)
-    previous = controller.input_mapping._last_input_runtime_state_signature
-    request = Mock(side_effect=error_type("Native policy request unavailable"))
-    audio_engine_mock.request_input_runtime_policy_adoption = request
-    audio_engine_mock.reset_mock()
-
-    assert not controller.input_mapping._refresh_rust_runtime_state()
-    committed = controller.input_mapping._last_input_runtime_state_signature
-    assert committed is not None
-    assert committed is not previous
-    assert committed[2][0].ready
-    assert controller.input_mapping._last_input_runtime_state_error == (
-        "Native policy request unavailable"
-    )
-    audio_engine_mock.set_input_runtime_state.assert_called_once()
-    request.assert_called_once_with(service=True)
-
-    audio_engine_mock.set_input_runtime_state.reset_mock()
-    request.side_effect = None
-    request.return_value = None
-
-    assert controller.input_mapping._refresh_rust_runtime_state()
-    assert controller.input_mapping._last_input_runtime_state_signature is committed
-    assert controller.input_mapping._last_input_runtime_state_error is None
-    audio_engine_mock.set_input_runtime_state.assert_not_called()
-    assert request.call_count == 2
-    assert request.call_args_list == [call(service=True), call(service=True)]
-
-
-def test_automatic_service_does_not_fall_back_to_a_legacy_no_argument_method(
-    controller: AppController, audio_engine_mock: Mock
-) -> None:
-    _configure_accepted_pad(controller, audio_engine_mock)
-    legacy_calls: list[None] = []
-
-    def request() -> None:
-        legacy_calls.append(None)
-
-    audio_engine_mock.request_input_runtime_policy_adoption = request
-
-    assert not controller.input_mapping._refresh_rust_runtime_state()
-    committed = controller.input_mapping._last_input_runtime_state_signature
-    assert committed is not None
-    assert not controller.input_mapping._refresh_rust_runtime_state()
-    assert controller.input_mapping._last_input_runtime_state_signature is committed
-    assert "service" in controller.input_mapping._last_input_runtime_state_error
-    assert not legacy_calls
-
-
-@pytest.mark.parametrize("missing", [False, True])
-def test_runtime_publication_remains_available_without_native_adoption_capability(
-    controller: AppController, audio_engine_mock: Mock, *, missing: bool
-) -> None:
-    _configure_accepted_pad(controller, audio_engine_mock)
-    audio_engine_mock.request_input_runtime_policy_adoption = None
-    if missing:
-        del audio_engine_mock.request_input_runtime_policy_adoption
-    audio_engine_mock.reset_mock()
-
-    assert controller.input_mapping._refresh_rust_runtime_state()
-    assert controller.input_mapping._refresh_rust_runtime_state()
-
-    audio_engine_mock.set_input_runtime_state.assert_called_once()
-    audio_engine_mock.pad_source_sync_status.assert_not_called()
-    assert controller.input_mapping._last_input_runtime_state_error is None
+    assert set(audio_engine_mock.set_input_runtime_state.call_args.kwargs) == {"pitch_rows"}
+    assert not any("policy_adoption" in call[0] for call in audio_engine_mock.mock_calls)
+    assert not hasattr(controller.transport, "source_sync")
+    assert not hasattr(controller.transport, "timing_policy")
+    assert not hasattr(controller.loader, "source_beatmaps")
 
 
 def test_runtime_region_and_accepted_identity_share_one_current_snapshot(
@@ -343,8 +243,6 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/unchanged.wav"
     controller.input_mapping._sync_rust_runtime_state()
-    request = Mock(return_value=None)
-    audio_engine_mock.request_input_runtime_policy_adoption = request
     original = _CapturedRuntimeGesture()
     controller.project.pad_loop_start_s[0] = 1.0
     audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
@@ -370,7 +268,6 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
     })
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    request.assert_not_called()
     audio_engine_mock.trigger_captured_input_pad.assert_called_once_with(original)
     controller.transport.residency.poll()
     assert not controller.transport.residency._captured_triggers
@@ -383,7 +280,6 @@ def test_rejected_publication_is_retried_and_never_launches_from_previous_runtim
     audio_engine_mock.set_input_runtime_state.side_effect = None
     controller.input_mapping._sync_rust_runtime_state()
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    request.assert_called_once_with(service=True)
 
 
 @pytest.mark.parametrize("unavailable", [False, True])

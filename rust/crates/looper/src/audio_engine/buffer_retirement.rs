@@ -25,7 +25,6 @@ pub(crate) enum RetiredAudioBuffer {
     ConstantTiming(PreparedConstantTiming),
     GlobalPlaybackBatch(Arc<super::global_playback_batch::GlobalPlaybackBatch>),
     AcceptedTimingRefresh(Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
-    RuntimePolicy(super::input_mapping::RuntimePolicyWork),
     ResidentTransaction(Box<crate::messages::ResidentTransaction>),
     ResidentCancellation(Arc<AtomicBool>),
     ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
@@ -47,12 +46,6 @@ pub(crate) enum RetiredAudioBuffer {
 }
 
 pub(crate) trait AudioBufferRetirement {
-    #[cfg(test)]
-    fn retire_runtime_policy(&mut self, work: super::input_mapping::RuntimePolicyWork) {
-        drop(work);
-    }
-    #[cfg(not(test))]
-    fn retire_runtime_policy(&mut self, work: super::input_mapping::RuntimePolicyWork);
     #[cfg(test)]
     fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
         drop(work);
@@ -326,9 +319,6 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
-    fn retire_runtime_policy(&mut self, work: super::input_mapping::RuntimePolicyWork) {
-        self.retire_buffer(RetiredAudioBuffer::RuntimePolicy(work));
-    }
     fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
         self.retire_buffer(RetiredAudioBuffer::MixCapture(work));
     }

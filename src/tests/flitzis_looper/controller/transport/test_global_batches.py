@@ -62,6 +62,9 @@ def _accepted_sources(
     audio.current_constant_timing.side_effect = metadata.get
     audio.pad_timing_intent.side_effect = lambda _sample_id: "automatic"
     audio.current_input_runtime_pad_binding.side_effect = bindings.get
+    # This fixture starts after whole-runtime admission. Separate input-mapping
+    # tests cover publication; these cases observe the batch's one source capture.
+    controller.transport.bind_input_runtime_refresh(lambda: True)
     return metadata, bindings
 
 

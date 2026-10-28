@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, Unpack, cast
 import pytest
 from imgui_bundle import imgui
 
-from flitzis_looper.controller.transport.global_params import GlobalRateStatus
+from flitzis_looper.controller.transport.global_params import (
+    BpmLockApplicationStatus,
+    GlobalRateStatus,
+)
 from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
 from flitzis_looper.ui.contextmanager import default_style
 from flitzis_looper.ui.render import render
@@ -69,6 +72,7 @@ class _PitchSurface:
         self.project = SimpleNamespace(
             speed=self.speed,
             bpm_lock=False,
+            multi_loop=True,
             input_mapping_enabled=False,
             sidebar_left_expanded=True,
             sidebar_right_expanded=True,
@@ -88,12 +92,17 @@ class _PitchSurface:
                         speed_reference_bpm=lambda: self.reference_bpm,
                         global_rate_status=lambda: self.rate,
                         key_lock_status=lambda: self.key_lock,
+                        bpm_lock_application_status=lambda: BpmLockApplicationStatus(
+                            requested=False, effective=False, pending=False
+                        ),
                     ),
                 ),
                 audio=SimpleNamespace(
                     global_=SimpleNamespace(
                         set_speed=self._set_speed,
                         toggle_key_lock=lambda: None,
+                        toggle_multi_loop=lambda: None,
+                        toggle_bpm_lock=lambda: None,
                     )
                 ),
                 ui=SimpleNamespace(

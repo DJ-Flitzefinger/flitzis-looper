@@ -164,15 +164,6 @@ pub(crate) fn normal_loop_feed_available_with_readers(
     {
         return false;
     }
-    if plan.loop_period.is_mapped()
-        && (!plan.domain().is_valid()
-            || plan
-                .loop_period
-                .mapped_period(plan.loop_region)
-                .is_none_or(|period| !period.validate_physical(plan.loop_region)))
-    {
-        return false;
-    }
     let position = playback.position();
     if position.seek_mode != plan.seek_mode
         || position.frame != plan.frame_pos
@@ -707,7 +698,6 @@ mod tests {
                 playback: self.playback,
                 plan: self.plan,
                 actual_feed: None,
-                mapped_input: None,
                 target_output_frame: 4096,
                 request_id: 1,
                 epoch: 0,

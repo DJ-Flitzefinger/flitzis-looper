@@ -703,8 +703,8 @@ fn apply_wet_attack_from(
     assert_eq!(attack.action.state(), "applied");
     assert_rate_clock(route, &attack, expected);
     let voice = route.voice(0);
-    assert!(voice.phase_launch_qualified);
-    assert!(voice.phase_birth_unadvanced);
+    assert!(voice.launch_qualified);
+    assert!(voice.launch_unadvanced);
     assert!(
         voice
             .source_playback

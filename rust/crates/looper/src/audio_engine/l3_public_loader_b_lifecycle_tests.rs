@@ -1190,7 +1190,7 @@ assert 0 not in session.active_sample_ids
             .source_playback
             .phase_reference_current(&launch_timeline)
     );
-    assert!(!voice(&playback.callback.mixer).phase_launch_qualified);
+    assert!(!voice(&playback.callback.mixer).launch_qualified);
     assert_eq!(
         voice(&playback.callback.mixer).stretch.adopted_request_id(),
         a_adoption

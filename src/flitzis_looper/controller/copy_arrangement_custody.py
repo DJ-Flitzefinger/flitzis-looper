@@ -9,46 +9,16 @@ from flitzis_looper.controller.pair_arrangement_journal import (
     validated_project_image,
 )
 from flitzis_looper.project_materials import original_asset, resolve_asset
-from flitzis_looper.source_beatmap_intent import SourceBeatmapReference
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from pathlib import Path
 
     from flitzis_looper.controller.asset_lifecycle import (
-        AssignmentImage,
-        AssignmentPublicationPlan,
         ProjectAssetLifecycle,
     )
     from flitzis_looper.copy_snapshot import CopySnapshot
-    from flitzis_looper.models import ProjectState
     from flitzis_looper_audio import ProjectAssetLease
-
-
-type MapRecoveryPublication = tuple[AssignmentImage, AssignmentPublicationPlan]
-
-
-def prepare_recovery_map_publication(
-    assets: ProjectAssetLifecycle, project: ProjectState, previous: MapRecoveryPublication | None
-) -> MapRecoveryPublication | None:
-    """Retain a complete prepared image in the existing recovery owner before Config commit."""
-    if previous is not None:
-        image, publication = previous
-        if publication.owns_unpublished_image:
-            assets.release_assignment_image(image)
-        elif not publication.settled:
-            publication.apply()
-    if previous is None and not any(
-        intent is not None and intent.selected is not None
-        for intent in project.pad_source_beatmap_intent
-    ):
-        return None
-    image = assets.prepare_assignment_image(project)
-    try:
-        return image, assets.prepare_assignment_publication(image)
-    except OSError, RuntimeError, TypeError, ValueError:
-        assets.release_assignment_image(image)
-        raise
 
 
 def journal_project_images(encoded: Iterable[str]) -> Iterator[str]:
@@ -71,7 +41,6 @@ class CopyJournalCustody:
     readers: list[ProjectAssetLease] = field(default_factory=list)
     acquired: bool = False
     _owned: dict[tuple[int, str, Path], ProjectAssetLease] = field(default_factory=dict)
-    _map_references: dict[Path, SourceBeatmapReference] = field(default_factory=dict)
     _project_images: set[bytes] = field(default_factory=set)
 
     def acquire(
@@ -111,16 +80,7 @@ class CopyJournalCustody:
         fingerprint = hashlib.sha256(raw_image.encode("utf-8")).digest()
         if fingerprint in self._project_images:
             return
-        project = validated_project_image(raw_image)
-        errors: list[str] = []
-        for intent in project.pad_source_beatmap_intent:
-            if intent is not None and intent.selected is not None:
-                try:
-                    self._acquire_map(assets, root, intent.selected)
-                except (OSError, RuntimeError, TypeError, ValueError) as error:
-                    errors.append(str(error))
-        if errors:
-            raise RuntimeError("; ".join(errors))
+        validated_project_image(raw_image)
         self._project_images.add(fingerprint)
 
     def _acquire_snapshot(
@@ -134,12 +94,6 @@ class CopyJournalCustody:
         for kind, reference in references:
             try:
                 self._acquire_reference(assets, root, index, kind, reference)
-            except (OSError, RuntimeError, TypeError, ValueError) as error:
-                errors.append(str(error))
-        intent = data.source_beatmap_intent
-        if intent is not None and intent.selected is not None:
-            try:
-                self._acquire_map(assets, root, intent.selected)
             except (OSError, RuntimeError, TypeError, ValueError) as error:
                 errors.append(str(error))
         if errors:
@@ -165,41 +119,6 @@ class CopyJournalCustody:
         self.readers.append(lease)
         self._owned[index, kind, path] = lease
 
-    def _acquire_map(
-        self, assets: ProjectAssetLifecycle, root: Path, reference: SourceBeatmapReference
-    ) -> None:
-        reference = SourceBeatmapReference.model_validate(reference)
-        path = resolve_asset(reference.reference, project_root=root).path
-        previous = self._map_references.get(path)
-        if previous is not None and previous != reference:
-            message = "Copy journal has contradictory immutable map receipts for one path"
-            raise ValueError(message)
-        self._map_references[path] = reference
-        if (-1, "source_beatmap", path) in self._owned:
-            return
-        preservation = (-2, "source_beatmap", path.parent)
-        if preservation not in self._owned:
-            # Acquire the actual typed generation FIRST. If leaf binding fails,
-            # this transient ancestor still blocks an already queued cleanup.
-            # It conveys no verified leaf bytes/hash or source qualification.
-            lease = assets.acquire(path.parent)
-            self.readers.append(lease)
-            self._owned[preservation] = lease
-        try:
-            lease = assets._acquire_map(reference)
-        except OSError, RuntimeError, ValueError:
-            # History requires actual retention, not current map qualification.
-            # The already acquired generation pin remains until real settlement.
-            return
-        self.readers.append(lease)
-        self._owned[-1, "source_beatmap", path] = lease
-        # The exact bound leaf now provides the same path protection. Retain a
-        # failed preservation release in the original reader owner for retry.
-        reader = self._owned[preservation]
-        reader.release()
-        self.readers.remove(reader)
-        self._owned.pop(preservation)
-
     def release(self) -> None:
         """Release readers only after the terminal journal and live owners are settled."""
         while self.readers:
@@ -207,5 +126,4 @@ class CopyJournalCustody:
             self.readers.pop()
         self.acquired = False
         self._owned.clear()
-        self._map_references.clear()
         self._project_images.clear()

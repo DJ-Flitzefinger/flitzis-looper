@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import ClassVar, Literal, NotRequired, TypedDict
+from typing import ClassVar, Literal, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,34 +27,6 @@ class ScalarSourceGrid:
     def source_at_beat(self, beat: float) -> float | None: ...
     def source_after_beats(self, source_s: float, beats: float) -> float | None: ...
 
-class RuntimePolicyAdoption(TypedDict):
-    snapshot_revision: int
-    attempt: int
-    state: Literal["pending", "applied", "refused"]
-    reason: (
-        Literal[
-            "busy",
-            "stale",
-            "unsupported",
-            "source_changed",
-            "missing_master",
-            "invalid_target",
-            "phase_changed",
-            "reader_unavailable",
-            "capacity",
-            "scheduler_full",
-            "sequence_exhausted",
-            "no_active_voices",
-        ]
-        | None
-    )
-    execution_frame: int | None
-    target_mode: Literal["legacy", "off", "fixed", "mapped"]
-    target_policy_revision: int | None
-    target_policy_sync: bool | None
-    target_policy_realtime_bpm: bool | None
-    target_intent_revision: int
-
 class GlobalRateMasterProvenance(TypedDict):
     # Actual Native evidence, coherent with the effective rate tuple; never admission.
     kind: Literal["absent", "unknown", "qualified"]
@@ -81,268 +53,15 @@ class BpmLockStatus(TypedDict):
     effective_enabled: bool
     reason: (
         Literal[
-            "mapped_active",
             "rate_pending",
             "drain_pending",
             "history_pending",
-            "policy_pending",
             "reference_changed",
         ]
         | None
     )
     execution_frame: int | None
     submission_available: bool
-
-class SourceSyncStatus(TypedDict):
-    source_generation: int
-    source_identity: int
-    window_revision: int
-    active: bool
-    effective: bool
-    intent_revision: int | None
-    map_revision: str | None
-    policy_mode: Literal["legacy", "off", "fixed", "mapped"] | None
-    policy_revision: int | None
-    policy_sync: bool | None
-    policy_realtime_bpm: bool | None
-    settled: bool | None
-    target_current: NotRequired[bool | None]
-    phase_program_current: NotRequired[bool | None]
-    phase_program_revision: NotRequired[int | None]
-    phase_read_confirmed: NotRequired[bool | None]
-    adoption: NotRequired[RuntimePolicyAdoption | None]
-
-class SourceBeatmapEvaluation(TypedDict):
-    map_revision: str
-    source_seconds: float | None
-    beat: float | None
-    local_bpm: float | None
-    coordinate_status: str
-    interval_status: str
-    segment_index: int | None
-    physical_domain: str
-    meter_status: str
-    downbeat_label: int | None
-
-class SourceBeatmapEditorInfo(TypedDict):
-    map_revision: str
-    sample_rate_hz: int
-    source_duration_seconds: float
-    anchor_count: int
-    can_undo: bool
-
-class SourceBeatmapEditorLine(TypedDict):
-    source_seconds: float
-    loop_beat: float
-    major: bool
-    reference: bool
-    meter_status: str
-    downbeat: bool
-
-class SourceBeatmapEditorAnchor(TypedDict):
-    source_seconds: float
-    beat: float
-    sample_index: int | None
-
-class SourceBeatmapEditorView(TypedDict):
-    map_revision: str
-    status: str
-    step_beats: float
-    lines: list[SourceBeatmapEditorLine]
-    anchors: list[SourceBeatmapEditorAnchor]
-
-class SourceBeatmapEditorSpanAnchor(SourceBeatmapEditorAnchor):
-    index: int
-
-class SourceBeatmapEditorSpan(TypedDict):
-    map_revision: str
-    status: str
-    first_anchor: SourceBeatmapEditorSpanAnchor | None
-    last_anchor: SourceBeatmapEditorSpanAnchor | None
-    quarter_notes: float | None
-    interval_count: int
-    coverage: str
-    meter_status: str
-    downbeat_status: str
-    downbeat_label: int | None
-
-class SourceBeatmapReviewInfo(TypedDict):
-    status: Literal["ready", "unavailable"]
-    reason: str | None
-    map_revision: str
-    source_identity: str
-    capture_revision: str | None
-    capture_encoding: str | None
-    backend: Literal["legacy_qm", "beat_this"] | None
-    event_count: int
-    anchor_count: int
-    source_sample_rate_hz: int
-    source_frame_count: int
-
-class SourceBeatmapReviewAnchor(TypedDict):
-    index: int
-    source_seconds: float
-    source_seconds_bits: str
-    beat: float
-    beat_bits: str
-    raw_beat_index: int | None
-    review: Literal["estimated", "reviewed"]
-    sample_index: int | None
-    has_sample_edit: bool
-
-class SourceBeatmapReviewEvent(TypedDict):
-    raw_index: int
-    source_seconds: float
-    source_seconds_bits: str
-    detected_downbeat: bool
-    physical_domain: Literal["inside", "exclusive_end", "outside"]
-
-class SourceBeatmapReviewPage(TypedDict):
-    status: Literal["ready", "unavailable"]
-    reason: str | None
-    map_revision: str
-    source_identity: str
-    capture_revision: str | None
-    first_anchor_index: int
-    last_anchor_index: int
-    start_index: int
-    returned_count: int
-    total_event_count: int
-    has_more: bool
-    anchors: list[SourceBeatmapReviewAnchor]
-    events: list[SourceBeatmapReviewEvent]
-
-class SourceBeatmapProjection(TypedDict):
-    map_revision: str
-    status: str
-    points: list[SourceBeatmapEvaluation]
-
-class SourceBeatmap:
-    # Immutable control-side geometry; parsing supplies no source/audio authority.
-    # Capability 4 adds explicit captured-map insert_manual_beat intent.
-    EDITOR_CORRECTION_API_VERSION: ClassVar[int]
-    @staticmethod
-    def from_json(record_json: str) -> SourceBeatmap: ...
-    def record_json(self) -> str: ...
-    def revision(self) -> str: ...
-    def source_identity(self) -> str: ...
-    def editor_info(self) -> SourceBeatmapEditorInfo: ...
-    def editor_span(
-        self, first_anchor_index: int, last_anchor_index: int
-    ) -> SourceBeatmapEditorSpan: ...
-    def editor_review_info(self) -> SourceBeatmapReviewInfo: ...
-    def editor_review_page(
-        self,
-        first_anchor_index: int,
-        last_anchor_index: int,
-        start_index: int,
-        max_events: int = 128,
-    ) -> SourceBeatmapReviewPage: ...
-    def editor_view(
-        self,
-        start_s: float,
-        end_s: float,
-        loop_start_s: float,
-        px_per_s: float,
-        max_points: int = 2048,
-    ) -> SourceBeatmapEditorView: ...
-    def source_after_beats(
-        self,
-        source_seconds: float,
-        beats: float,
-        require_four_four: bool = True,
-    ) -> SourceBeatmapEvaluation: ...
-    def evaluate_source(self, source_seconds: float) -> SourceBeatmapEvaluation: ...
-    def evaluate_beat(self, beat: float) -> SourceBeatmapEvaluation: ...
-    def local_tempo_at_source(self, source_seconds: float) -> SourceBeatmapEvaluation: ...
-    def nearest_grid_source(
-        self, source_seconds: float, step_beats: float = 0.0625
-    ) -> SourceBeatmapEvaluation: ...
-    def project_beats(
-        self, first_beat: float, last_beat: float, step_beats: float, max_points: int = 2048
-    ) -> SourceBeatmapProjection: ...
-    def diagnostic_extrapolate_source(self, source_seconds: float) -> SourceBeatmapEvaluation: ...
-    def diagnostic_extrapolate_beat(self, beat: float) -> SourceBeatmapEvaluation: ...
-
-class SourceBeatmapArtifact:
-    def retire_unselected(self) -> None: ...
-    # Nonconstructible genuine immutable output; receipt data grants no authority.
-    def receipt_json(self) -> str: ...
-    def reference(self) -> str: ...
-    def map(self) -> SourceBeatmap: ...
-
-class SourceBeatmapRawInfo(TypedDict):
-    backend: Literal["legacy_qm", "beat_this"]
-    capture_encoding: str
-    status: Literal["ready", "placement_pending", "stale", "cancelled"]
-    raw_revision: str
-    decoder_identity: str
-    source_sample_rate_hz: int
-    source_frame_count: int
-    source_zero_frame: int
-    mono_sha256: str
-    mono_rule: str
-    analyzer_sha256: str | None
-    analyzer_sample_rate_hz: int | None
-    analyzer_frame_count: int | None
-    conversion_revision: str | None
-    odf_hop_samples: int | None
-    detector_id: str
-    code_revision: str
-    configuration: dict[str, object] | None
-    worker_input_sha256: str | None
-    worker_input_sample_rate_hz: int | None
-    worker_input_frame_count: int | None
-    worker_input_source_zero_frame: int | None
-    model: dict[str, str] | None
-    frontend_identity: str | None
-    beat_logit_count: int
-    downbeat_logit_count: int
-    event_count: int
-    detected_downbeat_count: int
-    outside_source_event_count: int
-    interpretation: Literal["unverified"]
-    timing_uncertainty: Literal["unknown"]
-
-class SourceBeatmapRawEvent(TypedDict):
-    raw_index: int
-    odf_frame: float | None
-    source_seconds: float
-    detected_downbeat: bool
-    physical_domain: Literal["inside", "exclusive_end", "outside"]
-
-class SourceBeatmapRawInspection(TypedDict):
-    status: Literal["ready", "placement_pending", "stale", "cancelled"]
-    raw_revision: str
-    start_index: int
-    returned_count: int
-    total_event_count: int
-    has_more: bool
-    events: list[SourceBeatmapRawEvent]
-
-class SourceBeatmapRawDownbeatEvent(TypedDict):
-    raw_downbeat_index: int
-    source_seconds: float
-    physical_domain: Literal["inside", "exclusive_end", "outside"]
-    exact_matching_beat_index: int | None
-
-class SourceBeatmapRawDownbeatInspection(TypedDict):
-    status: Literal["ready", "placement_pending", "stale", "cancelled"]
-    raw_revision: str
-    start_index: int
-    returned_count: int
-    total_event_count: int
-    has_more: bool
-    events: list[SourceBeatmapRawDownbeatEvent]
-
-class SourceBeatmapRawCandidate:
-    # Nonconstructible unverified original evidence; no map/receipt/ACK API.
-    RAW_REVIEW_API_VERSION: ClassVar[int]
-    def info(self) -> SourceBeatmapRawInfo: ...
-    def inspect(self, start_index: int, max_events: int = 128) -> SourceBeatmapRawInspection: ...
-    def inspect_downbeats(
-        self, start_index: int, max_events: int = 128
-    ) -> SourceBeatmapRawDownbeatInspection: ...
 
 class AudioMessage:
     def sample_id(self) -> int | None: ...
@@ -435,18 +154,6 @@ class OrdinaryTransportObservation:
 
 class OfflineAnalysisJob:
     # Map-purpose jobs share admission/cancellation; analysis-only methods refuse them.
-    def prepare_source_beatmap(self, record_json: str) -> None: ...
-    def finish_source_beatmap(self) -> bool: ...
-    def source_beatmap_async_status(self) -> dict[str, object] | None: ...
-    def resolve_source_beatmap_completion(
-        self, delivery: LoaderEventDelivery
-    ) -> SourceBeatmap | None: ...
-    def resolve_source_beatmap_artifact_completion(
-        self, delivery: LoaderEventDelivery
-    ) -> SourceBeatmapArtifact | None: ...
-    def resolve_source_beatmap_raw_completion(
-        self, delivery: LoaderEventDelivery
-    ) -> SourceBeatmapRawCandidate | None: ...
     def metadata(self) -> dict[str, object]: ...
     def staging_stats(self) -> dict[str, int]: ...
     def prepare_export(self, path: str) -> None: ...
@@ -544,11 +251,6 @@ class ProjectAssetLease:
     def release(self) -> None: ...
     def acknowledge(self, expected_path: str) -> None: ...
     def reclaim_stems(self, expected_path: str) -> None: ...
-    def bind_source_beatmap(self, receipt_json: str) -> None: ...
-    def retire_source_beatmap(self) -> None: ...
-    def acknowledge_source_beatmap(self) -> None: ...
-    @property
-    def source_beatmap_bound(self) -> bool: ...
     @property
     def released(self) -> bool: ...
 
@@ -817,7 +519,6 @@ class RecoveredBankAcceptance:
 
 class LoaderEventDelivery:
     def same_owner(self, other: LoaderEventDelivery) -> bool: ...
-    def automatic_source_beatmap_error(self) -> str | None: ...
 
 class PadPairTicket:
     def publication_status(self) -> str: ...
@@ -828,11 +529,9 @@ class MixCaptureTicket:
     def session_id(self) -> int: ...
 
 class AudioEngine:
-    GLOBAL_TIMING_POLICY_API_VERSION: ClassVar[int]
+    BPM_ONLY_RUNTIME_API_VERSION: ClassVar[int]
     GLOBAL_RATE_PROVENANCE_API_VERSION: ClassVar[int]
-    # Version 2 includes strict optional source_map_rows ordinary_pending permission.
     ORDINARY_TRANSPORT_API_VERSION: ClassVar[int]
-    GRID_PHASE_ORIGIN_API_VERSION: ClassVar[int]
     def audio_stream_failed(self) -> bool: ...
     def quiesce_failed_audio_stream(self) -> bool: ...
     # Internal float-spool capture; successful_spool is not an encoded/public take.
@@ -999,20 +698,7 @@ class AudioEngine:
     def output_device_descriptor(self) -> dict[str, object] | None: ...
     def request_loop_acceptance_snapshot(self, sample_id: int) -> int: ...
     SYNC_DIAGNOSTIC_API_VERSION: int
-    def request_sync_diagnostic_snapshot(self) -> int: ...
-    def consume_automatic_source_beatmap(
-        self, delivery: LoaderEventDelivery
-    ) -> tuple[int, SourceBeatmapArtifact, LoaderEventDelivery] | None: ...
-    AUTOMATIC_SOURCE_BEATMAP_JOB_API_VERSION: ClassVar[int]
-    AUTOMATIC_SOURCE_BEATMAP_SELECTION_API_VERSION: ClassVar[int]
     BEAT_THIS_EXECUTION_API_VERSION: ClassVar[int]
-    def begin_automatic_source_beatmap_restore_async(
-        self, sample_id: int, receipt_json: str
-    ) -> OfflineAnalysisJob: ...
-    def begin_automatic_source_beatmap_async(
-        self, sample_id: int, installation_root: str, *, expected_source_generation: int
-    ) -> OfflineAnalysisJob: ...
-    def sync_diagnostic_snapshot(self, request_id: int) -> dict[str, object] | None: ...
     def loop_acceptance_snapshot(
         self, sample_id: int, request_id: int
     ) -> dict[str, object] | None: ...
@@ -1066,9 +752,6 @@ class AudioEngine:
         loop_ends: list[float | None],
         bindings: list[InputRuntimePadBinding | None] | None = None,
         pitch_rows: list[dict[str, object]] | None = None,
-        source_map_rows: list[dict[str, object]] | None = None,
-        *,
-        timing_policy_json: str | None = None,
     ) -> None: ...
     def current_input_runtime_pad_binding(
         self, sample_id: int
@@ -1126,44 +809,6 @@ class AudioEngine:
     ) -> None: ...
     def analyze_sample_async(self, sample_id: int) -> int: ...
     def begin_offline_analysis(self, sample_id: int) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap(self, sample_id: int) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_raw_async(
-        self, sample_id: int, *, expected_source_generation: int
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_beat_this_raw_async(
-        self, sample_id: int, installation_root: str, *, expected_source_generation: int
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_review_async(
-        self,
-        sample_id: int,
-        candidate: SourceBeatmapRawCandidate,
-        review_json: str,
-        *,
-        expected_source_generation: int,
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_async(
-        self, sample_id: int, record_json: str
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_store_async(
-        self, sample_id: int, record_json: str
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_restore_async(
-        self, sample_id: int, receipt_json: str
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_create_async(
-        self,
-        sample_id: int,
-        origin_seconds: float,
-        period_seconds: float,
-        *,
-        expected_source_generation: int | None = None,
-    ) -> OfflineAnalysisJob: ...
-    def begin_source_beatmap_edit_async(
-        self,
-        sample_id: int,
-        receipt_json: str,
-        operation_json: str,
-    ) -> OfflineAnalysisJob: ...
     def set_pad_timing_intent(
         self,
         sample_id: int,
@@ -1338,11 +983,6 @@ class AudioEngine:
         expected_source_generation: int | None = None,
     ) -> int: ...
     def pad_key_lock_status(self, sample_id: int) -> dict[str, object] | None: ...
-    def request_input_runtime_policy_adoption(self, *, service: bool = False) -> None: ...
-    def pad_source_sync_status(
-        self,
-        id: int,  # noqa: A002 - Match the existing Native keyword signature.
-    ) -> SourceSyncStatus | None: ...
     def set_master_bpm(self, bpm: float) -> None: ...
     def set_master_period(
         self, period_seconds: float, *, anchor_binding: InputRuntimePadBinding | None = None
@@ -1368,8 +1008,6 @@ class AudioEngine:
         *,
         expected_source_generation: int | None = None,
     ) -> None: ...
-    def bootstrap_transport_from_pad(self, sample_id: int) -> None: ...
-    def anchor_transport_phase_from_pad(self, sample_id: int) -> None: ...
     def unload_sample(self, sample_id: int) -> None: ...
     def ping(self) -> None: ...
     def receive_msg(self) -> AudioMessage | None: ...

@@ -123,7 +123,6 @@ impl PreparedPairRuntimeMirror<'_> {
         }
         // The parent's original marker owns the complete two-row publication.
         // The runtime mutex remains held until both actual rows and this commit exist.
-        self.ownership.publish_runtime_policy_revision();
     }
 }
 

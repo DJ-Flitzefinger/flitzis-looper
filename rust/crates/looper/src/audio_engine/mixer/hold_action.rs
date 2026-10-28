@@ -117,16 +117,6 @@ impl RtMixer {
         }
         match effect {
             TransportContentEffect::Pause | TransportContentEffect::Resume => {
-                let Some(replacements) = self.mapped_transport_continuations_rt(
-                    id,
-                    key,
-                    (cohort, changed),
-                    matches!(effect, TransportContentEffect::Resume),
-                    output_frame,
-                    transport,
-                ) else {
-                    return (REFUSED, cohort != 0, previous_paused);
-                };
                 self.revoke_hold_for_content_rt(
                     key,
                     HoldActionState::Superseded,
@@ -135,9 +125,6 @@ impl RtMixer {
                 );
                 for (index, voice) in self.voices.iter_mut().enumerate() {
                     if changed & (1u32 << index) != 0 {
-                        if let Some(playback) = replacements[index] {
-                            voice.source_playback = playback;
-                        }
                         if matches!(effect, TransportContentEffect::Pause) {
                             voice.pause();
                         } else {
@@ -156,9 +143,6 @@ impl RtMixer {
                 position_s,
                 expected_source_generation,
             } => {
-                if self.hold_content_is_mapped_rt(id, key) {
-                    return (REFUSED, cohort != 0, previous_paused);
-                }
                 let held_cohort = self.hold_actions[key.cell().index()]
                     .as_ref()
                     .filter(|owned| owned.action.key() == key)
@@ -346,12 +330,6 @@ impl RtMixer {
         }
         // Legacy numerical helpers carry no actual callback epoch and remain
         // closed even when their artificial mapped cohort is already paused.
-        if transport.is_none() && self.hold_content_is_mapped_rt(id, key) {
-            action.settle(HoldActionState::Rejected, output_frame);
-            let projection = action.projection();
-            retirement.retire_hold_action(work);
-            return projection;
-        }
         let mut effect = NativePauseEffect {
             key,
             action_id: action.action_id(),
@@ -379,23 +357,6 @@ impl RtMixer {
                     effect.changed_mask |= bit;
                 }
             }
-        }
-
-        if self
-            .mapped_hold_continuations_rt(
-                id,
-                key,
-                effect.changed_mask,
-                None,
-                output_frame,
-                transport,
-            )
-            .is_none()
-        {
-            action.settle(HoldActionState::Rejected, output_frame);
-            let projection = action.projection();
-            retirement.retire_hold_action(work);
-            return projection;
         }
 
         // A later accepted physical hold may not inherit another hold's pause. Its producer
@@ -471,9 +432,6 @@ impl RtMixer {
         let state = match self.content_effect_slot(key) {
             None => HoldActionState::Retired,
             Some(_) if !action.intent_current() => HoldActionState::Superseded,
-            Some(id) if transport.is_none() && self.hold_content_is_mapped_rt(id, key) => {
-                HoldActionState::Rejected
-            }
             Some(id) => {
                 let same_owner = self.hold_actions[cell].as_ref().is_some_and(|owned| {
                     Arc::ptr_eq(&owned.action, action)
@@ -483,27 +441,13 @@ impl RtMixer {
                     Some(effect)
                         if same_owner && self.hold_effect_cohort_current_rt(id, effect) =>
                     {
-                        if let Some(replacements) = self.mapped_hold_continuations_rt(
-                            id,
-                            key,
-                            effect.changed_mask,
-                            Some(effect.paused_at_output_frame),
-                            output_frame,
-                            transport,
-                        ) {
-                            for (index, voice) in self.voices.iter_mut().enumerate() {
-                                if effect.changed_mask & (1u32 << index) != 0 {
-                                    if let Some(playback) = replacements[index] {
-                                        voice.source_playback = playback;
-                                    }
-                                    voice.resume();
-                                }
+                        for (index, voice) in self.voices.iter_mut().enumerate() {
+                            if effect.changed_mask & (1u32 << index) != 0 {
+                                voice.resume();
                             }
-                            self.publish_key_lock_status(id);
-                            HoldActionState::Resumed
-                        } else {
-                            HoldActionState::Rejected
                         }
+                        self.publish_key_lock_status(id);
+                        HoldActionState::Resumed
                     }
                     _ => HoldActionState::Superseded,
                 }
@@ -516,14 +460,6 @@ impl RtMixer {
         }
         retirement.retire_hold_action(work);
         projection
-    }
-
-    fn hold_content_is_mapped_rt(&self, id: usize, key: ContentKey) -> bool {
-        // Ordinary transport stays closed until its durable revision-correct feedback exists.
-        self.voices.iter().any(|voice| {
-            Self::hold_voice_belongs_to_content_rt(voice, id, key)
-                && voice.source_playback.is_mapped()
-        })
     }
 
     fn hold_effect_cohort_current_rt(&self, id: usize, effect: NativePauseEffect) -> bool {

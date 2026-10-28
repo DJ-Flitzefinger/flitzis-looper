@@ -36,12 +36,10 @@ def _encoded(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def _legacy_image(text: str, budget: int, *, source_map_missing: bool) -> str:
+def _legacy_image(text: str, budget: int) -> str:
     data = json.loads(text)
     data["resident_pcm_budget_mib"] = budget
     data.pop("resident_pcm_budget_automatic")
-    if source_map_missing:
-        data.pop("pad_source_beatmap_intent")
     return _encoded(data)
 
 
@@ -50,8 +48,6 @@ def _historical_settled_case(
     monkeypatch: pytest.MonkeyPatch,
     kind: JournalKind,
     budget: int,
-    *,
-    source_map_missing: bool,
 ) -> tuple[Path, list[str]]:
     if kind == "pair":
         config, current = _pair_prior(tmp_path, monkeypatch, after=True)
@@ -70,9 +66,7 @@ def _historical_settled_case(
     for index, record in enumerate(records):
         for field in ("project_image_json", "captured_project_image_json"):
             if field in record:
-                record[field] = _legacy_image(
-                    record[field], budget, source_map_missing=source_map_missing
-                )
+                record[field] = _legacy_image(record[field], budget)
         if captured_digest is None:
             captured_digest = hashlib.sha256(record["project_image_json"].encode()).hexdigest()
         record["captured_config_sha256"] = captured_digest
@@ -109,18 +103,13 @@ def _settle_empty_recording_discovery(app: AppController) -> None:
 
 @pytest.mark.parametrize("kind", ["pair", "copy", "bank"])
 @pytest.mark.parametrize("budget", [512, 9925])
-@pytest.mark.parametrize("source_map_missing", [False, True])
 def test_settled_legacy_histories_accept_known_missing_admission_field_without_rewriting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     kind: JournalKind,
     budget: int,
-    *,
-    source_map_missing: bool,
 ) -> None:
-    config, historical = _historical_settled_case(
-        tmp_path, monkeypatch, kind, budget, source_map_missing=source_map_missing
-    )
+    config, historical = _historical_settled_case(tmp_path, monkeypatch, kind, budget)
     transaction = json.loads(historical[0])["transaction_id"]
     store = MaterialMigrationJournalStore.open(str(config.parent), transaction)
     validators = {
@@ -139,25 +128,19 @@ def test_settled_legacy_histories_accept_known_missing_admission_field_without_r
         image = validated_project_image(record.project_image_json)
         assert image.resident_pcm_budget_mib == budget
         assert image.resident_pcm_budget_automatic is (budget == 512)
-        assert image.pad_source_beatmap_intent == [None] * 216
     assert store.history() == historical
 
 
 @pytest.mark.parametrize("kind", ["pair", "copy", "bank"])
 @pytest.mark.parametrize("budget", [512, 9925])
-@pytest.mark.parametrize("source_map_missing", [False, True])
 def test_settled_legacy_history_startup_closes_without_spurious_writer_recovery(
     audio_engine_mock: Mock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     kind: JournalKind,
     budget: int,
-    *,
-    source_map_missing: bool,
 ) -> None:
-    config, historical = _historical_settled_case(
-        tmp_path, monkeypatch, kind, budget, source_map_missing=source_map_missing
-    )
+    config, historical = _historical_settled_case(tmp_path, monkeypatch, kind, budget)
     directory = config.parent / ".material-migrations"
     before = {config: config.read_bytes()}
     before.update({leaf: leaf.read_bytes() for leaf in directory.glob("*/*.json")})
@@ -198,20 +181,16 @@ def test_settled_legacy_history_startup_closes_without_spurious_writer_recovery(
 
 @pytest.mark.parametrize("budget", [512, 9925])
 @pytest.mark.parametrize("automatic", [False, True])
-@pytest.mark.parametrize("source_map_missing", [False, True])
-def test_project_image_preserves_explicit_admission_mode_and_existing_map_only_compatibility(
-    budget: int, *, automatic: bool, source_map_missing: bool
+def test_project_image_preserves_explicit_admission_mode_for_current_project_images(
+    budget: int, *, automatic: bool
 ) -> None:
     project = ProjectState(resident_pcm_budget_mib=budget, resident_pcm_budget_automatic=automatic)
     data = project.model_dump(mode="json", exclude_computed_fields=True)
-    if source_map_missing:
-        data.pop("pad_source_beatmap_intent")
 
     restored = validated_project_image(_encoded(data))
 
     assert restored.resident_pcm_budget_mib == budget
     assert restored.resident_pcm_budget_automatic is automatic
-    assert restored.pad_source_beatmap_intent == [None] * 216
 
 
 @pytest.mark.parametrize("automatic", [0, 1, "false", "true", None])
@@ -227,9 +206,7 @@ def test_project_image_rejects_non_boolean_explicit_admission_mode(automatic: ob
 def test_legacy_admission_image_does_not_allow_unrelated_missing_or_unknown_metadata(
     corruption: str,
 ) -> None:
-    data = json.loads(
-        _legacy_image(ProjectState().model_dump_json(), 9925, source_map_missing=True)
-    )
+    data = json.loads(_legacy_image(ProjectState().model_dump_json(), 9925))
     if corruption == "missing":
         data.pop("volume")
     elif corruption == "unknown":
@@ -248,7 +225,7 @@ def test_legacy_admission_image_does_not_allow_unrelated_missing_or_unknown_meta
 
 @pytest.mark.parametrize("nested", [False, True])
 def test_legacy_admission_image_rejects_duplicate_json_keys(*, nested: bool) -> None:
-    text = _legacy_image(ProjectState().model_dump_json(), 9925, source_map_missing=True)
+    text = _legacy_image(ProjectState().model_dump_json(), 9925)
     if nested:
         text = text.replace('"base_shift":0', '"base_shift":0,"base_shift":0', 1)
     else:

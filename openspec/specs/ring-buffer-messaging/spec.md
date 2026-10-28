@@ -150,44 +150,34 @@ producer-side request SHALL fail or be deferred without affecting the audio call
 - **AND** it does not touch disk, allocate stem audio, run inference, log, block, or acquire the GIL
 
 
-<!-- Added from add-phase-aware-playback-sync -->
-### Requirement: Phase Sync Uses Fixed-Size Control Messages
-The system SHALL use the existing fixed-capacity control-to-audio ring buffer for
-phase-aware playback sync requests.
+### Requirement: Qualified Bootstrap Uses Existing Bounded Control Ownership
+The system SHALL retain the existing fixed-capacity control-to-audio ring architecture for
+source-qualified BPM-lock setup and acknowledged accepted-timing refreshes. Only bounded
+identifiers, scalars and established prepared ownership handles SHALL cross this boundary;
+Python objects, file paths and heap-owned beat-grid vectors SHALL NOT enter the callback.
+The system SHALL NOT expose unqualified phase-anchor or bootstrap control commands.
 
-Any new request for BPM-lock transport phase anchoring SHALL be represented as a fixed-size
-control message. The message SHALL contain bounded identifiers or scalar values only, such
-as a selected pad id, and SHALL NOT contain file paths, heap-owned beat-grid vectors, or
-Python objects.
+#### Scenario: Qualified bootstrap uses audio-thread state
+- **WHEN** a qualified accepted-timing refresh arms the internal one-time session bootstrap
+- **THEN** the audio thread uses current source/ownership and bounded mixer/transport state
+- **AND** Python does not directly access transport, scheduler or mixer storage
 
-#### Scenario: BPM-lock phase-anchor request is fixed-size
-- **WHEN** Python/control code requests transport phase anchoring from the selected BPM-lock pad
-- **THEN** the request is enqueued as a fixed-size control message
-- **AND** the audio thread uses audio-thread-owned mixer and transport state to process it
-- **AND** Python does not directly access transport, scheduler, or mixer storage
+### Requirement: Qualified Timing Publication Failures Are Non-Blocking
+A full control ring SHALL reject or defer must-apply qualified timing publication outside the
+callback according to the existing producer contract. An unavailable bootstrap reference SHALL
+remain pending without corrupting master phase or interrupting ordinary playback.
 
+#### Scenario: Ring buffer full preserves playback
+- **GIVEN** the control-to-audio ring is full
+- **WHEN** control code attempts a qualified timing publication
+- **THEN** the producer reports rejection or defers outside the callback
+- **AND** currently playing audio continues unchanged
 
-<!-- Added from add-phase-aware-playback-sync -->
-### Requirement: Phase Sync Message Failures Are Non-Blocking
-Phase sync message failures SHALL be handled without blocking the audio callback.
-
-If the control ring buffer is full before a request reaches the audio thread, the
-Python-facing producer-side error/drop behavior SHALL apply. If phase anchoring cannot be
-computed after a request reaches the audio thread, the request SHALL be ignored safely and
-existing playback SHALL continue.
-
-#### Scenario: Ring buffer full does not affect audio callback
-- **GIVEN** the control-to-audio ring buffer is full
-- **WHEN** Python/control code attempts to enqueue a phase-anchor request
-- **THEN** the request is rejected or dropped according to the Python API contract
-- **AND** the audio callback continues unaffected
-
-#### Scenario: Phase anchor request cannot be computed
-- **GIVEN** a phase-anchor request reaches the audio callback
-- **AND** the selected pad is inactive or missing required metadata
-- **WHEN** the callback handles the request
-- **THEN** the callback ignores the request safely
-- **AND** it does not block, allocate, log, touch disk, acquire the GIL, or panic
+#### Scenario: Unavailable reference does not block the callback
+- **GIVEN** a qualified internal bootstrap reference lacks required active timing metadata
+- **WHEN** the callback services bootstrap
+- **THEN** it preserves master phase and defers completion
+- **AND** it does not block, allocate, log, touch disk, acquire the GIL or panic
 
 
 <!-- Added from add-rust-transport-timeline -->

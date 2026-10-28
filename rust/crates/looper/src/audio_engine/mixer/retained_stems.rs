@@ -134,9 +134,6 @@ impl RtMixer {
             if !voice.active || voice.sample_id != id {
                 return true;
             }
-            if voice.source_playback.is_mapped() {
-                return false;
-            }
             self.voice_keeps_frozen_stem_source(voice)
                 || !voice.stretch.has_retained_source_input()
                 || (voice.sample.as_ref().is_some_and(|sample| {

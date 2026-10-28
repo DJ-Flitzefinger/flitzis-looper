@@ -19,116 +19,10 @@ use super::source_reader::{SourceReadPlan, StemReadSets, StemTransition};
 use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo, ProductiveSourceFeed};
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Inclusive, non-additive component measurements for the explicitly enabled test thread.
-/// Disabled calls return before reading the clock; no callback logging or allocation occurs.
-#[cfg(test)]
-pub(crate) mod mapped_rate_probe {
-    use std::cell::Cell;
-    use std::time::Instant;
-
-    #[derive(Clone, Copy)]
-    pub(crate) enum Stage {
-        Projection,
-        Canonicalize,
-        EndpointProof,
-        ReaderFill,
-        NativePitch,
-        NativeShift,
-    }
-
-    #[derive(Clone, Copy, Debug, Default)]
-    pub(crate) struct Bucket {
-        pub(crate) calls: u64,
-        pub(crate) nanos: u128,
-    }
-
-    #[derive(Clone, Copy, Debug, Default)]
-    pub(crate) struct Snapshot {
-        pub(crate) buckets: [Bucket; 6],
-        pub(crate) projection_hits: u64,
-        pub(crate) projection_misses: u64,
-    }
-
-    thread_local! {
-        static ENABLED: Cell<bool> = const { Cell::new(false) };
-        static COUNTERS: Cell<Snapshot> = const { Cell::new(Snapshot {
-            buckets: [Bucket { calls: 0, nanos: 0 }; 6],
-            projection_hits: 0,
-            projection_misses: 0,
-        }) };
-    }
-
-    pub(crate) fn record_projection_memo(hit: bool) {
-        if !ENABLED.get() {
-            return;
-        }
-        let mut counters = COUNTERS.get();
-        if hit {
-            counters.projection_hits += 1;
-        } else {
-            counters.projection_misses += 1;
-        }
-        COUNTERS.set(counters);
-    }
-
-    pub(crate) struct Scope(Option<(Stage, Instant)>);
-
-    pub(crate) fn scope(stage: Stage) -> Scope {
-        if !ENABLED.get() {
-            return Scope(None);
-        }
-        Scope(Some((stage, Instant::now())))
-    }
-
-    impl Drop for Scope {
-        fn drop(&mut self) {
-            if let Some((stage, start)) = self.0 {
-                let elapsed = start.elapsed().as_nanos();
-                let mut counters = COUNTERS.get();
-                let bucket = &mut counters.buckets[stage as usize];
-                bucket.calls += 1;
-                bucket.nanos += elapsed;
-                COUNTERS.set(counters);
-            }
-        }
-    }
-
-    pub(crate) fn start() {
-        assert!(!ENABLED.replace(true), "component probes cannot be nested");
-        COUNTERS.set(Snapshot::default());
-    }
-
-    pub(crate) fn finish() -> Snapshot {
-        assert!(ENABLED.replace(false), "component probe was not enabled");
-        COUNTERS.get()
-    }
-}
-
-// Comparison identity allocated only with the already off-realtime Native/FIFO owner.
-// Zero is unavailable; exhaustion never wraps or recycles an adapter identity.
-static NEXT_MAPPED_ADAPTER_ID: AtomicU64 = AtomicU64::new(1);
-
-fn next_mapped_adapter_id() -> u64 {
-    NEXT_MAPPED_ADAPTER_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-            next.checked_add(1)
-        })
-        .unwrap_or(0)
-}
 
 #[path = "retained_native_start.rs"]
 mod retained_start;
-pub(crate) use retained_start::MappedRateContinuation;
-#[cfg(test)]
-pub(crate) use retained_start::RetainedMappedOutputCoordinates;
 use retained_start::RetainedNativeStartTimeline;
-
-#[path = "mapped_native_input.rs"]
-mod mapped_input;
-pub(crate) use mapped_input::{MappedNativeInput, MappedNativePitchChunk, PreparedMappedVoice};
-use mapped_input::{MappedNativePitchOwner, MappedNativePitchStamp};
 
 pub(crate) const PREPARED_HISTORY_FRAMES: usize = 4096;
 // A near-unity request remains a real request. Only actual native p=1 permits dry bypass.
@@ -269,11 +163,6 @@ impl SourceReadCheckpoint {
     /// Work is bounded by the supported rate range, including a terminal constant interval.
     /// Failure does not partially update this checkpoint.
     pub(crate) fn project_output_frames(&mut self, output_frames: u64) -> bool {
-        // A copied span is not an owning map. Arbitrary mapped F-to-E requires
-        // the caller's retained geometry and its direct canonical projection.
-        if (self.playback.is_mapped() || self.playback.has_phase_program()) && output_frames != 0 {
-            return false;
-        }
         let mut projected = *self;
         let mut remaining = output_frames;
         for _ in 0..SourcePlayback::MAX_PROJECTION_SEGMENTS {
@@ -427,7 +316,6 @@ impl PitchSourceSnapshot {
             playback: self.playback,
             plan: self.plan,
             actual_feed: self.actual_feed,
-            mapped_input: None,
             target_output_frame,
             request_id,
             epoch,
@@ -447,105 +335,14 @@ pub(crate) struct NativeHistoryRequest {
     pub(crate) plan: SourceReadPlan,
     /// Logical adoption remains authoritative; this names only the actual next Native input.
     pub(crate) actual_feed: Option<SourceReadCheckpoint>,
-    /// Immutable original map pins retire with this source request, never in reset_adapter.
-    pub(crate) mapped_input: Option<Box<MappedNativeInput>>,
     pub(crate) target_output_frame: u64,
     pub(crate) request_id: u64,
     pub(crate) epoch: u64,
 }
 
 impl NativeHistoryRequest {
-    /// Worker-only: requalify this same held physical beginning for a new mapped E.
-    /// The action separately validates its original source/control owner and new endpoint.
-    /// Nothing in the request changes until the complete replacement proof exists.
-    pub(crate) fn coverage_for_replanned_mapped_birth(
-        &self,
-        endpoint: SourceReadCheckpoint,
-    ) -> Result<Option<NormalLoopCoverage>, RubberBandError> {
-        let unavailable = || RubberBandError::UnavailableSourceHistory;
-        let original = SourceReadCheckpoint {
-            playback: self.playback,
-            plan: self.plan,
-        };
-        let mut reference_check = endpoint.playback;
-        // This changes only the copied reference. Exact equality then proves that
-        // the independently prepared endpoint retained the original launch reference.
-        reference_check.carry_launch_reference_from(&self.playback);
-        let position = self.playback.position();
-        if self.actual_feed.is_some()
-            || !original.is_consistent()
-            || !endpoint.is_consistent()
-            || !self.playback.is_mapped()
-            || !endpoint.playback.is_mapped()
-            || self.playback.has_phase_program()
-            || endpoint.playback.has_phase_program()
-            || self.plan.transition.is_active()
-            || endpoint.plan.transition.is_active()
-            || position.seek_mode != super::source_reader::ExplicitSeekMode::Normal
-            || position.frame != self.plan.loop_region.start
-            || position.fraction.to_bits() != 0.0_f64.to_bits()
-            || endpoint.playback.position() != position
-            || endpoint.playback.position().fraction.to_bits() != 0.0_f64.to_bits()
-            || !self.plan.matches_source_contract(endpoint.plan)
-            || self.plan.domain() != endpoint.plan.domain()
-            || self.playback.mapped_epoch().map(|epoch| epoch.marker())
-                != endpoint.playback.mapped_epoch().map(|epoch| epoch.marker())
-            || self.playback.original_scalar_domain().is_none()
-            || self.playback.original_scalar_domain() != endpoint.playback.original_scalar_domain()
-            || !reference_check.matches_exact(&endpoint.playback)
-            || self.playback.mapped_output_frame() != Some(self.target_output_frame)
-            || endpoint
-                .playback
-                .mapped_output_frame()
-                .is_none_or(|frame| frame <= self.target_output_frame)
-            || !self
-                .permit
-                .current(&self.sample, self.binding.sample_rate_hz)
-            || !self.permit.matches_projection(self.binding.accepted)
-            || self.binding
-                != ProductiveSourceBinding::new(
-                    &self.sample,
-                    self.binding.sample_rate_hz,
-                    self.binding.accepted,
-                )
-        {
-            return Err(unavailable());
-        }
-        let readers = StemReadSets::new(self.stems.as_ref(), None);
-        match &self.coverage {
-            Some(previous) => {
-                if !previous.matches_with_readers(
-                    &self.sample,
-                    readers,
-                    self.binding.sample_rate_hz,
-                    self.binding.accepted,
-                    self.plan,
-                    &self.playback,
-                    true,
-                ) {
-                    return Err(unavailable());
-                }
-                NormalLoopCoverage::capture_with_readers(
-                    &self.sample,
-                    readers,
-                    self.binding.sample_rate_hz,
-                    self.binding.accepted,
-                    endpoint.plan,
-                    &endpoint.playback,
-                )
-                .map(Some)
-                .ok_or_else(unavailable)
-            }
-            None if complete_view_available(&self.sample) => Ok(None),
-            None => Err(unavailable()),
-        }
-    }
-
     fn effective_source_current(&self, sample: &SampleBuffer, rate: u32) -> bool {
-        self.mapped_input.as_ref().map_or_else(
-            || self.permit.current_effective_source(sample, rate),
-            |mapped| mapped.effective_source_current(self),
-        )
+        self.permit.current_effective_source(sample, rate)
     }
 
     pub(crate) fn actual_feed_checkpoint(&self) -> SourceReadCheckpoint {
@@ -787,10 +584,6 @@ impl NativeHistoryRequest {
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
-            && self
-                .mapped_input
-                .as_ref()
-                .is_none_or(|input| input.matches_request(self) && input.pending_current())
             && self.pitch_intent == feed.pitch_intent
             && self.key_lock == feed.key_lock
             && self.coverage_matches(feed, true)
@@ -900,121 +693,9 @@ pub(crate) struct NativeAdapterState {
     pub(crate) primed_output_frames: usize,
     input_history_context: Option<NativeStartHistoryContext>,
     retained_start_timeline: Option<RetainedNativeStartTimeline>,
-    mapped_pitch: Option<MappedNativePitchState>,
-    /// Never reset: re-preparing the same original action must not revive old descriptors.
-    mapped_preparation_incarnation: u64,
-    mapped_adapter_id: u64,
-    // Persistent even across resets: a zero-input master cut cannot revive an old chunk.
-    mapped_continuation_revision: u64,
-}
-
-/// Fixed adapter metadata, not another source clock. The source request retains its owners.
-struct MappedNativePitchState {
-    owner: MappedNativePitchOwner,
-    intent: PitchIntent,
-    key_lock: bool,
-    pending_head_pitch: Option<f64>,
-    stamp: MappedNativePitchStamp,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct MappedContinuationTestState {
-    input: Vec<Vec<f32>>,
-    output: Vec<Vec<f32>>,
-    input_fifo: Vec<FixedFifo>,
-    output_fifo: Vec<FixedFifo>,
-    head: Option<f64>,
-    identity: Option<(u64, usize, u64, u64, u64)>,
-    effective_tuple: Option<(PitchIntent, bool)>,
-    pitch_scale_bits: u64,
-    active: bool,
-    used: bool,
-    pub(crate) revision: u64,
-    pub(crate) coordinates: Option<RetainedMappedOutputCoordinates>,
-}
-
-#[cfg(test)]
-impl MappedContinuationTestState {
-    pub(crate) fn same_storage(&self, other: &Self) -> bool {
-        self.input == other.input
-            && self.output == other.output
-            && self.input_fifo == other.input_fifo
-            && self.output_fifo == other.output_fifo
-            && self.head == other.head
-            && self.identity == other.identity
-    }
-
-    pub(crate) fn own_identity(&self) -> Option<(u64, usize, u64)> {
-        self.identity
-            .map(|(adapter, native, incarnation, _, _)| (adapter, native, incarnation))
-    }
-
-    /// Independent adapters have different identities. Compare their complete fixed stream
-    /// state and input chronology, then check each identity against its own baseline separately.
-    pub(crate) fn same_stream_state(&self, other: &Self) -> bool {
-        self.input == other.input
-            && self.output == other.output
-            && self.input_fifo == other.input_fifo
-            && self.output_fifo == other.output_fifo
-            && self.head == other.head
-            && self
-                .identity
-                .map(|(_, _, _, serial, frame)| (serial, frame))
-                == other
-                    .identity
-                    .map(|(_, _, _, serial, frame)| (serial, frame))
-            && self.effective_tuple == other.effective_tuple
-            && self.pitch_scale_bits == other.pitch_scale_bits
-            && self.active == other.active
-            && self.used == other.used
-            && self.revision == other.revision
-            && self.coordinates == other.coordinates
-    }
-
-    pub(crate) fn effective_tuple(&self) -> Option<(PitchIntent, bool)> {
-        self.effective_tuple
-    }
 }
 
 impl NativeAdapterState {
-    #[cfg(test)]
-    pub(crate) fn mapped_projection_memo_keys_for_test(&self) -> Option<[[Option<u64>; 2]; 2]> {
-        self.mapped_input()
-            .map(MappedNativeInput::projection_memo_keys_for_test)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn continuation_test_state(&self) -> MappedContinuationTestState {
-        MappedContinuationTestState {
-            input: self.input.clone(),
-            output: self.output.clone(),
-            input_fifo: self.input_fifo.clone(),
-            output_fifo: self.output_fifo.clone(),
-            head: self.mapped_pending_pitch_for_test(),
-            identity: self.mapped_pitch_witness_for_test(),
-            effective_tuple: self
-                .mapped_pitch
-                .as_ref()
-                .map(|state| (state.intent, state.key_lock)),
-            pitch_scale_bits: self.pitch_scale.to_bits(),
-            active: self.active,
-            used: self.used,
-            revision: self.mapped_continuation_revision,
-            coordinates: self.retained_mapped_output_coordinates().unwrap(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_continuation_revision_for_test(&mut self, revision: u64) {
-        self.mapped_continuation_revision = revision;
-        self.mapped_pitch
-            .as_mut()
-            .expect("genuine mapped owner")
-            .stamp
-            .continuation_revision = revision;
-    }
-
     pub(crate) fn new(rubberband: Option<RubberBandLiveShifter>, channels: usize) -> Self {
         let block_size = rubberband
             .as_ref()
@@ -1041,10 +722,6 @@ impl NativeAdapterState {
             primed_output_frames: 0,
             input_history_context: None,
             retained_start_timeline: None,
-            mapped_pitch: None,
-            mapped_preparation_incarnation: 0,
-            mapped_adapter_id: next_mapped_adapter_id(),
-            mapped_continuation_revision: 0,
         }
     }
 
@@ -1063,102 +740,10 @@ impl NativeAdapterState {
         self.effective_stem_read_context = None;
         self.input_history_context = None;
         self.retained_start_timeline = None;
-        self.mapped_pitch = None;
-    }
-
-    /// Called before the first Native reset of a new owned mapped preparation.
-    /// Exhaustion refuses without mutation; entering preparation irrevocably fences old chunks.
-    fn begin_mapped_preparation(&mut self) -> Result<(), NativeSourcePreparationError> {
-        if self.mapped_adapter_id == 0 {
-            return Err(NativeSourcePreparationError::Unavailable(
-                RubberBandError::UnavailableSourceHistory,
-            ));
-        }
-        let next = self.mapped_preparation_incarnation.checked_add(1).ok_or(
-            NativeSourcePreparationError::Unavailable(RubberBandError::UnavailableSourceHistory),
-        )?;
-        self.mapped_preparation_incarnation = next;
-        Ok(())
-    }
-
-    fn mapped_pitch_stamp(&self) -> Option<MappedNativePitchStamp> {
-        let stamp = self.mapped_pitch.as_ref()?.stamp;
-        (stamp.adapter_id != 0
-            && stamp.adapter_id == self.mapped_adapter_id
-            && stamp.incarnation != 0
-            && stamp.incarnation == self.mapped_preparation_incarnation
-            && stamp.continuation_revision == self.mapped_continuation_revision
-            && stamp.native == self.rubberband.as_ref()?.state_address())
-        .then_some(stamp)
-    }
-
-    pub(crate) fn stage_mapped_voice(
-        &self,
-        lifetime: &Arc<AtomicU64>,
-        generation: u64,
-        active: bool,
-        increments: u64,
-    ) -> Option<PreparedMappedVoice> {
-        if !self.active || self.dirty || !self.has_physical_birth_context() {
-            return None;
-        }
-        self.mapped_input()?.stage_effective_voice(
-            self.source.as_ref()?,
-            self.mapped_pitch_stamp()?,
-            lifetime,
-            generation,
-            active,
-            increments,
-        )
-    }
-
-    pub(crate) fn staged_mapped_voice_current(
-        &self,
-        staged: &PreparedMappedVoice,
-        admission: &super::native_history_permit::NativeSourceAdmission,
-        lifetime: &Arc<AtomicU64>,
-        generation: u64,
-        active: bool,
-    ) -> bool {
-        self.active
-            && !self.dirty
-            && staged.claim_current(admission, lifetime, generation, active)
-            && self
-                .mapped_input()
-                .zip(self.mapped_pitch_stamp())
-                .is_some_and(|(mapped, stamp)| mapped.staged_voice_matches(staged, stamp))
-    }
-
-    /// All qualification precedes the claim. This only moves the prechecked owner.
-    pub(crate) fn install_mapped_voice_claimed(&mut self, staged: PreparedMappedVoice) {
-        self.source
-            .as_mut()
-            .expect("claimed Native source")
-            .mapped_input
-            .as_mut()
-            .expect("claimed mapped Native source")
-            .install_effective_voice(staged);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_effective_mapped_voice_for_test(&self) -> bool {
-        self.mapped_input().is_some_and(|mapped| {
-            mapped.has_effective_voice()
-                && mapped.effective_adapter_current(self.mapped_pitch_stamp())
-                && self
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| mapped.effective_source_current(source))
-        })
     }
 
     pub(crate) fn has_physical_birth_context(&self) -> bool {
         self.input_history_context == Some(NativeStartHistoryContext::PhysicalBirth)
-    }
-
-    pub(crate) fn has_installed_mapped_voice(&self) -> bool {
-        self.mapped_input()
-            .is_some_and(|mapped| mapped.has_effective_voice())
     }
 
     pub(super) fn record_input_history_context(&mut self, context: NativeStartHistoryContext) {
@@ -1175,9 +760,6 @@ impl NativeAdapterState {
     /// Called only inside the mixer's complete same-pitch/source claim.
     pub(crate) fn retain_effective_mode_claimed(&mut self, enabled: bool) {
         self.effective_mode = Some(enabled);
-        if let Some(state) = &mut self.mapped_pitch {
-            state.key_lock = enabled;
-        }
     }
 
     /// Called after the complete mixer selection claim and exact retained endpoint update.
@@ -1219,12 +801,6 @@ impl NativeAdapterState {
         epoch: u64,
         history: Option<super::productive_source_history::ProductiveSourceHistory>,
     ) -> bool {
-        if self.mapped_input().is_some_and(|mapped| {
-            !mapped
-                .effective_adapter_current(self.active.then(|| self.mapped_pitch_stamp()).flatten())
-        }) {
-            return false;
-        }
         let productive_continuity = self.has_productive_continuity(feed, history);
         if self.effective_mode.is_some() && !productive_continuity {
             return false;
@@ -1259,9 +835,6 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
-        if request.mapped_input.is_some() {
-            return Err(RubberBandError::UnavailableSourceHistory);
-        }
         self.prepare_source_with_silence(request, 0, PREPARED_HISTORY_FRAMES, false, None, None)
             .map_err(NativeSourcePreparationError::into_backend)
     }
@@ -1274,11 +847,6 @@ impl NativeAdapterState {
         &mut self,
         mut request: NativeHistoryRequest,
     ) -> Result<(), NativeSourcePreparationError> {
-        if request.mapped_input.is_some() {
-            return Err(NativeSourcePreparationError::Unavailable(
-                RubberBandError::UnavailableSourceHistory,
-            ));
-        }
         let pitch = request
             .pitch_intent
             .native_pitch_scale(request.playback.tempo_ratio(), request.key_lock)
@@ -1329,11 +897,6 @@ impl NativeAdapterState {
         &mut self,
         request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
-        if request.mapped_input.is_some() {
-            return self
-                .prepare_productive_mapped_birth(request)
-                .map_err(NativeSourcePreparationError::into_backend);
-        }
         self.prepare_retained_source_start_context_checked(
             request,
             None,
@@ -1384,38 +947,6 @@ impl NativeAdapterState {
         source_rebase: Option<(usize, SourceReadCheckpoint)>,
         mut dsp: Option<(usize, &mut super::late_start_dsp::LateStartDspWork)>,
     ) -> Result<(), NativeSourcePreparationError> {
-        let owned_birth = request
-            .mapped_input
-            .as_ref()
-            .is_some_and(|input| input.matches_request(&request) && input.pending_current())
-            && native_prepared
-            && silent_prefix > 0
-            && source_rebase.is_none()
-            && dsp.is_none();
-        if request.playback.has_phase_program()
-            || (!owned_birth
-                && (request.plan.loop_period.is_mapped() || request.playback.is_general_mapped()))
-            || request.actual_feed.is_some_and(|checkpoint| {
-                checkpoint.plan.loop_period.is_mapped()
-                    || checkpoint.playback.is_general_mapped()
-                    || checkpoint.playback.has_phase_program()
-            })
-        {
-            return Err(NativeSourcePreparationError::Unavailable(
-                RubberBandError::UnavailableSourceHistory,
-            ));
-        }
-        if request.playback.is_mapped()
-            && request.mapped_input.is_none()
-            && source_rebase.is_none()
-            && !request
-                .playback
-                .can_read_frames(history_frames.saturating_sub(silent_prefix))
-        {
-            return Err(NativeSourcePreparationError::Unavailable(
-                RubberBandError::UnavailableSourceHistory,
-            ));
-        }
         if !request
             .actual_feed_checkpoint()
             .matches_exact(SourceReadCheckpoint {
@@ -1447,40 +978,6 @@ impl NativeAdapterState {
                 RubberBandError::InvalidBlockSize,
             ));
         }
-        let mapped_pitch = if let Some(input) = &request.mapped_input {
-            let stamp = MappedNativePitchStamp {
-                adapter_id: self.mapped_adapter_id,
-                native: self
-                    .rubberband
-                    .as_ref()
-                    .ok_or(NativeSourcePreparationError::Unavailable(
-                        RubberBandError::UnavailableSourceHistory,
-                    ))?
-                    .state_address(),
-                incarnation: self.mapped_preparation_incarnation,
-                input_serial: 0,
-                continuation_revision: self.mapped_continuation_revision,
-                actual_frame: request.playback.mapped_output_frame().ok_or(
-                    NativeSourcePreparationError::Unavailable(
-                        RubberBandError::UnavailableSourceHistory,
-                    ),
-                )?,
-            };
-            if stamp.adapter_id == 0 || stamp.incarnation == 0 {
-                return Err(NativeSourcePreparationError::Unavailable(
-                    RubberBandError::UnavailableSourceHistory,
-                ));
-            }
-            Some(MappedNativePitchState {
-                owner: input.pitch_owner(),
-                intent: request.pitch_intent,
-                key_lock: request.key_lock,
-                pending_head_pitch: None,
-                stamp,
-            })
-        } else {
-            None
-        };
         self.source = None;
         self.reset_adapter();
         let pitch = request
@@ -1514,7 +1011,6 @@ impl NativeAdapterState {
         self.pitch_scale = pitch;
         self.dirty = false;
         self.used = false;
-        self.mapped_pitch = mapped_pitch;
         let channels = self.input.len();
         let mut feed = (0..channels)
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
@@ -1526,22 +1022,6 @@ impl NativeAdapterState {
         #[cfg(test)]
         super::source_reader::reset_tap_observation_for_test();
         while remaining > 0 {
-            if request
-                .mapped_input
-                .as_ref()
-                .is_some_and(|input| !input.pending_current())
-                || (request.mapped_input.is_some()
-                    && !request
-                        .permit
-                        .current(&request.sample, request.binding.sample_rate_hz))
-            {
-                return Err(NativeSourcePreparationError::Unavailable(
-                    RubberBandError::UnavailableSourceHistory,
-                ));
-            }
-            if silent_prefix == 0 {
-                Self::refresh_owned_mapped_request(&mut request)?;
-            }
             let consumed = history_frames - remaining;
             if let Some((boundary, checkpoint)) = source_rebase
                 && consumed == boundary
@@ -1598,40 +1078,15 @@ impl NativeAdapterState {
             }
             if silent_prefix != 0 {
                 let frames = frames.min(silent_prefix);
-                let mapped_chunk = request
-                    .mapped_input
-                    .as_ref()
-                    .map(|input| {
-                        input
-                            .frozen_birth_pitch_chunk(
-                                &request,
-                                frames,
-                                self.mapped_pitch_stamp().ok_or(
-                                    NativeSourcePreparationError::Unavailable(
-                                        RubberBandError::UnavailableSourceHistory,
-                                    ),
-                                )?,
-                            )
-                            .map_err(NativeSourcePreparationError::from_history)
-                    })
-                    .transpose()?;
-                if let Some(chunk) = &mapped_chunk {
-                    self.validate_mapped_render(&feed, &output, chunk)?;
-                }
                 feed.iter_mut()
                     .for_each(|channel| channel[..frames].fill(0.0));
-                if let Some(chunk) = mapped_chunk {
-                    self.render_mapped(&feed, &mut output, chunk)?;
-                } else {
-                    self.render(&feed, &mut output, frames, pitch)
-                        .map_err(NativeSourcePreparationError::Backend)?;
-                }
+                self.render(&feed, &mut output, frames, pitch)
+                    .map_err(NativeSourcePreparationError::Backend)?;
                 silent_prefix -= frames;
                 remaining -= frames;
                 continue;
             }
-            // Preparation retains the same Native stream even at unity. An already adopted
-            // owned mapped stream also keeps that history through subsequent unity intervals.
+            // Preparation retains the same Native stream even at unity.
             self.render_source_history_chunk(&request, &mut feed, &mut output, frames, pitch)?;
             if let Some((start, dsp)) = &mut dsp
                 && consumed >= *start
@@ -1646,21 +1101,6 @@ impl NativeAdapterState {
             request.plan.seek_mode = position.seek_mode;
             remaining -= frames;
         }
-        // Live rendering begins a smoothing chunk before passing its cursor to this adapter.
-        if request
-            .mapped_input
-            .as_ref()
-            .is_some_and(|input| !input.pending_current())
-            || (request.mapped_input.is_some()
-                && !request
-                    .permit
-                    .current(&request.sample, request.binding.sample_rate_hz))
-        {
-            return Err(NativeSourcePreparationError::Unavailable(
-                RubberBandError::UnavailableSourceHistory,
-            ));
-        }
-        Self::refresh_owned_mapped_request(&mut request)?;
         request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
         #[cfg(test)]
         if let Some(coverage) = &mut request.coverage {
@@ -1669,23 +1109,6 @@ impl NativeAdapterState {
         self.source = Some(request);
         self.primed_output_frames = history_frames;
         self.input_history_context = Some(NativeStartHistoryContext::SourceHistory);
-        Ok(())
-    }
-
-    fn refresh_owned_mapped_request(
-        request: &mut NativeHistoryRequest,
-    ) -> Result<(), NativeSourcePreparationError> {
-        if let Some(input) = &request.mapped_input {
-            let mut checkpoint = SourceReadCheckpoint {
-                playback: request.playback,
-                plan: request.plan,
-            };
-            input
-                .project(&mut checkpoint, 0)
-                .map_err(NativeSourcePreparationError::from_history)?;
-            request.playback = checkpoint.playback;
-            request.plan = checkpoint.plan;
-        }
         Ok(())
     }
 
@@ -1703,32 +1126,6 @@ impl NativeAdapterState {
             return Err(NativeSourcePreparationError::Unavailable(
                 RubberBandError::UnavailableSourceHistory,
             ));
-        }
-        let mapped_chunk = request
-            .mapped_input
-            .as_ref()
-            .map(|input| {
-                input
-                    .pitch_chunk(
-                        request,
-                        SourceReadCheckpoint {
-                            playback: request.playback,
-                            plan: request.plan,
-                        },
-                        frames,
-                        request.pitch_intent,
-                        request.key_lock,
-                        self.mapped_pitch_stamp().ok_or(
-                            NativeSourcePreparationError::Unavailable(
-                                RubberBandError::UnavailableSourceHistory,
-                            ),
-                        )?,
-                    )
-                    .map_err(NativeSourcePreparationError::from_history)
-            })
-            .transpose()?;
-        if let Some(chunk) = &mapped_chunk {
-            self.validate_mapped_render(feed, output, chunk)?;
         }
         if request.coverage.is_some() {
             if !normal_loop_feed_available(
@@ -1774,232 +1171,8 @@ impl NativeAdapterState {
                 RubberBandError::InvalidBlockSize,
             ));
         }
-        if let Some(chunk) = mapped_chunk {
-            self.render_mapped(feed, output, chunk)
-        } else {
-            self.render(feed, output, frames, pitch)
-                .map_err(NativeSourcePreparationError::Backend)
-        }
-    }
-
-    /// Validate every fixed buffer and FIFO before accepting any mapped input.
-    pub(super) fn validate_mapped_render(
-        &self,
-        feed: &[Vec<f32>],
-        output: &[Vec<f32>],
-        chunk: &MappedNativePitchChunk,
-    ) -> Result<(), NativeSourcePreparationError> {
-        let unavailable =
-            || NativeSourcePreparationError::Unavailable(RubberBandError::InvalidBlockSize);
-        let state = self.mapped_pitch.as_ref().ok_or_else(unavailable)?;
-        let stamp = self.mapped_pitch_stamp().ok_or_else(unavailable)?;
-        chunk.next_stamp(stamp).ok_or_else(unavailable)?;
-        if self.source.as_ref().is_some_and(|source| {
-            source.mapped_input.as_ref().is_some_and(|mapped| {
-                mapped.has_effective_voice()
-                    && (!self.active
-                        || !mapped.effective_adapter_current(Some(stamp))
-                        || !mapped.effective_source_current(source))
-            })
-        }) {
-            return Err(unavailable());
-        }
-        let channels = self.input.len();
-        let frames = chunk.frames();
-        let pending = self.input_fifo.first().map_or(0, FixedFifo::len);
-        let queued = self.output_fifo.first().map_or(0, FixedFifo::len);
-        if state.owner != chunk.owner()
-            || !chunk.matches_tuple(state.intent, state.key_lock)
-            || !chunk.is_readable()
-            || !chunk.pitch().is_finite()
-            || chunk.pitch() <= 0.0
-            || self.rubberband.is_none()
-            || self.block_size == 0
-            || channels == 0
-            || frames > DEFAULT_BLOCK_SAMPLES
-            || pending >= self.block_size
-            || (pending == 0) != state.pending_head_pitch.is_none()
-            || state
-                .pending_head_pitch
-                .is_some_and(|pitch| !pitch.is_finite() || pitch <= 0.0)
-            || self.output.len() != channels
-            || self.input_fifo.len() != channels
-            || self.output_fifo.len() != channels
-            || feed.len() != channels
-            || output.len() != channels
-            || feed.iter().any(|channel| channel.len() < frames)
-            || output.iter().any(|channel| channel.len() < frames)
-            || self
-                .input
-                .iter()
-                .chain(&self.output)
-                .any(|channel| channel.len() < self.block_size)
-            || self
-                .input_fifo
-                .iter()
-                .any(|fifo| fifo.len() != pending || fifo.capacity() < self.block_size)
-            || self.output_fifo.iter().any(|fifo| fifo.len() != queued)
-            || (!self.active && (pending != 0 || queued != 0))
-        {
-            return Err(unavailable());
-        }
-        let blocks = pending.checked_add(frames).ok_or_else(unavailable)? / self.block_size;
-        let lead = if self.active { 0 } else { self.block_size - 1 };
-        let required = blocks
-            .checked_mul(self.block_size)
-            .and_then(|size| size.checked_add(queued))
-            .and_then(|size| size.checked_add(lead))
-            .ok_or_else(unavailable)?;
-        if self
-            .output_fifo
-            .iter()
-            .any(|fifo| fifo.capacity() < required)
-        {
-            return Err(unavailable());
-        }
-        Ok(())
-    }
-
-    /// Mapped input latches h/r at the FIRST actual input frame of each Native block.
-    /// A caller boundary or map knot inside a partial block cannot replace that pitch.
-    /// No map search, allocation, second timeline or per-block parameter queue is needed.
-    pub(crate) fn render_mapped(
-        &mut self,
-        feed: &[Vec<f32>],
-        output: &mut [Vec<f32>],
-        chunk: MappedNativePitchChunk,
-    ) -> Result<(), NativeSourcePreparationError> {
-        self.validate_mapped_render(feed, output, &chunk)?;
-        let next_stamp = chunk
-            .next_stamp(self.mapped_pitch_stamp().expect("validated current stamp"))
-            .expect("validated checked successor");
-        let frames = chunk.frames();
-        if frames == 0 {
-            return Ok(());
-        }
-        if !self.active {
-            for fifo in &mut self.output_fifo {
-                fifo.push_silence(self.block_size - 1);
-            }
-            self.active = true;
-        }
-        let mut consumed = 0;
-        while consumed < frames {
-            let pending = self.input_fifo[0].len();
-            if pending == 0 {
-                self.mapped_pitch
-                    .as_mut()
-                    .expect("validated mapped mode")
-                    .pending_head_pitch = Some(chunk.pitch());
-            }
-            let take = (self.block_size - pending).min(frames - consumed);
-            for (fifo, channel) in self.input_fifo.iter_mut().zip(feed) {
-                let written = fifo.push_slice(&channel[consumed..consumed + take]);
-                debug_assert_eq!(written, take);
-            }
-            consumed += take;
-            if pending + take == self.block_size {
-                let pitch = self
-                    .mapped_pitch
-                    .as_ref()
-                    .and_then(|state| state.pending_head_pitch)
-                    .expect("validated mapped block head");
-                if (pitch - self.pitch_scale).abs() > PITCH_SCALE_EPSILON {
-                    #[cfg(test)]
-                    let _probe = mapped_rate_probe::scope(mapped_rate_probe::Stage::NativePitch);
-                    self.rubberband
-                        .as_mut()
-                        .expect("validated native owner")
-                        .set_pitch_scale(pitch)
-                        .map_err(NativeSourcePreparationError::Backend)?;
-                    self.pitch_scale = pitch;
-                }
-                for (fifo, channel) in self.input_fifo.iter_mut().zip(&mut self.input) {
-                    let read = fifo.pop_into(&mut channel[..self.block_size]);
-                    debug_assert_eq!(read, self.block_size);
-                }
-                {
-                    #[cfg(test)]
-                    let _probe = mapped_rate_probe::scope(mapped_rate_probe::Stage::NativeShift);
-                    self.rubberband
-                        .as_mut()
-                        .expect("validated native owner")
-                        .shift(&self.input, &mut self.output)
-                        .map_err(NativeSourcePreparationError::Backend)?;
-                }
-                self.used = true;
-                for (fifo, channel) in self.output_fifo.iter_mut().zip(&self.output) {
-                    let written = fifo.push_slice(&channel[..self.block_size]);
-                    debug_assert_eq!(written, self.block_size);
-                }
-                self.mapped_pitch
-                    .as_mut()
-                    .expect("validated mapped mode")
-                    .pending_head_pitch = None;
-            }
-        }
-        for (fifo, channel) in self.output_fifo.iter_mut().zip(output) {
-            let read = fifo.pop_into(&mut channel[..frames]);
-            channel[read..frames].fill(0.0);
-        }
-        self.mapped_pitch
-            .as_mut()
-            .expect("validated mapped mode")
-            .stamp = next_stamp;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mapped_pending_pitch_for_test(&self) -> Option<f64> {
-        self.mapped_pitch
-            .as_ref()
-            .and_then(|state| state.pending_head_pitch)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mapped_pitch_witness_for_test(&self) -> Option<(u64, usize, u64, u64, u64)> {
-        let stamp = self.mapped_pitch_stamp()?;
-        Some((
-            stamp.adapter_id,
-            stamp.native,
-            stamp.incarnation,
-            stamp.input_serial,
-            stamp.actual_frame,
-        ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_mapped_counter_limits_for_test(
-        &mut self,
-        incarnation: u64,
-        serial: u64,
-        actual: u64,
-    ) {
-        self.mapped_preparation_incarnation = incarnation;
-        let stamp = &mut self
-            .mapped_pitch
-            .as_mut()
-            .expect("existing qualified test owner")
-            .stamp;
-        stamp.incarnation = incarnation;
-        stamp.input_serial = serial;
-        stamp.actual_frame = actual;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mapped_next_counters_fit_for_test(
-        &self,
-        frames: usize,
-        frozen_birth: bool,
-    ) -> bool {
-        self.mapped_pitch_stamp()
-            .and_then(|stamp| stamp.checked_next(frames, frozen_birth))
-            .is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn exhaust_mapped_adapter_id_for_test(&mut self) {
-        self.mapped_adapter_id = 0;
+        self.render(feed, output, frames, pitch)
+            .map_err(NativeSourcePreparationError::Backend)
     }
 
     /// One common adapter implementation for worker catch-up and bounded callback rendering.
@@ -2010,9 +1183,6 @@ impl NativeAdapterState {
         frames: usize,
         pitch: f64,
     ) -> Result<(), RubberBandError> {
-        if self.mapped_pitch.is_some() {
-            return Err(RubberBandError::UnavailableSourceHistory);
-        }
         if !self.active {
             for fifo in &mut self.output_fifo {
                 fifo.push_silence(self.block_size.saturating_sub(1));
@@ -2083,55 +1253,6 @@ pub(super) mod tests {
         start: 100,
         end: 23_999,
     };
-
-    #[test]
-    fn copied_mapped_checkpoint_requires_geometry_for_positive_projection() {
-        use crate::audio_engine::mapped_source_clock::{MappedClockEpoch, MappedLoopGeometry};
-        use crate::audio_engine::source_beatmap::render_comparison_tests::{
-            CanonicalFixture, RATE, SOURCE, SPAN, Signal,
-        };
-        use crate::audio_engine::transport::TransportTimeline;
-
-        let fixture = CanonicalFixture::new(Signal::StereoTone);
-        let geometry = MappedLoopGeometry::new(
-            fixture.map,
-            SOURCE,
-            RATE,
-            FrameRange {
-                start: 0,
-                // This ownership test uses two supported variable segments;
-                // the full comparison fixture rounds its 2.0 boundary above max.
-                end: SPAN + SPAN / 2,
-            },
-            4.0,
-            false,
-        )
-        .unwrap();
-        let mut timeline = TransportTimeline::new(RATE);
-        assert!(timeline.set_master_period(SPAN as f64 / 2.0 / f64::from(RATE)));
-        let epoch = MappedClockEpoch::new(71, timeline, 0.0).unwrap();
-        let playback = SourcePlayback::mapped(&geometry, epoch, 0).unwrap();
-        let domain = geometry.domain();
-        let mut checkpoint = SourceReadCheckpoint {
-            playback,
-            plan: SourceReadPlan {
-                channels: 2,
-                sample_frames: SOURCE,
-                frame_pos: playback.position().frame,
-                loop_region: domain.region,
-                loop_period: domain.musical_period,
-                seek_mode: ExplicitSeekMode::Normal,
-                selection: StemRenderSelection::full_mix(),
-                transition: StemTransition::default(),
-            },
-        };
-        let original = checkpoint;
-        assert!(geometry.position_at(epoch, 1).is_ok());
-        assert!(!checkpoint.project_output_frames(1));
-        assert!(checkpoint.matches_exact(original));
-        assert!(checkpoint.project_output_frames(0));
-        assert!(checkpoint.matches_exact(original));
-    }
 
     pub(crate) fn fixture(
         channels: usize,
@@ -2220,7 +1341,6 @@ pub(super) mod tests {
             playback,
             plan,
             actual_feed: None,
-            mapped_input: None,
             target_output_frame: PREPARED_HISTORY_FRAMES as u64,
             request_id: 1,
             epoch: 3,

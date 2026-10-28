@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 from imgui_bundle import imgui, implot
 
-from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render, waveform_editor
 
@@ -165,7 +164,7 @@ def _context(controller: AppController, audio: Mock) -> tuple[UiContext, _Pendin
     return UiContext(controller), worker
 
 
-def test_adjust_loop_renders_saved_variable_loop_without_a_ready_map(
+def test_adjust_loop_renders_saved_scalar_loop(
     controller: AppController,
     audio_engine_mock: Mock,
     headless_plot: None,
@@ -177,9 +176,6 @@ def test_adjust_loop_renders_saved_variable_loop_without_a_ready_map(
     project = controller.project
     project.multi_loop = True
     project.bpm_lock = True
-    project.global_timing_policy = GlobalTimingPolicy(
-        schema_version=1, sync=True, realtime_bpm=True, revision=2
-    )
     project.pad_loop_auto[0] = True
     project.pad_loop_start_s[0] = 16.0
     project.pad_loop_bars[0] = 32.0

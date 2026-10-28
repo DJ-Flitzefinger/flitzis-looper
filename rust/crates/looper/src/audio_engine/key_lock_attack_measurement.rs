@@ -141,13 +141,6 @@ fn reader_context(request: &NativeHistoryRequest) -> SourceFeedContext {
 }
 
 fn scalar_layout_available(request: &NativeHistoryRequest) -> bool {
-    if request.playback.is_mapped()
-        || request
-            .actual_feed
-            .is_some_and(|checkpoint| checkpoint.playback.is_mapped())
-    {
-        return false;
-    }
     let sample_layout = |sample: &crate::messages::SampleBuffer| {
         sample.channels != 0
             && !sample.samples.is_empty()
@@ -479,7 +472,6 @@ fn supported_request(request: &NativeHistoryRequest) -> bool {
         && (8_000..=768_000).contains(&request.binding.sample_rate_hz)
         && !request.plan.transition.is_active()
         && checkpoint.is_consistent()
-        && !request.playback.has_phase_program()
         && request.actual_feed_checkpoint().matches_exact(checkpoint)
         && ratio.is_finite()
         && ratio > 0.0

@@ -44,19 +44,12 @@ fn render_partitioned(fixture: &mut Fixture, frames: usize, partitions: &[usize]
 fn late_original_gui_start_emits_the_independent_early_native_beginning_from_its_first_sample() {
     for rate in [0.73, 1.0, 1.37] {
         for policy in ["first_sound_at_grid", "attack_at_grid"] {
-            compare_late_start(rate, policy, false);
+            compare_late_start(rate, policy);
         }
     }
 }
 
-#[test]
-fn missing_map_pending_native_late_start_keeps_the_complete_original_beginning() {
-    for policy in ["first_sound_at_grid", "attack_at_grid"] {
-        compare_late_start(1.0, policy, true);
-    }
-}
-
-fn compare_late_start(rate: f64, policy: &str, pending_map: bool) {
+fn compare_late_start(rate: f64, policy: &str) {
     let mut early = Fixture::new(true);
     let mut late = Fixture::new(true);
     let _early_files = install_synthetic_complete_lease(&mut early);
@@ -91,9 +84,6 @@ fn compare_late_start(rate: f64, policy: &str, pending_map: bool) {
 
     // Both are genuine public OrdinaryStart captures. CapturePadStartTarget is
     // consumed before either capture's own actual resident publication is ACKed.
-    if pending_map {
-        publish_missing_map_intent(&late);
-    }
     let early_start = capture(&early, 1.0);
     let early_window = early
         .control

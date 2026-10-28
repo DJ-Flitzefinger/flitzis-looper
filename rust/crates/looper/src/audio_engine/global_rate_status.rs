@@ -39,7 +39,6 @@ pub(crate) enum RateError {
     OtherRatePending,
     InvalidTransport,
     ParticipantChanged,
-    MappedTimingUnavailable,
 }
 
 impl RateError {
@@ -55,7 +54,6 @@ impl RateError {
             Self::OtherRatePending => Some("Rate change refused: another rate edit is preparing"),
             Self::InvalidTransport => Some("Rate change refused: invalid master timing"),
             Self::ParticipantChanged => Some("Rate change refused: playing voices changed"),
-            Self::MappedTimingUnavailable => Some("Rate change refused: mapped timing unavailable"),
         }
     }
 }
@@ -189,7 +187,6 @@ impl RateRecord {
             6 => RateError::MissedBoundary,
             7 => RateError::OtherRatePending,
             8 => RateError::InvalidTransport,
-            10 => RateError::MappedTimingUnavailable,
             _ => RateError::ParticipantChanged,
         };
         let value = RateEffect {
@@ -392,22 +389,18 @@ impl GlobalRateStatusSlot {
 pub(crate) enum BpmReason {
     #[default]
     None,
-    MappedActive,
     RatePending,
     DrainPending,
     HistoryPending,
-    PolicyPending,
     ReferenceChanged,
 }
 impl BpmReason {
     pub(crate) fn name(self) -> Option<&'static str> {
         match self {
             Self::None => None,
-            Self::MappedActive => Some("mapped_active"),
             Self::RatePending => Some("rate_pending"),
             Self::DrainPending => Some("drain_pending"),
             Self::HistoryPending => Some("history_pending"),
-            Self::PolicyPending => Some("policy_pending"),
             Self::ReferenceChanged => Some("reference_changed"),
         }
     }
@@ -460,11 +453,9 @@ impl BpmRecord {
         let execution = self.execution.load(Ordering::SeqCst);
         let reason = match self.reason.load(Ordering::SeqCst) {
             0 => BpmReason::None,
-            1 => BpmReason::MappedActive,
-            2 => BpmReason::RatePending,
-            3 => BpmReason::DrainPending,
-            4 => BpmReason::HistoryPending,
-            5 => BpmReason::PolicyPending,
+            1 => BpmReason::RatePending,
+            2 => BpmReason::DrainPending,
+            3 => BpmReason::HistoryPending,
             _ => BpmReason::ReferenceChanged,
         };
         let value = BpmEffect {

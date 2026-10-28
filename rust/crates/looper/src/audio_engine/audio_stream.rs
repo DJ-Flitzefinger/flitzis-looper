@@ -472,44 +472,6 @@ fn quantized_target_frame(
     }
 }
 
-fn anchor_transport_phase_from_pad(
-    mixer: &mut RtMixer,
-    transport: &mut TransportTimeline,
-    id: usize,
-) -> bool {
-    anchor_transport_phase_from_pad_at_frame(mixer, transport, id, transport.output_frame())
-}
-
-fn anchor_transport_phase_from_pad_at_frame(
-    mixer: &mut RtMixer,
-    transport: &mut TransportTimeline,
-    id: usize,
-    output_frame: u64,
-) -> bool {
-    if mixer.has_mapped_voice() || mixer.has_static_phase_voice() {
-        return false;
-    }
-    let Some(source_beat) = mixer.active_pad_beat_position(id) else {
-        return false;
-    };
-    let Some(period) = mixer.transport_reference_period_for_sample_id(id) else {
-        return false;
-    };
-
-    let mut candidate = *transport;
-    let anchored = candidate.set_master_period_and_anchor_beat_position_at_frame(
-        period,
-        source_beat,
-        output_frame,
-    );
-    if anchored {
-        candidate.complete_bootstrap();
-        mixer.rebind_dry_phase_births(transport, &candidate, output_frame);
-        *transport = candidate;
-    }
-    anchored
-}
-
 /// Called after both command/parameter batches and at render segment boundaries.
 /// The source position and output frame therefore describe the same instant.
 fn try_bootstrap_transport_from_reference(
@@ -517,8 +479,7 @@ fn try_bootstrap_transport_from_reference(
     transport: &mut TransportTimeline,
     output_frame: u64,
 ) -> bool {
-    if mixer.has_pending_global_rate() || mixer.has_mapped_voice() || mixer.has_static_phase_voice()
-    {
+    if mixer.has_pending_global_rate() {
         return false;
     }
     let Some(id) = transport.bootstrap_reference() else {
@@ -534,7 +495,7 @@ fn try_bootstrap_transport_from_reference(
     if !candidate.bootstrap_from_source_period_at_frame(period, source_beat, output_frame) {
         return false;
     }
-    mixer.rebind_dry_phase_births(transport, &candidate, output_frame);
+    mixer.rebind_launch_births(transport, &candidate, output_frame);
     *transport = candidate;
     true
 }
@@ -708,8 +669,7 @@ fn execute_admitted_trigger<S: AudioMessageSink, R: AudioBufferRetirement>(
     ) else {
         return CallbackEffectResult::Settled(false);
     };
-    let retirement_needed =
-        if *exclusive { 3 * MAX_VOICES } else { 3 } + mixer.mapped_owner_retirement_slots();
+    let retirement_needed = if *exclusive { 3 * MAX_VOICES } else { 3 };
     let feedback_needed = if *exclusive {
         mixer.voices.iter().filter(|voice| voice.active).count() + 1
     } else {
@@ -828,8 +788,7 @@ fn execute_admitted_stop<S: AudioMessageSink, R: AudioBufferRetirement>(
     let Some(id) = mixer.timing_effect_slot(placement.slot(), Some(placement)) else {
         return CallbackEffectResult::Settled(false);
     };
-    if retirement.available_retirement_slots()
-        < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots()
+    if retirement.available_retirement_slots() < 3 * MAX_VOICES
         || audio_messages.available_audio_message_slots() < 1
     {
         return CallbackEffectResult::Pending;
@@ -938,22 +897,6 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             batch.finish(accepted);
             retirement.retire_global_playback_batch(batch);
         }
-        ScheduledCommand::AdoptRuntimePolicy(work) => {
-            if retirement.available_retirement_slots()
-                < mixer.runtime_policy_retirement_slots(&work)
-            {
-                return ScheduledExecution::Pending(ScheduledCommand::AdoptRuntimePolicy(work));
-            }
-            // Actual E may be later than the original barrier after capacity refusal.
-            // No phase was prepared or extrapolated by the owning request.
-            let Some((result, retry)) =
-                mixer.adopt_runtime_policy_observed(&work, transport, output_frame, retirement)
-            else {
-                return ScheduledExecution::Pending(ScheduledCommand::AdoptRuntimePolicy(work));
-            };
-            work.finish_with_retry(result, Some(output_frame), retry);
-            retirement.retire_runtime_policy(work);
-        }
         command @ ScheduledCommand::TriggerInputPad { .. } => {
             if matches!(
                 execute_admitted_trigger(mixer, output_frame, &command, audio_messages, retirement),
@@ -999,9 +942,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             if !mixer.expected_source_generation_current(id, expected_source_generation) {
                 return ScheduledExecution::Complete;
             }
-            if retirement.available_retirement_slots()
-                < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots()
-            {
+            if retirement.available_retirement_slots() < 3 * MAX_VOICES {
                 return ScheduledExecution::Complete;
             }
             let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
@@ -1229,7 +1170,7 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     }
     // One fixed retirement reservation covers every old pin plus this immutable payload.
     let retirement_slots = retirement.available_retirement_slots();
-    if retirement_slots < 3 * MAX_VOICES + mixer.mapped_owner_retirement_slots() + 1 {
+    if retirement_slots < 3 * MAX_VOICES + 1 {
         // Preserve the existing atomic capacity rejection. Only an unavailable
         // payload-retirement slot must retain the event to avoid a final RT drop.
         return if retirement_slots == 0 {
@@ -1463,7 +1404,6 @@ fn render_scheduled_audio_tracking_pads<
     if scheduler.deferred_due().is_none() {
         mixer.service_global_rate(callback_start_frame, transport, retirement);
     }
-    mixer.observe_runtime_policy_retry(transport);
 
     if channels == 0 {
         return;
@@ -1559,7 +1499,6 @@ fn render_scheduled_audio_tracking_pads<
         scheduler.peek_next_target_frame().is_none() && scheduler.deferred_due().is_none(),
     );
     mixer.service_mix_capture(scheduler, retirement);
-    mixer.observe_runtime_policy_retry(transport);
 }
 
 // Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
@@ -1665,23 +1604,17 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
     }
 }
 
-fn control_message_retirement_slots_needed(
-    message: &ControlMessage,
-    mapped_owners: usize,
-) -> usize {
+fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
-        ControlMessage::AdoptRuntimePolicy(_) => 1,
         ControlMessage::StartMixCapture { .. } => 2,
         ControlMessage::GlobalPlaybackBatch(batch) => {
-            3 * MAX_VOICES + mapped_owners + 1 + usize::from(batch.capture_publication.is_some())
+            3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
         }
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
-        ControlMessage::PadCopy(work) => work.retirement_slots_needed() + mapped_owners,
-        ControlMessage::BankMutation(_) => {
-            3 * MAX_VOICES + mapped_owners + super::constants::NUM_PADS + 1
-        }
+        ControlMessage::PadCopy(work) => work.retirement_slots_needed(),
+        ControlMessage::BankMutation(_) => 3 * MAX_VOICES + super::constants::NUM_PADS + 1,
         ControlMessage::VerifyRecoveredBank(_) => 1,
         ControlMessage::PadPair(_) => 1,
         ControlMessage::HoldAction(_) => 2,
@@ -1693,7 +1626,7 @@ fn control_message_retirement_slots_needed(
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
-        } => 3 * MAX_VOICES + mapped_owners + 5,
+        } => 3 * MAX_VOICES + 5,
         ControlMessage::LoadColdSample {
             replace_assignment: false,
             ..
@@ -1707,16 +1640,16 @@ fn control_message_retirement_slots_needed(
         ControlMessage::PlaySample { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
-        } => 3 + mapped_owners,
+        } => 3,
         #[cfg(test)]
-        ControlMessage::StopSample { .. } => 3 * MAX_VOICES + mapped_owners,
-        ControlMessage::StopSampleForPlacement { .. } => 3 * MAX_VOICES + mapped_owners,
-        ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + mapped_owners + 3,
+        ControlMessage::StopSample { .. } => 3 * MAX_VOICES,
+        ControlMessage::StopSampleForPlacement { .. } => 3 * MAX_VOICES,
+        ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + 3,
         ControlMessage::StopAll()
         | ControlMessage::PlaySampleExclusive { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: true, ..
-        } => 3 * MAX_VOICES + mapped_owners,
+        } => 3 * MAX_VOICES,
         _ => 0,
     }
 }
@@ -2018,10 +1951,8 @@ pub(super) fn drain_control_messages<
                     break;
                 }
                 (
-                    control_message_retirement_slots_needed(
-                        message,
-                        mixer.mapped_owner_retirement_slots(),
-                    ) + usize::from(source.is_some()),
+                    control_message_retirement_slots_needed(message)
+                        + usize::from(source.is_some()),
                     usize::from(matches!(
                         message,
                         ControlMessage::TransportForPlacement { .. }
@@ -2505,32 +2436,6 @@ pub(super) fn process_control_message<
         return;
     }
     match message {
-        ControlMessage::AdoptRuntimePolicy(work) => {
-            if retirement.available_retirement_slots() == 0 {
-                mixer.defer_control(ControlMessage::AdoptRuntimePolicy(work));
-                return;
-            }
-            let result = if !work.current() {
-                Err(super::input_mapping::RuntimePolicyError::Stale)
-            } else {
-                // schedule() consumes a command on Full AND order exhaustion.
-                // Keep the original alive until its one retirement transfer;
-                // every failed/returned scheduler clone is therefore nonfinal.
-                scheduler
-                    .schedule(
-                        callback_start_frame,
-                        ScheduledCommand::AdoptRuntimePolicy(work.clone()),
-                    )
-                    .map(|_| ())
-                    .map_err(|_| super::input_mapping::RuntimePolicyError::SchedulerFull)
-            };
-            if let Err(error) = result {
-                work.finish(Err(error), None);
-            }
-            retirement.retire_runtime_policy(work);
-            // Existing renderer due-dispatch runs after both bounded drains.
-            // Other eager due passes can only produce an honest Busy refusal.
-        }
         ControlMessage::StartMixCapture {
             publication,
             target_frame,
@@ -2737,7 +2642,6 @@ pub(super) fn process_control_message<
             {
                 // Source-load telemetry is valid only after its callback-source
                 // ACK. A stopped replacement has no voice render to refresh it.
-                mixer.publish_source_sync_status(target);
             }
             drop(ownership);
             retirement.retire_source_publication(publication);
@@ -2929,7 +2833,6 @@ pub(super) fn process_control_message<
                 return;
             }
             if accepted.get() {
-                mixer.publish_source_sync_status(id);
                 adoption.store(2, std::sync::atomic::Ordering::Release);
                 if replace_assignment {
                     #[cfg(test)]
@@ -3334,16 +3237,6 @@ pub(super) fn process_control_message<
                 mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
             }
         }
-        ControlMessage::BootstrapTransportFromPad { id } => {
-            if id < NUM_SAMPLES && !mixer.refuse_legacy_global_rate_if_pending() {
-                transport.request_bootstrap(id);
-            }
-        }
-        ControlMessage::AnchorTransportPhaseFromPad { id } => {
-            if !mixer.refuse_legacy_global_rate_if_pending() {
-                anchor_transport_phase_from_pad(mixer, transport, id);
-            }
-        }
         ControlMessage::SetPadLoopRegion {
             id,
             start_s,
@@ -3417,7 +3310,6 @@ pub(super) fn create_stream_mixer(
     // Supplied owners are installed directly. Invalidate their admission policy
     // exactly once, after the complete boxed constructor has succeeded.
     policy.invalidate_admission();
-    mixer.register_runtime_policy_retry_publisher();
     Ok(mixer)
 }
 
@@ -3435,7 +3327,6 @@ struct AudioCallbackState {
     callback_clock: Arc<SharedOutputClock>,
     clock_mapper: OutputClockMapper,
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
-    sync_diagnostics: Option<Arc<super::sync_diagnostics::DiagnosticSlot>>,
     pad_peaks: [f32; NUM_SAMPLES],
     pad_activity: RtRenderPadActivity,
     last_pad_emit_frame: u64,
@@ -3481,7 +3372,6 @@ fn boxed_stream_callback_state(
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
     retired_buffers: RtAudioBufferRetirement,
 ) -> Box<AudioCallbackState> {
-    let sync_diagnostics = loop_acceptance.diagnostics.register();
     let (consumer_in, parameter_consumer_in, producer_out) = queues;
     let producer_out = ContentFeedbackProducer {
         producer: producer_out,
@@ -3498,7 +3388,6 @@ fn boxed_stream_callback_state(
         callback_clock,
         clock_mapper: OutputClockMapper::new(),
         loop_acceptance,
-        sync_diagnostics,
         pad_peaks: [0.0; NUM_SAMPLES],
         pad_activity: RtRenderPadActivity::default(),
         last_pad_emit_frame: 0,
@@ -3694,14 +3583,6 @@ pub fn create_audio_stream(
 
                 // Freeze a demand for this callback only. No demand leaves the
                 // renderer's diagnostic scalar copies disabled.
-                let diagnostic_request = state
-                    .sync_diagnostics
-                    .as_ref()
-                    .and_then(|slot| slot.pending())
-                    .unwrap_or(0);
-                state
-                    .mixer
-                    .begin_sync_diagnostic_capture(diagnostic_request);
                 // Render audio + compute per-pad peaks.
                 render_scheduled_audio_tracking_pads(
                     &mut state.mixer,
@@ -3723,11 +3604,6 @@ pub fn create_audio_stream(
                 state
                     .loop_acceptance
                     .observe(&state.mixer, observed_at_ns, frame_clock, frames);
-                if let Some(slot) = state.sync_diagnostics.as_ref() {
-                    slot.observe(&state.mixer, &state.transport, observed_at_ns, frames);
-                }
-                state.mixer.end_sync_diagnostic_capture();
-
                 publish_pad_telemetry(
                     &mut state.producer_out,
                     &state.mixer,
@@ -4558,33 +4434,27 @@ mod tests {
     #[test]
     fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }, 0),
+            control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
             3 * MAX_VOICES
         );
         assert_eq!(
-            control_message_retirement_slots_needed(
-                &ControlMessage::UnloadSample {
-                    id: 0,
-                    publication: None
-                },
-                0
-            ),
+            control_message_retirement_slots_needed(&ControlMessage::UnloadSample {
+                id: 0,
+                publication: None
+            }),
             3 * MAX_VOICES + 3
         );
         assert_eq!(
-            control_message_retirement_slots_needed(&ControlMessage::StopAll(), 0),
+            control_message_retirement_slots_needed(&ControlMessage::StopAll()),
             3 * MAX_VOICES
         );
         assert_eq!(
-            control_message_retirement_slots_needed(
-                &ControlMessage::PlaySampleExclusive {
-                    expected_source_generation: None,
-                    id: 0,
-                    volume: 1.0,
-                    received_at_ns: None
-                },
-                0
-            ),
+            control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
+                expected_source_generation: None,
+                id: 0,
+                volume: 1.0,
+                received_at_ns: None
+            }),
             3 * MAX_VOICES
         );
     }
@@ -4598,7 +4468,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_mixer_constructor_keeps_supplied_source_owners_and_invalidates_policy_once() {
+    fn stream_mixer_constructor_keeps_supplied_source_owners_and_invalidates_start_policy_once() {
         use crate::audio_engine::global_rate_status::RateTuple;
         use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
         use crate::audio_engine::master_provenance::MasterProvenance;
@@ -4638,16 +4508,6 @@ mod tests {
             .key_lock_start_policy
             .begin_callback_drain()
             .unwrap();
-        let old_retry_slot = ownership.runtime_policy_retry.register().unwrap();
-        let old_retry_birth = ownership
-            .runtime_policy_retry
-            .current_birth_for_test()
-            .unwrap();
-        old_retry_slot.publish(
-            11,
-            17,
-            ownership.runtime_policy_retry.next_condition().unwrap(),
-        );
         let mut mixer = create_stream_mixer(
             1,
             8_000,
@@ -4656,19 +4516,6 @@ mod tests {
             epochs.clone(),
         )
         .unwrap();
-        let new_retry_birth = ownership
-            .runtime_policy_retry
-            .current_birth_for_test()
-            .unwrap();
-        assert_ne!(new_retry_birth, old_retry_birth);
-        assert!(ownership.runtime_policy_retry.current().is_none());
-        old_retry_slot.publish(
-            11,
-            17,
-            ownership.runtime_policy_retry.next_condition().unwrap(),
-        );
-        old_retry_slot.invalidate();
-        assert!(ownership.runtime_policy_retry.current().is_none());
         let (actual_ack, actual_owner, actual_epochs) = mixer.source_owners_for_test();
         assert!(Arc::ptr_eq(actual_ack, &acknowledgements));
         assert!(Arc::ptr_eq(actual_owner, &ownership));
@@ -4691,20 +4538,10 @@ mod tests {
         assert_eq!(observed.master_provenance, proof);
         assert!(!mixer.global_rate_drains_settled());
         mixer.set_input_runtime_ownership(ownership.clone());
-        assert_ne!(
-            ownership.runtime_policy_retry.current_birth_for_test(),
-            Some(new_retry_birth)
-        );
-        assert!(ownership.runtime_policy_retry.current().is_none());
         let replacement = Arc::new(InputRuntimeOwnership::tracked());
         mixer.set_input_runtime_ownership(replacement.clone());
-        assert!(
-            replacement
-                .runtime_policy_retry
-                .current_birth_for_test()
-                .is_some()
-        );
-        assert!(replacement.runtime_policy_retry.current().is_none());
+        let (_, actual_owner, _) = mixer.source_owners_for_test();
+        assert!(Arc::ptr_eq(actual_owner, &replacement));
     }
 
     #[test]
@@ -4739,13 +4576,6 @@ mod tests {
                 .global_timing_revision
                 .store(17, Ordering::Release);
             let revision = ownership.key_lock_start_policy.begin_callback_drain();
-            let retry_slot = ownership.runtime_policy_retry.register().unwrap();
-            let retry_birth = ownership.runtime_policy_retry.current_birth_for_test();
-            let retry = retry_slot.publish(
-                11,
-                17,
-                ownership.runtime_policy_retry.next_condition().unwrap(),
-            );
             let attempt = catch_unwind(AssertUnwindSafe(|| {
                 create_stream_mixer(
                     channels,
@@ -4773,11 +4603,6 @@ mod tests {
                 revision
             );
             assert_eq!(acknowledgements.current_epoch(0), 23);
-            assert_eq!(
-                ownership.runtime_policy_retry.current_birth_for_test(),
-                retry_birth
-            );
-            assert_eq!(ownership.runtime_policy_retry.current(), Some(retry));
             assert_eq!(ownership.global_timing_revision.load(Ordering::Acquire), 17);
             for (id, epoch) in epochs.iter().enumerate() {
                 assert_eq!(epoch.load(Ordering::Acquire), id as u64 + 41);
@@ -5495,32 +5320,6 @@ mod tests {
     }
 
     #[test]
-    fn deliberate_sync_retains_complete_source_beat_and_consumes_bootstrap() {
-        let mut mixer = RtMixer::new(1, 10.0);
-        mixer.load_sample(0, create_test_sample(1, 200, 0.5));
-        mixer.set_pad_bpm(0, Some(60.0));
-        mixer.set_pad_loop_region(0, 18.5, Some(19.0));
-        assert!(mixer.play_sample(0, 1.0));
-        let mut transport = TransportTimeline::new(10);
-        transport.advance_by_rendered_frames(100);
-        transport.request_bootstrap(1);
-        assert!(anchor_transport_phase_from_pad(
-            &mut mixer,
-            &mut transport,
-            0
-        ));
-        assert_eq!(transport.beat_position(), Some(18.5));
-        assert_eq!(transport.bar_phase_beats(), Some(2.5));
-        transport.request_bootstrap(0);
-        assert_eq!(transport.bootstrap_reference(), None);
-        assert!(!try_bootstrap_transport_from_reference(
-            &mut mixer,
-            &mut transport,
-            100
-        ));
-    }
-
-    #[test]
     fn reference_bootstrap_uses_same_loop_edit_position_as_renderer() {
         for (rendered, expected_start) in [(30, 30), (80, 20)] {
             let mut mixer = RtMixer::new(1, 10.0);
@@ -5594,7 +5393,6 @@ mod tests {
                     phase_anchor_s: -0.5,
                 },
             },
-            ControlMessage::BootstrapTransportFromPad { id: 0 },
         ] {
             process_control_message(
                 command.clone(),
@@ -5607,6 +5405,7 @@ mod tests {
                 &mut ImmediateAudioBufferRetirement,
             );
         }
+        transport.request_bootstrap(0);
         assert_eq!(transport.master_bpm(), Some(120.0));
         assert_eq!(transport.beat_position(), Some(20.0));
         assert!(!try_bootstrap_transport_from_reference(
@@ -5760,125 +5559,6 @@ mod tests {
             &mut ImmediateAudioBufferRetirement,
         );
         assert_eq!(active_voice_frame(&mixer, 0), Some(10));
-    }
-
-    #[test]
-    fn bpm_lock_phase_anchor_updates_transport_downbeat_from_active_pad() {
-        let mut mixer = RtMixer::new(1, 10.0);
-        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
-        mixer.set_pad_bpm(0, Some(60.0));
-        mixer.set_pad_timing_metadata(
-            0,
-            PadTimingMetadata {
-                phase_anchor_s: 0.5,
-            },
-        );
-        assert!(mixer.play_sample(0, 1.0));
-
-        let mut output = vec![0.0; 30];
-        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
-        mixer.render(&mut output, &mut pad_peaks);
-
-        let mut transport = TransportTimeline::new(10);
-        assert!(transport.set_master_bpm(60.0));
-        transport.advance_by_rendered_frames(100);
-
-        assert!(anchor_transport_phase_from_pad(
-            &mut mixer,
-            &mut transport,
-            0
-        ));
-
-        assert_eq!(transport.downbeat_frame(), 75);
-        assert_eq!(transport.bar_phase_beats(), Some(2.5));
-    }
-
-    #[test]
-    fn bpm_lock_phase_anchor_keeps_transport_downbeat_when_anchor_is_inactive() {
-        let mut mixer = RtMixer::new(1, 10.0);
-        let mut transport = TransportTimeline::new(10);
-        assert!(transport.set_master_bpm(60.0));
-        transport.set_downbeat_frame(12);
-        transport.advance_by_rendered_frames(100);
-
-        assert!(!anchor_transport_phase_from_pad(
-            &mut mixer,
-            &mut transport,
-            0
-        ));
-
-        assert_eq!(transport.downbeat_frame(), 12);
-    }
-
-    #[test]
-    fn explicit_anchor_rebinds_only_genuine_same_frame_births_and_failed_anchor_changes_nothing() {
-        use crate::audio_engine::ordinary_global_start_tests::phase_group;
-        for advanced in [false, true] {
-            let (mut fixture, _) = phase_group(false);
-            let (mut reference, _) = phase_group(false);
-            if advanced {
-                assert_eq!(fixture.render(1), reference.render(1));
-            }
-            let frame = fixture.transport.output_frame();
-            let before = fixture.transport;
-            let copies = [0, 1].map(|id| fixture.voice(id).source_playback);
-            assert!(!anchor_transport_phase_from_pad_at_frame(
-                &mut fixture.mixer,
-                &mut fixture.transport,
-                2,
-                frame
-            ));
-            assert_eq!(format!("{:?}", fixture.transport), format!("{before:?}"));
-            for (id, copy) in copies.iter().enumerate() {
-                assert!(fixture.voice(id).source_playback.matches_exact(copy));
-                assert!(fixture.voice(id).phase_launch_qualified);
-                assert_eq!(fixture.voice(id).phase_birth_unadvanced, !advanced);
-            }
-            assert!(anchor_transport_phase_from_pad_at_frame(
-                &mut fixture.mixer,
-                &mut fixture.transport,
-                0,
-                frame
-            ));
-            assert_ne!(
-                fixture.transport.phase_generation(),
-                before.phase_generation()
-            );
-            for (id, copy) in copies.iter().enumerate() {
-                assert_eq!(
-                    fixture.voice(id).source_playback.position(),
-                    copy.position()
-                );
-                assert_eq!(
-                    fixture
-                        .voice(id)
-                        .source_playback
-                        .phase_reference_current(&fixture.transport),
-                    !advanced
-                );
-            }
-            assert_eq!(fixture.pcm(513), reference.pcm(513));
-        }
-    }
-
-    #[test]
-    fn phase_anchor_establishes_transport_clock_without_existing_master_bpm() {
-        let mut mixer = RtMixer::new(1, 10.0);
-        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
-        mixer.set_pad_bpm(0, Some(60.0));
-        assert!(mixer.play_sample(0, 1.0));
-        let mut transport = TransportTimeline::new(10);
-        transport.clear_master_bpm();
-        transport.set_downbeat_frame(12);
-
-        assert!(anchor_transport_phase_from_pad(
-            &mut mixer,
-            &mut transport,
-            0
-        ));
-
-        assert_eq!(transport.master_bpm(), Some(60.0));
-        assert_eq!(transport.downbeat_frame(), 0);
     }
 
     #[test]

@@ -6,18 +6,12 @@
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::loop_phase_reference::LoopPhaseReference;
-use super::mapped_source_clock::{
-    CompactLocalSpanView, CompactSpanView, GeneralLocalSpanView, MappedClockEpoch,
-    MappedClockError, MappedLoopGeometry, MappedSourceSpan, PhaseLocalSpanView,
-};
 #[cfg(test)]
 use super::source_reader::FrameRange;
 use super::source_reader::{
     ExplicitSeekMode, SourceLoopDomain, SourceReaderPeriod, advance_playback_position,
     playhead_before_render,
 };
-use super::static_source_clock::{StaticClockError, StaticPhaseClock};
-use super::transport::TransportBeatProjection;
 
 const TEMPO_STEP: f64 = 0.05;
 const TEMPO_STEP_OUTPUT_FRAMES: usize = 512;
@@ -32,90 +26,10 @@ pub(crate) struct FractionalSourcePosition {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct MappedCopyState {
-    span: MappedSourceSpan,
-    intended_output_frame: u64,
-}
-
-/// Mutually exclusive copied trajectories reuse the existing mapped storage.
-/// Neither variant retains an owning source, map, reader or permission.
-#[derive(Clone, Copy, Debug)]
-enum CopiedClock {
-    Scalar(ScalarGlide),
-    Mapped(MappedCopyState),
-    Static(StaticPhaseClock),
-}
-
-#[derive(Clone, Copy, Debug)]
 struct ScalarGlide {
     ratio: f64,
     target: f64,
     frames_until_step: usize,
-}
-
-/// Temporary coordinates borrowing the caller's original retained geometry.
-/// This is not a source/custody permit and never enters stored copied playback.
-pub(crate) struct CompactPlaybackView<'a> {
-    span: CompactSpanView<'a>,
-    intended_output_frame: u64,
-}
-
-impl CompactPlaybackView<'_> {
-    pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
-        self.span
-            .position_at(self.intended_output_frame.checked_add(offset as u64)?)
-    }
-}
-
-/// Prepared coordinates from an already admitted compact span. This contains no
-/// geometry owner and is discarded after the reader chunk or copied query.
-pub(crate) struct CompactLocalPlaybackView {
-    span: LocalMappedSpanView,
-    intended_output_frame: u64,
-}
-
-enum LocalMappedSpanView {
-    Intersection(CompactLocalSpanView),
-    General(GeneralLocalSpanView),
-    Phase(PhaseLocalSpanView),
-}
-
-impl CompactLocalPlaybackView {
-    #[cfg(test)]
-    pub(crate) fn full_fraction_phase_split_bits_for_test(&self) -> Option<usize> {
-        match &self.span {
-            LocalMappedSpanView::Phase(view) => view.full_fraction_split_bits_for_test(),
-            _ => None,
-        }
-    }
-    pub(crate) fn position_at(&self, offset: usize) -> Option<FractionalSourcePosition> {
-        let frame = self.intended_output_frame.checked_add(offset as u64)?;
-        match &self.span {
-            LocalMappedSpanView::Intersection(span) => span.position_at(frame),
-            LocalMappedSpanView::General(span) => span.position_at(frame),
-            LocalMappedSpanView::Phase(span) => span.position_at(frame),
-        }
-    }
-}
-
-/// Physical None is a valid original scalar domain and cannot alias a missing
-/// original-domain witness on a generic mapped construction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OriginalScalarPeriod {
-    Unavailable,
-    Physical,
-    Musical(u64),
-}
-
-impl OriginalScalarPeriod {
-    fn from_domain(domain: SourceLoopDomain) -> Self {
-        match domain.musical_period {
-            SourceReaderPeriod::Physical => Self::Physical,
-            SourceReaderPeriod::ScalarMusical(bits) => Self::Musical(bits),
-            SourceReaderPeriod::MappedRational(_)
-            | SourceReaderPeriod::MappedPhysicalQuarters(_) => Self::Unavailable,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,33 +43,20 @@ enum ScalarProjection {
 pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
     domain: Option<SourceLoopDomain>,
-    original_scalar_period: OriginalScalarPeriod,
     elapsed_output_frames: u64,
     // Before this epoch, only an intentional start/seek defines reconstructible source history.
     history_reconstructible: bool,
     scalar_projection: ScalarProjection,
     phase_reference: LoopPhaseReference,
-    clock: CopiedClock,
+    clock: ScalarGlide,
 }
 
 impl SourcePlayback {
-    fn is_scalar(&self) -> bool {
-        matches!(self.clock, CopiedClock::Scalar(_))
-    }
-
-    // Callers first exclude both other enum variants. These helpers never
-    // synthesize a scalar clock from an admitted mapped/static trajectory.
     fn glide(&self) -> &ScalarGlide {
-        match &self.clock {
-            CopiedClock::Scalar(glide) => glide,
-            _ => unreachable!("scalar clock required"),
-        }
+        &self.clock
     }
     fn glide_mut(&mut self) -> &mut ScalarGlide {
-        match &mut self.clock {
-            CopiedClock::Scalar(glide) => glide,
-            _ => unreachable!("scalar clock required"),
-        }
+        &mut self.clock
     }
     /// Historical (phase generation, original output frame, master beat).
     pub(crate) fn diagnostic_launch_reference(&self) -> Option<(u64, u64, f64)> {
@@ -189,22 +90,7 @@ impl SourcePlayback {
         &self,
         timeline: &super::transport::TransportTimeline,
     ) -> bool {
-        if let Some(epoch) = self
-            .mapped_epoch()
-            .filter(|epoch| epoch.is_absolute_grid_phase())
-        {
-            epoch.matches_timeline(timeline)
-        } else {
-            self.phase_reference.current(timeline)
-        }
-    }
-
-    pub(crate) fn validate_mapped_reference(&self, geometry: &MappedLoopGeometry) -> bool {
-        self.mapped_epoch().is_some_and(|epoch| {
-            geometry
-                .validate_epoch_with_reference(epoch, self.phase_reference)
-                .is_ok()
-        })
+        self.phase_reference.current(timeline)
     }
 
     /// Caller first excludes Native/retained/source-history owners. Only a still
@@ -215,8 +101,7 @@ impl SourcePlayback {
         next: &super::transport::TransportTimeline,
         frame: u64,
     ) {
-        if self.is_scalar()
-            && self.elapsed_output_frames == 0
+        if self.elapsed_output_frames == 0
             && self.domain.is_some_and(|domain| {
                 let raw = self.position();
                 raw.frame == domain.region.start
@@ -228,816 +113,12 @@ impl SourcePlayback {
         }
     }
 
-    fn mapped_state(&self) -> Option<MappedCopyState> {
-        match self.clock {
-            CopiedClock::Mapped(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    fn static_state(&self) -> Option<StaticPhaseClock> {
-        match self.clock {
-            CopiedClock::Static(state) => Some(state),
-            _ => None,
-        }
-    }
-
-    /// Coordinates only, admitted at actual E by the original complete caller claim.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn static_continuation(
-        previous: &Self,
-        timeline: super::transport::TransportTimeline,
-        execution: u64,
-        marker: u64,
-        frames_per_beat: f64,
-        origin_frame: f64,
-        quarters: f64,
-    ) -> Result<Self, StaticClockError> {
-        Self::static_continuation_class(
-            previous,
-            timeline,
-            execution,
-            marker,
-            frames_per_beat,
-            origin_frame,
-            quarters,
-            false,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn static_physical_normalized_continuation(
-        previous: &Self,
-        timeline: super::transport::TransportTimeline,
-        execution: u64,
-        marker: u64,
-        frames_per_beat: f64,
-        origin_frame: f64,
-        quarters: f64,
-    ) -> Result<Self, StaticClockError> {
-        Self::static_continuation_class(
-            previous,
-            timeline,
-            execution,
-            marker,
-            frames_per_beat,
-            origin_frame,
-            quarters,
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn static_continuation_class(
-        previous: &Self,
-        timeline: super::transport::TransportTimeline,
-        execution: u64,
-        marker: u64,
-        frames_per_beat: f64,
-        origin_frame: f64,
-        quarters: f64,
-        physical_normalized: bool,
-    ) -> Result<Self, StaticClockError> {
-        if !previous.phase_reference.current(&timeline) {
-            return Err(StaticClockError::InvalidEpoch);
-        }
-        let projection = timeline
-            .beat_projection()
-            .ok_or(StaticClockError::InvalidEpoch)?;
-        let (_, _, launch_master) = previous
-            .phase_reference
-            .parts()
-            .ok_or(StaticClockError::InvalidEpoch)?;
-        if previous.is_mapped()
-            || previous.is_static_phase()
-            || previous.glide().ratio.to_bits() != previous.glide().target.to_bits()
-        {
-            return Err(StaticClockError::InvalidEpoch);
-        }
-        let domain = previous.domain.ok_or(StaticClockError::InvalidGeometry)?;
-        let raw = previous.position();
-        let valid = match domain.musical_period {
-            SourceReaderPeriod::Physical => valid_physical_pair(raw, domain),
-            SourceReaderPeriod::ScalarMusical(_) => valid_musical_pair(raw, domain),
-            SourceReaderPeriod::MappedRational(_)
-            | SourceReaderPeriod::MappedPhysicalQuarters(_) => false,
-        };
-        if !valid {
-            return Err(StaticClockError::InvalidGeometry);
-        }
-        let construct = if physical_normalized {
-            StaticPhaseClock::new_physical_normalized
-        } else {
-            StaticPhaseClock::new
-        };
-        let clock = construct(
-            raw,
-            domain,
-            projection,
-            execution,
-            marker,
-            frames_per_beat,
-            origin_frame,
-            quarters,
-            previous.glide().target,
-            launch_master,
-        )?;
-        Ok(Self {
-            origin: raw,
-            domain: Some(domain),
-            original_scalar_period: OriginalScalarPeriod::from_domain(domain),
-            elapsed_output_frames: 0,
-            history_reconstructible: false,
-            scalar_projection: ScalarProjection::Legacy,
-            clock: CopiedClock::Static(clock),
-            phase_reference: previous.phase_reference,
-        })
-    }
-
-    pub(crate) fn is_static_phase(&self) -> bool {
-        self.static_state().is_some()
-    }
-    pub(crate) fn is_physical_normalized_static(&self) -> bool {
-        self.static_state()
-            .is_some_and(|clock| clock.is_physical_normalized())
-    }
-    pub(crate) fn static_output_frame(&self) -> Option<u64> {
-        self.static_state().map(|clock| clock.intended_frame())
-    }
-    pub(crate) fn static_first_frame(&self) -> Option<u64> {
-        self.static_state().map(|clock| clock.first_frame())
-    }
-    pub(crate) fn static_marker(&self) -> Option<u64> {
-        self.static_state().map(|clock| clock.marker())
-    }
-    pub(crate) fn static_master_period(&self) -> Option<f64> {
-        self.static_state().map(|clock| clock.master_period())
-    }
-    pub(crate) fn static_matches_projection(&self, projection: TransportBeatProjection) -> bool {
-        self.static_state()
-            .is_some_and(|clock| clock.matches_projection(projection))
-    }
-    pub(crate) fn static_grid_matches(&self, f: f64, o: f64, q: f64) -> bool {
-        self.static_state()
-            .is_some_and(|clock| clock.grid_matches(f, o, q))
-    }
-    pub(crate) fn static_phase_settled(&self) -> bool {
-        self.static_state().is_some_and(|clock| clock.settled())
-    }
     /// Even captured actual-M coordinates are not a constant-rate scalar history.
     pub(crate) fn has_constant_scalar_trajectory(&self) -> bool {
-        self.is_scalar() && self.glide().ratio.to_bits() == self.glide().target.to_bits()
-    }
-
-    /// Caller custody owns the effect. Preserve the current pair and derivative;
-    /// no earlier scalar history can be reconstructed from this new endpoint.
-    pub(crate) fn dissolve_static(&mut self) -> bool {
-        let Some(clock) = self.static_state() else {
-            return true;
-        };
-        let Some(domain) = self.domain else {
-            return false;
-        };
-        let position = self.origin;
-        let construct = match domain.musical_period {
-            SourceReaderPeriod::Physical => Self::scalar_continuation,
-            SourceReaderPeriod::ScalarMusical(_) => Self::scalar_musical_continuation,
-            SourceReaderPeriod::MappedRational(_)
-            | SourceReaderPeriod::MappedPhysicalQuarters(_) => return false,
-        };
-        let Some(mut replacement) =
-            construct(position, domain, clock.ratio(), clock.nominal_ratio())
-        else {
-            return false;
-        };
-        replacement.carry_launch_reference_from(self);
-        *self = replacement;
-        true
-    }
-
-    /// The installed coordinate programme is not a source, phase-read or Native permit.
-    pub(crate) fn is_mapped_phase(&self) -> bool {
-        self.mapped_state()
-            .is_some_and(|state| state.span.epoch().is_common_phase())
-    }
-
-    /// These dry phase trajectories have not been integrated with Native preparation.
-    pub(crate) fn has_phase_program(&self) -> bool {
-        self.is_static_phase() || self.is_mapped_phase()
-    }
-
-    pub(crate) fn mapped_phase_settled(
-        &self,
-        geometry: &MappedLoopGeometry,
-    ) -> Result<bool, MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if !state.span.epoch().is_common_phase() || self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        state.span.epoch().common_phase_settled(
-            geometry,
-            state.intended_output_frame,
-            self.phase_reference,
-        )
-    }
-
-    /// Reuse an already mapped lane's separately retained scalar witness. Its current
-    /// pair may be outside that older circle until a genuine scalar reverse qualifies.
-    fn retained_scalar_for_mapped_recovery(
-        geometry: &MappedLoopGeometry,
-        previous: &Self,
-    ) -> Result<OriginalScalarPeriod, MappedClockError> {
-        let original = previous
-            .original_scalar_domain()
-            .ok_or(MappedClockError::InvalidGeometry)?;
-        let anchor = FractionalSourcePosition {
-            frame: original.region.start,
-            fraction: 0.0,
-            seek_mode: ExplicitSeekMode::Normal,
-        };
-        let valid = match original.musical_period {
-            SourceReaderPeriod::Physical => {
-                Self::scalar_continuation(anchor, original, 1.0, 1.0).is_some()
-            }
-            SourceReaderPeriod::ScalarMusical(_) => {
-                Self::scalar_musical_continuation(anchor, original, 1.0, 1.0).is_some()
-            }
-            SourceReaderPeriod::MappedRational(_)
-            | SourceReaderPeriod::MappedPhysicalQuarters(_) => false,
-        };
-        if !previous.is_mapped()
-            || previous.domain != Some(geometry.domain())
-            || !valid
-            || !original.is_valid()
-            || original.sample_frames != geometry.domain().sample_frames
-            || original.region != geometry.domain().region
-        {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        Ok(previous.original_scalar_period)
-    }
-
-    /// Coordinates only. The original all-participant claim separately owns the
-    /// actual source/map/reader/full request and exact first-PCM admission.
-    pub(crate) fn mapped_phase_continuation(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        previous: &Self,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let original = Self::retained_scalar_for_mapped_recovery(geometry, previous)?;
-        if previous.mapped_output_frame() != Some(output_frame) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        let reference = geometry.qualify_phase_reference(previous.phase_reference, &timeline)?;
-        let epoch = MappedClockEpoch::common_phase(
-            marker,
-            timeline,
-            geometry,
-            previous.position(),
-            output_frame,
-            reference,
-        )?;
-        let mut replacement =
-            Self::mapped_with_reference(geometry, epoch, output_frame, reference)?;
-        if !same_position(previous.position(), replacement.position()) {
-            return Err(MappedClockError::NumericalUnavailable);
-        }
-        replacement.original_scalar_period = original;
-        Ok(replacement)
-    }
-
-    /// Rebase a CURRENT mapped phase under its caller's original actual-E claim.
-    pub(crate) fn mapped_ordinary_recovery_at(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        previous: &Self,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        if previous.mapped_output_frame() != Some(output_frame) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        Self::mapped_resume_recovery_at(geometry, marker, timeline, previous, output_frame)
-    }
-
-    /// The original paused/cause cohort must prove suspension before calling.
-    /// Keep the frozen pair, use LIVE M(R), and never shift the old phase clock.
-    pub(crate) fn mapped_resume_recovery_at(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        previous: &Self,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let original = Self::retained_scalar_for_mapped_recovery(geometry, previous)?;
-        if !(previous.is_mapped_phase()
-            || previous
-                .mapped_epoch()
-                .is_some_and(|e| e.is_full_fraction_general()))
-            || previous
-                .mapped_output_frame()
-                .is_none_or(|frozen| output_frame < frozen)
-        {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        let recover = if previous
-            .mapped_epoch()
-            .is_some_and(|e| e.has_full_fraction_recovery())
-        {
-            MappedClockEpoch::full_fraction_ordinary_recovery
-        } else {
-            MappedClockEpoch::ordinary_mapped_recovery
-        };
-        let epoch = recover(
-            marker,
-            timeline,
-            geometry,
-            previous.position(),
-            output_frame,
-        )?;
-        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
-        if !same_position(previous.position(), replacement.position()) {
-            return Err(MappedClockError::NumericalUnavailable);
-        }
-        replacement.original_scalar_period = original;
-        replacement.carry_launch_reference_from(previous);
-        Ok(replacement)
-    }
-
-    /// An already mapped voice may move to a different prepared intersection
-    /// circle without losing its separately retained original scalar circle.
-    /// Physical/source ownership and first-PCM equality remain the caller's claim.
-    pub(crate) fn mapped_compact_replacement(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        previous: &Self,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let effective = previous.domain.ok_or(MappedClockError::InvalidGeometry)?;
-        let original = previous
-            .original_scalar_domain()
-            .ok_or(MappedClockError::InvalidGeometry)?;
-        let target = geometry.domain();
-        // Validate historical scalar metadata at its own canonical start. The
-        // current mapped pair need not lie in that older circle until reverse.
-        let original_anchor = FractionalSourcePosition {
-            frame: original.region.start,
-            fraction: 0.0,
-            seek_mode: ExplicitSeekMode::Normal,
-        };
-        let original_valid = match original.musical_period {
-            SourceReaderPeriod::Physical => {
-                Self::scalar_continuation(original_anchor, original, 1.0, 1.0).is_some()
-            }
-            SourceReaderPeriod::ScalarMusical(_) => {
-                Self::scalar_musical_continuation(original_anchor, original, 1.0, 1.0).is_some()
-            }
-            SourceReaderPeriod::MappedRational(_)
-            | SourceReaderPeriod::MappedPhysicalQuarters(_) => false,
-        };
-        if !previous.is_mapped()
-            || previous.mapped_output_frame() != Some(output_frame)
-            || !effective.is_valid()
-            || !original.is_valid()
-            || !original_valid
-            || original.musical_period.is_mapped()
-            || effective.sample_frames != target.sample_frames
-            || effective.region != target.region
-            || original.sample_frames != target.sample_frames
-            || original.region != target.region
-            || target.musical_period.is_mapped()
-            || !geometry.has_compact_continuation()
-        {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let mut replacement = Self::mapped_anchored_compact_continuation(
-            geometry,
-            marker,
-            timeline,
-            target,
-            previous.position(),
-            output_frame,
-        )?;
-        replacement.original_scalar_period = previous.original_scalar_period;
-        replacement.carry_launch_reference_from(previous);
-        Ok(replacement)
-    }
-
-    /// Productive general coordinates retain their original scalar circle
-    /// independently of the effective rational reader certificate.
-    pub(crate) fn mapped_general_continuation(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        original_scalar_domain: SourceLoopDomain,
-        position: FractionalSourcePosition,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let original = OriginalScalarPeriod::from_domain(original_scalar_domain);
-        if original == OriginalScalarPeriod::Unavailable {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let epoch = MappedClockEpoch::general_compact(
-            marker,
-            timeline,
-            geometry,
-            original_scalar_domain,
-            position,
-            output_frame,
-        )?;
-        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
-        if !same_position(position, replacement.origin) {
-            return Err(MappedClockError::NumericalUnavailable);
-        }
-        replacement.original_scalar_period = original;
-        Ok(replacement)
-    }
-
-    /// Bounded actual-E coordinates. Original source/map/ACK custody and the
-    /// complete live cohort claim remain the caller's separate responsibility.
-    pub(crate) fn mapped_anchored_compact_continuation(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        original_domain: SourceLoopDomain,
-        position: FractionalSourcePosition,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let epoch = MappedClockEpoch::anchored_compact(
-            marker,
-            timeline,
-            geometry,
-            original_domain,
-            position,
-            output_frame,
-        )?;
-        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
-        if !same_position(position, replacement.origin) {
-            return Err(MappedClockError::NumericalUnavailable);
-        }
-        replacement.original_scalar_period = OriginalScalarPeriod::from_domain(original_domain);
-        Ok(replacement)
-    }
-
-    /// A tagged span has already passed whole-original-geometry admission.
-    /// Untagged legacy and explicit wide reference trajectories retain their path.
-    pub(crate) fn local_compact_view(
-        &self,
-    ) -> Result<Option<CompactLocalPlaybackView>, MappedClockError> {
-        let Some(state) = self.mapped_state().filter(|state| {
-            state.span.epoch().is_compact_anchored()
-                || state.span.epoch().is_general_family()
-                || state.span.epoch().is_common_phase()
-        }) else {
-            return Ok(None);
-        };
-        let span = if state.span.epoch().is_common_phase() {
-            LocalMappedSpanView::Phase(state.span.local_phase_view(
-                self.domain.ok_or(MappedClockError::InvalidGeometry)?,
-                self.phase_reference,
-            )?)
-        } else if state.span.epoch().is_general_family() {
-            LocalMappedSpanView::General(
-                state
-                    .span
-                    .local_general_view(self.domain.ok_or(MappedClockError::InvalidGeometry)?)?,
-            )
-        } else {
-            LocalMappedSpanView::Intersection(state.span.local_compact_view()?)
-        };
-        let view = CompactLocalPlaybackView {
-            span,
-            intended_output_frame: state.intended_output_frame,
-        };
-        if !view
-            .position_at(0)
-            .is_some_and(|position| same_position(position, self.origin))
-        {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        Ok(Some(view))
-    }
-
-    /// Reference anchored map coordinates only; no productive caller or realtime-cost permit.
-    /// The caller retains the same qualified original owning geometry and reader custody.
-    pub(crate) fn mapped_anchored_continuation(
-        geometry: &MappedLoopGeometry,
-        marker: u64,
-        timeline: super::transport::TransportTimeline,
-        original_domain: SourceLoopDomain,
-        position: FractionalSourcePosition,
-        output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        let epoch = MappedClockEpoch::anchored(
-            marker,
-            timeline,
-            geometry,
-            original_domain,
-            position,
-            output_frame,
-        )?;
-        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
-        if !same_position(position, replacement.origin) {
-            return Err(MappedClockError::NumericalUnavailable);
-        }
-        replacement.original_scalar_period = OriginalScalarPeriod::from_domain(original_domain);
-        Ok(replacement)
-    }
-
-    /// The caller separately retains and qualifies the original immutable map
-    /// owner. This value contains only a copied trajectory and identity markers.
-    pub(crate) fn mapped(
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-        intended_output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        Self::mapped_with_reference(
-            geometry,
-            epoch,
-            intended_output_frame,
-            LoopPhaseReference::Unavailable,
-        )
-    }
-
-    fn mapped_with_reference(
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-        intended_output_frame: u64,
-        reference: LoopPhaseReference,
-    ) -> Result<Self, MappedClockError> {
-        let span = geometry.refresh_span_with_reference(epoch, intended_output_frame, reference)?;
-        let origin = span
-            .position_in_domain_with_reference(geometry.domain(), intended_output_frame, reference)
-            .ok_or(MappedClockError::NumericalUnavailable)?;
-        span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
-        Ok(Self {
-            origin,
-            domain: Some(geometry.domain()),
-            original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
-            elapsed_output_frames: 0,
-            history_reconstructible: false,
-            scalar_projection: ScalarProjection::Legacy,
-            clock: CopiedClock::Mapped(MappedCopyState {
-                span,
-                intended_output_frame,
-            }),
-            phase_reference: reference,
-        })
-    }
-
-    /// Explicit compact-only coordinates. Epoch construction and original source
-    /// qualification remain separate off-realtime prerequisites; no wide fallback.
-    pub(crate) fn mapped_compact(
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-        intended_output_frame: u64,
-    ) -> Result<Self, MappedClockError> {
-        Self::mapped_compact_with_reference(
-            geometry,
-            epoch,
-            intended_output_frame,
-            LoopPhaseReference::Unavailable,
-        )
-    }
-
-    fn mapped_compact_with_reference(
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-        intended_output_frame: u64,
-        reference: LoopPhaseReference,
-    ) -> Result<Self, MappedClockError> {
-        if epoch.is_general_family() || epoch.is_common_phase() {
-            return Self::mapped_with_reference(geometry, epoch, intended_output_frame, reference);
-        }
-        let span = geometry.refresh_span_compact(epoch, intended_output_frame)?;
-        let origin = span
-            .compact_view(geometry)?
-            .position_at(intended_output_frame)
-            .ok_or(MappedClockError::NumericalUnavailable)?;
-        span.local_rate().ok_or(MappedClockError::UnsupportedRate)?;
-        Ok(Self {
-            origin,
-            domain: Some(geometry.domain()),
-            original_scalar_period: OriginalScalarPeriod::from_domain(geometry.domain()),
-            elapsed_output_frames: 0,
-            history_reconstructible: false,
-            scalar_projection: ScalarProjection::Legacy,
-            clock: CopiedClock::Mapped(MappedCopyState {
-                span,
-                intended_output_frame,
-            }),
-            phase_reference: reference,
-        })
-    }
-
-    /// Borrow numeric context only; equal geometry does not establish map custody.
-    pub(crate) fn compact_view<'a>(
-        &self,
-        geometry: &'a MappedLoopGeometry,
-    ) -> Result<CompactPlaybackView<'a>, MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let span = state
-            .span
-            .compact_view_with_reference(geometry, self.phase_reference)?;
-        if !span
-            .position_at(state.intended_output_frame)
-            .is_some_and(|position| same_position(position, self.origin))
-        {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        Ok(CompactPlaybackView {
-            span,
-            intended_output_frame: state.intended_output_frame,
-        })
-    }
-
-    pub(crate) fn position_at_compact(
-        &self,
-        geometry: &MappedLoopGeometry,
-        output_offset: usize,
-    ) -> Option<FractionalSourcePosition> {
-        self.compact_view(geometry).ok()?.position_at(output_offset)
-    }
-
-    /// Refusal leaves the complete prior copied state intact.
-    pub(crate) fn advance_compact(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        output_frames: usize,
-    ) -> bool {
-        let Some(mut state) = self.mapped_state() else {
-            return false;
-        };
-        let Some(next) = state
-            .intended_output_frame
-            .checked_add(output_frames as u64)
-        else {
-            return false;
-        };
-        let Some(position) = self.position_at_compact(geometry, output_frames) else {
-            return false;
-        };
-        state.intended_output_frame = next;
-        self.clock = CopiedClock::Mapped(state);
-        self.origin = position;
-        true
-    }
-
-    pub(crate) fn refresh_mapped_span_compact(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let mut replacement = Self::mapped_compact_with_reference(
-            geometry,
-            state.span.epoch(),
-            state.intended_output_frame,
-            self.phase_reference,
-        )?;
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    pub(crate) fn project_mapped_compact_to(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        intended_output_frame: u64,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let mut replacement = Self::mapped_compact_with_reference(
-            geometry,
-            state.span.epoch(),
-            intended_output_frame,
-            self.phase_reference,
-        )?;
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    pub(crate) fn replace_mapped_epoch_compact(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        if !state
-            .span
-            .epoch()
-            .replacement_anchor_matches(epoch, state.intended_output_frame)
-        {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        let mut replacement = Self::mapped_compact_with_reference(
-            geometry,
-            epoch,
-            state.intended_output_frame,
-            self.phase_reference,
-        )?;
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    pub(crate) fn resume_mapped_compact_at(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        actual: &super::transport::TransportTimeline,
-        output_frame: u64,
-    ) -> Result<(), MappedClockError> {
-        if self.is_mapped_phase() {
-            return self.resume_mapped_at(geometry, actual, output_frame);
-        }
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let epoch = state
-            .span
-            .epoch()
-            .resumed_at(actual, state.intended_output_frame, output_frame)
-            .ok_or(MappedClockError::InvalidEpoch)?;
-        let mut replacement = Self::mapped_compact_with_reference(
-            geometry,
-            epoch,
-            output_frame,
-            self.phase_reference,
-        )?;
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    pub(crate) fn is_mapped(&self) -> bool {
-        self.mapped_state().is_some()
-    }
-
-    pub(crate) fn is_compact_mapped(&self) -> bool {
-        self.mapped_state().is_some_and(|state| {
-            state.span.epoch().is_compact_anchored()
-                || state.span.epoch().is_general_family()
-                || state.span.epoch().is_common_phase()
-        })
-    }
-
-    pub(crate) fn is_general_mapped(&self) -> bool {
-        self.mapped_state()
-            .is_some_and(|state| state.span.epoch().is_general_family())
+        self.glide().ratio.to_bits() == self.glide().target.to_bits()
     }
 
     pub(crate) fn effective_domain(&self) -> Option<SourceLoopDomain> {
-        self.domain
-    }
-
-    /// Reconstruct the retained original scalar circle. A generic general map
-    /// without that proof cannot manufacture a Physical fallback.
-    pub(crate) fn original_scalar_domain(&self) -> Option<SourceLoopDomain> {
-        let domain = self.domain?;
-        let musical_period = if !self.is_mapped() {
-            if domain.musical_period.is_mapped() {
-                return None;
-            }
-            domain.musical_period
-        } else {
-            match self.original_scalar_period {
-                OriginalScalarPeriod::Unavailable => return None,
-                OriginalScalarPeriod::Physical => SourceReaderPeriod::Physical,
-                OriginalScalarPeriod::Musical(bits) => SourceReaderPeriod::ScalarMusical(bits),
-            }
-        };
-        Some(SourceLoopDomain {
-            musical_period,
-            ..domain
-        })
-    }
-
-    /// Stable renderer configuration only, never playback progress or permission.
-    pub(crate) fn retry_domain(&self) -> Option<SourceLoopDomain> {
         self.domain
     }
 
@@ -1048,154 +129,15 @@ impl SourcePlayback {
         )
     }
 
-    pub(crate) fn mapped_epoch(&self) -> Option<MappedClockEpoch> {
-        self.mapped_state().map(|state| state.span.epoch())
-    }
-
-    pub(crate) fn mapped_output_frame(&self) -> Option<u64> {
-        self.mapped_state().map(|state| state.intended_output_frame)
-    }
-
-    /// Include the canonical exclusive endpoint, but never invent a later span.
     pub(crate) fn can_read_frames(&self, output_frames: usize) -> bool {
-        if let Some(clock) = self.static_state() {
-            return clock
-                .intended_frame()
-                .checked_add(output_frames as u64)
-                .and_then(|frame| clock.position_at(self.domain?, frame))
-                .is_some();
-        }
-        if self.is_pair_scalar() {
-            return self
+        !self.is_pair_scalar()
+            || self
                 .elapsed_output_frames
                 .checked_add(output_frames as u64)
-                .is_some();
-        }
-        self.mapped_state().is_none_or(|state| {
-            state
-                .intended_output_frame
-                .checked_add(output_frames as u64)
-                .is_some_and(|end| end <= state.span.end_frame())
-        })
+                .is_some()
     }
 
-    /// Refresh derived geometry at this exact cursor. The caller must supply
-    /// the original qualified owning map; equal geometry is not that permission.
-    pub(crate) fn refresh_mapped_span(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let mut replacement = Self::mapped_with_reference(
-            geometry,
-            state.span.epoch(),
-            state.intended_output_frame,
-            self.phase_reference,
-        )?;
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    /// Direct canonical F-to-E projection with the retained owner. This operation
-    /// supplies coordinates only and does not certify actual historical reads.
-    pub(crate) fn project_mapped_to(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        intended_output_frame: u64,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let mut replacement = Self::mapped_with_reference(
-            geometry,
-            state.span.epoch(),
-            intended_output_frame,
-            self.phase_reference,
-        )?;
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    /// A caller's atomic master-epoch claim may replace the frozen projection
-    /// only at the same intended frame and exact canonical source position.
-    pub(crate) fn replace_mapped_epoch(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        epoch: MappedClockEpoch,
-    ) -> Result<(), MappedClockError> {
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        if !state
-            .span
-            .epoch()
-            .replacement_anchor_matches(epoch, state.intended_output_frame)
-        {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        let mut replacement = Self::mapped_with_reference(
-            geometry,
-            epoch,
-            state.intended_output_frame,
-            self.phase_reference,
-        )?;
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    /// Resume only a copied mapped trajectory, borrowing the original geometry
-    /// and actual callback master. Source/content/reader ownership is a separate
-    /// mixer preflight. This projection creates no actual read or Native permit.
-    pub(crate) fn resume_mapped_at(
-        &mut self,
-        geometry: &MappedLoopGeometry,
-        actual: &super::transport::TransportTimeline,
-        output_frame: u64,
-    ) -> Result<(), MappedClockError> {
-        if self.is_mapped_phase() {
-            let marker = self
-                .mapped_epoch()
-                .ok_or(MappedClockError::InvalidEpoch)?
-                .marker();
-            let replacement =
-                Self::mapped_resume_recovery_at(geometry, marker, *actual, self, output_frame)?;
-            *self = replacement;
-            return Ok(());
-        }
-        let state = self.mapped_state().ok_or(MappedClockError::InvalidEpoch)?;
-        if self.domain != Some(geometry.domain()) {
-            return Err(MappedClockError::InvalidGeometry);
-        }
-        let epoch = state
-            .span
-            .epoch()
-            .resumed_at(actual, state.intended_output_frame, output_frame)
-            .ok_or(MappedClockError::InvalidEpoch)?;
-        let mut replacement = Self::mapped(geometry, epoch, output_frame)?;
-        replacement.carry_launch_reference_from(self);
-        if !same_position(self.origin, replacement.origin) {
-            return Err(MappedClockError::InvalidEpoch);
-        }
-        replacement.original_scalar_period = self.original_scalar_period;
-        *self = replacement;
-        Ok(())
-    }
-
-    /// Isolated map diagnostics start an exact affine epoch, without the live scalar glide.
+    /// Isolated source diagnostics start an exact affine epoch, without the live scalar glide.
     /// This constructs no source, timing, preparation or continuation permission.
     #[cfg(test)]
     pub(crate) fn diagnostic_affine_epoch(
@@ -1203,8 +145,7 @@ impl SourcePlayback {
         ratio: f64,
         domain: SourceLoopDomain,
     ) -> Option<Self> {
-        if domain.musical_period.is_mapped()
-            || !coordinate.is_finite()
+        if !coordinate.is_finite()
             || coordinate < domain.region.start as f64
             || coordinate >= domain.region.end as f64
             || !ratio.is_finite()
@@ -1232,16 +173,15 @@ impl SourcePlayback {
                 seek_mode,
             },
             domain: None,
-            original_scalar_period: OriginalScalarPeriod::Unavailable,
             elapsed_output_frames: 0,
             history_reconstructible: true,
             scalar_projection: ScalarProjection::Legacy,
             phase_reference: LoopPhaseReference::Unavailable,
-            clock: CopiedClock::Scalar(ScalarGlide {
+            clock: ScalarGlide {
                 ratio,
                 target: ratio,
                 frames_until_step: 0,
-            }),
+            },
         }
     }
 
@@ -1264,16 +204,15 @@ impl SourcePlayback {
         Some(Self {
             origin: position,
             domain: Some(domain),
-            original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::PairPhysical,
             phase_reference: LoopPhaseReference::Unavailable,
-            clock: CopiedClock::Scalar(ScalarGlide {
+            clock: ScalarGlide {
                 ratio: initial_ratio,
                 target,
                 frames_until_step: 0,
-            }),
+            },
         })
     }
 
@@ -1297,16 +236,15 @@ impl SourcePlayback {
         Some(Self {
             origin: position,
             domain: Some(domain),
-            original_scalar_period: OriginalScalarPeriod::from_domain(domain),
             elapsed_output_frames: 0,
             history_reconstructible: false,
             scalar_projection: ScalarProjection::PairMusical,
             phase_reference: LoopPhaseReference::Unavailable,
-            clock: CopiedClock::Scalar(ScalarGlide {
+            clock: ScalarGlide {
                 ratio: initial_ratio,
                 target,
                 frames_until_step: 0,
-            }),
+            },
         })
     }
 
@@ -1316,9 +254,6 @@ impl SourcePlayback {
     /// the accepted target and active-frame step interval.
     #[cfg(test)]
     pub(crate) fn at_constant_ratio(mut self, ratio: f64) -> Self {
-        if self.is_mapped() || self.is_static_phase() {
-            return self;
-        }
         self.rebase();
         self.glide_mut().ratio = checked_ratio(ratio);
         self.glide_mut().target = self.glide().ratio;
@@ -1328,26 +263,11 @@ impl SourcePlayback {
     }
 
     pub(crate) fn tempo_ratio(&self) -> f64 {
-        match self.clock {
-            CopiedClock::Scalar(glide) => glide.ratio,
-            CopiedClock::Static(clock) => clock.ratio(),
-            CopiedClock::Mapped(state) => state
-                .span
-                .local_rate()
-                .expect("admitted immutable span has a local rate"),
-        }
+        self.glide().ratio
     }
 
-    /// Observe the pending target separately from the applied rate without advancing it.
     pub(crate) fn rate_target(&self) -> f64 {
-        match self.clock {
-            CopiedClock::Scalar(glide) => glide.target,
-            CopiedClock::Static(clock) => clock.nominal_ratio(),
-            CopiedClock::Mapped(state) => state
-                .span
-                .local_rate()
-                .expect("admitted immutable span has a local rate"),
-        }
+        self.glide().target
     }
 
     /// Copy a constant source trajectory's past for off-thread endpoint priming.
@@ -1355,9 +275,6 @@ impl SourcePlayback {
     /// its endpoint and is explicitly unavailable; ordinary forward catch-up retains it.
     /// The second result counts silence before physical source zero for Intro/Tail history.
     pub(crate) fn history_before_constant(&self, output_frames: usize) -> Option<(Self, usize)> {
-        if self.is_mapped() || self.is_static_phase() {
-            return None;
-        }
         if self.glide().ratio.to_bits() != self.glide().target.to_bits() {
             return None;
         }
@@ -1417,7 +334,7 @@ impl SourcePlayback {
     /// never introduces a new rounding anchor. This is derived input, not a claim
     /// that the live voice actually read these shifted source positions.
     pub(crate) fn shifted_normal_history(mut self, shift: f64) -> Option<Self> {
-        if self.is_mapped() || self.is_static_phase() || self.is_pair_scalar() {
+        if self.is_pair_scalar() {
             return None;
         }
         let domain = self.domain?;
@@ -1429,9 +346,6 @@ impl SourcePlayback {
             || domain.region.start >= domain.region.end
             || domain.region.end > domain.sample_frames
         {
-            return None;
-        }
-        if domain.musical_period.is_mapped() {
             return None;
         }
         let period = domain
@@ -1460,30 +374,10 @@ impl SourcePlayback {
         if !self.phase_reference.matches_exact(other.phase_reference) {
             return false;
         }
-        match (self.static_state(), other.static_state()) {
-            (Some(left), Some(right)) => {
-                return self.domain == other.domain
-                    && self.original_scalar_period == other.original_scalar_period
-                    && left.matches_exact(right);
-            }
-            (Some(_), None) | (None, Some(_)) => return false,
-            (None, None) => {}
-        }
-        match (self.mapped_state(), other.mapped_state()) {
-            (Some(left), Some(right)) => {
-                return self.domain == other.domain
-                    && self.original_scalar_period == other.original_scalar_period
-                    && left.intended_output_frame == right.intended_output_frame
-                    && left.span.matches_exact(right.span);
-            }
-            (Some(_), None) | (None, Some(_)) => return false,
-            (None, None) => {}
-        }
         self.origin.frame == other.origin.frame
             && self.origin.fraction.to_bits() == other.origin.fraction.to_bits()
             && self.origin.seek_mode == other.origin.seek_mode
             && self.domain == other.domain
-            && self.original_scalar_period == other.original_scalar_period
             && self.elapsed_output_frames == other.elapsed_output_frames
             && self.glide().ratio.to_bits() == other.glide().ratio.to_bits()
             && self.glide().target.to_bits() == other.glide().target.to_bits()
@@ -1496,24 +390,6 @@ impl SourcePlayback {
     pub(crate) fn matches_rate_target(&self, other: &Self) -> bool {
         if !self.phase_reference.matches_exact(other.phase_reference) {
             return false;
-        }
-        match (self.static_state(), other.static_state()) {
-            (Some(left), Some(right)) => {
-                return self.domain == other.domain
-                    && self.original_scalar_period == other.original_scalar_period
-                    && left.matches_program(right);
-            }
-            (Some(_), None) | (None, Some(_)) => return false,
-            (None, None) => {}
-        }
-        match (self.mapped_state(), other.mapped_state()) {
-            (Some(left), Some(right)) => {
-                return self.domain == other.domain
-                    && self.original_scalar_period == other.original_scalar_period
-                    && left.span.epoch().matches_exact(right.span.epoch());
-            }
-            (Some(_), None) | (None, Some(_)) => return false,
-            (None, None) => {}
         }
         self.scalar_projection == other.scalar_projection
             && self.glide().target.to_bits() == other.glide().target.to_bits()
@@ -1545,28 +421,9 @@ impl SourcePlayback {
         if self.domain == Some(domain) {
             return true;
         }
-        if domain.musical_period.is_mapped() {
-            return false;
-        }
-        if self.is_static_phase() {
-            let mut replacement = *self;
-            if !replacement.dissolve_static() {
-                return false;
-            }
-            // A real edit resumes the established scalar domain-edit policy.
-            replacement.scalar_projection = ScalarProjection::Legacy;
-            if !replacement.configure_domain(domain) {
-                return false;
-            }
-            *self = replacement;
-            return true;
-        }
         // A new domain needs its own future integration contract. An unchanged
         // pair refresh retains this exact epoch; do not clamp, wrap or rebase it.
         if self.is_pair_scalar() {
-            return false;
-        }
-        if self.is_mapped() {
             return false;
         }
         let same_geometry = self.domain.is_some_and(|previous| {
@@ -1578,7 +435,6 @@ impl SourcePlayback {
         self.rebase();
         self.domain = Some(domain);
         self.phase_reference = LoopPhaseReference::Unavailable;
-        self.original_scalar_period = OriginalScalarPeriod::from_domain(domain);
         let outside = if let Some(period) = domain.musical_period.scalar_period() {
             let offset =
                 self.origin.frame.saturating_sub(domain.region.start) as f64 + self.origin.fraction;
@@ -1599,7 +455,7 @@ impl SourcePlayback {
 
     pub(crate) fn clear_explicit_seek(&mut self) {
         // Both pair modes are already Normal. An unchanged refresh retains the epoch.
-        if self.is_mapped() || self.is_static_phase() || self.is_pair_scalar() {
+        if self.is_pair_scalar() {
             return;
         }
         self.rebase();
@@ -1611,25 +467,13 @@ impl SourcePlayback {
         if was_explicit {
             self.phase_reference = LoopPhaseReference::Unavailable;
             self.domain = None;
-            self.original_scalar_period = OriginalScalarPeriod::Unavailable;
             self.history_reconstructible = false;
         }
     }
 
     #[must_use]
     pub(crate) fn set_target(&mut self, target: f64) -> bool {
-        if self.is_mapped() {
-            return false;
-        }
         let target = checked_ratio(target);
-        if self.is_static_phase() {
-            if target.to_bits() == self.rate_target().to_bits() {
-                return true;
-            }
-            if !self.dissolve_static() {
-                return false;
-            }
-        }
         if target != self.glide().target {
             self.glide_mut().target = target;
             self.glide_mut().frames_until_step = 0;
@@ -1640,12 +484,6 @@ impl SourcePlayback {
     /// A seek changes source phase, while the accepted rate target and smoothing clock continue.
     #[must_use]
     pub(crate) fn seek(&mut self, frame: usize, seek_mode: ExplicitSeekMode) -> bool {
-        if self.is_mapped() {
-            return false;
-        }
-        if self.is_static_phase() && !self.dissolve_static() {
-            return false;
-        }
         self.origin = FractionalSourcePosition {
             frame,
             fraction: 0.0,
@@ -1653,7 +491,6 @@ impl SourcePlayback {
         };
         self.phase_reference = LoopPhaseReference::Unavailable;
         self.domain = None;
-        self.original_scalar_period = OriginalScalarPeriod::Unavailable;
         self.elapsed_output_frames = 0;
         self.history_reconstructible = true;
         self.scalar_projection = ScalarProjection::Legacy;
@@ -1662,16 +499,6 @@ impl SourcePlayback {
 
     /// Begin a constant-ratio chunk, bounded by the next active-output-frame smoothing step.
     pub(crate) fn chunk(&mut self, max_frames: usize) -> (usize, f64) {
-        if let Some(clock) = self.static_state() {
-            return clock.chunk(max_frames);
-        }
-        if let Some(state) = self.mapped_state() {
-            let remaining = state.span.end_frame() - state.intended_output_frame;
-            return (
-                max_frames.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
-                self.tempo_ratio(),
-            );
-        }
         if self.glide().frames_until_step == 0 && self.glide().ratio != self.glide().target {
             self.rebase();
             self.history_reconstructible = false;
@@ -1700,37 +527,18 @@ impl SourcePlayback {
     }
 
     pub(crate) fn position(&self) -> FractionalSourcePosition {
-        if self.is_mapped() || self.is_static_phase() {
-            self.origin
-        } else {
-            match self.scalar_projection {
-                ScalarProjection::Legacy => self.scalar_position_at(0),
-                ScalarProjection::PairPhysical => {
-                    self.pair_physical_position_at(self.elapsed_output_frames)
-                }
-                ScalarProjection::PairMusical => {
-                    self.pair_musical_position_at(self.elapsed_output_frames)
-                }
+        match self.scalar_projection {
+            ScalarProjection::Legacy => self.scalar_position_at(0),
+            ScalarProjection::PairPhysical => {
+                self.pair_physical_position_at(self.elapsed_output_frames)
+            }
+            ScalarProjection::PairMusical => {
+                self.pair_musical_position_at(self.elapsed_output_frames)
             }
         }
     }
 
     pub(crate) fn position_at(&self, output_offset: usize) -> Option<FractionalSourcePosition> {
-        if let Some(clock) = self.static_state() {
-            return clock.position_at(
-                self.domain?,
-                clock.intended_frame().checked_add(output_offset as u64)?,
-            );
-        }
-        if let Some(state) = self.mapped_state() {
-            return state.span.position_in_domain_with_reference(
-                self.domain?,
-                state
-                    .intended_output_frame
-                    .checked_add(output_offset as u64)?,
-                self.phase_reference,
-            );
-        }
         if self.is_pair_scalar() {
             let elapsed = self
                 .elapsed_output_frames
@@ -1930,42 +738,6 @@ impl SourcePlayback {
     }
 
     fn try_advance_coordinates(&mut self, output_frames: usize) -> bool {
-        if let Some(mut clock) = self.static_state() {
-            if !clock.advance(output_frames) {
-                return false;
-            }
-            let Some(position) = self
-                .domain
-                .and_then(|domain| clock.position_at(domain, clock.intended_frame()))
-            else {
-                return false;
-            };
-            self.origin = position;
-            self.clock = CopiedClock::Static(clock);
-            return true;
-        }
-        if let Some(mut state) = self.mapped_state() {
-            let Some(next) = state
-                .intended_output_frame
-                .checked_add(output_frames as u64)
-            else {
-                return false;
-            };
-            let Some(domain) = self.domain else {
-                return false;
-            };
-            let Some(position) =
-                state
-                    .span
-                    .position_in_domain_with_reference(domain, next, self.phase_reference)
-            else {
-                return false;
-            };
-            state.intended_output_frame = next;
-            self.clock = CopiedClock::Mapped(state);
-            self.origin = position;
-            return true;
-        }
         if self.is_pair_scalar() {
             let Some(elapsed) = self.elapsed_output_frames.checked_add(output_frames as u64) else {
                 return false;
@@ -2065,14 +837,6 @@ mod source_pair_continuation_tests;
 mod source_playback_musical_tests;
 
 #[cfg(test)]
-#[path = "source_playback_anchored_tests.rs"]
-mod anchored_tests;
-
-#[cfg(test)]
-#[path = "source_playback_compact_tests.rs"]
-mod compact_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2111,22 +875,6 @@ mod tests {
         assert!(
             !playback.phase_reference_current(&timeline),
             "domain ABA cannot restore launch custody"
-        );
-    }
-
-    #[test]
-    fn original_scalar_period_is_a_small_copy_witness_with_explicit_unavailability() {
-        fn assert_copy<T: Copy>() {}
-        assert_copy::<OriginalScalarPeriod>();
-        assert!(std::mem::size_of::<OriginalScalarPeriod>() <= 16);
-        assert!(!std::mem::needs_drop::<OriginalScalarPeriod>());
-        assert_ne!(
-            OriginalScalarPeriod::Unavailable,
-            OriginalScalarPeriod::Physical
-        );
-        println!(
-            "original_scalar_period_layout: bytes={} unavailable_distinct_from_physical=true",
-            std::mem::size_of::<OriginalScalarPeriod>(),
         );
     }
 

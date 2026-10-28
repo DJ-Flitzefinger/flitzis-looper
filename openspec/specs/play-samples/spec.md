@@ -206,7 +206,7 @@ becomes audible. Rust SHALL NOT use transport phase, pad BPM, pad timing metadat
 catch-up to choose a different initial source frame for normal pad triggers.
 
 If valid pad timing metadata is available, it SHALL remain available for loop-editor grid
-anchoring and explicit future sync operations, but it SHALL NOT make a newly triggered pad start
+anchoring and qualified internal session bootstrap, but it SHALL NOT make a newly triggered pad start
 from the middle or end of its loop.
 
 #### Scenario: Quantized one-sixteenth start begins at loop start

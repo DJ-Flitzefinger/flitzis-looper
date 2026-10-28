@@ -302,11 +302,12 @@ Python package directories are already available to standalone test executables.
   period/origin directly. Native Transport/BPMLOCK periods and rates also retain
   binary64 precision. See
   [scalar source coordinates](../docs/scalar-source-coordinates.md).
-- Transport stores complete musical position across BPM changes. The dedicated
-  `bootstrap_transport_from_pad(id)` request latches the selected BPMLOCK
-  reference once per stream, waits for valid active source state and consumes
-  the opportunity on success or deliberate explicit sync. Silence cannot rearm
-  it. Active source playheads and the monotonic output-frame clock are preserved.
+- Transport stores complete musical position across BPM changes. Source-qualified
+  BPMLOCK setup and acknowledged accepted-timing refreshes arm the internal
+  one-time bootstrap, which waits for valid active reference state and consumes
+  the opportunity on success. No public unqualified phase-control command remains.
+  Silence cannot rearm it. Active source playheads and the monotonic output-frame
+  clock are preserved.
 - Rate changes and in-range loop edits preserve fractional source carry.
   Out-of-range edits retain the loop-start clamp. Bootstrap configures a copy of
   the canonical cursor against the current effective loop and maps frame plus

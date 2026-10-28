@@ -12,7 +12,6 @@ from flitzis_looper.controller.current_binding import (
 )
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
-from flitzis_looper.timing_policy import effective_runtime_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES = 512 * 1024 * 1024
 MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES = 1024 * 1024 * 1024
-ACCEPTED_REFRESH_SIGNATURE_LENGTH = 19
+ACCEPTED_REFRESH_SIGNATURE_LENGTH = 14
 
 
 def validate_constant_timing_pcm_limit(value: object) -> int:
@@ -468,22 +467,6 @@ class AcceptedTimingController:
         )
 
     def _control_signature(self, sample_id: int) -> tuple[object, ...]:
-        policy = effective_runtime_policy(self._project.global_timing_policy)
-        sync = self._project.pad_source_sync_intent[sample_id]
-        intent = self._project.pad_source_beatmap_intent[sample_id]
-        selected = None if intent is None else intent.selected
-        map_signature = (
-            None if intent is None else intent.revision,
-            None
-            if selected is None
-            else (
-                selected.reference,
-                selected.bytes,
-                selected.sha256,
-                selected.map_revision,
-                selected.decoder_identity,
-            ),
-        )
         return tuple(
             _scalar_signature(value)
             for value in (
@@ -498,13 +481,8 @@ class AcceptedTimingController:
                 self._project.pad_grid_offset_samples[sample_id],
                 self._project.speed,
                 self._project.bpm_lock,
-                (policy.sync, policy.realtime_bpm, policy.revision),
                 self._project.multi_loop,
-                self._project.timing_policy_recovery,
                 self._project.resolve_bpm_lock(),
-                (sync.requested, sync.revision),
-                map_signature,
-                self._project.resolve_pad_realtime_bpm(sample_id),
                 self._session.bpm_lock_anchor_pad_id,
             )
         )

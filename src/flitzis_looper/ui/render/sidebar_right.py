@@ -25,7 +25,6 @@ from flitzis_looper.ui.render.control_gestures import (
     item_middle_clicked,
 )
 from flitzis_looper.ui.render.key_lock import render_key_lock_button
-from flitzis_looper.ui.render.timing_policy import render_global_timing_policy
 
 if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
@@ -225,12 +224,12 @@ def _speed_controls(ctx: UiContext) -> None:
 
 def _pitch_slider_height(available_height: float) -> float:
     """Reserve fixed control rows, independent of receipts, pointer and scrollbars."""
-    # Three step/reset buttons, two lock buttons and one confirmed-audio caption.
+    # Three step/reset buttons, Key Lock, Multi Loop, BPM Lock and two audio captions.
     # Spacing includes the BPM display, fader, spacer and compact button groups.
     reserved = (
         BPM_DISPLAY_HEIGHT
-        + 5 * imgui.get_frame_height()
-        + imgui.get_text_line_height()
+        + 6 * imgui.get_frame_height()
+        + 2 * imgui.get_text_line_height()
         + 6 * SPACING
         + 6 * (SPACING / 4)
     )
@@ -374,9 +373,7 @@ def sidebar_right(ctx: UiContext) -> None:
                     ctx.audio.global_.toggle_multi_loop()
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
-            imgui.begin_disabled(
-                not ctx.state.project.multi_loop or ctx.state.project.timing_policy_recovery
-            )
+            imgui.begin_disabled(not ctx.state.project.multi_loop)
             with button_style(bpm_lock_style):
                 if imgui.button("BPM LOCK##bpm_lock", (-1, 0)):
                     ctx.audio.global_.toggle_bpm_lock()
@@ -389,8 +386,6 @@ def sidebar_right(ctx: UiContext) -> None:
             imgui.text(f"Audio {actual}{suffix}")
             if status.detail is not None:
                 imgui.text_wrapped("BPM Lock is waiting for qualified audio timing.")
-
-            render_global_timing_policy(ctx)
 
 
 def _render_global_key_lock(ctx: UiContext) -> None:

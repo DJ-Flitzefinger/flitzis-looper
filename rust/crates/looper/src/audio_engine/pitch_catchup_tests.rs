@@ -379,7 +379,6 @@ fn missing_coverage_is_local_but_native_fifo_invalid_block_size_remains_fatal() 
         playback: source.playback,
         plan: source.plan,
         actual_feed: None,
-        mapped_input: None,
         target_output_frame: CAPTURE_FRAME + 4096,
         request_id: 1,
         epoch: 0,

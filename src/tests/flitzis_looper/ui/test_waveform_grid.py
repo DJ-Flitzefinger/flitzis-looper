@@ -8,6 +8,11 @@ import pytest
 from imgui_bundle import imgui, imgui_ctx, implot
 
 from flitzis_looper.controller.current_timing import CurrentPadTiming, current_accepted_timing
+from flitzis_looper.controller.scalar_grid import (
+    nearest_grid_source_s,
+    physical_source_marker_s,
+    scalar_source_grid,
+)
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import waveform_editor
 from flitzis_looper.ui.waveform_grid import (
@@ -160,7 +165,7 @@ def test_manual_120_grid_matches_every_independent_half_second_pulse() -> None:
     ("sample_rate_hz", "bpm", "origin_frame"),
     [(44_100, 119.999, -217), (48_000, 123.45, 28_776_001), (96_000, 119.999, 96_000)],
 )
-def test_fractional_visible_subdivisions_keep_continuous_source_positions(
+def test_fractional_visible_subdivisions_draw_on_the_loaded_sample_lattice(
     sample_rate_hz: int, bpm: float, origin_frame: int
 ) -> None:
     period_frames = Decimal(60 * sample_rate_hz) / Decimal(str(bpm))
@@ -173,16 +178,63 @@ def test_fractional_visible_subdivisions_keep_continuous_source_positions(
         loop_start_s=599.123,
         bpm=bpm,
         px_per_s=1_000.0,
+        sample_rate_hz=sample_rate_hz,
     )
 
     assert len(lines) == 17
     for subdivision, line in enumerate(lines):
         exact_frame = first_frame + Decimal(subdivision) * period_frames / 16
-        assert abs(Decimal(line.source_s) * sample_rate_hz - exact_frame) < Decimal("1e-6")
+        assert line.source_s == round(exact_frame) / sample_rate_hz
         assert round(line.source_s * sample_rate_hz) == round(exact_frame)
     assert any(
-        line.source_s * sample_rate_hz != round(line.source_s * sample_rate_hz) for line in lines
+        exact_frame != round(exact_frame)
+        for exact_frame in (
+            first_frame + Decimal(subdivision) * period_frames / 16 for subdivision in range(17)
+        )
     )
+
+
+@pytest.mark.parametrize("rate", [44_100, 48_000, 96_000])
+@pytest.mark.parametrize("offset", [-137, 0, 137])
+def test_shifted_grid_line_and_snapped_loop_marker_share_one_loaded_frame(
+    rate: int,
+    offset: int,
+) -> None:
+    period = 60.0 / 94.0
+    origin = offset / rate
+    grid = scalar_source_grid(origin_s=origin, period_seconds=period)
+    ideal = grid.source_at_beat(1001.0 / 16.0)
+    marker = physical_source_marker_s(
+        nearest_grid_source_s(ideal, grid=grid, step_beats=1.0 / 16.0), sample_rate_hz=rate
+    )
+    lines = visible_grid_lines(
+        start_s=ideal - period / 64,
+        end_s=ideal + period / 64,
+        anchor_s=origin,
+        loop_start_s=marker,
+        period_seconds=period,
+        px_per_s=1_000_000.0,
+        sample_rate_hz=rate,
+    )
+    assert len(lines) == 1
+    assert lines[0].source_s == marker
+    assert grid.source_at_beat(1001.0 / 16.0) == ideal
+    assert grid.beat_at_source(origin) == 0.0
+
+
+def test_sample_lattice_drawing_keeps_distinct_negative_virtual_grid_positions() -> None:
+    lines = visible_grid_lines(
+        start_s=-0.1,
+        end_s=0.1,
+        anchor_s=-0.012345,
+        loop_start_s=0.0,
+        bpm=94.0,
+        px_per_s=1_000_000.0,
+        sample_rate_hz=48_000,
+    )
+    negative = [line.source_s for line in lines if line.source_s < 0]
+    assert len(negative) > 1
+    assert len(set(negative)) == len(negative)
 
 
 def test_first_frame_zoom_to_loop_wins_over_initial_source_view(
@@ -284,6 +336,7 @@ def test_musical_grid_captures_one_current_period_origin_revision_snapshot(
         loop_start_s=0.075,
         period_seconds=timing.period_seconds,
         px_per_s=1000.0,
+        sample_rate_hz=timing.sample_rate_hz,
     )
     drawn_lines.assert_called_once_with(draw_list, expected)
     drawn_labels.assert_called_once_with(

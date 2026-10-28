@@ -8,9 +8,6 @@ use crate::audio_engine::audio_quality_metrics::stereo_response;
 use crate::audio_engine::key_lock_physical_onset_tests::{PROFILES, RawNative};
 use sha2::{Digest, Sha256};
 
-#[path = "realtime_mapped_prerequisite.rs"]
-mod realtime_mapped_prerequisite;
-
 const RATE: u32 = 44_100;
 const SOURCE_RATE: f64 = 0.5;
 const TOTAL_SEMITONES: i32 = 0;

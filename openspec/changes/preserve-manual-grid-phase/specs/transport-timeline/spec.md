@@ -42,8 +42,8 @@ state with a monotonic output-frame clock and complete musical beat position.
 The timeline SHALL initialize with the stream and advance by rendered output frames, including
 silence. It SHALL store validated output rate/master BPM, a four-beat bar model and a musical
 position reference. Python SHALL request changes through bounded messages and SHALL NOT own the
-sample-frame clock. Only deliberate explicit transport/sync operations or completion of the
-selected one-time session bootstrap SHALL establish a pad-derived master phase.
+sample-frame clock. Only completion of the qualified internal one-time session bootstrap SHALL
+establish a pad-derived master phase; no unqualified or repeatable phase-control command remains.
 
 Normal pad start, stop, pause, retrigger, unload, loop wraps and stem changes SHALL NOT reset or
 reselect the master clock. A successful start of an already selected pending bootstrap reference
@@ -61,29 +61,6 @@ MAY complete that bootstrap. Silence SHALL NOT rearm completed bootstrap.
 - **THEN** the output clock and master musical progression remain continuous
 - **AND** the remaining pad is not selected as a new master
 
-### Requirement: Explicit Sync Can Anchor Transport Downbeat From A Playing Pad
-The system SHALL retain a deliberate repeatable request to anchor master musical position from
-the selected active pad's canonical source-grid phase.
-
-Rust SHALL read only bounded audio-thread-owned pad id, output frame, BPM/rate, signed source origin
-and current source playhead. A valid explicit request SHALL use the pad's complete source beat
-position, from which beat/bar phase is derived. Missing/inactive pad or unavailable required
-metadata SHALL leave transport unchanged. Successful explicit sync SHALL consume any remaining
-one-time bootstrap opportunity. Automatic source-grid anchoring SHALL occur only through the
-dedicated selected-reference bootstrap contract.
-
-#### Scenario: Deliberate sync retains complete source beat
-- **GIVEN** a selected active pad has valid grid/BPM metadata and is at source beat 18.5
-- **WHEN** its explicit sync request succeeds
-- **THEN** master musical position at that output frame is 18.5 beats
-- **AND** its bar phase is 2.5 beats
-- **AND** bootstrap cannot later overwrite that deliberate anchor
-
-#### Scenario: Inactive explicit reference leaves transport unchanged
-- **GIVEN** an existing master position and an inactive requested pad
-- **WHEN** deliberate sync is requested
-- **THEN** the output clock and musical position remain unchanged
-
 ### Requirement: Master BPM Is Owned And Validated In Rust
 The system SHALL store validated master BPM in Rust and use the same accepted value for transport
 grid timing and BPMLOCK tempo matching.
@@ -94,7 +71,8 @@ NOT reset frame time or seek, stop, restart or retrigger active voices. The deri
 SHALL therefore also be continuous. Invalid/non-finite/non-positive BPM SHALL preserve the
 previous valid state.
 
-BPMLOCK reference setup MAY issue the dedicated one-time bootstrap request. Mode toggles, pitch,
+Qualified BPMLOCK reference setup and acknowledged accepted-timing refreshes MAY arm internal
+one-time bootstrap through the existing source/content/ownership checks. Mode toggles, pitch,
 KEYLOCK, ordinary pad metadata and playback SHALL otherwise not reanchor phase.
 
 #### Scenario: Master tempo change preserves beat count beyond one bar
@@ -182,7 +160,7 @@ NOT reject otherwise valid ordinary playback, rewrite loop markers or imply vari
 
 ### Requirement: Session Master Bootstrap Uses A Selected Reference Once
 The system SHALL bootstrap master musical position at most once per stream from the reference
-explicitly requested through existing selected-pad/BPMLOCK enable or restore setup.
+qualified through existing BPMLOCK setup or acknowledged accepted-timing refresh ownership.
 
 The first accepted bootstrap request SHALL latch its pad id. Completion SHALL require that reference
 to be active with valid BPM/rate and signed source-grid metadata. Rust SHALL anchor master musical
@@ -192,9 +170,10 @@ for that latched reference when it successfully starts or relevant metadata beco
 Bootstrap SHALL observe the same normalized source playhead as the next renderer read after loop
 edits or explicit seeks; an obsolete voice timeline anchor SHALL NOT override that source position.
 
-Further requests SHALL NOT replace a latched/completed reference. Unloading an incomplete reference
+Qualified accepted-timing refreshes MAY requalify their pending reference through the same owner.
+Unqualified requests SHALL NOT replace a latched/completed reference. Unloading an incomplete reference
 SHALL clear that pending reference while retaining the unused opportunity for a later request.
-Successful bootstrap or explicit deliberate sync SHALL consume the opportunity until a new stream
+Successful bootstrap SHALL consume the opportunity until a new stream
 is initialized. Silence, stop/restart, reference changes, ordinary metadata, wraps and stem masks
 SHALL NOT rearm it. The bootstrap state SHALL be runtime-only, not persisted or a new UI control.
 

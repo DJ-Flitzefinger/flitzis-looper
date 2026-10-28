@@ -70,11 +70,10 @@ apply that BPM to both mixer tempo matching and the permanent transport grid whi
 transport's current bar phase at the current output frame. This update SHALL NOT reset the
 transport output-frame clock, stop, restart, retrigger, or time-slip active voices.
 
-Enabling BPM lock, setting per-pad BPM, enabling Key Lock, or changing pitch/speed controls SHALL
-NOT anchor the transport downbeat to a pad by side effect. An explicit transport phase-anchor
-request MAY align the transport downbeat to a selected active pad when valid metadata is available.
-That request SHALL remain a controlled sync operation, not a side effect of whichever pad happens
-to be playing.
+Setting per-pad BPM, enabling Key Lock, or changing pitch/speed controls SHALL NOT anchor the
+transport downbeat to a pad by side effect. Qualified BPMLOCK setup and acknowledged
+accepted-timing refreshes MAY arm the internal one-time session bootstrap through existing
+source/content/ownership checks. No unqualified or repeatable phase-anchor command SHALL remain.
 
 #### Scenario: BPM lock master tempo updates transport tempo without pad phase sync
 - **GIVEN** BPM lock is enabled
@@ -84,29 +83,17 @@ to be playing.
 - **AND** the transport grid uses the same master BPM
 - **AND** the transport preserves its current bar phase without anchoring to a pad
 
-#### Scenario: Explicit sync may anchor transport phase
-- **GIVEN** BPM lock is enabled
-- **AND** an explicit transport phase-anchor request selects an active pad with valid BPM and timing metadata
-- **WHEN** Rust handles the fixed-size phase-anchor request
-- **THEN** Rust may update the transport downbeat anchor from that pad's current musical phase
-- **AND** existing active voices are not time-slipped, warped, or retriggered
-
-
 <!-- Added from add-phase-aware-playback-sync -->
-### Requirement: BPM Lock Phase Degrades Gracefully
-The system SHALL preserve existing BPM-lock tempo matching when explicit transport phase anchoring
-cannot be established.
+### Requirement: Unavailable Bootstrap Reference Preserves Tempo Matching
+The system SHALL preserve ordinary BPM-lock tempo matching while its qualified internal
+session-bootstrap reference is inactive, paused, missing or lacks valid BPM/timing metadata.
+Rust SHALL leave master phase unchanged until that same qualified reference is available.
 
-If the selected anchor pad is inactive, paused, missing, or lacks valid BPM/timing metadata, Rust
-SHALL leave the transport downbeat unchanged and continue existing tempo-ratio matching behavior
-where metadata is available.
-
-#### Scenario: Missing anchor metadata preserves tempo matching
-- **GIVEN** BPM lock is enabled
-- **AND** the selected anchor pad lacks valid BPM or timing-anchor metadata
-- **WHEN** Rust handles a phase-anchor request
-- **THEN** Rust does not update the transport downbeat from that pad
-- **AND** BPM lock continues to use existing tempo-ratio matching
+#### Scenario: Missing reference metadata preserves tempo matching
+- **GIVEN** BPM lock is enabled and its internal bootstrap reference lacks valid timing metadata
+- **WHEN** Rust services the pending bootstrap at an ordinary callback boundary
+- **THEN** Rust does not update master phase from that pad
+- **AND** ordinary BPM-ratio tempo matching continues where metadata is available
 
 
 <!-- Added from add-per-pad-key-lock -->

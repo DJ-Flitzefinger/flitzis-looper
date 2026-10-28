@@ -244,11 +244,7 @@ def test_latest_outside_globals_selection_and_input_setting_survive_projection()
     # Their genuine ownership is verified by the separate Native/controller composition.
     payload = json.loads(snapshot.payload_json)
     for row in payload["slots"]:
-        assert set(row["before"]) == {
-            name
-            for name, _ in CONTENT_FIELDS
-            if name not in {"source_beatmap_intent", "source_sync_intent"}
-        }
+        assert set(row["before"]) == {name for name, _ in CONTENT_FIELDS}
         assert not any("midi" in name or "binding" in name for name in row["after"])
     assert project.model_dump(mode="json", exclude_computed_fields=True) == before
 

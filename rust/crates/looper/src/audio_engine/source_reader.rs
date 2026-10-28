@@ -20,11 +20,6 @@ pub(crate) struct FractionalSourceTaps {
     pub(crate) right_gain: f32,
 }
 
-const MAPPED_TAP_BATCH_FRAMES: usize = super::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-const _: () = assert!(MAPPED_TAP_BATCH_FRAMES == 1024);
-const _: () =
-    assert!(std::mem::size_of::<[FractionalSourceTaps; MAPPED_TAP_BATCH_FRAMES]>() <= 32_768);
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TapReadObservation {
@@ -137,8 +132,6 @@ impl SourceLoopDomain {
             SourceReaderPeriod::ScalarMusical(bits) => {
                 Self::musical(self.sample_frames, self.region, f64::from_bits(bits)).is_some()
             }
-            SourceReaderPeriod::MappedRational(period) => period.validate_physical(self.region),
-            SourceReaderPeriod::MappedPhysicalQuarters(quarters) => quarters.is_valid(),
         }
     }
 
@@ -149,8 +142,7 @@ impl SourceLoopDomain {
         self,
         position: FractionalSourcePosition,
     ) -> Option<FractionalSourcePosition> {
-        if self.musical_period.is_mapped()
-            || position.seek_mode != ExplicitSeekMode::Normal
+        if position.seek_mode != ExplicitSeekMode::Normal
             || !position.fraction.is_finite()
             || !(0.0..1.0).contains(&position.fraction)
             || position.frame < self.region.start
@@ -207,39 +199,6 @@ impl SourceLoopDomain {
             region,
             musical_period: SourceReaderPeriod::from_scalar_period(Some(period)),
         })
-    }
-
-    /// Arithmetic certificate only. The owning caller separately qualifies PCM,
-    /// original map, timing, source lifetime and the complete actual-E effect.
-    pub(crate) fn mapped(
-        sample_frames: usize,
-        region: FrameRange,
-        period: super::general_source_numerics::MappedReaderPeriod,
-    ) -> Option<Self> {
-        (region.start < region.end
-            && region.end <= sample_frames
-            && period.validate_physical(region))
-        .then_some(Self {
-            sample_frames,
-            region,
-            musical_period: SourceReaderPeriod::MappedRational(period),
-        })
-    }
-
-    /// Physical-marker maps retain exact quarter extent Q in their identity,
-    /// while the actual reader circle is exactly the original physical H.
-    pub(crate) fn mapped_physical(
-        sample_frames: usize,
-        region: FrameRange,
-        quarters: super::general_source_numerics::PhysicalMapQuarters,
-    ) -> Option<Self> {
-        (region.start < region.end && region.end <= sample_frames && quarters.is_valid()).then_some(
-            Self {
-                sample_frames,
-                region,
-                musical_period: SourceReaderPeriod::MappedPhysicalQuarters(quarters),
-            },
-        )
     }
 }
 
@@ -758,47 +717,21 @@ pub(crate) struct SourceReadPlan {
     pub(crate) sample_frames: usize,
     pub(crate) frame_pos: usize,
     pub(crate) loop_region: FrameRange,
-    /// Effective reader topology and complete numeric identity. A physical-map
-    /// variant retains beat Q separately and resolves source-frame period H.
-    /// Neither certificate is an additional playback-rate ratio.
+    /// Effective physical or accepted constant-tempo reader period.
     pub(crate) loop_period: SourceReaderPeriod,
     pub(crate) seek_mode: ExplicitSeekMode,
     pub(crate) selection: StemRenderSelection,
     pub(crate) transition: StemTransition,
 }
 
-/// Ephemeral once-per-chunk seam constants. The copied plan remains the complete
-/// domain witness; this context holds no source, map owner or mutable voice state.
-enum PreparedSourceTapPlan {
-    Legacy,
-    Mapped(super::general_source_numerics::PreparedMappedReaderPeriod),
-}
+struct PreparedSourceTapPlan;
 
 impl PreparedSourceTapPlan {
-    fn new(plan: SourceReadPlan) -> Option<Self> {
-        if plan.loop_period.is_mapped() {
-            let period = plan.loop_period.mapped_period(plan.loop_region)?;
-            Some(Self::Mapped(period.prepare(plan.loop_region)?))
-        } else {
-            Some(Self::Legacy)
-        }
+    fn new(_plan: SourceReadPlan) -> Option<Self> {
+        Some(Self)
     }
-
     fn taps(&self, plan: SourceReadPlan, fraction: f64) -> Option<FractionalSourceTaps> {
-        match self {
-            Self::Legacy => plan.try_fractional_taps(fraction),
-            Self::Mapped(period) => {
-                if plan.seek_mode != ExplicitSeekMode::Normal {
-                    return None;
-                }
-                let taps = period.seam_taps(plan.frame_pos, fraction)?;
-                Some(FractionalSourceTaps {
-                    left: taps.left,
-                    right: taps.right,
-                    right_gain: taps.right_gain,
-                })
-            }
-        }
+        plan.try_fractional_taps(fraction)
     }
 }
 
@@ -896,19 +829,6 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if let Some(view) = playback
-            .local_compact_view()
-            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?
-        {
-            return self.fill_fractional_buffers_queried(
-                sample,
-                readers,
-                playback,
-                buffers,
-                output_frames,
-                |frame| view.position_at(frame),
-            );
-        }
         self.fill_fractional_buffers_queried(
             sample,
             readers,
@@ -916,30 +836,6 @@ impl SourceReadPlan {
             buffers,
             output_frames,
             |frame| playback.position_at(frame),
-        )
-    }
-
-    /// Explicit compact coordinates through the original interpolation loop.
-    /// The caller still retains and qualifies original PCM/map reader custody.
-    pub(crate) fn fill_fractional_buffers_compact_with_readers(
-        self,
-        sample: &SampleBuffer,
-        readers: StemReadSets<'_>,
-        playback: &SourcePlayback,
-        geometry: &super::mapped_source_clock::MappedLoopGeometry,
-        buffers: &mut [Vec<f32>],
-        output_frames: usize,
-    ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        let view = playback
-            .compact_view(geometry)
-            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
-        self.fill_fractional_buffers_queried(
-            sample,
-            readers,
-            playback,
-            buffers,
-            output_frames,
-            |frame| view.position_at(frame),
         )
     }
 
@@ -952,17 +848,6 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if self.mapped_tap_batch_eligible(playback, output_frames) {
-            return self.fill_fractional_buffers_tap_batch(
-                sample,
-                readers,
-                playback,
-                buffers,
-                output_frames,
-                position_at,
-                false,
-            );
-        }
         self.fill_fractional_buffers_queried_original(
             sample,
             readers,
@@ -971,111 +856,6 @@ impl SourceReadPlan {
             output_frames,
             position_at,
         )
-    }
-
-    fn mapped_tap_batch_eligible(self, playback: &SourcePlayback, output_frames: usize) -> bool {
-        output_frames != 0
-            && output_frames <= MAPPED_TAP_BATCH_FRAMES
-            && (self.loop_period.is_mapped() || playback.has_phase_program())
-            // The old checked path can report an earlier missing tap before its final
-            // unchecked domain check. Retain that exact error order for invalid domains.
-            && self.domain().is_valid()
-    }
-
-    // Keep this fixed scratch out of scalar/long-request stack frames. All outputs remain
-    // untouched until every exact tap/channel/current/outgoing reader has been validated.
-    #[inline(never)]
-    fn fill_fractional_buffers_tap_batch(
-        self,
-        sample: &SampleBuffer,
-        readers: StemReadSets<'_>,
-        playback: &SourcePlayback,
-        buffers: &mut [Vec<f32>],
-        output_frames: usize,
-        position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
-        checked: bool,
-    ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        use super::rubberband_backend::RubberBandError;
-        debug_assert!(self.mapped_tap_batch_eligible(playback, output_frames));
-        if checked {
-            if self.channels == 0
-                || sample.channels != self.channels
-                || sample.frame_count() != self.sample_frames
-                || !playback.matches_domain(self.domain())
-                || buffers.len() < self.channels
-                || buffers
-                    .iter()
-                    .take(self.channels)
-                    .any(|buffer| buffer.len() < output_frames)
-            {
-                return Err(RubberBandError::InvalidBlockSize);
-            }
-            if !playback.can_read_frames(output_frames) {
-                return Err(RubberBandError::UnavailableSourceHistory);
-            }
-        } else if !self.domain().is_valid()
-            || !playback.matches_domain(self.domain())
-            || self.channels == 0
-            || self.channels != sample.channels
-            || self.sample_frames != sample.frame_count()
-            || buffers.len() < self.channels
-            || buffers
-                .iter()
-                .take(self.channels)
-                .any(|buffer| buffer.len() < output_frames)
-        {
-            return Err(RubberBandError::InvalidBlockSize);
-        }
-        let tap_plan =
-            PreparedSourceTapPlan::new(self).ok_or(RubberBandError::UnavailableSourceHistory)?;
-        if !checked && !playback.can_read_frames(output_frames) {
-            return Err(RubberBandError::UnavailableSourceHistory);
-        }
-        let mut batch = [FractionalSourceTaps {
-            left: 0,
-            right: None,
-            right_gain: 0.0,
-        }; MAPPED_TAP_BATCH_FRAMES];
-        for (offset, entry) in batch[..output_frames].iter_mut().enumerate() {
-            let position = position_at(offset).ok_or(RubberBandError::UnavailableSourceHistory)?;
-            let plan = Self {
-                frame_pos: position.frame,
-                seek_mode: position.seek_mode,
-                ..self
-            };
-            let taps = tap_plan
-                .taps(plan, position.fraction)
-                .ok_or(RubberBandError::UnavailableSourceHistory)?;
-            for channel in 0..self.channels {
-                if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
-                    #[cfg(test)]
-                    observe_tap(taps.left, channel, false, false);
-                    return Err(RubberBandError::InvalidBlockSize);
-                }
-                if let Some(right) = taps.right
-                    && !plan.tap_available_with_readers(sample, readers, right, channel)
-                {
-                    #[cfg(test)]
-                    observe_tap(right, channel, true, false);
-                    return Err(RubberBandError::InvalidBlockSize);
-                }
-            }
-            *entry = taps;
-        }
-        let tempo_ratio = playback.tempo_ratio();
-        for (frame, taps) in batch[..output_frames].iter().copied().enumerate() {
-            let transition_gains = self.transition.gains_at_output_offset(frame, tempo_ratio);
-            for (channel, buffer) in buffers.iter_mut().enumerate().take(self.channels) {
-                buffer[frame] = self.sample_at_taps_with_gains(
-                    sample,
-                    readers,
-                    taps,
-                    transition_gains,
-                    channel,
-                );
-            }
-        }
-        Ok(())
     }
 
     fn fill_fractional_buffers_queried_original(
@@ -1087,22 +867,6 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if (self.loop_period.is_mapped()
-            || playback.reader_period().is_mapped()
-            || playback.has_phase_program())
-            && (!self.domain().is_valid()
-                || !playback.matches_domain(self.domain())
-                || self.channels == 0
-                || self.channels != sample.channels
-                || self.sample_frames != sample.frame_count()
-                || buffers.len() < self.channels
-                || buffers
-                    .iter()
-                    .take(self.channels)
-                    .any(|buffer| buffer.len() < output_frames))
-        {
-            return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
-        }
         let tap_plan = PreparedSourceTapPlan::new(self)
             .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
@@ -1116,37 +880,6 @@ impl SourceReadPlan {
         );
         if !playback.can_read_frames(output_frames) {
             return Err(super::rubberband_backend::RubberBandError::UnavailableSourceHistory);
-        }
-        // Mapped seams and dry phase coordinates are fallible at this copied boundary.
-        // Validate the entire requested chunk before changing any output buffer.
-        // The admitted scalar path retains its preceding single-pass work.
-        if self.loop_period.is_mapped() || playback.has_phase_program() {
-            for offset in 0..output_frames {
-                let position = position_at(offset)
-                    .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
-                let plan = Self {
-                    frame_pos: position.frame,
-                    seek_mode: position.seek_mode,
-                    ..self
-                };
-                let taps = tap_plan
-                    .taps(plan, position.fraction)
-                    .ok_or(super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
-                for channel in 0..self.channels {
-                    if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
-                        #[cfg(test)]
-                        observe_tap(taps.left, channel, false, false);
-                        return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
-                    }
-                    if let Some(right) = taps.right
-                        && !plan.tap_available_with_readers(sample, readers, right, channel)
-                    {
-                        #[cfg(test)]
-                        observe_tap(right, channel, true, false);
-                        return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
-                    }
-                }
-            }
         }
         let tempo_ratio = playback.tempo_ratio();
         for frame in 0..output_frames {
@@ -1201,19 +934,6 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if let Some(view) = playback
-            .local_compact_view()
-            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?
-        {
-            return self.fill_fractional_buffers_checked_queried(
-                sample,
-                readers,
-                playback,
-                buffers,
-                output_frames,
-                |frame| view.position_at(frame),
-            );
-        }
         self.fill_fractional_buffers_checked_queried(
             sample,
             readers,
@@ -1221,28 +941,6 @@ impl SourceReadPlan {
             buffers,
             output_frames,
             |frame| playback.position_at(frame),
-        )
-    }
-
-    pub(crate) fn fill_fractional_buffers_checked_compact_with_readers(
-        self,
-        sample: &SampleBuffer,
-        readers: StemReadSets<'_>,
-        playback: &SourcePlayback,
-        geometry: &super::mapped_source_clock::MappedLoopGeometry,
-        buffers: &mut [Vec<f32>],
-        output_frames: usize,
-    ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        let view = playback
-            .compact_view(geometry)
-            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
-        self.fill_fractional_buffers_checked_queried(
-            sample,
-            readers,
-            playback,
-            buffers,
-            output_frames,
-            |frame| view.position_at(frame),
         )
     }
 
@@ -1255,17 +953,6 @@ impl SourceReadPlan {
         output_frames: usize,
         position_at: impl Fn(usize) -> Option<FractionalSourcePosition>,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        if self.mapped_tap_batch_eligible(playback, output_frames) {
-            return self.fill_fractional_buffers_tap_batch(
-                sample,
-                readers,
-                playback,
-                buffers,
-                output_frames,
-                position_at,
-                true,
-            );
-        }
         self.fill_fractional_buffers_checked_queried_original(
             sample,
             readers,
@@ -1348,15 +1035,7 @@ impl SourceReadPlan {
         output_frames: usize,
         checked: bool,
     ) -> Result<(), super::rubberband_backend::RubberBandError> {
-        let view = playback
-            .local_compact_view()
-            .map_err(|_| super::rubberband_backend::RubberBandError::UnavailableSourceHistory)?;
-        let position = |frame| {
-            view.as_ref().map_or_else(
-                || playback.position_at(frame),
-                |view| view.position_at(frame),
-            )
-        };
+        let position = |frame| playback.position_at(frame);
         if checked {
             self.fill_fractional_buffers_checked_queried_original(
                 sample,
@@ -1560,7 +1239,6 @@ impl SourceReadPlan {
         transition_progress: f64,
         channel: usize,
     ) -> f32 {
-        assert!(!self.loop_period.is_mapped());
         self.try_sample_fractional_with_readers(
             sample,
             readers,
@@ -1610,18 +1288,6 @@ impl SourceReadPlan {
 
     /// The single authority for both executed interpolation addresses and coverage checks.
     pub(crate) fn try_fractional_taps(self, fraction: f64) -> Option<FractionalSourceTaps> {
-        if self.loop_period.is_mapped() {
-            let period = self.loop_period.mapped_period(self.loop_region)?;
-            if self.seek_mode != ExplicitSeekMode::Normal {
-                return None;
-            }
-            let taps = period.seam_taps(self.frame_pos, fraction, self.loop_region)?;
-            return Some(FractionalSourceTaps {
-                left: taps.left,
-                right: taps.right,
-                right_gain: taps.right_gain,
-            });
-        }
         if let Some(period) = self.loop_period.scalar_period()
             && period != self.loop_region.len() as f64
             && self.seek_mode == ExplicitSeekMode::Normal
@@ -1662,7 +1328,6 @@ impl SourceReadPlan {
 
     #[cfg(test)]
     pub(crate) fn fractional_taps(self, fraction: f64) -> FractionalSourceTaps {
-        assert!(!self.loop_period.is_mapped());
         self.try_fractional_taps(fraction)
             .expect("valid legacy scalar fixture taps")
     }
@@ -1736,701 +1401,6 @@ mod tests {
             seek_mode,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
-        }
-    }
-
-    fn batch_fixture() -> (
-        SampleBuffer,
-        super::super::mapped_source_clock::MappedLoopGeometry,
-    ) {
-        use crate::audio_engine::mapped_source_clock::MappedLoopGeometry;
-        use crate::audio_engine::mapped_source_clock::tests::map_with_source;
-        use crate::messages::{CompleteSourceIdentity, ResidentContext, ResidentSourceView};
-        let sample = SampleBuffer {
-            channels: 2,
-            samples: Arc::from(
-                (0..4097)
-                    .flat_map(|frame| {
-                        [
-                            if frame % 17 == 0 {
-                                -0.0
-                            } else {
-                                frame as f32 * 0.25
-                            },
-                            (frame as f32 - 123.0) * -0.125,
-                        ]
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            residency: Some(Arc::new(ResidentSourceView {
-                source: Arc::new(CompleteSourceIdentity {
-                    frame_count: 4097,
-                    channels: 2,
-                    sample_rate_hz: 64,
-                    original_sha256: [1; 32],
-                    playback_sha256: [2; 32],
-                    mono_sha256: [3; 32],
-                    transform_sha256: [4; 32],
-                    source_zero_frame: 0,
-                }),
-                start_frame: 0,
-                window_revision: 1,
-                context: ResidentContext::FullTrack,
-            })),
-        };
-        let map = map_with_source(
-            &[(0.0, 0.0), (4097.0 / 64.0, 4097.0 / 1024.0)],
-            &["trusted"],
-            true,
-            64,
-            4097,
-        );
-        let mut geometry = MappedLoopGeometry::new_general_declared(
-            map,
-            4097,
-            64,
-            FrameRange {
-                start: 0,
-                end: 4096,
-            },
-            4.0,
-            true,
-        )
-        .unwrap();
-        geometry.prepare_common_phase();
-        (sample, geometry)
-    }
-
-    fn batch_playback(
-        geometry: &super::super::mapped_source_clock::MappedLoopGeometry,
-        frame: usize,
-        fraction: f64,
-    ) -> SourcePlayback {
-        use crate::audio_engine::mapped_source_clock::MappedClockEpoch;
-        let mut timeline = super::super::transport::TransportTimeline::new(64);
-        assert!(timeline.set_master_period(16.0));
-        let position = FractionalSourcePosition {
-            frame,
-            fraction,
-            seek_mode: ExplicitSeekMode::Normal,
-        };
-        assert!(geometry.has_general_continuation());
-        let epoch = MappedClockEpoch::ordinary_mapped_recovery(31, timeline, geometry, position, 0)
-            .unwrap();
-        SourcePlayback::mapped(geometry, epoch, 0).unwrap()
-    }
-
-    fn batch_plan(playback: &SourcePlayback) -> SourceReadPlan {
-        let position = playback.position();
-        SourceReadPlan {
-            channels: 2,
-            sample_frames: 4097,
-            frame_pos: position.frame,
-            loop_region: FrameRange {
-                start: 0,
-                end: 4096,
-            },
-            loop_period: playback.reader_period(),
-            seek_mode: position.seek_mode,
-            selection: StemRenderSelection::full_mix(),
-            transition: StemTransition::default(),
-        }
-    }
-
-    fn batch_stems(sample: &SampleBuffer, version: u64) -> PreparedStemSet {
-        PreparedStemSet {
-            complete_set_identity: Arc::new([version as u8; 32]),
-            accepted_timing: None,
-            reference_samples: sample.samples.clone(),
-            reference_residency: sample.residency.clone(),
-            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
-            source_version_hash: version,
-            sample_rate_hz: 64,
-            channels: 2,
-            frame_count: 4097,
-            available_mask: full_stem_available_mask(),
-            stems: std::array::from_fn(|index| SampleBuffer {
-                samples: Arc::from(
-                    sample
-                        .samples
-                        .iter()
-                        .map(|value| *value * (index + 1) as f32)
-                        .collect::<Vec<_>>(),
-                ),
-                ..sample.clone()
-            }),
-        }
-    }
-
-    fn pcm_bits(buffers: &[Vec<f32>]) -> Vec<Vec<u32>> {
-        buffers
-            .iter()
-            .map(|buffer| buffer.iter().map(|value| value.to_bits()).collect())
-            .collect()
-    }
-
-    fn compare_batch_reference(
-        sample: &SampleBuffer,
-        readers: StemReadSets<'_>,
-        playback: &SourcePlayback,
-        read: SourceReadPlan,
-        frames: usize,
-        checked: bool,
-    ) -> (Result<(), String>, TapReadObservation) {
-        // Distinct trailing/extra-channel sentinels make all nonrequested writes observable.
-        let mut actual = vec![
-            vec![-0.0; frames + 3],
-            vec![17.0; frames + 5],
-            vec![-91.0; frames + 7],
-        ];
-        let mut expected = actual.clone();
-        let before = pcm_bits(&actual);
-        reset_tap_observation_for_test();
-        let reference = read
-            .fill_fractional_buffers_reference_for_test(
-                sample,
-                readers,
-                playback,
-                &mut expected,
-                frames,
-                checked,
-            )
-            .map_err(|error| error.to_string());
-        let expected_taps = tap_observation_for_test();
-        reset_tap_observation_for_test();
-        let result = if checked {
-            read.fill_fractional_buffers_checked_with_readers(
-                sample,
-                readers,
-                playback,
-                &mut actual,
-                frames,
-            )
-        } else {
-            read.fill_fractional_buffers_with_readers(
-                sample,
-                readers,
-                playback,
-                &mut actual,
-                frames,
-            )
-        }
-        .map_err(|error| error.to_string());
-        let actual_taps = tap_observation_for_test();
-        assert_eq!(result, reference, "checked={checked} frames={frames}");
-        assert_eq!(
-            pcm_bits(&actual),
-            pcm_bits(&expected),
-            "checked={checked} frames={frames}"
-        );
-        assert_eq!(actual_taps, expected_taps);
-        if result.is_err() {
-            assert_eq!(
-                pcm_bits(&actual),
-                before,
-                "every output must remain untouched"
-            );
-        }
-        assert_eq!(actual[2].len(), frames + 7);
-        assert_eq!(&pcm_bits(&actual)[0][frames..], &before[0][frames..]);
-        assert_eq!(&pcm_bits(&actual)[1][frames..], &before[1][frames..]);
-        assert_eq!(pcm_bits(&actual)[2], before[2]);
-        (result, actual_taps)
-    }
-
-    #[test]
-    fn mapped_tap_batch_matches_old_pcm_reads_boundaries_stems_and_phase_paths() {
-        use crate::audio_engine::loop_phase_reference::LoopPhaseReference;
-        let (sample, geometry) = batch_fixture();
-        let current = batch_stems(&sample, 41);
-        let outgoing = batch_stems(&sample, 42);
-        let mut timeline = super::super::transport::TransportTimeline::new(64);
-        assert!(timeline.set_master_period(16.0));
-        let domain = SourceLoopDomain::physical(4097, geometry.domain().region);
-        let mut ordinary = SourcePlayback::mapped_general_continuation(
-            &geometry,
-            40,
-            timeline,
-            domain,
-            FractionalSourcePosition {
-                frame: 0,
-                fraction: 0.0,
-                seek_mode: ExplicitSeekMode::Normal,
-            },
-            0,
-        )
-        .unwrap();
-        ordinary.install_launch_reference(LoopPhaseReference::capture(Some(timeline), 0));
-        let phase =
-            SourcePlayback::mapped_phase_continuation(&geometry, 41, timeline, &ordinary, 0)
-                .unwrap();
-        assert!(phase.has_phase_program());
-        let mut scalar = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
-        assert!(scalar.configure(4097, geometry.domain().region));
-        scalar.install_launch_reference(LoopPhaseReference::capture(Some(timeline), 0));
-        let static_phase =
-            SourcePlayback::static_continuation(&scalar, timeline, 0, 42, 1024.0, 0.0, 4.0)
-                .unwrap();
-        assert!(static_phase.has_phase_program());
-        for playback in [
-            batch_playback(&geometry, 13, 0.125),
-            phase,
-            static_phase,
-            scalar,
-        ] {
-            for frames in [0, 1, 17, 1024, 1025] {
-                for selection in [
-                    StemRenderSelection::full_mix(),
-                    StemRenderSelection::for_stems(&current, STEM_MASK_VOCALS | STEM_MASK_MELODY),
-                    StemRenderSelection::for_stems(&current, 0),
-                ] {
-                    for transitioning in [false, true] {
-                        let read = SourceReadPlan {
-                            selection,
-                            transition: if transitioning {
-                                StemTransition::start(
-                                    StemRenderSelection::for_stems(&outgoing, u8::MAX),
-                                    128,
-                                )
-                            } else {
-                                StemTransition::default()
-                            },
-                            ..batch_plan(&playback)
-                        };
-                        assert_eq!(
-                            read.mapped_tap_batch_eligible(&playback, frames),
-                            frames != 0
-                                && frames <= 1024
-                                && (read.loop_period.is_mapped() || playback.has_phase_program())
-                        );
-                        for checked in [false, true] {
-                            compare_batch_reference(
-                                &sample,
-                                StemReadSets::new(Some(&current), Some(&outgoing)),
-                                &playback,
-                                read,
-                                frames,
-                                checked,
-                            )
-                            .0
-                            .unwrap();
-                        }
-                    }
-                }
-            }
-        }
-        // The last physical knot owns its wrapped right tap; the exclusive
-        // mapped endpoint itself is not an extra permitted source sample.
-        let seam = batch_playback(&geometry, 4095, 0.5);
-        let read = batch_plan(&seam);
-        for checked in [false, true] {
-            let (result, taps) =
-                compare_batch_reference(&sample, StemReadSets::default(), &seam, read, 1, checked);
-            result.unwrap();
-            assert_eq!(
-                (
-                    taps.left_reads,
-                    taps.right_reads,
-                    taps.min_frame,
-                    taps.max_frame
-                ),
-                (2, 2, Some(0), Some(4095))
-            );
-            assert!(
-                compare_batch_reference(&sample, StemReadSets::default(), &seam, read, 2, checked)
-                    .0
-                    .is_err()
-            );
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn compare_batch_queries(
-        sample: &SampleBuffer,
-        readers: StemReadSets<'_>,
-        playback: &SourcePlayback,
-        read: SourceReadPlan,
-        frames: usize,
-        checked: bool,
-        position: impl Fn(usize) -> Option<FractionalSourcePosition>,
-        initial: &[Vec<f32>],
-    ) -> (Result<(), String>, TapReadObservation) {
-        let mut actual = initial.to_vec();
-        let mut expected = initial.to_vec();
-        reset_tap_observation_for_test();
-        let reference = if checked {
-            read.fill_fractional_buffers_checked_queried_original(
-                sample,
-                readers,
-                playback,
-                &mut expected,
-                frames,
-                &position,
-            )
-        } else {
-            read.fill_fractional_buffers_queried_original(
-                sample,
-                readers,
-                playback,
-                &mut expected,
-                frames,
-                &position,
-            )
-        }
-        .map_err(|error| error.to_string());
-        let expected_taps = tap_observation_for_test();
-        reset_tap_observation_for_test();
-        let result = if checked {
-            read.fill_fractional_buffers_checked_queried(
-                sample,
-                readers,
-                playback,
-                &mut actual,
-                frames,
-                &position,
-            )
-        } else {
-            read.fill_fractional_buffers_queried(
-                sample,
-                readers,
-                playback,
-                &mut actual,
-                frames,
-                &position,
-            )
-        }
-        .map_err(|error| error.to_string());
-        let actual_taps = tap_observation_for_test();
-        assert_eq!(result, reference);
-        assert_eq!(pcm_bits(&actual), pcm_bits(&expected));
-        assert_eq!(actual_taps, expected_taps);
-        if result.is_err() {
-            assert_eq!(pcm_bits(&actual), pcm_bits(initial));
-        }
-        (result, actual_taps)
-    }
-
-    #[test]
-    fn mapped_tap_batch_preserves_negative_zero_subnormal_gain_and_real_right_reads() {
-        let (sample, geometry) = batch_fixture();
-        let playback = batch_playback(&geometry, 17, 0.0);
-        let read = batch_plan(&playback);
-        let initial = vec![vec![-0.0; 4], vec![19.0; 5], vec![-17.0; 6]];
-        for fraction in [
-            -0.0,
-            0.0,
-            f64::from_bits(1),
-            f64::from_bits(0x36a0_0000_0000_0000),
-            0.5,
-        ] {
-            let taps = PreparedSourceTapPlan::new(read)
-                .unwrap()
-                .taps(read, fraction)
-                .unwrap();
-            let reference = read.try_fractional_taps(fraction).unwrap();
-            assert_eq!(
-                (taps.left, taps.right, taps.right_gain.to_bits()),
-                (
-                    reference.left,
-                    reference.right,
-                    reference.right_gain.to_bits()
-                )
-            );
-            assert_eq!(taps.right, (fraction != 0.0).then_some(18));
-            assert_eq!(taps.right_gain.to_bits(), (fraction as f32).to_bits());
-            for checked in [false, true] {
-                let (result, observed) = compare_batch_queries(
-                    &sample,
-                    StemReadSets::default(),
-                    &playback,
-                    read,
-                    1,
-                    checked,
-                    |_| {
-                        Some(FractionalSourcePosition {
-                            frame: 17,
-                            fraction,
-                            seek_mode: ExplicitSeekMode::Normal,
-                        })
-                    },
-                    &initial,
-                );
-                result.unwrap();
-                assert_eq!(observed.left_reads, 2);
-                assert_eq!(observed.right_reads, if fraction != 0.0 { 2 } else { 0 });
-                if fraction == f64::from_bits(1) {
-                    assert_eq!(taps.right_gain.to_bits(), 0.0_f32.to_bits());
-                    assert_eq!(
-                        observed.max_frame,
-                        Some(18),
-                        "gain zero still reads Some(right)"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn mapped_tap_batch_late_right_final_channel_and_outgoing_fail_without_any_write() {
-        use crate::messages::ResidentContext;
-        let (sample, geometry) = batch_fixture();
-        let playback = batch_playback(&geometry, 300, 0.5);
-        let read = batch_plan(&playback);
-        let initial = vec![vec![-0.0; 9], vec![19.0; 11], vec![-17.0; 13]];
-        let current = batch_stems(&sample, 51);
-        let outgoing = batch_stems(&sample, 52);
-        for failure in 0..4 {
-            let mut source = sample.clone();
-            let mut bad_current = current.clone();
-            let mut bad_outgoing = outgoing.clone();
-            let failed = if failure == 0 {
-                &mut source
-            } else if failure == 3 {
-                &mut bad_outgoing.stems[3]
-            } else {
-                &mut bad_current.stems[3]
-            };
-            let mut window = failed
-                .window(
-                    300,
-                    if failure == 1 { 305 } else { 304 },
-                    7,
-                    ResidentContext::KeyLockFiniteLoop,
-                )
-                .unwrap();
-            if failure == 1 {
-                window.samples = Arc::from(&window.samples[..window.samples.len() - 1]);
-            }
-            *failed = window;
-            let selection = if failure == 0 {
-                StemRenderSelection::full_mix()
-            } else {
-                StemRenderSelection::for_stems(&bad_current, u8::MAX)
-            };
-            let read = SourceReadPlan {
-                selection,
-                transition: if failure == 3 {
-                    StemTransition::start(
-                        StemRenderSelection::for_stems(&bad_outgoing, u8::MAX),
-                        128,
-                    )
-                } else {
-                    StemTransition::default()
-                },
-                ..read
-            };
-            for checked in [false, true] {
-                let (result, observed) = compare_batch_queries(
-                    &source,
-                    StemReadSets::new(Some(&bad_current), Some(&bad_outgoing)),
-                    &playback,
-                    read,
-                    4,
-                    checked,
-                    |offset| {
-                        Some(FractionalSourcePosition {
-                            frame: 300 + offset,
-                            fraction: if failure == 2 { f64::from_bits(1) } else { 0.5 },
-                            seek_mode: ExplicitSeekMode::Normal,
-                        })
-                    },
-                    &initial,
-                );
-                assert_eq!(
-                    result,
-                    Err(
-                        super::super::rubberband_backend::RubberBandError::InvalidBlockSize
-                            .to_string()
-                    )
-                );
-                assert_eq!(observed.missing_reads, 1);
-                assert_eq!(observed.max_frame, Some(304));
-                assert_eq!(observed.right_reads, 1);
-                // Case one has right/frame304 channel0 available: only its final
-                // channel is missing, after every earlier frame/channel succeeded.
-                assert_eq!(
-                    observed.address_checksum,
-                    tap_failure_checksum_for_test(304, if failure == 1 { 1 } else { 0 }, true)
-                );
-            }
-        }
-    }
-
-    fn tap_failure_checksum_for_test(frame: usize, channel: usize, right: bool) -> u64 {
-        reset_tap_observation_for_test();
-        observe_tap(frame, channel, right, false);
-        tap_observation_for_test().address_checksum
-    }
-
-    #[test]
-    fn mapped_tap_batch_keeps_old_multi_invalid_error_order_and_fallbacks() {
-        use super::super::rubberband_backend::RubberBandError;
-        use crate::messages::ResidentContext;
-        let (sample, geometry) = batch_fixture();
-        let playback = batch_playback(&geometry, 300, 0.5);
-        let read = batch_plan(&playback);
-        let missing = sample
-            .window(300, 301, 3, ResidentContext::KeyLockFiniteLoop)
-            .unwrap();
-        for checked in [false, true] {
-            for case in 0..10 {
-                let mut changed = read;
-                let mut buffers = vec![vec![-0.0; 8], vec![19.0; 9], vec![-17.0; 10]];
-                let mut frames = 4;
-                let mut fail_position = false;
-                match case {
-                    0 => {
-                        changed.channels = 0;
-                        fail_position = true;
-                    }
-                    1 => {
-                        buffers[1].truncate(1);
-                        fail_position = true;
-                    }
-                    2 => {
-                        changed.sample_frames -= 1;
-                        frames = 5000;
-                    }
-                    3 => {
-                        changed.loop_region.end = changed.loop_region.start;
-                        fail_position = true;
-                    }
-                    4 => {
-                        changed.loop_period = rational_period(3, 1);
-                    }
-                    5 => {
-                        frames = 5000;
-                        buffers = vec![vec![-0.0; 5003], vec![19.0; 5005], vec![-17.0; 5007]];
-                    }
-                    6 => {
-                        fail_position = true;
-                    }
-                    _ => {
-                        changed.loop_region.end -= 1;
-                    }
-                }
-                // Case four uses an otherwise valid rational period with incompatible
-                // physical shape; no constructor bypass is needed for the bad domain.
-                if case >= 8 {
-                    changed = read;
-                }
-                let source = if case >= 8 { &sample } else { &missing };
-                let (result, _) = compare_batch_queries(
-                    source,
-                    StemReadSets::default(),
-                    &playback,
-                    changed,
-                    frames,
-                    checked,
-                    |offset| {
-                        (!fail_position || offset != 0)
-                            .then_some(FractionalSourcePosition {
-                                frame: 300 + offset,
-                                fraction: if case == 9 && offset == 3 {
-                                    f64::NAN
-                                } else {
-                                    0.5
-                                },
-                                seek_mode: ExplicitSeekMode::Normal,
-                            })
-                            .filter(|_| case != 8 || offset != 3)
-                    },
-                    &buffers,
-                );
-                let expected = if case == 5 || case == 6 || case >= 8 {
-                    RubberBandError::UnavailableSourceHistory
-                } else {
-                    RubberBandError::InvalidBlockSize
-                };
-                assert_eq!(
-                    result,
-                    Err(expected.to_string()),
-                    "checked={checked} invalid={case}"
-                );
-                if !changed.domain().is_valid() {
-                    assert!(!changed.mapped_tap_batch_eligible(&playback, frames));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn mapped_tap_batch_partitioned_seams_and_transition_completion_match_old_reader_bits() {
-        let (mut sample, geometry) = batch_fixture();
-        // Keep this partition oracle nonzero: legacy active-ramp +0 arithmetic
-        // and an already completed direct -0 read have distinct historical bits.
-        // Signed-zero equality with that old reader is checked separately above.
-        sample.samples = Arc::from(
-            sample
-                .samples
-                .iter()
-                .map(|value| *value + 8192.0)
-                .collect::<Vec<_>>(),
-        );
-        let current = batch_stems(&sample, 61);
-        let outgoing = batch_stems(&sample, 62);
-        let initial = batch_playback(&geometry, 13, 0.125);
-        let mut reference = None;
-        for pattern in [&[1024][..], &[127, 1, 383, 17, 256][..], &[1025, 1024][..]] {
-            let mut playback = initial;
-            let mut read = SourceReadPlan {
-                selection: StemRenderSelection::for_stems(&current, STEM_MASK_VOCALS),
-                transition: StemTransition::start(
-                    StemRenderSelection::for_stems(&outgoing, u8::MAX),
-                    128,
-                ),
-                ..batch_plan(&playback)
-            };
-            let mut pcm = [Vec::new(), Vec::new()];
-            let mut done = 0;
-            let mut caller = 0;
-            while done < 6000 {
-                playback.refresh_mapped_span(&geometry).unwrap();
-                let position = playback.position();
-                read.frame_pos = position.frame;
-                read.seek_mode = position.seek_mode;
-                read.loop_period = playback.reader_period();
-                let frames = playback
-                    .chunk(pattern[caller % pattern.len()].min(6000 - done))
-                    .0;
-                assert!(frames > 0);
-                for checked in [false, true] {
-                    compare_batch_reference(
-                        &sample,
-                        StemReadSets::new(Some(&current), Some(&outgoing)),
-                        &playback,
-                        read,
-                        frames,
-                        checked,
-                    )
-                    .0
-                    .unwrap();
-                }
-                let mut output = [vec![-0.0; frames], vec![19.0; frames]];
-                read.fill_fractional_buffers_checked_with_readers(
-                    &sample,
-                    StemReadSets::new(Some(&current), Some(&outgoing)),
-                    &playback,
-                    &mut output,
-                    frames,
-                )
-                .unwrap();
-                for channel in 0..2 {
-                    pcm[channel].extend(output[channel].iter().map(|value| value.to_bits()));
-                }
-                read.transition
-                    .advance_output_frames(frames, playback.tempo_ratio());
-                assert!(playback.advance(frames));
-                done += frames;
-                caller += 1;
-            }
-            assert!(!read.transition.is_active());
-            assert!(playback.mapped_output_frame().unwrap() > 4096);
-            if let Some(reference) = &reference {
-                assert_eq!(&pcm, reference);
-            } else {
-                reference = Some(pcm);
-            }
         }
     }
 
@@ -2549,234 +1519,6 @@ mod tests {
         }
         assert_eq!(original.domain().musical_period.scalar_period(), Some(3.25));
         assert!(original.matches_exact(original));
-    }
-
-    #[test]
-    fn physical_quarter_extent_uses_h_taps_but_keeps_its_complete_domain_identity() {
-        use crate::audio_engine::general_source_numerics::{Integer, PhysicalMapQuarters};
-
-        let quarters = PhysicalMapQuarters::new(
-            Integer::from_u128(29).unwrap(),
-            Integer::from_u128(15).unwrap(),
-        )
-        .unwrap();
-        let region = FrameRange { start: 1, end: 4 };
-        let domain = SourceLoopDomain::mapped_physical(10, region, quarters).unwrap();
-        let read = SourceReadPlan {
-            channels: 2,
-            sample_frames: 10,
-            frame_pos: 3,
-            loop_region: region,
-            loop_period: domain.musical_period,
-            seek_mode: ExplicitSeekMode::Normal,
-            selection: StemRenderSelection::full_mix(),
-            transition: StemTransition::default(),
-        };
-        let taps = read.try_fractional_taps(0.5).unwrap();
-        assert_eq!((taps.left, taps.right, taps.right_gain), (3, Some(1), 0.5));
-        let zero = read.try_fractional_taps(-0.0).unwrap();
-        assert_eq!(zero.right, None);
-        assert_eq!(zero.right_gain.to_bits(), (-0.0_f32).to_bits());
-        assert!(read.try_fractional_taps(f64::NAN).is_none());
-        assert!(domain.is_valid());
-        assert!(domain.musical_period.is_mapped());
-        assert_eq!(domain.musical_period.physical_quarters(), Some(quarters));
-        assert_eq!(domain.musical_period.scalar_period(), None);
-        for other in [
-            SourceReaderPeriod::Physical,
-            SourceReaderPeriod::from_scalar_period(Some(3.0)),
-            rational_period(3, 1),
-            SourceReaderPeriod::MappedPhysicalQuarters(
-                PhysicalMapQuarters::new(
-                    Integer::from_u128(2).unwrap(),
-                    Integer::from_u128(1).unwrap(),
-                )
-                .unwrap(),
-            ),
-        ] {
-            let other = SourceReadPlan {
-                loop_period: other,
-                ..read
-            };
-            assert!(!read.matches_exact(other));
-            assert!(!read.matches_source_contract(other));
-        }
-        assert!(
-            SourceReadPlan {
-                frame_pos: region.end,
-                ..read
-            }
-            .try_fractional_taps(0.0)
-            .is_none()
-        );
-        assert!(
-            SourceReadPlan {
-                seek_mode: ExplicitSeekMode::AfterLoop,
-                ..read
-            }
-            .try_fractional_taps(0.5)
-            .is_none()
-        );
-        let invalid_region = FrameRange { start: 4, end: 1 };
-        assert!(read.loop_period.mapped_period(invalid_region).is_none());
-        assert!(
-            SourceReadPlan {
-                loop_region: invalid_region,
-                ..read
-            }
-            .try_fractional_taps(0.0)
-            .is_none()
-        );
-        assert!(SourceLoopDomain::mapped_physical(2, region, quarters).is_none());
-    }
-
-    fn rational_period(numerator: u128, denominator: u128) -> SourceReaderPeriod {
-        use crate::audio_engine::general_source_numerics::{Integer, MappedReaderPeriod};
-        SourceReaderPeriod::MappedRational(
-            MappedReaderPeriod::new(
-                Integer::from_u128(numerator).unwrap(),
-                Integer::from_u128(denominator).unwrap(),
-            )
-            .unwrap(),
-        )
-    }
-
-    #[test]
-    fn rational_reader_uses_its_exact_seam_for_full_mix_and_each_stem_selection() {
-        let sample = stereo_sample(1.0);
-        let stems = prepared_stems(&sample);
-        let rational = SourceReadPlan {
-            frame_pos: 5,
-            loop_period: rational_period(31, 10),
-            ..plan(2, ExplicitSeekMode::Normal)
-        };
-        let scalar = SourceReadPlan {
-            loop_period: SourceReaderPeriod::from_scalar_period(Some(3.25)),
-            ..rational
-        };
-        // phase=3+1/16; last=2; alpha=(17/16)/(11/10)=85/88.
-        let expected_gain = (85.0_f64 / 88.0) as f32;
-        let taps = rational.try_fractional_taps(0.0625).unwrap();
-        assert_eq!(taps.left, 4);
-        assert_eq!(taps.right, Some(2));
-        assert_eq!(taps.right_gain.to_bits(), expected_gain.to_bits());
-        assert_ne!(taps, scalar.try_fractional_taps(0.0625).unwrap());
-        assert!(!rational.matches_source_contract(scalar));
-        assert!(!rational.matches_exact(scalar));
-        for mask in [0, STEM_MASK_MELODY, full_stem_available_mask()] {
-            for selection in [
-                StemRenderSelection::full_mix(),
-                StemRenderSelection::for_stems(&stems, mask),
-            ] {
-                let selected = SourceReadPlan {
-                    selection,
-                    ..rational
-                };
-                for channel in 0..2 {
-                    let readers = StemReadSets::new(Some(&stems), None);
-                    let left = selected.sample_at_frame_with_gains(
-                        &sample,
-                        readers,
-                        4,
-                        (0.0, 1.0),
-                        channel,
-                    );
-                    let right = selected.sample_at_frame_with_gains(
-                        &sample,
-                        readers,
-                        2,
-                        (0.0, 1.0),
-                        channel,
-                    );
-                    let expected = left + (right - left) * expected_gain;
-                    assert_eq!(
-                        selected
-                            .try_sample_fractional_with_readers(
-                                &sample, readers, 0.0625, 0.0, channel,
-                            )
-                            .unwrap()
-                            .to_bits(),
-                        expected.to_bits(),
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn rational_reader_refuses_bad_pairs_and_preserves_physical_equal_period_taps() {
-        let physical = plan(4, ExplicitSeekMode::Normal);
-        let rational = SourceReadPlan {
-            loop_period: rational_period(3, 1),
-            ..physical
-        };
-        for fraction in [0.0, -0.0, 0.25, 0.75] {
-            assert_eq!(
-                physical.try_fractional_taps(fraction),
-                rational.try_fractional_taps(fraction),
-            );
-        }
-        assert!(rational.try_fractional_taps(0.0).unwrap().right.is_none());
-        assert!(!rational.matches_exact(physical));
-        assert!(
-            rational
-                .domain()
-                .project_normal_position(FractionalSourcePosition {
-                    frame: 4,
-                    fraction: 0.0,
-                    seek_mode: ExplicitSeekMode::Normal,
-                })
-                .is_none()
-        );
-        let shorter = SourceReadPlan {
-            frame_pos: 5,
-            loop_period: rational_period(31, 10),
-            ..physical
-        };
-        assert!(shorter.try_fractional_taps(0.125).is_none());
-        assert!(shorter.try_fractional_taps(f64::NAN).is_none());
-        assert!(
-            SourceReadPlan {
-                seek_mode: ExplicitSeekMode::BeforeLoop,
-                ..shorter
-            }
-            .try_fractional_taps(0.0)
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn rational_full_and_checked_readers_reject_a_different_copied_domain_before_output() {
-        let sample = stereo_sample(1.0);
-        let read = SourceReadPlan {
-            loop_period: rational_period(31, 10),
-            ..plan(3, ExplicitSeekMode::Normal)
-        };
-        let mut scalar = SourcePlayback::new(3, ExplicitSeekMode::Normal, 1.0);
-        assert!(scalar.configure(6, read.loop_region));
-        for checked in [false, true] {
-            let mut buffers = [vec![17.0; 4], vec![19.0; 4]];
-            let original = buffers.clone();
-            let result = if checked {
-                read.fill_fractional_buffers_checked_with_readers(
-                    &sample,
-                    StemReadSets::default(),
-                    &scalar,
-                    &mut buffers,
-                    4,
-                )
-            } else {
-                read.fill_fractional_buffers_with_readers(
-                    &sample,
-                    StemReadSets::default(),
-                    &scalar,
-                    &mut buffers,
-                    4,
-                )
-            };
-            assert!(result.is_err());
-            assert_eq!(buffers, original);
-        }
     }
 
     #[test]

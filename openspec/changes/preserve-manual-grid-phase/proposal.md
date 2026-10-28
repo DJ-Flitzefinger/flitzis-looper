@@ -15,8 +15,9 @@ an explicit session bootstrap and a defined policy for accepted starts during me
   checks for prepared constant-tempo material, without activating phase-based playback starts.
 - Preserve complete transport musical position through master-BPM changes, rather than retaining
   only the current bar phase.
-- Bootstrap the master phase once per stream from the existing selected-pad/BPMLOCK reference.
-  A dedicated request selects the reference; unavailable metadata may defer completion.
+- Bootstrap the master phase once per stream through the existing source-qualified BPMLOCK
+  owner or acknowledged accepted-timing refresh; unavailable metadata may defer completion.
+  The later remove-source-sync change retires the public unqualified phase-control commands.
 - Freeze accepted scheduler output targets, ordering and captured timestamps across subsequent
   BPM/metadata changes. Current execution still reads the effective loop start.
 - Document the foundation/activation boundary and extend deterministic regression coverage.

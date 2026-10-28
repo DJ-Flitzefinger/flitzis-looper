@@ -35,8 +35,6 @@ from unittest.mock import patch
 
 from imgui_bundle import imgui
 
-from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
-from flitzis_looper.controller.source_beatmap_selection import SourceBeatmapSelection
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping.bindings import KeyboardBinding
 from flitzis_looper.input_mapping.actions import LooperAction
@@ -71,11 +69,7 @@ class PianoProbe:
             self.project.pad_loop_auto[slot] = False
             self.project.pad_loop_start_s[slot] = 0.1
             self.project.pad_loop_end_s[slot] = 2.1
-        # Runtime publication always includes source-map intent. These scalar
-        # piano fixtures own a real neutral selection, without any map jobs.
-        self.loader = SimpleNamespace(source_beatmaps=SourceBeatmapSelection(
-            self.project, audio, ProjectAssetLifecycle(self.project, audio), lambda: None))
-        assert not any(intent.requested for intent in self.project.pad_source_sync_intent)
+        self.loader = SimpleNamespace()
         self.transport = TransportController(self.project, self.session, audio)
         self.storage = ExitStack()
         if mapping_path is None:
@@ -388,7 +382,6 @@ class PianoProbe:
         self.imgui_context = None
         if self.previous_context is not None:
             imgui.set_current_context(self.previous_context)
-        self.loader.source_beatmaps.shut_down()
         self.storage.close()
 "###;
 

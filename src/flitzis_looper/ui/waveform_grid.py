@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING
 from flitzis_looper.controller.scalar_grid import beat_duration_s, scalar_source_grid
 
 if TYPE_CHECKING:
-    from flitzis_looper_audio import ScalarSourceGrid, SourceBeatmapEditorLine
+    from flitzis_looper_audio import ScalarSourceGrid
 
 __all__ = [
     "WaveformGridLine",
     "beat_duration_s",
     "loop_beat_label",
-    "source_map_grid_lines",
     "visible_grid_lines",
     "waveform_view_start",
 ]
@@ -53,29 +52,6 @@ def loop_beat_label(beat: float) -> str:
     return f"~{label}" if "." not in label else label
 
 
-def source_map_grid_lines(
-    lines: list[SourceBeatmapEditorLine],
-) -> tuple[WaveformGridLine, ...]:
-    """Render Native-projected coordinates without reconstructing a source transform."""
-    projected = []
-    for line in lines:
-        source = line["source_seconds"]
-        beat = line["loop_beat"]
-        if not isinstance(source, (float, int)) or not isinstance(beat, (float, int)):
-            continue
-        if not math.isfinite(source) or not math.isfinite(beat) or beat == 0.0:
-            continue
-        projected.append(
-            WaveformGridLine(
-                source_s=float(source),
-                loop_beat=float(beat),
-                major=line["major"] is True,
-                reference=line["reference"] is True,
-            )
-        )
-    return tuple(projected)
-
-
 def _minor_step_beats(beat_s: float, px_per_s: float) -> float:
     for step in (1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0, 4.0, 16.0):
         if step * beat_s * px_per_s >= _MIN_MINOR_STEP_PX:
@@ -106,6 +82,7 @@ def _project_grid_lines(
     last_beat: float,
     loop_grid_beat: float,
     step_beats: float,
+    sample_rate_hz: int | None,
 ) -> dict[float, WaveformGridLine]:
     """Evaluate the bounded visible range and actual near-loop references."""
     every = _major_every(step_beats)
@@ -118,7 +95,7 @@ def _project_grid_lines(
         if source_s is None:
             continue
         projected[grid_beat] = WaveformGridLine(
-            source_s,
+            _display_source_s(source_s, sample_rate_hz),
             1.0 + grid_beat - loop_grid_beat,
             index % every == 0,
         )
@@ -128,12 +105,20 @@ def _project_grid_lines(
             if source_s is None:
                 continue
             projected[grid_beat] = WaveformGridLine(
-                source_s,
+                _display_source_s(source_s, sample_rate_hz),
                 1.0 + grid_beat - loop_grid_beat,
                 major=True,
                 reference=True,
             )
     return projected
+
+
+def _display_source_s(source_s: float, sample_rate_hz: int | None) -> float:
+    """Draw on the same absolute frame lattice as loop markers, including pre-roll."""
+    if sample_rate_hz is None or sample_rate_hz <= 0:
+        return source_s
+    frames = source_s * sample_rate_hz
+    return round(frames) / sample_rate_hz if math.isfinite(frames) else source_s
 
 
 def visible_grid_lines(
@@ -145,10 +130,12 @@ def visible_grid_lines(
     bpm: float | None = None,
     period_seconds: float | None = None,
     px_per_s: float,
+    sample_rate_hz: int | None = None,
 ) -> tuple[WaveformGridLine, ...]:
     """Project bounded scalar grid lines, retaining real beat zero/one references.
 
-    Grid positions always come from the source anchor. The selected loop changes
+    Musical positions always come from the source anchor; drawing rounds each
+    absolute boundary once to the loaded sample lattice. The selected loop changes
     only the displayed continuous coordinate ``1 + (source - loop_start) / beat``.
     """
     beat_s = beat_duration_s(bpm, period_seconds=period_seconds)
@@ -183,6 +170,7 @@ def visible_grid_lines(
         last_beat=last_beat,
         loop_grid_beat=loop_grid_beat,
         step_beats=step_beats,
+        sample_rate_hz=sample_rate_hz,
     )
     return tuple(
         sorted(

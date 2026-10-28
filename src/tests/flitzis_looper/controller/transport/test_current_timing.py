@@ -8,7 +8,7 @@ import pytest
 
 from flitzis_looper.models import BeatGrid, PadContentIdentity, SampleAnalysis
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
-from tests.flitzis_looper.controller.test_timing_hierarchy import (
+from tests.flitzis_looper.controller.bpm_lock_fixture import (
     BPM_REFERENCE_SOURCE_IDENTITY,
     _master_provenance,
 )

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.project_materials import original_asset, resolve_asset
-from flitzis_looper.source_beatmap_intent import SourceBeatmapReference
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -75,7 +74,6 @@ class AssignmentPublicationPlan:
         self._store_attempted = False
         self._applied = False
         self._retirement_index = 0
-        self._maps_acknowledged = False
 
     def _prepare_after(self) -> dict[tuple[str, int], tuple[Path, ProjectAssetLease]]:
         after = {}
@@ -117,11 +115,7 @@ class AssignmentPublicationPlan:
     @property
     def settled(self) -> bool:
         """Whether all old owners were released or transferred to the existing cleanup lane."""
-        return (
-            self.applied
-            and self._maps_acknowledged
-            and self._retirement_index == len(self._retired)
-        )
+        return self.applied and self._retirement_index == len(self._retired)
 
     @property
     def owns_unpublished_image(self) -> bool:
@@ -130,7 +124,6 @@ class AssignmentPublicationPlan:
 
     def _publish(self) -> None:
         if self.applied:
-            self._acknowledge_maps()
             return
         if (
             self._image[0] != self._desired
@@ -143,12 +136,6 @@ class AssignmentPublicationPlan:
         self._store_attempted = True
         _store_assignment_table(self._assets, self._publication_table, publication=self)
         self._applied = True
-        self._acknowledge_maps()
-
-    def _acknowledge_maps(self) -> None:
-        if not self._maps_acknowledged:
-            self._assets._acknowledge_source_maps(self._after)
-            self._maps_acknowledged = True
 
     @staticmethod
     def _lease_released(lease: ProjectAssetLease) -> bool:
@@ -294,7 +281,7 @@ class ProjectAssetLifecycle:
         """Acquire every current assignment before retiring removed assignments."""
         current = self._current_assignments()
         acquired = self._acquire_assignments(current, self._project)
-        self._publish_assignment_image(current, acquired, acknowledge_maps=False)
+        self._publish_assignment_image(current, acquired)
 
     def prepare_assignment_image(
         self, project: ProjectState
@@ -336,7 +323,6 @@ class ProjectAssetLifecycle:
         acquired: dict[tuple[str, int], tuple[Path, ProjectAssetLease]],
         *,
         preserve_previous: bool = False,
-        acknowledge_maps: bool = True,
     ) -> None:
         retired: list[tuple[str, Path, ProjectAssetLease]] = []
         for key, path in current.items():
@@ -349,8 +335,6 @@ class ProjectAssetLifecycle:
         for key in self._assignments.keys() - current.keys():
             path, lease = self._assignments.pop(key)
             retired.append((key[0], path, lease))
-        if acknowledge_maps:
-            self._acknowledge_source_maps(self._assignments)
         current_paths = set(current.values())
         for kind, path, lease in retired:
             if preserve_previous or path in current_paths:
@@ -366,11 +350,6 @@ class ProjectAssetLifecycle:
         try:
             for key, path in tuple(current.items()):
                 previous = self._assignments.get(key)
-                if key[0] == "source_beatmap":
-                    lease = self._prepare_map_row(current, key, path, project)
-                    if lease is not None:
-                        acquired[key] = (path, lease)
-                    continue
                 if previous is None or previous[0] != path:
                     acquired[key] = (path, self.acquire(path))
         except OSError, RuntimeError, ValueError:
@@ -378,73 +357,6 @@ class ProjectAssetLifecycle:
                 lease.release()
             raise
         return acquired
-
-    def _prepare_map_row(
-        self,
-        current: dict[tuple[str, int], Path],
-        key: tuple[str, int],
-        path: Path,
-        project: ProjectState,
-    ) -> ProjectAssetLease | None:
-        intent = project.pad_source_beatmap_intent[key[1]]
-        if intent is None or intent.selected is None:
-            message = "Map assignment lacks its exact candidate receipt"
-            raise ValueError(message)
-        previous = self._assignments.get(key)
-        try:
-            return self._prepare_map_assignment(intent.selected, path, previous)
-        except (OSError, RuntimeError, ValueError) as error:
-            if not self._historical_map_reference(intent.selected):
-                raise
-            # Preserve valid saved intent and all unrelated source/scalar state
-            # without fabricating a pin, ACK or qualification for an unsafe row.
-            self._record_error(path, f"Saved map retention unavailable: {error}")
-            if previous is None or previous[0] != path or previous[1].released:
-                current.pop(key)
-            return None
-
-    def _historical_map_reference(self, reference: SourceBeatmapReference) -> bool:
-        return any(
-            intent is not None and intent.selected == reference
-            for intent in self._project.pad_source_beatmap_intent
-        )
-
-    def _prepare_map_assignment(
-        self,
-        reference: SourceBeatmapReference,
-        path: Path,
-        previous: tuple[Path, ProjectAssetLease] | None,
-    ) -> ProjectAssetLease | None:
-        same_path = previous is not None and previous[0] == path
-        if previous is not None and same_path and previous[1].source_beatmap_bound:
-            # Exact rebinding refuses contradictory metadata without disturbing
-            # cached custody, even if historical backing has since disappeared.
-            previous[1].bind_source_beatmap(reference.model_dump_json())
-            return None
-        historical = self._historical_map_reference(reference)
-        if historical:
-            try:
-                lease = self.acquire(path)
-            except OSError, RuntimeError, ValueError:
-                # A safely acquired generation is retention only when the leaf
-                # cannot be inspected. Native still rejects every reparse path.
-                return self.acquire(path.parent) if not same_path else None
-            try:
-                lease.bind_source_beatmap(reference.model_dump_json())
-            except OSError, RuntimeError, ValueError:
-                # A historical reference remains intent when its backing is
-                # missing/corrupt. Keep its transient path pin; Loader separately
-                # reports failed fresh restoration. No saved ACK is inferred.
-                if same_path:
-                    lease.release()
-                    return None
-                return lease
-        else:
-            lease = self._acquire_map(reference)
-        if same_path and not lease.source_beatmap_bound:
-            lease.release()
-            return None
-        return lease
 
     def prepare_original(
         self, source: str, delivered: ProjectAssetLease | None = None
@@ -499,41 +411,8 @@ class ProjectAssetLifecycle:
         path = asset.path
         with self._retirement_lock:
             lease = self._audio.acquire_project_asset_lease(str(path))
-            if not asset.kind.startswith("source_beatmap_"):
-                self._cancel_retirements_locked(path)
+            self._cancel_retirements_locked(path)
             return lease
-
-    def _acquire_map(self, reference: SourceBeatmapReference) -> ProjectAssetLease:
-        """Bind a compact historical receipt to a checked reader without saved-map ACK."""
-        reference = SourceBeatmapReference.model_validate(reference)
-        asset = resolve_asset(reference.reference, project_root=self._root)
-        if asset.kind != "source_beatmap_artifact":
-            message = "Map assignment requires an exact typed map artifact"
-            raise ValueError(message)
-        lease = self.acquire(asset.path)
-        try:
-            lease.bind_source_beatmap(reference.model_dump_json())
-        except OSError, RuntimeError, TypeError, ValueError:
-            lease.release()
-            raise
-        return lease
-
-    def _acknowledge_source_maps(
-        self, assignments: dict[tuple[str, int], tuple[Path, ProjectAssetLease]]
-    ) -> None:
-        for key, row in assignments.items():
-            kind, _ = key
-            path, lease = row
-            if kind == "source_beatmap":
-                if (
-                    lease.released
-                    or self._assignments.get(key) is not row
-                    or not lease.source_beatmap_bound
-                ):
-                    continue
-                lease.acknowledge_source_beatmap()
-                with self._retirement_lock:
-                    self._cancel_retirements_locked(path)
 
     def _cancel_retirements_locked(self, path: Path) -> None:
         targets = {path}
@@ -634,10 +513,7 @@ class ProjectAssetLifecycle:
         path, recursive = key
         try:
             asset = resolve_asset(path, project_root=self._root)
-            if asset.kind.startswith("source_beatmap_"):
-                self._queue_map_retirement(key, asset.kind)
-            else:
-                self._audio.retire_project_asset(str(asset.path), recursive=recursive)
+            self._audio.retire_project_asset(str(asset.path), recursive=recursive)
         except (OSError, RuntimeError, ValueError) as error:
             self._record_error(path, str(error))
             if self._retryable_admission(error):
@@ -646,14 +522,6 @@ class ProjectAssetLifecycle:
             self.retirement_errors.pop(path, None)
         for lease in self._pending.pop(key):
             lease.release()
-
-    def _queue_map_retirement(self, key: tuple[Path, bool], kind: str) -> None:
-        _, recursive = key
-        owners = self._pending[key]
-        if kind != "source_beatmap_artifact" or recursive or not owners:
-            message = "Map retirement requires its exact bound artifact lease"
-            raise ValueError(message)
-        owners[0].retire_source_beatmap()
 
     def _record_error(self, path: Path, message: str) -> None:
         if (
@@ -696,12 +564,6 @@ class ProjectAssetLifecycle:
             path = self._stem_assignment_path(sample_id, entry, project)
             if path is not None:
                 result["stems", sample_id] = path
-        for sample_id, intent in enumerate(project.pad_source_beatmap_intent):
-            if intent is not None and intent.selected is not None:
-                reference = SourceBeatmapReference.model_validate(intent.selected)
-                # This is declared intent, not file qualification. Actual native
-                # acquisition below checks the leaf or its safe generation pin.
-                result["source_beatmap", sample_id] = self._absolute_path(Path(reference.reference))
         return result
 
     def _stem_assignment_path(
@@ -770,12 +632,6 @@ class ProjectAssetLifecycle:
     ) -> None:
         if kind == "original":
             self.retire(path, lease=lease)
-        elif kind == "source_beatmap":
-            if lease.source_beatmap_bound:
-                self.retire(path, lease=lease)
-            else:
-                # Historical unbound retention never confers deletion authority.
-                lease.release()
         elif path.name.startswith(".ready-"):
             self.retire(path, recursive=True, lease=lease)
         else:

@@ -1427,7 +1427,7 @@ fn public_bpm_before_voice_birth(
 from flitzis_looper.controller.transport import TransportController
 class BpmTransportAudio:
     def __getattr__(self, name):
-        if name in {'current_constant_timing', 'current_input_runtime_pad_binding', 'global_rate_status', 'set_bpm_lock', 'bpm_lock_status', 'bootstrap_transport_from_pad',
+        if name in {'current_constant_timing', 'current_input_runtime_pad_binding', 'global_rate_status', 'set_bpm_lock', 'bpm_lock_status',
                     'set_master_period', 'set_speed_and_master_period'}:
             return getattr(bpm_audio, name)
         return getattr(playback_audio, name)
@@ -1619,20 +1619,6 @@ impl PublicBpmAudio {
 
     fn bpm_lock_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         crate::audio_engine::bpm_lock_status_with_producer(&self.engine, py, &self.producer)
-    }
-
-    fn bootstrap_transport_from_pad(&self, id: usize) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(pyo3::exceptions::PyValueError::new_err("id out of range"));
-        }
-        let _requests = self.engine.pad_request_ids.lock().unwrap();
-        crate::audio_engine::push_global_timing_message(
-            &self.engine.global_timing_revision,
-            &self.engine.input_runtime_ownership.global_timing_publishing,
-            &mut self.producer.lock().unwrap(),
-            ControlMessage::BootstrapTransportFromPad { id },
-            "BootstrapTransportFromPad",
-        )
     }
 
     #[pyo3(signature = (period_seconds, *, anchor_binding=None))]
@@ -6892,7 +6878,7 @@ assert audio.worker_call_count() == source_worker_calls
             .source_playback
             .phase_reference_current(&launch_timeline)
     );
-    assert!(!current.phase_launch_qualified);
+    assert!(!current.launch_qualified);
     assert_eq!(playback.callback.feedback.events.len(), feedback_before + 1);
     expected_started.assert_message(&playback.callback.feedback.events[feedback_before]);
     assert!(
@@ -8482,7 +8468,7 @@ for _ in range(16):
             .source_playback
             .phase_reference_current(&launch_timeline)
     );
-    assert!(!new_voice.phase_launch_qualified);
+    assert!(!new_voice.launch_qualified);
     assert!(
         other_voice(&playback.callback.mixer)
             .source_playback

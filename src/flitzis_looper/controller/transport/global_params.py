@@ -23,7 +23,6 @@ from flitzis_looper.models import (
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
     TRIGGER_QUANTIZATION_STEPS,
 )
-from flitzis_looper.timing_policy import advance_global_timing_policy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -371,10 +370,8 @@ class GlobalParametersController:
             raise TypeError(message)
         if self._project.multi_loop is enabled:
             return
-        policy = advance_global_timing_policy(self._project.global_timing_policy)
         self._transport.stage_multi_loop_cancellation(enabled=enabled)
         self._project.multi_loop = enabled
-        self._project.global_timing_policy = policy
         self._begin_bpm_lock_application(capture_anchor=enabled and self._project.bpm_lock)
         self._transport._mark_project_changed()
         self.poll_bpm_lock_application()
@@ -455,14 +452,12 @@ class GlobalParametersController:
             raise TypeError(message)
         if enabled == self._project.bpm_lock:
             return
-        if not self._project.multi_loop or self._project.timing_policy_recovery:
+        if not self._project.multi_loop:
             message = "BPM Lock requires available Multi Loop timing."
             raise ValueError(message)
-        policy = advance_global_timing_policy(self._project.global_timing_policy)
         if enabled:
             self._transport.ensure_pad_edit_allowed(self._project.selected_pad)
         self._project.bpm_lock = enabled
-        self._project.global_timing_policy = policy
         self._begin_bpm_lock_application(capture_anchor=enabled)
         self._transport._mark_project_changed()
         self.poll_bpm_lock_application()

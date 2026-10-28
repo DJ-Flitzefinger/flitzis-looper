@@ -32,6 +32,8 @@ For focused areas:
 | File | Purpose |
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
+| `constant-bpm-guide.md` | Current BPM Lock, loop, Tap BPM, device labels and fresh-project workflow. |
+| `sync-archive.md` | Preserved SYNC-REALTIME-BPM branch and accepted constant-tempo baseline. |
 | `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
 | `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
 | `pad-content-copy.md` | Complete empty-target musical Copy, durable stem intent, own Native acceptance, independent shared custody and close settlement. |
@@ -60,7 +62,7 @@ For focused areas:
 | `selected-backend-bpm.md` | Frozen complete-sequence/representative-region BPM metadata, shared G2 fitting, diagnostic integration and unverified evaluation limits. |
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
-| `beatmap-sync-design.md` | Selected gated Beat This migration, shared-map architecture, current independent source-SYNC control and remaining continuous Native integration/acceptance boundaries. |
+| `beatmap-sync-design.md` | Historical source-SYNC design, retained for recovery from the archive branch. |
 | `accepted-map-render-comparison.md` | Measured shared-map renderer comparison, retained acoustic failures, unsupported combinations and limits before live adoption. |
 | `../openspec/changes/probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |

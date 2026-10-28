@@ -1,36 +1,7 @@
 //! Copied phase metadata, never source or publication authority.
 //! Intentional launch history and requested grid axes have distinct purposes.
 
-use super::source_beatmap::CanonicalBeatSegment;
 use super::transport::TransportTimeline;
-
-/// Requested loaded-frame grid zero plus its captured Native timing authority.
-/// This copied identity is not an acknowledgement of source or timing adoption.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct GridPhaseOrigin {
-    pub(crate) frame_bits: u64,
-    pub(crate) authority_revision: u64,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GridPhaseTarget {
-    pub(crate) origin: GridPhaseOrigin,
-    pub(crate) inverse: CanonicalBeatSegment,
-}
-
-impl GridPhaseTarget {
-    pub(crate) fn matches_exact(self, other: Self) -> bool {
-        self.origin == other.origin && self.inverse.matches_exact(other.inverse)
-    }
-}
-
-pub(crate) fn same_grid_target(a: Option<GridPhaseTarget>, b: Option<GridPhaseTarget>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => a.matches_exact(b),
-        _ => false,
-    }
-}
 
 /// Existing work-owner data: future M(T) is a prediction until actual effect.
 #[derive(Clone, Copy, Debug, Default)]
@@ -77,12 +48,6 @@ pub(crate) enum LoopPhaseReference {
         frame: u64,
         master: f64,
     },
-    Mapped {
-        generation: u64,
-        frame: u64,
-        master: f64,
-        start_inverse: CanonicalBeatSegment,
-    },
 }
 
 impl LoopPhaseReference {
@@ -111,12 +76,6 @@ impl LoopPhaseReference {
                 generation,
                 frame,
                 master,
-            }
-            | Self::Mapped {
-                generation,
-                frame,
-                master,
-                ..
             } => Some((generation, frame, master)),
         }
     }
@@ -127,29 +86,6 @@ impl LoopPhaseReference {
                 && master.is_finite()
                 && timeline.beat_projection().is_some()
         })
-    }
-
-    pub(crate) fn qualify(self, start_inverse: CanonicalBeatSegment) -> Self {
-        let Some((generation, frame, master)) = self.parts() else {
-            return Self::Unavailable;
-        };
-        Self::Mapped {
-            generation,
-            frame,
-            master,
-            start_inverse,
-        }
-    }
-
-    pub(crate) fn mapped_parts(self) -> Option<(f64, CanonicalBeatSegment)> {
-        match self {
-            Self::Mapped {
-                master,
-                start_inverse,
-                ..
-            } => Some((master, start_inverse)),
-            _ => None,
-        }
     }
 
     pub(crate) fn rebind_birth(
@@ -172,27 +108,13 @@ impl LoopPhaseReference {
     }
 
     pub(crate) fn matches_exact(self, other: Self) -> bool {
-        let same_parts = match (self.parts(), other.parts()) {
+        match (self.parts(), other.parts()) {
             (None, None) => true,
             (Some((ag, af, am)), Some((bg, bf, bm))) => {
                 ag == bg && af == bf && am.to_bits() == bm.to_bits()
             }
             _ => false,
-        };
-        same_parts
-            && match (self, other) {
-                (Self::Unavailable, Self::Unavailable)
-                | (Self::Launch { .. }, Self::Launch { .. }) => true,
-                (
-                    Self::Mapped {
-                        start_inverse: a, ..
-                    },
-                    Self::Mapped {
-                        start_inverse: b, ..
-                    },
-                ) => a.matches_exact(b),
-                _ => false,
-            }
+        }
     }
 }
 

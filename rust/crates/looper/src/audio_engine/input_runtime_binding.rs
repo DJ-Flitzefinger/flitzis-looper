@@ -22,8 +22,8 @@ use std::sync::{
 
 #[path = "key_lock_status.rs"]
 mod key_lock_status;
+pub(crate) use key_lock_status::KeyLockStatus;
 use key_lock_status::KeyLockStatusSlot;
-pub(crate) use key_lock_status::{KeyLockStatus, SourceSyncStatus, SourceSyncWitness};
 mod ordinary_custody;
 #[path = "input_runtime_binding/pair_control.rs"]
 mod pair_control;
@@ -240,8 +240,6 @@ impl Default for CurrentSourceFence {
 pub(crate) struct InputRuntimeOwnership {
     // Desired Native runtime projection only; never an audio/rate clock. Zero is
     // sticky exhaustion. The existing runtime mutex serializes its control writers.
-    runtime_policy_revision: AtomicU64,
-    pub(crate) runtime_policy_retry: super::runtime_policy_retry::RuntimePolicyRetryRegistry,
     pub(super) key_lock_start_policy: Arc<super::key_lock_start_policy::KeyLockStartPolicy>,
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
@@ -287,9 +285,6 @@ pub(crate) struct InputRuntimeOwnership {
 impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
-            runtime_policy_revision: AtomicU64::new(1),
-            runtime_policy_retry: super::runtime_policy_retry::RuntimePolicyRetryRegistry::default(
-            ),
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
@@ -328,23 +323,6 @@ impl Default for InputRuntimeOwnership {
 }
 
 impl InputRuntimeOwnership {
-    pub(crate) fn runtime_policy_revision(&self) -> Option<u64> {
-        let revision = self.runtime_policy_revision.load(Ordering::Acquire);
-        (revision != 0).then_some(revision)
-    }
-
-    /// Commit after actual Native row writes, under the existing runtime mutex.
-    /// Exhaustion closes only live-policy adoption; legacy controls still work.
-    pub(crate) fn publish_runtime_policy_revision(&self) {
-        let previous = self.runtime_policy_revision.load(Ordering::Relaxed);
-        let next = if previous == 0 {
-            0
-        } else {
-            previous.checked_add(1).unwrap_or(0)
-        };
-        self.runtime_policy_revision.store(next, Ordering::Release);
-    }
-
     pub(crate) fn source_request_for_cell(&self, cell: ContentCell) -> u64 {
         self.source_requests[cell.index()].load(Ordering::Acquire)
     }
@@ -666,22 +644,6 @@ impl InputRuntimeOwnership {
         }
     }
 
-    pub(crate) fn publish_callback_source_sync_status(&self, id: usize, status: SourceSyncStatus) {
-        let Some(cell) = self.callback_cell(id) else {
-            return;
-        };
-        let source = &self.sources[cell.index()];
-        if self
-            .callback_feedback_key(id)
-            .is_some_and(|key| key.lifetime() == status.content_lifetime)
-            && (!self.source_tracking
-                || (source.generation.load(Ordering::SeqCst) == status.source_generation
-                    && source.address.load(Ordering::SeqCst) == status.source_address
-                    && source.window_revision.load(Ordering::SeqCst) == status.window_revision))
-        {
-            self.key_lock[cell.index()].publish_source_sync(status);
-        }
-    }
     pub(crate) fn slot_snapshot_fields_current(&self, snapshot: SlotSnapshot) -> bool {
         self.placement.snapshot_fields_current(
             self.owner_identity(),
@@ -1693,17 +1655,6 @@ impl InputRuntimeOwnership {
             .then_some(again)
     }
 
-    pub(crate) fn source_sync_status(&self, id: usize) -> Option<SourceSyncStatus> {
-        let placement = self.slot_snapshot(id)?;
-        let source = &self.sources[placement.cell().index()];
-        let status = self.key_lock[placement.cell().index()].read_source_sync()?;
-        (self.slot_snapshot_fields_current(placement)
-            && placement.lifetime() == status.content_lifetime
-            && source.generation.load(Ordering::SeqCst) == status.source_generation
-            && source.address.load(Ordering::SeqCst) == status.source_address
-            && source.window_revision.load(Ordering::SeqCst) == status.window_revision)
-            .then_some(status)
-    }
     #[cfg(test)]
     pub(crate) fn mark_launch_admitted(&self, id: usize) {
         if let Some(snapshot) = self.slot_snapshot(id) {
@@ -2274,40 +2225,6 @@ impl InputRuntimeOwnership {
 
 const CONTROL_LAUNCH_PUBLICATION_ATTEMPTS: usize = 64;
 
-#[cfg(test)]
-mod runtime_policy_revision_tests {
-    use super::*;
-    #[test]
-    fn exhausted_runtime_policy_stamp_is_sticky_without_disabling_legacy_publication() {
-        let ownership = Arc::new(InputRuntimeOwnership::default());
-        ownership
-            .runtime_policy_revision
-            .store(u64::MAX, Ordering::Release);
-        ownership.publish_runtime_policy_revision();
-        assert_eq!(ownership.runtime_policy_revision(), None);
-        ownership.publish_runtime_policy_revision();
-        assert_eq!(ownership.runtime_policy_revision(), None);
-        let (producer, mut consumer) = rtrb::RingBuffer::new(1);
-        let runtime = crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
-            Arc::new(Mutex::new(producer)),
-            crate::audio_engine::timing::InputClock::new(),
-            ownership.clone(),
-        );
-        runtime
-            .set_runtime_state(
-                true,
-                vec![false; NUM_SAMPLES],
-                vec![0.0; NUM_SAMPLES],
-                vec![None; NUM_SAMPLES],
-                vec![None; NUM_SAMPLES],
-            )
-            .unwrap();
-        runtime.request_runtime_policy_adoption().unwrap();
-        assert!(consumer.pop().is_err());
-        assert_eq!(ownership.runtime_policy_revision(), None);
-    }
-}
-
 /// Off-realtime only. The caller keeps its original producer guard across every fresh
 /// whole-set preflight/claim. Brief Pending contention yields; other failures never retry.
 fn retry_control_launch_publication<T>(
@@ -2499,15 +2416,13 @@ pub struct InputRuntimePadBinding {
     pub(super) ownership: Arc<InputRuntimeOwnership>,
     pub(super) acknowledgements: Arc<CurrentTimingAcknowledgements>,
     accepted: Option<CurrentConstantTimingRecord>,
-    source_map: super::source_map_admission::SourceMapLaunchSnapshot,
+    // Original capture witness; a later Stop/Clear must not be inherited.
+    launch_revision: u64,
 }
 
 impl InputRuntimePadBinding {
-    /// Launch-only map witness; physical preparation keeps its existing currentness contract.
-    pub(crate) fn source_map_launch_snapshot(
-        &self,
-    ) -> super::source_map_admission::SourceMapLaunchSnapshot {
-        self.source_map.clone()
+    pub(crate) fn launch_revision(&self) -> u64 {
+        self.launch_revision
     }
 
     /// Already admitted work keeps its original source and timing owners through placement.
@@ -2566,8 +2481,17 @@ impl InputRuntimePadBinding {
         if ownership.content_lifetime(id) == 0 {
             ownership.publish_content_lifetime(id, super::content_lifetime::reserve().unwrap());
         }
-        let mut captured = Self {
+        let launch_revision = ownership
+            .slot_snapshot(id)
+            .map(|placement| {
+                ownership
+                    .launch_revision_for_cell(placement.cell())
+                    .load(Ordering::Acquire)
+            })
+            .unwrap_or(u64::MAX);
+        let captured = Self {
             id,
+            launch_revision,
             source_generation: 1,
             content_lifetime: ownership.content_lifetime(id),
             source_digest: "a".repeat(64),
@@ -2587,12 +2511,8 @@ impl InputRuntimePadBinding {
             ownership,
             acknowledgements: Arc::default(),
             accepted: None,
-            source_map: super::source_map_admission::SourceMapLaunchSnapshot::unavailable(),
         };
-        captured.source_map = super::source_map_admission::SourceMapLaunchSnapshot::scalar(
-            &captured.ownership,
-            captured.binding,
-        );
+
         captured
     }
     pub(super) fn current(&self) -> bool {
@@ -2858,8 +2778,13 @@ pub(super) fn capture_under_request_lock(
     {
         return Ok(None);
     }
-    let mut captured = InputRuntimePadBinding {
+    let launch_revision = engine
+        .input_runtime_ownership
+        .launch_revision_for_cell(placement.cell())
+        .load(Ordering::Acquire);
+    let captured = InputRuntimePadBinding {
         id,
+        launch_revision,
         source_generation: generation,
         content_lifetime: engine.input_runtime_ownership.content_lifetime(id),
         source_digest: digest.clone(),
@@ -2879,24 +2804,14 @@ pub(super) fn capture_under_request_lock(
         ownership: engine.input_runtime_ownership.clone(),
         acknowledgements: engine.current_timing_acknowledgements.clone(),
         accepted,
-        source_map: super::source_map_admission::SourceMapLaunchSnapshot::unavailable(),
     };
-    // The caller still holds pad_requests. Do not add cache -> runtime-state
-    // lock nesting when capturing the selected map's independent launch witness.
+    // Drop source/cache readers before returning the captured ordinary binding.
     drop(all_records);
     drop(digests);
     drop(generations);
     drop(cache);
     drop(intents);
-    captured.source_map = match engine.input_runtime.as_ref() {
-        Some(runtime) => runtime
-            .source_map_snapshot_for_binding(&captured)
-            .map_err(PyRuntimeError::new_err)?,
-        None => super::source_map_admission::SourceMapLaunchSnapshot::scalar(
-            &captured.ownership,
-            captured.binding,
-        ),
-    };
+
     Ok(Some(captured))
 }
 

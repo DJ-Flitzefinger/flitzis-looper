@@ -12,7 +12,6 @@ use super::complete_context::{CompleteSourceReader, NativeAnalysisOwner};
 use super::content_placement::PlacementObservation;
 #[cfg(test)]
 use super::next_pad_request_id;
-use super::source_beatmap::SourceBeatmap;
 use super::{PadRequestAdvance, current_pad_request_id, pad_request_matches};
 use crate::messages::{BackgroundTaskKind, CompleteSourceIdentity, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis as analysis;
@@ -23,39 +22,13 @@ use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc::Sender};
+use std::sync::{Arc, Mutex, Weak, mpsc::Sender};
 
 const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
 
 #[path = "corrected_legacy.rs"]
 mod corrected_legacy;
-
-#[path = "source_beatmap_job.rs"]
-mod source_beatmap_job;
-use source_beatmap_job::PreparedMap;
-
-#[path = "source_beatmap_async.rs"]
-mod source_beatmap_async;
-use source_beatmap_async::AsyncMapStatus;
-
-#[path = "source_beatmap_neural.rs"]
-pub(super) mod source_beatmap_neural;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OfflinePurpose {
-    Analysis,
-    SourceBeatmap,
-}
-
-impl OfflinePurpose {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Analysis => "analysis",
-            Self::SourceBeatmap => "source_beatmap",
-        }
-    }
-}
 
 /// Shared current-request publication boundary and its actual callback freshness epoch.
 pub(super) struct OfflineRequestOwner {
@@ -115,17 +88,7 @@ impl OfflineJobs {
         owner: OfflineRequestOwner,
         tx: Sender<LoaderEvent>,
     ) -> Result<OfflineAnalysisJob, String> {
-        self.begin_input(
-            id,
-            sample,
-            rate,
-            source_generation,
-            owner,
-            tx,
-            None,
-            OfflinePurpose::Analysis,
-            None,
-        )
+        self.begin_input(id, sample, rate, source_generation, owner, tx, None)
     }
 
     pub(super) fn begin_complete(
@@ -150,37 +113,6 @@ impl OfflineJobs {
             owner,
             tx,
             Some(reader),
-            OfflinePurpose::Analysis,
-            None,
-        )
-    }
-
-    pub(super) fn begin_source_beatmap(
-        &self,
-        id: usize,
-        reader: CompleteSourceReader,
-        loaded_source: (u64, u32),
-        owner: OfflineRequestOwner,
-        tx: Sender<LoaderEvent>,
-        raw_review: Option<super::source_beatmap_raw::RawReviewLease>,
-    ) -> Result<OfflineAnalysisJob, String> {
-        let (source_generation, rate) = loaded_source;
-        if reader.guard.as_ref().is_none_or(|guard| {
-            !guard.current() || guard.generation != source_generation || guard.rate != rate
-        }) {
-            return Err("source beatmap assignment changed before admission".into());
-        }
-        reader.require_map_custody()?;
-        self.begin_input(
-            id,
-            reader.reference.clone(),
-            rate,
-            source_generation,
-            owner,
-            tx,
-            Some(reader),
-            OfflinePurpose::SourceBeatmap,
-            raw_review,
         )
     }
 
@@ -194,8 +126,6 @@ impl OfflineJobs {
         owner: OfflineRequestOwner,
         tx: Sender<LoaderEvent>,
         reader: Option<CompleteSourceReader>,
-        purpose: OfflinePurpose,
-        raw_review: Option<super::source_beatmap_raw::RawReviewLease>,
     ) -> Result<OfflineAnalysisJob, String> {
         let OfflineRequestOwner {
             request_ids,
@@ -236,56 +166,36 @@ impl OfflineJobs {
                     .map_err(|e| e.to_string())?,
             )
         };
-        let staging = match purpose {
-            OfflinePurpose::Analysis => {
-                let plan = snapshot.staging_plan(rate)?;
-                if plan.export_peak_bytes.max(plan.key_peak_bytes) > MAX_PCM_BYTES
-                    || plan.export_bytes > MAX_PCM_BYTES
-                {
-                    return Err("offline analysis PCM byte limit exceeded".into());
-                }
-                Some(plan)
-            }
-            OfflinePurpose::SourceBeatmap => None,
-        };
+        let plan = snapshot.staging_plan(rate)?;
+        if plan.export_peak_bytes.max(plan.key_peak_bytes) > MAX_PCM_BYTES
+            || plan.export_bytes > MAX_PCM_BYTES
+        {
+            return Err("offline analysis PCM byte limit exceeded".into());
+        }
+        let staging = Some(plan);
         let retained_bytes = snapshot.retained_bytes()?;
         let mut requests = request_ids.lock().map_err(|_| "request lock poisoned")?;
         if source_guard.as_ref().is_some_and(|guard| !guard.current()) {
             return Err("complete analysis source assignment changed before admission".into());
         }
-        let request_id = match purpose {
-            OfflinePurpose::Analysis => {
-                let logical_advance = request_owner
-                    .as_ref()
-                    .map(|(ownership, _)| ownership.prepare_source_request_advance(id))
-                    .transpose()?;
-                let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)?;
-                if let Some(logical_advance) = logical_advance {
-                    logical_advance.commit();
-                }
-                advance.commit()
-            }
-            // Data validation owns no audio or selected-map effect. Snapshot the
-            // real source request without invalidating sealed starts/retriggers.
-            OfflinePurpose::SourceBeatmap => requests[id],
-        };
+        let logical_advance = request_owner
+            .as_ref()
+            .map(|(ownership, _)| ownership.prepare_source_request_advance(id))
+            .transpose()?;
+        let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)?;
+        if let Some(logical_advance) = logical_advance {
+            logical_advance.commit();
+        }
+        let request_id = advance.commit();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let native_owner = source_guard.map(|guard| {
-            let owner = NativeAnalysisOwner::new(guard, prepared_epoch.clone());
-            match purpose {
-                OfflinePurpose::Analysis => owner,
-                OfflinePurpose::SourceBeatmap => owner.with_cancellation(cancelled.clone()),
-            }
-        });
+        let native_owner =
+            source_guard.map(|guard| NativeAnalysisOwner::new(guard, prepared_epoch.clone()));
         drop(requests);
         let identity = PcmIdentity {
             request_id,
             ..identity
         };
         let state = Arc::new(JobState {
-            raw_review_receipt: raw_review.as_ref().map(|lease| lease.receipt()),
-            raw_review: Mutex::new(raw_review),
-            purpose,
             identity,
             rate,
             frames,
@@ -310,8 +220,6 @@ impl OfflineJobs {
             legacy_started: AtomicBool::new(false),
             legacy_running: AtomicBool::new(false),
             legacy_result: Mutex::new(None),
-            prepared_map: Mutex::new(None),
-            async_map: OnceLock::new(),
             finished: AtomicBool::new(false),
             transitions: Mutex::new(()),
             busy: self.busy.clone(),
@@ -320,10 +228,7 @@ impl OfflineJobs {
         });
         self.busy.store(true, Ordering::Release);
         *slot = Arc::downgrade(&state);
-        state.progress(match purpose {
-            OfflinePurpose::Analysis => "Preparing offline analysis",
-            OfflinePurpose::SourceBeatmap => "Preparing source beatmap",
-        });
+        state.progress("Preparing offline analysis");
         Ok(OfflineAnalysisJob { state: Some(state) })
     }
 }
@@ -389,9 +294,6 @@ impl OfflineInput {
 }
 
 struct JobState {
-    raw_review: Mutex<Option<super::source_beatmap_raw::RawReviewLease>>,
-    raw_review_receipt: Option<Arc<super::source_beatmap_raw::RawReviewReceipt>>,
-    purpose: OfflinePurpose,
     identity: PcmIdentity,
     rate: u32,
     frames: usize,
@@ -419,8 +321,6 @@ struct JobState {
     legacy_started: AtomicBool,
     legacy_running: AtomicBool,
     legacy_result: Mutex<Option<String>>,
-    prepared_map: Mutex<Option<PreparedMap>>,
-    async_map: OnceLock<Arc<AsyncMapStatus>>,
     finished: AtomicBool,
     transitions: Mutex<()>,
     busy: Arc<AtomicBool>,
@@ -429,18 +329,7 @@ struct JobState {
 }
 
 impl JobState {
-    fn require_purpose(&self, purpose: OfflinePurpose) -> Result<(), String> {
-        if self.purpose != purpose {
-            return Err(format!(
-                "offline operation requires {} purpose",
-                purpose.label()
-            ));
-        }
-        Ok(())
-    }
-
     fn analysis_staging(&self) -> Result<PcmStagingPlan, String> {
-        self.require_purpose(OfflinePurpose::Analysis)?;
         self.staging
             .ok_or_else(|| "analysis staging unavailable".into())
     }
@@ -465,12 +354,6 @@ impl JobState {
     }
 
     fn cancel_request(&self) -> Result<(), String> {
-        if self.purpose == OfflinePurpose::SourceBeatmap {
-            // The original token also fences queued DTOs and pending mirrors.
-            // A data-only cancellation must not revoke unrelated playback work.
-            self.cancelled.store(true, Ordering::Release);
-            return Ok(());
-        }
         // Serialize cancellation against publication. Invalidating the request
         // also rejects a queued completion if cancellation wins the race.
         if self.finished.load(Ordering::Acquire) {
@@ -520,10 +403,6 @@ impl JobState {
 
     fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
-            || self
-                .async_map
-                .get()
-                .is_some_and(|status| status.shutdown_requested())
             || self
                 .native_owner
                 .as_ref()
@@ -654,7 +533,6 @@ impl JobState {
     }
 
     fn corrected_legacy(&self, analyzer_output: Option<&str>) -> Result<String, String> {
-        self.require_purpose(OfflinePurpose::Analysis)?;
         let transition = self
             .transitions
             .lock()
@@ -710,7 +588,6 @@ impl JobState {
     }
 
     fn finish_result(&self, result: &str, legacy: bool) -> Result<bool, String> {
-        self.require_purpose(OfflinePurpose::Analysis)?;
         let _transition = self
             .transitions
             .lock()
@@ -782,18 +659,11 @@ impl JobState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         self.retained_source_bytes.store(0, Ordering::Release);
-        // Arm/submit failure and last Python handle release use this same
-        // actual cleanup. Long-lived status handles retain only the receipt.
-        self.raw_review
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
     }
 
     /// Close native PCM owners before filesystem cleanup, retaining admission.
     /// The supervisor calls this only after both branch readers have stopped.
     fn retire_pcm(&self) -> Result<(), String> {
-        self.require_purpose(OfflinePurpose::Analysis)?;
         let _transition = self
             .transitions
             .lock()
@@ -926,9 +796,6 @@ pub struct OfflineAnalysisJob {
 impl OfflineAnalysisJob {
     pub fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
-        if self.state().purpose == OfflinePurpose::SourceBeatmap {
-            dict.set_item("purpose", self.state().purpose.label())?;
-        }
         dict.set_item("pad_id", self.state().identity.pad_id)?;
         dict.set_item("request_id", self.state().identity.request_id)?;
         dict.set_item("source_id", &self.state().identity.source_id)?;
@@ -937,9 +804,7 @@ impl OfflineAnalysisJob {
         dict.set_item("frame_count", self.state().frames)?;
         dict.set_item("channels", self.state().channels)?;
         dict.set_item("origin_seconds", 0.0)?;
-        if self.state().purpose == OfflinePurpose::Analysis {
-            dict.set_item("mono_rule", MONO_RULE)?;
-        }
+        dict.set_item("mono_rule", MONO_RULE)?;
         if let Some(source) = self.state().complete_source.as_ref() {
             let digest = |bytes: &[u8; 32]| {
                 bytes
@@ -1024,11 +889,6 @@ impl OfflineAnalysisJob {
             .transitions
             .lock()
             .map_err(|_| PyRuntimeError::new_err("offline transition lock poisoned"))?;
-        if state.async_map.get().is_some() {
-            return Err(PyRuntimeError::new_err(
-                "asynchronous source beatmap owns its queued retirement",
-            ));
-        }
         if state.preparing.load(Ordering::Acquire)
             || state.key_started.load(Ordering::Acquire)
             || state.legacy_started.load(Ordering::Acquire)
@@ -1038,11 +898,6 @@ impl OfflineAnalysisJob {
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("offline staged PCM lock poisoned"))?
                 .is_some()
-            || state
-                .prepared_map
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("source beatmap result lock poisoned"))?
-                .is_some()
         {
             return Err(PyRuntimeError::new_err("offline work already started"));
         }
@@ -1051,20 +906,12 @@ impl OfflineAnalysisJob {
         }
         let _ = state.cancel_request();
         drop(transition);
-        std::thread::spawn(move || match state.purpose {
-            OfflinePurpose::Analysis => {
-                let id = &state.identity;
-                let envelope = json!({"schema_version":1,"identity":{"pad_id":id.pad_id,
-                        "request_id":id.request_id,"source_id":id.source_id,"source_generation":id.source_generation},
-                        "beat":{"status":"cancelled"},"key":{"status":"cancelled"}}).to_string();
-                let _ = state.finish(&envelope);
-            }
-            OfflinePurpose::SourceBeatmap => {
-                state.drop_pcm();
-                state.discard_prepared_map();
-                state.finished.store(true, Ordering::Release);
-                state.release_reservation();
-            }
+        std::thread::spawn(move || {
+            let id = &state.identity;
+            let envelope = json!({"schema_version":1,"identity":{"pad_id":id.pad_id,
+                "request_id":id.request_id,"source_id":id.source_id,"source_generation":id.source_generation},
+                "beat":{"status":"cancelled"},"key":{"status":"cancelled"}}).to_string();
+            let _ = state.finish(&envelope);
         });
         Ok(())
     }
@@ -1084,133 +931,11 @@ impl OfflineAnalysisJob {
         py.detach(|| self.state().finish_corrected_legacy(&result_json))
             .map_err(PyRuntimeError::new_err)
     }
-
-    /// Verify immutable map geometry and the actual captured source off realtime.
-    pub fn prepare_source_beatmap(&self, py: Python<'_>, record_json: String) -> PyResult<()> {
-        py.detach(|| self.state().prepare_source_beatmap(&record_json, || {}))
-            .map_err(PyRuntimeError::new_err)
-    }
-
-    /// Queue one source-bound map DTO, without changing scalar/audio/project state.
-    pub fn finish_source_beatmap(&self, py: Python<'_>) -> PyResult<bool> {
-        py.detach(|| self.state().finish_source_beatmap())
-            .map_err(PyRuntimeError::new_err)
-    }
-
-    /// Observe bounded lifecycle scalars; cancellation alone is never retirement.
-    pub fn source_beatmap_async_status(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
-        let result = self
-            .state()
-            .async_map
-            .get()
-            .map(|status| status.dictionary(py, self.state().cancelled.load(Ordering::Acquire)))
-            .transpose()?;
-        if let Some(result) = result.as_ref()
-            && let Some(receipt) = self.state().raw_review_receipt.as_ref()
-        {
-            result
-                .bind(py)
-                .set_item("raw_review_retired", receipt.retired())?;
-        }
-        Ok(result)
-    }
-
-    /// Raw evidence resolves only through this original map admission, with no export ACK.
-    pub fn resolve_source_beatmap_raw_completion(
-        &self,
-        delivery: &super::loader_events::LoaderEventDelivery,
-    ) -> PyResult<Option<super::source_beatmap_raw::SourceBeatmapRawCandidate>> {
-        let state = self.state();
-        state
-            .require_purpose(OfflinePurpose::SourceBeatmap)
-            .map_err(PyRuntimeError::new_err)?;
-        let _requests = state
-            .request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if state.raw_review_receipt.is_none() || state.cancelled() {
-            return Ok(None);
-        }
-        let Some(owner) = state.native_owner.as_ref() else {
-            return Ok(None);
-        };
-        let Some(status) = state.async_map.get() else {
-            return Ok(None);
-        };
-        delivery.source_beatmap_raw_for(owner, status.shutdown_token())
-    }
-
-    /// Return only this original job's privately retained genuine map payload.
-    pub fn resolve_source_beatmap_completion(
-        &self,
-        delivery: &super::loader_events::LoaderEventDelivery,
-    ) -> PyResult<Option<SourceBeatmap>> {
-        let state = self.state();
-        state
-            .require_purpose(OfflinePurpose::SourceBeatmap)
-            .map_err(PyRuntimeError::new_err)?;
-        let _requests = state
-            .request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if state.cancelled() {
-            return Ok(None);
-        }
-        let Some(owner) = state.native_owner.as_ref() else {
-            return Ok(None);
-        };
-        delivery.source_beatmap_for(owner)
-    }
-
-    /// Resolve genuine output and acknowledge only its exact exported birth.
-    pub fn resolve_source_beatmap_artifact_completion(
-        &self,
-        delivery: &super::loader_events::LoaderEventDelivery,
-    ) -> PyResult<Option<super::source_beatmap_artifact::SourceBeatmapArtifact>> {
-        let state = self.state();
-        state
-            .require_purpose(OfflinePurpose::SourceBeatmap)
-            .map_err(PyRuntimeError::new_err)?;
-        let _requests = state
-            .request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if state.cancelled() {
-            return Ok(None);
-        }
-        let Some(owner) = state.native_owner.as_ref() else {
-            return Ok(None);
-        };
-        delivery.source_beatmap_artifact_for(owner)
-    }
 }
 
 impl OfflineAnalysisJob {
     fn state(&self) -> &JobState {
         self.state.as_deref().expect("live offline analysis handle")
-    }
-
-    #[cfg(test)]
-    pub(super) fn prepare_source_beatmap_with(
-        &self,
-        record_json: &str,
-        after_verify: impl FnOnce(),
-    ) -> Result<(), String> {
-        self.state()
-            .prepare_source_beatmap(record_json, after_verify)
-    }
-
-    /// Deterministic original-job event-before-retirement lifetime negative.
-    #[cfg(test)]
-    pub(super) fn publish_automatic_map_before_retirement_for_test(&self, receipt: &str) {
-        self.state()
-            .prepare_source_beatmap_input(
-                source_beatmap_job::MapInput::RestoreAutomatic(receipt),
-                || {},
-            )
-            .unwrap();
-        assert!(self.state().finish_source_beatmap_body(false).unwrap());
-        assert!(!self.state().finished.load(Ordering::Acquire));
     }
 }
 
@@ -1218,16 +943,11 @@ impl Drop for OfflineAnalysisJob {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // A natural post-finish handle release does not cancel its queued DTO.
-            // Explicit cancel() can still revoke that original map completion.
+            // Explicit cancellation still revokes an unfinished original analysis.
             if state.finished.load(Ordering::Acquire) {
                 return;
             }
             let _ = state.cancel_request();
-            if state.async_map.get().is_some() {
-                // Its armed queue/worker guard retains the actual source and
-                // both admissions, including when the closure never executes.
-                return;
-            }
             if state.finished.load(Ordering::Acquire)
                 || state.retirement_started.swap(true, Ordering::AcqRel)
             {
@@ -1236,7 +956,6 @@ impl Drop for OfflineAnalysisJob {
             // Move the actual final owner, never race a cloned owner against UI Drop.
             std::thread::spawn(move || {
                 state.drop_pcm();
-                state.discard_prepared_map();
                 state.release_reservation();
                 drop(state);
             });

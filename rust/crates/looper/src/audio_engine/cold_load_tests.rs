@@ -530,7 +530,6 @@ impl Retirement {
                 RetiredAudioBuffer::AcceptedTimingRefresh(value) => {
                     actual.retire_accepted_timing_refresh(value)
                 }
-                RetiredAudioBuffer::RuntimePolicy(value) => actual.retire_runtime_policy(value),
                 RetiredAudioBuffer::ResidentTransaction(value) => {
                     actual.retire_resident_transaction(value)
                 }
@@ -575,9 +574,6 @@ impl Retirement {
     }
 }
 impl AudioBufferRetirement for Retirement {
-    fn retire_runtime_policy(&mut self, value: crate::audio_engine::RuntimePolicyWork) {
-        self.push(RetiredAudioBuffer::RuntimePolicy(value));
-    }
     fn retire_committed_stem_work(
         &mut self,
         value: Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>,

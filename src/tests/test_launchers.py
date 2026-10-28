@@ -24,9 +24,8 @@ if os.environ['LAUNCHER_NATIVE_MODE'] != 'older':
         mode = os.environ['LAUNCHER_NATIVE_MODE']
         if (
             mode in {'old-piano', 'old-recording', 'old-editor', 'old-residency', 'old-ordinary'}
-            or mode.startswith('editor-')
+            or mode.startswith('bpm-runtime-')
             or mode.startswith('ordinary-')
-            or mode.startswith('adoption-')
         ):
             return 'release'
         return mode
@@ -34,7 +33,10 @@ class CapturedPitchAction:
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-piano':
         resets_key_correction = property(lambda self: False)
 class AudioEngine:
-    GLOBAL_TIMING_POLICY_API_VERSION = 1
+    if os.environ['LAUNCHER_NATIVE_MODE'] != 'bpm-runtime-missing':
+        BPM_ONLY_RUNTIME_API_VERSION = {
+            'bpm-runtime-bool': True, 'bpm-runtime-old': 0,
+        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 1)
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-ordinary':
         ORDINARY_TRANSPORT_API_VERSION = {
             'ordinary-version-false': False,
@@ -59,138 +61,14 @@ class AudioEngine:
         raise AssertionError('launcher must never construct an engine')
     def set_input_runtime_state(
         self, multi_loop, loaded, loop_starts, loop_ends, bindings=None,
-        pitch_rows=None, source_map_rows=None, *, timing_policy_json=None,
+        pitch_rows=None,
     ):
         raise AssertionError('launcher must only reflect timing policy')
-    def pad_source_sync_status(self, id):
-        raise AssertionError('launcher must only reflect sync status')
-    if os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-extra-target':
-        def request_input_runtime_policy_adoption(self, target=None):
-            raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-legacy-noarg':
-        def request_input_runtime_policy_adoption(self):
-            raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-positional':
-        def request_input_runtime_policy_adoption(self, service=False):
-            raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-true':
-        def request_input_runtime_policy_adoption(self, *, service=True):
-            raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] == 'adoption-service-zero':
-        def request_input_runtime_policy_adoption(self, *, service=0):
-            raise AssertionError('launcher must never request adoption')
-    elif os.environ['LAUNCHER_NATIVE_MODE'] != 'adoption-missing':
-        def request_input_runtime_policy_adoption(self, *, service=False):
-            raise AssertionError('launcher must never request adoption')
-    def begin_source_beatmap_raw_async(self, sample_id, *, expected_source_generation):
-        raise AssertionError('launcher must never analyze source audio')
-    def begin_source_beatmap_beat_this_raw_async(
-        self, sample_id, installation_root, *, expected_source_generation,
-    ):
-        raise AssertionError('launcher must never run inference')
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
         def audio_stream_failed(self):
             raise AssertionError('launcher must only reflect stream lifecycle')
         def quiesce_failed_audio_stream(self):
             raise AssertionError('launcher must never close a stream')
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-editor':
-        def begin_source_beatmap_create_async(
-            self, sample_id, origin_seconds, period_seconds, *, expected_source_generation=None,
-        ):
-            raise AssertionError('launcher must never create a source beatmap')
-        def begin_source_beatmap_edit_async(self, sample_id, receipt_json, operation_json):
-            raise AssertionError('launcher must never edit a source beatmap')
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review':
-        def begin_source_beatmap_review_async(
-            self, sample_id, candidate, review_json, *, expected_source_generation,
-        ):
-            raise AssertionError('launcher must never build a source beatmap')
-class SourceBeatmap:
-    def __init__(self):
-        raise AssertionError('launcher must never construct a map')
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-version':
-        EDITOR_CORRECTION_API_VERSION = {
-            'editor-version-none': None,
-            'editor-version-false': False,
-            'editor-version-true': True,
-            'editor-version-float': 4.0,
-            'editor-version-string': '4',
-            'editor-version-old': 3,
-            'editor-version-future': 5,
-        }.get(os.environ['LAUNCHER_NATIVE_MODE'], 4)
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-span':
-        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-optional':
-            def editor_span(self, first_anchor_index, last_anchor_index=None):
-                raise AssertionError('launcher must never query a span')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-keyword-only':
-            def editor_span(self, *, first_anchor_index, last_anchor_index):
-                raise AssertionError('launcher must never query a span')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-positional-only':
-            def editor_span(self, first_anchor_index, last_anchor_index, /):
-                raise AssertionError('launcher must never query a span')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-span-renamed':
-            def editor_span(self, first_anchor_index, anchor_index):
-                raise AssertionError('launcher must never query a span')
-        else:
-            def editor_span(self, first_anchor_index, last_anchor_index):
-                raise AssertionError('launcher must never query a span')
-    def editor_info(self):
-        raise AssertionError('launcher must only reflect map capabilities')
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review-info':
-        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-info-optional':
-            def editor_review_info(self, rows=None):
-                raise AssertionError('launcher must never inspect embedded capture metadata')
-        else:
-            def editor_review_info(self):
-                raise AssertionError('launcher must never inspect embedded capture metadata')
-    if os.environ['LAUNCHER_NATIVE_MODE'] != 'editor-missing-review-page':
-        if os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-limit':
-            def editor_review_page(
-                self, first_anchor_index, last_anchor_index, start_index, max_events=64,
-            ):
-                raise AssertionError('launcher must never inspect embedded capture rows')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-renamed':
-            def editor_review_page(
-                self, first_anchor_index, last_anchor_index, raw_index, max_events=128,
-            ):
-                raise AssertionError('launcher must never inspect embedded capture rows')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-keyword-only':
-            def editor_review_page(
-                self, first_anchor_index, last_anchor_index, start_index, *, max_events=128,
-            ):
-                raise AssertionError('launcher must never inspect embedded capture rows')
-        elif os.environ['LAUNCHER_NATIVE_MODE'] == 'editor-review-page-bool':
-            def editor_review_page(
-                self, first_anchor_index, last_anchor_index, start_index, max_events=True,
-            ):
-                raise AssertionError('launcher must never inspect embedded capture rows')
-        else:
-            def editor_review_page(
-                self, first_anchor_index, last_anchor_index, start_index, max_events=128,
-            ):
-                raise AssertionError('launcher must never inspect embedded capture rows')
-    def editor_view(self, start_s, end_s, loop_start_s, px_per_s, max_points=2048):
-        raise AssertionError('launcher must never query source geometry')
-    def source_after_beats(self, source_seconds, beats, require_four_four=True):
-        raise AssertionError('launcher must never query source geometry')
-    revision = editor_info
-    source_identity = editor_info
-    evaluate_source = editor_info
-    evaluate_beat = editor_info
-    local_tempo_at_source = editor_info
-    nearest_grid_source = editor_info
-class SourceBeatmapRawCandidate:
-    RAW_REVIEW_API_VERSION = 2
-    def info(self):
-        raise AssertionError('launcher must only reflect raw results')
-    def inspect(self, start_index, max_events=128):
-        raise AssertionError('launcher must never inspect raw results')
-    inspect_downbeats = inspect
-class OfflineAnalysisJob:
-    def resolve_source_beatmap_raw_completion(self, delivery):
-        raise AssertionError('launcher must never resolve a worker result')
-    def source_beatmap_async_status(self):
-        raise AssertionError('launcher must only reflect worker status')
 class OrdinaryTransportAdmission:
     content_lifetime = property(lambda self: 1)
     transport_revision = property(lambda self: 1)
@@ -532,89 +410,6 @@ def test_ordinary_transport_requires_current_native_before_application(
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
-@pytest.mark.parametrize(
-    "mode",
-    [
-        "old-editor",
-        "editor-missing-version",
-        "editor-version-none",
-        "editor-version-false",
-        "editor-version-true",
-        "editor-version-float",
-        "editor-version-string",
-        "editor-version-old",
-        "editor-version-future",
-        "editor-missing-span",
-        "editor-missing-review",
-        "editor-missing-review-info",
-        "editor-missing-review-page",
-        "editor-span-optional",
-        "editor-span-keyword-only",
-        "editor-span-positional-only",
-        "editor-span-renamed",
-    ],
-)
-def test_source_beatmap_editor_requires_current_native_before_application(
-    launchers: _Launchers, starter: str, mode: str
-) -> None:
-    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
-    result = launchers.run(starter)
-    assert result.returncode != 0
-    assert "Native source beatmap editor API requires a current build" in (
-        result.stdout + result.stderr
-    )
-    assert not launchers.app_log.exists()
-    assert launchers.profile_log.exists()
-
-
-@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
-@pytest.mark.parametrize(
-    "mode",
-    [
-        "adoption-missing",
-        "adoption-extra-target",
-        "adoption-legacy-noarg",
-        "adoption-service-positional",
-        "adoption-service-true",
-        "adoption-service-zero",
-    ],
-)
-def test_live_policy_requires_distinct_service_api_before_application(
-    launchers: _Launchers, starter: str, mode: str
-) -> None:
-    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
-    result = launchers.run(starter)
-    assert result.returncode != 0
-    assert "request_input_runtime_policy_adoption(self, *, service=False)" in (
-        result.stdout + result.stderr
-    )
-    assert not launchers.app_log.exists()
-    assert launchers.profile_log.exists()
-
-
-@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
-@pytest.mark.parametrize(
-    ("mode", "method"),
-    [
-        ("editor-review-page-limit", "editor_review_page"),
-        ("editor-review-page-renamed", "editor_review_page"),
-        ("editor-review-page-keyword-only", "editor_review_page"),
-        ("editor-review-page-bool", "editor_review_page"),
-        ("editor-review-info-optional", "editor_review_info"),
-    ],
-)
-def test_embedded_review_page_signature_is_checked_without_querying_native(
-    launchers: _Launchers, starter: str, mode: str, method: str
-) -> None:
-    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
-    result = launchers.run(starter)
-    assert result.returncode != 0
-    assert f"SourceBeatmap.{method}" in result.stdout + result.stderr
-    assert not launchers.app_log.exists()
-    assert launchers.profile_log.exists()
-
-
-@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
 def test_application_exit_code_is_preserved(launchers: _Launchers, starter: str) -> None:
     launchers.environment["LAUNCHER_APP_EXIT"] = "17"
     result = launchers.run(starter)
@@ -652,3 +447,17 @@ def test_invalid_arguments_stop_before_setup_or_python(
     if starter == "build-release.bat":
         assert "build-release.bat" in result.stdout
         assert launchers.pause_prompt in result.stdout
+
+
+@pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
+@pytest.mark.parametrize("mode", ["bpm-runtime-missing", "bpm-runtime-bool", "bpm-runtime-old"])
+def test_retired_runtime_cannot_start_before_rebuild(
+    launchers: _Launchers, starter: str, mode: str
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = mode
+    result = launchers.run(starter)
+    assert result.returncode != 0
+    assert "Native constant-BPM runtime requires a current Release build" in (
+        result.stdout + result.stderr
+    )
+    assert not launchers.app_log.exists()

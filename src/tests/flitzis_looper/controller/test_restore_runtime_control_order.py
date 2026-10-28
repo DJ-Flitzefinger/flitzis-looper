@@ -10,7 +10,6 @@ import pytest
 
 from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
 from flitzis_looper.models import BeatGrid, SampleAnalysis
-from flitzis_looper.timing_policy import GlobalTimingPolicy
 from flitzis_looper.ui.context import UiContext
 
 if TYPE_CHECKING:
@@ -34,23 +33,18 @@ _STARTUP_CONTROLS = {
     "set_pad_timing_intent",
     "set_master_bpm",
     "set_master_period",
-    "bootstrap_transport_from_pad",
 }
 
 
-def test_saved_variable_sync_loop_restores_before_its_map_is_available(
+def test_saved_scalar_loop_restores_with_its_full_requested_bars(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
     relative = _configure_saved_source(controller, audio_engine_mock, tmp_path, "manual")
     project = controller.project
     project.multi_loop = True
-    project.global_timing_policy = GlobalTimingPolicy(
-        schema_version=1, sync=True, realtime_bpm=True, revision=2
-    )
     project.pad_loop_auto[0] = True
     project.pad_loop_bars[0] = 32.0
     before = (
-        project.global_timing_policy,
         project.pad_loop_start_s[0],
         project.pad_loop_end_s[0],
         project.pad_loop_bars[0],
@@ -63,7 +57,6 @@ def test_saved_variable_sync_loop_restores_before_its_map_is_available(
     assert audio_engine_mock.load_sample_async.call_args.args == (0, relative)
     assert audio_engine_mock.load_sample_async.call_args.kwargs["resident_loop_end_s"] == 65.0
     assert before == (
-        project.global_timing_policy,
         project.pad_loop_start_s[0],
         project.pad_loop_end_s[0],
         project.pad_loop_bars[0],
