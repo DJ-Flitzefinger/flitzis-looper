@@ -7,7 +7,7 @@
 - [x] Validate cached positive, rejection, mismatch, cancel/stale/budget and Copy forgery cases.
 - [x] Verify actual-source/cached-NN preparation, selection and serialization without repeating NN49 inference; retain compatible earlier OwnACK evidence without claiming a new NN publication.
 - [x] Complete frozen Systems POST, focused checks and the one independent review campaign.
-- [ ] Deliver checked normal main push, clean actual remote equality and matching safe Native.
+- [x] Deliver checked normal main push, clean actual remote equality and matching safe Native.
 
 This does not complete the separate allten/minimum-eight nominal recognition
 target, three older ambiguity/phase outcomes or the remaining transport/default
@@ -21,3 +21,9 @@ retaining every NN float bit. A cfg(test)-only exact-bit transport map prevents
 cached JSON reader rounding; production metadata and tolerances are unchanged.
 The additional-ten assessment is now five exact and seven useful nominal matches;
 minimum eight remains open. No hearing or musical-accuracy certification follows.
+
+Source47aa75d9 was normally pushed with clean HEAD/tracking/fresh actual remote
+equality. Matching Release AF546352 (32,968,192 bytes) passed13 API/import checks
+and52 focused private-Python cases, then replaced the verified4299E12E module
+under closed-App/held-module/exclusive-handle guards with an exact fresh backup.
+Installed13 API checks and the launcher --check pass without starting audio/App.
