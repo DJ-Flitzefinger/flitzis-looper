@@ -2,14 +2,14 @@
 
 import math
 from itertools import pairwise
-from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
+    from flitzis_looper.analysis.app_tempo_inferred import OrdinalFit
 
 _Time = Annotated[float, Field(allow_inf_nan=False, ge=0)]
 
@@ -89,6 +89,43 @@ class AdaptiveTempoProbe(BaseModel):
     fractional_check: FractionalTempoCheck
 
 
+class TempoMathView(Protocol):
+    """Only scalar evidence and source geometry, without backend or execution claims."""
+
+    @property
+    def schema_version(self) -> int: ...
+
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def bpm(self) -> float | None: ...
+
+    @property
+    def selected(self) -> TempoRegion | None: ...
+
+    @property
+    def regions(self) -> list[TempoRegion]: ...
+
+    @property
+    def integer_probe(self) -> IntegerTempoProbe | AdaptiveTempoProbe | None: ...
+
+    @property
+    def ordinal_fit(self) -> OrdinalFit | None: ...
+
+    @property
+    def sample_rate_hz(self) -> int: ...
+
+    @property
+    def frame_count(self) -> int: ...
+
+    @property
+    def raw_beats(self) -> list[float]: ...
+
+    @property
+    def raw_downbeats(self) -> list[float]: ...
+
+
 def _invalid(message: str) -> NoReturn:
     raise ValueError(message)
 
@@ -110,7 +147,7 @@ def _close(actual: float | None, expected: float | None) -> bool:
     )
 
 
-def _points(method: AppTempoMethod, region: TempoRegion) -> list[tuple[int, float]]:
+def _points(method: TempoMathView, region: TempoRegion) -> list[tuple[int, float]]:
     excluded = region.excluded_raw_indices
     start, end = region.window_seconds
     if excluded != sorted(set(excluded)) or any(
@@ -136,7 +173,7 @@ def _pivot(points: list[tuple[int, float]]) -> tuple[float, float, float]:
     return mx, my, period
 
 
-def _is_run(method: AppTempoMethod, window: list[float]) -> bool:
+def _is_run(method: TempoMathView, window: list[float]) -> bool:
     beats = method.raw_beats
     duration = method.frame_count / method.sample_rate_hz
     bounds = []
@@ -160,7 +197,7 @@ def _is_run(method: AppTempoMethod, window: list[float]) -> bool:
 
 
 def _strict_common(
-    method: AppTempoMethod,
+    method: TempoMathView,
     common: TempoRegion,
     points: list[tuple[int, float]],
     minimum: tuple[int, float] | None = None,
@@ -228,7 +265,7 @@ def _check_metrics(actual: tuple[float | None, ...], expected: tuple[float, ...]
 
 
 def _validate_windows(
-    method: AppTempoMethod,
+    method: TempoMathView,
     probe: AdaptiveTempoProbe,
     points: list[tuple[int, float]],
 ) -> None:
@@ -264,7 +301,7 @@ def _validate_windows(
 
 
 def _validate_window_geometry(
-    method: AppTempoMethod,
+    method: TempoMathView,
     probe: AdaptiveTempoProbe,
     points: list[tuple[int, float]],
     endpoints: list[tuple[tuple[int, float], tuple[int, float]]],
@@ -298,7 +335,7 @@ def _validate_window_geometry(
 
 
 def _validate_short_tier(
-    method: AppTempoMethod,
+    method: TempoMathView,
     probe: AdaptiveTempoProbe,
     points: list[tuple[int, float]],
     endpoints: list[tuple[tuple[int, float], tuple[int, float]]],
@@ -322,7 +359,7 @@ def _validate_short_tier(
         _invalid("Ten-second evidence cannot be relabelled as short source")
 
 
-def _common_points(method: AppTempoMethod, probe: AdaptiveTempoProbe) -> list[tuple[int, float]]:
+def _common_points(method: TempoMathView, probe: AdaptiveTempoProbe) -> list[tuple[int, float]]:
     common = probe.common_region
     if common is None:
         if probe.pivot_raw_index is not None or probe.pivot_seconds is not None:
@@ -361,7 +398,7 @@ def historical_probe(
 
 
 def validate_adaptive_probe(
-    method: AppTempoMethod,
+    method: TempoMathView,
     probe: IntegerTempoProbe | AdaptiveTempoProbe | None,
 ) -> None:
     """Recompute both exact candidate periods using the same immutable common mask."""

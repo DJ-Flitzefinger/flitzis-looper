@@ -12,6 +12,8 @@ const CHILD: &str = "FLITZI_AUTOMATIC_ANALYSIS_CHILD_RATE";
 
 #[path = "actual_music_loop_tests.rs"]
 mod actual_music_loop_tests;
+#[path = "qm_corpus_diagnostic_tests.rs"]
+mod qm_corpus_diagnostic_tests;
 const PRIVATE_MP3: &str =
     "C:/SCRATCHBEATS/Third_sight-rhymes_like_a_scientist_(instrumental)-ftd.mp3";
 

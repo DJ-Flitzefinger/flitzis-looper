@@ -6,6 +6,7 @@ import pytest
 from imgui_bundle import imgui
 
 from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
+from flitzis_looper.models import BeatGrid, SampleAnalysis
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.bpm_entry import filtered_bpm_entry_char, sanitize_bpm_entry_text
@@ -17,6 +18,8 @@ from flitzis_looper.ui.render.sidebar_left import (
     parse_manual_bpm_entry_text,
     sanitize_eq_entry_text,
 )
+from tests.flitzis_looper.controller.test_adaptive_tempo_probe import _v4_method
+from tests.flitzis_looper.controller.test_corroborated_tempo import _v6_method
 from tests.flitzis_looper.ui.test_key_lock_render import _imgui_context
 
 if TYPE_CHECKING:
@@ -429,6 +432,42 @@ def test_half_double_buttons_route_factors_and_disable_unavailable_bpm(
         action.assert_called_once_with(3, factor)
     else:
         action.assert_not_called()
+
+
+@pytest.mark.parametrize("state", ["automatic", "loading", "analyzing", "manual", "tap"])
+@pytest.mark.parametrize("version", [4, 6])
+def test_bpm_guidance_describes_only_current_automatic_evidence_and_keeps_errors_separate(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, state: str, version: int
+) -> None:
+    ctx = UiContext(controller)
+    method = (
+        _v6_method()
+        if version == 6
+        else _v4_method().model_copy(
+            update={"status": "insufficient", "bpm": None, "selected": None, "integer_probe": None}
+        )
+    )
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=120.0 if version == 6 else 0.0,
+        key="unknown",
+        beat_grid=BeatGrid(beats=[], downbeats=[], bars=[]),
+        bpm_method=method,
+    )
+    if state == "loading":
+        controller.session.loading_sample_ids.add(0)
+    elif state == "analyzing":
+        controller.session.analyzing_sample_ids.add(0)
+    elif state in {"manual", "tap"}:
+        controller.project.manual_bpm[0] = 94.0
+        controller.project.pad_timing_intent[0] = "tap" if state == "tap" else "manual"
+    diagnostic = "Key analysis skipped; BPM remains available"
+    controller.session.sample_analysis_errors[0] = diagnostic
+    rendered: list[str] = []
+    monkeypatch.setattr(imgui, "text_wrapped", rendered.append)
+    sidebar_left._render_bpm_evidence(ctx, 0)
+    assert diagnostic in rendered
+    guidance = sidebar_left.bpm_estimate_guidance(method)
+    assert (guidance in rendered) is (state == "automatic")
 
 
 @pytest.mark.parametrize("manual", [False, True])

@@ -25,6 +25,8 @@ const MAX_RATE_HZ: u32 = 384_000;
 
 mod default;
 pub(super) use default::{default_analysis_peak, prepare_default_mono_f64};
+mod qm;
+pub(super) use qm::{QmPcm, prepare_qm_input};
 
 #[cfg(test)]
 mod admission_tests {

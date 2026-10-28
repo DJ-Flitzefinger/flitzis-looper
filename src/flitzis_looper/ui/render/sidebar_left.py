@@ -49,6 +49,7 @@ from flitzis_looper.ui.render.key_lock import render_pad_key_lock_buttons
 from flitzis_looper.ui.render.pitch_keyboard import format_extra_shift
 
 if TYPE_CHECKING:
+    from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.input_mapping import PadEqBand
     from flitzis_looper.input_mapping.actions import PitchCcMode
@@ -420,6 +421,52 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     imgui.text_colored(
         TEXT_MUTED_RGBA, f"BPM inference: {ctx.state.pads.bpm_execution_label(info.pad_id)}"
     )
+    _render_bpm_evidence(ctx, info.pad_id)
+
+
+def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
+    """Explain finite automatic evidence without presenting it as musical certainty."""
+    if method is None:
+        return None
+    fit = method.ordinal_fit
+    unavailable = {
+        "budget_unavailable": (
+            "Automatic BPM needs more analysis memory. Use Tap BPM or enter a value."
+        ),
+        "allocation_unavailable": (
+            "Automatic BPM preparation is unavailable. Retry Analyze audio or use Tap BPM."
+        ),
+    }
+    note = unavailable.get(fit.outcome) if fit is not None else None
+    if note is not None:
+        return note
+    if method.status not in {"estimated", "single_region_estimate"}:
+        return "Automatic BPM is uncertain. Use Tap BPM or enter a value."
+    if method.schema_version in {5, 6}:
+        return {
+            5: "Automatic BPM estimate. Verify its beat level with /2, x2 or Tap BPM.",
+            6: (
+                "Automatic BPM uses CPU acoustic support. "
+                "Verify its beat level with /2, x2 or Tap BPM."
+            ),
+        }[method.schema_version]
+    if method.status == "single_region_estimate" or (
+        method.integer_probe is not None and method.integer_probe.status == "inconclusive"
+    ):
+        return "Automatic BPM has limited independent support. Verify it with Tap BPM."
+    return None
+
+
+def _render_bpm_evidence(ctx: UiContext, pad_id: int) -> None:
+    """Keep current automatic guidance separate from key and beat diagnostics."""
+    automatic = ctx.state.pads.bpm_evidence_is_current_auto(pad_id)
+    analysis = ctx.state.pads.analysis(pad_id) if automatic else None
+    guidance = bpm_estimate_guidance(analysis.bpm_method if analysis is not None else None)
+    if guidance is not None:
+        imgui.text_wrapped(guidance)
+    error = ctx.state.pads.analysis_error(pad_id)
+    if error is not None:
+        imgui.text_wrapped(error)
 
 
 def _render_bpm_scale(ctx: UiContext, pad_id: int, effective_bpm: float | None) -> None:

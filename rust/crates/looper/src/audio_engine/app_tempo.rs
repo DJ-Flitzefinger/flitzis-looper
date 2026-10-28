@@ -5,7 +5,11 @@ use serde::Serialize;
 
 pub(super) const POLICY: &str = "neural-stable-regions-v4";
 const RESIDUAL_SECONDS: f64 = 0.025;
+#[path = "app_tempo/inferred_ordinals.rs"]
+mod inferred_ordinals;
+#[path = "app_tempo/integer.rs"]
 mod integer;
+#[path = "app_tempo/stable_runs.rs"]
 mod stable_runs;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -27,6 +31,8 @@ pub(crate) struct TempoEstimate {
     pub regions: Vec<RegionEstimate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integer_probe: Option<integer::Counterprobe>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordinal_fit: Option<inferred_ordinals::OrdinalFit>,
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -164,6 +170,90 @@ fn region(
 }
 
 pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
+    estimate_with_budget(beats, duration, 0, usize::MAX)
+}
+
+pub(super) fn estimate_with_budget(
+    beats: &[f64],
+    duration: f64,
+    downbeats: usize,
+    available_bytes: usize,
+) -> TempoEstimate {
+    estimate_with_budget_cancelled(beats, duration, downbeats, available_bytes, &|| false)
+        .expect("non-cancelling tempo estimator")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Cancelled;
+
+/// Recompute the narrow optional acoustic-corroboration gate without altering
+/// the original estimate or granting its failed phase check a passing status.
+pub(super) fn phase_only_period(
+    beats: &[f64],
+    duration: f64,
+    estimate: &TempoEstimate,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<f64>, Cancelled> {
+    let control = inferred_ordinals::Control::new(cancelled);
+    if control.cancelled() {
+        return Err(Cancelled);
+    }
+    if estimate.policy != inferred_ordinals::POLICY || estimate.bpm.is_some() {
+        return Ok(None);
+    }
+    let Some(inferred_ordinals::OrdinalFit::Evaluated(evidence)) = &estimate.ordinal_fit else {
+        return Ok(None);
+    };
+    inferred_ordinals::phase_only_period(beats, duration, evidence, &control)
+}
+
+pub(super) fn preparation_reservation(beats: usize, downbeats: usize) -> Option<usize> {
+    inferred_ordinals::preparation_bytes(beats, downbeats)
+}
+
+pub(super) fn estimate_with_budget_cancelled(
+    beats: &[f64],
+    duration: f64,
+    downbeats: usize,
+    available_bytes: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<TempoEstimate, Cancelled> {
+    let control = inferred_ordinals::Control::new(cancelled);
+    if control.cancelled() {
+        return Err(Cancelled);
+    }
+    let mut result = estimate_v4(beats, duration);
+    if control.cancelled() {
+        return Err(Cancelled);
+    }
+    if result.bpm.is_some() || result.status == "invalid" {
+        return Ok(result);
+    }
+    if downbeats > 250_000 {
+        result.status = "invalid";
+        return Ok(result);
+    }
+    let required =
+        inferred_ordinals::preparation_bytes(beats.len(), downbeats).unwrap_or(usize::MAX);
+    let (bpm, fit) =
+        inferred_ordinals::recover(beats, duration, required, available_bytes, &control)?;
+    result.policy = inferred_ordinals::POLICY;
+    result.bpm = bpm;
+    if bpm.is_some() {
+        result.status = if duration < 30.0 {
+            "single_region_estimate"
+        } else {
+            "estimated"
+        };
+    }
+    result.ordinal_fit = Some(fit);
+    if control.cancelled() {
+        return Err(Cancelled);
+    }
+    Ok(result)
+}
+
+fn estimate_v4(beats: &[f64], duration: f64) -> TempoEstimate {
     let mut result = TempoEstimate {
         policy: POLICY,
         status: "insufficient",
@@ -171,6 +261,7 @@ pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
         selected: None,
         regions: Vec::new(),
         integer_probe: None,
+        ordinal_fit: None,
     };
     if !duration.is_finite()
         || duration <= 0.0

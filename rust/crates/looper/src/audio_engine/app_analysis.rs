@@ -11,6 +11,10 @@ use sha2::{Digest, Sha256};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[path = "app_analysis_qm.rs"]
+mod qm_corroboration;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
@@ -299,7 +303,15 @@ pub(super) fn analyze(
         // Callers without a configured neural installation retain the scientific backend.
         return super::analyze_sample(sample, rate).map(Into::into);
     };
-    let cancelled = || (context.cancelled)();
+    let cancellation = {
+        let source = context.cancelled.clone();
+        let latched = AtomicBool::new(false);
+        Arc::new(move || {
+            if latched.load(Ordering::Acquire) { return true; }
+            if source() { latched.store(true,Ordering::Release); true } else { false }
+        }) as Arc<dyn Fn()->bool + Send + Sync>
+    };
+    let cancelled = || cancellation();
     let source_digest = context.descriptor["original"]["sha256"]
         .as_str()
         .ok_or("neural analysis original digest unavailable")?
@@ -345,7 +357,7 @@ pub(super) fn analyze(
             mono_sha256: mono_sha256.clone(), mono_rule: super::analysis_pcm::MONO_RULE.into() };
         let identity = json!({"pad_id":context.identity.pad_id,"request_id":context.identity.request_id,
             "source_id":context.identity.source_id,"source_generation":context.identity.source_generation});
-        let probe = Python::attach(|py| Py::new(py, AnalysisCancellation(context.cancelled.clone())))
+        let probe = Python::attach(|py| Py::new(py, AnalysisCancellation(cancellation.clone())))
             .map_err(|e| e.to_string())?.into_any();
         let (beat, key_outcome) = std::thread::scope(|scope| {
             let beat = scope.spawn(|| invoke_worker(source, identity, path_text, &context.installation, probe));
@@ -378,10 +390,28 @@ pub(super) fn analyze(
             source_digest.capacity(), mono_sha256.capacity(), key.as_ref().map_or(0, String::capacity),
             key_error.as_ref().map_or(0, String::capacity)])?;
         let predictions = raw.predictions();
-        let estimate = super::app_tempo::estimate(&predictions.beat_seconds, frames as f64 / f64::from(rate));
+        let raw_workspace = raw.encoding_workspace_bytes()?;
+        let available = LIMIT.checked_sub(source_live).and_then(|bytes| bytes.checked_sub(raw_workspace)).unwrap_or(0);
+        // Successful v4 estimates retain their established preparation path. New
+        // fallback search/typed evidence/JSON storage is admitted before allocation.
+        let estimate = super::app_tempo::estimate_with_budget_cancelled(
+            &predictions.beat_seconds, frames as f64 / f64::from(rate),
+            predictions.downbeat_seconds.len(), available,
+            &cancelled,
+        ).map_err(|_| "neural analysis request superseded".to_owned())?;
+        if cancelled() { return Err("neural analysis request superseded".into()); }
+        let phase_period = super::app_tempo::phase_only_period(
+            &predictions.beat_seconds,frames as f64 / f64::from(rate),&estimate,&cancelled,
+        ).map_err(|_| "neural analysis request superseded".to_owned())?;
+        let schema_version = if estimate.ordinal_fit.is_some() { 5 } else { 4 };
+        let estimate_bpm = estimate.bpm;
+        let estimate_status = estimate.status;
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
+        // The admitted preparation reserve covers typed/JSON coexistence above;
+        // final capacity accounting below must not retain a second typed method.
+        drop(estimate);
         let object = method.as_object_mut().ok_or("neural estimate envelope missing")?;
-        object.extend(json!({"schema_version":4,"backend":"beat_this","model_sha256":pinned_model()["sha256"],
+        object.extend(json!({"schema_version":schema_version,"backend":"beat_this","model_sha256":pinned_model()["sha256"],
             "frontend_id":pinned_model()["frontend_id"],"source_sha256":source_digest,
             "mono_sha256":mono_sha256,"sample_rate_hz":rate,"frame_count":frames,
             "raw_beats":predictions.beat_seconds,"raw_downbeats":predictions.downbeat_seconds}).as_object().unwrap().clone());
@@ -394,18 +424,43 @@ pub(super) fn analyze(
             predictions.beat_seconds.len().max(4).checked_mul(4).ok_or("neural grid budget overflow")?,
             predictions.downbeat_seconds.len().max(4).checked_mul(8).ok_or("neural downbeat budget overflow")?,
         ])?;
-        let core = super::neural_analysis::budget::sum(&[source_live, raw.encoding_workspace_bytes()?,
+        let core = super::neural_analysis::budget::sum(&[source_live, raw_workspace,
             method_tree, method_len.checked_mul(2).ok_or("neural method budget overflow")?, grid_bytes,
             std::mem::size_of::<LoadedAnalysis>()])?.max(super::neural_analysis::budget::sum(&[held, wire])?);
         if core > LIMIT { return Err("neural analysis metadata exceeds preparation budget".into()); }
-        let method_json = method.to_string();
+        if cancelled() { return Err("neural analysis request superseded".into()); }
+        // Keep the exact old string and one tree. An optional late failure must
+        // never reconstruct floats or partially publish the joint choice.
+        let base_method_json = method.to_string();
+        let mut selected_bpm = estimate_bpm;
+        let mut beat_error = estimate_bpm.is_none().then(||format!("Neural tempo estimate {estimate_status}"));
+        let method_json = if let Some(period) = phase_period {
+            let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                qm_corroboration::attempt(sample,rate,&context,&mono_sha256,raw.decoder_identity(),period,
+                    &mut method,&base_method_json,core,source_live,raw_workspace,grid_bytes,&cancelled)
+            }));
+            if cancelled() { return Err("neural analysis request superseded".into()); }
+            match attempted {
+                Ok(Ok(choice)) => { selected_bpm=Some(choice.bpm); beat_error=None; choice.method_json },
+                Ok(Err(qm_corroboration::Failure::Cancelled)) => return Err("neural analysis request superseded".into()),
+                Ok(Err(qm_corroboration::Failure::Unavailable(reason))) => {
+                    beat_error=Some(format!("Neural tempo estimate {estimate_status}; QM corroboration unavailable: {reason}"));
+                    base_method_json
+                },
+                Err(_) => {
+                    beat_error=Some(format!("Neural tempo estimate {estimate_status}; QM corroboration unavailable: analysis panicked"));
+                    base_method_json
+                },
+            }
+        } else { base_method_json };
         drop(method);
         let beats = predictions.beat_seconds.iter().map(|&v| v as f32).collect();
         let downbeats: Vec<_> = predictions.downbeat_seconds.iter().map(|&v| v as f32).collect();
-        Ok(LoadedAnalysis { bpm: estimate.bpm.unwrap_or(0.0), key, key_status, key_error,
+        if cancelled() { return Err("neural analysis request superseded".into()); }
+        Ok(LoadedAnalysis { bpm: selected_bpm.unwrap_or(0.0), key, key_status, key_error,
             beat_grid: flitzis_looper_analysis::BeatGrid { beats, bars: downbeats.clone(), downbeats },
             bpm_method_json: Some(method_json),
-            beat_error: estimate.bpm.is_none().then(|| format!("Neural tempo estimate {}", estimate.status)) })
+            beat_error })
     })).unwrap_or_else(|_| Err("neural analysis worker panicked".into()));
     match (result, temporary.close()) {
         (result, Ok(())) => result,

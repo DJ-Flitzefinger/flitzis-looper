@@ -232,7 +232,20 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
+        if method is not None and method.schema_version == 6:
+            if not self.bpm_evidence_is_current_auto(pad_id):
+                return bpm_device_label(None)
+            return f"NN {bpm_device_label(method.execution)}; QM CPU"
         return bpm_device_label(method.execution if method is not None else None)
+
+    def bpm_evidence_is_current_auto(self, pad_id: int) -> bool:
+        """Busy and manual choices cannot be described by cached automatic support."""
+        return (
+            not self.is_loading(pad_id)
+            and not self.is_analyzing(pad_id)
+            and self.manual_bpm(pad_id) is None
+            and self._project.pad_timing_intent[pad_id] not in {"manual", "tap"}
+        )
 
     def peak(self, pad_id: int) -> float:
         return float(self._session.pad_peak[pad_id])

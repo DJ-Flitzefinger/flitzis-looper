@@ -4,6 +4,14 @@ use super::{PcmError, fft, resample_mono_cancellable, validate_rate};
 use crate::messages::SampleBuffer;
 use flitzis_looper_analysis as analysis;
 
+pub(super) fn normal_mean(frame: &[f32]) -> f32 {
+    if frame.len() == 1 {
+        frame[0]
+    } else {
+        (frame[0] + frame[1]) * 0.5
+    }
+}
+
 /// Both pipelines borrow this one signal. Preserve legacy f32 channel arithmetic
 /// before widening, including frame zero and the complete resampled tail.
 pub(in crate::audio_engine) fn prepare_default_mono_f64(
@@ -25,21 +33,18 @@ pub(in crate::audio_engine) fn prepare_default_mono_f64(
         0,
         super::super::constant_timing::MAX_PCM_BYTES,
     )?;
-    let mean = |frame: &[f32]| {
-        if channels == 1 {
-            frame[0]
-        } else {
-            (frame[0] + frame[1]) * 0.5
-        }
-    };
     if rate_hz == 44_100 {
         return Ok(sample
             .samples
             .chunks_exact(channels)
-            .map(|frame| f64::from(mean(frame)))
+            .map(|frame| f64::from(normal_mean(frame)))
             .collect());
     }
-    let mono: Vec<f32> = sample.samples.chunks_exact(channels).map(mean).collect();
+    let mono: Vec<f32> = sample
+        .samples
+        .chunks_exact(channels)
+        .map(normal_mean)
+        .collect();
     let converted = resample_mono_cancellable(
         mono,
         rate_hz,
