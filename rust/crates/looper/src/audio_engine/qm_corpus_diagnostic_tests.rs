@@ -2,9 +2,9 @@
 #![cfg(windows)]
 
 use crate::audio_engine::{analysis_pcm, c3_process_metrics as process, cold_store, sample_loader};
-use flitzis_looper_analysis::{AnalysisConfig, analyze_bpm_raw, default_bpm_working_bytes};
+use flitzis_looper_analysis::{analyze_bpm_raw, default_bpm_working_bytes, AnalysisConfig};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -323,6 +323,219 @@ fn authorized_source_qm_capture() -> Result<()> {
     report.sync_all()?;
     println!(
         "QM_DIAGNOSTIC_COMPLETE source_sha256={expected} pid={}",
+        std::process::id()
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "explicit frozen source/SHA and owned output leaf; NN mono export only"]
+fn authorized_source_nn_mono_export() -> Result<()> {
+    let requested =
+        PathBuf::from(std::env::var_os("FLITZI_MONO_SOURCE").ok_or("explicit mono source")?);
+    assert!(requested.is_absolute());
+    let source = requested.canonicalize()?;
+    let authorized = Path::new("C:/SCRATCHBEATS").canonicalize()?;
+    assert!(
+        source.starts_with(&authorized),
+        "source must remain inside canonical C:/SCRATCHBEATS"
+    );
+    let expected = std::env::var("FLITZI_MONO_SOURCE_SHA256")?;
+    assert!(
+        expected.len() == 64
+            && expected
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    );
+    let requested_output = PathBuf::from(
+        std::env::var_os("FLITZI_MONO_OUTPUT_DIR").ok_or("explicit mono output leaf")?,
+    );
+    assert!(requested_output.is_absolute() && requested_output.is_dir());
+    let output = requested_output.canonicalize()?;
+    let owner = output.join("OWNER.md");
+    assert!(fs::metadata(&owner)?.len() > 0 && fs::metadata(&owner)?.len() <= 65_536);
+    assert!(!fs::read_to_string(owner)?.trim().is_empty());
+    let mono_path = output.join("mono.f32le");
+    let receipt_path = output.join("receipt.json");
+    assert!(
+        !mono_path.exists() && !receipt_path.exists(),
+        "inspect existing or partial export before retry"
+    );
+    let started = Instant::now();
+    let process_before = process::snapshot();
+    let temporary = tempfile::tempdir_in(&output)?;
+    let snapshot_path = temporary.path().join("source.snapshot");
+    // Retain this external immutable source handle until the function returns.
+    let mut original = cold_store::sealed_reader(&source)?;
+    let before = digest(&mut original)?;
+    assert_eq!(before, expected);
+    let original_bytes = original.metadata()?.len();
+    let mut snapshot_writer = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&snapshot_path)?;
+    assert_eq!(
+        io::copy(&mut original, &mut snapshot_writer)?,
+        original_bytes
+    );
+    snapshot_writer.sync_all()?;
+    drop(snapshot_writer);
+    let mut snapshot = cold_store::sealed_reader(&snapshot_path)?;
+    let snapshot_sha256 = digest(&mut snapshot)?;
+    assert_eq!(snapshot_sha256, expected);
+    let mut decoded = sample_loader::decode_audio_snapshot_streamed(
+        snapshot.try_clone()?,
+        &source,
+        &temporary.path().join("decoder.f32le"),
+        48_000,
+        LIMIT - FIXED_BYTES,
+        &|| false,
+        |_| {},
+    )?;
+    let decoder = decoded.artifact.descriptor.clone();
+    let (mut playback, transform) = sample_loader::prepare_playback_streamed(
+        &mut decoded,
+        &temporary.path().join("playback.f32le"),
+        2,
+        48_000,
+        LIMIT - FIXED_BYTES,
+        &|| false,
+        |_| {},
+    )?;
+    let stream_scratch = decoded.scratch_reserved_bytes;
+    let stream_peak = admit(&[stream_scratch])?;
+    drop(decoded);
+    assert_eq!(playback.descriptor["rate_hz"], 48_000);
+    assert_eq!(playback.descriptor["channels"], 2);
+    let frames = playback.descriptor["full_frames"]
+        .as_u64()
+        .ok_or("mono export full frames")?;
+    assert!(frames > 0);
+    let playback_bytes = frames
+        .checked_mul(8)
+        .ok_or("mono export stereo extent overflow")?;
+    let mono_bytes = frames
+        .checked_mul(4)
+        .ok_or("mono export output extent overflow")?;
+    assert_eq!(
+        playback.descriptor["full_bytes"].as_u64(),
+        Some(playback_bytes)
+    );
+    assert_eq!(playback.reader.metadata()?.len(), playback_bytes);
+    let mut input_buffer = [0_u8; CHUNK_FRAMES * 2 * 4];
+    let mut mono_buffer = [0_u8; CHUNK_FRAMES * 4];
+    let io_peak = admit(&[input_buffer.len(), mono_buffer.len()])?;
+    let mut mono_writer = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&mono_path)?;
+    playback.reader.seek(SeekFrom::Start(0))?;
+    let mut actual_playback = Sha256::new();
+    let mut actual_mono = Sha256::new();
+    let mut left = frames;
+    let mut written = 0_u64;
+    while left > 0 {
+        let count = usize::try_from(left.min(CHUNK_FRAMES as u64))?;
+        let input_bytes = count
+            .checked_mul(8)
+            .ok_or("mono export input chunk overflow")?;
+        let output_bytes = count
+            .checked_mul(4)
+            .ok_or("mono export output chunk overflow")?;
+        playback
+            .reader
+            .read_exact(&mut input_buffer[..input_bytes])?;
+        actual_playback.update(&input_buffer[..input_bytes]);
+        for (frame, destination) in input_buffer[..input_bytes]
+            .chunks_exact(8)
+            .zip(mono_buffer[..output_bytes].chunks_exact_mut(4))
+        {
+            // Exact NN input arithmetic: +0 seed, channel order, f64 divide,
+            // then one f32 cast. This is deliberately not normal QM f32 mixing.
+            let mut sum = 0.0_f64;
+            for channel in frame.chunks_exact(4) {
+                let value = f32::from_le_bytes(channel.try_into()?);
+                assert!(value.is_finite());
+                sum += f64::from(value);
+            }
+            let value = (sum / 2.0) as f32;
+            assert!(value.is_finite());
+            destination.copy_from_slice(&value.to_le_bytes());
+        }
+        mono_writer.write_all(&mono_buffer[..output_bytes])?;
+        actual_mono.update(&mono_buffer[..output_bytes]);
+        written = written
+            .checked_add(output_bytes as u64)
+            .ok_or("mono export written extent overflow")?;
+        left -= count as u64;
+    }
+    assert_eq!(playback.reader.read(&mut [0_u8; 1])?, 0);
+    assert_eq!(written, mono_bytes);
+    let playback_sha256 = format!("{:x}", actual_playback.finalize());
+    let mono_sha256 = format!("{:x}", actual_mono.finalize());
+    assert_eq!(playback.descriptor["interleaved_sha256"], playback_sha256);
+    let playback_description =
+        json!({"pcm":playback.descriptor.clone(),"transform":transform.to_json()});
+    drop(playback);
+    mono_writer.flush()?;
+    mono_writer.sync_all()?;
+    drop(mono_writer);
+    let mut retained_mono = cold_store::sealed_reader(&mono_path)?;
+    assert_eq!(retained_mono.metadata()?.len(), mono_bytes);
+    assert_eq!(digest(&mut retained_mono)?, mono_sha256);
+    drop(retained_mono);
+    let after = digest(&mut original)?;
+    assert_eq!(after, expected);
+    assert_eq!(path_digest(&source)?, expected);
+    drop(snapshot);
+    // Only the original external source handle remains; no temporary PCM or
+    // snapshot reader can obstruct the owned TempDir's normal retirement.
+    temporary.close()?;
+    let decoder_bytes = decoder["full_bytes"]
+        .as_u64()
+        .ok_or("mono export decoder extent")?;
+    let temporary_disk_bytes = original_bytes
+        .checked_add(decoder_bytes)
+        .and_then(|n| n.checked_add(playback_bytes))
+        .ok_or("mono export disk extent overflow")?;
+    let owned_pcm_disk_peak = temporary_disk_bytes
+        .checked_add(mono_bytes)
+        .ok_or("mono export combined disk extent overflow")?;
+    let executable = std::env::current_exe()?;
+    let receipt = json!({"schema_version":1,"diagnostic_only":true,
+        "scope":"Complete NN mono input export; no inference, tempo estimate, device or SourceACK",
+        "source":{"path":source,"sha256_before":before,"snapshot_sha256":snapshot_sha256,
+            "sha256_after":after,"bytes":original_bytes},
+        "original":{"sha256":expected,"bytes":original_bytes},
+        "decoder":decoder,"playback":playback_description,
+        "mono":{"format":"f32-le","sample_rate_hz":48_000,"source_channels":2,"channels":1,
+            "frame_count":frames,"full_bytes":mono_bytes,"origin_seconds":0.0,
+            "revision":analysis_pcm::MONO_RULE,"sha256":mono_sha256,
+            "actual_read_playback_sha256":playback_sha256},
+        "memory":{"limit_bytes":LIMIT,"fixed_overhead_bytes":FIXED_BYTES,
+            "decoder_converter_scratch_reserved_bytes":stream_scratch,
+            "stream_peak_bytes":stream_peak,"io_buffers_bytes":input_buffer.len()+mono_buffer.len(),
+            "io_peak_bytes":io_peak,"peak_reserved_bytes":stream_peak.max(io_peak),"complete_pcm_array_allocated":false},
+        "disk":{"scope":"File extents are separate from RAM reservations",
+            "temporary_source_snapshot_bytes":original_bytes,"temporary_decoder_pcm_bytes":decoder_bytes,
+            "temporary_playback_pcm_bytes":playback_bytes,"temporary_peak_file_bytes":temporary_disk_bytes,
+            "retained_mono_bytes":mono_bytes,"owned_snapshot_and_pcm_peak_file_bytes":owned_pcm_disk_peak},
+        "runtime":{"process_id":std::process::id(),"native_executable":{"path":executable,
+            "sha256":path_digest(&executable)?},
+            "compiled_helper_sha256":format!("{:x}",Sha256::digest(include_bytes!("qm_corpus_diagnostic_tests.rs")))},
+        "process_before":process_before,"process_after":process::snapshot(),
+        "elapsed_seconds":started.elapsed().as_secs_f64()});
+    let mut receipt_writer = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&receipt_path)?;
+    serde_json::to_writer(&mut receipt_writer, &receipt)?;
+    receipt_writer.write_all(b"\n")?;
+    receipt_writer.flush()?;
+    receipt_writer.sync_all()?;
+    drop(receipt_writer);
+    println!(
+        "NN_MONO_EXPORT_COMPLETE source_sha256={expected} mono_sha256={mono_sha256} pid={}",
         std::process::id()
     );
     Ok(())
