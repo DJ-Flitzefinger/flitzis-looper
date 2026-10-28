@@ -1,6 +1,7 @@
 import math
 from typing import TYPE_CHECKING
 
+from flitzis_looper.bpm_range_options import BpmRangeOptions
 from flitzis_looper.constants import (
     MAX_DEMUCS_OVERLAP,
     MAX_DEMUCS_SHIFTS,
@@ -64,6 +65,17 @@ class SettingsController(BaseController):
         if validated == self._project.recording_options:
             return
         self._project.recording_options = validated
+        self._mark_project_changed()
+
+    def set_automatic_bpm_range(self, options: BpmRangeOptions) -> None:
+        """Configure future Native admissions before persisting their immutable intent."""
+        validated = BpmRangeOptions.model_validate(options)
+        if validated == self._project.automatic_bpm_range:
+            return
+        self._audio.configure_automatic_bpm_range(
+            validated.enabled, validated.minimum_bpm, validated.maximum_bpm
+        )
+        self._project.automatic_bpm_range = validated
         self._mark_project_changed()
 
     def set_preload_stem_loops_on_startup(self, *, enabled: bool) -> None:

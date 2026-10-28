@@ -428,6 +428,29 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     """Explain finite automatic evidence without presenting it as musical certainty."""
     if method is None:
         return None
+    if method.bpm_range is not None:
+        return _range_bpm_guidance(method)
+    return _base_bpm_guidance(method)
+
+
+def _range_bpm_guidance(method: AppTempoMethod) -> str:
+    evidence = method.bpm_range
+    if evidence is None:
+        message = "Range guidance requires recorded automatic evidence"
+        raise ValueError(message)
+    bounds = f"{evidence.minimum_bpm:g}-{evidence.maximum_bpm:g} BPM"
+    if evidence.selection is None:
+        return (
+            f"Automatic analysis found no supported BPM in its recorded range ({bounds}). "
+            "Use Tap BPM or enter a value."
+        )
+    return (
+        f"Automatic analysis used CPU acoustic support within its recorded range ({bounds}). "
+        "Verify with /2, x2 or Tap BPM."
+    )
+
+
+def _base_bpm_guidance(method: AppTempoMethod) -> str | None:
     fit = method.ordinal_fit
     unavailable = {
         "budget_unavailable": (

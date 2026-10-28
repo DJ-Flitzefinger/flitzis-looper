@@ -21,11 +21,21 @@ def _runtime_state(
     pytest.fail("Preflight must never publish runtime state")
 
 
+def _range_configuration(
+    self: object, enabled: bool, minimum_bpm: float, maximum_bpm: float  # noqa: FBT001
+) -> None:
+    pytest.fail("Preflight must never configure analysis")
+
+
 def bpm_runtime_native_module(engine_type: type = object) -> SimpleNamespace:
     engine = type(
         "BpmRuntimeEngine",
         (engine_type,),
-        {"BPM_ONLY_RUNTIME_API_VERSION": 1, "set_input_runtime_state": _runtime_state},
+        {
+            "BPM_ONLY_RUNTIME_API_VERSION": 1,
+            "set_input_runtime_state": _runtime_state,
+            "configure_automatic_bpm_range": _range_configuration,
+        },
     )
     return SimpleNamespace(AudioEngine=engine)
 
@@ -36,6 +46,36 @@ def test_bpm_runtime_preflight_creates_no_engine() -> None:
         "check_bpm_only_runtime_api"
     ]
     check(native)
+
+
+@pytest.mark.parametrize("variant", ["missing", "optional", "variadic", "wrong_name"])
+def test_bpm_runtime_preflight_requires_exact_future_range_configuration(variant: str) -> None:
+    native = bpm_runtime_native_module()
+    if variant == "missing":
+        del native.AudioEngine.configure_automatic_bpm_range
+    elif variant == "optional":
+
+        def replacement(self, enabled, minimum_bpm, maximum_bpm=170.0):
+            pytest.fail("Preflight must not invoke configuration")
+
+        native.AudioEngine.configure_automatic_bpm_range = replacement
+    elif variant == "variadic":
+
+        def replacement(self, *args):
+            pytest.fail("Preflight must not invoke configuration")
+
+        native.AudioEngine.configure_automatic_bpm_range = replacement
+    else:
+
+        def replacement(self, enabled, minimum, maximum):
+            pytest.fail("Preflight must not invoke configuration")
+
+        native.AudioEngine.configure_automatic_bpm_range = replacement
+    check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))[
+        "check_bpm_only_runtime_api"
+    ]
+    with pytest.raises(AssertionError, match="automatic BPM range"):
+        check(native)
 
 
 @pytest.mark.parametrize("version", [None, False, True, 0, 2, "1", 1.0])

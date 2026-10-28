@@ -410,8 +410,14 @@ def test_copy_json_reopen_preserves_method_and_rejects_invalid_nested_metadata()
         CopySnapshotData.model_validate(malformed)
 
 
+@pytest.mark.parametrize(
+    "diagnostic", ["Beat This unavailable", "No automatic BPM within configured range"]
+)
 def test_failed_same_source_beats_preserve_tempo_but_complete_key(
-    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic: str,
 ) -> None:
     previous = _previous().model_copy(update={"bpm_method": _method()})
     controller.project.sample_analysis[0] = previous
@@ -427,7 +433,7 @@ def test_failed_same_source_beats_preserve_tempo_but_complete_key(
         {
             "task": "analysis",
             "request_id": 7,
-            "analysis_error": "Beat This unavailable",
+            "analysis_error": diagnostic,
             "analysis": {
                 "bpm": 0.0,
                 "key": "Am",
@@ -443,4 +449,4 @@ def test_failed_same_source_beats_preserve_tempo_but_complete_key(
     assert updated.key == "Am"
     completed.assert_called_once_with(0, 7, "Am")
     assert audio_engine_mock.mock_calls == []
-    assert controller.session.sample_analysis_errors[0] == "Beat This unavailable"
+    assert controller.session.sample_analysis_errors[0] == diagnostic

@@ -165,11 +165,37 @@ fn native_event_rejects_foreign_live_owner_with_equal_loaded_metadata() {
 }
 
 #[test]
+fn actual_analysis_admission_keeps_its_range_after_settings_change() {
+    let fixture=LaunchFixture::new(4);
+    fixture.engine.configure_automatic_bpm_range(true,50.0,170.0).unwrap();
+    let (entered,started)=mpsc::channel();
+    let (release,resumed)=mpsc::channel();
+    start_analysis_with(&fixture.engine,0,move |snapshot| {
+        entered.send(snapshot).unwrap();
+        resumed.recv_timeout(Duration::from_secs(5)).unwrap();
+    }).unwrap();
+    fixture.engine.configure_automatic_bpm_range(false,30.0,300.0).unwrap();
+    let snapshot=started.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(snapshot.minimum_bpm,50.0);
+    assert_eq!(snapshot.maximum_bpm,170.0);
+    assert!(fixture.engine.automatic_bpm_range.lock().unwrap().is_none());
+    // No detector is needed to prove the admitted snapshot. Retire this actual
+    // worker through the original whole-request cancellation boundary.
+    fixture.engine.cold_cancelled.store(true,Ordering::Release);
+    release.send(()).unwrap();
+    let deadline=Instant::now()+Duration::from_secs(5);
+    while fixture.engine.cold_jobs.counts_for_test() != (0,0,0) {
+        assert!(Instant::now()<deadline,"range snapshot worker did not retire");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
 fn actual_admitted_analysis_worker_follows_pair_and_ignores_vacated_slot_request() {
     let mut fixture = LaunchFixture::new(4);
     let (entered, started) = mpsc::channel();
     let (release, resumed) = mpsc::channel();
-    let request = start_analysis_with(&fixture.engine, 0, move || {
+    let request = start_analysis_with(&fixture.engine, 0, move |_| {
         entered.send(()).unwrap();
         resumed.recv_timeout(Duration::from_secs(5)).unwrap();
     })
@@ -255,7 +281,7 @@ fn old_analysis_worker_retirement_preserves_blocked_successor_after_actual_unloa
     let row = (original.cell().index(), BackgroundTaskKind::Analysis);
     let (old_entered, old_started) = mpsc::channel();
     let (old_release, old_resumed) = mpsc::channel();
-    start_analysis_with(&fixture.engine, 0, move || {
+    start_analysis_with(&fixture.engine, 0, move |_| {
         old_entered.send(()).unwrap();
         old_resumed.recv_timeout(Duration::from_secs(5)).unwrap();
     })
@@ -284,7 +310,7 @@ fn old_analysis_worker_retirement_preserves_blocked_successor_after_actual_unloa
     assert_ne!(successor.lifetime(), original.lifetime());
     let (new_entered, new_started) = mpsc::channel();
     let (new_release, new_resumed) = mpsc::channel();
-    start_analysis_with(&fixture.engine, 0, move || {
+    start_analysis_with(&fixture.engine, 0, move |_| {
         new_entered.send(()).unwrap();
         new_resumed.recv_timeout(Duration::from_secs(5)).unwrap();
     })

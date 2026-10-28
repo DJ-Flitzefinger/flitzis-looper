@@ -64,6 +64,8 @@ class AudioEngine:
         pitch_rows=None,
     ):
         raise AssertionError('launcher must only reflect timing policy')
+    def configure_automatic_bpm_range(self, enabled, minimum_bpm, maximum_bpm):
+        raise AssertionError('launcher must only reflect analysis configuration')
     if os.environ['LAUNCHER_NATIVE_MODE'] != 'old-recording':
         def audio_stream_failed(self):
             raise AssertionError('launcher must only reflect stream lifecycle')

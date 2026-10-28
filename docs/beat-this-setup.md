@@ -9,6 +9,21 @@ The two closed profiles are `legacy-cpu-v1` and `cuda-auto-v2`. The legacy sourc
 project and its scientific request/raw bytes remain unchanged. The CUDA profile
 uses the same model and CPU frontend with a separate pinned Torch runtime.
 
+## Optional automatic BPM range
+
+In Settings > Automatic BPM, **Use automatic BPM range** is off by default.
+Its retained initial bounds are50–170 BPM; both bounds are editable within30–300.
+They apply to future loads and Analyze audio requests. Changing this option does
+not reinterpret existing PAD values, pending requests or saved/copied analysis.
+Manual BPM, Tap and the /2/x2 corrections remain available independently.
+
+An already in-range primary estimate is retained. An outside neural estimate may
+use an independently checked QM half/double alternative inside the range. This
+does not force rounding or guarantee that every track has a supported candidate.
+If none qualifies, the new request reports that outcome; a previous valid BPM
+may remain visible. Guidance records the range used by that analysis, rather than
+claiming it used today's settings. No additional worker installation is needed.
+
 ## Locked Windows runtime
 
 The separate `workers/beat_this` project pins Python 3.12.13, Beat This 1.1.0,

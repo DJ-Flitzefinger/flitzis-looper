@@ -24,6 +24,14 @@ pub(super) struct Choice {
     pub method_json: String,
 }
 
+pub(super) struct Observation {
+    pub source: Value,
+    pub qm: Value,
+    pub bpm: f64,
+    pub status: &'static str,
+    pub period_drift_seconds: f64,
+}
+
 fn unavailable(reason: impl std::fmt::Display) -> Failure {
     Failure::Unavailable(reason.to_string().chars().take(240).collect())
 }
@@ -78,17 +86,16 @@ fn seconds(
 
 /// All QM PCM, raw arrays, scalar-estimate objects and preparation temporaries
 /// retire on return, before the final joint-tree/string ownership check.
-fn evidence(
+pub(super) fn observation(
     sample: &SampleBuffer,
     rate: u32,
     context: &NeuralContext,
     nn_mono: &str,
     decoder_identity: &str,
-    nn_period: f64,
     base_core: usize,
-    neural_result: Value,
     cancelled: &impl Fn() -> bool,
-) -> Result<(Value, f64, &'static str), Failure> {
+    agreement: impl FnOnce(f64, f64) -> Result<f64, Failure>,
+) -> Result<Observation, Failure> {
     check(cancelled)?;
     let available = remaining(&[base_core])?;
     let prepared = analysis_pcm::prepare_qm_input(sample, rate, nn_mono, available, cancelled)
@@ -154,19 +161,9 @@ fn evidence(
         .bpm
         .ok_or_else(|| unavailable("QM has no independently admitted tempo"))?;
     let status = qm_estimate.status;
-    let qm_period = 60.0 / bpm;
     let source_extent = sample.frame_count() as f64 / f64::from(rate);
     let extent = source_extent.min(analyzer_frames as f64 / 44_100.0);
-    let drift = (qm_period - nn_period).abs() * (extent / nn_period);
-    if !qm_period.is_finite()
-        || qm_period <= 0.0
-        || !nn_period.is_finite()
-        || nn_period <= 0.0
-        || !drift.is_finite()
-        || drift > 0.005
-    {
-        return Err(unavailable("QM same-period agreement failed"));
-    }
+    let drift = agreement(bpm, extent)?;
     drop(beats);
     drop(downbeats);
     // The admitted scalar reserve covers typed estimate / new JSON coexistence;
@@ -191,13 +188,12 @@ fn evidence(
     {
         return Err(unavailable("QM decoder binding differs"));
     }
-    let block = json!({"neural_result":neural_result,
-        "source":{"source_sha256":context.descriptor["original"]["sha256"],
+    let source = json!({"source_sha256":context.descriptor["original"]["sha256"],
             "decoder_identity":decoder_identity,"decoder_descriptor_json":decoder_json,
             "loaded_sample_rate_hz":rate,"loaded_channels":sample.channels,
             "loaded_frame_count":sample.frame_count(),"loaded_origin_seconds":0.0,
-            "loaded_interleaved_sha256":loaded_interleaved_sha256,"verified_nn_mono_sha256":nn_mono},
-        "qm":{"backend":"qm_dsp","device":"cpu",
+            "loaded_interleaved_sha256":loaded_interleaved_sha256,"verified_nn_mono_sha256":nn_mono});
+    let qm = json!({"backend":"qm_dsp","device":"cpu",
             "configuration":{"alpha":config.alpha,"hop_size":config.hop_size,"input_tempo":config.input_tempo,
                 "max_bin_hz":config.max_bin_hz,"step_secs":config.step_secs,"tightness":config.tightness,
                 "viterbi_sigma":config.viterbi_sigma,"window_length":config.window_length},
@@ -206,10 +202,9 @@ fn evidence(
             "analyzer":{"sample_rate_hz":44_100,"frame_count":analyzer_frames,"origin_seconds":0.0,
                 "f64_le_sha256":analyzer_sha256,"resampler":resampler},
             "odf_hop_samples":raw.odf_hop_samples(),"raw_beat_frames":raw.beat_frames(),
-            "raw_downbeat_indices":raw.downbeat_raw_indices(),"estimate":own},
-        "period_drift_seconds":drift});
+            "raw_downbeat_indices":raw.downbeat_raw_indices(),"estimate":own});
     check(cancelled)?;
-    Ok((block, bpm, status))
+    Ok(Observation { source, qm, bpm, status, period_drift_seconds: drift })
 }
 
 pub(super) fn attempt(
@@ -231,20 +226,33 @@ pub(super) fn attempt(
     admit(&[base_core, SMALL])?;
     let neural_result =
         json!({"schema_version":5,"policy":tree["policy"],"status":tree["status"],"bpm":null});
-    let (block, bpm, status) = evidence(
+    let observed = observation(
         sample,
         rate,
         context,
         nn_mono,
         decoder_identity,
-        nn_period,
         base_core,
-        neural_result,
         cancelled,
+        |bpm, extent| {
+            let qm_period = 60.0 / bpm;
+            let drift = (qm_period - nn_period).abs() * (extent / nn_period);
+            if !qm_period.is_finite() || qm_period <= 0.0
+                || !nn_period.is_finite() || nn_period <= 0.0
+                || !drift.is_finite() || drift > 0.005
+            { return Err(unavailable("QM same-period agreement failed")); }
+            Ok(drift)
+        },
     )?;
+    let Observation { source, qm, bpm, status, period_drift_seconds } = observed;
+    let mut block = serde_json::Map::new();
+    block.insert("neural_result".into(), neural_result);
+    block.insert("source".into(), source);
+    block.insert("qm".into(), qm);
+    block.insert("period_drift_seconds".into(), json!(period_drift_seconds));
     complete(
         tree,
-        block,
+        Value::Object(block),
         bpm,
         status,
         base_string,

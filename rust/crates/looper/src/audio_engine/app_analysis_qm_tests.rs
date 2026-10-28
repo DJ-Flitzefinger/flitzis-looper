@@ -74,6 +74,16 @@ fn supersession_during_finalization_never_selects_a_new_scalar() {
 #[test]
 #[ignore = "explicit owned source plus genuine cached NN method; no NN, Engine or OwnACK"]
 fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::error::Error>> {
+    cached_component(false)
+}
+
+#[test]
+#[ignore = "explicit owned source plus genuine cached NN method; no NN, Engine or OwnACK"]
+fn cached_prediction_bpm_range_component() -> Result<(), Box<dyn std::error::Error>> {
+    cached_component(true)
+}
+
+fn cached_component(use_range: bool) -> Result<(), Box<dyn std::error::Error>> {
     use crate::audio_engine::{analysis_pcm::PcmIdentity, sample_loader};
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -101,13 +111,15 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
         Ok(parent)
     }
     let input_path = PathBuf::from(
-        std::env::var_os("FLITZI_QM_CORROBORATION_INPUT").ok_or("explicit component input")?,
+        std::env::var_os(if use_range { "FLITZI_BPM_RANGE_INPUT" } else { "FLITZI_QM_CORROBORATION_INPUT" })
+            .ok_or("explicit component input")?,
     );
     let root = owned(&input_path)?;
     assert!(fs::metadata(&input_path)?.len() <= 16 * 1024 * 1024);
     let mut input: Value = serde_json::from_slice(&fs::read(input_path)?)?;
     let source = PathBuf::from(input["source_path"].as_str().ok_or("source path")?);
     assert!(source.is_absolute());
+    assert!(source.canonicalize()?.starts_with(Path::new("C:/SCRATCHBEATS").canonicalize()?));
     let expected = input["source_sha256"]
         .as_str()
         .ok_or("source SHA")?
@@ -119,7 +131,8 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
     )?;
     assert_eq!(rate, 48_000);
     let output = PathBuf::from(
-        std::env::var_os("FLITZI_QM_CORROBORATION_OUTPUT").ok_or("explicit component output")?,
+        std::env::var_os(if use_range { "FLITZI_BPM_RANGE_OUTPUT" } else { "FLITZI_QM_CORROBORATION_OUTPUT" })
+            .ok_or("explicit component output")?,
     );
     owned(&output)?;
     assert!(!output.exists());
@@ -143,7 +156,8 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
     assert_eq!(tree["source_sha256"], expected);
     assert_eq!(tree["schema_version"], 5);
     assert_eq!(tree["backend"], "beat_this");
-    assert_eq!(tree["bpm"], Value::Null);
+    if use_range { assert!(tree["bpm"].as_f64().is_some()); }
+    else { assert_eq!(tree["bpm"], Value::Null); }
     let original_ordinal = format!("\"ordinal_fit\":{}", tree["ordinal_fit"]);
     let original_beats = format!("\"raw_beats\":{}", tree["raw_beats"]);
     let original_execution = format!("\"execution\":{}", tree["execution"]);
@@ -160,7 +174,6 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
     writer.sync_all()?;
     drop(writer);
     assert_eq!(hash(&mut original)?, expected);
-    drop(original);
     let mut snapshot = cold_store::sealed_reader(&snapshot_path)?;
     assert_eq!(hash(&mut snapshot)?, expected);
     let mut decoded = sample_loader::decode_audio_snapshot_streamed(
@@ -231,6 +244,7 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
         cancelled: Arc::new(|| false),
         additional_held_bytes: 0,
     };
+    let period = if use_range { None } else {
     let beats: Vec<_> = tree["raw_beats"]
         .as_array()
         .unwrap()
@@ -246,6 +260,8 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
         .unwrap();
     drop(estimate);
     drop(beats);
+    Some(period)
+    };
     let nn_mono = tree["mono_sha256"].as_str().unwrap().to_owned();
     let base = tree.to_string();
     let source_live = budget::sum(&[pcm_bytes, budget::value_tree(&context.descriptor)?, SMALL])?;
@@ -259,13 +275,29 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
         base.len() * 2,
         grid_bytes,
     ])?;
-    let choice = attempt(
+    let choice = if use_range {
+        let range = super::super::bpm_range::BpmRange::configured(true,
+            input["minimum_bpm"].as_f64().ok_or("minimum BPM")?,
+            input["maximum_bpm"].as_f64().ok_or("maximum BPM")?)?.unwrap();
+        let primary_bpm = tree["bpm"].as_f64().unwrap();
+        let selected = super::super::bpm_range::apply(range,primary_bpm,&mut tree,base,
+            base_core,source_live,raw_workspace,grid_bytes,&|| false,|work_core| {
+                observation(&sample,rate,&context,&nn_mono,&decoder_identity,work_core,&|| false,
+                    |bpm,extent| super::super::bpm_range::half_double_drift(primary_bpm,bpm,extent))
+            })?;
+        assert_eq!(primary_bpm,174.0);
+        assert_eq!(selected.bpm,Some(87.0));
+        assert!(selected.beat_error.is_none());
+        assert_eq!(tree["schema_version"],7);
+        assert_eq!(tree["bpm_range"]["primary"]["bpm"],primary_bpm);
+        Choice { bpm:selected.bpm.unwrap(),method_json:selected.method_json.unwrap() }
+    } else { attempt(
         &sample,
         rate,
         &context,
         &nn_mono,
         &decoder_identity,
-        period,
+        period.unwrap(),
         &mut tree,
         &base,
         base_core,
@@ -273,29 +305,32 @@ fn cached_prediction_phase_corroboration_component() -> Result<(), Box<dyn std::
         raw_workspace,
         grid_bytes,
         &|| false,
-    )?;
-    assert_eq!(choice.bpm, 120.0);
+    )? };
+    assert_eq!(choice.bpm, if use_range {87.0} else {120.0});
     assert!(choice.method_json.contains(&original_ordinal));
     assert!(choice.method_json.contains(&original_beats));
     assert!(choice.method_json.contains(&original_execution));
-    assert_eq!(tree["schema_version"], 6);
+    assert_eq!(tree["schema_version"], if use_range {7} else {6});
+    let evidence = if use_range { &tree["bpm_range"]["selection"] } else { &tree["qm_corroboration"] };
     assert_eq!(
-        tree["qm_corroboration"]["source"]["loaded_interleaved_sha256"],
+        evidence["source"]["loaded_interleaved_sha256"],
         playback_sha
     );
     assert_eq!(
-        tree["qm_corroboration"]["source"]["verified_nn_mono_sha256"],
+        evidence["source"]["verified_nn_mono_sha256"],
         nn_mono
     );
-    assert!(
+    if !use_range { assert!(
         tree["ordinal_fit"]["fractional_check"]["window_phase_difference_seconds"]
             .as_f64()
             .unwrap()
             > 0.005
-    );
+    ); }
     let mut current = cold_store::sealed_reader(&source)?;
     assert_eq!(hash(&mut current)?, expected);
     drop(current);
+    assert_eq!(hash(&mut original)?,expected);
+    drop(original);
     drop(snapshot);
     drop(context);
     directory.close()?;

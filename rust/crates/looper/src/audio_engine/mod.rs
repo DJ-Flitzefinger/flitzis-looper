@@ -1128,6 +1128,7 @@ pub struct AudioEngine {
     waveform_requests: waveform::WaveformRequests,
     cold_cancelled: Arc<AtomicBool>,
     primary_beat_installation: Mutex<Option<String>>,
+    automatic_bpm_range: Mutex<Option<app_analysis::BpmRange>>,
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
     resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
@@ -1812,6 +1813,7 @@ impl AudioEngine {
             waveform_requests: waveform::WaveformRequests::default(),
             cold_cancelled: Arc::new(AtomicBool::new(false)),
             primary_beat_installation: Mutex::new(None),
+            automatic_bpm_range: Mutex::new(None),
             cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
             resident_stem_cache: Arc::new(Mutex::new(
@@ -2439,6 +2441,15 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))? =
             Some(installation_root);
+        Ok(())
+    }
+
+    /// Snapshot future automatic-analysis bounds without changing current pads.
+    pub fn configure_automatic_bpm_range(&self, enabled: bool, minimum_bpm: f64, maximum_bpm: f64) -> PyResult<()> {
+        let configured = app_analysis::BpmRange::configured(enabled, minimum_bpm, maximum_bpm)
+            .map_err(PyValueError::new_err)?;
+        *self.automatic_bpm_range.lock()
+            .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))? = configured;
         Ok(())
     }
 

@@ -564,6 +564,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self, lifecycle: ProjectAssetLifecycle, *, beat_this_installation_root: Path | None = None
     ) -> None:
         """Share assignment and separator owners with the application controller."""
+        options = self._project.automatic_bpm_range
+        self._audio.configure_automatic_bpm_range(
+            options.enabled, options.minimum_bpm, options.maximum_bpm
+        )
         self._assets = lifecycle
         configure = getattr(self._audio, "configure_primary_beat_analysis", None)
         if beat_this_installation_root is not None and callable(configure):

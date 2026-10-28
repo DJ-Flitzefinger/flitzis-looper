@@ -23,6 +23,7 @@ from flitzis_looper import stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
+from flitzis_looper.bpm_range_options import BpmRangeOptions
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
@@ -686,6 +687,8 @@ class ProjectState(BaseModel):
     """Enable performer MIDI/keyboard input mappings."""
     recording_options: RecordingOptions = Field(default_factory=RecordingOptions)
     """Immutable format/quality defaults for future takes; no live capture authority."""
+    automatic_bpm_range: BpmRangeOptions = Field(default_factory=BpmRangeOptions)
+    """Immutable range preference captured only by future automatic requests."""
     stem_separator: StemSeparator = "demucs:htdemucs"
     """Separator/model used by future offline stem-generation requests."""
     preload_stem_loops_on_startup: bool = Field(default=False, strict=True)
@@ -999,6 +1002,8 @@ class SessionState(BaseModel):
     """Whether the Settings overlay is open."""
     resident_pcm_settings_error: str | None = None
     """Transient rejected Settings admission; never persisted as project intent."""
+    automatic_bpm_range_settings_error: str | None = None
+    """A rejected future-analysis preference; existing PAD values remain independent."""
 
     input_learn_active: bool = False
     """Whether input mapping Learn mode is waiting for an input/action."""

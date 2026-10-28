@@ -15,6 +15,7 @@ from flitzis_looper.analysis.app_tempo_probe import (
     historical_probe,
     validate_adaptive_probe,
 )
+from flitzis_looper.analysis.app_tempo_range import BpmRangeResult, validate_bpm_range
 from flitzis_looper.analysis.execution import (
     ACTUAL_EXECUTION_ADAPTER,
     ActualExecutionReceipt,
@@ -33,8 +34,8 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4, 5, 6]
-    backend: Literal["beat_this", "beat_this_qm_dsp"]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7]
+    backend: Literal["beat_this", "beat_this_qm_dsp", "beat_this_bpm_range"]
     policy: Literal[
         "neural-stable-regions-v1",
         "neural-stable-regions-v2",
@@ -42,6 +43,7 @@ class AppTempoMethod(BaseModel):
         "neural-stable-regions-v4",
         "neural-inferred-ordinals-v5",
         "neural-qm-same-period-v6",
+        "neural-user-range-v7",
     ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
@@ -67,20 +69,21 @@ class AppTempoMethod(BaseModel):
     qm_corroboration: QmCorroboration | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    bpm_range: BpmRangeResult | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="before")
     @classmethod
     def _reject_legacy_corroboration(cls, value: object) -> object:
         if (
             isinstance(value, dict)
-            and value.get("schema_version") != 6
+            and value.get("schema_version") not in {6, 7}
             and "qm_corroboration" in value
         ):
             message = "Acoustic corroboration fields require version six"
             raise ValueError(message)
         if (
             isinstance(value, dict)
-            and value.get("schema_version") == 6
+            and value.get("schema_version") in {6, 7}
             and any(
                 type(value.get(key)) is not int
                 for key in ("schema_version", "sample_rate_hz", "frame_count")
@@ -88,6 +91,29 @@ class AppTempoMethod(BaseModel):
         ):
             message = "Joint source geometry requires strict integer fields"
             raise ValueError(message)
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _range_field_presence(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if value.get("schema_version") != 7 and "bpm_range" in value:
+            message = "Automatic range fields require version seven"
+            raise ValueError(message)
+        if value.get("schema_version") == 7 and "qm_corroboration" in value:
+            evidence = value.get("bpm_range")
+            primary_version: object
+            if isinstance(evidence, BpmRangeResult):
+                primary_version = evidence.primary.schema_version
+            else:
+                primary = evidence.get("primary") if isinstance(evidence, dict) else None
+                primary_version = (
+                    primary.get("schema_version") if isinstance(primary, dict) else None
+                )
+            if primary_version != 6:
+                message = "Range corroboration fields require an original version six primary"
+                raise ValueError(message)
         return value
 
     @field_validator("execution", mode="before")
@@ -99,13 +125,19 @@ class AppTempoMethod(BaseModel):
 
     @model_validator(mode="after")
     def _coherent_estimate(self) -> AppTempoMethod:
+        self._validate_estimate()
+        return self
+
+    def _validate_estimate(self) -> None:
         if self.execution is not None:
-            if self.schema_version not in {4, 5, 6}:
+            if self.schema_version not in {4, 5, 6, 7}:
                 message = "Execution receipts require version four, five or six tempo metadata"
                 raise ValueError(message)
             validate_execution(self.execution)
         self._validate_policy_version()
-        if self.schema_version == 6:
+        if self.schema_version == 7:
+            validate_bpm_range(self, validate_math_estimate, validate_original_method)
+        elif self.schema_version == 6:
             validate_corroboration(
                 self,
                 validate_math_estimate,
@@ -113,17 +145,13 @@ class AppTempoMethod(BaseModel):
             )
         else:
             validate_math_estimate(self)
-        return self
 
     def _validate_policy_version(self) -> None:
+        if self.schema_version == 7:
+            self._validate_range_policy()
+            return
         if self.schema_version == 6:
-            if (
-                self.backend != "beat_this_qm_dsp"
-                or self.policy != "neural-qm-same-period-v6"
-                or self.qm_corroboration is None
-            ):
-                message = "Version six requires explicit joint acoustic evidence"
-                raise ValueError(message)
+            self._validate_joint_policy()
             return
         expected = (
             "neural-inferred-ordinals-v5"
@@ -140,6 +168,32 @@ class AppTempoMethod(BaseModel):
         if (self.schema_version == 5) != (self.ordinal_fit is not None):
             message = "Inferred-ordinal evidence requires its explicit version five policy"
             raise ValueError(message)
+
+    def _validate_range_policy(self) -> None:
+        if (
+            self.backend != "beat_this_bpm_range"
+            or self.policy != "neural-user-range-v7"
+            or self.bpm_range is None
+        ):
+            message = "Version seven requires explicit automatic range evidence"
+            raise ValueError(message)
+        if (self.bpm_range.primary.schema_version == 6) != (self.qm_corroboration is not None):
+            message = "Range metadata must retain exactly its original joint evidence"
+            raise ValueError(message)
+
+    def _validate_joint_policy(self) -> None:
+        if (
+            self.backend != "beat_this_qm_dsp"
+            or self.policy != "neural-qm-same-period-v6"
+            or self.qm_corroboration is None
+        ):
+            message = "Version six requires explicit joint acoustic evidence"
+            raise ValueError(message)
+
+
+def validate_original_method(method: AppTempoMethod) -> None:
+    """Validate a shallow original header without duplicating its raw observations."""
+    method._validate_estimate()
 
 
 def validate_math_estimate(method: TempoMathView, *, phase_only: bool = False) -> None:

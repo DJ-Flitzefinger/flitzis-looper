@@ -510,14 +510,16 @@ impl CompleteSourceReader {
 
 /// Productive bounded worker path shared by the API and device-free execution.
 pub(super) fn start_analysis(engine: &AudioEngine, id: usize) -> pyo3::PyResult<u64> {
-    start_analysis_with(engine, id, || {})
+    start_analysis_with(engine, id, |_| {})
 }
 
 fn start_analysis_with(
     engine: &AudioEngine,
     id: usize,
-    after_admission: impl FnOnce() + Send + 'static,
+    after_admission: impl FnOnce(Option<super::app_analysis::BpmRange>) + Send + 'static,
 ) -> pyo3::PyResult<u64> {
+    let automatic_bpm_range = *engine.automatic_bpm_range.lock()
+        .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?;
     let reservation = engine
         .cold_jobs
         .reserve()
@@ -562,7 +564,7 @@ fn start_analysis_with(
         .cold_jobs
         .submit(reservation, move || {
             let _task_guard = task_guard;
-            after_admission();
+            after_admission(automatic_bpm_range);
             let cancelled = || {
                 shutdown.load(Ordering::Acquire)
                     || !owner.current()
@@ -631,7 +633,8 @@ fn start_analysis_with(
                         } else {
                             None
                         };
-                        super::app_analysis::analyze(&sample, output_sample_rate, context, false)
+                        super::app_analysis::analyze_with_range(&sample, output_sample_rate,
+                            context, false, automatic_bpm_range)
                     })
             }))
             .unwrap_or_else(|_| Err("Analysis worker failed".into()));

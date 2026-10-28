@@ -125,7 +125,8 @@ def test_analysis_terminal_control_refusal_settles_exact_request_without_replay(
         assert project.sample_analysis[0] == previous
     else:
         assert project.pad_timing_intent[0] == "legacy"
-        assert project.sample_analysis[0] == SampleAnalysis.model_validate(ANALYSIS)
+        expected = ANALYSIS | {"key": previous.key if key_completion_error else ANALYSIS["key"]}
+        assert project.sample_analysis[0] == SampleAnalysis.model_validate(expected)
     assert controller.loader._analysis_request_ids == {2: 23}
     assert controller.session.analyzing_sample_ids == {2}
     assert controller.session.sample_analysis_progress[2] == 0.5

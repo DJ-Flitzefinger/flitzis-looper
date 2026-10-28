@@ -15,6 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[path = "app_analysis_qm.rs"]
 mod qm_corroboration;
+#[path = "app_analysis_range.rs"]
+mod bpm_range;
+pub(super) use bpm_range::BpmRange;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
@@ -299,9 +302,20 @@ pub(super) fn analyze(
     context: Option<NeuralContext>,
     tempo_only: bool,
 ) -> Result<LoadedAnalysis, String> {
+    analyze_with_range(sample, rate, context, tempo_only, None)
+}
+
+pub(super) fn analyze_with_range(
+    sample: &SampleBuffer,
+    rate: u32,
+    context: Option<NeuralContext>,
+    tempo_only: bool,
+    automatic_range: Option<BpmRange>,
+) -> Result<LoadedAnalysis, String> {
     let Some(context) = context else {
         // Callers without a configured neural installation retain the scientific backend.
-        return super::analyze_sample(sample, rate).map(Into::into);
+        return super::analyze_sample(sample, rate)
+            .map(|result| bpm_range::scientific(automatic_range, result.into()));
     };
     let cancellation = {
         let source = context.cancelled.clone();
@@ -432,6 +446,7 @@ pub(super) fn analyze(
         // Keep the exact old string and one tree. An optional late failure must
         // never reconstruct floats or partially publish the joint choice.
         let base_method_json = method.to_string();
+        let base_string_capacity = base_method_json.capacity();
         let mut selected_bpm = estimate_bpm;
         let mut beat_error = estimate_bpm.is_none().then(||format!("Neural tempo estimate {estimate_status}"));
         let method_json = if let Some(period) = phase_period {
@@ -441,7 +456,7 @@ pub(super) fn analyze(
             }));
             if cancelled() { return Err("neural analysis request superseded".into()); }
             match attempted {
-                Ok(Ok(choice)) => { selected_bpm=Some(choice.bpm); beat_error=None; choice.method_json },
+                Ok(Ok(choice)) => { drop(base_method_json); selected_bpm=Some(choice.bpm); beat_error=None; choice.method_json },
                 Ok(Err(qm_corroboration::Failure::Cancelled)) => return Err("neural analysis request superseded".into()),
                 Ok(Err(qm_corroboration::Failure::Unavailable(reason))) => {
                     beat_error=Some(format!("Neural tempo estimate {estimate_status}; QM corroboration unavailable: {reason}"));
@@ -453,13 +468,42 @@ pub(super) fn analyze(
                 },
             }
         } else { base_method_json };
+        let method_json = if let Some((range, primary_bpm)) = automatic_range.zip(selected_bpm)
+            .filter(|(range,bpm)| !range.contains(*bpm)) {
+            let primary_core = super::neural_analysis::budget::value_tree(&method).and_then(|tree| {
+                let strings = method_json.capacity().checked_mul(2).ok_or("range method budget overflow")?;
+                super::neural_analysis::budget::sum(&[source_live,raw_workspace,tree,strings,
+                    base_string_capacity,grid_bytes,std::mem::size_of::<LoadedAnalysis>()])
+            }).unwrap_or(usize::MAX).max(core);
+            let choice = bpm_range::apply(range,primary_bpm,&mut method,method_json,
+                primary_core,source_live,raw_workspace,grid_bytes,&cancelled,|work_core| {
+                    qm_corroboration::observation(sample,rate,&context,&mono_sha256,
+                        raw.decoder_identity(),work_core,&cancelled,|bpm,extent| {
+                            if !range.contains(bpm) {
+                                return Err(qm_corroboration::Failure::Unavailable(
+                                    "independent QM estimate outside the requested range".into()));
+                            }
+                            bpm_range::half_double_drift(primary_bpm,bpm,extent)
+                        })
+                }).map_err(|_| "neural analysis request superseded".to_owned())?;
+            selected_bpm=choice.bpm;
+            beat_error=choice.beat_error;
+            choice.method_json
+        } else { Some(method_json) };
+        if selected_bpm.is_none() {
+            if let Some(range) = automatic_range {
+                if beat_error.as_ref().is_none_or(|reason| !reason.starts_with("No automatic BPM within")) {
+                    beat_error=Some(range.diagnostic(beat_error.as_deref().unwrap_or("no independently admitted tempo")));
+                }
+            }
+        }
         drop(method);
         let beats = predictions.beat_seconds.iter().map(|&v| v as f32).collect();
         let downbeats: Vec<_> = predictions.downbeat_seconds.iter().map(|&v| v as f32).collect();
         if cancelled() { return Err("neural analysis request superseded".into()); }
         Ok(LoadedAnalysis { bpm: selected_bpm.unwrap_or(0.0), key, key_status, key_error,
             beat_grid: flitzis_looper_analysis::BeatGrid { beats, bars: downbeats.clone(), downbeats },
-            bpm_method_json: Some(method_json),
+            bpm_method_json: method_json,
             beat_error })
     })).unwrap_or_else(|_| Err("neural analysis worker panicked".into()));
     match (result, temporary.close()) {

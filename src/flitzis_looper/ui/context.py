@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar, cast
 from pydantic import BaseModel
 
 from flitzis_looper.analysis.execution import device_label as bpm_device_label
+from flitzis_looper.bpm_range_options import BpmRangeOptions
 from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
 from flitzis_looper.controller.key_metadata import loaded_source_identity
 from flitzis_looper.input_mapping import (
@@ -232,10 +233,17 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
-        if method is not None and method.schema_version == 6:
+        if method is not None and method.schema_version in {6, 7}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
-            return f"NN {bpm_device_label(method.execution)}; QM CPU"
+            has_qm = method.qm_corroboration is not None or (
+                method.bpm_range is not None and method.bpm_range.selection is not None
+            )
+            return (
+                f"NN {bpm_device_label(method.execution)}; QM CPU"
+                if has_qm
+                else bpm_device_label(method.execution)
+            )
         return bpm_device_label(method.execution if method is not None else None)
 
     def bpm_evidence_is_current_auto(self, pad_id: int) -> bool:
@@ -1608,6 +1616,20 @@ class SettingsActions:
     def set_recording_options(self, options: RecordingOptions) -> None:
         """Replace future recording defaults through the persistent Settings owner."""
         self._controller.settings.set_recording_options(options)
+
+    def set_automatic_bpm_range(
+        self, *, enabled: bool, minimum_bpm: float, maximum_bpm: float
+    ) -> bool:
+        """Reject invalid or unavailable configuration without changing saved intent."""
+        try:
+            self._controller.settings.set_automatic_bpm_range(
+                BpmRangeOptions(enabled=enabled, minimum_bpm=minimum_bpm, maximum_bpm=maximum_bpm)
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._controller.session.automatic_bpm_range_settings_error = str(error)
+            return False
+        self._controller.session.automatic_bpm_range_settings_error = None
+        return True
 
     def can_change_key_lock_start_behavior(self) -> bool:
         """Read the actual Native playback guard for the global Settings choice."""

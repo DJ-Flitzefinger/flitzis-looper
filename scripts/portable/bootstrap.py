@@ -606,6 +606,19 @@ def check_bpm_only_runtime_api(native_module: object) -> None:
     assert version == 1, (
         "Native constant-BPM runtime requires a current Release build; use start-release.bat"
     )
+    configure = inspect.getattr_static(engine, "configure_automatic_bpm_range", None)
+    range_error = (
+        "Native automatic BPM range requires a current Release build; use start-release.bat"
+    )
+    assert callable(configure), range_error
+    range_parameters = inspect.signature(configure).parameters
+    assert tuple(range_parameters) == ("self", "enabled", "minimum_bpm", "maximum_bpm"), range_error
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        and parameter.kind
+        in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        for parameter in range_parameters.values()
+    ), range_error
     runtime = getattr(engine, "set_input_runtime_state", None)
     assert callable(runtime), "Native constant-BPM runtime is missing set_input_runtime_state"
     parameters = inspect.signature(runtime).parameters

@@ -361,6 +361,7 @@ struct ColdLoad {
     resident_guard: Option<Arc<ResidentLoadGuard>>,
     refine_tempo_only: bool,
     analysis_installation: Option<String>,
+    automatic_bpm_range: Option<super::app_analysis::BpmRange>,
     incoming: Option<Arc<super::incoming_load::IncomingLoad>>,
     intents: Arc<Mutex<Vec<TimingIntent>>>,
     initial_source: Option<SampleBuffer>,
@@ -738,6 +739,8 @@ fn admit_selected_material_incoming(
     refine_tempo_only: bool,
 ) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
+    let automatic_bpm_range = *engine.automatic_bpm_range.lock()
+        .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if refine_tempo_only && (source_intent != "restore" || restore_automatic || run_analysis) {
         return Err(PyValueError::new_err(
@@ -986,6 +989,7 @@ fn admit_selected_material_incoming(
             .lock()
             .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?
             .clone(),
+        automatic_bpm_range,
         incoming: incoming.clone(),
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
@@ -1311,7 +1315,11 @@ impl ColdLoad {
         if self.refine_tempo_only && context.is_none() {
             return Err("primary neural analysis is not configured".into());
         }
-        super::app_analysis::analyze(sample, self.output_rate, context, self.refine_tempo_only)
+        match self.automatic_bpm_range {
+            Some(range) => super::app_analysis::analyze_with_range(sample, self.output_rate,
+                context, self.refine_tempo_only, Some(range)),
+            None => super::app_analysis::analyze(sample, self.output_rate, context, self.refine_tempo_only),
+        }
     }
 
     fn prepare(&self) -> Result<PreparedColdSample, String> {

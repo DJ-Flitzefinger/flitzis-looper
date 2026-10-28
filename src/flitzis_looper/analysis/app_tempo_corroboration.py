@@ -210,8 +210,18 @@ def validate_corroboration(
     )
     primary._validate_policy_version()
     validate_neural(primary)
-    _check_source_extent(method, evidence)
-    qm = evidence.qm
+    validate_qm_evidence(method, evidence.source, evidence.qm, validate_math)
+    _check_selection(method, evidence)
+
+
+def validate_qm_evidence(
+    method: AppTempoMethod,
+    source: CorroborationSource,
+    qm: QmEvidence,
+    validate_math: Callable[[TempoMathView], None],
+) -> None:
+    """Reuse the same complete source preparation and independent scalar replay."""
+    _check_source_extent(method, source, qm)
     step = qm.odf_hop_samples / qm.analyzer.sample_rate_hz
     beats = [frame * step for frame in qm.raw_beat_frames]
     estimate = qm.estimate
@@ -229,11 +239,11 @@ def validate_corroboration(
         [beats[index] for index in qm.raw_downbeat_indices],
     )
     validate_math(view)
-    _check_selection(method, evidence)
 
 
-def _check_source_extent(method: AppTempoMethod, evidence: QmCorroboration) -> None:
-    source, qm = evidence.source, evidence.qm
+def _check_source_extent(
+    method: AppTempoMethod, source: CorroborationSource, qm: QmEvidence
+) -> None:
     if (
         source.source_sha256 != method.source_sha256
         or source.verified_nn_mono_sha256 != method.mono_sha256

@@ -70,6 +70,9 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.separator()
         _key_lock_start_behavior_controls(ctx)
         imgui.separator()
+        imgui.text_colored(TEXT_MUTED_RGBA, "Automatic BPM")
+        _automatic_bpm_range_controls(ctx)
+        imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Recording")
         _recording_controls(ctx)
         imgui.separator()
@@ -104,6 +107,34 @@ def _recording_choice(
             if selected:
                 imgui.set_item_default_focus()
         imgui.end_combo()
+
+
+def _automatic_bpm_range_controls(ctx: UiContext) -> None:
+    options = ctx.state.project.automatic_bpm_range
+    changed, enabled = imgui.checkbox("Use automatic BPM range", options.enabled)
+    if changed and ctx.ui.settings.set_automatic_bpm_range(
+        enabled=enabled, minimum_bpm=options.minimum_bpm, maximum_bpm=options.maximum_bpm
+    ):
+        ctx.persistence.flush_if_dirty()
+    options = ctx.state.project.automatic_bpm_range
+    with item_width(240):
+        minimum_changed, minimum = imgui.input_double(
+            "Minimum BPM", options.minimum_bpm, 1.0, 10.0, "%.2f"
+        )
+        maximum_changed, maximum = imgui.input_double(
+            "Maximum BPM", options.maximum_bpm, 1.0, 10.0, "%.2f"
+        )
+    if (minimum_changed or maximum_changed) and ctx.ui.settings.set_automatic_bpm_range(
+        enabled=options.enabled, minimum_bpm=minimum, maximum_bpm=maximum
+    ):
+        ctx.persistence.flush_if_dirty()
+    imgui.text_wrapped(
+        "Applies to future loads and Analyze audio. "
+        "Existing BPM and manual choices remain unchanged."
+    )
+    error = ctx.state.session.automatic_bpm_range_settings_error
+    if error:
+        imgui.text_wrapped(error)
 
 
 def _recording_controls(ctx: UiContext) -> None:
