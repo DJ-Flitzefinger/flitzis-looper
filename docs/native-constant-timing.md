@@ -352,6 +352,9 @@ off-realtime paths. No failed subset can stop unrelated voices or rewrite loops.
 The controller leaves active/paused truth to native playback messages. It observes
 terminal ticket feedback only for GLOBAL restore intent: an accepted STOP remembers
 the captured playing subset, and an accepted remembered START consumes that intent.
+Launch cancellation may also return historical or not-yet-effective targets. Those
+receive ordered STOP coverage, but never enter restart membership without actual
+active, non-paused playback observed after the cancellation fence and feedback drain.
 Generic stop-all creates no remembered restore set. Before each subsequent global
 target capture, the controller drains native playback feedback through the existing
 app event handler after observing any accepted ticket. A following MIDI/keyboard

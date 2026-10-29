@@ -1009,6 +1009,17 @@ After a manual pad trigger or stop clears the remembered set, START/STOP left mo
 restart only the pads that are currently playing. START/STOP right mouse down SHALL remember only
 the pads that are currently playing at that moment.
 
+Previously admitted or cancelled starts SHALL NOT count as playing solely because
+they require ordered STOP coverage. With Multi Loop ON, the remembered set SHALL
+use actual active, non-paused playback after launch cancellation and feedback drain.
+
+#### Scenario: Enabling Multi Loop does not revive earlier exclusive starts
+- **GIVEN** pads 1, 2 and 3 were played in sequence with Multi Loop OFF
+- **AND** only pad 3 is still playing when Multi Loop is enabled
+- **WHEN** the performer right-clicks START/STOP and later left-clicks it
+- **THEN** only pad 3 is restarted
+- **AND** cancellation still fences all earlier starts
+
 #### Scenario: Manual pad trigger replaces the stopped restore target
 - **GIVEN** START/STOP previously remembered pads 1, 2, and 3 from a right-button stop
 - **WHEN** the performer manually triggers pad 4

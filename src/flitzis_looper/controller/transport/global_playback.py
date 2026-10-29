@@ -437,6 +437,13 @@ class GlobalPlaybackController:
             if snapshot is None:
                 return
             bindings.append(snapshot.binding)
-        restore_ids = active_ids - self._session.paused_sample_ids if remember else frozenset()
+        # Revoked launch IDs include historical admissions and unclaimed starts.
+        # They need ordered STOP coverage, but only post-drain actual playback
+        # belongs to the next remembered restart.
+        restore_ids = (
+            frozenset(self._session.active_sample_ids - self._session.paused_sample_ids)
+            if remember
+            else frozenset()
+        )
         ticket = self._audio.stop_global_playback_batch(bindings, received_at_ns=received_at_ns)
         self._pending = _PendingGlobalBatch(ticket, frozenset(restore_ids), self._restore_revision)
