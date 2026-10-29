@@ -78,7 +78,7 @@ fn receipt(profile: &Profile, request: &Value, shape: Geometry, class: usize) ->
 fn observation(primary: f64, bpm: f64) -> Observation {
     Observation {
         source: json!({}),
-        qm: json!({"analyzer":{"frame_count":26_460_000}}),
+        qm: json!({"analyzer":{"frame_count":26_460_000},"estimate":{"kernel_version":4}}),
         bpm,
         status: "estimated",
         period_drift_seconds: bpm_range::half_double_drift(primary, bpm, 600.0).unwrap(),
@@ -93,6 +93,21 @@ fn exact_classes_reject_midpoints_and_uncovered_values() {
     assert_eq!(candidate_class(30.0), Some(30));
     assert_eq!(candidate_class(285.0), Some(285));
     assert_eq!(candidate_class(77.94247297546801), Some(78));
+}
+
+#[test]
+fn retired_schema8_tool_rejects_new_qm_kernel_before_any_classifier_call() {
+    let profile=profile();
+    let mut tree=tree(61.0);
+    let base=tree.to_string();
+    let result=transact(&mut tree,&base,0,0,0,0,None,geometry(28_800_000,48_000).unwrap(),
+        &profile,input(&profile),false,&||false,|_,primary| {
+            let mut observation=observation(primary,122.0);
+            observation.qm["estimate"]["kernel_version"]=json!(9);
+            Ok(observation)
+        },|_|panic!("retired8 must not call a classifier for kernel9"));
+    assert!(matches!(result,Err(Failure::NoChoice)));
+    assert_eq!(tree.to_string(),base);
 }
 #[test]
 fn full_geometry_reservation_matches_the_retained_two_resource_cases() {

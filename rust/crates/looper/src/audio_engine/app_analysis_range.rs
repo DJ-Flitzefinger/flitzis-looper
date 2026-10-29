@@ -176,7 +176,7 @@ pub(super) fn apply(
         method_json: None,
         beat_error: Some(range.diagnostic(detail)),
     };
-    let eligible = matches!(tree["schema_version"].as_u64(), Some(4 | 5))
+    let eligible = matches!(tree["schema_version"].as_u64(), Some(4 | 5 | 9))
         && tree["backend"] == "beat_this"
         && matches!(
             tree["status"].as_str(),

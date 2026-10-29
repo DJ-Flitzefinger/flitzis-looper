@@ -1,3 +1,8 @@
+This delivered change is historical for fresh automatic publication. The later
+Human priority and `prioritize-tempo-periods` supersede its automatic nominal
+arbitration requirement. Actual stored schema8 evidence and installed bytes are
+retained; fresh analysis prioritizes accurate period with manual unit controls.
+
 ## Why
 
 Two independently admitted detectors can agree on physical timing but differ by

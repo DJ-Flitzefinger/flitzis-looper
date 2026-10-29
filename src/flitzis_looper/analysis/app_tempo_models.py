@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from flitzis_looper.analysis.app_tempo_corroboration import QmCorroboration, validate_corroboration
 from flitzis_looper.analysis.app_tempo_inferred import OrdinalFit, validate_ordinal_fit
+from flitzis_looper.analysis.app_tempo_periods import validate_period_fit
 from flitzis_looper.analysis.app_tempo_prior import NominalSelection, validate_nominal_selection
 from flitzis_looper.analysis.app_tempo_probe import (
     AdaptiveTempoProbe,
@@ -35,7 +36,7 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
     backend: Literal[
         "beat_this", "beat_this_qm_dsp", "beat_this_bpm_range", "beat_this_qm_tempocnn"
     ]
@@ -48,6 +49,7 @@ class AppTempoMethod(BaseModel):
         "neural-qm-same-period-v6",
         "neural-user-range-v7",
         "neural-qm-nominal-prior-v8",
+        "neural-inferred-periods-v9",
     ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
@@ -90,7 +92,7 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (
             isinstance(value, dict)
-            and value.get("schema_version") in {6, 7, 8}
+            and value.get("schema_version") in {6, 7, 8, 9}
             and any(
                 type(value.get(key)) is not int
                 for key in ("schema_version", "sample_rate_hz", "frame_count")
@@ -149,8 +151,8 @@ class AppTempoMethod(BaseModel):
 
     def _validate_estimate(self) -> None:
         if self.execution is not None:
-            if self.schema_version not in {4, 5, 6, 7, 8}:
-                message = "Execution receipts require tempo metadata version four through eight"
+            if self.schema_version not in {4, 5, 6, 7, 8, 9}:
+                message = "Execution receipts require tempo metadata version four through nine"
                 raise ValueError(message)
             validate_execution(self.execution)
         self._validate_policy_version()
@@ -177,10 +179,8 @@ class AppTempoMethod(BaseModel):
         if self.schema_version == 6:
             self._validate_joint_policy()
             return
-        expected = (
-            "neural-inferred-ordinals-v5"
-            if self.schema_version == 5
-            else f"neural-stable-regions-v{self.schema_version}"
+        expected = {5: "neural-inferred-ordinals-v5", 9: "neural-inferred-periods-v9"}.get(
+            self.schema_version, f"neural-stable-regions-v{self.schema_version}"
         )
         if (
             self.backend != "beat_this"
@@ -189,8 +189,8 @@ class AppTempoMethod(BaseModel):
         ):
             message = "Tempo policy differs from its metadata version"
             raise ValueError(message)
-        if (self.schema_version == 5) != (self.ordinal_fit is not None):
-            message = "Inferred-ordinal evidence requires its explicit version five policy"
+        if (self.schema_version in {5, 9}) != (self.ordinal_fit is not None):
+            message = "Inferred evidence requires its explicit version five or nine policy"
             raise ValueError(message)
 
     def _validate_range_policy(self) -> None:
@@ -236,7 +236,9 @@ def validate_math_estimate(method: TempoMathView, *, phase_only: bool = False) -
     """Replay existing scalar mathematics without model or execution identity."""
     duration = method.frame_count / method.sample_rate_hz
     _validate_observations(method, duration)
-    if method.schema_version == 5:
+    if method.schema_version == 9:
+        validate_period_fit(method, phase_only=phase_only)
+    elif method.schema_version == 5:
         validate_ordinal_fit(method, phase_only=phase_only)
     else:
         if phase_only:

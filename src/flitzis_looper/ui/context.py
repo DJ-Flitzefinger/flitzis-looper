@@ -233,7 +233,7 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
-        if method is not None and method.schema_version in {6, 7, 8}:
+        if method is not None and method.schema_version in {6, 7, 8, 9}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
             if method.nominal_selection is not None:

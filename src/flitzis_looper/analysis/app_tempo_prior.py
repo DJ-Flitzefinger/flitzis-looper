@@ -352,8 +352,10 @@ def validate_nominal_selection(
         }
     )
     validate_primary(primary)
-    validate_qm_evidence(method, evidence.source, evidence.qm, validate_math)
     chosen = evidence.qm.estimate
+    if chosen.kernel_version not in {4, 5}:
+        _invalid("Saved nominal selection retains its original QM kernel versions")
+    validate_qm_evidence(method, evidence.source, evidence.qm, validate_math)
     source = evidence.prior.input
     if (
         source.source_sha256 != method.source_sha256

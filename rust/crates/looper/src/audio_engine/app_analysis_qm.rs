@@ -173,11 +173,7 @@ pub(super) fn observation(
     // The admitted scalar reserve covers typed estimate / new JSON coexistence;
     // no NN arrays are cloned here. The caller holds one mutable base tree.
     admit(&[raw_live, reserve])?;
-    let kernel_version = if qm_estimate.ordinal_fit.is_some() {
-        5
-    } else {
-        4
-    };
+    let kernel_version = app_tempo::schema_version(&qm_estimate);
     let mut own = serde_json::to_value(&qm_estimate).map_err(unavailable)?;
     drop(qm_estimate);
     let own_fields = own
@@ -228,8 +224,7 @@ pub(super) fn attempt(
 ) -> Result<Choice, Failure> {
     check(cancelled)?;
     admit(&[base_core, SMALL])?;
-    let neural_result =
-        json!({"schema_version":5,"policy":tree["policy"],"status":tree["status"],"bpm":null});
+    let neural_result = neural_result_header(tree);
     let observed = observation(
         sample,
         rate,
@@ -265,6 +260,10 @@ pub(super) fn attempt(
         grid_bytes,
         cancelled,
     )
+}
+
+fn neural_result_header(tree: &Value) -> Value {
+    json!({"schema_version":tree["schema_version"],"policy":tree["policy"],"status":tree["status"],"bpm":null})
 }
 
 fn complete(

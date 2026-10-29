@@ -81,6 +81,60 @@ class HarmonicCheck(BaseModel):
         return value
 
 
+class PeriodHarmonicCheck(BaseModel):
+    """An actual canonical seed referencing the shared version-nine summaries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    factor: _Finite
+    seed_period_seconds: Annotated[float, Field(allow_inf_nan=False, gt=0)]
+    seed_anchor_seconds: _Finite
+    outcome: Literal["fitted", "no_fixed_fit", "out_of_range"]
+    candidate_index: Annotated[int, Field(strict=True, ge=0, le=31)] | None
+
+    @field_validator("factor")
+    @classmethod
+    def _factor(cls, value: float) -> float:
+        if value not in {0.5, 2.0}:
+            _invalid("Period harmonic factor must be one half or two")
+        return value
+
+
+class PeriodTrial(BaseModel):
+    """One performed candidate's finite precision and rival diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_index: Annotated[int, Field(strict=True, ge=0, le=31)]
+    outcome: Literal[
+        "supported", "ambiguous", "conflicting_sections", "insufficient", "search_limited"
+    ]
+    evidence_tier: Literal["two_ten_second", "gapped_support", "short_source", "inconclusive"]
+    candidate_limit_reached: bool = Field(strict=True)
+    probe_windows: Annotated[list[_Bounds], Field(max_length=2)]
+    fractional_check: FractionalTempoCheck | None
+    integer_check: FractionalTempoCheck | None
+    integer_candidate_bpm: _Bpm | None
+    integer_preferred: bool = Field(strict=True)
+    conflicting_sections: Annotated[
+        list[Annotated[int, Field(strict=True, ge=0, le=4)]], Field(max_length=5)
+    ]
+    critical_indices: Annotated[
+        list[Annotated[int, Field(strict=True, ge=0, le=31)]], Field(max_length=9)
+    ]
+
+
+class PeriodSelection(BaseModel):
+    """Canonical-first choice among exactly the two already declared harmonics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_index: Annotated[int, Field(strict=True, ge=0, le=31)]
+    harmonics: Annotated[list[PeriodHarmonicCheck], Field(min_length=2, max_length=2)]
+    trials: Annotated[list[PeriodTrial], Field(min_length=1, max_length=3)]
+    selected_trial_index: Annotated[int, Field(strict=True, ge=0, le=2)] | None
+
+
 class EvaluatedOrdinalFit(BaseModel):
     """Declared winner and critical rivals after the bounded Native search."""
 
@@ -94,7 +148,7 @@ class EvaluatedOrdinalFit(BaseModel):
     evaluated_candidate_count: Annotated[int, Field(strict=True, ge=0, le=4098)]
     winner: CandidateSummary | None
     assignments: Annotated[list[_Assignment], Field(max_length=250_000)]
-    alternatives: Annotated[list[CandidateSummary], Field(max_length=10)]
+    alternatives: Annotated[list[CandidateSummary], Field(max_length=31)]
     harmonics: Annotated[list[HarmonicCheck], Field(max_length=2)]
     probe_windows: Annotated[list[_Bounds], Field(max_length=2)]
     fractional_check: FractionalTempoCheck | None
@@ -104,6 +158,16 @@ class EvaluatedOrdinalFit(BaseModel):
     conflicting_sections: Annotated[
         list[Annotated[int, Field(strict=True, ge=0, le=4)]], Field(max_length=5)
     ]
+    period_selection: PeriodSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("period_selection", mode="before")
+    @classmethod
+    def _selection_not_null(cls, value: object) -> object:
+        if value is None:
+            _invalid("Missing period selection must be omitted")
+        return value
 
 
 type OrdinalFit = Annotated[BudgetOrdinalFit | EvaluatedOrdinalFit, Field(discriminator="outcome")]
@@ -677,6 +741,8 @@ def validate_ordinal_fit(method: TempoMathView, *, phase_only: bool = False) -> 
             _invalid("Acoustic corroboration cannot bypass unavailable neural preparation")
         _validate_budget(method, fit)
     elif isinstance(fit, EvaluatedOrdinalFit):
+        if len(fit.alternatives) > 10 or fit.period_selection is not None:
+            _invalid("Version five retains its original bounded ordinal evidence")
         _validate_evaluated(method, fit, phase_only=phase_only)
     else:
         _invalid("Version five requires its explicit inferred-ordinal evidence")

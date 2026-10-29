@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui, imgui_knobs
 
+from flitzis_looper.analysis.app_tempo_periods import has_unit_counterpart
 from flitzis_looper.audio_eq import (
     EQ_KNOB_POSITION_MAX,
     EQ_KNOB_POSITION_MIN,
@@ -424,12 +425,43 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     _render_bpm_evidence(ctx, info.pad_id)
 
 
+def _has_period_unit_note(method: AppTempoMethod) -> bool:
+    if method.status not in {"estimated", "single_region_estimate"}:
+        return False
+    if has_unit_counterpart(method.ordinal_fit, method.frame_count / method.sample_rate_hz):
+        return True
+    selection = method.bpm_range.selection if method.bpm_range is not None else None
+    qm = (
+        selection.qm
+        if selection is not None
+        else (method.qm_corroboration.qm if method.qm_corroboration is not None else None)
+    )
+    return qm is not None and has_unit_counterpart(
+        qm.estimate.ordinal_fit, qm.analyzer.frame_count / qm.analyzer.sample_rate_hz
+    )
+
+
+def _period_unit_guidance(method: AppTempoMethod) -> str:
+    prefix = "Automatic BPM estimate."
+    if method.bpm_range is not None:
+        evidence = method.bpm_range
+        bounds = f"{evidence.minimum_bpm:g}-{evidence.maximum_bpm:g} BPM"
+        prefix = (
+            f"Automatic analysis used CPU acoustic support within its recorded range ({bounds})."
+        )
+    elif method.qm_corroboration is not None:
+        prefix = "Automatic BPM uses CPU acoustic support."
+    return f"{prefix} Beat level may be half or double. Use BPM /2 or x2 if needed."
+
+
 def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     """Explain finite automatic evidence without presenting it as musical certainty."""
     if method is None:
         return None
     if method.nominal_selection is not None:
         return _prior_bpm_guidance(method)
+    if _has_period_unit_note(method):
+        return _period_unit_guidance(method)
     if method.bpm_range is not None:
         return _range_bpm_guidance(method)
     return _base_bpm_guidance(method)
@@ -484,13 +516,14 @@ def _base_bpm_guidance(method: AppTempoMethod) -> str | None:
         return note
     if method.status not in {"estimated", "single_region_estimate"}:
         return "Automatic BPM is uncertain. Use Tap BPM or enter a value."
-    if method.schema_version in {5, 6}:
+    if method.schema_version in {5, 6, 9}:
         return {
             5: "Automatic BPM estimate. Verify its beat level with /2, x2 or Tap BPM.",
             6: (
                 "Automatic BPM uses CPU acoustic support. "
                 "Verify its beat level with /2, x2 or Tap BPM."
             ),
+            9: "Automatic BPM estimate. Verify its beat level with /2, x2 or Tap BPM.",
         }[method.schema_version]
     if method.status == "single_region_estimate" or (
         method.integer_probe is not None and method.integer_probe.status == "inconclusive"

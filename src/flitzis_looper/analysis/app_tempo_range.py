@@ -3,7 +3,7 @@
 import math
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from flitzis_looper.analysis.app_tempo_corroboration import (
     CorroborationSource,
@@ -24,13 +24,24 @@ _Bpm = Annotated[float, Field(strict=True, allow_inf_nan=False, ge=30, le=300)]
 class RangePrimary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Annotated[int, Field(strict=True, ge=4, le=6)]
+    schema_version: Literal[4, 5, 6, 9]
     backend: Literal["beat_this", "beat_this_qm_dsp"]
     policy: Literal[
-        "neural-stable-regions-v4", "neural-inferred-ordinals-v5", "neural-qm-same-period-v6"
+        "neural-stable-regions-v4",
+        "neural-inferred-ordinals-v5",
+        "neural-qm-same-period-v6",
+        "neural-inferred-periods-v9",
     ]
     status: Literal["estimated", "single_region_estimate"]
     bpm: _Bpm
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _strict_version(cls, value: object) -> object:
+        if type(value) is not int:
+            message = "Automatic range primary version must be an integer"
+            raise ValueError(message)
+        return value
 
 
 class RangeSelection(BaseModel):
@@ -103,7 +114,7 @@ def validate_bpm_range(
             message = "An unsupported range must publish no new automatic BPM"
             raise ValueError(message)
         return
-    if header.schema_version not in {4, 5}:
+    if header.schema_version not in {4, 5, 9}:
         message = "Range acoustic fallback requires an independently successful neural primary"
         raise ValueError(message)
     validate_qm_evidence(method, selection.source, selection.qm, validate_math)

@@ -114,7 +114,7 @@ pub(super) fn observe_search_fit(
     fitted: &FitResult<CandidateSummary>,
 ) {
     with_observer(|observer| {
-        assert!(observer.attempts.len() < SEARCH_FITS && ordinal <= SEARCH_FITS);
+        assert!(observer.attempts.len() < SEARCH_FITS && ordinal <= MAX_FITS);
         observer.attempts.push(serde_json::json!({"stage":observer.stage,"fit_ordinal":ordinal,
             "period_seconds":period,"anchor_seconds":anchor,"period_bits":period.to_bits(),"anchor_bits":anchor.to_bits(),
             "pool_index":if matches!(fitted, Ok(Some(_))) { Some(pool_index) } else { None },"result":observed_fit(fitted)}));
@@ -533,6 +533,17 @@ fn cancelled_priority_dispatch_never_returns_unavailable_evidence() {
 fn fixed_search_layout_and_point_lifetimes_fit_the_unchanged_reserve() {
     assert!(constant_storage_bytes().unwrap() <= FIXED_RESERVE);
     assert!(4 * std::mem::size_of::<Point>() <= 96);
+    println!(
+        "PERIOD_STORAGE fixed={} reserve={} trial={} selection={} harmonic={} summary={} span={} point={}",
+        constant_storage_bytes().unwrap(),
+        FIXED_RESERVE,
+        std::mem::size_of::<PeriodTrial>(),
+        std::mem::size_of::<PeriodSelection>(),
+        std::mem::size_of::<PeriodHarmonic>(),
+        std::mem::size_of::<CandidateSummary>(),
+        std::mem::size_of::<SpanDiagnostics>(),
+        std::mem::size_of::<Point>()
+    );
     if usize::BITS == 64 {
         assert_eq!(std::mem::size_of::<Seed>(), 144);
         assert_eq!(std::mem::size_of::<SpanDiagnostics>(), 112);
@@ -607,7 +618,9 @@ fn missing_and_extra_events_recover_scalar_tempo_without_mutating_observations()
         };
         assert_eq!(proof.outcome, "supported");
         assert_eq!(proof.winner.as_ref().unwrap().sections.len(), 5);
-        assert!(proof.evaluated_candidate_count <= MAX_FITS && proof.alternatives.len() <= 10);
+        assert!(
+            proof.evaluated_candidate_count <= MAX_FITS && proof.alternatives.len() < MAX_SUMMARIES
+        );
         assert_eq!(proof.assignments[0].1, 0);
     }
 }
@@ -634,7 +647,10 @@ fn canonical_interval_ranking_preserves_low_and_high_missing_event_tempi() {
                 panic!("inferred evidence missing");
             };
             assert_eq!(proof.outcome, "supported");
-            assert!(proof.evaluated_candidate_count <= MAX_FITS && proof.alternatives.len() <= 10);
+            assert!(
+                proof.evaluated_candidate_count <= MAX_FITS
+                    && proof.alternatives.len() < MAX_SUMMARIES
+            );
         }
     }
 }
@@ -685,7 +701,7 @@ fn short_original_has_explicit_short_evidence_without_claiming_long_probes() {
 }
 
 #[test]
-fn eight_second_missing_event_clip_reports_its_unresolved_harmonic() {
+fn eight_second_missing_event_clip_keeps_its_nonunit_ambiguity() {
     let events: Vec<_> = (0..16)
         .filter(|i| ![5, 11].contains(i))
         .map(|i| 0.1 + i as f64 * 0.5)
@@ -698,6 +714,40 @@ fn eight_second_missing_event_clip_reports_its_unresolved_harmonic() {
     };
     assert_eq!(proof.evidence_tier, "short_source");
     assert_eq!(proof.outcome, "ambiguous");
+    let selection = proof.period_selection.as_ref().unwrap();
+    assert!(selection.selected_trial_index.is_none());
+    let winner = proof.winner.as_ref().unwrap();
+    assert!(
+        proof
+            .alternatives
+            .iter()
+            .any(|candidate| candidate.global.sustained()
+                && !equivalent(candidate, winner, 8.0)
+                && !unit_counterpart(candidate, winner, 8.0)
+                && candidate.global.band().1 >= winner.global.band().0)
+    );
+}
+
+#[test]
+fn complete_short_clip_keeps_tempo_when_only_unit_bands_overlap() {
+    // Eight complete observations cannot meet the old four-second observed-span
+    // gate. Their coherent half/double uncertainty is independent of precision.
+    let events: Vec<_> = (0..8).map(|i| 0.125 + i as f64 * 0.5).collect();
+    assert!(estimate_v4(&events, 4.0).bpm.is_none());
+    let result = estimate(&events, 4.0);
+    assert_eq!(result.bpm, Some(120.0), "{result:?}");
+    let Some(OrdinalFit::Evaluated(proof)) = result.ordinal_fit else {
+        panic!("period evidence missing");
+    };
+    assert_eq!(proof.outcome, "supported");
+    let winner = proof.winner.as_ref().unwrap();
+    assert!(
+        proof
+            .alternatives
+            .iter()
+            .any(|candidate| unit_counterpart(candidate, winner, 4.0)
+                && candidate.global.band().1 >= winner.global.band().0)
+    );
 }
 
 #[test]
@@ -1154,16 +1204,24 @@ fn trace_cached_search_witnesses() {
 fn harmonic_declarations_replay_only_the_two_exact_bounded_starts() {
     let events = interrupted(97.125, true);
     let (_, evidence) = evaluate(&events, 187.0).unwrap();
-    let winner = evidence.winner.as_ref().unwrap();
-    assert_eq!(evidence.harmonics.len(), 2);
+    let selection = evidence.period_selection.as_ref().unwrap();
+    let summaries: Vec<_> = std::iter::once(evidence.winner.as_ref().unwrap())
+        .chain(evidence.alternatives.iter())
+        .collect();
+    let canonical = summaries[selection.canonical_index];
+    assert!(evidence.harmonics.is_empty());
+    assert_eq!(selection.harmonics.len(), 2);
     assert!(evidence.evaluated_candidate_count <= MAX_FITS);
-    for (factor, declared) in [0.5, 2.0].into_iter().zip(&evidence.harmonics) {
+    for (factor, declared) in [0.5, 2.0].into_iter().zip(&selection.harmonics) {
         assert_eq!(declared.factor, factor);
-        assert_eq!(declared.seed_period_seconds, winner.period_seconds * factor);
-        assert_eq!(declared.seed_anchor_seconds, winner.anchor_seconds);
+        assert_eq!(
+            declared.seed_period_seconds,
+            canonical.period_seconds * factor
+        );
+        assert_eq!(declared.seed_anchor_seconds, canonical.anchor_seconds);
         if !(MIN_PERIOD..=MAX_PERIOD).contains(&declared.seed_period_seconds) {
             assert_eq!(declared.outcome, "out_of_range");
-            assert!(declared.alternative_index.is_none());
+            assert!(declared.candidate_index.is_none());
         } else {
             match fit(
                 &events,
@@ -1175,17 +1233,424 @@ fn harmonic_declarations_replay_only_the_two_exact_bounded_starts() {
             {
                 Some(candidate) => {
                     assert_eq!(declared.outcome, "fitted");
-                    assert_eq!(
-                        evidence.alternatives[declared.alternative_index.unwrap()],
-                        candidate
-                    );
+                    assert_eq!(*summaries[declared.candidate_index.unwrap()], candidate);
                 }
                 None => {
                     assert_eq!(declared.outcome, "no_fixed_fit");
-                    assert!(declared.alternative_index.is_none());
+                    assert!(declared.candidate_index.is_none());
                 }
             }
         }
     }
     assert!(fit(&events, 187.0, f64::NAN, 0.0).unwrap().is_none());
+}
+
+#[test]
+fn direct_unit_proof_has_one_global_winding_and_a_strict_drift_boundary() {
+    let fine = bounded_summary(0.46875, 0.08);
+    let coarse = bounded_summary(1.0, 0.08);
+    assert!(unit_counterpart(&fine, &coarse, 0.08));
+    assert!(unit_counterpart(&coarse, &fine, 0.08));
+    assert!(!unit_counterpart(&fine, &coarse, 0.08_f64.next_up()));
+    let fine = bounded_summary(0.5, 180.0);
+    let mut coarse = bounded_summary(1.0, 180.0);
+    coarse.anchor_seconds = 40.0;
+    assert!(unit_counterpart(&fine, &coarse, 180.0));
+    assert!(strongest(&[coarse.clone()], &fine, 180.0, None).is_none());
+    for section in 0..5 {
+        assert!(strongest(&[coarse.clone()], &fine, 180.0, Some(section)).is_none());
+    }
+    coarse.anchor_seconds += 0.25;
+    assert!(!unit_counterpart(&fine, &coarse, 180.0));
+    assert!(!unit_counterpart(
+        &fine,
+        &bounded_summary(2.0, 180.0),
+        180.0
+    ));
+    assert!(!unit_counterpart(
+        &fine,
+        &bounded_summary(0.75, 180.0),
+        180.0
+    ));
+    assert!(!unit_counterpart(&fine, &coarse, f64::INFINITY));
+}
+
+fn biased_subdivision_events() -> Vec<f64> {
+    (0..360)
+        .filter(|i| i % 2 == 0 || i % 6 != 5)
+        .map(|i| {
+            let time = 0.125 + i as f64 * 0.5;
+            // Equal repeated support in four blocks gives exactly zero bias
+            // sum and ordinal/bias covariance. Binary amplitudes preserve the
+            // .5-second canonical slope while its distant probes still differ.
+            let bias = if i % 2 == 0 {
+                0.0
+            } else {
+                [1.0, -3.0, 3.0, -1.0][i as usize / 90] / 128.0
+            };
+            time + bias
+        })
+        .collect()
+}
+
+#[test]
+fn a_precise_half_period_survives_the_failed_higher_support_canonical() {
+    let events = biased_subdivision_events();
+    let before = events.clone();
+    let result = estimate(&events, 180.0);
+    assert_eq!(result.bpm, Some(60.0), "{result:?}");
+    assert_eq!(events, before);
+    let Some(OrdinalFit::Evaluated(proof)) = result.ordinal_fit else {
+        panic!("period evidence missing");
+    };
+    let selection = proof.period_selection.as_ref().unwrap();
+    let canonical = if selection.canonical_index == 0 {
+        proof.winner.as_ref().unwrap()
+    } else {
+        &proof.alternatives[selection.canonical_index - 1]
+    };
+    assert_eq!(canonical.period_seconds, 0.5);
+    assert_eq!(canonical.anchor_seconds, 0.125);
+    let chosen = selection.selected_trial_index.unwrap();
+    assert!(chosen > 0);
+    assert_eq!(selection.trials[chosen].candidate_index, 0);
+    assert_eq!(
+        selection.trials[0]
+            .fractional_check
+            .as_ref()
+            .unwrap()
+            .status,
+        "fail"
+    );
+    assert_eq!(
+        selection.trials[chosen]
+            .fractional_check
+            .as_ref()
+            .unwrap()
+            .status,
+        "pass"
+    );
+    assert!(proof.alternatives.len() < MAX_SUMMARIES);
+    assert_eq!(selection.harmonics.len(), 2);
+    assert!(proof.harmonics.is_empty());
+}
+
+#[test]
+fn failed_alias_precision_spends_no_coverage_fuel_or_false_limit() {
+    let events: Vec<_> = (0..360)
+        .map(|i| {
+            let t = 0.05 + i as f64 * 0.5;
+            t + if (2.0..34.0).contains(&t) {
+                0.01
+            } else if (146.0..178.0).contains(&t) {
+                -0.01
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let canonical = fit(&events, 180.0, 0.5, 0.05).unwrap().unwrap();
+    let mut pool = vec![canonical.clone()];
+    let mut declared = Vec::new();
+    for factor in [0.5, 2.0] {
+        let candidate = fit(
+            &events,
+            180.0,
+            canonical.period_seconds * factor,
+            canonical.anchor_seconds,
+        )
+        .unwrap()
+        .unwrap();
+        let index = pool.len();
+        pool.push(candidate);
+        declared.push(PeriodHarmonic {
+            factor,
+            seed_period_seconds: canonical.period_seconds * factor,
+            seed_anchor_seconds: canonical.anchor_seconds,
+            outcome: "fitted",
+            candidate_index: Some(index),
+        });
+    }
+    let calls = std::cell::Cell::new(0);
+    let (trials, selected) = select_period_trials(
+        &events,
+        180.0,
+        0,
+        &declared,
+        false,
+        &mut pool,
+        &Control::new(&never_cancel),
+        |_, _| {
+            calls.set(calls.get() + 1);
+            Ok(false)
+        },
+    )
+    .unwrap();
+    assert_eq!(calls.get(), 0);
+    assert_eq!(trials.len(), 3);
+    assert!(selected.is_none());
+    assert!(trials.iter().all(|trial| !trial.candidate_limit_reached
+        && trial.fractional_check.as_ref().unwrap().status == "fail"));
+}
+
+#[test]
+fn a_new_rival_from_alias_coverage_cannot_be_promoted_or_hidden() {
+    let events = biased_subdivision_events();
+    let canonical = fit(&events, 180.0, 0.5, 0.125).unwrap().unwrap();
+    let half = fit(
+        &events,
+        180.0,
+        canonical.period_seconds * 2.0,
+        canonical.anchor_seconds,
+    )
+    .unwrap()
+    .unwrap();
+    let mut pool = vec![canonical.clone(), half];
+    let declared = [PeriodHarmonic {
+        factor: 2.0,
+        seed_period_seconds: canonical.period_seconds * 2.0,
+        seed_anchor_seconds: canonical.anchor_seconds,
+        outcome: "fitted",
+        candidate_index: Some(1),
+    }];
+    let (trials, selected) = select_period_trials(
+        &events,
+        180.0,
+        0,
+        &declared,
+        false,
+        &mut pool,
+        &Control::new(&never_cancel),
+        |_, pool| {
+            let mut rival = bounded_summary(0.8, 180.0);
+            rival.global.raw_count = 300;
+            rival.global.expected_slots = 225;
+            rival.global.matched = 220;
+            pool.push(rival);
+            Ok(true)
+        },
+    )
+    .unwrap();
+    assert!(selected.is_none());
+    assert_eq!(trials.len(), 2);
+    assert!(trials[1].critical_indices.contains(&2));
+    assert_ne!(trials[1].outcome, "supported");
+}
+
+#[test]
+fn canonical_success_is_kept_and_alias_coverage_refusal_stops_selection() {
+    let events = biased_subdivision_events();
+    let fast = fit(&events, 180.0, 0.5, 0.125).unwrap().unwrap();
+    let half = fit(&events, 180.0, 1.0, 0.125).unwrap().unwrap();
+    let control = Control::new(&never_cancel);
+    let mut pool = vec![half.clone(), fast.clone()];
+    let declared = [PeriodHarmonic {
+        factor: 0.5,
+        seed_period_seconds: half.period_seconds * 0.5,
+        seed_anchor_seconds: half.anchor_seconds,
+        outcome: "fitted",
+        candidate_index: Some(1),
+    }];
+    let (trials, selected) = select_period_trials(
+        &events,
+        180.0,
+        0,
+        &declared,
+        false,
+        &mut pool,
+        &control,
+        |_, _| panic!("a precise canonical does not start alias coverage"),
+    )
+    .unwrap();
+    assert_eq!(selected, Some(0));
+    assert_eq!(trials.len(), 1);
+    let mut pool = vec![fast.clone(), half];
+    let declared = [PeriodHarmonic {
+        factor: 2.0,
+        seed_period_seconds: fast.period_seconds * 2.0,
+        seed_anchor_seconds: fast.anchor_seconds,
+        outcome: "fitted",
+        candidate_index: Some(1),
+    }];
+    let (trials, selected) = select_period_trials(
+        &events,
+        180.0,
+        0,
+        &declared,
+        false,
+        &mut pool,
+        &control,
+        |_, _| Ok(false),
+    )
+    .unwrap();
+    assert!(selected.is_none());
+    assert!(!trials[0].candidate_limit_reached);
+    assert!(trials.last().unwrap().candidate_limit_reached);
+    assert_eq!(trials.last().unwrap().outcome, "search_limited");
+}
+
+#[test]
+fn a_stronger_unit_counterpart_cannot_hide_nonunit_global_or_local_vetoes() {
+    let winner = bounded_summary(1.0, 180.0);
+    let unit = bounded_summary(0.5, 180.0);
+    let rival = bounded_summary(0.8, 180.0);
+    let pool = [unit, rival];
+    assert_eq!(strongest(&pool, &winner, 180.0, None), Some(1));
+    for section in 0..5 {
+        assert_eq!(strongest(&pool, &winner, 180.0, Some(section)), Some(1));
+    }
+}
+
+#[test]
+fn fixed_alias_coverage_completes_without_canonical_winner_restarts() {
+    let events = interrupted(97.125, true);
+    let duration = 187.0;
+    let control = Control::new(&never_cancel);
+    let sample = sample_indices(&events, duration).unwrap();
+    let geometry = build_geometry(&events, duration, &sample, &control).unwrap();
+    let (families, _, limited) =
+        representative_census(&events, duration, &sample, &geometry, &control).unwrap();
+    assert!(!limited);
+    let basis = fit(&events, duration, 60.0 / 97.125, 0.08)
+        .unwrap()
+        .unwrap();
+    let mut pool = reserve(MAX_FITS).unwrap();
+    pool.push(basis.clone());
+    let mut discovery = Discovery {
+        seeds: reserve(MAX_COARSE_SEEDS).unwrap(),
+        limited: false,
+        representatives: Vec::new(),
+        family_count: 0,
+    };
+    let mut evidence = empty_evidence();
+    let mut attempts = reserve(SEARCH_FITS).unwrap();
+    assert!(
+        cover_alias(
+            &events,
+            duration,
+            &sample,
+            &geometry,
+            &families,
+            &basis,
+            &mut discovery,
+            &mut evidence,
+            &mut pool,
+            &mut attempts,
+            &control
+        )
+        .unwrap()
+    );
+    assert!(!attempts.is_empty());
+    assert_eq!(pool[0], basis);
+    assert!(attempts.len() <= SEARCH_FITS);
+}
+
+#[test]
+fn shared_search_fuel_still_allows_4096_starts_after_two_canonical_checks() {
+    let mut evidence = empty_evidence();
+    evidence.evaluated_candidate_count = 2;
+    let mut pool = reserve(MAX_FITS).unwrap();
+    let mut attempts = reserve(SEARCH_FITS).unwrap();
+    let control = Control::new(&never_cancel);
+    for index in 0..SEARCH_FITS {
+        assert!(
+            search_attempt(
+                &[0.1, 0.6],
+                2.0,
+                0.5,
+                index as f64 / 10000.0,
+                &mut evidence,
+                &mut pool,
+                &mut attempts,
+                &control
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(evidence.evaluated_candidate_count, MAX_FITS);
+    assert!(
+        !search_attempt(
+            &[0.1, 0.6],
+            2.0,
+            0.5,
+            -1.0,
+            &mut evidence,
+            &mut pool,
+            &mut attempts,
+            &control
+        )
+        .unwrap()
+    );
+    assert_eq!(evidence.evaluated_candidate_count, MAX_FITS);
+}
+
+#[test]
+#[ignore = "explicit owned lossless cached observations; scalar math only, no inference or OwnACK"]
+fn replay_cached_scalar_periods() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let input = std::path::PathBuf::from(
+        std::env::var_os("FLITZI_TEMPO_REPLAY_INPUT").ok_or("explicit input required")?,
+    );
+    let output = std::path::PathBuf::from(
+        std::env::var_os("FLITZI_TEMPO_REPLAY_OUTPUT").ok_or("explicit output required")?,
+    );
+    assert!(input.is_absolute() && output.is_absolute());
+    let input = input.canonicalize()?;
+    let parent = output
+        .parent()
+        .ok_or("output parent required")?
+        .canonicalize()?;
+    assert!(
+        !std::fs::read_to_string(input.parent().unwrap().join("OWNER.md"))?
+            .trim()
+            .is_empty()
+    );
+    assert!(
+        !std::fs::read_to_string(parent.join("OWNER.md"))?
+            .trim()
+            .is_empty()
+    );
+    assert!(std::fs::metadata(&input)?.len() <= 16 * 1024 * 1024);
+    let data: serde_json::Value = serde_json::from_slice(&std::fs::read(input)?)?;
+    let cases = data["cases"].as_array().ok_or("cases array required")?;
+    assert!(!cases.is_empty() && cases.len() <= 64);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(parent.join(output.file_name().ok_or("output filename required")?))?;
+    for case in cases {
+        let bits = case["beat_bits"].as_array().ok_or("beat_bits required")?;
+        assert!(bits.len() <= 250_000);
+        let beats: Vec<_> = bits
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .map(f64::from_bits)
+                    .ok_or("binary64 bits required")
+            })
+            .collect::<Result<_, _>>()?;
+        let duration = f64::from_bits(
+            case["duration_bits"]
+                .as_u64()
+                .ok_or("duration_bits required")?,
+        );
+        let downbeats = case.get("downbeat_count").map_or(Ok(0), |value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or("downbeat count required")
+        })?;
+        let start = std::time::Instant::now();
+        let estimate = estimate_with_budget(&beats, duration, downbeats, 512 * 1024 * 1024);
+        serde_json::to_writer(
+            &mut file,
+            &serde_json::json!({"id":case["id"],"estimate":estimate,
+            "elapsed_seconds":start.elapsed().as_secs_f64(),
+            "scope":"Cached scalar math only; no source validation, decode, inference, playback or OwnACK"}),
+        )?;
+        writeln!(&mut file)?;
+        file.flush()?;
+    }
+    Ok(())
 }

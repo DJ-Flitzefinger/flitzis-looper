@@ -2,7 +2,8 @@
 use super::integer::FractionalCheck;
 use serde::Serialize;
 
-pub(super) const POLICY: &str = "neural-inferred-ordinals-v5";
+pub(super) const POLICY: &str = "neural-inferred-periods-v9";
+const MAX_SUMMARIES: usize = 32;
 const MAX_COARSE_SEEDS: usize = 4096;
 // Duplicates spend original-emission fuel; refinement can emit one extra row.
 const ORIGINAL_FUEL: usize = 4096;
@@ -48,6 +49,40 @@ pub(crate) struct Evidence {
     pub integer_preferred: bool,
     pub conflicting_sections: Vec<usize>,
     pub harmonics: Vec<HarmonicOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period_selection: Option<PeriodSelection>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PeriodSelection {
+    pub canonical_index: usize,
+    pub harmonics: Vec<PeriodHarmonic>,
+    pub trials: Vec<PeriodTrial>,
+    pub selected_trial_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PeriodHarmonic {
+    pub factor: f64,
+    pub seed_period_seconds: f64,
+    pub seed_anchor_seconds: f64,
+    pub outcome: &'static str,
+    pub candidate_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PeriodTrial {
+    pub candidate_index: usize,
+    pub outcome: &'static str,
+    pub evidence_tier: &'static str,
+    pub candidate_limit_reached: bool,
+    pub probe_windows: Vec<[f64; 2]>,
+    pub fractional_check: Option<FractionalCheck>,
+    pub integer_check: Option<FractionalCheck>,
+    pub integer_candidate_bpm: Option<f64>,
+    pub integer_preferred: bool,
+    pub conflicting_sections: Vec<usize>,
+    pub critical_indices: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -707,6 +742,20 @@ fn section_stride(a: &CandidateSummary, b: &CandidateSummary, window: [f64; 2]) 
         .then_some(stride)
 }
 
+fn unit_counterpart(a: &CandidateSummary, b: &CandidateSummary, duration: f64) -> bool {
+    let fine = a.period_seconds.min(b.period_seconds);
+    let coarse = a.period_seconds.max(b.period_seconds);
+    let drift = (coarse - 2.0 * fine).abs() * (duration / coarse);
+    duration.is_finite()
+        && duration > 0.0
+        && fine.is_finite()
+        && fine > 0.0
+        && coarse.is_finite()
+        && drift.is_finite()
+        && drift <= 0.005
+        && section_stride(a, b, [0.0, duration]) == Some(2)
+}
+
 fn sample_indices(beats: &[f64], duration: f64) -> Option<Vec<usize>> {
     let mut indices = reserve(SAMPLE)?;
     if beats.is_empty() {
@@ -862,10 +911,21 @@ fn constant_storage_bytes() -> Option<usize> {
         .checked_add(MAX_COARSE_FAMILIES.checked_mul(std::mem::size_of::<IntervalFamily>())?)?
         .checked_add(std::mem::size_of::<[u64; SAMPLE * 4 / 64]>())?
         .checked_add(SEARCH_FITS.checked_mul(std::mem::size_of::<(u64, u64)>())?)?
-        .checked_add((MAX_FITS + 12).checked_mul(
+        .checked_add((MAX_FITS + MAX_SUMMARIES + 2).checked_mul(
             std::mem::size_of::<CandidateSummary>()
                 + SECTIONS * std::mem::size_of::<SpanDiagnostics>(),
         )?)?
+        .checked_add(
+            3 * (std::mem::size_of::<PeriodTrial>()
+                + 9 * std::mem::size_of::<usize>()
+                + 2 * std::mem::size_of::<[f64; 2]>()
+                + 5 * std::mem::size_of::<usize>()),
+        )?
+        .checked_add(
+            std::mem::size_of::<PeriodSelection>()
+                + 2 * std::mem::size_of::<PeriodHarmonic>()
+                + MAX_SUMMARIES * std::mem::size_of::<usize>(),
+        )?
         .checked_add(64 * 1024)?;
     let census = CENSUS_KEYS
         .checked_mul(std::mem::size_of::<(u64, u64)>())?
@@ -1642,7 +1702,7 @@ fn search_attempt(
         tests::observe_search_memo(period, anchor);
         return Ok(true);
     }
-    if evidence.evaluated_candidate_count == SEARCH_FITS {
+    if attempts.len() == SEARCH_FITS {
         #[cfg(test)]
         tests::observe_search_capacity(period, anchor);
         return Ok(false);
@@ -1710,26 +1770,27 @@ fn octave_periods(period: f64) -> impl Iterator<Item = f64> {
         )
 }
 
-fn strongest(
+fn strongest_control(
     pool: &[CandidateSummary],
     winner: &CandidateSummary,
     duration: f64,
     section: Option<usize>,
-) -> Option<usize> {
-    pool.iter()
-        .enumerate()
-        .filter(|(_, candidate)| {
-            !equivalent(candidate, winner, duration)
-                && section.map_or_else(
-                    || candidate.global.sustained(),
-                    |i| {
-                        candidate.sections[i].sustained()
-                            && section_stride(candidate, winner, winner.sections[i].window_seconds)
-                                .is_none()
-                    },
-                )
-        })
-        .max_by(|(ia, a), (ib, b)| {
+    control: &Control<'_>,
+) -> Result<Option<usize>, SearchFailure> {
+    let mut best: Option<usize> = None;
+    for (index, candidate) in pool.iter().enumerate() {
+        control.block(index)?;
+        if !equivalent(candidate, winner, duration)
+            && !unit_counterpart(candidate, winner, duration)
+            && section.map_or_else(
+                || candidate.global.sustained(),
+                |i| {
+                    candidate.sections[i].sustained()
+                        && section_stride(candidate, winner, winner.sections[i].window_seconds)
+                            .is_none()
+                },
+            )
+        {
             // Persist the actual veto statistic, not a point-score surrogate. A
             // weaker point score can still own the strongest count-scaled band.
             let veto = |candidate: &CandidateSummary| {
@@ -1738,9 +1799,29 @@ fn strongest(
                     |i| candidate.sections[i].band().0,
                 )
             };
-            veto(a).total_cmp(&veto(b)).then(ib.cmp(ia))
-        })
-        .map(|(index, _)| index)
+            if best.is_none_or(|old| veto(candidate) > veto(&pool[old])) {
+                best = Some(index);
+            }
+        }
+    }
+    Ok(best)
+}
+
+#[cfg(test)]
+fn strongest(
+    pool: &[CandidateSummary],
+    winner: &CandidateSummary,
+    duration: f64,
+    section: Option<usize>,
+) -> Option<usize> {
+    strongest_control(
+        pool,
+        winner,
+        duration,
+        section,
+        &Control::new(&never_cancel),
+    )
+    .unwrap()
 }
 
 fn empty_evidence() -> Evidence {
@@ -1759,6 +1840,7 @@ fn empty_evidence() -> Evidence {
         integer_preferred: false,
         conflicting_sections: Vec::new(),
         harmonics: Vec::new(),
+        period_selection: None,
     }
 }
 
@@ -1815,6 +1897,291 @@ fn replay_seed(
     })
 }
 
+fn physical_trial(
+    beats: &[f64],
+    duration: f64,
+    candidate_index: usize,
+    candidate: &CandidateSummary,
+    limited: bool,
+    control: &Control<'_>,
+) -> Result<PeriodTrial, SearchFailure> {
+    let points = required(assignment_checked(
+        beats,
+        duration,
+        candidate.period_seconds,
+        candidate.anchor_seconds,
+        control,
+    )?)?;
+    let windows = probes(beats, duration, candidate, &points, control)?;
+    let base = 60.0 / candidate.period_seconds;
+    let integer = (base + 0.5).floor().clamp(30.0, 300.0);
+    let pivot = (
+        candidate.pivot_ordinal,
+        candidate.pivot_seconds,
+        candidate.period_seconds,
+    );
+    let fractional = check(
+        &points,
+        &windows,
+        pivot,
+        base,
+        candidate.period_seconds,
+        candidate.anchor_seconds,
+        control,
+    )?;
+    let integer_check = check(
+        &points,
+        &windows,
+        pivot,
+        integer,
+        candidate.period_seconds,
+        candidate.anchor_seconds,
+        control,
+    )?;
+    let integer_preferred = fractional.as_ref().is_some_and(|c| c.status == "pass")
+        && integer_check.as_ref().is_some_and(|c| c.status == "pass")
+        && (integer - base).abs() <= 0.005;
+    let tier = if windows.len() != 2 {
+        "inconclusive"
+    } else if duration < 30.0 {
+        "short_source"
+    } else if candidate.global.max_gap_seconds > 10.0_f64.max(8.0 * candidate.period_seconds) {
+        "gapped_support"
+    } else {
+        "two_ten_second"
+    };
+    Ok(PeriodTrial {
+        candidate_index,
+        outcome: "insufficient",
+        evidence_tier: tier,
+        candidate_limit_reached: limited,
+        probe_windows: windows,
+        fractional_check: fractional,
+        integer_check,
+        integer_candidate_bpm: Some(integer),
+        integer_preferred,
+        conflicting_sections: allocate(5)?,
+        critical_indices: allocate(9)?,
+    })
+}
+
+fn physically_supported(trial: &PeriodTrial, candidate: &CandidateSummary, duration: f64) -> bool {
+    eligible(candidate, duration)
+        && trial
+            .fractional_check
+            .as_ref()
+            .is_some_and(|check| check.status == "pass")
+}
+
+fn assess_trial(
+    trial: &mut PeriodTrial,
+    pool: &[CandidateSummary],
+    duration: f64,
+    control: &Control<'_>,
+) -> Result<(), SearchFailure> {
+    control.check()?;
+    let winner = &pool[trial.candidate_index];
+    trial.critical_indices.clear();
+    trial.conflicting_sections.clear();
+    let global = strongest_control(pool, winner, duration, None, control)?;
+    add_critical(&mut trial.critical_indices, global);
+    for section in 0..SECTIONS {
+        control.check()?;
+        let rival = strongest_control(pool, winner, duration, Some(section), control)?;
+        if rival
+            .is_some_and(|i| pool[i].sections[section].band().0 > winner.sections[section].band().1)
+        {
+            trial.conflicting_sections.push(section);
+        }
+        add_critical(&mut trial.critical_indices, rival);
+    }
+    let mut phase: Option<usize> = None;
+    let mut density: Option<usize> = None;
+    let mut unit: Option<usize> = None;
+    for (index, candidate) in pool.iter().enumerate() {
+        control.block(index)?;
+        let different = !equivalent(candidate, winner, duration);
+        if different
+            && (candidate.period_seconds / winner.period_seconds - 1.0).abs() <= 0.0001
+            && phase.is_none_or(|old| candidate.global.score() > pool[old].global.score())
+        {
+            phase = Some(index);
+        }
+        if different
+            && candidate.global.sustained()
+            && (0..SECTIONS).any(|i| {
+                candidate.sections[i].sustained()
+                    && winner.sections[i].sustained()
+                    && section_stride(candidate, winner, winner.sections[i].window_seconds)
+                        .is_some_and(|stride| stride >= 2)
+            })
+            && density.is_none_or(|old| candidate.global.score() > pool[old].global.score())
+        {
+            density = Some(index);
+        }
+        if candidate.global.sustained()
+            && unit_counterpart(candidate, winner, duration)
+            && unit.is_none_or(|old| candidate.global.band().1 > pool[old].global.band().1)
+        {
+            unit = Some(index);
+        }
+    }
+    add_critical(&mut trial.critical_indices, phase);
+    add_critical(&mut trial.critical_indices, density);
+    add_critical(&mut trial.critical_indices, unit);
+    let ambiguous = global.is_some_and(|i| pool[i].global.band().1 >= winner.global.band().0);
+    trial.outcome = if trial.candidate_limit_reached {
+        "search_limited"
+    } else if !trial.conflicting_sections.is_empty() {
+        "conflicting_sections"
+    } else if ambiguous {
+        "ambiguous"
+    } else if physically_supported(trial, winner, duration) {
+        "supported"
+    } else {
+        "insufficient"
+    };
+    Ok(())
+}
+
+fn cover_alias(
+    beats: &[f64],
+    duration: f64,
+    sampled: &[usize],
+    geometry: &Geometry,
+    families: &[Option<Seed>; 4],
+    basis: &CandidateSummary,
+    discovery: &mut Discovery,
+    evidence: &mut Evidence,
+    pool: &mut Vec<CandidateSummary>,
+    attempts: &mut Vec<(u64, u64)>,
+    control: &Control<'_>,
+) -> Result<bool, SearchFailure> {
+    // The prospective scalar is frozen. New rivals never change the selectable
+    // three candidates or restart this fixed-basis coverage pass.
+    let mut visitor = |seed: Seed| {
+        control.check()?;
+        if was_attempted(attempts, seed.period, seed.anchor)
+            || coarse_margin(&seed, Some(basis)).is_none()
+        {
+            return Ok(Visit::Continue);
+        }
+        let Some(index) = retain_seed(discovery, seed) else {
+            return Ok(Visit::Limited);
+        };
+        #[cfg(test)]
+        tests::observe_search_stage("period_rival", Some(index));
+        if !search_attempt(
+            beats,
+            duration,
+            seed.period,
+            seed.anchor,
+            evidence,
+            pool,
+            attempts,
+            control,
+        )? {
+            return Ok(Visit::Limited);
+        }
+        Ok(Visit::Continue)
+    };
+    let status = visit_legacy(
+        beats,
+        duration,
+        sampled,
+        geometry,
+        families,
+        control,
+        &mut visitor,
+    )?;
+    let status = if status == Visit::Continue {
+        visit_proposals(beats, duration, sampled, geometry, control, &mut visitor)?
+    } else {
+        status
+    };
+    Ok(status == Visit::Continue)
+}
+
+fn trial_needs_coverage(trial: &PeriodTrial, candidate: &CandidateSummary, duration: f64) -> bool {
+    // Failed timing/coverage or an existing veto cannot be repaired by adding
+    // more rivals. Do not spend shared fuel before trying the next precise alias.
+    !trial.candidate_limit_reached
+        && physically_supported(trial, candidate, duration)
+        && trial.outcome == "supported"
+}
+
+fn summary_reference(indices: &[usize], pool_index: usize) -> usize {
+    indices
+        .iter()
+        .position(|&index| index == pool_index)
+        .expect("retained critical candidate")
+}
+
+fn select_period_trials(
+    beats: &[f64],
+    duration: f64,
+    canonical_index: usize,
+    harmonics: &[PeriodHarmonic],
+    original_limit: bool,
+    pool: &mut Vec<CandidateSummary>,
+    control: &Control<'_>,
+    mut cover: impl FnMut(&CandidateSummary, &mut Vec<CandidateSummary>) -> Result<bool, SearchFailure>,
+) -> Result<(Vec<PeriodTrial>, Option<usize>), SearchFailure> {
+    let mut aliases = allocate(2)?;
+    for declared in harmonics {
+        if let Some(index) = declared
+            .candidate_index
+            .filter(|&index| index != canonical_index)
+        {
+            if !aliases.contains(&index) {
+                aliases.push(index);
+            }
+        }
+    }
+    aliases.sort_by(|&a, &b| {
+        eligible(&pool[b], duration)
+            .cmp(&eligible(&pool[a], duration))
+            .then_with(|| pool[b].global.score().total_cmp(&pool[a].global.score()))
+    });
+    // Stable sorting preserves declaration order (.5 before2) on exact ties.
+    let mut order = allocate(3)?;
+    order.push(canonical_index);
+    order.extend(aliases);
+    let mut trials = allocate(3)?;
+    let mut selected_trial_index = None;
+    for (rank, index) in order.into_iter().enumerate() {
+        let mut trial = physical_trial(
+            beats,
+            duration,
+            index,
+            &pool[index],
+            original_limit,
+            control,
+        )?;
+        assess_trial(&mut trial, pool, duration, control)?;
+        if rank > 0 && trial_needs_coverage(&trial, &pool[index], duration) {
+            let basis = copy_summary(&pool[index])?;
+            if !cover(&basis, pool)? {
+                trial.candidate_limit_reached = true;
+            }
+            assess_trial(&mut trial, pool, duration, control)?;
+        }
+        let outcome = trial.outcome;
+        trials.push(trial);
+        if outcome == "supported" {
+            selected_trial_index = Some(trials.len() - 1);
+            break;
+        }
+        if outcome == "search_limited" {
+            break;
+        }
+    }
+    for trial in &mut trials {
+        assess_trial(trial, pool, duration, control)?;
+    }
+    Ok((trials, selected_trial_index))
+}
+
 fn evaluate_control(
     beats: &[f64],
     duration: f64,
@@ -1822,7 +2189,7 @@ fn evaluate_control(
 ) -> Result<(Option<f64>, Evidence), SearchFailure> {
     control.check()?;
     let mut evidence = empty_evidence();
-    evidence.alternatives = allocate(10)?;
+    evidence.alternatives = allocate(MAX_SUMMARIES - 1)?;
     evidence.conflicting_sections = allocate(5)?;
     let sampled = required(sample_indices(beats, duration))?;
     if long_pairs(&sampled).is_none() {
@@ -1948,38 +2315,26 @@ fn evaluate_control(
         }
         return Ok((None, evidence));
     };
-    let winner_copy = copy_summary(&pool[winner_index])?;
-    let winner = &winner_copy;
-    let points = required(assignment_checked(
-        beats,
-        duration,
-        winner.period_seconds,
-        winner.anchor_seconds,
-        control,
-    )?)?;
-    if points.first().is_none_or(|point| point.ordinal != 0) {
-        return Ok((None, evidence));
-    }
+    let canonical = copy_summary(&pool[winner_index])?;
     evidence.candidate_limit_reached = discovery.limited;
-    let mut harmonic_indices = [None; 2];
-    evidence.harmonics = allocate(2)?;
+    let mut harmonics = allocate(2)?;
     for (side, factor) in [0.5, 2.0].into_iter().enumerate() {
-        let period = winner.period_seconds * factor;
-        let mut declared = HarmonicOutcome {
+        let period = canonical.period_seconds * factor;
+        let mut declared = PeriodHarmonic {
             factor,
             seed_period_seconds: period,
-            seed_anchor_seconds: winner.anchor_seconds,
+            seed_anchor_seconds: canonical.anchor_seconds,
             outcome: "out_of_range",
-            alternative_index: None,
+            candidate_index: None,
         };
         if (MIN_PERIOD..=MAX_PERIOD).contains(&period) {
             evidence.evaluated_candidate_count += 1;
-            let fitted = fit_control(beats, duration, period, winner.anchor_seconds, control);
+            let fitted = fit_control(beats, duration, period, canonical.anchor_seconds, control);
             #[cfg(test)]
             tests::observe_harmonic_fit(
                 side,
                 period,
-                winner.anchor_seconds,
+                canonical.anchor_seconds,
                 Some(evidence.evaluated_candidate_count),
                 Some(&fitted),
             );
@@ -1991,154 +2346,118 @@ fn evaluate_control(
                     pool.push(candidate);
                     index
                 };
-                harmonic_indices[side] = Some(index);
+                declared.candidate_index = Some(index);
                 declared.outcome = "fitted";
             } else {
                 declared.outcome = "no_fixed_fit";
             }
         } else {
             #[cfg(test)]
-            tests::observe_harmonic_fit(side, period, winner.anchor_seconds, None, None);
+            tests::observe_harmonic_fit(side, period, canonical.anchor_seconds, None, None);
         }
-        evidence.harmonics.push(declared);
+        harmonics.push(declared);
     }
-    let mut critical = allocate(10)?;
-    let global_rival = strongest(&pool, winner, duration, None);
-    add_critical(&mut critical, global_rival);
-    for section in 0..5 {
-        let rival = strongest(&pool, winner, duration, Some(section));
-        if rival
-            .is_some_and(|i| pool[i].sections[section].band().0 > winner.sections[section].band().1)
-        {
-            evidence.conflicting_sections.push(section);
-        }
-        add_critical(&mut critical, rival);
-    }
-    for index in harmonic_indices {
-        add_critical(&mut critical, index);
-    }
-    let phase_rival = pool
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| {
-            (candidate.period_seconds / winner.period_seconds - 1.0).abs() <= 0.0001
-                && !equivalent(candidate, winner, duration)
-        })
-        .max_by(|(ia, a), (ib, b)| {
-            a.global
-                .score()
-                .total_cmp(&b.global.score())
-                .then(ib.cmp(ia))
-        })
-        .map(|(index, _)| index);
-    add_critical(&mut critical, phase_rival);
-    let density = pool
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| {
-            !equivalent(candidate, winner, duration)
-                && candidate.global.sustained()
-                && (0..SECTIONS).any(|i| {
-                    candidate.sections[i].sustained()
-                        && winner.sections[i].sustained()
-                        && section_stride(candidate, winner, winner.sections[i].window_seconds)
-                            .is_some_and(|stride| stride >= 2)
-                })
-        })
-        .max_by(|(ia, a), (ib, b)| {
-            a.global
-                .score()
-                .total_cmp(&b.global.score())
-                .then(ib.cmp(ia))
-        })
-        .map(|(index, _)| index);
-    add_critical(&mut critical, density);
-    for index in critical {
-        if !evidence.alternatives.contains(&pool[index]) {
-            evidence.alternatives.push(copy_summary(&pool[index])?);
-        }
-    }
-    for (side, index) in harmonic_indices.into_iter().enumerate() {
-        evidence.harmonics[side].alternative_index = index.and_then(|index| {
-            evidence
-                .alternatives
-                .iter()
-                .position(|candidate| candidate == &pool[index])
-        });
-    }
-    let ambiguous =
-        global_rival.is_some_and(|index| pool[index].global.band().1 >= winner.global.band().0);
-    evidence.probe_windows = probes(beats, duration, winner, &points, control)?;
-    let base = 60.0 / winner.period_seconds;
-    let integer = (base + 0.5).floor().clamp(30.0, 300.0);
-    let pivot = (
-        winner.pivot_ordinal,
-        winner.pivot_seconds,
-        winner.period_seconds,
-    );
-    evidence.fractional_check = check(
-        &points,
-        &evidence.probe_windows,
-        pivot,
-        base,
-        winner.period_seconds,
-        winner.anchor_seconds,
+    // Freeze the promotion set before coverage can add any further rivals.
+    let original_limit = evidence.candidate_limit_reached;
+    let (mut trials, selected_trial_index) = select_period_trials(
+        beats,
+        duration,
+        winner_index,
+        &harmonics,
+        original_limit,
+        &mut pool,
         control,
+        |basis, pool| {
+            cover_alias(
+                beats,
+                duration,
+                &sampled,
+                &geometry,
+                &selected_families,
+                basis,
+                &mut discovery,
+                &mut evidence,
+                pool,
+                &mut attempts,
+                control,
+            )
+        },
     )?;
-    evidence.integer_check = check(
-        &points,
-        &evidence.probe_windows,
-        pivot,
-        integer,
-        winner.period_seconds,
-        winner.anchor_seconds,
-        control,
-    )?;
-    evidence.integer_candidate_bpm = Some(integer);
-    evidence.integer_preferred = evidence
-        .fractional_check
-        .as_ref()
-        .is_some_and(|c| c.status == "pass")
-        && evidence
-            .integer_check
-            .as_ref()
-            .is_some_and(|c| c.status == "pass")
-        && (integer - base).abs() <= 0.005;
-    if evidence.probe_windows.len() == 2 {
-        evidence.evidence_tier = if duration < 30.0 {
-            "short_source"
-        } else if winner.global.max_gap_seconds > 10.0_f64.max(8.0 * winner.period_seconds) {
-            "gapped_support"
-        } else {
-            "two_ten_second"
-        };
+    let chosen_trial = selected_trial_index.unwrap_or(0);
+    let chosen_index = trials[chosen_trial].candidate_index;
+    let winner_copy = copy_summary(&pool[chosen_index])?;
+    let mut retained = allocate(MAX_SUMMARIES)?;
+    add_critical(&mut retained, Some(chosen_index));
+    add_critical(&mut retained, Some(winner_index));
+    for declared in &harmonics {
+        add_critical(&mut retained, declared.candidate_index);
     }
-    evidence.outcome = if evidence.candidate_limit_reached {
-        "search_limited"
-    } else if !evidence.conflicting_sections.is_empty() {
-        "conflicting_sections"
-    } else if ambiguous {
-        "ambiguous"
-    } else if eligible(winner, duration)
-        && evidence
-            .fractional_check
-            .as_ref()
-            .is_some_and(|check| check.status == "pass")
-    {
+    for trial in &trials {
+        for &index in &trial.critical_indices {
+            add_critical(&mut retained, Some(index));
+        }
+    }
+    // Three selectable nodes plus nine categories for each of three trials.
+    debug_assert!(retained.len() <= 30);
+    for &index in retained.iter().skip(1) {
+        evidence.alternatives.push(copy_summary(&pool[index])?);
+    }
+    let chosen = &trials[chosen_trial];
+    evidence.outcome = if selected_trial_index.is_some() {
         "supported"
+    } else if trials.iter().any(|trial| trial.candidate_limit_reached) {
+        "search_limited"
     } else {
-        "insufficient"
+        trials[0].outcome
     };
-    let bpm = (evidence.outcome == "supported").then_some(if evidence.integer_preferred {
-        integer
-    } else {
-        base
+    evidence.evidence_tier = chosen.evidence_tier;
+    evidence.probe_windows = allocate(chosen.probe_windows.len())?;
+    evidence
+        .probe_windows
+        .extend_from_slice(&chosen.probe_windows);
+    evidence.fractional_check = chosen.fractional_check.clone();
+    evidence.integer_check = chosen.integer_check.clone();
+    evidence.integer_candidate_bpm = chosen.integer_candidate_bpm;
+    evidence.integer_preferred = chosen.integer_preferred;
+    evidence
+        .conflicting_sections
+        .extend_from_slice(&chosen.conflicting_sections);
+    let bpm = selected_trial_index.map(|_| {
+        if chosen.integer_preferred {
+            chosen.integer_candidate_bpm.expect("candidate integer")
+        } else {
+            60.0 / winner_copy.period_seconds
+        }
     });
-    evidence.winner = Some(winner_copy);
+    for declared in &mut harmonics {
+        declared.candidate_index = declared
+            .candidate_index
+            .map(|index| summary_reference(&retained, index));
+    }
+    for trial in &mut trials {
+        trial.candidate_index = summary_reference(&retained, trial.candidate_index);
+        for index in &mut trial.critical_indices {
+            *index = summary_reference(&retained, *index);
+        }
+    }
+    evidence.period_selection = Some(PeriodSelection {
+        canonical_index: summary_reference(&retained, winner_index),
+        harmonics,
+        trials,
+        selected_trial_index,
+    });
     drop(pool);
     drop(discovery);
     drop(attempts);
     drop(geometry);
+    let points = required(assignment_checked(
+        beats,
+        duration,
+        winner_copy.period_seconds,
+        winner_copy.anchor_seconds,
+        control,
+    )?)?;
+    evidence.winner = Some(winner_copy);
     evidence.assignments = allocate(points.len())?;
     for (index, point) in points.iter().enumerate() {
         control.block(index)?;

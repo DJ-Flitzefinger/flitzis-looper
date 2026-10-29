@@ -880,6 +880,11 @@ fn transact(
     if range.is_some_and(|r| !r.contains(observed.bpm)) {
         return Err(Failure::NoChoice);
     }
+    // Saved schema8 has its original kernel4/5 contract. This test-only retired
+    // tool must never relabel a newly computed period-first kernel as old8.
+    if !matches!(observed.qm["estimate"]["kernel_version"].as_u64(), Some(4 | 5)) {
+        return Err(Failure::NoChoice);
+    }
     let qm_class = candidate_class(observed.bpm).ok_or(Failure::NoChoice)?;
     if qm_class == primary_class {
         return Err(Failure::NoChoice);

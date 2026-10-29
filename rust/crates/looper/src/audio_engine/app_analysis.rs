@@ -19,6 +19,7 @@ mod qm_corroboration;
 mod bpm_range;
 pub(super) use bpm_range::BpmRange;
 #[path = "app_analysis_prior.rs"]
+#[cfg(test)]
 mod nominal_prior;
 
 const LIMIT: usize = 512 * 1024 * 1024;
@@ -419,7 +420,7 @@ pub(super) fn analyze_with_range(
         let phase_period = super::app_tempo::phase_only_period(
             &predictions.beat_seconds,frames as f64 / f64::from(rate),&estimate,&cancelled,
         ).map_err(|_| "neural analysis request superseded".to_owned())?;
-        let schema_version = if estimate.ordinal_fit.is_some() { 5 } else { 4 };
+        let schema_version = super::app_tempo::schema_version(&estimate);
         let estimate_bpm = estimate.bpm;
         let estimate_status = estimate.status;
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
@@ -474,24 +475,8 @@ pub(super) fn analyze_with_range(
                 },
             }
         } else { base_method_json };
-        let method_json = if estimate_bpm.is_some()
-            && automatic_range.is_none_or(|range|range.contains(estimate_bpm.unwrap())) {
-            let attempted=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                nominal_prior::attempt(sample,rate,&context,&mono_sha256,raw.decoder_identity(),
-                    &path,&mut method,&method_json,core,source_live,raw_workspace,grid_bytes,
-                    automatic_range,&cancellation)
-            }));
-            if cancelled() { return Err("neural analysis request superseded".into()); }
-            match attempted {
-                Ok(Ok(choice))=>{drop(method_json);selected_bpm=Some(choice.bpm);beat_error=None;choice.method_json},
-                Ok(Err(qm_corroboration::Failure::NoChoice))=>method_json,
-                Ok(Err(qm_corroboration::Failure::Cancelled))=>return Err("neural analysis request superseded".into()),
-                Ok(Err(qm_corroboration::Failure::Unavailable(reason)))=>{
-                    beat_error=Some(format!("Optional nominal tempo check unavailable: {reason}"));method_json
-                },
-                Err(_)=>{beat_error=Some("Optional nominal tempo check unavailable: analysis panicked".into());method_json},
-            }
-        } else {method_json};
+        // Accurate primary period is independent of musical half/double choice.
+        // Fresh publication never probes or executes the optional nominal model.
         let method_json = if let Some((range, primary_bpm)) = automatic_range.zip(selected_bpm)
             .filter(|(range,bpm)| !range.contains(*bpm)) {
             let primary_core = super::neural_analysis::budget::value_tree(&method).and_then(|tree| {

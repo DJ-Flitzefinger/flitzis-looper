@@ -63,6 +63,31 @@ fn in_range_primary_retains_exact_bytes_without_qm() {
 }
 
 #[test]
+fn period_first_primary_is_precise_in_range_and_can_use_the_existing_range_choice() {
+    for bpm in [77.94247297546801,174.0] {
+        let mut tree=primary(bpm);
+        tree["schema_version"]=json!(9);
+        tree["policy"]=json!("neural-inferred-periods-v9");
+        let raw=tree["raw_beats"].clone();
+        let exact=tree.to_string();
+        let calls=std::cell::Cell::new(0);
+        let result=apply(range(),bpm,&mut tree,exact.clone(),0,0,0,0,&||false,|_| {
+            calls.set(calls.get()+1); Ok(observed(bpm,87.0))
+        }).unwrap();
+        assert_eq!(tree["raw_beats"],raw);
+        if range().contains(bpm) {
+            assert_eq!(calls.get(),0);
+            assert_eq!(result.method_json.as_deref(),Some(exact.as_str()));
+            assert_eq!(result.bpm,Some(bpm));
+        } else {
+            assert_eq!(calls.get(),1);
+            assert_eq!(result.bpm,Some(87.0));
+            assert_eq!(tree["bpm_range"]["primary"]["schema_version"],9);
+        }
+    }
+}
+
+#[test]
 fn symmetric_half_double_drift_has_a_strict_five_millisecond_boundary() {
     assert_eq!(half_double_drift(60.0, 128.0, 0.08).unwrap(), 0.005);
     assert_eq!(half_double_drift(128.0, 60.0, 0.08).unwrap(), 0.005);

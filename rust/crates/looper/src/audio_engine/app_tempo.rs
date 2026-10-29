@@ -35,6 +35,10 @@ pub(crate) struct TempoEstimate {
     pub ordinal_fit: Option<inferred_ordinals::OrdinalFit>,
 }
 
+pub(super) fn schema_version(estimate: &TempoEstimate) -> u32 {
+    if estimate.ordinal_fit.is_some() { 9 } else { 4 }
+}
+
 fn median(values: &mut [f64]) -> f64 {
     values.sort_unstable_by(f64::total_cmp);
     let n = values.len();

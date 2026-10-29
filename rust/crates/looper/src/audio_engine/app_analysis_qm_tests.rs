@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn joint_header_preserves_the_actual_original_fallback_version() {
+    for (version,policy) in [(5,"neural-inferred-ordinals-v5"),(9,"neural-inferred-periods-v9")] {
+        let base=json!({"schema_version":version,"policy":policy,"status":"insufficient","bpm":null,
+            "raw_beats":[0.06,0.56]});
+        let header=neural_result_header(&base);
+        assert_eq!(header,json!({"schema_version":version,"policy":policy,"status":"insufficient","bpm":null}));
+        assert!(header.get("raw_beats").is_none());
+    }
+}
+
+#[test]
 fn late_joint_refusal_keeps_the_original_float_string_available() {
     let mut tree = json!({"schema_version":5,"backend":"beat_this","bpm":null,
         "policy":"neural-inferred-ordinals-v5","status":"insufficient",
@@ -83,11 +94,8 @@ fn cached_prediction_bpm_range_component() -> Result<(), Box<dyn std::error::Err
     cached_component(true,false)
 }
 
-#[test]
-#[ignore = "explicit owned source plus cached NN/CDF; no NN or classifier inference, Engine or OwnACK"]
-fn cached_prediction_nominal_prior_component() -> Result<(), Box<dyn std::error::Error>> {
-    cached_component(false,true)
-}
+// The historical nominal component is retired. Its sealed schema8 receipts are
+// replayed by the saved-method validator; fresh kernel9 cannot emit old8.
 
 // Prior input additionally requires profile_token (schema_version,
 // installation_root, profile_sha256, numeric_profile_sha256) and prior_response

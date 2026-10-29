@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from flitzis_looper.analysis.app_tempo_inferred import EvaluatedOrdinalFit, OrdinalFit
 from flitzis_looper.analysis.app_tempo_probe import (
@@ -38,10 +38,28 @@ def _invalid(message: str) -> NoReturn:
 class NeuralResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Annotated[int, Field(strict=True, ge=5, le=5)]
-    policy: Literal["neural-inferred-ordinals-v5"]
+    schema_version: Literal[5, 9]
+    policy: Literal["neural-inferred-ordinals-v5", "neural-inferred-periods-v9"]
     status: Literal["insufficient", "uncorroborated"]
     bpm: None
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _strict_version(cls, value: object) -> object:
+        if type(value) is not int:
+            _invalid("Joint original version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def _policy_version(self) -> NeuralResult:
+        expected = (
+            "neural-inferred-ordinals-v5"
+            if self.schema_version == 5
+            else "neural-inferred-periods-v9"
+        )
+        if self.policy != expected:
+            _invalid("Joint original policy differs from its declared version")
+        return self
 
 
 class CorroborationSource(BaseModel):
@@ -114,7 +132,7 @@ class QmEstimate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kernel_version: Annotated[int, Field(strict=True, ge=4, le=5)]
+    kernel_version: Literal[4, 5, 9]
     status: Literal["estimated", "single_region_estimate"]
     bpm: _Bpm
     selected: TempoRegion | None
@@ -124,9 +142,16 @@ class QmEstimate(BaseModel):
     )
     ordinal_fit: OrdinalFit | None = Field(default=None, exclude_if=lambda value: value is None)
 
+    @field_validator("kernel_version", mode="before")
+    @classmethod
+    def _strict_version(cls, value: object) -> object:
+        if type(value) is not int:
+            _invalid("QM numeric kernel version must be an integer")
+        return value
+
     @model_validator(mode="after")
     def _kernel_shape(self) -> QmEstimate:
-        if (self.kernel_version == 5) != (self.ordinal_fit is not None):
+        if (self.kernel_version in {5, 9}) != (self.ordinal_fit is not None):
             _invalid("QM scalar evidence differs from its numeric kernel version")
         return self
 
@@ -200,7 +225,7 @@ def validate_corroboration(
         _invalid("Joint scalar selection requires its explicit acoustic evidence")
     primary = method.model_copy(
         update={
-            "schema_version": 5,
+            "schema_version": evidence.neural_result.schema_version,
             "backend": "beat_this",
             "policy": evidence.neural_result.policy,
             "status": evidence.neural_result.status,
