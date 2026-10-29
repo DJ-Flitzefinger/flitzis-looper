@@ -17,12 +17,31 @@ They apply to future loads and Analyze audio requests. Changing this option does
 not reinterpret existing PAD values, pending requests or saved/copied analysis.
 Manual BPM, Tap and the /2/x2 corrections remain available independently.
 
-An already in-range primary estimate is retained. An outside neural estimate may
-use an independently checked QM half/double alternative inside the range. This
-does not force rounding or guarantee that every track has a supported candidate.
+The range option itself retains an already in-range primary estimate; the optional
+beat-level support below can still choose another admitted in-range candidate.
+An outside neural estimate may use an independently checked QM half/double
+alternative inside the range. This does not force rounding or guarantee that
+every track has a supported candidate.
 If none qualifies, the new request reports that outcome; a previous valid BPM
 may remain visible. Guidance records the range used by that analysis, rather than
-claiming it used today's settings. No additional worker installation is needed.
+claiming it used today's settings. The range option needs no additional worker
+installation.
+
+## Optional half/double beat-level support
+
+With the separate verified nominal-tempo profile installed, an automatic neural
+estimate can use additional acoustic and learned support to choose its half/double
+alternative. The alternative must independently pass the existing QM timing
+checks; the learned model supplies no decimal BPM value. Both candidates must
+also satisfy the captured range when the optional range is enabled.
+
+Missing support or an ordinary disagreement retains the original estimate.
+Optional runtime failures retain that estimate and report a bounded diagnostic;
+cancellation still cancels the request. Saved results preserve the observations
+and actual CPU/NN device information. Manual BPM, Tap and /2/x2 remain available
+for musical beat-level choices. This support does not establish accuracy for
+every track. The isolated runtime assets and setup contract are documented in
+[the optional worker README](../workers/metrical_prior/README.md).
 
 ## Locked Windows runtime
 

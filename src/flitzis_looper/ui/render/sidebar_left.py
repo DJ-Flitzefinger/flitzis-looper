@@ -428,9 +428,28 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     """Explain finite automatic evidence without presenting it as musical certainty."""
     if method is None:
         return None
+    if method.nominal_selection is not None:
+        return _prior_bpm_guidance(method)
     if method.bpm_range is not None:
         return _range_bpm_guidance(method)
     return _base_bpm_guidance(method)
+
+
+def _prior_bpm_guidance(method: AppTempoMethod) -> str:
+    evidence = method.nominal_selection
+    if evidence is None:
+        message = "Nominal guidance requires recorded automatic evidence"
+        raise ValueError(message)
+    constraint = evidence.range_constraint
+    bounds = (
+        f" within its recorded range ({constraint.minimum_bpm:g}-{constraint.maximum_bpm:g} BPM)"
+        if constraint is not None
+        else ""
+    )
+    return (
+        f"Automatic BPM used acoustic support and a learned beat-level prior{bounds}. "
+        "Verify with /2, x2 or Tap BPM."
+    )
 
 
 def _range_bpm_guidance(method: AppTempoMethod) -> str:

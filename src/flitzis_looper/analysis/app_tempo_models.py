@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from flitzis_looper.analysis.app_tempo_corroboration import QmCorroboration, validate_corroboration
 from flitzis_looper.analysis.app_tempo_inferred import OrdinalFit, validate_ordinal_fit
+from flitzis_looper.analysis.app_tempo_prior import NominalSelection, validate_nominal_selection
 from flitzis_looper.analysis.app_tempo_probe import (
     AdaptiveTempoProbe,
     IntegerTempoProbe,
@@ -34,8 +35,10 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4, 5, 6, 7]
-    backend: Literal["beat_this", "beat_this_qm_dsp", "beat_this_bpm_range"]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8]
+    backend: Literal[
+        "beat_this", "beat_this_qm_dsp", "beat_this_bpm_range", "beat_this_qm_tempocnn"
+    ]
     policy: Literal[
         "neural-stable-regions-v1",
         "neural-stable-regions-v2",
@@ -44,6 +47,7 @@ class AppTempoMethod(BaseModel):
         "neural-inferred-ordinals-v5",
         "neural-qm-same-period-v6",
         "neural-user-range-v7",
+        "neural-qm-nominal-prior-v8",
     ]
     status: Literal[
         "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
@@ -70,6 +74,9 @@ class AppTempoMethod(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     bpm_range: BpmRangeResult | None = Field(default=None, exclude_if=lambda value: value is None)
+    nominal_selection: NominalSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -83,7 +90,7 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (
             isinstance(value, dict)
-            and value.get("schema_version") in {6, 7}
+            and value.get("schema_version") in {6, 7, 8}
             and any(
                 type(value.get(key)) is not int
                 for key in ("schema_version", "sample_rate_hz", "frame_count")
@@ -116,6 +123,18 @@ class AppTempoMethod(BaseModel):
                 raise ValueError(message)
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _prior_field_presence(cls, value: object) -> object:
+        if (
+            isinstance(value, dict)
+            and value.get("schema_version") != 8
+            and "nominal_selection" in value
+        ):
+            message = "Nominal selection fields require version eight"
+            raise ValueError(message)
+        return value
+
     @field_validator("execution", mode="before")
     @classmethod
     def _load_execution(cls, value: object) -> ActualExecutionReceipt | None:
@@ -130,12 +149,14 @@ class AppTempoMethod(BaseModel):
 
     def _validate_estimate(self) -> None:
         if self.execution is not None:
-            if self.schema_version not in {4, 5, 6, 7}:
-                message = "Execution receipts require version four, five or six tempo metadata"
+            if self.schema_version not in {4, 5, 6, 7, 8}:
+                message = "Execution receipts require tempo metadata version four through eight"
                 raise ValueError(message)
             validate_execution(self.execution)
         self._validate_policy_version()
-        if self.schema_version == 7:
+        if self.schema_version == 8:
+            validate_nominal_selection(self, validate_math_estimate, validate_original_method)
+        elif self.schema_version == 7:
             validate_bpm_range(self, validate_math_estimate, validate_original_method)
         elif self.schema_version == 6:
             validate_corroboration(
@@ -147,6 +168,9 @@ class AppTempoMethod(BaseModel):
             validate_math_estimate(self)
 
     def _validate_policy_version(self) -> None:
+        if self.schema_version == 8:
+            self._validate_prior_policy()
+            return
         if self.schema_version == 7:
             self._validate_range_policy()
             return
@@ -179,6 +203,18 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (self.bpm_range.primary.schema_version == 6) != (self.qm_corroboration is not None):
             message = "Range metadata must retain exactly its original joint evidence"
+            raise ValueError(message)
+
+    def _validate_prior_policy(self) -> None:
+        if (
+            self.backend != "beat_this_qm_tempocnn"
+            or self.policy != "neural-qm-nominal-prior-v8"
+            or self.nominal_selection is None
+        ):
+            message = "Version eight requires explicit nominal prior evidence"
+            raise ValueError(message)
+        if self.bpm_range is not None or self.qm_corroboration is not None:
+            message = "Nominal prior evidence cannot nest other scalar wrappers"
             raise ValueError(message)
 
     def _validate_joint_policy(self) -> None:

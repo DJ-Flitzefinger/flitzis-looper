@@ -211,6 +211,7 @@ pub(super) fn apply(
     let rejected = match prepared {
         Ok(Ok(encoded)) => encoded,
         Ok(Err(Failure::Cancelled)) => return Err(Failure::Cancelled),
+        Ok(Err(Failure::NoChoice)) => return Ok(no_method("QM has no independently admitted tempo")),
         Ok(Err(Failure::Unavailable(reason))) => return Ok(no_method(&reason)),
         Err(_) => return Ok(no_method("range metadata preparation panicked")),
     };
@@ -290,6 +291,7 @@ pub(super) fn apply(
         failure => {
             let reason = match failure {
                 Ok(Err(Failure::Unavailable(reason))) => reason,
+                Ok(Err(Failure::NoChoice)) => "QM has no independently admitted tempo".into(),
                 _ => "optional range selection panicked".into(),
             };
             Ok(RangeResult {

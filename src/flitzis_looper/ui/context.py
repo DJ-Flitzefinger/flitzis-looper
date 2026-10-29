@@ -233,9 +233,11 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
-        if method is not None and method.schema_version in {6, 7}:
+        if method is not None and method.schema_version in {6, 7, 8}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
+            if method.nominal_selection is not None:
+                return f"NN {bpm_device_label(method.execution)}; QM CPU; prior CPU"
             has_qm = method.qm_corroboration is not None or (
                 method.bpm_range is not None and method.bpm_range.selection is not None
             )

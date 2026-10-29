@@ -1,0 +1,4 @@
+# Frozen CPython3.12 worker/reference assets must retain their exact bytes.
+target-version = "py312"
+exclude = ["prepare-features.py", "prepare-features-streamed.py", "upstream"]
+force-exclude = true

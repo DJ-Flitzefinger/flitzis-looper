@@ -341,26 +341,63 @@ def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str |
     return "resource_unavailable"
 
 
+def _pending_stop_reason(
+    owned: _OwnedProcess,
+    cancel: Event,
+    stop_reason: Callable[[], str | None] | None,
+    *,
+    observe_before_exit: bool,
+) -> str | None:
+    if cancel.is_set():
+        return "cancelled"
+    if any(reader.overflow.is_set() for reader in owned.readers):
+        return "response_limit"
+    if any(reader.failed.is_set() for reader in owned.readers):
+        return "response_read_failed"
+    return _resource_stop_reason(stop_reason) if observe_before_exit else None
+
+
+def _completed_reason(
+    returncode: int,
+    cancel: Event,
+    stop_reason: Callable[[], str | None] | None,
+    *,
+    observe_before_exit: bool,
+) -> str:
+    if observe_before_exit:
+        if cancel.is_set():
+            return "cancelled"
+        # The peak can change between the periodic query and the poll that sees exit.
+        resource_reason = _resource_stop_reason(stop_reason)
+        if cancel.is_set():
+            return "cancelled"
+        if resource_reason is not None:
+            return resource_reason
+    return "ok" if returncode == 0 else "worker_crashed"
+
+
 def _monitor(
     owned: _OwnedProcess,
     cancel: Event,
     limits: WorkerLimits,
     stop_reason: Callable[[], str | None] | None = None,
+    *,
+    observe_before_exit: bool = False,
 ) -> str:
     deadline = time.monotonic() + limits.timeout_seconds
     while True:
         if isinstance(owned.process, _OwnedTreeProcess):
             owned.process.observe_tree()
-        if cancel.is_set():
-            return "cancelled"
-        if any(reader.overflow.is_set() for reader in owned.readers):
-            return "response_limit"
-        if any(reader.failed.is_set() for reader in owned.readers):
-            return "response_read_failed"
+        if pending_reason := _pending_stop_reason(
+            owned, cancel, stop_reason, observe_before_exit=observe_before_exit
+        ):
+            return pending_reason
         returncode = owned.process.poll()
         if returncode is not None:
-            return "ok" if returncode == 0 else "worker_crashed"
-        if resource_reason := _resource_stop_reason(stop_reason):
+            return _completed_reason(
+                returncode, cancel, stop_reason, observe_before_exit=observe_before_exit
+            )
+        if not observe_before_exit and (resource_reason := _resource_stop_reason(stop_reason)):
             return resource_reason
         if time.monotonic() >= deadline:
             return "worker_timeout"
@@ -423,7 +460,61 @@ def _command_readers(
     return stdout, stderr
 
 
-def run_owned_command(
+def _readers_for_command(
+    owned: _OwnedProcess,
+    limits: WorkerLimits,
+    receipt_prefixes: tuple[bytes, ...] | IndependentReceipts,
+) -> tuple[_CommandReader, _CommandReader]:
+    if isinstance(receipt_prefixes, IndependentReceipts):
+        prefixes, independent = receipt_prefixes.prefixes, True
+    else:
+        prefixes, independent = receipt_prefixes, False
+    return _command_readers(owned, limits, prefixes, independent_receipts=independent)
+
+
+class _ObserverSetupError(Exception):
+    """Route an opt-in observer admission failure through the existing owner teardown."""
+
+
+def _bind_command_observer(
+    process: _OwnedTreeProcess, cancel: Event, on_process_started: Callable[[int], None] | None
+) -> None:
+    if on_process_started is not None:
+        try:
+            on_process_started(process.pid)
+        except OSError, RuntimeError, ValueError:
+            reason = "cancelled" if cancel.is_set() else "resource_unavailable"
+            raise _ObserverSetupError(reason) from None
+
+
+def _supervise_command(
+    owned: _OwnedProcess,
+    process: _OwnedTreeProcess,
+    cancel: Event,
+    limits: WorkerLimits,
+    stop_reason: Callable[[], str | None] | None,
+    on_process_started: Callable[[int], None] | None,
+    request_abort: Callable[[], None] | None,
+    abort_grace_seconds: float,
+) -> str:
+    _bind_command_observer(process, cancel, on_process_started)
+    process.activate()
+    for reader in owned.readers:
+        reader.thread.start()
+    reason = _monitor(
+        owned, cancel, limits, stop_reason, observe_before_exit=on_process_started is not None
+    )
+    if reason in {"cancelled", "resource_pressure", "resource_unavailable"} and (
+        request_abort is not None
+    ):
+        request_abort()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=abort_grace_seconds)
+    return reason
+
+
+# Preserve the existing keyword API and optional observer hook.
+def run_owned_command(  # noqa: PLR0913
     arguments: list[str],
     *,
     cwd: Path,
@@ -435,13 +526,15 @@ def run_owned_command(
     request_abort: Callable[[], None] | None = None,
     abort_grace_seconds: float = 0.2,
     stop_reason: Callable[[], str | None] | None = None,
+    on_process_started: Callable[[int], None] | None = None,
 ) -> OwnedCommandResult:
     """Run under caller admission, retaining the worker through actual read end.
 
     This function creates no executor and acquires no analysis process slot.
     Cancellation and optional resource pressure are observed on the existing
     offline worker. An optional owned child abort hook receives finite grace before
-    tree termination. Completed commands win over a later resource observation.
+    tree termination. Legacy commands win over a later resource observation; the
+    opt-in observer checks before accepting completion.
     A finite reap failure keeps this worker and all caller resources occupied until
     retirement succeeds.
     """
@@ -467,21 +560,19 @@ def run_owned_command(
     stderr = None
     reason = "worker_supervision_failed"
     try:
-        if isinstance(receipt_prefixes, IndependentReceipts):
-            prefixes, independent = receipt_prefixes.prefixes, True
-        else:
-            prefixes, independent = receipt_prefixes, False
-        stdout, stderr = _command_readers(owned, limits, prefixes, independent_receipts=independent)
-        process.activate()
-        for reader in owned.readers:
-            reader.thread.start()
-        reason = _monitor(owned, cancel, limits, stop_reason)
-        if reason in {"cancelled", "resource_pressure", "resource_unavailable"} and (
-            request_abort is not None
-        ):
-            request_abort()
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=abort_grace_seconds)
+        stdout, stderr = _readers_for_command(owned, limits, receipt_prefixes)
+        reason = _supervise_command(
+            owned,
+            process,
+            cancel,
+            limits,
+            stop_reason,
+            on_process_started,
+            request_abort,
+            abort_grace_seconds,
+        )
+    except _ObserverSetupError as error:
+        reason = str(error)
     except OSError, RuntimeError:
         reason = "worker_supervision_failed"
     finally:
@@ -493,6 +584,8 @@ def run_owned_command(
     final_reason = reason if outcome.reason == "worker_retiring" else outcome.reason
     if any(reader.failed.is_set() for reader in owned.readers):
         final_reason = "response_read_failed"
+    if on_process_started is not None and cancel.is_set():
+        final_reason = "cancelled"
     assert process.returncode is not None
     return OwnedCommandResult(
         final_reason,

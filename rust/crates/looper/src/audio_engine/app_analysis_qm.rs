@@ -8,12 +8,14 @@ const SMALL: usize = 1024 * 1024;
 #[derive(Debug)]
 pub(super) enum Failure {
     Cancelled,
+    NoChoice,
     Unavailable(String),
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Cancelled => out.write_str("analysis superseded"),
+            Self::NoChoice => out.write_str("QM has no independently admitted tempo"),
             Self::Unavailable(reason) => out.write_str(reason),
         }
     }
@@ -157,9 +159,11 @@ pub(super) fn observation(
     )
     .map_err(|_| Failure::Cancelled)?;
     check(cancelled)?;
-    let bpm = qm_estimate
-        .bpm
-        .ok_or_else(|| unavailable("QM has no independently admitted tempo"))?;
+    let bpm = qm_estimate.bpm.ok_or_else(|| {
+        if app_tempo::optional_resource_refusal(&qm_estimate) {
+            unavailable("QM has no independently admitted tempo")
+        } else { Failure::NoChoice }
+    })?;
     let status = qm_estimate.status;
     let source_extent = sample.frame_count() as f64 / f64::from(rate);
     let extent = source_extent.min(analyzer_frames as f64 / 44_100.0);

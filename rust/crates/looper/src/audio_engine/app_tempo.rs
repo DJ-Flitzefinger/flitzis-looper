@@ -211,6 +211,17 @@ pub(super) fn preparation_reservation(beats: usize, downbeats: usize) -> Option<
     inferred_ordinals::preparation_bytes(beats, downbeats)
 }
 
+/// Distinguish an ordinary absent optional scalar from incomplete resource work.
+pub(super) fn optional_resource_refusal(estimate: &TempoEstimate) -> bool {
+    match &estimate.ordinal_fit {
+        Some(inferred_ordinals::OrdinalFit::Budget(_)) => true,
+        Some(inferred_ordinals::OrdinalFit::Evaluated(evidence)) => {
+            evidence.candidate_limit_reached || evidence.outcome == "search_limited"
+        }
+        None => false,
+    }
+}
+
 pub(super) fn estimate_with_budget_cancelled(
     beats: &[f64],
     duration: f64,
@@ -338,6 +349,18 @@ fn estimate_v4(beats: &[f64], duration: f64) -> TempoEstimate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_absence_keeps_resource_refusals_distinct() {
+        let mut result=TempoEstimate {policy:POLICY,status:"insufficient",bpm:None,selected:None,
+            regions:vec![],integer_probe:None,ordinal_fit:None};
+        assert!(!optional_resource_refusal(&result));
+        for outcome in ["budget_unavailable","allocation_unavailable"] {
+            result.ordinal_fit=Some(inferred_ordinals::OrdinalFit::Budget(inferred_ordinals::BudgetUnavailable {
+                outcome,required_bytes:100,available_bytes:0}));
+            assert!(optional_resource_refusal(&result));
+        }
+    }
 
     #[test]
     fn quantized_fractional_tempo_rejects_bad_edges_and_is_not_integer_snapped() {
