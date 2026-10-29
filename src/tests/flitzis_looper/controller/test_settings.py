@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def test_separator_switch_and_rollback_preserve_stems_and_running_intent() -> None:
-    project = ProjectState(demucs_shifts=4, demucs_overlap=0.25)
+    project = ProjectState(stem_separator="demucs:htdemucs", demucs_shifts=4, demucs_overlap=0.25)
     entry = StemCacheEntry(source_version="saved-source", cache_dir="saved-set", available=True)
     project.stem_cache[0] = entry
     project.pad_stem_mix_mode[0] = "all_stems"
@@ -46,7 +46,7 @@ def test_separator_switch_and_rollback_preserve_stems_and_running_intent() -> No
 
 def test_unchanged_separator_does_not_mark_project_dirty() -> None:
     changed = Mock()
-    project = ProjectState()
+    project = ProjectState(stem_separator="demucs:htdemucs")
     settings = SettingsController(project, SessionState(), Mock(), on_project_changed=changed)
 
     settings.set_stem_separator("demucs:htdemucs")
@@ -70,7 +70,7 @@ def test_unknown_separator_rejects_without_mutating_project() -> None:
 
 
 def test_settings_quality_aba_advances_only_the_models_effective_revision() -> None:
-    project = ProjectState(demucs_shifts=4, demucs_overlap=0.25)
+    project = ProjectState(stem_separator="demucs:htdemucs", demucs_shifts=4, demucs_overlap=0.25)
     changed = Mock()
     settings = SettingsController(project, SessionState(), Mock(), on_project_changed=changed)
 

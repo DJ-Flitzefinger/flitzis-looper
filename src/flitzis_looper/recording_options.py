@@ -15,7 +15,7 @@ class RecordingOptions(BaseModel):
         frozen=True, extra="forbid", revalidate_instances="always", strict=True
     )
 
-    format: RecordingFormat = "wav"
+    format: RecordingFormat = "flac"
     wav_encoding: WavEncoding = "float32"
     flac_bit_depth: int = Field(default=24, strict=True)
     flac_compression: int = Field(default=8, strict=True, ge=0, le=8)

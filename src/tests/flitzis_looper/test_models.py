@@ -38,6 +38,7 @@ from flitzis_looper.models import (
     StemFileSet,
     StemSeparator,
 )
+from flitzis_looper.recording_options import RecordingOptions
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
@@ -198,6 +199,9 @@ class TestModelSerialization:
         )
         project_state.manual_bpm[0] = 128.0
         project_state.manual_key[0] = "Gm"
+        project_state.trigger_quantization_step = "1_32"
+        project_state.stem_separator = "demucs:htdemucs"
+        project_state.recording_options = RecordingOptions(format="wav")
 
         # Serialize
         json_str = project_state.model_dump_json()
@@ -231,6 +235,9 @@ class TestModelSerialization:
         # Deserialize
         reconstructed = ProjectState.model_validate_json(json_str)
         assert reconstructed.model_dump() == project_state.model_dump()
+        assert reconstructed.trigger_quantization_step == "1_32"
+        assert reconstructed.stem_separator == "demucs:htdemucs"
+        assert reconstructed.recording_options.format == "wav"
 
     def test_session_state_json_serialization(self, session_state: SessionState) -> None:
         """Test that SessionState can be serialized to and from JSON."""
@@ -272,10 +279,11 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.key_lock is False
     assert project_state.bpm_lock is False
     assert project_state.trigger_quantization_enabled is False
+    assert DEFAULT_TRIGGER_QUANTIZATION_STEP == "1_16"
     assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
     assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
-    assert project_state.stem_separator == "demucs:htdemucs"
+    assert project_state.stem_separator == "bs-roformer:musdb18hq"
     assert project_state.input_mapping_enabled is True
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
@@ -498,7 +506,7 @@ def test_separator_identity_validation_preserves_last_valid_selection(unknown: s
 
 
 def test_stem_processing_revision_fences_direct_model_and_quality_aba() -> None:
-    project = ProjectState()
+    project = ProjectState(stem_separator="demucs:htdemucs")
     assert project.stem_processing_revision == 0
 
     project.stem_separator = "bs-roformer:musdb18hq"
@@ -561,7 +569,7 @@ def test_invalid_processing_assignment_preserves_private_revision(
 
 
 def test_processing_revision_is_private_and_reopen_starts_a_fresh_runtime() -> None:
-    project = ProjectState()
+    project = ProjectState(stem_separator="demucs:htdemucs")
     project.stem_separator = "bs-roformer:musdb18hq"
     project.stem_separator = "demucs:htdemucs"
     encoded = project.model_dump_json()

@@ -96,7 +96,7 @@ TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
     "1_32": "1/32",
     "1_16": "1/16",
 }
-DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_32"
+DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_16"
 KEY_LOCK_START_BEHAVIORS: tuple[KeyLockStartBehavior, ...] = (
     "first_sound_at_grid",
     "attack_at_grid",
@@ -689,7 +689,7 @@ class ProjectState(BaseModel):
     """Immutable format/quality defaults for future takes; no live capture authority."""
     automatic_bpm_range: BpmRangeOptions = Field(default_factory=BpmRangeOptions)
     """Immutable range preference captured only by future automatic requests."""
-    stem_separator: StemSeparator = "demucs:htdemucs"
+    stem_separator: StemSeparator = "bs-roformer:musdb18hq"
     """Separator/model used by future offline stem-generation requests."""
     preload_stem_loops_on_startup: bool = Field(default=False, strict=True)
     """Deliberately retain eligible existing component loops without changing stem mode."""

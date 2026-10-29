@@ -3,7 +3,9 @@
 Flitzis Looper generates stems offline with Demucs htdemucs or BS-RoFormer
 MUSDB18HQ. Settings provides a quick Stem Separator choice and return to Demucs.
 Selection applies to future jobs; existing prepared sets and model-free restoration
-keep their source/timing eligibility. Old projects default to Demucs. The Rust
+keep their source/timing eligibility. Fresh or missing separator choices use
+BS-RoFormer MUSDB18HQ; an explicitly saved choice, including Demucs, remains
+authoritative. The Rust
 callback never runs separators, FFmpeg, disk I/O, model loading, GIL/UI or inference.
 
 ## What `uv sync` Installs

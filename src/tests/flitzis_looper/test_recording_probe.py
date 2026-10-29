@@ -74,14 +74,14 @@ def _ten_packets(*, plain: bool = False) -> list[bytes]:
 @pytest.mark.parametrize(
     ("options", "fields", "bits"),
     [
-        (RecordingOptions(), {}, 32),
+        (RecordingOptions(format="wav"), {}, 32),
         (
-            RecordingOptions(wav_encoding="pcm16"),
+            RecordingOptions(format="wav", wav_encoding="pcm16"),
             {"codec_name": "pcm_s16le", "bits_per_sample": 16},
             16,
         ),
         (
-            RecordingOptions(wav_encoding="pcm24"),
+            RecordingOptions(format="wav", wav_encoding="pcm24"),
             {"codec_name": "pcm_s24le", "bits_per_sample": 24, "bits_per_raw_sample": "24"},
             24,
         ),
@@ -111,7 +111,7 @@ def test_selected_lossless_codec_precision_and_exact_rational_duration(
 def test_exact_duration_uses_timebase_not_rounded_descriptive_duration() -> None:
     info = validate_recording_streams(
         _metadata({"time_base": "2/192000", "duration_ts": "20002", "duration": "0.2"}),
-        RecordingOptions(),
+        RecordingOptions(format="wav"),
         rate=48000,
         channels=2,
         frames=10001,
@@ -149,7 +149,7 @@ def test_mp3_nominal_duration_does_not_replace_packet_trim_verification() -> Non
 def test_malformed_or_additional_streams_fail(metadata: object) -> None:
     with pytest.raises(ValueError, match="recording"):
         validate_recording_streams(
-            metadata, RecordingOptions(), rate=48000, channels=2, frames=10001
+            metadata, RecordingOptions(format="wav"), rate=48000, channels=2, frames=10001
         )
 
 
@@ -202,7 +202,7 @@ def test_stream_known_numeric_fields_are_strict_and_geometry_cannot_drift(
     with pytest.raises(ValueError, match="recording"):
         validate_recording_streams(
             _metadata({field: value}),
-            RecordingOptions(),
+            RecordingOptions(format="wav"),
             rate=48000,
             channels=2,
             frames=10001,

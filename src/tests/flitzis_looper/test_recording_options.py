@@ -18,7 +18,7 @@ class _UncheckedOptionsConstructor(Protocol):
 
 def test_recording_defaults_are_explicit_and_round_trip_in_project_json() -> None:
     expected = {
-        "format": "wav",
+        "format": "flac",
         "wav_encoding": "float32",
         "flac_bit_depth": 24,
         "flac_compression": 8,

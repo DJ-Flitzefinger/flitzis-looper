@@ -117,9 +117,9 @@ class _RecordingRender:
 @pytest.mark.parametrize(
     ("options", "combo", "field", "value", "label"),
     [
-        (RecordingOptions(), "Recording format", "format", "flac", "FLAC"),
-        (RecordingOptions(), "WAV precision", "wav_encoding", "pcm24", "24-bit PCM"),
-        (RecordingOptions(), "WAV precision", "wav_encoding", "pcm16", "16-bit PCM"),
+        (RecordingOptions(format="wav"), "Recording format", "format", "flac", "FLAC"),
+        (RecordingOptions(format="wav"), "WAV precision", "wav_encoding", "pcm24", "24-bit PCM"),
+        (RecordingOptions(format="wav"), "WAV precision", "wav_encoding", "pcm16", "16-bit PCM"),
         (RecordingOptions(format="flac"), "FLAC precision", "flac_bit_depth", 16, "16-bit"),
         (RecordingOptions(format="mp3"), "MP3 bitrate", "mp3_bitrate_kbps", 128, "128 kbit/s CBR"),
         (RecordingOptions(format="mp3"), "MP3 bitrate", "mp3_bitrate_kbps", 256, "256 kbit/s CBR"),

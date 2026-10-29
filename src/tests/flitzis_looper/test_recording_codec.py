@@ -56,9 +56,9 @@ def tools() -> RecordingCodecTools:
 @pytest.mark.parametrize(
     ("options", "rate"),
     [
-        (RecordingOptions(wav_encoding="float32"), 48000),
-        (RecordingOptions(wav_encoding="pcm16"), 48000),
-        (RecordingOptions(wav_encoding="pcm24"), 48000),
+        (RecordingOptions(format="wav", wav_encoding="float32"), 48000),
+        (RecordingOptions(format="wav", wav_encoding="pcm16"), 48000),
+        (RecordingOptions(format="wav", wav_encoding="pcm24"), 48000),
         (RecordingOptions(format="flac", flac_bit_depth=16, flac_compression=0), 48000),
         (RecordingOptions(format="flac", flac_bit_depth=16, flac_compression=8), 48000),
         (RecordingOptions(format="flac", flac_bit_depth=24, flac_compression=0), 48000),
@@ -227,7 +227,7 @@ def test_raw_input_digest_mismatch_is_not_encoded_or_silently_repaired(
         decoded=tmp_path / "decoded.pcm",
         source_identity=(state.st_dev, state.st_ino),
         source_payload_sha256="0" * 64,
-        options=RecordingOptions(),
+        options=RecordingOptions(format="wav"),
         rate=48000,
         channels=2,
         frames=10,
@@ -256,7 +256,7 @@ def test_source_file_identity_change_rejected_before_process(
         decoded=tmp_path / "decoded.pcm",
         source_identity=(state.st_dev, state.st_ino),
         source_payload_sha256=hashlib.sha256(b"\0" * 80).hexdigest(),
-        options=RecordingOptions(),
+        options=RecordingOptions(format="wav"),
         rate=48000,
         channels=2,
         frames=10,
@@ -279,7 +279,7 @@ def _short_request(tmp_path: Path, tools: RecordingCodecTools) -> RecordingCodec
         decoded=tmp_path / "decoded.pcm",
         source_identity=(state.st_dev, state.st_ino),
         source_payload_sha256=hashlib.sha256(b"\0" * 80).hexdigest(),
-        options=RecordingOptions(),
+        options=RecordingOptions(format="wav"),
         rate=48000,
         channels=2,
         frames=10,
@@ -408,7 +408,7 @@ def test_public_retirement_waits_for_actual_wrapper_input_reads(
 @pytest.mark.parametrize(
     ("options", "stage"),
     [
-        (RecordingOptions(), "streams.json"),
+        (RecordingOptions(format="wav"), "streams.json"),
         (RecordingOptions(format="mp3"), "packets"),
         (RecordingOptions(format="flac", flac_bit_depth=16), "decoded.pcm"),
     ],

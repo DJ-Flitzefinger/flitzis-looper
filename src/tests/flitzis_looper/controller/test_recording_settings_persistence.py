@@ -87,6 +87,9 @@ def test_new_missing_config_uses_recording_defaults_without_a_recovery_warning(
     loaded = ProjectPersistence.from_config_path(config)
 
     assert loaded.project.recording_options == RecordingOptions()
+    assert loaded.project.recording_options.format == "flac"
+    assert loaded.project.recording_options.flac_bit_depth == 24
+    assert loaded.project.recording_options.flac_compression == 8
     assert loaded.recording_settings_warning is None
     assert loaded.load_error is None
     assert not config.exists()

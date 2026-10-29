@@ -72,6 +72,11 @@ is not evidence that a GPU processed the source.
 
 ## Fresh project
 
+Fresh projects use a 1/16 trigger-quantization step with quantization initially
+disabled, FLAC recording at 24 bit with compression 8, and BS-RoFormer MUSDB18HQ for future
+stem requests. Explicitly saved choices remain authoritative; changing defaults
+does not rewrite user settings or existing recordings/stems.
+
 This architecture change intentionally provides no backward compatibility. The
 Human starts with a fresh samples directory. Development tooling does not delete
 private samples, settings or previous artifacts.

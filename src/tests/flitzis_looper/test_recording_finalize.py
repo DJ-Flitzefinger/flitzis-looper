@@ -131,7 +131,7 @@ def test_cancel_before_finalization_never_reads_native_or_creates_stages(owned_c
 
 
 def test_changed_options_cannot_reuse_previous_codec_readiness(owned_case: Path) -> None:
-    paths = create_recording_namespace(owned_case / "record", RecordingOptions())
+    paths = create_recording_namespace(owned_case / "record", RecordingOptions(format="wav"))
     ready = _negative_readiness(owned_case, RecordingOptions(format="flac"))
     engine = _FailureEngine()
     retired = Event()
@@ -264,8 +264,8 @@ def test_malformed_real_checkpoint_releases_local_native_pin_even_with_retained_
 @pytest.mark.parametrize(
     "options",
     [
-        RecordingOptions(),
-        RecordingOptions(wav_encoding="pcm16"),
+        RecordingOptions(format="wav"),
+        RecordingOptions(format="wav", wav_encoding="pcm16"),
         RecordingOptions(format="flac"),
         RecordingOptions(format="mp3"),
     ],
@@ -290,7 +290,7 @@ def test_overrange_warning_reports_original_counts_and_selected_conversion(
 
 def test_exact_fullscale_endpoint_is_not_reported_as_original_overrange(owned_case: Path) -> None:
     paths = create_recording_namespace(
-        owned_case / "record", RecordingOptions(wav_encoding="pcm24")
+        owned_case / "record", RecordingOptions(format="wav", wav_encoding="pcm24")
     )
     pcm = RecordingPcmStats(8, 2, 1.0, 0, 0, "0" * 64, "1" * 64)
     assert recording_finalize._overrange_warning(paths, pcm) is None
