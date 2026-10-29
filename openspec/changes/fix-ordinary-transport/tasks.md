@@ -6,4 +6,4 @@
 - [x] Synchronize GUI/MIDI, parent specifications, guide and API3 startup checks.
 - [x] Freeze Systems POST and run focused source/order/recording/Lock/transition regressions.
 - [x] Complete one independent final-diff campaign and matching Release/API checks.
-- [ ] Commit, normally push, verify fresh clean remote and safely install matching Native.
+- [x] Commit, normally push, verify fresh clean remote and safely install matching Native.
