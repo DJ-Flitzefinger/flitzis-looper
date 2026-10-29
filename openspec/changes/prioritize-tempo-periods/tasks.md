@@ -6,7 +6,7 @@
 - [x] Explain unit uncertainty under existing automatic/manual/Tap/range guards.
 - [x] Verify changed math, limits, negative cases, cached corpus and exactDAW120.
 - [x] Complete frozen Systems POST, one independent final review and matching Release/API checks.
-- [ ] Commit, normally push, verify fresh clean remote equality and safely install matching Native.
+- [x] Commit, normally push, verify fresh clean remote equality and safely install matching Native.
 
 Producer reference reports distinguish physical period agreement from musical
 half/double unit. Provisional labels do not supply algorithm seeds or certify
