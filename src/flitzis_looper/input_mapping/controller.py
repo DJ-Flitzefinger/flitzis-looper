@@ -820,8 +820,11 @@ class InputMappingController(BaseController):
         bindings = [pad.binding for pad in pad_signatures]
 
         try:
+            previous = self._last_input_runtime_state_signature
+            if previous is not None and previous[0] and not multi_loop:
+                self._app.transport.playback._prepare_fenced_playback_observation()
             if callable(getattr(self._audio, "capture_selected_pitch_action", None)):
-                self._audio.set_input_runtime_state(
+                transition = self._audio.set_input_runtime_state(
                     multi_loop,
                     loaded,
                     loop_starts,
@@ -830,7 +833,7 @@ class InputMappingController(BaseController):
                     pitch_rows=[pad.pitch.payload() for pad in pad_signatures],
                 )
             else:
-                self._audio.set_input_runtime_state(
+                transition = self._audio.set_input_runtime_state(
                     multi_loop,
                     loaded,
                     loop_starts,
@@ -842,6 +845,8 @@ class InputMappingController(BaseController):
             return False
 
         self._last_input_runtime_state_signature = signature
+        if transition is not None:
+            self._app.transport.playback._observe_fenced_playback(transition)
         return True
 
     def _input_runtime_state_signature(self) -> _InputRuntimeStateSignature:

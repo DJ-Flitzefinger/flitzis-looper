@@ -267,6 +267,7 @@ pub(crate) struct InputRuntimeOwnership {
     pending_ordinary_origins: [AtomicU64; NUM_SAMPLES],
     pub(super) ordinary_observations:
         [super::ordinary_transport::OrdinaryObservationSlot; NUM_SAMPLES],
+    pub(super) explicit_target: super::explicit_playback_target::ExplicitTargetSlot,
     parameter_intents: [AtomicU64; NUM_SAMPLES],
     // Source/request intent belongs to stable content cells. Window preparation and
     // physical placement counters do not change this incarnation.
@@ -308,6 +309,7 @@ impl Default for InputRuntimeOwnership {
             ordinary_observations: std::array::from_fn(|_| {
                 super::ordinary_transport::OrdinaryObservationSlot::default()
             }),
+            explicit_target: super::explicit_playback_target::ExplicitTargetSlot::default(),
             parameter_intents: std::array::from_fn(|_| AtomicU64::new(0)),
             source_requests: std::array::from_fn(|_| AtomicU64::new(1)),
             control_cell_to_slot: std::array::from_fn(|slot| AtomicUsize::new(slot)),
@@ -676,6 +678,9 @@ impl InputRuntimeOwnership {
     }
     pub(crate) fn placement_read_token(&self) -> Option<u64> {
         self.placement.read_token()
+    }
+    pub(crate) fn placement_claimed_observation_token(&self) -> Option<u64> {
+        self.placement.claimed_observation_token()
     }
     pub(crate) fn placement_read_token_result(&self) -> Result<u64, PlacementError> {
         self.placement.read_token_result()
@@ -2023,6 +2028,21 @@ impl InputRuntimeOwnership {
             && epoch != u64::MAX
             && (!self.source_tracking || source.generation.load(Ordering::SeqCst) != 0)
             && source.ordinary_epoch.load(Ordering::SeqCst) == epoch)
+            .then_some(epoch)
+    }
+
+    /// Identity observation only. An unchanged epoch with unavailable generation is
+    /// pending source publication, never permission to use that source.
+    pub(crate) fn ordinary_source_identity_epoch(&self, cell: ContentCell) -> Option<u64> {
+        let epoch = self.sources[cell.index()]
+            .ordinary_epoch
+            .load(Ordering::SeqCst);
+        (epoch != 0
+            && epoch != u64::MAX
+            && self.sources[cell.index()]
+                .ordinary_epoch
+                .load(Ordering::SeqCst)
+                == epoch)
             .then_some(epoch)
     }
 

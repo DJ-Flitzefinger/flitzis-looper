@@ -372,7 +372,6 @@ class GlobalParametersController:
             return
         self._transport.stage_multi_loop_cancellation(enabled=enabled)
         self._project.multi_loop = enabled
-        self._begin_bpm_lock_application(capture_anchor=enabled and self._project.bpm_lock)
         self._transport._mark_project_changed()
         self.poll_bpm_lock_application()
 
@@ -452,9 +451,6 @@ class GlobalParametersController:
             raise TypeError(message)
         if enabled == self._project.bpm_lock:
             return
-        if not self._project.multi_loop:
-            message = "BPM Lock requires available Multi Loop timing."
-            raise ValueError(message)
         if enabled:
             self._transport.ensure_pad_edit_allowed(self._project.selected_pad)
         self._project.bpm_lock = enabled

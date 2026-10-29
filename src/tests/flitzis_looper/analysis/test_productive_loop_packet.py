@@ -34,9 +34,10 @@ from flitzis_looper.analysis.productive_loop_snapshot import comparison_pad
 from flitzis_looper.controller import accepted_restore
 from flitzis_looper.models import ProjectState
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
+from tests.flitzis_looper.controller.bpm_lock_fixture import _configured
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from flitzis_looper.controller import AppController
     from flitzis_looper_audio import ConstantTimingTicket
@@ -617,6 +618,51 @@ def test_rejected_pcm_geometry_retains_binding_without_capture_or_error_clear(
     assert not (observer.directory / "setup-ready.json").exists()
 
 
+def _prepare_productive_lock(
+    controller: AppController, audio: Mock, current: dict[str, object], accepted_period: float
+) -> Callable[[], None]:
+    """Capture a real fixture owner, then correlate its synthetic Native effect receipts."""
+    controller.project.speed = 0.73
+    controller.project.pad_loop_auto[0] = False
+    lock_receipt = _configured(controller, audio)
+    controller.project.multi_loop = False
+    controller.project.manual_bpm[0] = None
+    parameters = controller.transport.global_params
+    parameters.set_bpm_lock(enabled=True)
+
+    def acknowledge() -> None:
+        parameters.poll_bpm_lock_application()
+        anchor = audio.set_bpm_lock.call_args.kwargs["anchor_binding"]
+        assert anchor.metadata()["accepted_timing"]["revision"] == current["revision"]
+        lock_receipt.update(
+            state="applied",
+            effect_revision=lock_receipt["request_revision"],
+            effective_enabled=True,
+            execution_frame=64,
+        )
+        audio.global_rate_status.side_effect = None
+        audio.global_rate_status.return_value = {
+            "request_revision": 1,
+            "effect_revision": 1,
+            "state": "applied",
+            "requested_speed": 0.73,
+            "requested_master_period": accepted_period / 0.73,
+            "effective_speed": 0.73,
+            "effective_master_period": accepted_period / 0.73,
+            "execution_frame": 64,
+            "error": None,
+            "master_provenance": {
+                "kind": "qualified",
+                "source_identity": anchor.metadata()["source_identity"],
+                "accepted_revision": current["revision"],
+            },
+        }
+        parameters.poll_bpm_lock_application()
+        assert parameters._bpm_lock_master_ready()
+
+    return acknowledge
+
+
 def test_adapter_uses_productive_controller_prepare_publish_current_and_derived_ack(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
@@ -649,9 +695,9 @@ def test_adapter_uses_productive_controller_prepare_publish_current_and_derived_
     refresh.is_current.return_value = False
     audio_engine_mock.refresh_current_constant_timing.return_value = refresh
     controller.project.sample_paths[0] = str(source)
-    controller.project.bpm_lock = True
-    controller.project.speed = 0.73
-    controller.project.pad_loop_auto[0] = False
+    acknowledge_lock = _prepare_productive_lock(
+        controller, audio_engine_mock, current, accepted_period
+    )
 
     observer = blank_observer(controller, plan, ref, tmp_path / "observations")
 
@@ -665,6 +711,7 @@ def test_adapter_uses_productive_controller_prepare_publish_current_and_derived_
         ] == [1, 2, 4]
         ticket.publication_status.return_value = "accepted"
         audio_engine_mock.current_constant_timing.return_value = current
+        acknowledge_lock()
         advance_observer_until(observer, "awaiting_actual_derived_ack")
         assert not observer.completed
         assert not (observer.directory / "setup-ready.json").exists()

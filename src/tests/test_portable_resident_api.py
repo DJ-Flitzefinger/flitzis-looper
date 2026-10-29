@@ -468,6 +468,7 @@ def _capture_pad_start(
     exclusive: bool = False,
     received_at_ns: int | None = None,
     expected_source_generation: int | None = None,
+    explicit_target: object | None = None,
 ) -> None:
     _forbidden_native_work(
         self,
@@ -478,6 +479,7 @@ def _capture_pad_start(
         exclusive=exclusive,
         received_at_ns=received_at_ns,
         expected_source_generation=expected_source_generation,
+        explicit_target=explicit_target,
     )
 
 
@@ -745,6 +747,7 @@ def test_incomplete_ordinary_start_receipt_cannot_activate(
         ("capture_pad_start", "exclusive"),
         ("capture_pad_start", "received_at_ns"),
         ("capture_pad_start", "expected_source_generation"),
+        ("capture_pad_start", "explicit_target"),
         ("publish_pad_start", "window"),
         ("prepare_captured_pad_start", "window"),
     ],

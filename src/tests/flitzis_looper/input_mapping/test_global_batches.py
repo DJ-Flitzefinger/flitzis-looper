@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 def _prepare_midi_batch(
     controller: AppController, audio: Mock
 ) -> tuple[dict[int, dict[str, object]], dict[int, FakeInputRuntimePadBinding]]:
+    controller.project.multi_loop = True
     controller.input_mapping.set_enabled(enabled=True)
     metadata = {
         sample_id: current_timing_metadata(

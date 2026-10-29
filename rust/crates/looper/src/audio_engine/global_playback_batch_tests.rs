@@ -1,5 +1,8 @@
 //! Productive controller transaction admission, callback, scheduler and pinned-voice ownership.
 
+#[path = "explicit_transport_tests.rs"]
+mod explicit_transport_tests;
+
 use super::*;
 use crate::audio_engine::audio_stream::{
     drain_control_messages, execute_scheduled_command, process_control_message,

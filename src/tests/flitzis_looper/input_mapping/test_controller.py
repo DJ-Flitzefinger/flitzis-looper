@@ -1236,6 +1236,7 @@ def test_non_direct_rust_midi_event_executes_start_stop_action(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
+    controller.project.multi_loop = True
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/foo.wav"
     controller.session.active_sample_ids.add(0)
@@ -1580,6 +1581,7 @@ def test_keyboard_mapping_preserves_captured_input_time(
 def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.input_mapping.set_enabled(enabled=True)
     for pad_id in (0, 1):
         controller.project.sample_paths[pad_id] = f"samples/{pad_id}.wav"

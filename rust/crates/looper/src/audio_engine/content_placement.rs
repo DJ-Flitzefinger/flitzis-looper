@@ -354,6 +354,14 @@ impl ContentPlacement {
         self.read_token_result().ok()
     }
 
+    /// Read only inside the caller's already held mutation marker. This observation
+    /// grants no claim; it binds a preflight token to this marker's single increment.
+    pub(crate) fn claimed_observation_token(&self) -> Option<u64> {
+        let revision = self.revision.load(Ordering::SeqCst);
+        let token = self.observation_generation.load(Ordering::SeqCst);
+        (revision & 1 != 0 && token != u64::MAX).then_some(token)
+    }
+
     /// Preserve permanent exhaustion when a control owner needs to defer only
     /// actual publication contention. The optional read API retains its contract.
     pub(crate) fn read_token_result(&self) -> Result<u64, PlacementError> {

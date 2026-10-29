@@ -1293,6 +1293,11 @@ class ResidencyController:
             pending.after_ack = None
             self.cancel_requested(sample_id)
 
+    def _retire_fenced_launch_callbacks(self) -> None:
+        """Detach obsolete launches after Native fenced them; keep independent edits."""
+        for pending in self._pending.values():
+            pending.after_ack = None
+
     def cancel_all_launches(self) -> frozenset[int]:
         """Return admitted STOP targets captured with native launch revocation."""
         admitted = frozenset(self._audio.cancel_all_launches()) | frozenset(self._launched)

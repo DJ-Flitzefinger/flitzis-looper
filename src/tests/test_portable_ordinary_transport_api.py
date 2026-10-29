@@ -1,4 +1,4 @@
-"""Admission-only pause runtimes cannot activate controls that require Native truth."""
+"""Reflect effective target ownership without executing Native work."""
 
 import runpy
 from pathlib import Path
@@ -78,12 +78,28 @@ def ordinary_transport_native_module(engine_base: type = object) -> SimpleNamesp
         | {"__init__": _forbidden, "feedback_kind": _self},
     )
     return SimpleNamespace(
+        ExplicitPlaybackTarget=type(
+            "ExplicitPlaybackTarget",
+            (),
+            {"__init__": _forbidden}
+            | dict.fromkeys(
+                (
+                    "current_control_slot",
+                    "content_lifetime",
+                    "effective_frame",
+                    "original_sequence",
+                ),
+                _self,
+            ),
+        ),
         AudioEngine=type(
             "Engine",
             (engine_base,),
             {
                 "__init__": _forbidden,
-                "ORDINARY_TRANSPORT_API_VERSION": 2,
+                "ORDINARY_TRANSPORT_API_VERSION": 3,
+                "current_explicit_playback_target": _self,
+                "stop_explicit_playback": _self,
                 "pause_sample": _pad,
                 "resume_sample": _pad,
                 "_resolve_ordinary_transport_feedback": _resolve,
@@ -106,7 +122,7 @@ def test_complete_ordinary_transport_interface_is_reflected_without_native_work(
     _check(ordinary_transport_native_module())
 
 
-@pytest.mark.parametrize("version", [None, False, True, 0, 1, 3, 2.0, "2"])
+@pytest.mark.parametrize("version", [None, False, True, 0, 1, 2, 4, 3.0, "3"])
 def test_ordinary_transport_version_requires_exact_current_integer(version: object) -> None:
     native = ordinary_transport_native_module()
     native.AudioEngine.ORDINARY_TRANSPORT_API_VERSION = version
@@ -117,6 +133,12 @@ def test_ordinary_transport_version_requires_exact_current_integer(version: obje
 @pytest.mark.parametrize(
     ("class_name", "method"),
     [
+        ("AudioEngine", "current_explicit_playback_target"),
+        ("AudioEngine", "stop_explicit_playback"),
+        ("ExplicitPlaybackTarget", "current_control_slot"),
+        ("ExplicitPlaybackTarget", "content_lifetime"),
+        ("ExplicitPlaybackTarget", "effective_frame"),
+        ("ExplicitPlaybackTarget", "original_sequence"),
         ("AudioEngine", "pause_sample"),
         ("AudioEngine", "resume_sample"),
         ("AudioEngine", "_resolve_ordinary_transport_feedback"),

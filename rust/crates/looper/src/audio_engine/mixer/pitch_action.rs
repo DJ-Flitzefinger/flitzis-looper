@@ -815,6 +815,12 @@ impl RtMixer {
                     let mixer = mixer.borrow();
                     let work = work.borrow();
                     work.claim_current(guard)
+                        && (!retrigger
+                            || ownership.explicit_playback_available(
+                                work.action.content_key(),
+                                output_frame,
+                                work.action.sequence(),
+                            ))
                         && mixer.admitted_source_binding_current(id, guard.binding)
                         && work.source_control_revision.is_none_or(|revision| {
                             mixer.source_control_revision_matches(
@@ -949,6 +955,17 @@ impl RtMixer {
                         feedback_count += 1;
                     }
                     work.action.mark_effective(output_frame);
+                    if retrigger {
+                        let recorded = ownership.record_explicit_playback(
+                            work.action.content_key(),
+                            output_frame,
+                            work.action.sequence(),
+                        );
+                        debug_assert!(
+                            recorded,
+                            "the held retrigger claim reserved explicit target publication"
+                        );
+                    }
                 },
             )
             .map_err(placement_rejection);

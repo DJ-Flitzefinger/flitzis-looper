@@ -18,7 +18,7 @@ The system SHALL provide a global MultiLoop mode setting that can be enabled or 
 - **THEN** MultiLoop mode becomes disabled
 
 ### Requirement: MultiLoop Enabled Allows Concurrent Loops
-MultiLoop SHALL gate BPM Lock without erasing its saved preference. Parent OFF/ON SHALL preserve existing source and acknowledgement fences, precise scalar loop periods, ordinary scheduling and retirement. Retired source-SYNC and REALTIME BPM preferences SHALL have no runtime effect.
+MultiLoop and BPM Lock SHALL be independently toggleable. Changing MultiLoop SHALL preserve the requested Lock state, its qualified source reference and established master tempo. Mode transitions SHALL preserve existing source and acknowledgement fences, precise scalar loop periods, ordinary scheduling and retirement. Retired source-SYNC and REALTIME BPM preferences SHALL have no runtime effect.
 
 When MultiLoop mode is enabled, the system SHALL allow multiple pads to be active simultaneously. Triggering a pad SHALL start or restart that pad’s loop without stopping other active pads.
 
@@ -48,7 +48,7 @@ When MultiLoop mode is disabled, triggering a pad SHALL stop all other active pa
 - **AND** pad 2 becomes active
 
 ### Requirement: Loop Onset Is Determined by Trigger Time
-The system SHALL start loops immediately when a pad trigger action occurs. Loop onset SHALL be determined by the user’s trigger timing (no quantization to a global grid).
+Without trigger quantization, the system SHALL start loops immediately when a pad trigger action occurs. With trigger quantization enabled, loop onset SHALL follow the existing sample-frame scheduler and atomic quantized transition requirements.
 
 #### Scenario: Onsets are independent
 - **WHEN** MultiLoop mode is enabled

@@ -16,8 +16,12 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
+
+const GROUP_OPEN: u8 = 0;
+const GROUP_CANCELLED: u8 = 1;
+const GROUP_CLAIMED: u8 = 2;
 
 struct GlobalStartMember {
     start: CapturedPadStart,
@@ -29,6 +33,7 @@ struct GlobalStartOwner {
     members: Box<[GlobalStartMember]>,
     received_at_ns: u64,
     published: AtomicBool,
+    effect: AtomicU8,
 }
 
 /// Opaque native ownership, never reconstructed from current Python fields.
@@ -54,6 +59,23 @@ pub(crate) struct ResolvedGlobalStart {
 }
 
 impl CapturedGlobalStart {
+    pub(crate) fn claim_effect(&self) -> bool {
+        self.owner
+            .effect
+            .compare_exchange(
+                GROUP_OPEN,
+                GROUP_CLAIMED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+    pub(crate) fn effect_claimed(&self) -> bool {
+        self.owner.effect.load(Ordering::Acquire) == GROUP_CLAIMED
+    }
+    pub(crate) fn cancelled(&self) -> bool {
+        self.owner.effect.load(Ordering::Acquire) == GROUP_CANCELLED
+    }
     pub(crate) fn belongs_to(&self, ownership: &Arc<InputRuntimeOwnership>) -> bool {
         Arc::ptr_eq(&self.owner.ownership, ownership)
     }
@@ -64,6 +86,9 @@ impl CapturedGlobalStart {
 
     /// The single callback performs the existing quantization once for the group.
     pub(super) fn capture_target(&self, target: u64, mixer: &super::mixer::RtMixer) {
+        if self.cancelled() {
+            return;
+        }
         for member in &self.owner.members {
             if let Err(reason) = mixer
                 .source_control_revision(member.start.content_key())
@@ -89,6 +114,9 @@ impl CapturedGlobalStart {
     }
 
     pub(crate) fn resolve(&self) -> PyResult<Option<Vec<ResolvedGlobalStart>>> {
+        if self.cancelled() {
+            return Err(PyValueError::new_err("original global start is cancelled"));
+        }
         if self.owner.published.load(Ordering::Acquire) {
             return Err(PyValueError::new_err("global start already published"));
         }
@@ -138,7 +166,8 @@ impl CapturedGlobalStart {
         // Members are private to this group and publication is serialized by the
         // engine request mutex. No other path can publish a prefix independently;
         // after complete preflight these one-shot CAS operations cannot diverge.
-        !self.owner.published.load(Ordering::Acquire)
+        !self.cancelled()
+            && !self.owner.published.load(Ordering::Acquire)
             && self
                 .owner
                 .members
@@ -165,11 +194,12 @@ impl CapturedGlobalStart {
         self.target_frame()
     }
     pub fn state(&self) -> &'static str {
-        if self
-            .owner
-            .members
-            .iter()
-            .any(|member| member.start.state() == "rejected")
+        if self.cancelled()
+            || self
+                .owner
+                .members
+                .iter()
+                .any(|member| member.start.state() == "rejected")
         {
             "rejected"
         } else if self
@@ -186,18 +216,35 @@ impl CapturedGlobalStart {
         }
     }
     pub fn reason(&self) -> Option<&'static str> {
+        if self.cancelled() {
+            return Some("launch_cancelled");
+        }
         self.owner
             .members
             .iter()
             .find_map(|member| member.start.reason())
     }
-    /// Cancels only the attacks; the independently requested resident edit survives.
+    /// True closes OPEN irrevocably. False means already cancelled or irreversibly
+    /// claimed under the callback marker; it never reports a transient member CAS loss.
+    /// The independently requested resident edit and original ACK custody survive.
     pub fn cancel(&self) -> bool {
-        let mut cancelled = false;
-        for member in &self.owner.members {
-            cancelled |= member.start.cancel();
+        if self
+            .owner
+            .effect
+            .compare_exchange(
+                GROUP_OPEN,
+                GROUP_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return false;
         }
-        cancelled
+        for member in &self.owner.members {
+            member.start.cancel();
+        }
+        true
     }
 }
 
@@ -258,6 +305,7 @@ pub(super) fn capture(
         let dependency = ticket
             .map(|ticket| ticket.capture_start_dependency(&start))
             .transpose()?;
+        start.exclude_explicit_choice();
         members.push(GlobalStartMember { start, dependency });
     }
     if entries.iter().any(|(binding, _, _, _)| !binding.current()) {
@@ -271,6 +319,7 @@ pub(super) fn capture(
             members: members.into_boxed_slice(),
             received_at_ns,
             published: AtomicBool::new(false),
+            effect: AtomicU8::new(GROUP_OPEN),
         }),
     };
     if producer

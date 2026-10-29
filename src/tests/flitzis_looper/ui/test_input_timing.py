@@ -208,6 +208,7 @@ def test_mouse_right_hold_stops_on_each_hovered_frame(
 def test_start_stop_mouse_input_captures_once_for_whole_restart_batch(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    controller.project.multi_loop = True
     for pad_id in (0, 1):
         controller.project.sample_paths[pad_id] = f"samples/{pad_id}.wav"
     controller.session.active_sample_ids.update({0, 1})

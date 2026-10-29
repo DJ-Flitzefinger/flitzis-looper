@@ -8,6 +8,237 @@ const ID: usize = 37;
 const RATE: u32 = 48_000;
 const GENERATION: u64 = 7;
 
+#[test]
+fn tracked_source_busy_stop_and_collapse_admissions_preserve_voices_fences_and_mode() {
+    use crate::audio_engine::global_playback_batch::{
+        prepare_explicit_stop, with_target_source_read_for_test,
+    };
+    use crate::audio_engine::input_mapping::{InputRuntime, launch_admission_tests::LaunchFixture};
+    for collapse in [false, true] {
+        let fixture = LaunchFixture::new(8);
+        let ownership = fixture.engine.input_runtime_ownership.clone();
+        assert!(ownership.source_tracking);
+        let mut mixer = fixture.mixer();
+        assert!(mixer.play_sample(0, 1.0));
+        assert!(mixer.play_sample(1, 1.0));
+        let key = ownership.slot_snapshot(0).unwrap().content_key().unwrap();
+        assert!(ownership.record_explicit_playback(key, 100, 7));
+        let runtime = InputRuntime::new_with_ownership(
+            fixture.producer.clone(),
+            crate::audio_engine::timing::InputClock::new(),
+            ownership.clone(),
+        );
+        let bindings: Vec<_> = (0..NUM_SAMPLES)
+            .map(|id| capture(&fixture.engine, id).unwrap())
+            .collect();
+        let publish_image = |multi_loop| {
+            runtime.set_runtime_state_with_pitch_projection(
+                multi_loop,
+                bindings.iter().map(Option::is_some).collect(),
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+                bindings.iter().map(Option::as_ref).collect(),
+                None,
+            )
+        };
+        assert!(publish_image(true).unwrap().is_none());
+        let before_voices: Vec<_> = mixer
+            .voices
+            .iter()
+            .map(|voice| {
+                (
+                    voice.active,
+                    voice.paused,
+                    voice.generation,
+                    voice.frame_pos,
+                )
+            })
+            .collect();
+        let before_fences: Vec<_> = (0..NUM_SAMPLES)
+            .map(|id| ownership.launch_revision(id))
+            .collect();
+        let before_hierarchy = ownership.hierarchy_stamp.load(Ordering::Acquire);
+        let admit = || {
+            if collapse {
+                publish_image(false)
+            } else {
+                fixture
+                    .engine
+                    .stop_explicit_playback()
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            }
+        };
+        ownership.sources[key.cell().index()]
+            .generation
+            .store(0, Ordering::SeqCst);
+        assert!(
+            admit().is_err(),
+            "stable same-epoch unavailability must refuse before any fence"
+        );
+        ownership.sources[key.cell().index()]
+            .generation
+            .store(GENERATION, Ordering::SeqCst);
+        let beginning = ownership.clone();
+        let completing = ownership.clone();
+        assert!(
+            with_target_source_read_for_test(
+                move || {
+                    beginning.sources[key.cell().index()]
+                        .generation
+                        .store(0, Ordering::SeqCst);
+                },
+                move || {
+                    let placement = completing.slot_snapshot(0).unwrap();
+                    let write = completing
+                        .prepare_slot_write_fixed(placement, placement.lifetime())
+                        .unwrap();
+                    completing
+                        .commit_slot_write_fixed(
+                            &write,
+                            || true,
+                            |_| {
+                                completing.sources[key.cell().index()]
+                                    .generation
+                                    .store(GENERATION, Ordering::SeqCst);
+                            },
+                        )
+                        .unwrap();
+                },
+                admit
+            )
+            .is_err(),
+            "completion before row capture cannot turn busy target into an omitted target"
+        );
+        let prepared = prepare_explicit_stop(&ownership, collapse).unwrap();
+        let placement = ownership.slot_snapshot(0).unwrap();
+        let crossing = ownership
+            .prepare_slot_write_fixed(placement, placement.lifetime())
+            .unwrap();
+        assert!(
+            ownership
+                .commit_slot_write_fixed(&crossing, || false, |_| unreachable!())
+                .is_err()
+        );
+        let anchor = prepared.writes[0].placement;
+        let write = ownership
+            .prepare_slot_write_fixed(anchor, anchor.lifetime())
+            .unwrap();
+        assert!(
+            ownership
+                .commit_slot_write_fixed(
+                    &write,
+                    || prepared.current(&ownership),
+                    |_| panic!(
+                        "an intervening rejected source marker must not admit old preflight"
+                    )
+                )
+                .is_err()
+        );
+        assert!(fixture.consumer.is_empty());
+        assert_eq!(
+            before_fences,
+            (0..NUM_SAMPLES)
+                .map(|id| ownership.launch_revision(id))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            before_hierarchy,
+            ownership.hierarchy_stamp.load(Ordering::Acquire)
+        );
+        assert_eq!(
+            before_voices,
+            mixer
+                .voices
+                .iter()
+                .map(|voice| (
+                    voice.active,
+                    voice.paused,
+                    voice.generation,
+                    voice.frame_pos
+                ))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            publish_image(false).unwrap().is_some(),
+            "both refused collapse attempts left the actual runtime image ON"
+        );
+    }
+}
+
+#[test]
+fn explicit_target_tracked_source_unavailability_and_same_slot_aba_are_never_absent_history() {
+    use crate::audio_engine::explicit_playback_target::{
+        ExplicitPlaybackTarget, with_after_source_read_for_test,
+    };
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    let pcm = sample(0.25);
+    let publication = publish(&ownership, &pcm, GENERATION);
+    let key = publication.key().unwrap();
+    assert!(ownership.record_explicit_playback(key, 100, 7));
+    let target = ExplicitPlaybackTarget {
+        ownership: ownership.clone(),
+        value: ownership.explicit_target_snapshot().unwrap().unwrap(),
+    };
+    let epoch = ownership
+        .ordinary_source_identity_epoch(key.cell())
+        .unwrap();
+    // Exercise the actual tracked readiness field independently of semantic identity.
+    ownership.sources[key.cell().index()]
+        .generation
+        .store(0, Ordering::SeqCst);
+    assert!(target.current_control_slot().is_err());
+    let finishing = ownership.clone();
+    let result = with_after_source_read_for_test(
+        move || {
+            let write = current_write(&finishing);
+            finishing
+                .commit_slot_write_fixed(
+                    &write,
+                    || true,
+                    |_| {
+                        finishing.sources[key.cell().index()]
+                            .generation
+                            .store(GENERATION, Ordering::SeqCst);
+                    },
+                )
+                .unwrap();
+        },
+        || target.current_control_slot(),
+    );
+    assert!(
+        result.is_err(),
+        "completion before the second same-slot read is a busy observation"
+    );
+    assert_eq!(
+        ownership.ordinary_source_identity_epoch(key.cell()),
+        Some(epoch)
+    );
+    assert_eq!(target.current_control_slot().unwrap(), Some(ID));
+    let crossing = ownership.clone();
+    assert!(
+        with_after_source_read_for_test(
+            move || {
+                let write = current_write(&crossing);
+                assert!(
+                    crossing
+                        .commit_slot_write_fixed(&write, || false, |_| unreachable!())
+                        .is_err()
+                );
+            },
+            || target.current_control_slot()
+        )
+        .is_err(),
+        "even rejected same-slot ABA changes the observation token"
+    );
+    ownership.revoke_source(ID);
+    assert_eq!(
+        target.current_control_slot().unwrap(),
+        None,
+        "stable actual semantic revocation is invalid history"
+    );
+}
+
 fn sample(value: f32) -> SampleBuffer {
     SampleBuffer {
         residency: None,

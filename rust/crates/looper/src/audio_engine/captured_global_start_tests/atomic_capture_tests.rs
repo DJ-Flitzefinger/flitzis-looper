@@ -1053,6 +1053,10 @@ fn real_control_cancellation_before_or_after_capture_claim_has_one_combined_winn
             std::panic::resume_unwind(panic);
         }
         rig.fixture.render(1);
+        assert!(
+            captured.effect_claimed(),
+            "even a subsequent capture-permission failure closes the group gate permanently"
+        );
         let snapshot = rig.joined();
         assert_eq!(snapshot.failure.as_deref(), Some("cancelled"));
         assert!(!snapshot.successful_spool);
@@ -1068,5 +1072,40 @@ fn real_control_cancellation_before_or_after_capture_claim_has_one_combined_winn
             assert!(!snapshot.started);
             assert_eq!(snapshot.first_frame, None);
         }
+    }
+}
+
+#[test]
+fn original_group_cancel_immediately_before_or_after_the_effect_gate_has_one_winner() {
+    for after_claim in [false, true] {
+        let mut rig = CaptureRig::new(false);
+        rig.fixture.render_to(700);
+        let captured = public_capture(&rig.fixture);
+        rig.fixture.drain();
+        let batch = rig.publish(&captured);
+        let cancellation = captured.clone();
+        RtMixer::with_group_capture_claim_hook_for_test(
+            after_claim,
+            move || assert_eq!(cancellation.cancel(), !after_claim),
+            || rig.fixture.drain(),
+        );
+        rig.fixture.render(1);
+        assert_eq!(
+            (rig.fixture.starts(0), rig.fixture.starts(1)),
+            if after_claim { (1, 1) } else { (0, 0) }
+        );
+        assert_eq!(
+            batch.publication_status(),
+            if after_claim { "accepted" } else { "rejected" }
+        );
+        if after_claim {
+            rig.stop(701);
+        }
+        let snapshot = rig.joined();
+        assert_eq!(snapshot.started, after_claim);
+        assert!(
+            !captured.cancel(),
+            "a completed cancellation or effect gate cannot reopen"
+        );
     }
 }

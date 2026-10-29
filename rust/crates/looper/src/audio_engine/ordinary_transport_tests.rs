@@ -17,6 +17,13 @@ fn ordinary_transport_fixed_metadata_and_terminal_scratch_layout_are_bounded() {
     let metadata = size_of::<[OrdinaryObservationSlot; NUM_SAMPLES]>()
         + 2 * size_of::<[AtomicU64; NUM_SAMPLES]>();
     let terminal_scratch = size_of::<[Option<ContentKey>; MAX_VOICES]>();
+    let target = size_of::<crate::audio_engine::explicit_playback_target::ExplicitTargetSlot>();
+    let stop_sources =
+        NUM_SAMPLES * size_of::<crate::audio_engine::global_playback_batch::ExplicitStopSource>();
+    println!(
+        "explicit target={target}B; maximum control-owned source stop bindings={stop_sources}B; callback stop flags={NUM_SAMPLES}B"
+    );
+    assert!(target <= 128 && stop_sources <= 8192);
     println!(
         "ordinary fixed layout: slot={slot}B; {NUM_SAMPLES} slots+semantic epochs+pending origins={metadata}B; terminal {MAX_VOICES}-lane scratch={terminal_scratch}B; ControlMessage={}B; AudioMessage={}B",
         size_of::<ControlMessage>(),
@@ -67,6 +74,86 @@ impl Path {
             );
         }
     }
+}
+
+#[test]
+fn a_successful_native_midi_start_promotes_the_same_source_bound_explicit_target() {
+    use std::time::{Duration, Instant};
+    // Use the production dispatcher and prepared ordinary-start lane. Path::new
+    // deliberately keeps the older raw-trigger guard fixture used by its neighbors.
+    let mut fixture = crate::audio_engine::pitch_runtime_tests::Fixture::new(false);
+    fixture.refresh_clock();
+    let original = {
+        let runtime = fixture.control.engine.input_runtime.as_ref().unwrap();
+        runtime.replace_mappings(vec![("midi:note:1:60".into(), "pad.trigger:0".into())]);
+        runtime.set_enabled(true);
+        assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let event = loop {
+            if let Some(event) = runtime.poll_event() {
+                break event;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "actual mapped MIDI capture did not arrive"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(event.action_key.as_deref(), Some("pad.trigger:0"));
+        assert!(event.direct && event.dispatched);
+        let trigger = event
+            .captured_trigger
+            .expect("production MIDI retains the original source owner");
+        let start = trigger.captured_start();
+        assert_eq!(start.received_timestamp(), event.received_at_ns);
+        assert!(Arc::ptr_eq(
+            start.ownership(),
+            &fixture.control.engine.input_runtime_ownership
+        ));
+        start
+    };
+    assert!(matches!(fixture.control.consumer.peek().unwrap(),
+        ControlMessage::CapturePadStartTarget(start) if start.same_owner(&original)));
+    assert!(
+        fixture
+            .control
+            .engine
+            .current_explicit_playback_target()
+            .unwrap()
+            .is_none(),
+        "capturing or admitting MIDI intent is not an effective playable choice"
+    );
+    fixture.drain();
+    assert_eq!(original.state(), "applied", "{:?}", original.reason());
+    assert_eq!(fixture.starts(0), 1);
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == 0)
+    );
+    let target = fixture
+        .control
+        .engine
+        .current_explicit_playback_target()
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.current_control_slot().unwrap(), Some(0));
+    assert_eq!(target.original_sequence(), original.sequence());
+    assert_eq!(Some(target.effective_frame()), original.effective_frame());
+    assert_eq!(target.content_lifetime(), original.content_key().lifetime());
+    assert_eq!(
+        fixture
+            .control
+            .engine
+            .input_runtime_ownership
+            .explicit_target_snapshot()
+            .unwrap()
+            .unwrap()
+            .key,
+        original.content_key()
+    );
 }
 
 #[test]

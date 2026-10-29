@@ -20,6 +20,34 @@ const GLOBAL_PCM_FRAMES: usize = 48_000;
 const SILENT_BIRTH_HISTORY: usize = 4096;
 const LATER_SPECTRAL_START: usize = 8192;
 
+#[test]
+fn group_cancellation_is_irrevocable_when_an_individual_reject_loses_its_cas() {
+    let mut fixture = Fixture::new(false);
+    restore_nonzero(&mut fixture);
+    let captured = public_capture(&fixture);
+    let member = captured.owner.members[0].start.clone();
+    let advancing = member.clone();
+    assert!(
+        super::super::pad_start::CapturedPadStart::with_reject_interleaving_for_test(
+            move || assert!(advancing.mark_preparing()),
+            || captured.cancel()
+        )
+    );
+    assert_eq!(
+        member.state(),
+        "preparing",
+        "the individual rejection really lost its CAS"
+    );
+    assert_eq!(captured.state(), "rejected");
+    assert_eq!(captured.reason(), Some("launch_cancelled"));
+    assert!(captured.resolve().is_err());
+    assert!(!captured.claim_effect());
+    assert!(
+        !captured.cancel(),
+        "already cancelled is a terminal safe false"
+    );
+}
+
 fn public_capture(fixture: &Fixture) -> CapturedGlobalStart {
     Python::attach(|py| {
         let entries = [0, 1]

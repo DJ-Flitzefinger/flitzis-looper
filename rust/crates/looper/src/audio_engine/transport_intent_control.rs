@@ -42,6 +42,8 @@ pub(super) fn publish_under_request_lock(
         .input_runtime_ownership
         .ordinary_source_epoch(placement.cell())
         .unwrap_or(0);
+    let original_sequence = super::scheduler::reserve_input_order()
+        .ok_or_else(|| PyRuntimeError::new_err("transport input sequence exhausted"))?;
     engine
         .input_runtime_ownership
         .commit_ordinary_transport_intent(
@@ -61,6 +63,7 @@ pub(super) fn publish_under_request_lock(
                         placement,
                         transport_revision: prepared.revision(),
                         source_epoch,
+                        original_sequence,
                         effect,
                     })
                     .is_ok();

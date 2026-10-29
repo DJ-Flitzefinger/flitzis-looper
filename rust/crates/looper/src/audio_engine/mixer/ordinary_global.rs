@@ -260,6 +260,18 @@ impl RtMixer {
                 if let Some(work) = capture_work.borrow_mut().take() {
                     #[cfg(test)]
                     capture_claim_hook(false);
+                    if batch
+                        .captured_start
+                        .as_ref()
+                        .is_some_and(|captured| !captured.claim_effect())
+                    {
+                        for previous in works.iter().flatten() {
+                            previous
+                                .origin()
+                                .abort_claim(PitchActionReject::LaunchCancelled);
+                        }
+                        return false;
+                    }
                     let session_id = work.session_id();
                     let Some(claim) = work.try_claim_start(
                         session_id,
@@ -277,10 +289,27 @@ impl RtMixer {
                     *capture_claim.borrow_mut() = Some(claim);
                     #[cfg(test)]
                     capture_claim_hook(true);
+                } else if batch
+                    .captured_start
+                    .as_ref()
+                    .is_some_and(|captured| !captured.claim_effect())
+                {
+                    for previous in works.iter().flatten() {
+                        previous
+                            .origin()
+                            .abort_claim(PitchActionReject::LaunchCancelled);
+                    }
+                    return false;
                 }
                 true
             },
             |_| {
+                debug_assert!(
+                    batch
+                        .captured_start
+                        .as_ref()
+                        .is_none_or(|captured| captured.effect_claimed())
+                );
                 let mut mixer = mixer.borrow_mut();
                 let mut works = works.borrow_mut();
                 let mut configs = configs.borrow_mut();

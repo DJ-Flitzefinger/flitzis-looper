@@ -11,6 +11,7 @@ mod bank_mutation;
 mod bpm_lock;
 mod capture;
 mod endpoint_reserve;
+mod explicit_stop;
 mod global_rate;
 pub(crate) use bpm_lock::BpmLockTarget;
 #[path = "mixer/hold_action.rs"]

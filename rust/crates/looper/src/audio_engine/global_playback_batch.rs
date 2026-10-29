@@ -39,9 +39,233 @@ pub(crate) struct GlobalPlaybackBatch {
     pub(crate) received_at_ns: Option<u64>,
     pub(crate) captured_start: Option<CapturedGlobalStart>,
     pub(crate) capture_publication: Option<Arc<CapturePublication>>,
+    pub(crate) explicit_stop: Option<ExplicitStopPlan>,
     status: Arc<AtomicU8>,
     prepared_claimed: AtomicBool,
     prepared_starts: UnsafeCell<Option<Box<[Option<Box<OrdinaryStartWork>>]>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExplicitStopSource {
+    pub(crate) key: super::content_placement::ContentKey,
+    pub(crate) source: u64,
+}
+
+/// Fixed source-only audible membership. An empty singleton is deliberately not StopAll.
+pub(crate) struct ExplicitStopPlan {
+    pub(crate) target: Option<super::explicit_playback_target::ExplicitTargetSnapshot>,
+    pub(crate) collapse: bool,
+    pub(crate) sources: Box<[ExplicitStopSource]>,
+}
+
+pub(crate) struct PreparedExplicitStop {
+    pub(crate) original_target: Option<super::explicit_playback_target::ExplicitTargetSnapshot>,
+    pub(crate) writes: Vec<input_runtime_binding::PreparedLaunchWrite>,
+    pub(crate) batch: Arc<GlobalPlaybackBatch>,
+    pub(crate) ticket: GlobalPlaybackBatchTicket,
+    claimed_observation_token: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_TARGET_SOURCE_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static AFTER_TARGET_SOURCE_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_target_source_read_for_test<T>(
+    before: impl FnOnce() + 'static,
+    after: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BEFORE_TARGET_SOURCE_READ.with(|slot| *slot.borrow_mut() = None);
+            AFTER_TARGET_SOURCE_READ.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    BEFORE_TARGET_SOURCE_READ.with(|slot| {
+        assert!(slot.borrow().is_none());
+        *slot.borrow_mut() = Some(Box::new(before));
+    });
+    AFTER_TARGET_SOURCE_READ.with(|slot| {
+        assert!(slot.borrow().is_none());
+        *slot.borrow_mut() = Some(Box::new(after));
+    });
+    let _reset = Reset;
+    action()
+}
+
+impl PreparedExplicitStop {
+    pub(crate) fn current(
+        &self,
+        ownership: &super::input_runtime_binding::InputRuntimeOwnership,
+    ) -> bool {
+        ownership.placement_claimed_observation_token() == Some(self.claimed_observation_token)
+            && ownership.explicit_target_current(self.original_target)
+            && self
+                .writes
+                .iter()
+                .all(|entry| ownership.launch_write_current(*entry))
+            && self.batch.explicit_stop.as_ref().is_some_and(|plan| {
+                plan.sources.iter().all(|source| {
+                    ownership.content_key_current(source.key)
+                        && ownership.ordinary_source_epoch(source.key.cell()) == Some(source.source)
+                })
+            })
+    }
+}
+
+/// The request/runtime publisher reserves its queue slot before committing these stores.
+pub(crate) fn prepare_explicit_stop(
+    ownership: &Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    collapse: bool,
+) -> Result<PreparedExplicitStop, String> {
+    let observation_token = ownership
+        .placement_read_token()
+        .ok_or("explicit stop source publication pending")?;
+    let claimed_observation_token = observation_token
+        .checked_add(1)
+        .filter(|token| *token != u64::MAX)
+        .ok_or("explicit stop source observation exhausted")?;
+    let original_target = ownership
+        .explicit_target_snapshot()
+        .map_err(str::to_owned)?;
+    if original_target.is_some_and(|value| !ownership.ordinary_source_available(value.key.cell())) {
+        return Err("explicit playback source observation unavailable".into());
+    }
+    let target = match original_target {
+        Some(value) => match ownership.observe_control_key(value.key) {
+            super::content_placement::PlacementObservation::Current(_) => {
+                #[cfg(test)]
+                if let Some(hook) = BEFORE_TARGET_SOURCE_READ.with(|slot| slot.borrow_mut().take())
+                {
+                    hook();
+                }
+                let identity = ownership.ordinary_source_identity_epoch(value.key.cell());
+                let ready = ownership.ordinary_source_epoch(value.key.cell());
+                #[cfg(test)]
+                if let Some(hook) = AFTER_TARGET_SOURCE_READ.with(|slot| slot.borrow_mut().take()) {
+                    hook();
+                }
+                super::explicit_playback_target::classify_source_epochs(
+                    value.source,
+                    identity,
+                    ready,
+                )
+                .map_err(str::to_owned)?
+                .then_some(value)
+            }
+            super::content_placement::PlacementObservation::Pending => {
+                return Err("explicit playback placement pending".into());
+            }
+            _ => None,
+        },
+        None => None,
+    };
+    let mut writes = Vec::with_capacity(NUM_SAMPLES);
+    let mut sources = Vec::with_capacity(if collapse { NUM_SAMPLES } else { 1 });
+    for id in 0..NUM_SAMPLES {
+        let placement = ownership
+            .slot_snapshot(id)
+            .ok_or("explicit stop placement pending")?;
+        if placement.content_key().is_some()
+            && !ownership.ordinary_source_available(placement.cell())
+        {
+            return Err("explicit stop source observation unavailable".into());
+        }
+        let source = placement.content_key().and_then(|key| {
+            ownership
+                .ordinary_source_epoch(key.cell())
+                .map(|source| ExplicitStopSource { key, source })
+        });
+        if collapse
+            && placement.content_key().is_some()
+            && source.is_none()
+            && !original_target.is_some_and(|original| {
+                target.is_none() && Some(original.key) == placement.content_key()
+            })
+        {
+            return Err("explicit stop source publication pending".into());
+        }
+        let is_target = source.is_some_and(|source| {
+            target.is_some_and(|target| target.key == source.key && target.source == source.source)
+        });
+        let audible = (collapse && !is_target) || (!collapse && is_target);
+        writes.push(if audible {
+            ownership.prepare_launch_write(placement, LaunchWriteKind::Stop)?
+        } else {
+            // Inaudible peers must retain ordinary Pause/Hold release authority.
+            ownership.prepare_request_only_launch_cancellation(placement)?
+        });
+        if (collapse || is_target)
+            && let Some(source) = source
+        {
+            sources.push(source);
+        }
+    }
+    if ownership.placement_read_token() != Some(observation_token) {
+        return Err("explicit stop source publication crossed preflight".into());
+    }
+    let status = Arc::new(AtomicU8::new(PENDING));
+    let batch = Arc::new(GlobalPlaybackBatch {
+        entries: Box::new([]),
+        start: false,
+        received_at_ns: None,
+        captured_start: None,
+        capture_publication: None,
+        explicit_stop: Some(ExplicitStopPlan {
+            target,
+            collapse,
+            sources: sources.into_boxed_slice(),
+        }),
+        status: status.clone(),
+        prepared_claimed: AtomicBool::new(false),
+        prepared_starts: UnsafeCell::new(None),
+    });
+    Ok(PreparedExplicitStop {
+        original_target,
+        writes,
+        batch,
+        ticket: GlobalPlaybackBatchTicket { status },
+        claimed_observation_token,
+    })
+}
+
+pub(super) fn enqueue_explicit_stop(engine: &AudioEngine) -> PyResult<GlobalPlaybackBatchTicket> {
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let mut producer = engine
+        .control_producer()?
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err("explicit stop queue is full"));
+    }
+    let ownership = &engine.input_runtime_ownership;
+    let prepared = prepare_explicit_stop(ownership, false).map_err(PyRuntimeError::new_err)?;
+    let anchor = prepared.writes[0].placement;
+    let write = ownership
+        .prepare_slot_write_fixed(anchor, anchor.lifetime())
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    ownership
+        .commit_slot_write_fixed(
+            &write,
+            || prepared.current(ownership),
+            |_| {
+                for entry in &prepared.writes {
+                    ownership.apply_launch_write(*entry);
+                }
+                producer
+                    .push(ControlMessage::GlobalPlaybackBatch(prepared.batch.clone()))
+                    .expect("reserved explicit stop queue capacity");
+            },
+        )
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    Ok(prepared.ticket)
 }
 
 // Control finishes initialization before queue publication. Exactly one callback
@@ -209,6 +433,7 @@ fn enqueue_before_commit(
                 None,
             )
             .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?;
+            owner.exclude_explicit_choice();
             let work = owner
                 .take_work_with_binding(current.binding, None)
                 .map_err(|reason| PyRuntimeError::new_err(reason.as_str()))?
@@ -267,6 +492,7 @@ fn enqueue_before_commit(
         received_at_ns,
         captured_start: None,
         capture_publication: None,
+        explicit_stop: None,
         status: status.clone(),
         prepared_claimed: AtomicBool::new(false),
         prepared_starts: UnsafeCell::new(start.then(|| prepared_starts.into_boxed_slice())),
@@ -423,6 +649,7 @@ fn enqueue_captured_ready(
         received_at_ns: Some(captured.received_timestamp()),
         captured_start: Some(captured.clone()),
         capture_publication: capture.as_ref().map(|capture| capture.global_publication()),
+        explicit_stop: None,
         status: status.clone(),
         prepared_claimed: AtomicBool::new(false),
         prepared_starts: UnsafeCell::new(Some(prepared_starts.into_boxed_slice())),

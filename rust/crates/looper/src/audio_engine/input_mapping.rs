@@ -425,6 +425,7 @@ impl InputRuntime {
             None,
             before_commit,
         )
+        .map(|_| ())
     }
 
     pub(crate) fn set_runtime_state_with_pitch(
@@ -445,6 +446,7 @@ impl InputRuntime {
             Some(pitch),
             || {},
         )
+        .map(|_| ())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -456,7 +458,7 @@ impl InputRuntime {
         loop_ends: Vec<Option<f64>>,
         bindings: Vec<Option<&InputRuntimePadBinding>>,
         pitch: Option<Vec<PitchPadProjection>>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<super::global_playback_batch::GlobalPlaybackBatchTicket>, String> {
         self.set_runtime_state_with_pitch_before_commit(
             multi_loop,
             loaded,
@@ -477,7 +479,7 @@ impl InputRuntime {
         bindings: Vec<Option<&InputRuntimePadBinding>>,
         pitch: Option<Vec<PitchPadProjection>>,
         before_commit: impl FnOnce(),
-    ) -> Result<(), String> {
+    ) -> Result<Option<super::global_playback_batch::GlobalPlaybackBatchTicket>, String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
             || loop_ends.len() != NUM_SAMPLES
@@ -639,6 +641,24 @@ impl InputRuntime {
             pitch_shadow,
         });
         let mut previous = None;
+        let collapse = guard.multi_loop && !multi_loop;
+        // The same runtime mutex orders direct MIDI captures. Reserve the queue before
+        // publishing the new image, launch fences or hierarchy revision.
+        let mut producer = if collapse {
+            let producer = self
+                .audio_producer
+                .lock()
+                .map_err(|_| "producer lock poisoned")?;
+            if producer.is_full() {
+                return Err("multi-loop transition queue is full".into());
+            }
+            Some(producer)
+        } else {
+            None
+        };
+        let explicit_stop = collapse
+            .then(|| super::global_playback_batch::prepare_explicit_stop(&self.ownership, true))
+            .transpose()?;
         before_commit();
         let _global_lease = if hierarchy_changed {
             Some(
@@ -657,9 +677,12 @@ impl InputRuntime {
                             .global_timing_revision
                             .load(Ordering::Acquire)
                             == revision - 1
-                    }) && revisions
-                        .iter()
-                        .all(|prepared| self.ownership.runtime_revision_write_current(*prepared))
+                    }) && explicit_stop
+                        .as_ref()
+                        .is_none_or(|stop| stop.current(&self.ownership))
+                        && revisions.iter().all(|prepared| {
+                            self.ownership.runtime_revision_write_current(*prepared)
+                        })
                         && bindings.iter().enumerate().all(|(idx, binding)| {
                             reservations[idx]
                                 == (
@@ -675,6 +698,16 @@ impl InputRuntime {
                         })
                 },
                 |_| {
+                    if let Some(stop) = &explicit_stop {
+                        for entry in &stop.writes {
+                            self.ownership.apply_launch_write(*entry);
+                        }
+                        producer
+                            .as_mut()
+                            .expect("reserved transition producer")
+                            .push(ControlMessage::GlobalPlaybackBatch(stop.batch.clone()))
+                            .expect("reserved transition queue capacity");
+                    }
                     if let Some(revision) = hierarchy_revision {
                         self.ownership
                             .global_timing_revision
@@ -695,7 +728,7 @@ impl InputRuntime {
             .map_err(|error| error.to_string())?;
         // Vec storage and its previous bindings are released only after the marker completes.
         drop(previous);
-        Ok(())
+        Ok(explicit_stop.map(|stop| stop.ticket))
     }
 
     pub(super) fn trigger_pad(&self, id: usize, received_at_ns: u64) -> bool {

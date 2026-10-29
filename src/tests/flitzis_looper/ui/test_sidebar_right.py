@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -215,3 +216,28 @@ def test_global_bpm_display_opens_full_precision_and_explains_rounding(
     assert controller.session.global_bpm_edit_text == format_bpm_entry_value(bpm)
     assert str(bpm) in tooltip.call_args.args[0]
     assert "rounded" in tooltip.call_args.args[0]
+
+
+@pytest.mark.parametrize("multi_loop", [False, True])
+def test_lock_button_is_available_independently_of_multi_loop(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, *, multi_loop: bool
+) -> None:
+    controller.project.multi_loop = multi_loop
+    context = UiContext(controller)
+    toggle = Mock()
+    monkeypatch.setattr(context.audio.global_, "toggle_bpm_lock", toggle)
+    monkeypatch.setattr(sidebar_right, "style_var", lambda *_args: nullcontext())
+    monkeypatch.setattr(sidebar_right, "button_style", lambda *_args: nullcontext())
+    monkeypatch.setattr(sidebar_right, "_speed_controls", lambda _context: None)
+    monkeypatch.setattr(sidebar_right, "_render_global_key_lock", lambda _context: None)
+    monkeypatch.setattr(imgui, "dummy", lambda **_kwargs: None)
+    monkeypatch.setattr(imgui, "text", lambda *_args: None)
+    monkeypatch.setattr(imgui, "text_wrapped", lambda *_args: None)
+    monkeypatch.setattr(imgui, "button", lambda label, _size: label == "BPM LOCK##bpm_lock")
+    disabled = Mock(side_effect=AssertionError("Lock has no Multi Loop parent"))
+    monkeypatch.setattr(imgui, "begin_disabled", disabled)
+
+    sidebar_right.sidebar_right(context)
+
+    toggle.assert_called_once_with()
+    disabled.assert_not_called()

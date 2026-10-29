@@ -2527,7 +2527,7 @@ impl ReadyPlaybackAudio {
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
         pitch_rows: Option<Vec<Py<PyDict>>>,
     ) -> PyResult<()> {
-        self.engine.set_input_runtime_state(
+        let transition = self.engine.set_input_runtime_state(
             py,
             true,
             loaded,
@@ -2535,7 +2535,12 @@ impl ReadyPlaybackAudio {
             loop_ends,
             bindings,
             pitch_rows,
-        )
+        )?;
+        assert!(
+            transition.is_none(),
+            "piano runtime refresh cannot admit a mode transition"
+        );
+        Ok(())
     }
 
     #[pyo3(signature=(id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None))]

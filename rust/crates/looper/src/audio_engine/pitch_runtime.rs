@@ -572,6 +572,14 @@ impl PitchRuntime {
             slots: [usize::MAX; super::constants::MAX_VOICES],
         };
         let result = (|| {
+            if group
+                .batch
+                .captured_start
+                .as_ref()
+                .is_some_and(|captured| captured.cancelled())
+            {
+                return Err(PitchActionReject::LaunchCancelled);
+            }
             if group.len == 0
                 || group.len > super::constants::MAX_VOICES
                 || scheduler.is_full()

@@ -250,14 +250,15 @@ def check_global_rate_api(engine_type: object) -> None:
 
 
 def check_ordinary_transport_api(native_module: object) -> None:
-    """Reject admission-only pause runtimes before any application or device starts."""
+    """Reflect effective target and ordinary transport ownership before device startup."""
     engine = getattr(native_module, "AudioEngine", None)
     version = getattr(engine, "ORDINARY_TRANSPORT_API_VERSION", None)
     assert type(version) is int, (
-        "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=2"
+        "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=3"
     )
-    assert version == 2, "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=2"
+    assert version == 3, "Native ordinary transport API requires ORDINARY_TRANSPORT_API_VERSION=3"
     getters = {
+        "ExplicitPlaybackTarget": (),
         "OrdinaryTransportAdmission": (
             "content_lifetime",
             "transport_revision",
@@ -286,6 +287,12 @@ def check_ordinary_transport_api(native_module: object) -> None:
                 or inspect.ismemberdescriptor(getter)
             ), f"Native ordinary transport API missing getter: {name}.{attribute}"
     signatures = (
+        (engine, "current_explicit_playback_target", ("self",)),
+        (engine, "stop_explicit_playback", ("self",)),
+        (native_module.ExplicitPlaybackTarget, "current_control_slot", ("self",)),
+        (native_module.ExplicitPlaybackTarget, "content_lifetime", ("self",)),
+        (native_module.ExplicitPlaybackTarget, "effective_frame", ("self",)),
+        (native_module.ExplicitPlaybackTarget, "original_sequence", ("self",)),
         (engine, "pause_sample", ("self", "id")),
         (engine, "resume_sample", ("self", "id")),
         (engine, "_resolve_ordinary_transport_feedback", ("self", "message")),
@@ -494,6 +501,7 @@ def check_ordinary_start_api(native_module: object) -> None:
         ("capture_pad_start", "exclusive", False),
         ("capture_pad_start", "received_at_ns", None),
         ("capture_pad_start", "expected_source_generation", None),
+        ("capture_pad_start", "explicit_target", None),
         ("publish_pad_start", "window", None),
         ("prepare_captured_pad_start", "window", None),
     ):

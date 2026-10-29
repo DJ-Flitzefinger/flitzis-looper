@@ -19,16 +19,27 @@ quality criteria; a short resident loop does not shorten an available full song.
 
 ## Normal use
 
-1. After this Native change, close the Looper and use **start-release.bat** once
-   to rebuild and start the matching Release version. Later **start.bat** starts
-   that installed build without rebuilding it.
+1. Use **start.bat** to start the delivered matching Release. Developers rebuilding
+   changed Native sources use **start-release.bat** as described in Development.
 2. Load the songs and let BPM analysis finish. Use half or double when the
    detector chooses the wrong rhythmic level. Tap BPM or manual BPM provides a
    correction for difficult material.
 3. Set Grid Offset and each loop's start/end in Adjust Loop. A bar is four beats.
    For example, choose 8 bars on one PAD and 64 bars on another.
-4. Enable Multi Loop and BPM Lock with the intended reference PAD selected, then
-   start the PADs using the ordinary quantized controls.
+4. Enable BPM Lock with the intended reference PAD selected. It is available with
+   Multi Loop OFF and ON. Start PADs using the ordinary quantized controls; switching
+   PADs or Multi Loop preserves the established master tempo and Lock reference.
+
+With Multi Loop OFF, START/STOP uses the last PAD that actually played through an
+explicit start or resume. Right-click STOP retains that target for the next START.
+Changing editor selection does not change it. If no valid playback target exists,
+an explicit START can use the loaded selection. STOP ALL remains global, as do
+the existing recording group controls.
+
+Turning Multi Loop OFF stops peers and keeps the last playable target at its
+current position. It does not retrigger or resume a paused, stopped or held target.
+An admitted transition may remain pending until the audio callback can complete
+it; a refused transition leaves the previous mode and voices intact.
 
 Grid Offset sets the source grid's phase; loop start selects the musical entry.
 Grid lines and physical loop markers use the same loaded sample positions.

@@ -478,6 +478,15 @@ impl RtMixer {
             .ok_or(PitchActionReject::SourceChanged)?;
         config.initial_frame_pos = snapshot.plan.frame_pos;
         let ownership = self.input_runtime_ownership.clone();
+        if work.origin().records_explicit_choice()
+            && !ownership.explicit_playback_available(
+                work.origin().content_key(),
+                output_frame,
+                work.sequence(),
+            )
+        {
+            return Err(PitchActionReject::SequenceExhausted);
+        }
         let placement = guard
             .binding
             .placement
@@ -501,6 +510,12 @@ impl RtMixer {
                     let mixer = mixer.borrow();
                     let work = work.borrow();
                     work.origin().claim_current(guard)
+                        && (!work.origin().records_explicit_choice()
+                            || ownership.explicit_playback_available(
+                                work.origin().content_key(),
+                                output_frame,
+                                work.sequence(),
+                            ))
                         && mixer.admitted_source_binding_current(id, guard.binding)
                         && mixer.ordinary_start_continuity_current(&work)
                         && mixer.ordinary_start_render(id) == render
@@ -630,7 +645,19 @@ impl RtMixer {
                     feedback[feedback_count] =
                         Some((captured_feedback(&ownership, id, true), id, true));
                     feedback_count += 1;
-                    work.origin().mark_effective(output_frame);
+                    if work.origin().mark_effective(output_frame)
+                        && work.origin().records_explicit_choice()
+                    {
+                        let recorded = ownership.record_explicit_playback(
+                            work.origin().content_key(),
+                            output_frame,
+                            work.sequence(),
+                        );
+                        debug_assert!(
+                            recorded,
+                            "the held callback claim reserved explicit target publication"
+                        );
+                    }
                 },
             )
             .map_err(placement_rejection)?;

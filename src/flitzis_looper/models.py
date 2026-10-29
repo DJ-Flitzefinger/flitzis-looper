@@ -614,8 +614,8 @@ class ProjectState(BaseModel):
     """Durable per-content key metadata and neutral pitch intent; no native permits."""
 
     def resolve_bpm_lock(self) -> bool:
-        """Resolve ordinary tempo matching under its Multi Loop parent."""
-        return self.multi_loop and self.bpm_lock
+        """Resolve ordinary tempo matching independently of playback grouping."""
+        return self.bpm_lock
 
     # Mypy cannot yet type Pydantic's computed-field decorator over a property.
     @field_validator("material_migrations")

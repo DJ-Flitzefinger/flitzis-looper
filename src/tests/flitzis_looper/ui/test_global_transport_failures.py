@@ -33,6 +33,7 @@ def _context(
 ) -> tuple[UiContext, dict[int, FakeInputRuntimePadBinding]]:
     """Represent loaded PAD1 and a busy PAD2 without opening files or a device."""
     project = controller.project
+    project.multi_loop = True
     metadata = {sample_id: current_timing_metadata(sample_id=sample_id) for sample_id in (0, 2)}
     bindings = {
         sample_id: FakeInputRuntimePadBinding(sample_id, accepted_timing=timing, intent="automatic")

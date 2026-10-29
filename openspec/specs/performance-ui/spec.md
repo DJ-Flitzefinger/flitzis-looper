@@ -62,7 +62,7 @@ The system SHALL assign deterministic item tags to each pad and bank control to 
 - **THEN** the MultiLoop control exists with tag `multiloop_btn`
 
 ### Requirement: MultiLoop Toggle Control
-The system SHALL provide a MultiLoop toggle control in the right performance sidebar directly below Key Lock. The control group SHALL appear in the order Key Lock, Multi Loop, BPM Lock, retain the stable MultiLoop tag and use the original controller/Learn actions. BPM Lock SHALL depend on Multi Loop. Source SYNC, REALTIME BPM and their editor controls SHALL be absent.
+The system SHALL provide a MultiLoop toggle control in the right performance sidebar directly below Key Lock. The control group SHALL appear in the order Key Lock, Multi Loop, BPM Lock, retain the stable MultiLoop tag and use the original controller/Learn actions. BPM Lock SHALL remain independently available with MultiLoop OFF or ON through GUI and MIDI. Source SYNC, REALTIME BPM and their editor controls SHALL be absent.
 
 #### Scenario: MultiLoop control is visible
 - **WHEN** the UI is started
@@ -267,7 +267,7 @@ requests use the same live mode. Global changes SHALL affect only inheriting loa
 - **AND** explicit pad overrides retain their requested modes
 
 ### Requirement: BPM Lock Anchors Master BPM To The Current Pad When Enabled
-When the performer enables BPM lock, the system SHALL select the currently selected pad as the lock source and derive the master BPM from that pad when available.
+When the performer explicitly enables BPM lock, the system SHALL capture the currently selected qualified source as the lock reference and derive the master BPM from that source when available. Selection, ordinary starts/retriggers and MultiLoop transitions SHALL preserve that same source owner and the established master tempo. Hierarchy-only requalification SHALL NOT re-anchor the master timeline. An empty captured reference MAY bind its first qualified content; later replacement SHALL NOT rebind a successor merely by slot.
 
 #### Scenario: Enabling BPM lock captures master BPM from selected pad and speed
 - **GIVEN** Pad 1 is selected

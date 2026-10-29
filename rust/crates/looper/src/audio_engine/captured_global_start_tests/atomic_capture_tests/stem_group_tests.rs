@@ -337,21 +337,60 @@ fn run_prepared_stem_group(multi_loop: bool) {
             .current_input_runtime_pad_binding(id)
             .unwrap();
     }
-    rig.fixture
+    let before_mode_voices: Vec<_> = rig
+        .fixture
+        .mixer
+        .voices
+        .iter()
+        .map(|voice| (voice.active, voice.generation, voice.frame_pos))
+        .collect();
+    assert!(before_mode_voices.iter().all(|voice| !voice.0));
+    let before_mode_frame = rig.fixture.transport.output_frame();
+    let before_mode_starts = (rig.fixture.starts(0), rig.fixture.starts(1));
+    let transition = rig
+        .fixture
         .control
         .engine
         .input_runtime
         .as_ref()
         .unwrap()
-        .set_runtime_state_with_pitch(
+        .set_runtime_state_with_pitch_projection(
             multi_loop,
             loaded,
             starts,
             ends,
             bindings.iter().map(Option::as_ref).collect(),
-            vec![PitchPadProjection::default(); NUM_SAMPLES],
+            Some(vec![PitchPadProjection::default(); NUM_SAMPLES]),
         )
         .unwrap();
+    if multi_loop {
+        assert!(
+            transition.is_none(),
+            "the unchanged ON image has no collapse effect"
+        );
+    } else {
+        let transition =
+            transition.expect("the initial ON image must admit exactly one OFF collapse");
+        assert_eq!(transition.publication_status(), "pending");
+        assert_eq!(fixed_capture_callback(&mut rig.fixture, &mut []), 1);
+        assert_eq!(transition.publication_status(), "accepted");
+        assert!(rig.fixture.control.consumer.is_empty());
+        assert_eq!(rig.fixture.transport.output_frame(), before_mode_frame);
+        assert_eq!(
+            (rig.fixture.starts(0), rig.fixture.starts(1)),
+            before_mode_starts
+        );
+        assert_eq!(
+            rig.fixture
+                .mixer
+                .voices
+                .iter()
+                .map(|voice| (voice.active, voice.generation, voice.frame_pos))
+                .collect::<Vec<_>>(),
+            before_mode_voices,
+            "settling the initial silent collapse must not create or retrigger a voice"
+        );
+    }
 
     let mut source_tickets = Vec::with_capacity(2);
     let mut pairs = Vec::with_capacity(2);

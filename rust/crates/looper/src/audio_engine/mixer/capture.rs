@@ -89,6 +89,13 @@ impl RtMixer {
         key: OrdinaryGroupKey,
         execution: u64,
     ) -> bool {
+        if batch
+            .captured_start
+            .as_ref()
+            .is_some_and(|captured| captured.cancelled())
+        {
+            return false;
+        }
         let Some(publication) = batch.capture_publication.as_ref() else {
             return true;
         };

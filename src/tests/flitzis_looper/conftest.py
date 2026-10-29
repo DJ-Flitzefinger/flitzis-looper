@@ -208,6 +208,7 @@ class FakeCapturedPadStart:
         exclusive: bool = False,
         received_at_ns: int | None = None,
         expected_source_generation: int | None = None,
+        explicit_target: object = None,
     ) -> None:
         self._intent = _CapturedPadStartIntent(
             sample_id,
@@ -219,6 +220,7 @@ class FakeCapturedPadStart:
             expected_source_generation,
         )
         self.diagnostic_slot: int | None = sample_id
+        self.explicit_target = explicit_target
         self.status = "captured"
         self.failure: str | None = None
         self.cancelled = False
@@ -510,6 +512,15 @@ def _install_captured_global_start_fakes(audio: Mock) -> None:
     audio.publish_captured_global_start = Mock(side_effect=lambda captured: captured.publish())
 
 
+def _install_playback_capture_fakes(audio: Mock) -> None:
+    """Configure explicit capture APIs without manufacturing current target history."""
+    _install_captured_start_fakes(audio)
+    _install_captured_global_start_fakes(audio)
+    audio.current_explicit_playback_target = Mock(return_value=None)
+    audio.stop_explicit_playback = Mock(return_value=FakeGlobalPlaybackBatchTicket())
+    audio.set_input_runtime_state.return_value = None
+
+
 class FakeInputSelection:
     """Control-only selection projection; opaque Native lifetime proof remains separate."""
 
@@ -716,8 +727,7 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.key_lock_start_behavior = Mock(return_value="first_sound_at_grid")
         audio_engine.return_value.can_change_key_lock_start_behavior = Mock(return_value=True)
         audio_engine.return_value.set_key_lock_start_behavior = Mock(return_value=True)
-        _install_captured_start_fakes(audio_engine.return_value)
-        _install_captured_global_start_fakes(audio_engine.return_value)
+        _install_playback_capture_fakes(audio_engine.return_value)
 
         def runtime_binding(sample_id: int) -> FakeInputRuntimePadBinding:
             metadata = audio_engine.return_value.current_constant_timing.return_value

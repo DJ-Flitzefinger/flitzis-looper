@@ -159,6 +159,7 @@ def test_keep_others_trigger_preserves_input_time(
 def test_global_restart_preserves_one_input_timestamp_for_every_pad(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "/path/to/sample-a.wav"
     controller.project.sample_paths[2] = "/path/to/sample-b.wav"
     controller.session.global_stop_engaged = True
@@ -299,6 +300,7 @@ def test_stop_all_pads(controller: AppController, audio_engine_mock: Mock) -> No
 def test_global_start_stop_right_stops_and_remembers_playing_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "/path/to/sample-a.wav"
     controller.project.sample_paths[1] = "/path/to/sample-b.wav"
     controller.session.active_sample_ids.update({0, 1})
@@ -317,6 +319,7 @@ def test_global_start_stop_right_stops_and_remembers_playing_set(
 def test_global_start_stop_right_stops_paused_only_set_without_restore(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[1] = "/path/to/sample-b.wav"
     controller.session.active_sample_ids.add(1)
     controller.session.paused_sample_ids.add(1)
@@ -334,6 +337,7 @@ def test_global_start_stop_right_stops_paused_only_set_without_restore(
 def test_global_start_stop_right_ignores_empty_active_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.transport.playback.stop_global_start_stop()
 
     audio_engine_mock.stop_all.assert_not_called()
@@ -345,6 +349,7 @@ def test_global_start_stop_right_ignores_empty_active_set(
 def test_global_start_stop_left_restarts_current_active_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "/path/to/sample-a.wav"
     controller.project.sample_paths[1] = "/path/to/sample-b.wav"
     controller.project.pad_loop_start_s[0] = 1.0
@@ -368,6 +373,7 @@ def test_global_start_stop_left_restarts_current_active_set(
 def test_global_start_stop_left_restarts_current_active_set_without_paused_pads(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "/path/to/sample-a.wav"
     controller.project.sample_paths[1] = "/path/to/sample-b.wav"
     controller.session.active_sample_ids.update({0, 1})
@@ -382,6 +388,7 @@ def test_global_start_stop_left_restarts_current_active_set_without_paused_pads(
 def test_global_start_stop_left_restores_remembered_set_together(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "/path/to/sample-a.wav"
     controller.project.sample_paths[1] = "/path/to/sample-b.wav"
     controller.project.pad_loop_start_s[0] = 1.0
@@ -441,6 +448,7 @@ def test_manual_pad_trigger_after_global_stop_forgets_remembered_set(
 def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     for sample_id in (0, 1, 2, 3):
         controller.project.sample_paths[sample_id] = f"/path/to/sample-{sample_id}.wav"
     controller.session.global_stop_engaged = True
@@ -468,6 +476,7 @@ def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
 def test_global_start_stop_right_never_restores_remembered_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.multi_loop = True
     controller.session.global_stop_engaged = True
     controller.session.global_stop_restore_sample_ids = {0, 1}
 

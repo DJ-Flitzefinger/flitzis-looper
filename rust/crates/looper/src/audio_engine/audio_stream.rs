@@ -1608,7 +1608,11 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::StartMixCapture { .. } => 2,
         ControlMessage::GlobalPlaybackBatch(batch) => {
-            3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
+            if batch.explicit_stop.is_some() {
+                4 * MAX_VOICES + 1
+            } else {
+                3 * MAX_VOICES + 1 + usize::from(batch.capture_publication.is_some())
+            }
         }
         ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
@@ -1753,6 +1757,7 @@ fn apply_transport_content_message(
         placement: original,
         transport_revision: revision,
         source_epoch,
+        original_sequence,
         effect,
     } = command
     else {
@@ -1770,6 +1775,7 @@ fn apply_transport_content_message(
             placement: original,
             transport_revision: revision,
             source_epoch,
+            original_sequence,
             effect,
         });
         return;
@@ -1796,6 +1802,7 @@ fn apply_transport_content_message(
             placement: original,
             transport_revision: revision,
             source_epoch,
+            original_sequence,
             effect,
         });
         return;
@@ -1805,6 +1812,7 @@ fn apply_transport_content_message(
             placement: original,
             transport_revision: revision,
             source_epoch,
+            original_sequence,
             effect,
         });
         return;
@@ -1828,15 +1836,54 @@ fn apply_transport_content_message(
                 // error; this queued control must never report false success.
                 if ownership.ordinary_available(original.cell()) {
                     if ownership.ordinary_source_epoch(original.cell()) == Some(source_epoch) {
-                        let (outcome, active, paused) = mixer
-                            .apply_transport_content_with_timeline_rt(
+                        let is_resume =
+                            matches!(effect, crate::messages::TransportContentEffect::Resume);
+                        let would_resume = is_resume
+                            && mixer.voices.iter().any(|voice| {
+                                voice.active && voice.sample_id == target && voice.paused
+                            });
+                        let (outcome, active, paused) = if would_resume
+                            && !ownership.explicit_playback_available(
+                                key,
+                                output_frame,
+                                original_sequence,
+                            ) {
+                            let active = mixer
+                                .voices
+                                .iter()
+                                .any(|voice| voice.active && voice.sample_id == target);
+                            let paused = active
+                                && mixer
+                                    .voices
+                                    .iter()
+                                    .filter(|voice| voice.active && voice.sample_id == target)
+                                    .all(|voice| voice.paused);
+                            (super::ordinary_transport::REFUSED, active, paused)
+                        } else {
+                            mixer.apply_transport_content_with_timeline_rt(
                                 key,
                                 effect,
                                 output_frame,
                                 Some(transport),
                                 Some(revision),
                                 retirement,
+                            )
+                        };
+                        if is_resume
+                            && outcome == super::ordinary_transport::APPLIED
+                            && active
+                            && !paused
+                        {
+                            let recorded = ownership.record_explicit_playback(
+                                key,
+                                output_frame,
+                                original_sequence,
                             );
+                            debug_assert!(
+                                recorded,
+                                "the held Resume claim reserved explicit target publication"
+                            );
+                        }
                         completed = ownership.publish_ordinary_effect(
                             key, revision, effect, outcome, active, paused,
                         );
@@ -1877,6 +1924,7 @@ fn apply_transport_content_message(
             placement: original,
             transport_revision: revision,
             source_epoch,
+            original_sequence,
             effect,
         });
     }
@@ -2476,6 +2524,22 @@ pub(super) fn process_control_message<
             }
         }
         ControlMessage::GlobalPlaybackBatch(batch) => {
+            if let Some(plan) = &batch.explicit_stop {
+                // This immediate effect is a control/deferred barrier. It never enters
+                // a later quantized lane where a new launch could overtake the peer STOP.
+                if !mixer.execute_explicit_stop(
+                    plan,
+                    callback_start_frame,
+                    audio_messages,
+                    retirement,
+                ) {
+                    mixer.defer_control(ControlMessage::GlobalPlaybackBatch(batch));
+                    return;
+                }
+                batch.finish(true);
+                retirement.retire_global_playback_batch(batch);
+                return;
+            }
             let needed = if batch.capture_publication.is_some() && !batch.prepared_transferred() {
                 2
             } else {

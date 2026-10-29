@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from flitzis_looper.controller.transport.global_playback import GlobalPlaybackController
 from flitzis_looper.controller.transport.pause_intent import OrdinaryPauseIntentController
@@ -11,7 +11,16 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.recording import RecordingGroupGate
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper_audio import AudioMessage, OrdinaryTransportObservation
+    from flitzis_looper_audio import (
+        AudioMessage,
+        ExplicitPlaybackTarget,
+        GlobalPlaybackBatchTicket,
+        OrdinaryTransportObservation,
+    )
+
+
+class _ExplicitTargetOptions(TypedDict, total=False):
+    explicit_target: ExplicitPlaybackTarget
 
 
 class PadPlaybackController:
@@ -55,6 +64,14 @@ class PadPlaybackController:
     def set_global_playback_feedback_poll(self, callback: Callable[[], None]) -> None:
         """Drain native playback feedback before a subsequent global target capture."""
         self._global_playback.set_feedback_poll(callback)
+
+    def _prepare_fenced_playback_observation(self) -> None:
+        """Reserve bounded control observation before a Native STOP/mode admission."""
+        self._global_playback.prepare_fenced_observation()
+
+    def _observe_fenced_playback(self, ticket: GlobalPlaybackBatchTicket) -> None:
+        """Retain an admitted Native fence without issuing another audio operation."""
+        self._global_playback.observe_fenced_playback(ticket)
 
     def capture_recording_start(
         self, *, received_at_ns: int | None = None
@@ -109,10 +126,14 @@ class PadPlaybackController:
         *,
         exclusive: bool = False,
         received_at_ns: int | None = None,
+        explicit_target: ExplicitPlaybackTarget | None = None,
     ) -> None:
         self._transport.refresh_input_runtime((sample_id,))
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
         options = self._transport.source_generation_options(generation)
+        target_options: _ExplicitTargetOptions = {}
+        if explicit_target is not None:
+            target_options["explicit_target"] = explicit_target
         start_s, end_s = self._loop.launch_region(sample_id)
         captured = self._audio.capture_pad_start(
             sample_id,
@@ -121,6 +142,7 @@ class PadPlaybackController:
             1.0,
             exclusive=exclusive,
             received_at_ns=received_at_ns,
+            **target_options,
             **options,
         )
         self._transport.residency.start(
@@ -147,16 +169,37 @@ class PadPlaybackController:
         self._global_playback.stop(remember=False, received_at_ns=received_at_ns)
 
     def start_or_restart_global_start_stop(self, *, received_at_ns: int | None = None) -> None:
-        """Start remembered loops or restart active loops from their loop starts.
+        """Restart the explicit target, or the existing group when Multi Loop is ON.
 
         Args:
             received_at_ns: One captured Rust input timestamp shared by every pad.
         """
-        self._global_playback.start(received_at_ns=received_at_ns)
+        if self._project.multi_loop:
+            self._global_playback.start(received_at_ns=received_at_ns)
+            return
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
+        target = self._audio.current_explicit_playback_target()
+        sample_id = (
+            target.current_control_slot() if target is not None else self._project.selected_pad
+        )
+        if sample_id is None:
+            return
+        validate_sample_id(sample_id)
+        if self._project.sample_paths[sample_id] is None:
+            return
+        self._global_playback.prepare_explicit_start()
+        self._start_pad(
+            sample_id, exclusive=True, received_at_ns=received_at_ns, explicit_target=target
+        )
 
     def stop_global_start_stop(self) -> None:
         """Stop active loops from START/STOP right mouse down without starting anything."""
-        self._global_playback.stop(remember=True)
+        if self._project.multi_loop:
+            self._global_playback.stop(remember=True)
+            return
+        self._global_playback.prepare_fenced_observation()
+        ticket = self._audio.stop_explicit_playback()
+        self._global_playback.observe_fenced_playback(ticket)
 
     def pause_pad(self, sample_id: int) -> None:
         """Pause a pad if it is currently playing.

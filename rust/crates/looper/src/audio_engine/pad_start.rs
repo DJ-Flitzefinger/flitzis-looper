@@ -45,6 +45,7 @@ struct PadStartOwner {
     loop_end_s: Option<f64>,
     volume: f32,
     exclusive: bool,
+    explicit_choice: AtomicBool,
     received_at_ns: u64,
     sequence: u64,
     input_owners: InputOwners,
@@ -70,6 +71,9 @@ const SCHEDULED: u8 = 3;
 const APPLYING: u8 = 4;
 const APPLIED: u8 = 5;
 const REJECTED: u8 = 6;
+
+#[cfg(test)]
+thread_local! { static REJECT_INTERLEAVING: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
 
 /// One original GUI/MIDI/global attack. Python fields are observations only.
 #[pyclass(frozen)]
@@ -270,6 +274,7 @@ impl CapturedPadStart {
                 loop_end_s: end_s,
                 volume,
                 exclusive,
+                explicit_choice: AtomicBool::new(true),
                 received_at_ns,
                 sequence,
                 input_owners,
@@ -302,6 +307,12 @@ impl CapturedPadStart {
 
     pub(crate) fn sequence(&self) -> u64 {
         self.owner.sequence
+    }
+    pub(crate) fn exclude_explicit_choice(&self) {
+        self.owner.explicit_choice.store(false, Ordering::Release);
+    }
+    pub(crate) fn records_explicit_choice(&self) -> bool {
+        self.owner.explicit_choice.load(Ordering::Acquire)
     }
 
     pub(crate) fn start_behavior(&self) -> KeyLockStartBehavior {
@@ -863,6 +874,10 @@ impl CapturedPadStart {
         if matches!(status, APPLYING | APPLIED | REJECTED) {
             return false;
         }
+        #[cfg(test)]
+        if let Some(hook) = REJECT_INTERLEAVING.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
         if self
             .owner
             .status
@@ -874,6 +889,24 @@ impl CapturedPadStart {
         self.owner.reason.store(reason as u8, Ordering::Release);
         self.owner.start_policy.finish();
         true
+    }
+    #[cfg(test)]
+    pub(crate) fn with_reject_interleaving_for_test<T>(
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                REJECT_INTERLEAVING.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        REJECT_INTERLEAVING.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+        let _reset = Reset;
+        action()
     }
 }
 

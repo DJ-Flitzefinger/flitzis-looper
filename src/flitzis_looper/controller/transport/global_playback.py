@@ -136,6 +136,7 @@ class GlobalPlaybackController:
         self._pending: _PendingGlobalBatch | None = None
         self._deferred: _DeferredStart | None = None
         self._restore_revision = 0
+        self._fenced_batches: list[GlobalPlaybackBatchTicket] = []
         self._poll_feedback: Callable[[], None] | None = None
         transport._on_frame_render_callbacks.append(self.poll)
 
@@ -149,6 +150,40 @@ class GlobalPlaybackController:
         self._cancel_deferred()
         self._session.global_stop_engaged = False
         self._session.global_stop_restore_sample_ids = set()
+
+    def prepare_explicit_start(self) -> None:
+        """Close old group originals before admitting a new ordinary singleton."""
+        if self._deferred is not None:
+            self._deferred.capture.cancel()
+        if self._pending is not None and self._pending.start and self._pending.capture is not None:
+            self._pending.capture.cancel()
+        # Native cancellation closes the original group gate even when its
+        # atomic claim already won. Keep the pending receipt until actual ACK.
+        self._restore_revision += 1
+        self._deferred = None
+        self._session.global_stop_engaged = False
+        self._session.global_stop_restore_sample_ids = set()
+
+    def prepare_fenced_observation(self) -> None:
+        """Prune only terminal receipts before another fallible Native admission."""
+        self._poll_fenced_batches()
+        if len(self._fenced_batches) >= 256:
+            message = "Playback transition observation capacity exhausted"
+            raise RuntimeError(message)
+
+    def observe_fenced_playback(self, ticket: GlobalPlaybackBatchTicket) -> None:
+        """Mirror a Native-admitted fence; do not cancel or recapture after commit."""
+        self._fenced_batches.append(ticket)
+        self._restore_revision += 1
+        self._deferred = None
+        self._session.global_stop_engaged = False
+        self._session.global_stop_restore_sample_ids = set()
+        self._transport.residency._retire_fenced_launch_callbacks()
+
+    def _poll_fenced_batches(self) -> None:
+        self._fenced_batches = [
+            ticket for ticket in self._fenced_batches if ticket.publication_status() == "pending"
+        ]
 
     def discard_pad_restore(self, sample_id: int) -> None:
         """Prune an unloaded pad from an acknowledgement still awaiting observation."""
@@ -175,6 +210,7 @@ class GlobalPlaybackController:
 
     def poll(self) -> None:
         """Observe completion without projecting pending/rejected work as effective."""
+        self._poll_fenced_batches()
         if self._pair_publication_pending():
             if self._deferred is not None and self._deferred.recording_gate is not None:
                 # A writer/placement hold cannot extend this original press's
@@ -190,7 +226,11 @@ class GlobalPlaybackController:
         if status == "pending":
             return
         self._pending = None
-        if pending.start and status != "accepted":
+        if (
+            pending.start
+            and status != "accepted"
+            and pending.restore_revision == self._restore_revision
+        ):
             ids = (
                 frozenset(pending.capture.diagnostic_slots())
                 if pending.capture is not None

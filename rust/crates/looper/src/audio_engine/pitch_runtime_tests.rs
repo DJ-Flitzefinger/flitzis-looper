@@ -61,6 +61,71 @@ pub(super) const LOOP_END: usize = 100_800;
 pub(super) const SOURCE_HZ: f64 = 160.0;
 const WORKER_WAIT: Duration = Duration::from_secs(2);
 
+#[test]
+fn only_effective_pitch_retrigger_promotes_the_explicit_playback_target() {
+    let mut fixture = Fixture::new(false);
+    assert!(
+        fixture
+            .control
+            .engine
+            .current_explicit_playback_target()
+            .unwrap()
+            .is_none()
+    );
+    let retrigger = fixture.capture(0, "pitch.extra:0:set_retrigger");
+    fixture.publish(&retrigger);
+    fixture.apply(&retrigger);
+    let target = fixture
+        .control
+        .engine
+        .current_explicit_playback_target()
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.current_control_slot().unwrap(), Some(0));
+    assert_eq!(target.original_sequence(), retrigger.sequence());
+    assert_eq!(target.effective_frame(), retrigger.execution_target());
+    let set = fixture.capture(0, "pitch.extra:0:set");
+    fixture.publish(&set);
+    fixture.apply(&set);
+    assert_eq!(
+        fixture
+            .control
+            .engine
+            .current_explicit_playback_target()
+            .unwrap()
+            .unwrap()
+            .original_sequence(),
+        target.original_sequence()
+    );
+    let generation = fixture.voice(0).generation;
+    fixture
+        .control
+        .engine
+        .input_runtime_ownership
+        .exhaust_explicit_target_for_test();
+    let refused = fixture.capture(0, "pitch.extra:0:set_retrigger");
+    fixture.publish(&refused);
+    fixture.wait_worker(&[&refused]);
+    fixture.render_to(refused.execution_target());
+    fixture.render(1);
+    assert_eq!(refused.state(), "rejected");
+    assert_eq!(
+        fixture.voice(0).generation,
+        generation,
+        "exhaustion cannot create an unrecorded audible birth"
+    );
+    assert_eq!(
+        fixture
+            .control
+            .engine
+            .current_explicit_playback_target()
+            .unwrap()
+            .unwrap()
+            .original_sequence(),
+        target.original_sequence()
+    );
+}
+
 fn tone(hz: f64) -> SampleBuffer {
     tone_format(hz, RATE, 1)
 }

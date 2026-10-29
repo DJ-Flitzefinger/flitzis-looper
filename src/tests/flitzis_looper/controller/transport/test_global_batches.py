@@ -41,6 +41,7 @@ def test_unload_last_remembered_pad_normalizes_stop_indicator(
 def _accepted_sources(
     controller: AppController, audio: Mock, ids: tuple[int, ...] = (0, 2)
 ) -> tuple[dict[int, dict[str, object]], dict[int, FakeInputRuntimePadBinding]]:
+    controller.project.multi_loop = True
     metadata = {
         sample_id: current_timing_metadata(
             sample_id=sample_id, period=PRECISE_PERIOD, origin=-0.125
@@ -293,6 +294,7 @@ def test_native_capture_failure_never_falls_back_to_saved_paths_or_partial_batch
 def test_explicit_nonaccepted_authority_uses_native_binding_without_promoting_analysis(
     controller: AppController, audio_engine_mock: Mock, intent: TimingIntent
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "saved/ordinary.wav"
     controller.project.sample_analysis[0] = SampleAnalysis(
         bpm=135.0, key="C", beat_grid=BeatGrid(beats=[], downbeats=[], bars=[])

@@ -848,6 +848,7 @@ pub enum ControlMessage {
         placement: crate::audio_engine::content_placement::SlotSnapshot,
         transport_revision: u64,
         source_epoch: u64,
+        original_sequence: u64,
         effect: TransportContentEffect,
     },
 

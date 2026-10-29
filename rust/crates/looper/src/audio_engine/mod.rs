@@ -79,6 +79,8 @@ mod ordinary_transport;
 mod transport_intent_control;
 pub use input_runtime_binding::InputRuntimePadBinding;
 pub use ordinary_transport::{OrdinaryTransportAdmission, OrdinaryTransportObservation};
+mod explicit_playback_target;
+pub use explicit_playback_target::ExplicitPlaybackTarget;
 pub(crate) mod global_rate_status;
 mod key_lock_attack_measurement;
 mod key_lock_attack_reference;
@@ -1652,7 +1654,7 @@ impl AudioEngine {
     #[classattr]
     const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 1;
     #[classattr]
-    const ORDINARY_TRANSPORT_API_VERSION: u32 = 2;
+    const ORDINARY_TRANSPORT_API_VERSION: u32 = 3;
 
     /// Seal an already committed immutable disk selection independently of component residency.
     pub fn register_committed_stem_pair(
@@ -1859,6 +1861,9 @@ impl AudioEngine {
         self.current_timing_acknowledgements.clear_all();
         self.loop_acceptance.reset();
         self.input_runtime_ownership.revoke_all_sources();
+        self.input_runtime_ownership
+            .retire_explicit_target_after_quiescence()
+            .map_err(PyRuntimeError::new_err)?;
         for records in self
             .current_constant_timing
             .lock()
@@ -2242,7 +2247,7 @@ impl AudioEngine {
         loop_ends: Vec<Option<f64>>,
         bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
         pitch_rows: Option<Vec<Py<PyDict>>>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Option<GlobalPlaybackBatchTicket>> {
         let runtime = self
             .input_runtime
             .as_ref()
@@ -2313,9 +2318,9 @@ impl AudioEngine {
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
-    #[pyo3(signature = (id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None))]
+    #[pyo3(name = "capture_pad_start", signature = (id, start_s, end_s=None, volume=1.0, *, exclusive=false, received_at_ns=None, expected_source_generation=None, explicit_target=None))]
     #[allow(clippy::too_many_arguments)]
-    pub fn capture_pad_start(
+    pub fn python_capture_pad_start(
         &self,
         id: usize,
         start_s: f64,
@@ -2324,8 +2329,9 @@ impl AudioEngine {
         exclusive: bool,
         received_at_ns: Option<&Bound<'_, PyAny>>,
         expected_source_generation: Option<u64>,
+        explicit_target: Option<&ExplicitPlaybackTarget>,
     ) -> PyResult<CapturedPadStart> {
-        self._capture_pad_start(
+        self._capture_pad_start_guarded(
             id,
             start_s,
             end_s,
@@ -2333,7 +2339,16 @@ impl AudioEngine {
             exclusive,
             received_at_ns,
             expected_source_generation,
+            explicit_target,
         )
+    }
+
+    pub fn current_explicit_playback_target(&self) -> PyResult<Option<ExplicitPlaybackTarget>> {
+        explicit_playback_target::current(&self.input_runtime_ownership)
+    }
+
+    pub fn stop_explicit_playback(&self) -> PyResult<GlobalPlaybackBatchTicket> {
+        global_playback_batch::enqueue_explicit_stop(self)
     }
 
     #[pyo3(name = "prepare_captured_pad_start", signature = (captured, window=None))]
@@ -2445,11 +2460,19 @@ impl AudioEngine {
     }
 
     /// Snapshot future automatic-analysis bounds without changing current pads.
-    pub fn configure_automatic_bpm_range(&self, enabled: bool, minimum_bpm: f64, maximum_bpm: f64) -> PyResult<()> {
+    pub fn configure_automatic_bpm_range(
+        &self,
+        enabled: bool,
+        minimum_bpm: f64,
+        maximum_bpm: f64,
+    ) -> PyResult<()> {
         let configured = app_analysis::BpmRange::configured(enabled, minimum_bpm, maximum_bpm)
             .map_err(PyValueError::new_err)?;
-        *self.automatic_bpm_range.lock()
-            .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))? = configured;
+        *self
+            .automatic_bpm_range
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))? =
+            configured;
         Ok(())
     }
 

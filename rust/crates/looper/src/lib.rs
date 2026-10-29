@@ -135,6 +135,8 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::CapturedPitchAction;
     #[pymodule_export]
+    use super::audio_engine::ExplicitPlaybackTarget;
+    #[pymodule_export]
     use super::audio_engine::HoldActionTicket;
     #[pymodule_export]
     use super::audio_engine::InputRuntimePadBinding;

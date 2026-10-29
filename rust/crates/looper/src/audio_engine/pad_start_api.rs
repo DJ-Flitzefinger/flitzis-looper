@@ -14,6 +14,28 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 
 impl AudioEngine {
+    // Rust callers retain their existing ordinary capture signature.
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture_pad_start(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        volume: f32,
+        exclusive: bool,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
+    ) -> PyResult<CapturedPadStart> {
+        self._capture_pad_start(
+            id,
+            start_s,
+            end_s,
+            volume,
+            exclusive,
+            received_at_ns,
+            expected_source_generation,
+        )
+    }
     pub(super) fn ordinary_start_render_format(&self) -> PyResult<(u32, usize)> {
         let format = self
             .stream_handle
@@ -39,6 +61,30 @@ impl AudioEngine {
         exclusive: bool,
         received_at_ns: Option<&Bound<'_, PyAny>>,
         expected_source_generation: Option<u64>,
+    ) -> PyResult<CapturedPadStart> {
+        self._capture_pad_start_guarded(
+            id,
+            start_s,
+            end_s,
+            volume,
+            exclusive,
+            received_at_ns,
+            expected_source_generation,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn _capture_pad_start_guarded(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        volume: f32,
+        exclusive: bool,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+        expected_source_generation: Option<u64>,
+        explicit_target: Option<&super::ExplicitPlaybackTarget>,
     ) -> PyResult<CapturedPadStart> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -70,6 +116,25 @@ impl AudioEngine {
         let binding = binding
             .filter(|binding| binding.available() && binding.current())
             .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
+        if let Some(target) = explicit_target {
+            if !Arc::ptr_eq(&target.ownership, &self.input_runtime_ownership)
+                || !self
+                    .input_runtime_ownership
+                    .explicit_target_current(Some(target.value))
+                || !self
+                    .input_runtime_ownership
+                    .explicit_source_current(target.value)
+                || binding
+                    .binding
+                    .placement
+                    .and_then(|placement| placement.content_key())
+                    != Some(target.value.key)
+            {
+                return Err(PyValueError::new_err(
+                    "explicit playback target changed or unavailable",
+                ));
+            }
+        }
         let mut producer = self
             .control_producer()?
             .lock()
@@ -85,10 +150,39 @@ impl AudioEngine {
         .map_err(|reason| PyValueError::new_err(reason.as_str()))?;
         // This original target capture precedes every own WindowACK publication. It
         // transfers no Work and changes no playback state or requested pitch tuple.
-        if producer
-            .push(ControlMessage::CapturePadStartTarget(captured.clone()))
-            .is_err()
-        {
+        let message = ControlMessage::CapturePadStartTarget(captured.clone());
+        let queued = if let Some(target) = explicit_target {
+            let placement = binding
+                .binding
+                .placement
+                .expect("complete source placement");
+            let write = self
+                .input_runtime_ownership
+                .prepare_slot_write_fixed(placement, placement.lifetime())
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            self.input_runtime_ownership
+                .commit_slot_write_fixed(
+                    &write,
+                    || {
+                        self.input_runtime_ownership
+                            .explicit_target_current(Some(target.value))
+                            && self
+                                .input_runtime_ownership
+                                .explicit_source_current(target.value)
+                            && binding.control_publication_current()
+                    },
+                    |_| {
+                        producer
+                            .push(message)
+                            .expect("reserved explicit start capture capacity")
+                    },
+                )
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            true
+        } else {
+            producer.push(message).is_ok()
+        };
+        if !queued {
             captured.reject(PitchActionReject::Capacity);
             return Err(PyRuntimeError::new_err(
                 "ordinary start capture queue is full",
