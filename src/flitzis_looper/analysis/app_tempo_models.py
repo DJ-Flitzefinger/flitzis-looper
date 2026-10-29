@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from flitzis_looper.analysis.app_tempo_corroboration import QmCorroboration, validate_corroboration
+from flitzis_looper.analysis.app_tempo_fallback import TempoFallback, validate_tempo_fallback
 from flitzis_looper.analysis.app_tempo_inferred import OrdinalFit, validate_ordinal_fit
 from flitzis_looper.analysis.app_tempo_periods import validate_period_fit
 from flitzis_looper.analysis.app_tempo_prior import NominalSelection, validate_nominal_selection
@@ -36,7 +37,7 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     backend: Literal[
         "beat_this", "beat_this_qm_dsp", "beat_this_bpm_range", "beat_this_qm_tempocnn"
     ]
@@ -50,9 +51,15 @@ class AppTempoMethod(BaseModel):
         "neural-user-range-v7",
         "neural-qm-nominal-prior-v8",
         "neural-inferred-periods-v9",
+        "neural-qm-tempo-fallback-v10",
     ]
     status: Literal[
-        "estimated", "single_region_estimate", "insufficient", "invalid", "uncorroborated"
+        "estimated",
+        "single_region_estimate",
+        "insufficient",
+        "invalid",
+        "uncorroborated",
+        "mean_estimate",
     ]
     bpm: Annotated[float | None, Field(allow_inf_nan=False, ge=30, le=300)]
     selected: TempoRegion | None
@@ -79,6 +86,9 @@ class AppTempoMethod(BaseModel):
     nominal_selection: NominalSelection | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    tempo_fallback: TempoFallback | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -92,7 +102,7 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (
             isinstance(value, dict)
-            and value.get("schema_version") in {6, 7, 8, 9}
+            and value.get("schema_version") in {6, 7, 8, 9, 10}
             and any(
                 type(value.get(key)) is not int
                 for key in ("schema_version", "sample_rate_hz", "frame_count")
@@ -137,6 +147,19 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _fallback_field_presence(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if value.get("schema_version") != 10 and "tempo_fallback" in value:
+            message = "Last-fallback fields require version ten"
+            raise ValueError(message)
+        if value.get("schema_version") != 10 and value.get("status") == "mean_estimate":
+            message = "Mean estimates require their explicit version ten evidence"
+            raise ValueError(message)
+        return value
+
     @field_validator("execution", mode="before")
     @classmethod
     def _load_execution(cls, value: object) -> ActualExecutionReceipt | None:
@@ -151,12 +174,14 @@ class AppTempoMethod(BaseModel):
 
     def _validate_estimate(self) -> None:
         if self.execution is not None:
-            if self.schema_version not in {4, 5, 6, 7, 8, 9}:
-                message = "Execution receipts require tempo metadata version four through nine"
+            if self.schema_version not in {4, 5, 6, 7, 8, 9, 10}:
+                message = "Execution receipts require tempo metadata version four through ten"
                 raise ValueError(message)
             validate_execution(self.execution)
         self._validate_policy_version()
-        if self.schema_version == 8:
+        if self.schema_version == 10:
+            validate_tempo_fallback(self, validate_math_estimate)
+        elif self.schema_version == 8:
             validate_nominal_selection(self, validate_math_estimate, validate_original_method)
         elif self.schema_version == 7:
             validate_bpm_range(self, validate_math_estimate, validate_original_method)
@@ -170,6 +195,9 @@ class AppTempoMethod(BaseModel):
             validate_math_estimate(self)
 
     def _validate_policy_version(self) -> None:
+        if self.schema_version == 10:
+            self._validate_fallback_policy()
+            return
         if self.schema_version == 8:
             self._validate_prior_policy()
             return
@@ -191,6 +219,15 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (self.schema_version in {5, 9}) != (self.ordinal_fit is not None):
             message = "Inferred evidence requires its explicit version five or nine policy"
+            raise ValueError(message)
+
+    def _validate_fallback_policy(self) -> None:
+        if (
+            self.backend != "beat_this_qm_dsp"
+            or self.policy != "neural-qm-tempo-fallback-v10"
+            or self.tempo_fallback is None
+        ):
+            message = "Version ten requires explicit last-fallback evidence"
             raise ValueError(message)
 
     def _validate_range_policy(self) -> None:

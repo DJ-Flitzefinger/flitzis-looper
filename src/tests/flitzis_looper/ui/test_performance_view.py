@@ -65,6 +65,9 @@ class _Pads:
     def effective_key(self, _pad_id: int) -> str | None:
         return "D#"
 
+    def bpm_drift_warning(self, _pad_id: int) -> str | None:
+        return None
+
     def peak(self, _pad_id: int) -> float:
         raise AssertionError
 

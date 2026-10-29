@@ -458,6 +458,8 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     """Explain finite automatic evidence without presenting it as musical certainty."""
     if method is None:
         return None
+    if method.tempo_fallback is not None:
+        return _fallback_bpm_guidance(method)
     if method.nominal_selection is not None:
         return _prior_bpm_guidance(method)
     if _has_period_unit_note(method):
@@ -465,6 +467,29 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     if method.bpm_range is not None:
         return _range_bpm_guidance(method)
     return _base_bpm_guidance(method)
+
+
+def _fallback_bpm_guidance(method: AppTempoMethod) -> str:
+    evidence = method.tempo_fallback
+    if evidence is None:
+        message = "Fallback guidance requires recorded analysis evidence"
+        raise ValueError(message)
+    constraint = evidence.range_constraint
+    bounds = (
+        f" Within its recorded range ({constraint.minimum_bpm:g}-{constraint.maximum_bpm:g} BPM)."
+        if constraint is not None
+        else ""
+    )
+    if evidence.kind == "mean_estimate":
+        return (
+            "Possible BPM drift. Mean estimate · middle 60%. "
+            "Fixed loops may drift; playback does not follow tempo changes."
+            f"{bounds} Verify with /2, x2 or Tap BPM."
+        )
+    return (
+        "Automatic BPM uses an independent CPU acoustic estimate."
+        f"{bounds} Verify its beat level with /2, x2 or Tap BPM."
+    )
 
 
 def _prior_bpm_guidance(method: AppTempoMethod) -> str:

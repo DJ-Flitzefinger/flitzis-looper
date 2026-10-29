@@ -233,13 +233,15 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
-        if method is not None and method.schema_version in {6, 7, 8, 9}:
+        if method is not None and method.schema_version in {6, 7, 8, 9, 10}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
             if method.nominal_selection is not None:
                 return f"NN {bpm_device_label(method.execution)}; QM CPU; prior CPU"
-            has_qm = method.qm_corroboration is not None or (
-                method.bpm_range is not None and method.bpm_range.selection is not None
+            has_qm = (
+                method.tempo_fallback is not None
+                or method.qm_corroboration is not None
+                or (method.bpm_range is not None and method.bpm_range.selection is not None)
             )
             return (
                 f"NN {bpm_device_label(method.execution)}; QM CPU"
@@ -247,6 +249,22 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
                 else bpm_device_label(method.execution)
             )
         return bpm_device_label(method.execution if method is not None else None)
+
+    def bpm_drift_warning(self, pad_id: int) -> str | None:
+        """A validated mean is approximate; it does not prove audible source drift."""
+        if not self.bpm_evidence_is_current_auto(pad_id):
+            return None
+        analysis = self.analysis(pad_id)
+        method = analysis.bpm_method if analysis is not None else None
+        return (
+            "Possible BPM drift"
+            if method is not None
+            and method.schema_version == 10
+            and method.status == "mean_estimate"
+            and method.tempo_fallback is not None
+            and method.tempo_fallback.kind == "mean_estimate"
+            else None
+        )
 
     def bpm_evidence_is_current_auto(self, pad_id: int) -> bool:
         """Busy and manual choices cannot be described by cached automatic support."""

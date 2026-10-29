@@ -131,6 +131,19 @@ def _parse_sample_analysis(analysis: object) -> SampleAnalysis | None:
         return None
 
 
+def _require_fresh_tempo_provenance(analysis: object, parsed: SampleAnalysis | None) -> None:
+    """Historical recovery is lenient; a present fresh proof must survive validation."""
+    if not isinstance(analysis, dict) or analysis.get("bpm_method") is None:
+        return
+    method = parsed.bpm_method if parsed is not None else None
+    if parsed is None or method is None:
+        message = "Fresh BPM provenance is invalid or contradicts its selected scalar"
+        raise ValueError(message)
+    if method.bpm is None and normalize_bpm(parsed.bpm) is not None:
+        message = "Unavailable fresh BPM provenance cannot publish a positive scalar"
+        raise ValueError(message)
+
+
 def _key_component_result(analysis: object) -> tuple[bool, str | None]:
     """Read an ephemeral component outcome without changing the saved analysis schema."""
     if not isinstance(analysis, dict):
@@ -1494,7 +1507,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             )
         except ValueError, TypeError:
             return
-        if method.status not in {"estimated", "single_region_estimate"} or method.bpm is None:
+        if (
+            method.status not in {"estimated", "single_region_estimate", "mean_estimate"}
+            or method.bpm is None
+        ):
             if method.schema_version >= 3 and normalize_bpm(previous.bpm) is None:
                 # Record a completed unavailable upgrade without changing key,
                 # grid, cuts or numeric intent and retrying it on every restore.
@@ -1502,6 +1518,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                     update={"bpm_method": method}
                 )
                 self._mark_project_changed()
+            return
+        if self._retain_precise_before_mean(sample_id, method):
             return
         self._project.sample_analysis[sample_id] = previous.model_copy(
             update={
@@ -1736,6 +1754,14 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
     ) -> None:
         """A failed beat component may complete key data without clearing valid tempo."""
         parsed = _parse_sample_analysis(analysis)
+        try:
+            _require_fresh_tempo_provenance(analysis, parsed)
+        except ValueError:
+            self._merge_completed_analysis_key(sample_id, parsed, key_completed=key_completed)
+            raise
+        if parsed is not None and self._retain_precise_before_mean(sample_id, parsed.bpm_method):
+            self._merge_completed_analysis_key(sample_id, parsed, key_completed=key_completed)
+            return
         if parsed is not None and (not math.isfinite(parsed.bpm) or parsed.bpm <= 0):
             if key_completed:
                 previous = self._project.sample_analysis[sample_id]
@@ -1750,6 +1776,37 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             sample_id,
             self._analysis_preserving_key(sample_id, analysis) if preserve_key else analysis,
         )
+
+    def _merge_completed_analysis_key(
+        self, sample_id: int, parsed: SampleAnalysis | None, *, key_completed: bool
+    ) -> None:
+        previous = self._project.sample_analysis[sample_id]
+        if previous is None or parsed is None or not key_completed or parsed.key == previous.key:
+            return
+        self._project.sample_analysis[sample_id] = previous.model_copy(update={"key": parsed.key})
+        self._mark_project_changed()
+
+    def _retain_precise_before_mean(self, sample_id: int, candidate: AppTempoMethod | None) -> bool:
+        """Keep one validated same-source scalar/grid/method before any Native write."""
+        if (
+            candidate is None
+            or candidate.schema_version != 10
+            or candidate.status != "mean_estimate"
+        ):
+            return False
+        previous = self._project.sample_analysis[sample_id]
+        old = previous.bpm_method if previous is not None else None
+        if previous is None or old is None:
+            return False
+        if (
+            old.schema_version < 4
+            or old.status not in {"estimated", "single_region_estimate"}
+            or old.bpm is None
+        ):
+            return False
+        if not math.isfinite(previous.bpm) or previous.bpm <= 0 or previous.bpm != old.bpm:
+            return False
+        return old.source_sha256 == candidate.source_sha256
 
     def _analysis_preserving_key(self, sample_id: int, analysis: object) -> object:
         """Merge independent BPM output with the current source's detected key."""

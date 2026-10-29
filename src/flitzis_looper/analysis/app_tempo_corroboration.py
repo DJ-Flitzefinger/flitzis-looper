@@ -156,7 +156,9 @@ class QmEstimate(BaseModel):
         return self
 
 
-class QmEvidence(BaseModel):
+class QmObservation(BaseModel):
+    """Complete source coordinates shared by precise and completed QM evidence."""
+
     model_config = ConfigDict(extra="forbid")
 
     backend: Literal["qm_dsp"]
@@ -174,10 +176,9 @@ class QmEvidence(BaseModel):
         Field(max_length=250_000),
     ]
     raw_downbeat_indices: Annotated[list[_Index], Field(max_length=250_000)]
-    estimate: QmEstimate
 
     @model_validator(mode="after")
-    def _raw_coordinates(self) -> QmEvidence:
+    def _raw_coordinates(self) -> QmObservation:
         if self.odf_hop_samples != int(self.analyzer.sample_rate_hz * self.configuration.step_secs):
             _invalid("QM evidence differs from its actual configured ODF hop")
         if any(a >= b for a, b in pairwise(self.raw_beat_frames)) or any(
@@ -187,6 +188,12 @@ class QmEvidence(BaseModel):
         if any(index >= len(self.raw_beat_frames) for index in self.raw_downbeat_indices):
             _invalid("QM downbeat index lies outside its original beat coordinates")
         return self
+
+
+class QmEvidence(QmObservation):
+    """Legacy joint evidence retains its successful scalar requirement."""
+
+    estimate: QmEstimate
 
 
 class QmCorroboration(BaseModel):
@@ -246,7 +253,7 @@ def validate_qm_evidence(
     validate_math: Callable[[TempoMathView], None],
 ) -> None:
     """Reuse the same complete source preparation and independent scalar replay."""
-    _check_source_extent(method, source, qm)
+    validate_qm_source_extent(method, source, qm)
     step = qm.odf_hop_samples / qm.analyzer.sample_rate_hz
     beats = [frame * step for frame in qm.raw_beat_frames]
     estimate = qm.estimate
@@ -266,8 +273,8 @@ def validate_qm_evidence(
     validate_math(view)
 
 
-def _check_source_extent(
-    method: AppTempoMethod, source: CorroborationSource, qm: QmEvidence
+def validate_qm_source_extent(
+    method: AppTempoMethod, source: CorroborationSource, qm: QmObservation
 ) -> None:
     if (
         source.source_sha256 != method.source_sha256

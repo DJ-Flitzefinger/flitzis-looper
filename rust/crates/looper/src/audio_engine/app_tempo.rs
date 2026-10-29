@@ -9,6 +9,8 @@ const RESIDUAL_SECONDS: f64 = 0.025;
 mod inferred_ordinals;
 #[path = "app_tempo/integer.rs"]
 mod integer;
+#[path = "app_tempo/mean.rs"]
+pub(super) mod mean;
 #[path = "app_tempo/stable_runs.rs"]
 mod stable_runs;
 
@@ -50,36 +52,7 @@ fn median(values: &mut [f64]) -> f64 {
 }
 
 fn line(points: &[(usize, f64)], keep: &[bool]) -> Option<(f64, f64, f64)> {
-    let count = keep.iter().filter(|&&yes| yes).count();
-    if count < 2 {
-        return None;
-    }
-    let n = count as f64;
-    let mx = points
-        .iter()
-        .zip(keep)
-        .filter(|(_, k)| **k)
-        .map(|(p, _)| p.0 as f64)
-        .sum::<f64>()
-        / n;
-    let my = points
-        .iter()
-        .zip(keep)
-        .filter(|(_, k)| **k)
-        .map(|(p, _)| p.1)
-        .sum::<f64>()
-        / n;
-    let (xx, xy) =
-        points
-            .iter()
-            .zip(keep)
-            .filter(|(_, k)| **k)
-            .fold((0.0, 0.0), |(xx, xy), (p, _)| {
-                let x = p.0 as f64 - mx;
-                (xx + x * x, xy + x * (p.1 - my))
-            });
-    let period = xy / xx;
-    (period.is_finite() && (0.2..=2.0).contains(&period)).then_some((mx, my, period))
+    mean::line(points, keep, &|| false).expect("non-cancelling ordinary line fit")
 }
 
 fn region(
@@ -89,88 +62,16 @@ fn region(
     minimum_points: usize,
     minimum_span: f64,
 ) -> Option<RegionEstimate> {
-    let points: Vec<_> = beats
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, t)| *t >= lower && *t < upper)
-        .collect();
-    if points.len() < minimum_points {
-        return None;
-    }
-    let mut keep = vec![true; points.len()];
-    // A bounded robust fit removes isolated model errors without moving retained
-    // observations or renumbering their original detector indices.
-    for _ in 0..5 {
-        let (mx, my, period) = line(&points, &keep)?;
-        let residual: Vec<_> = points
-            .iter()
-            .map(|&(i, t)| t - my - period * (i as f64 - mx))
-            .collect();
-        let mut retained: Vec<_> = residual
-            .iter()
-            .zip(&keep)
-            .filter(|(_, k)| **k)
-            .map(|(r, _)| *r)
-            .collect();
-        let center = median(&mut retained);
-        let mut deviations: Vec<_> = retained.iter().map(|r| (r - center).abs()).collect();
-        let limit = RESIDUAL_SECONDS.min(0.05 * period);
-        let threshold = (3.5 * 1.4826 * median(&mut deviations)).clamp(0.010, limit);
-        let next: Vec<_> = residual
-            .iter()
-            .map(|r| (r - center).abs() <= threshold)
-            .collect();
-        if next == keep {
-            break;
-        }
-        keep = next;
-    }
-    let excluded: Vec<_> = points
-        .iter()
-        .zip(&keep)
-        .filter(|(_, k)| !**k)
-        .map(|(p, _)| p.0)
-        .collect();
-    if excluded.len() * 20 > points.len() || keep.windows(2).any(|k| !k[0] && !k[1]) {
-        return None;
-    }
-    let retained: Vec<_> = points
-        .iter()
-        .zip(&keep)
-        .filter(|(_, k)| **k)
-        .map(|(p, _)| *p)
-        .collect();
-    if retained.len() < minimum_points {
-        return None;
-    }
-    let first = retained.first()?.1;
-    let last = retained.last()?.1;
-    if last - first < minimum_span
-        || last - first < 0.6 * (upper - lower)
-        || first > lower + 0.2 * (upper - lower)
-        || last < upper - 0.2 * (upper - lower)
-    {
-        return None;
-    }
-    let (mx, my, period) = line(&points, &keep)?;
-    let residual: Vec<_> = retained
-        .iter()
-        .map(|&(i, t)| t - my - period * (i as f64 - mx))
-        .collect();
-    let maximum = residual.iter().copied().map(f64::abs).fold(0.0, f64::max);
-    if maximum > RESIDUAL_SECONDS.min(0.05 * period) {
-        return None;
-    }
-    Some(RegionEstimate {
-        window_seconds: [lower, upper],
-        bpm: 60.0 / period,
-        retained: retained.len(),
-        excluded_raw_indices: excluded,
-        max_residual_seconds: maximum,
-        rms_residual_seconds: (residual.iter().map(|r| r * r).sum::<f64>() / residual.len() as f64)
-            .sqrt(),
-    })
+    mean::region_checked(beats, lower, upper, minimum_points, minimum_span, &|| false)
+        .ok()
+        .flatten()
+}
+
+pub(super) fn completed_conflict(estimate: &TempoEstimate) -> bool {
+    estimate.bpm.is_none()
+        && estimate.policy == inferred_ordinals::POLICY
+        && matches!(&estimate.ordinal_fit, Some(inferred_ordinals::OrdinalFit::Evaluated(e))
+            if e.outcome == "conflicting_sections" && !e.candidate_limit_reached)
 }
 
 pub(super) fn estimate(beats: &[f64], duration: f64) -> TempoEstimate {
@@ -355,13 +256,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn last_fallback_entry_requires_completed_conflict_not_missing_or_limited_work() {
+        let mut result = TempoEstimate {
+            policy: inferred_ordinals::POLICY,
+            status: "uncorroborated",
+            bpm: None,
+            selected: None,
+            regions: vec![],
+            integer_probe: None,
+            ordinal_fit: None,
+        };
+        assert!(!completed_conflict(&result));
+        let beats: Vec<_> = (0..600).map(|i| 0.1 + i as f64 * 0.5).collect();
+        result = estimate(&beats, 300.0);
+        assert_eq!(result.bpm, Some(120.0));
+        assert!(!completed_conflict(&result));
+        // A budget refusal cannot become fluctuating-tempo evidence.
+        result.bpm = None;
+        result.policy = inferred_ordinals::POLICY;
+        result.ordinal_fit = Some(inferred_ordinals::OrdinalFit::Budget(
+            inferred_ordinals::BudgetUnavailable {
+                outcome: "budget_unavailable",
+                required_bytes: 100,
+                available_bytes: 0,
+            },
+        ));
+        assert!(!completed_conflict(&result));
+    }
+
+    #[test]
     fn optional_absence_keeps_resource_refusals_distinct() {
-        let mut result=TempoEstimate {policy:POLICY,status:"insufficient",bpm:None,selected:None,
-            regions:vec![],integer_probe:None,ordinal_fit:None};
+        let mut result = TempoEstimate {
+            policy: POLICY,
+            status: "insufficient",
+            bpm: None,
+            selected: None,
+            regions: vec![],
+            integer_probe: None,
+            ordinal_fit: None,
+        };
         assert!(!optional_resource_refusal(&result));
-        for outcome in ["budget_unavailable","allocation_unavailable"] {
-            result.ordinal_fit=Some(inferred_ordinals::OrdinalFit::Budget(inferred_ordinals::BudgetUnavailable {
-                outcome,required_bytes:100,available_bytes:0}));
+        for outcome in ["budget_unavailable", "allocation_unavailable"] {
+            result.ordinal_fit = Some(inferred_ordinals::OrdinalFit::Budget(
+                inferred_ordinals::BudgetUnavailable {
+                    outcome,
+                    required_bytes: 100,
+                    available_bytes: 0,
+                },
+            ));
             assert!(optional_resource_refusal(&result));
         }
     }

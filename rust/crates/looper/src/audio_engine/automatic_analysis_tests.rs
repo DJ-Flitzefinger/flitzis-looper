@@ -585,7 +585,28 @@ fn primary_neural_authorized_corpus_single_pass_import_and_own_ack() {
     )
     .unwrap();
     assert_eq!(method["source_sha256"], expected);
-    assert_eq!(method["backend"], "beat_this");
+    if method["schema_version"] == 10 {
+        assert_eq!(method["backend"], "beat_this_qm_dsp");
+        assert_eq!(method["policy"], "neural-qm-tempo-fallback-v10");
+        let fallback = &method["tempo_fallback"];
+        assert_eq!(fallback["source"]["source_sha256"], expected);
+        assert_eq!(fallback["neural_result"]["schema_version"], 9);
+        assert_eq!(fallback["neural_result"]["backend"], "beat_this");
+        assert_eq!(
+            fallback["neural_result"]["policy"],
+            "neural-inferred-periods-v9"
+        );
+        match fallback["kind"].as_str() {
+            Some("precise_qm") => assert!(matches!(
+                method["status"].as_str(),
+                Some("estimated" | "single_region_estimate")
+            )),
+            Some("mean_estimate") => assert_eq!(method["status"], "mean_estimate"),
+            _ => panic!("schema10 requires its precise-QM or mean-estimate classification"),
+        }
+    } else {
+        assert_eq!(method["backend"], "beat_this");
+    }
     assert!(matches!(
         result["key_status"].as_str(),
         Some("ready" | "skipped_budget" | "not_requested" | "failed")

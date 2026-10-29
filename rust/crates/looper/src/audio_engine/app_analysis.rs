@@ -13,10 +13,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[path = "app_analysis_qm.rs"]
-mod qm_corroboration;
 #[path = "app_analysis_range.rs"]
 mod bpm_range;
+#[path = "app_analysis_qm.rs"]
+mod qm_corroboration;
+#[path = "app_analysis_mean.rs"]
+mod tempo_fallback;
 pub(super) use bpm_range::BpmRange;
 #[path = "app_analysis_prior.rs"]
 #[cfg(test)]
@@ -324,9 +326,16 @@ pub(super) fn analyze_with_range(
         let source = context.cancelled.clone();
         let latched = AtomicBool::new(false);
         Arc::new(move || {
-            if latched.load(Ordering::Acquire) { return true; }
-            if source() { latched.store(true,Ordering::Release); true } else { false }
-        }) as Arc<dyn Fn()->bool + Send + Sync>
+            if latched.load(Ordering::Acquire) {
+                return true;
+            }
+            if source() {
+                latched.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        }) as Arc<dyn Fn() -> bool + Send + Sync>
     };
     let cancelled = || cancellation();
     let source_digest = context.descriptor["original"]["sha256"]
@@ -421,6 +430,7 @@ pub(super) fn analyze_with_range(
             &predictions.beat_seconds,frames as f64 / f64::from(rate),&estimate,&cancelled,
         ).map_err(|_| "neural analysis request superseded".to_owned())?;
         let schema_version = super::app_tempo::schema_version(&estimate);
+        let completed_conflict = super::app_tempo::completed_conflict(&estimate);
         let estimate_bpm = estimate.bpm;
         let estimate_status = estimate.status;
         let mut method = serde_json::to_value(&estimate).map_err(|e| e.to_string())?;
@@ -471,6 +481,28 @@ pub(super) fn analyze_with_range(
                 },
                 Err(_) => {
                     beat_error=Some(format!("Neural tempo estimate {estimate_status}; QM corroboration unavailable: analysis panicked"));
+                    base_method_json
+                },
+            }
+        } else if completed_conflict {
+            let attempted=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tempo_fallback::attempt(&predictions.beat_seconds,frames as f64/f64::from(rate),
+                    automatic_range,&mut method,&base_method_json,core,source_live,raw_workspace,
+                    grid_bytes,&cancelled,|work_core| {
+                        qm_corroboration::completed_observation(sample,rate,&context,&mono_sha256,
+                            raw.decoder_identity(),work_core,&cancelled)
+                    })
+            }));
+            if cancelled() {return Err("neural analysis request superseded".into());}
+            match attempted {
+                Ok(Ok(choice))=>{drop(base_method_json);selected_bpm=Some(choice.bpm);beat_error=None;choice.method_json},
+                Ok(Err(qm_corroboration::Failure::Cancelled))=>return Err("neural analysis request superseded".into()),
+                Ok(Err(error))=>{
+                    beat_error=Some(format!("Neural tempo estimate {estimate_status}; tempo fallback unavailable: {error}"));
+                    base_method_json
+                },
+                Err(_)=>{
+                    beat_error=Some(format!("Neural tempo estimate {estimate_status}; tempo fallback unavailable: analysis panicked"));
                     base_method_json
                 },
             }

@@ -301,6 +301,8 @@ def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loa
         info = key
 
     _pad_button_stem_indicator(ctx, pad_id)
+    if is_loaded:
+        _pad_button_bpm_warning(ctx, pad_id, is_active=is_active)
 
     if info is None:
         return
@@ -310,6 +312,21 @@ def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loa
     info_pos = (pos_max.x - text_size.x - 6, pos_min.y + 4)
     info_color = TEXT_ACTIVE_RGBA if is_active else TEXT_MUTED_RGBA
     draw_list.add_text(info_pos, imgui.get_color_u32(info_color), info)
+
+
+def _pad_button_bpm_warning(ctx: UiContext, pad_id: int, *, is_active: bool) -> None:
+    warning = ctx.state.pads.bpm_drift_warning(pad_id)
+    if warning is None:
+        return
+    lower, upper = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    # Leave the established stem badge its lower-left space.
+    text = _fit_text_to_width(warning, max(0.0, upper.x - lower.x - 48.0))
+    size = imgui.calc_text_size(text)
+    imgui.get_window_draw_list().add_text(
+        (upper.x - size.x - 6.0, upper.y - size.y - 5.0),
+        imgui.get_color_u32(TEXT_ACTIVE_RGBA if is_active else BANK_PRESSED_RGBA),
+        text,
+    )
 
 
 def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:

@@ -34,6 +34,22 @@ pub(super) struct Observation {
     pub period_drift_seconds: f64,
 }
 
+pub(super) struct CompletedObservation {
+    pub source: Value,
+    pub qm: Value,
+    pub bpm: Option<f64>,
+    pub status: &'static str,
+    pub mean: Option<app_tempo::mean::InteriorMean>,
+    pub period_drift_seconds: f64,
+}
+
+fn local_failure(error: app_tempo::mean::Failure) -> Failure {
+    match error {
+        app_tempo::mean::Failure::Cancelled => Failure::Cancelled,
+        other => unavailable(format!("interior mean preparation unavailable: {other:?}")),
+    }
+}
+
 fn unavailable(reason: impl std::fmt::Display) -> Failure {
     Failure::Unavailable(reason.to_string().chars().take(240).collect())
 }
@@ -98,6 +114,62 @@ pub(super) fn observation(
     cancelled: &impl Fn() -> bool,
     agreement: impl FnOnce(f64, f64) -> Result<f64, Failure>,
 ) -> Result<Observation, Failure> {
+    let mut agreement = Some(agreement);
+    let completed = observe_completed(
+        sample,
+        rate,
+        context,
+        nn_mono,
+        decoder_identity,
+        base_core,
+        cancelled,
+        false,
+        |bpm, extent| agreement.take().unwrap()(bpm, extent),
+    )?;
+    Ok(Observation {
+        source: completed.source,
+        qm: completed.qm,
+        bpm: completed.bpm.ok_or(Failure::NoChoice)?,
+        status: completed.status,
+        period_drift_seconds: completed.period_drift_seconds,
+    })
+}
+
+/// Preserve a completed strict refusal for the separate approximate policy.
+/// Existing successful-only callers still use `observation` and the same gate.
+pub(super) fn completed_observation(
+    sample: &SampleBuffer,
+    rate: u32,
+    context: &NeuralContext,
+    nn_mono: &str,
+    decoder_identity: &str,
+    base_core: usize,
+    cancelled: &impl Fn() -> bool,
+) -> Result<CompletedObservation, Failure> {
+    observe_completed(
+        sample,
+        rate,
+        context,
+        nn_mono,
+        decoder_identity,
+        base_core,
+        cancelled,
+        true,
+        |_, _| Ok(0.0),
+    )
+}
+
+fn observe_completed(
+    sample: &SampleBuffer,
+    rate: u32,
+    context: &NeuralContext,
+    nn_mono: &str,
+    decoder_identity: &str,
+    base_core: usize,
+    cancelled: &impl Fn() -> bool,
+    mean_requested: bool,
+    mut agreement: impl FnMut(f64, f64) -> Result<f64, Failure>,
+) -> Result<CompletedObservation, Failure> {
     check(cancelled)?;
     let available = remaining(&[base_core])?;
     let prepared = analysis_pcm::prepare_qm_input(sample, rate, nn_mono, available, cancelled)
@@ -159,20 +231,45 @@ pub(super) fn observation(
     )
     .map_err(|_| Failure::Cancelled)?;
     check(cancelled)?;
-    let bpm = qm_estimate.bpm.ok_or_else(|| {
-        if app_tempo::optional_resource_refusal(&qm_estimate) {
-            unavailable("QM has no independently admitted tempo")
-        } else { Failure::NoChoice }
-    })?;
+    let bpm = qm_estimate.bpm;
+    if bpm.is_none() && app_tempo::optional_resource_refusal(&qm_estimate) {
+        return Err(unavailable("QM has no independently admitted tempo"));
+    }
+    if bpm.is_none() && !mean_requested {
+        return Err(Failure::NoChoice);
+    }
     let status = qm_estimate.status;
     let source_extent = sample.frame_count() as f64 / f64::from(rate);
     let extent = source_extent.min(analyzer_frames as f64 / 44_100.0);
-    let drift = agreement(bpm, extent)?;
+    let drift = if let Some(bpm) = bpm {
+        agreement(bpm, extent)?
+    } else {
+        0.0
+    };
+    let mean = if mean_requested && app_tempo::completed_conflict(&qm_estimate) {
+        let workspace = app_tempo::mean::preparation_bytes(beats.len())
+            .ok_or_else(|| unavailable("QM mean extent overflow"))?;
+        admit(&[
+            raw_live,
+            array_bytes(beats.capacity())?,
+            array_bytes(downbeats.capacity())?,
+            reserve,
+            workspace,
+        ])?;
+        app_tempo::mean::interior(&beats, source_extent, workspace, cancelled)
+            .map_err(local_failure)?
+    } else {
+        None
+    };
+    let retained_mean = mean
+        .as_ref()
+        .map_or(Some(0), app_tempo::mean::InteriorMean::retained_bytes)
+        .ok_or_else(|| unavailable("QM mean metadata overflow"))?;
     drop(beats);
     drop(downbeats);
     // The admitted scalar reserve covers typed estimate / new JSON coexistence;
     // no NN arrays are cloned here. The caller holds one mutable base tree.
-    admit(&[raw_live, reserve])?;
+    admit(&[raw_live, reserve, retained_mean])?;
     let kernel_version = app_tempo::schema_version(&qm_estimate);
     let mut own = serde_json::to_value(&qm_estimate).map_err(unavailable)?;
     drop(qm_estimate);
@@ -204,7 +301,14 @@ pub(super) fn observation(
             "odf_hop_samples":raw.odf_hop_samples(),"raw_beat_frames":raw.beat_frames(),
             "raw_downbeat_indices":raw.downbeat_raw_indices(),"estimate":own});
     check(cancelled)?;
-    Ok(Observation { source, qm, bpm, status, period_drift_seconds: drift })
+    Ok(CompletedObservation {
+        source,
+        qm,
+        bpm,
+        status,
+        mean,
+        period_drift_seconds: drift,
+    })
 }
 
 pub(super) fn attempt(
@@ -236,14 +340,25 @@ pub(super) fn attempt(
         |bpm, extent| {
             let qm_period = 60.0 / bpm;
             let drift = (qm_period - nn_period).abs() * (extent / nn_period);
-            if !qm_period.is_finite() || qm_period <= 0.0
-                || !nn_period.is_finite() || nn_period <= 0.0
-                || !drift.is_finite() || drift > 0.005
-            { return Err(unavailable("QM same-period agreement failed")); }
+            if !qm_period.is_finite()
+                || qm_period <= 0.0
+                || !nn_period.is_finite()
+                || nn_period <= 0.0
+                || !drift.is_finite()
+                || drift > 0.005
+            {
+                return Err(unavailable("QM same-period agreement failed"));
+            }
             Ok(drift)
         },
     )?;
-    let Observation { source, qm, bpm, status, period_drift_seconds } = observed;
+    let Observation {
+        source,
+        qm,
+        bpm,
+        status,
+        period_drift_seconds,
+    } = observed;
     let mut block = serde_json::Map::new();
     block.insert("neural_result".into(), neural_result);
     block.insert("source".into(), source);

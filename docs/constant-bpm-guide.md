@@ -17,6 +17,29 @@ complete-source material is available. Short original audio uses the existing
 adaptive check. Intro/outro and unstable sections are excluded by the established
 quality criteria; a short resident loop does not shorten an available full song.
 
+## Mean estimates and possible drift
+
+Successful precise estimates take priority. When the existing precise methods
+finish without a supported value because sections conflict, the final fallback
+can use an elapsed-time weighted mean of three sections between 20% and 80% of
+the full source. All three sections must independently support the same pulse
+family in both detectors, using one common half/double normalization. Existing
+local coverage, residual and outlier checks still apply; insufficient or incomplete
+analysis does not produce a mean. Each section needs at least 30 seconds of support,
+so short or irregular sources can remain unavailable.
+
+A selected mean is marked **Possible BPM drift** on its PAD, with
+**Mean estimate · middle 60%** in the BPM details. This is an approximate constant
+scalar for ordinary loops and BPM Lock. Playback does not follow changing source
+tempo. The label indicates uncertainty; it does not establish the physical cause
+of detector disagreement. Reproducible analysis is not a guarantee of musical accuracy.
+
+Reanalysis cannot replace a supported precise result of the same unchanged source
+with a mean. Its previous BPM, grid and method remain together, while an independent
+key result can still complete. New content does not inherit another source's result.
+Manual and Tap BPM keep their existing priority. A configured automatic range filters
+the final new value; it does not retrospectively qualify an older retained result.
+
 ## Normal use
 
 1. Use **start.bat** to start the delivered matching Release. Developers rebuilding
