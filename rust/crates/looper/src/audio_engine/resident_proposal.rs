@@ -81,9 +81,11 @@ impl ResidentProposals {
             (epoch, expected)
         }))
     }
+    #[cfg(test)]
     pub(super) fn begin(&self, id: usize) -> Result<ResidentProposal, String> {
         self.begin_domain(id, 1)
     }
+    #[cfg(test)]
     pub(super) fn begin_source(
         &self,
         id: usize,
@@ -144,9 +146,11 @@ impl ResidentProposals {
         let source = source.as_ref()?;
         Some(source.request == request && source.proposal.current())
     }
+    #[cfg(test)]
     pub(super) fn begin_stems(&self, id: usize) -> Result<ResidentProposal, String> {
         self.begin_domain(id, 2)
     }
+    #[cfg(test)]
     pub(super) fn begin_policy(&self, id: usize) -> Result<ResidentProposal, String> {
         self.begin_domain(id, 3)
     }

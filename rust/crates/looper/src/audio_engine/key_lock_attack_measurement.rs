@@ -348,6 +348,7 @@ impl MeasurementGeometry {
 
 impl PreparedAttackMeasurement {
     /// Fixed scalar/current-authority validation; this neither reruns FFT/Native nor accepts C.
+    #[cfg(test)]
     pub(crate) fn matches_request(&self, request: &NativeHistoryRequest) -> bool {
         self.matches_context(request, MeasurementContext::SourceHistory)
     }
@@ -396,6 +397,7 @@ pub(crate) fn measure_attack_reference_for_request(
     measure_attack_reference_for_launch(request, 0)
 }
 
+#[cfg(test)]
 pub(crate) fn measure_attack_reference_for_launch(
     request: &NativeHistoryRequest,
     catchup_frames: u64,

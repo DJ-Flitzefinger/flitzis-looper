@@ -389,6 +389,7 @@ impl InputRuntime {
         self.finish_stop_admission_update(next_revision);
     }
 
+    #[cfg(test)]
     pub fn set_runtime_state(
         &self,
         multi_loop: bool,
@@ -407,6 +408,7 @@ impl InputRuntime {
         )
     }
 
+    #[cfg(test)]
     fn set_runtime_state_before_commit(
         &self,
         multi_loop: bool,
@@ -428,6 +430,7 @@ impl InputRuntime {
         .map(|_| ())
     }
 
+    #[cfg(test)]
     pub(crate) fn set_runtime_state_with_pitch(
         &self,
         multi_loop: bool,

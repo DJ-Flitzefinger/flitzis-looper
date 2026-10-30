@@ -796,7 +796,8 @@ pub(crate) struct StemVoiceCapture {
     pub(crate) selection: SelectionPermit,
     pub(crate) status: Arc<ResidencyStatus>,
     pub(crate) launch_revision: u64,
-    pub(crate) operation_timing_revision: Option<u64>,
+    // Preserve the captured revision; the transaction owns productive validation.
+    pub(crate) _operation_timing_revision: Option<u64>,
     pub(crate) target: StemMixMode,
     pub(crate) candidate: Option<Arc<CandidateAuthority>>,
     sender: UnsafeCell<Producer<StemVoicePin>>,
@@ -1372,7 +1373,7 @@ impl AudioEngine {
             selection: selection.owner.rt_permit(),
             status: status.clone(),
             launch_revision,
-            operation_timing_revision,
+            _operation_timing_revision: operation_timing_revision,
             target,
             candidate: candidate.clone(),
             sender: UnsafeCell::new(sender),

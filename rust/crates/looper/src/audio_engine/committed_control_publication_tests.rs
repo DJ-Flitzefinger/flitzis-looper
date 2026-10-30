@@ -943,7 +943,7 @@ fn committed_actual_callback_capture_publishes_current_history_while_marker_owne
             revoked: Arc::new(AtomicBool::new(false)),
         },
         launch_revision: ownership.launch_revision(0),
-        operation_timing_revision: None,
+        _operation_timing_revision: None,
         target: StemMixMode::FullMix,
         candidate: None,
         sender: UnsafeCell::new(sender),

@@ -850,7 +850,7 @@ fn rate_admission_fences_original_candidate_worker_and_busy_retry_keeps_exact_bo
     assert!(
         matches!(p.h.consumer.peek().unwrap(), ControlMessage::CommittedStemWork(work)
         if matches!(work.as_ref(), CommittedStemRtWork::Capture(capture)
-            if capture.operation_timing_revision == Some(original_revision)))
+            if capture._operation_timing_revision == Some(original_revision)))
     );
     let (mut parameters, mut consumer) = rtrb::RingBuffer::new(8);
     crate::audio_engine::push_global_rate_message(

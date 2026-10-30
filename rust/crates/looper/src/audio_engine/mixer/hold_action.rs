@@ -72,7 +72,7 @@ impl RtMixer {
         key: ContentKey,
         effect: crate::messages::TransportContentEffect,
         output_frame: u64,
-        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
+        _transport: Option<&crate::audio_engine::transport::TransportTimeline>,
         accepted_revision: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> (u64, bool, bool) {
@@ -289,7 +289,7 @@ impl RtMixer {
         &mut self,
         work: Box<HoldActionRtWork>,
         output_frame: u64,
-        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
+        _transport: Option<&crate::audio_engine::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> NativeHoldProjection {
         let action = &work.action;
@@ -405,7 +405,7 @@ impl RtMixer {
         &mut self,
         work: Box<HoldActionRtWork>,
         output_frame: u64,
-        transport: Option<&crate::audio_engine::transport::TransportTimeline>,
+        _transport: Option<&crate::audio_engine::transport::TransportTimeline>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> NativeHoldProjection {
         let action = &work.action;

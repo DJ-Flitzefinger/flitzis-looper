@@ -44,7 +44,9 @@ use crate::audio_engine::key_lock_preparation::{
 use crate::audio_engine::native_history_permit::{NativeHistoryContext, NativeVoiceHistoryContext};
 use crate::audio_engine::native_source_coverage::normal_loop_feed_available_with_readers;
 use crate::audio_engine::pitch_intent::PitchIntent;
-use crate::audio_engine::prepared_native_history::{NativeAdapterState, PitchSourceSnapshot};
+#[cfg(test)]
+use crate::audio_engine::prepared_native_history::NativeAdapterState;
+use crate::audio_engine::prepared_native_history::PitchSourceSnapshot;
 use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
@@ -228,6 +230,7 @@ impl SmoothedGain {
 /// multiple concurrent voices for playback. All operations are designed to be
 /// lock-free and real-time safe.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[cfg(test)]
 pub(crate) enum PadPitchApplyError {
     #[error("invalid pad")]
     InvalidPad,
@@ -464,6 +467,7 @@ impl RtMixer {
                     .matches_late_start_intent(work.intent, work.original_frame())
         })
     }
+    #[cfg(test)]
     pub(crate) fn pad_pitch_intent(&self, id: usize) -> Option<PitchIntent> {
         self.pad_pitch_intent.get(id).copied()
     }
@@ -474,6 +478,7 @@ impl RtMixer {
 
     /// Valid intent is separate from availability of the exact produced source/pitch state.
     /// Preflight every voice before changing the shared pad image; no partial pad retune.
+    #[cfg(test)]
     pub(crate) fn set_pad_pitch_intent(
         &mut self,
         id: usize,
@@ -486,6 +491,7 @@ impl RtMixer {
         self.set_pad_pitch_tuple(id, pitch_intent, key_lock)
     }
 
+    #[cfg(test)]
     pub(crate) fn pad_pitch_tuple_ready(
         &self,
         id: usize,
@@ -527,6 +533,7 @@ impl RtMixer {
     }
 
     /// Commit the frozen tuple only after all event-owned candidates have passed preflight.
+    #[cfg(test)]
     pub(crate) fn set_pad_pitch_tuple(
         &mut self,
         id: usize,
@@ -566,6 +573,7 @@ impl RtMixer {
 
     /// The global dry-rate claim alone may capture an existing mapped trajectory.
     /// Generic pitch/Key-Lock/history callers keep their established mapped refusal.
+    #[cfg(test)]
     fn capture_rate_voice_snapshot(&self, index: usize) -> Option<PitchSourceSnapshot> {
         self.capture_voice_snapshot(index)
     }
@@ -579,8 +587,8 @@ impl RtMixer {
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))?;
         let timing = self.timing_for_voice(voice);
         let mut playback = voice.source_playback;
-        if (!playback.set_target(self.tempo_ratio_for_voice(voice)?)
-            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region)))
+        if !playback.set_target(self.tempo_ratio_for_voice(voice)?)
+            || !playback.configure_domain(timing.loop_domain(sample.frame_count(), region))
         {
             return None;
         }
@@ -710,6 +718,7 @@ impl RtMixer {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn adopt_prepared_pitch_voice(
         &mut self,
         index: usize,
@@ -1005,6 +1014,7 @@ impl RtMixer {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn set_current_timing_acknowledgements(
         &mut self,
         acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -1012,6 +1022,7 @@ impl RtMixer {
         self.current_timing_acknowledgements = acknowledgements;
     }
 
+    #[cfg(test)]
     pub(crate) fn set_input_runtime_ownership(
         &mut self,
         ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
@@ -1054,6 +1065,7 @@ impl RtMixer {
         self.input_runtime_ownership.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn set_prepared_source_epochs(&mut self, epochs: Vec<Arc<AtomicU64>>) {
         assert_eq!(epochs.len(), NUM_SAMPLES);
         self.prepared_source_epochs = epochs;
@@ -1879,6 +1891,7 @@ impl RtMixer {
             ))
     }
 
+    #[cfg(test)]
     fn cold_sample_geometry_for_mode(
         &self,
         id: usize,
@@ -1962,6 +1975,7 @@ impl RtMixer {
             ) == Some(generation)
     }
 
+    #[cfg(test)]
     pub(crate) fn cold_source_current_for_mode(
         &self,
         id: usize,
@@ -4209,6 +4223,7 @@ impl RtMixer {
     /// - `speed`: Speed multiplier
     ///
     /// Invalid values (NaN, infinite, or out of range) are silently ignored.
+    #[cfg(test)]
     pub fn set_speed(&mut self, speed: f64) {
         if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
             return;
@@ -4671,6 +4686,7 @@ impl RtMixer {
         self.set_master_period(60.0 / bpm);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
             if self.refuse_legacy_global_rate_if_pending() {
@@ -4684,6 +4700,7 @@ impl RtMixer {
         }
     }
 
+    #[cfg(test)]
     fn refresh_global_rate_observation(&mut self) {
         self.refresh_global_rate_intent();
         self.input_runtime_ownership
@@ -5474,10 +5491,12 @@ impl RtMixer {
         self.pause_sample_with_output_frame(id, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn pause_sample_at_output_frame(&mut self, id: usize, output_frame: u64) {
         self.pause_sample_with_output_frame(id, Some(output_frame));
     }
 
+    #[cfg(test)]
     fn pause_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
@@ -5500,10 +5519,12 @@ impl RtMixer {
         self.resume_sample_with_output_frame(id, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn resume_sample_at_output_frame(&mut self, id: usize, output_frame: u64) {
         self.resume_sample_with_output_frame(id, Some(output_frame));
     }
 
+    #[cfg(test)]
     fn resume_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;

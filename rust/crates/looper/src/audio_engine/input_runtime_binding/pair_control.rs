@@ -60,6 +60,7 @@ impl PairControlProjection {
     pub(crate) fn source_generation(self) -> u64 {
         self.source.generation
     }
+    #[cfg(test)]
     pub(crate) fn transport_intent(self) -> u64 {
         self.transport_intent
     }

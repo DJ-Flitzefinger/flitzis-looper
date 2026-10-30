@@ -1,6 +1,7 @@
 //! One native selected-content projection for GUI and the serialized MIDI dispatcher.
 
 use super::{InputRuntime, RuntimePadState, RuntimeState};
+#[cfg(test)]
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::content_placement::{ContentKey, PlacementObservation};
 use crate::audio_engine::input_runtime_binding::{
@@ -848,6 +849,7 @@ impl InputRuntime {
         Ok((state.selection_revision, slot))
     }
 
+    #[cfg(test)]
     pub(crate) fn pitch_request_sequence(&self, id: usize) -> Result<u64, PitchActionReject> {
         let state = self
             .runtime_state

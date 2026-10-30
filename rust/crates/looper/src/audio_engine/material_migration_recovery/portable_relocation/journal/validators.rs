@@ -413,7 +413,7 @@ fn stem_cache(value: &Value) -> io::Result<()> {
 }
 
 pub(super) fn slot(value: &Value) -> io::Result<()> {
-    let mut keys: Vec<&str> = CONTENT.iter().map(|(key, _)| *key).collect();
+    let keys: Vec<&str> = CONTENT.iter().map(|(key, _)| *key).collect();
     exact_keys(value, &keys)?;
     if value["source_path"].is_null() != value["source_identity"].is_null()
         || !value["source_path"].is_null() && !text(&value["source_path"])

@@ -763,6 +763,7 @@ impl InputRuntimeOwnership {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_source_write(
         self: &Arc<Self>,
         prepared: &super::content_placement::PreparedSlotWrite,
@@ -1707,6 +1708,7 @@ impl InputRuntimeOwnership {
             && self.launch_revision(id) == revision
     }
 
+    #[cfg(test)]
     pub(super) fn migration_hold(&self, id: usize) -> u64 {
         self.slot_snapshot(id).map_or(u64::MAX, |snapshot| {
             self.migration_holds[snapshot.cell().index()].load(Ordering::Acquire)

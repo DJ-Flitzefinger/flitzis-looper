@@ -184,7 +184,7 @@ impl RtMixer {
         if let Some(previous) = coordinator.pending.take() {
             self.finish_global_rate(previous, RateError::Superseded);
         }
-        let mut pending = PendingRate {
+        let pending = PendingRate {
             revision,
             requested: coordinator.requested,
             previous: self.effective_global_rate(),
@@ -305,6 +305,7 @@ impl RtMixer {
         Ok(false)
     }
 
+    #[cfg(test)]
     fn rate_hold_active_for_key(&self, key: ContentKey) -> bool {
         self.hold_actions[key.cell().index()]
             .as_ref()
@@ -379,12 +380,6 @@ impl RtMixer {
                         false,
                     )
             })
-    }
-
-    pub(super) fn global_rate_pending(&self) -> bool {
-        self.global_rate
-            .as_ref()
-            .is_none_or(|coordinator| coordinator.pending.is_some())
     }
 
     /// Shared fixed participant capture. This does not request work or change a
@@ -1045,6 +1040,7 @@ impl RtMixer {
 
     /// Legacy global edits have no separately held complete rate tuple. Refuse both
     /// pending effects instead of refreshing an old captured fence or applying half.
+    #[cfg(test)]
     pub(crate) fn refuse_legacy_global_rate_if_pending(&mut self) -> bool {
         let Some(mut coordinator) = self.global_rate.take() else {
             return false;

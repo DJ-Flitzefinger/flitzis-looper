@@ -650,6 +650,7 @@ pub(super) fn enqueue_current_prepared_stems(
     enqueue_prepared_stems(engine, producer, ticket, source_version, stems, None)
 }
 
+#[cfg(test)]
 pub(super) fn enqueue_current_prepared_stems_with_owner(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,

@@ -32,6 +32,7 @@ pub(super) fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
     Ok(count.0)
 }
 
+#[cfg(test)]
 pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>, String> {
     let length = encoded_len(value)?;
     let mut bytes = Vec::new();

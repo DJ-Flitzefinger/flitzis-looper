@@ -46,7 +46,8 @@ struct PadStartOwner {
     volume: f32,
     exclusive: bool,
     explicit_choice: AtomicBool,
-    received_at_ns: u64,
+    // Retained original capture metadata, observed by launch regressions.
+    _received_at_ns: u64,
     sequence: u64,
     input_owners: InputOwners,
     work: Mutex<Option<Box<OrdinaryStartWork>>>,
@@ -275,7 +276,7 @@ impl CapturedPadStart {
                 volume,
                 exclusive,
                 explicit_choice: AtomicBool::new(true),
-                received_at_ns,
+                _received_at_ns: received_at_ns,
                 sequence,
                 input_owners,
                 work: Mutex::new(Some(work)),
@@ -336,8 +337,9 @@ impl CapturedPadStart {
     pub(crate) fn loop_region(&self) -> (f64, Option<f64>) {
         (self.owner.loop_start_s, self.owner.loop_end_s)
     }
+    #[cfg(test)]
     pub(crate) fn received_timestamp(&self) -> u64 {
-        self.owner.received_at_ns
+        self.owner._received_at_ns
     }
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.owner, &other.owner)

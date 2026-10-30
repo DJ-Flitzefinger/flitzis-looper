@@ -325,7 +325,8 @@ pub(crate) struct PitchActionAdmission {
 
 struct PitchActionOwner {
     start_policy: Option<KeyLockStartLease>,
-    key_lock_request: u64,
+    // Keep original admission metadata alongside its retained owner.
+    _key_lock_request: u64,
     admission: PitchActionAdmission,
     sequence: u64,
     source_generation: u64,
@@ -423,9 +424,6 @@ pub(crate) struct PitchActionGuard {
 }
 
 impl CapturedPitchAction {
-    pub(crate) fn key_lock_request(&self) -> u64 {
-        self.owner.key_lock_request
-    }
     pub(crate) fn capture(admission: PitchActionAdmission) -> Result<Self, PitchActionReject> {
         let id = admission
             .binding
@@ -468,7 +466,7 @@ impl CapturedPitchAction {
         };
         let action = Self {
             owner: Arc::new(PitchActionOwner {
-                key_lock_request: admission.key_lock_request,
+                _key_lock_request: admission.key_lock_request,
                 start_policy,
                 admission,
                 sequence,
@@ -927,6 +925,7 @@ impl CapturedPitchAction {
 pub(crate) enum PitchActionPreparationMode {
     #[default]
     Endpoint,
+    #[cfg(test)]
     ForwardHistory,
 }
 
@@ -1090,6 +1089,7 @@ impl PitchActionWork {
     /// Caller selects the history interpretation before capture using actual mixer
     /// source coordinates. ForwardHistory starts at E minus the existing warm history;
     /// Endpoint owns the desired E/start coordinate and requires its proved history.
+    #[cfg(test)]
     pub(crate) fn set_preparation_mode(
         &mut self,
         mode: PitchActionPreparationMode,
@@ -1317,7 +1317,7 @@ impl PitchActionWork {
     /// Worker-only native reset/warm/read/allocate; each action retains its own tuple and epoch.
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
         self.action.preparation_guard(self.own_window)?;
-        if let Some((endpoint, dsp)) = self.late_replan.take() {
+        if let Some((_endpoint, dsp)) = self.late_replan.take() {
             let mut request = self
                 .request
                 .take()
@@ -1426,6 +1426,7 @@ impl PitchActionWork {
                         )
                     }
                 }
+                #[cfg(test)]
                 PitchActionPreparationMode::ForwardHistory => candidate.prepare_source(request),
             }
             .map_err(|_| PitchActionReject::PreparationFailed)?;

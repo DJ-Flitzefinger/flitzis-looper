@@ -60,7 +60,8 @@ impl PreparedActionWork {
 pub(crate) struct PitchActionPreparation {
     requests: Producer<PreparedActionWork>,
     ready: Consumer<PreparedActionWork>,
-    retirement: Producer<PreparedActionWork>,
+    // Keep this producer alive for the worker's retirement lane in every build.
+    _retirement: Producer<PreparedActionWork>,
     endpoint_requests: Producer<Box<EndpointReserveWork>>,
     endpoint_ready: Consumer<Box<EndpointReserveWork>>,
 }
@@ -165,7 +166,7 @@ impl PitchActionPreparation {
             Self {
                 requests,
                 ready,
-                retirement,
+                _retirement: retirement,
                 endpoint_requests,
                 endpoint_ready,
             },
@@ -226,14 +227,15 @@ impl PitchActionPreparation {
         self.ready.pop().ok()
     }
 
+    #[cfg(test)]
     pub(crate) fn retire_prepared(&mut self, work: &mut Option<PreparedActionWork>) -> bool {
-        if self.retirement.slots() == 0 {
+        if self._retirement.slots() == 0 {
             return false;
         }
         let Some(value) = work.take() else {
             return true;
         };
-        match self.retirement.push(value) {
+        match self._retirement.push(value) {
             Ok(()) => true,
             Err(PushError::Full(value)) => {
                 *work = Some(value);

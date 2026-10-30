@@ -59,15 +59,12 @@ impl TransportBeatProjection {
         self.master_period_seconds
     }
 
+    #[cfg(test)]
     pub(crate) fn frames_per_beat(self) -> f64 {
         f64::from(self.sample_rate_hz) * self.master_period_seconds
     }
 
-    /// Original immutable addend, for exact structural grid qualification only.
-    pub(crate) fn original_beat_anchor(self) -> f64 {
-        self.beat_anchor_position
-    }
-
+    #[cfg(test)]
     pub(crate) fn beat_position_at_frame(self, output_frame: u64) -> f64 {
         self.beat_anchor_position
             + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()
@@ -78,6 +75,7 @@ impl TransportBeatProjection {
     /// is nondecreasing, including its u64-to-f64 plateaus. Finite ordered
     /// endpoints therefore bound every interior evaluation. Do not reassociate
     /// the expression: intermediate overflow is part of the existing clock.
+    #[cfg(test)]
     pub(crate) fn finite_beats_for_horizon(self, first: u64, last: u64) -> Option<(f64, f64)> {
         let frames_per_beat = self.frames_per_beat();
         if first > last
@@ -466,6 +464,7 @@ impl TransportTimeline {
 
     /// Compare the frozen beat projection, independently of callback progress or bootstrap UI.
     /// A copied projection is data from this same authority, never another transport clock.
+    #[cfg(test)]
     pub(crate) fn matches_clock_epoch(&self, other: &Self) -> bool {
         self.sample_rate_hz == other.sample_rate_hz
             && self.phase_generation == other.phase_generation

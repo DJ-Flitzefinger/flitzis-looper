@@ -498,6 +498,7 @@ impl PadPairRtWork {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn kind(&self) -> PairPlacementKind {
         self.prepared.kind()
     }
@@ -506,6 +507,7 @@ impl PadPairRtWork {
 pub(crate) mod control;
 pub(crate) mod recovery;
 pub use control::{CapturedPadPair, PadPairAcknowledgement, PadPairTicket};
+#[cfg(test)]
 pub(crate) use control::{cancel, capture, prepare, publish, reconcile};
 
 #[cfg(test)]

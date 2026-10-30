@@ -11,7 +11,8 @@ pub(in crate::audio_engine) struct CapturedPairRuntime {
 }
 
 pub(in crate::audio_engine) struct PreparedPairRuntimeMirror<'a> {
-    ownership: Arc<super::InputRuntimeOwnership>,
+    // Retain the source owner until the prepared mirror and its lock retire.
+    _ownership: Arc<super::InputRuntimeOwnership>,
     state: MutexGuard<'a, RuntimeState>,
     original: [SlotSnapshot; 2],
     after: [SlotSnapshot; 2],
@@ -84,7 +85,7 @@ impl InputRuntime {
             }
         }
         let prepared = PreparedPairRuntimeMirror {
-            ownership: self.ownership.clone(),
+            _ownership: self.ownership.clone(),
             state,
             original: captured.original,
             after,

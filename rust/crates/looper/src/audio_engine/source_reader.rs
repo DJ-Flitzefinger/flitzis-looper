@@ -123,18 +123,6 @@ impl PartialEq for SourceLoopDomain {
 }
 
 impl SourceLoopDomain {
-    pub(crate) fn is_valid(self) -> bool {
-        if self.region.start >= self.region.end || self.region.end > self.sample_frames {
-            return false;
-        }
-        match self.musical_period {
-            SourceReaderPeriod::Physical => true,
-            SourceReaderPeriod::ScalarMusical(bits) => {
-                Self::musical(self.sample_frames, self.region, f64::from_bits(bits)).is_some()
-            }
-        }
-    }
-
     /// Canonicalize an already owned normal virtual source phase in this domain.
     /// Callers separately guard source, physical geometry and timing ownership;
     /// this projection alone never authorizes native/filter-history continuation.
@@ -337,14 +325,6 @@ pub(crate) struct StemRenderSelection {
 }
 
 impl StemRenderSelection {
-    /// Scalar diagnostic description only; never permission to read a stem set.
-    pub(crate) fn diagnostic_fields(self) -> (u64, u64, u64) {
-        (
-            u64::from(self.mode == StemMixMode::AllStems),
-            self.source_version_hash,
-            u64::from(self.enabled_mask),
-        )
-    }
     pub(crate) fn required_stem_hash(self) -> Option<u64> {
         (self.mode == StemMixMode::AllStems).then_some(self.source_version_hash)
     }
@@ -528,6 +508,7 @@ impl StemTransition {
         self.gains_at_elapsed(self.elapsed_at_output_offset(frames, ratio))
     }
 
+    #[cfg(test)]
     fn gains_at(self, frame_offset: f64) -> (f32, f32) {
         self.gains_at_elapsed(self.elapsed_frames() + frame_offset)
     }
@@ -760,18 +741,6 @@ impl SourceReadPlan {
             region: self.loop_region,
             musical_period: self.loop_period,
         }
-    }
-
-    /// Change only the explicit reader circle, retaining the same physical PCM
-    /// and selection. Adoption still proves canonical phase and first taps.
-    pub(crate) fn with_effective_domain(self, domain: SourceLoopDomain) -> Option<Self> {
-        (self.sample_frames == domain.sample_frames
-            && self.loop_region == domain.region
-            && domain.is_valid())
-        .then_some(Self {
-            loop_period: domain.musical_period,
-            ..self
-        })
     }
 
     /// Compare actual source addressing and selection, including an unfinished transition.
@@ -1210,6 +1179,7 @@ impl SourceReadPlan {
 
     /// The bounded live-policy preflight uses this same interpolation path after
     /// validating coverage. It does not record a productive source-read receipt.
+    #[cfg(test)]
     pub(crate) fn try_sample_fractional_with_readers(
         self,
         sample: &SampleBuffer,

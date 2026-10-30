@@ -178,6 +178,7 @@ impl NativeHoldAction {
         self.key
     }
 
+    #[cfg(test)]
     pub(crate) fn captured(&self) -> SlotSnapshot {
         self.captured
     }

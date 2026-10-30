@@ -10,7 +10,9 @@ use crate::audio_engine::pitch_actions::{
     FrozenPitchRender, PitchActionGuard, PitchActionPreparationMode, PitchActionReject,
     PitchActionVariant, PitchActionWork,
 };
-use crate::audio_engine::prepared_native_history::{NativeHistoryRequest, PREPARED_HISTORY_FRAMES};
+use crate::audio_engine::prepared_native_history::NativeHistoryRequest;
+#[cfg(test)]
+use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::prepared_source_feed::EndpointResetHistory;
 use crate::audio_engine::source_control_epoch::{SourceControlBirth, SourceControlEpoch};
 use crate::messages::AudioMessage;
@@ -78,7 +80,7 @@ impl RtMixer {
         work: &mut PitchActionWork,
         execution: u64,
         callback: u64,
-        timeline: Option<super::super::transport::TransportTimeline>,
+        _timeline: Option<super::super::transport::TransportTimeline>,
     ) -> Result<(), PitchActionReject> {
         let guard = self.pitch_action_guard(work)?;
         let origin = work
@@ -353,6 +355,7 @@ impl RtMixer {
                 }
                 let project_to = match work.preparation_mode() {
                     PitchActionPreparationMode::Endpoint => execution_frame,
+                    #[cfg(test)]
                     PitchActionPreparationMode::ForwardHistory => {
                         if snapshot.paused {
                             return Err(PitchActionReject::PreparationFailed);

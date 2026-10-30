@@ -448,7 +448,7 @@ impl OrdinaryStartWork {
             self.attack_measurement = None;
             self.request = Some(request);
         }
-        let mut request = self
+        let request = self
             .request
             .take()
             .ok_or(PitchActionReject::PreparedMismatch)?;

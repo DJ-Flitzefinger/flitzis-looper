@@ -136,6 +136,7 @@ pub(in crate::audio_engine) struct BeatThisRawData {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub(in crate::audio_engine) struct Envelope {
     schema_version: u32,
     encoding: String,
@@ -229,9 +230,6 @@ impl BeatThisRawData {
             .expect("validated complete Beat This predictions")
     }
 
-    pub(super) fn model(&self) -> Value {
-        serde_json::to_value(&self.request.model).expect("typed model")
-    }
     pub(in crate::audio_engine) fn execution(&self) -> Option<Value> {
         // This method is used only after validate(). The legacy known worker is
         // CPU-only and explicitly places its model/input on CPU. Derive a NEW
@@ -249,37 +247,9 @@ impl BeatThisRawData {
                 .map(|receipt| serde_json::to_value(receipt).expect("typed execution receipt"))
         }
     }
-    pub(super) fn frontend(&self) -> &str {
-        &self.request.model.frontend_id
-    }
-    pub(super) fn code_revision(&self) -> &str {
-        &self.code_revision
-    }
     pub(in crate::audio_engine) fn decoder_identity(&self) -> &str {
         &self.source.decoder_identity
     }
-    pub(in crate::audio_engine) fn source_descriptor(&self) -> &Value {
-        &self.source.source_descriptor
-    }
-    pub(in crate::audio_engine) fn event_count(&self) -> usize {
-        self.predictions().beat_seconds.len()
-    }
-
-    pub(in crate::audio_engine) fn observation_seconds(&self, index: usize) -> Option<f64> {
-        self.predictions().beat_seconds.get(index).copied()
-    }
-
-    pub(in crate::audio_engine) fn capture_revision(&self) -> &str {
-        &self.raw_revision
-    }
-
-    pub(in crate::audio_engine) fn observation_downbeat(&self, seconds: f64) -> bool {
-        self.predictions()
-            .downbeat_seconds
-            .binary_search_by(|value| value.total_cmp(&seconds))
-            .is_ok()
-    }
-
     fn validate(&self) -> Result<(), String> {
         validate_source_descriptor(
             &self.source.source_descriptor,
@@ -450,6 +420,7 @@ impl BeatThisRawData {
             .ok_or_else(|| "capture_encoding_budget_overflow".into())
     }
 
+    #[cfg(test)]
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
         if !codec::digest(&self.raw_revision)
@@ -460,15 +431,7 @@ impl BeatThisRawData {
         codec::encode(&self.envelope())
     }
 
-    pub(in crate::audio_engine) fn embedded_value(&self) -> Result<Value, String> {
-        self.validate()?;
-        if codec::revision(ENCODING, self)? != self.raw_revision {
-            return Err("Beat This capture revision differs".into());
-        }
-        self.encoded_len()?;
-        serde_json::to_value(self.envelope()).map_err(|e| e.to_string())
-    }
-
+    #[cfg(test)]
     pub(super) fn decode(input: &[u8]) -> Result<Self, String> {
         if input.is_empty() || input.len() > MAX_RAW_BYTES {
             return Err("Beat This raw byte limit".into());
@@ -482,6 +445,7 @@ impl BeatThisRawData {
     }
 }
 
+#[cfg(test)]
 impl Envelope {
     pub(in crate::audio_engine) fn validate(&mut self) -> Result<&BeatThisRawData, String> {
         if self.schema_version != 2 || self.encoding != ENCODING {

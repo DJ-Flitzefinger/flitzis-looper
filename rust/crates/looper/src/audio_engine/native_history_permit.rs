@@ -30,6 +30,7 @@ pub(crate) struct NativeSourceAdmission {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg(test)]
 pub(crate) struct NativeSourceAdmissionIdentity {
     id: usize,
     binding: InputPadBinding,
@@ -38,6 +39,7 @@ pub(crate) struct NativeSourceAdmissionIdentity {
 
 /// Staged from an original current permit, activated only by its complete birth claim.
 /// Pending preparation epochs are deliberately not the lifetime of an admitted voice.
+#[cfg(test)]
 pub(crate) struct EffectiveNativeVoice {
     admission: NativeSourceAdmissionIdentity,
     lifetime: Arc<AtomicU64>,
@@ -46,6 +48,7 @@ pub(crate) struct EffectiveNativeVoice {
     generation: u64,
 }
 
+#[cfg(test)]
 impl EffectiveNativeVoice {
     pub(crate) fn claim_current(
         &self,
@@ -278,14 +281,6 @@ impl NativeHistoryContext<'_> {
 }
 
 impl NativeSourceAdmission {
-    /// Comparison only; the original admitted voice retains the actual authority.
-    pub(crate) fn retry_identity(&self) -> NativeSourceAdmissionIdentity {
-        NativeSourceAdmissionIdentity {
-            id: self.id,
-            binding: self.binding,
-            source_generation: self.source_generation,
-        }
-    }
     pub(crate) fn content_key(&self) -> Option<super::content_placement::ContentKey> {
         self.binding
             .placement
@@ -353,6 +348,7 @@ impl NativeVoiceHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    #[cfg(test)]
     pub(crate) fn stage_effective_voice(
         &self,
         sample: &SampleBuffer,

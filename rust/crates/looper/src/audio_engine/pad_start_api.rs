@@ -205,6 +205,7 @@ impl AudioEngine {
     }
 
     // Existing Rust callers have no independently retained controller dependency.
+    #[cfg(test)]
     pub(super) fn prepare_captured_pad_start(
         &self,
         captured: &CapturedPadStart,

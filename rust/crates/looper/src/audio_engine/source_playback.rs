@@ -59,6 +59,7 @@ impl SourcePlayback {
         &mut self.clock
     }
     /// Historical (phase generation, original output frame, master beat).
+    #[cfg(test)]
     pub(crate) fn diagnostic_launch_reference(&self) -> Option<(u64, u64, f64)> {
         self.phase_reference.parts()
     }
@@ -86,6 +87,7 @@ impl SourcePlayback {
         };
     }
 
+    #[cfg(test)]
     pub(crate) fn phase_reference_current(
         &self,
         timeline: &super::transport::TransportTimeline,
@@ -111,15 +113,6 @@ impl SourcePlayback {
         {
             self.phase_reference = self.phase_reference.rebind_birth(previous, next, frame);
         }
-    }
-
-    /// Even captured actual-M coordinates are not a constant-rate scalar history.
-    pub(crate) fn has_constant_scalar_trajectory(&self) -> bool {
-        self.glide().ratio.to_bits() == self.glide().target.to_bits()
-    }
-
-    pub(crate) fn effective_domain(&self) -> Option<SourceLoopDomain> {
-        self.domain
     }
 
     fn is_pair_scalar(&self) -> bool {
@@ -812,12 +805,6 @@ fn valid_musical_pair(position: FractionalSourcePosition, domain: SourceLoopDoma
             position.fraction,
             period,
         )
-}
-
-fn same_position(left: FractionalSourcePosition, right: FractionalSourcePosition) -> bool {
-    left.frame == right.frame
-        && left.fraction.to_bits() == right.fraction.to_bits()
-        && left.seek_mode == right.seek_mode
 }
 
 fn checked_ratio(ratio: f64) -> f64 {

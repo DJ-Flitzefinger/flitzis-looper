@@ -312,7 +312,7 @@ impl RtMixer {
         work: &OrdinaryStartWork,
         execution: u64,
         callback: u64,
-        timeline: Option<super::super::transport::TransportTimeline>,
+        _timeline: Option<super::super::transport::TransportTimeline>,
     ) -> Result<
         (
             SourceReadCheckpoint,

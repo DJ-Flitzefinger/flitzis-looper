@@ -1871,11 +1871,11 @@ fn replay_seed(
     if coarse_margin(&seed, screening).is_none() {
         return Ok(Visit::Continue);
     }
-    let Some(index) = retain_seed(discovery, seed) else {
+    let Some(_index) = retain_seed(discovery, seed) else {
         return Ok(Visit::Limited);
     };
     #[cfg(test)]
-    tests::observe_search_stage("replay_witness", Some(index));
+    tests::observe_search_stage("replay_witness", Some(_index));
     if !search_attempt(
         beats,
         duration,
@@ -2066,11 +2066,11 @@ fn cover_alias(
         {
             return Ok(Visit::Continue);
         }
-        let Some(index) = retain_seed(discovery, seed) else {
+        let Some(_index) = retain_seed(discovery, seed) else {
             return Ok(Visit::Limited);
         };
         #[cfg(test)]
-        tests::observe_search_stage("period_rival", Some(index));
+        tests::observe_search_stage("period_rival", Some(_index));
         if !search_attempt(
             beats,
             duration,
@@ -2318,7 +2318,7 @@ fn evaluate_control(
     let canonical = copy_summary(&pool[winner_index])?;
     evidence.candidate_limit_reached = discovery.limited;
     let mut harmonics = allocate(2)?;
-    for (side, factor) in [0.5, 2.0].into_iter().enumerate() {
+    for (_side, factor) in [0.5, 2.0].into_iter().enumerate() {
         let period = canonical.period_seconds * factor;
         let mut declared = PeriodHarmonic {
             factor,
@@ -2332,7 +2332,7 @@ fn evaluate_control(
             let fitted = fit_control(beats, duration, period, canonical.anchor_seconds, control);
             #[cfg(test)]
             tests::observe_harmonic_fit(
-                side,
+                _side,
                 period,
                 canonical.anchor_seconds,
                 Some(evidence.evaluated_candidate_count),
@@ -2353,7 +2353,7 @@ fn evaluate_control(
             }
         } else {
             #[cfg(test)]
-            tests::observe_harmonic_fit(side, period, canonical.anchor_seconds, None, None);
+            tests::observe_harmonic_fit(_side, period, canonical.anchor_seconds, None, None);
         }
         harmonics.push(declared);
     }

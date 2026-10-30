@@ -2701,12 +2701,6 @@ pub(super) fn process_control_message<
             if let Some(sample) = pending_sample {
                 retirement.retire_sample(sample);
             }
-            if result.is_ok()
-                && let Some(target) = target
-            {
-                // Source-load telemetry is valid only after its callback-source
-                // ACK. A stopped replacement has no voice render to refresh it.
-            }
             drop(ownership);
             retirement.retire_source_publication(publication);
         }
@@ -3362,7 +3356,7 @@ pub(super) fn create_stream_mixer(
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<Box<RtMixer>, super::key_lock_preparation::KeyLockPreparationError> {
     let policy = input_runtime_ownership.key_lock_start_policy.clone();
-    let mut mixer = RtMixer::try_new(
+    let mixer = RtMixer::try_new(
         channels,
         sample_rate_hz as f32,
         Some((

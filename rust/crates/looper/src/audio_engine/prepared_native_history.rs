@@ -831,6 +831,7 @@ impl NativeAdapterState {
     }
 
     /// Native reset, initial pitch setup, source catch-up and old pin destruction are worker-only.
+    #[cfg(test)]
     pub(crate) fn prepare_source(
         &mut self,
         request: NativeHistoryRequest,
@@ -905,15 +906,6 @@ impl NativeAdapterState {
             NativeStartHistoryContext::PhysicalBirth,
         )
         .map_err(NativeSourcePreparationError::into_backend)
-    }
-
-    /// Worker-only: consume the original launch's missed suffix without a new reset origin.
-    pub(crate) fn prepare_source_at_endpoint_with_launch_catchup(
-        &mut self,
-        request: NativeHistoryRequest,
-        catchup_frames: u64,
-    ) -> Result<(), RubberBandError> {
-        self.prepare_source_at_endpoint_with_launch_catchup_and_dsp(request, catchup_frames, None)
     }
 
     pub(crate) fn prepare_source_at_endpoint_with_launch_catchup_and_dsp(

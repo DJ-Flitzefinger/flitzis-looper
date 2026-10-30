@@ -278,6 +278,7 @@ impl Drop for GlobalTimingLease<'_> {
 }
 
 /// Reserve capacity before publishing a global timing edit's revocation fence.
+#[cfg(test)]
 fn push_global_timing_message<T>(
     revision: &AtomicU64,
     publishing: &AtomicBool,
@@ -592,6 +593,7 @@ impl<'a> PadRequestAdvance<'a> {
     }
 }
 
+#[cfg(test)]
 fn next_pad_request_id(
     pad_request_ids: &Arc<Mutex<Vec<u64>>>,
     id: usize,
