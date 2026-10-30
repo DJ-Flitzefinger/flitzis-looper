@@ -43,18 +43,18 @@ The public complete-source Play and unchanged ALL STEMS return block now has its
 own bounded actual controller/callback proof, independent audio/reader oracles,
 affected integration and private Release/API receipts. It corrects reproduced
 complete ON classification through the shared physical selection policy. The
-[public complete report](../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
+[public complete report](../../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
 keeps final review disposition and full parent/music/resource/Human gates separate.
 
-The subsequent [public active ON-to-OFF proof](../../../docs/pcm-cache-residency.md#public-active-key-lock-on-to-off--2026-10-13)
+The subsequent [public active ON-to-OFF proof](../../../../docs/pcm-cache-residency.md#public-active-key-lock-on-to-off--2026-10-13)
 connects actual public-born ON, public pad OFF, own feedback, independent dry
 audio and mode-specific reader retirement for running/paused FullMix and ALL
 representatives. It changes only test/specification evidence; integration and
 final review disposition remain in that report, with wider gates separate.
 
-The [public GLOBAL multi-voice proof](../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) composes actual inherited running/paused targets with independently audible explicit ON/OFF peers, own acknowledgements and raw-Native/dry/EQ/history references. Target-local reserve admission failure and stale supersession retain usable audio; actual retirement frees obsolete mode views while current own PCM remains used. Cross-pad shared PCM was not observed and remains a separate coverage case. This finite one-frame test/specification block leaves wider domains and final Human gates open.
+The [public GLOBAL multi-voice proof](../../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) composes actual inherited running/paused targets with independently audible explicit ON/OFF peers, own acknowledgements and raw-Native/dry/EQ/history references. Target-local reserve admission failure and stale supersession retain usable audio; actual retirement frees obsolete mode views while current own PCM remains used. Cross-pad shared PCM was not observed and remains a separate coverage case. This finite one-frame test/specification block leaves wider domains and final Human gates open.
 
-The separate [public complete Restore sharing proof](../../../docs/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) supplies unconditional cross-pad PCM identity, independent actual public GLOBAL audio and actual final-reader release through one fresh public Restore. Existing OFF saved-hint classification is preserved; START and GLOBAL OFF contexts are observed at their own anchors. This adds only bounded test/specification evidence and leaves public Copy/ReArrange, ALL, finite sharing and full musical/resource/Human requirements open.
+The separate [public complete Restore sharing proof](../../../../docs/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) supplies unconditional cross-pad PCM identity, independent actual public GLOBAL audio and actual final-reader release through one fresh public Restore. Existing OFF saved-hint classification is preserved; START and GLOBAL OFF contexts are observed at their own anchors. This adds only bounded test/specification evidence and leaves public Copy/ReArrange, ALL, finite sharing and full musical/resource/Human requirements open.
 
 P0 is the historical published plan. R0 revises its incompatible physical topology
 after independent bounded P0 and complete C1 plan acceptance; R0's separate native
@@ -103,6 +103,6 @@ define the serial implementation and acceptance boundaries.
 
 ## Direct Human extension 2026-10-11 — PLAN_ONLY
 
-The [bounded extension](../../../docs/pre-rust-extension-20261011.md) adds all E11-01..20 without reopening completed historical subtasks or accepting unimplemented behavior. It supersedes the opaque material root with `samples/<Originalfilename>/<Originalfilename>`, stems/ and .pcm-cache/; hidden full-content SHA identity and immutable generations remain. It supersedes total-extent 1-GiB rejection with bounded streaming conversion/full warm verification, preserving separate scratch/live/analysis limits. Offline generation during playback is separated from verified disk commit and independently guarded active adoption; existing runtime guards are unchanged by this plan. Companion changes extend-shared-stem-generation, refine-loop-editor-performance-actions and add-live-mix-recording own new stem/UI/recording behavior.
+The [bounded extension](../../../../docs/pre-rust-extension-20261011.md) adds all E11-01..20 without reopening completed historical subtasks or accepting unimplemented behavior. It supersedes the opaque material root with `samples/<Originalfilename>/<Originalfilename>`, stems/ and .pcm-cache/; hidden full-content SHA identity and immutable generations remain. It supersedes total-extent 1-GiB rejection with bounded streaming conversion/full warm verification, preserving separate scratch/live/analysis limits. Offline generation during playback is separated from verified disk commit and independently guarded active adoption; existing runtime guards are unchanged by this plan. Companion changes extend-shared-stem-generation, refine-loop-editor-performance-actions and add-live-mix-recording own new stem/UI/recording behavior.
 
 X11-KEYLOCK is the prioritized bounded production k=0 fixed NormalLoop correction built on accepted vertical and lifecycle proofs, not whole P4b/B5 acceptance. Full scope, original 38 IDs/48 edges, 169 rows, 56+9 and HC01..26 remain; additive DAG and actual gates are in the maintained program/coverage. No product implementation, runtime acceptance or full Rust-port planning is part of X11-PLAN.

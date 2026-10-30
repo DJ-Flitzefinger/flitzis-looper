@@ -730,7 +730,7 @@ Stretch/Linear headers behind a small exclusive C ABI owner; normal builds do
 not compile its C++ module. Existing source progression, Native history, public
 APIs and admission remain authoritative. The bounded prerequisite and its
 evidence limits are specified in
-[`probe-signalsmith-canonical-pitch`](../openspec/changes/probe-signalsmith-canonical-pitch/design.md).
+[`probe-signalsmith-canonical-pitch`](../openspec/changes/archive/2026-10-30-probe-signalsmith-canonical-pitch/design.md).
 
 Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 

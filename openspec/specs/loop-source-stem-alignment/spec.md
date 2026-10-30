@@ -2,7 +2,8 @@
 
 ## Purpose
 
-<!-- Purpose to be updated after merge -->
+Define ordinary output scheduling, physical loop bounds, fractional musical source
+trajectories and aligned prepared-stem transitions under one source-reader authority.
 
 ## Requirements
 
@@ -27,8 +28,14 @@ loaded full-mix buffer or aligned prepared-stem buffers.
 The system SHALL resolve published loop regions to bounded half-open source-frame ranges before
 audio rendering.
 
-Python MAY persist editable loop intent in seconds, but live Rust playback SHALL use integer
-source-frame positions at the mixer sample rate. If a published loop end is missing, invalid, or
+Python MAY persist editable loop intent in seconds. Physical PCM endpoints SHALL use bounded
+integer frames at the mixer sample rate; the live source trajectory MAY advance fractionally.
+An admitted scalar musical loop period SHALL retain its binary64 fractional period independently
+of the integer physical span. Safe interpolation SHALL join the final admitted PCM knot to
+loop start at that period without reading beyond admitted PCM or substituting physical-span /
+musical-period scaling for the authoritative playback rate. Full mix, same-source stems and
+transition sides SHALL share that trajectory and its prepared-domain identity.
+If a published loop end is missing, invalid, or
 past the loaded source, Rust SHALL fall back to the full sample end. If the resolved end is not
 after the start, Rust SHALL fall back to a valid full-sample loop for rendering.
 
@@ -72,16 +79,14 @@ restart active voices or alter their source-frame playheads.
 
 
 <!-- From clarify-loop-source-stem-alignment -->
-### Requirement: Click-Free Transition Work Is Deferred And Bounded
-The system SHALL defer click-free loop and stem transitions to a later bounded Rust-side
-transition stage before new DSP/FX are added.
+### Requirement: Transition Scope Remains Bounded
+Existing stem mode/mask transitions SHALL use preallocated Rust-owned state and bounded scalar
+parameters as specified below. They SHALL NOT authorize live loop-edit crossfades, a new DSP
+effect or plugin host. No neural inference, disk I/O, logging, blocking wait, heap allocation
+or Python/GIL access SHALL run in the audio callback.
 
-The current Stage-6 clarification SHALL NOT add a new DSP effect, plugin host, neural inference,
-disk I/O, logging, blocking wait, heap allocation, or Python/GIL access to the audio callback.
-Future transition smoothing SHALL use preallocated Rust-owned state and bounded scalar parameters.
-
-#### Scenario: Stage-6 clarification does not add DSP work
-- **GIVEN** the Stage-6 alignment clarification is applied
+#### Scenario: Alignment preserves the existing rendering path
+- **GIVEN** ordinary full-mix or prepared-stem playback
 - **WHEN** the audio callback renders pads
 - **THEN** it continues to use the existing source reader, loop wrap, prepared-stem selection,
   playback-rate, Key Lock, gain/EQ, metering, and telemetry path

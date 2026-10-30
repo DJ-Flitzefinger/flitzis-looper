@@ -29,8 +29,8 @@ K-META now implements only the pure durable key policy and source/request-bound
 metadata lifecycle. Its saved numeric shifts are neutral intent; they issue no
 audible pitch or retrigger command and add no new GUI or MIDI action.
 
-R0 introduced the contract revision. The [extended program](../../../docs/pad-owned-pcm-program.md)
-and [coverage](../../../docs/pre-rust-program-coverage.json) own all56+9/seven groups,
+R0 introduced the contract revision. The [extended program](../../../../docs/pad-owned-pcm-program.md)
+and [coverage](../../../../docs/pre-rust-program-coverage.json) own all56+9/seven groups,
 38 IDs/48 edges. K-META supplies neutral policy/storage; B5 expanded diagnostics,
 B6-K-AUDIO/B7-K-ATOMIC native ownership/events; K1a/b guarded controls; V0 combined
 software; H-LIVE/SLICE7/H-FINAL/C-FINAL real final gates. R0-CLOSURE precedes J0/P1.

@@ -422,7 +422,7 @@ The 1024-record limit, real exhaustion rejection and all216 readiness/edit/outpu
 obligations remain unchanged; no live owner is evicted to admit another window.
 
 The current saved physical NormalLoop implementation and test plan are recorded in
-[the bounded report](../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
+[the bounded report](../../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
 Its four public histories combine inherited or explicit ON with public SPEED or
 manual source BPM plus display target deriving nonunity SPEED. Neither variant
 asserts BPM-lock admission or accepted-musical timing. Cold/fresh-warm/prepared
@@ -559,7 +559,7 @@ cold-job limits or the32-voice/96-handle pool.
 
 ## Acceptance and serial boundaries
 
-[Tasks](tasks.md) and [extended program](../../../docs/pad-owned-pcm-program.md)
+[Tasks](tasks.md) and [extended program](../../../../docs/pad-owned-pcm-program.md)
 own the unchanged38-ID/48-edge C1 order including R0-CLOSURE/J0/split P1-P2,
 K-META/R1-R5/V0 and genuine H-LIVE/H-FINAL. R2/R4 prove HC-01..HC-26 layout
 release integration; P6/V0 repeat its resource/pitch workload. All future cases stay OPEN. Each
@@ -686,7 +686,7 @@ verifier; there is no production-global exemption or neural/resource/music PASS.
 Current evidence and pending final gates are maintained in
 `docs/readable-material-validation.md`.
 
-Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.
+Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.
 
 ### Ordinary incoming Loader preparation
 

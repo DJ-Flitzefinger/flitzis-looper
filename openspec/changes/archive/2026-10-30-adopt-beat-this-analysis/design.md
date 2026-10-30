@@ -14,7 +14,7 @@ Both branches read the same loaded-rate mono without another decode. It leaves e
 and manual `analyze_sample` routing intact. JSON diagnostic envelopes are not adopted into saved
 analysis or manual grids. B1b adds explicit setup, an accepted final0 checksum, a separate
 locked Windows CPU environment and the pinned 22050-Hz reference frontend. See
-[setup](../../../docs/beat-this-setup.md) and [evidence](../../../docs/beat-this-reference-evidence.md).
+[setup](../../../../docs/beat-this-setup.md) and [evidence](../../../../docs/beat-this-reference-evidence.md).
 
 ## B2 independent reference and comparator preparation
 
@@ -33,7 +33,7 @@ session validation binds that order, reference and matching endpoints/workflow.
 Neither input validation nor sealing computes musical scores or supplies human
 observations. The workflow reads no candidate predictions during reference
 preparation/sealing, invokes no models and changes no routing/persistence/callback.
-See [reference input contract](../../../docs/beat-this-reference-inputs.md).
+See [reference input contract](../../../../docs/beat-this-reference-inputs.md).
 
 ### Corrected native QM provenance and engineering comparison
 
@@ -65,7 +65,7 @@ readers rehash artifacts and reject arbitrary self-hashed registrations,
 partial/ambiguous arrays, domain/identity errors, unsupported producers and
 invented finish claims. The selected original T01-T05 comparator chains remain
 distinct from every unchanged historical legacy/candidate result and failure.
-See [the contract](../../../docs/beat-this-corrected-legacy.md).
+See [the contract](../../../../docs/beat-this-corrected-legacy.md).
 
 An engineering evaluator retains complete approved comparator and candidate
 arrays and their identities while describing counts, extents and separately
@@ -98,7 +98,7 @@ promotion. This is offline Python only: no native/device/model operation or
 callback work. Human reference generation, musical acceptance and analyzer
 cutover remain non-goals; corrected legacy import has its separate contract
 above and BPM metadata has the separate bounded policy below. See
-[scoring workflow](../../../docs/beat-this-scoring-workflow.md).
+[scoring workflow](../../../../docs/beat-this-scoring-workflow.md).
 
 Fresh T01-T03 provenance uses an explicitly invoked test-only hardware-free native
 bridge: actual copy-first cold loading, finite resident-window ACK/command drain,
@@ -134,7 +134,7 @@ the adopted full-track model input or replacing immutable raw predictions.
 An intro/outro cause for the observed fractional BPM remains unproven.
 
 The bounded B2 metadata slice freezes `selected-backend-bpm-v1` and
-`representative-middle-region-v1`; see [exact policy](../../../docs/selected-backend-bpm.md).
+`representative-middle-region-v1`; see [exact policy](../../../../docs/selected-backend-bpm.md).
 Rust reuses G2's centered fit, robust fit and feasibility code without changing source-bound
 G2 acceptance. A pure detached PyO3 helper returns full all-assigned OLS, separate global
 G2 diagnostics and fixed middle/third fits. No fabricated source hash is used to invoke G2.
@@ -182,7 +182,7 @@ file has an independent 512-MiB limit. This excludes FFT scratch, CQT/ORT worksp
 model memory. The adapter also bounds request/response/checkpoint sizes and prediction counts. Its provisional process timeout
 is 120 seconds, followed by finite 5-second reap/reader-join attempts. Failed reaping retains
 the process slot and PCM until actual retirement. Key CQT/ORT calls remain non-preemptible.
-See [boundary reference](../../../docs/offline-analysis.md) for the complete implemented limits.
+See [boundary reference](../../../../docs/offline-analysis.md) for the complete implemented limits.
 Those limits and test doubles are not real-model performance/quality acceptance.
 
 Extend the existing analysis request lifecycle with a narrow beat-analysis adapter; do not put
@@ -400,6 +400,6 @@ not close native resource acceptance; labels and default cutover remain separate
 - [22.05-kHz front end](https://github.com/CPJKU/beat_this/blob/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c/beat_this/preprocessing.py)
 - [Minimal postprocessor](https://github.com/CPJKU/beat_this/blob/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c/beat_this/model/postprocessor.py)
 
-The [B1b report](../../../docs/beat-this-reference-evidence.md) records installed-source
+The [B1b report](../../../../docs/beat-this-reference-evidence.md) records installed-source
 reconciliation, executed Windows/reference checks and remaining quality/resource limits.
 Source inspection and model parity do not certify musical accuracy or live synchronization.

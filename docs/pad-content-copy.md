@@ -5,7 +5,7 @@ shares verified immutable material, source PCM and matching stem backing, while
 each assignment owns independent source custody, playback and mutable settings.
 Occupied-target overwrite, live Move/Swap, bank operations and Re-Arrange gestures
 have separate contracts in
-[add-rearrange-shared-pad-content](../openspec/changes/add-rearrange-shared-pad-content/specs/pad-content-arrangement/spec.md).
+[add-rearrange-shared-pad-content](../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/specs/pad-content-arrangement/spec.md).
 This core does not close those later gates.
 
 ## Internal occupied-target foundation — 2026-10-14

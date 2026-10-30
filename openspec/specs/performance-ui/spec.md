@@ -536,20 +536,22 @@ The system SHALL provide a selected-pad action for requesting offline stem gener
 the controller layer.
 
 The action SHALL be available only for a loaded pad and SHALL follow the controller's
-inactive-pad and per-pad background-task gating. The UI SHALL NOT call Rust background
-generation directly, bypass the controller, or run stem work in the render loop.
+source/request and per-pad background-task gating independently of playback.
+The UI SHALL NOT call Rust background generation directly, bypass the controller,
+or run stem work in the render loop.
 
 #### Scenario: Generate action schedules a stopped loaded pad
 - **GIVEN** the selected pad has loaded audio
-- **AND** the selected pad is not playing, loading, analyzing, or already generating stems
+- **AND** the selected pad is not loading, unloading, analyzing, or already generating stems
 - **WHEN** the performer activates Generate Stems
 - **THEN** the UI emits a controller action for that selected pad
 - **AND** stem generation is scheduled as offline/background work
 
-#### Scenario: Generate action is blocked for an active pad
-- **GIVEN** the selected pad is currently playing
+#### Scenario: Generate action preserves active playback
+- **GIVEN** the selected pad is playing or paused and has no conflicting task
 - **WHEN** the performer tries to generate stems for that pad
-- **THEN** the request is rejected or disabled through controller state
+- **THEN** source-leased offline generation may run through the controller
+- **AND** current audio remains usable while effective adoption requires its own guarded Native transaction and ACK
 - **AND** no stem generation work runs in the audio callback
 
 
@@ -557,9 +559,10 @@ generation directly, bypass the controller, or run stem work in the render loop.
 ### Requirement: Selected-Pad Stem Deletion Action
 The system SHALL provide a selected-pad Delete Stems action next to the Generate Stems action.
 
-The Delete Stems action SHALL route through the controller layer, SHALL remove only the selected
-pad's tracked project-local stem cache artifacts, SHALL clear the selected pad's stem cache
-metadata, and SHALL leave the loaded full-mix audio available. UI rendering SHALL decide whether
+The Delete Stems action SHALL route through the controller layer, withdraw only the selected
+pad's guarded stem intent, and leave its full-mix audio available. Logical completion SHALL NOT
+certify physical cleanup: shared selections, running jobs and actual last readers retain their
+exact artifacts until eligible off-thread retirement. UI rendering SHALL decide whether
 to enable the action from controller/session snapshots and SHALL NOT inspect cache directories.
 
 #### Scenario: Delete action removes selected pad stems
@@ -961,8 +964,9 @@ toggle.
 The START/STOP button SHALL be vertically centered on the same horizontal line as the bottom-bar
 icons and SHALL be wider than an icon button so it can be used as a performance control. While no
 remembered global stop is active, the START/STOP button SHALL render in the active green style.
-After the performer right-presses START/STOP to stop playback, the START/STOP button SHALL render in
-the red off style until the remembered loop set is restarted or cleared.
+While an acknowledged remembered global stop is active in MultiLoop ON, the button
+SHALL render in the red off style until that remembered set is restarted or cleared.
+Color SHALL reflect this session state rather than certify completion of a pending command.
 
 #### Scenario: START/STOP button is aligned beside Settings
 - **WHEN** the bottom bar is rendered
@@ -970,10 +974,11 @@ the red off style until the remembered loop set is restarted or cleared.
 - **AND** both controls are vertically centered within the bottom bar
 
 #### Scenario: START/STOP button reflects stopped state
-- **GIVEN** no global START/STOP stop state is active
+- **GIVEN** MultiLoop is ON and no remembered global stop state is active
 - **WHEN** the bottom bar is rendered
 - **THEN** the START/STOP button is green
 - **WHEN** the performer presses the right mouse button on START/STOP
+- **AND** its own stop acknowledgement establishes a nonempty remembered set
 - **THEN** the START/STOP button becomes red
 
 
@@ -982,19 +987,22 @@ the red off style until the remembered loop set is restarted or cleared.
 The system SHALL make left mouse button down on the bottom-bar START/STOP button start or restart
 the current target loop set immediately, using the same mouse-down timing style as pad triggering.
 
-If a remembered global stop is active, START/STOP left mouse down SHALL start the remembered pads
-together from the beginning of each effective loop. If no remembered global stop is active,
-START/STOP left mouse down SHALL restart all currently playing pads from the beginning of their
-effective loops. This action SHALL NOT stop playback.
+With MultiLoop ON and an active remembered global stop, left mouse down SHALL start
+the remembered pads together from the beginning of each effective loop. With MultiLoop
+ON and no remembered stop, left mouse down SHALL restart all currently playing pads
+from the beginning of their effective loops. With MultiLoop OFF, START/STOP SHALL use the
+[single effective target](../multi-loop-mode/spec.md#requirement-single-mode-startstop-uses-the-last-effective-explicit-target)
+and its source/content history instead of a group. A left gesture SHALL NOT be interpreted as
+STOP; ordinary exclusive launch still applies its mode-specific peer-stop policy.
 
 #### Scenario: Left mouse down restarts current active loops
-- **GIVEN** pads 1 and 2 are currently active
+- **GIVEN** MultiLoop is ON and pads 1 and 2 are currently active
 - **WHEN** the performer holds the left mouse button down on START/STOP
 - **THEN** pads 1 and 2 are retriggered from the beginning of their effective loops
 - **AND** no stop-all command is sent due to the left mouse button action
 
 #### Scenario: Left mouse down restores remembered loops
-- **GIVEN** START/STOP previously remembered pads 1 and 2 from a right-button stop
+- **GIVEN** MultiLoop is ON and START/STOP remembered pads 1 and 2 from a right-button stop
 - **WHEN** the performer presses the left mouse button down on START/STOP
 - **THEN** pads 1 and 2 are started together
 - **AND** START/STOP renders green
@@ -1002,12 +1010,13 @@ effective loops. This action SHALL NOT stop playback.
 
 <!-- Added from refine-gain-master-stop-controls -->
 ### Requirement: Manual Pad Actions Clear Remembered START/STOP Set
-The system SHALL clear any remembered START/STOP restore set when the performer manually triggers
-or stops a pad after START/STOP has stopped a loop set.
+With MultiLoop ON, the system SHALL clear any remembered START/STOP restore set when
+the performer manually triggers or stops a pad after START/STOP has stopped a loop set.
 
-After a manual pad trigger or stop clears the remembered set, START/STOP left mouse down SHALL
-restart only the pads that are currently playing. START/STOP right mouse down SHALL remember only
-the pads that are currently playing at that moment.
+With MultiLoop ON, after a manual pad trigger or stop clears the remembered set,
+left mouse down SHALL restart only currently playing pads; right mouse down SHALL
+remember only actual active, non-paused playback after feedback drain. With MultiLoop OFF, manual
+actions SHALL retain the source-qualified single-target history rules above.
 
 Previously admitted or cancelled starts SHALL NOT count as playing solely because
 they require ordered STOP coverage. With Multi Loop ON, the remembered set SHALL
@@ -1021,14 +1030,14 @@ use actual active, non-paused playback after launch cancellation and feedback dr
 - **AND** cancellation still fences all earlier starts
 
 #### Scenario: Manual pad trigger replaces the stopped restore target
-- **GIVEN** START/STOP previously remembered pads 1, 2, and 3 from a right-button stop
+- **GIVEN** MultiLoop is ON and START/STOP remembered pads 1, 2, and 3 from a right-button stop
 - **WHEN** the performer manually triggers pad 4
 - **AND** the performer presses the left mouse button down on START/STOP
 - **THEN** pad 4 is restarted
 - **AND** pads 1, 2, and 3 are not started from the old remembered set
 
 #### Scenario: Manual pad stop clears the stopped restore target
-- **GIVEN** START/STOP previously remembered pads 1, 2, and 3 from a right-button stop
+- **GIVEN** MultiLoop is ON and START/STOP remembered pads 1, 2, and 3 from a right-button stop
 - **AND** pad 4 is currently playing due to manual pad interaction
 - **WHEN** the performer manually stops pad 4
 - **AND** the performer presses the left mouse button down on START/STOP
@@ -1037,23 +1046,25 @@ use actual active, non-paused playback after launch cancellation and feedback dr
 
 <!-- Added from refine-gain-master-stop-controls -->
 ### Requirement: START/STOP Right Mouse Stops
-The system SHALL make right mouse button down on the bottom-bar START/STOP button stop the
-currently playing loop set immediately and remember exactly the pads that were playing at that
-moment.
+With MultiLoop ON, right mouse button down on START/STOP SHALL stop the complete
+source-qualified playing/paused set and remember only actual active, non-paused playback
+after launch cancellation and feedback drain. With MultiLoop OFF, it SHALL stop only
+the valid effective explicit target while fencing older pending starts; it SHALL NOT
+become STOP ALL or remember a group. Command admission SHALL remain distinct from its own effect ACK.
 
 Right mouse button interaction on START/STOP SHALL never start or restore playback, and SHALL not
 wait for mouse-button release before stopping. The remembered set SHALL be session-only state and
 SHALL NOT be persisted with the project.
 
 #### Scenario: Right mouse down stops and remembers playing loops
-- **GIVEN** pads 1 and 2 are currently playing
+- **GIVEN** MultiLoop is ON and pads 1 and 2 are currently playing
 - **WHEN** the performer presses the right mouse button down on START/STOP
 - **THEN** all active audio is stopped immediately
 - **AND** pads 1 and 2 are remembered for restore
 - **AND** START/STOP renders red
 
 #### Scenario: Right mouse down never starts remembered loops
-- **GIVEN** START/STOP previously remembered pads 1 and 2 from a right-button stop
+- **GIVEN** MultiLoop is ON and START/STOP remembered pads 1 and 2 from a right-button stop
 - **WHEN** the performer presses the right mouse button down on START/STOP again
 - **THEN** no remembered pad is started due to the right mouse button action
 - **AND** START/STOP remains in the stopped state

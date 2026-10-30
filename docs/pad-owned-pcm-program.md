@@ -10,7 +10,7 @@ Hold delivery, then its actually needed remaining R2 ownership/selection foundat
 and the rate/map/finite/DSP prerequisites for a complete testable Key + Transposition,
 playable keyboard and MIDI SET/SET_RETRIGGER milestone. Group1–3 delivery precedes
 large bank, bulk and RECORD work. Use the same proven runtime and scheduler paths.
-See [pitch tasks](../openspec/changes/add-key-transposition-performance/tasks.md).
+See [pitch tasks](../openspec/changes/archive/2026-10-30-add-key-transposition-performance/tasks.md).
 The canonical table/edges continue to describe full acceptance dependencies;
 earlier bounded engineering closes no unproved parent, resource, musical or Human
 gate. All48 IDs/78 edges/189 rows and both extensions remain. Pitch/keyboard are
@@ -176,10 +176,10 @@ hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 
-The [PCM proposal](../openspec/changes/adopt-pad-owned-pcm-residency/proposal.md),
-[design](../openspec/changes/adopt-pad-owned-pcm-residency/design.md),
-[pitch change](../openspec/changes/add-key-transposition-performance/proposal.md),
-[arrangement change](../openspec/changes/add-rearrange-shared-pad-content/proposal.md)
+The [PCM proposal](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/proposal.md),
+[design](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/design.md),
+[pitch change](../openspec/changes/archive/2026-10-30-add-key-transposition-performance/proposal.md),
+[arrangement change](../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/proposal.md)
 and [coverage map](pre-rust-program-coverage.json) define the pending end-state.
 The map keeps all164 direct detail rows plus5 crosslinks, all56 original obligations,
 nine feature points, all old35 IDs/42 edges and the corrected38 IDs/48 edges.
@@ -274,7 +274,7 @@ uses actual physical and caller/system commit headroom plus shared pending alloc
 promises. Optional manual128..16384MiB remains an additional scoped ownership limit;
 Settings edits wholeGiB steps while retaining precise legacyMiB values. Nondefault
 legacy manual choices remain manual. Final live arrays are not conversion scratch.
-See `openspec/changes/admit-long-remix-residency` for the normative delta and actual
+See `openspec/changes/archive/2026-10-30-admit-long-remix-residency` for the normative delta and actual
 remaining verification. Contiguous live ranges still require their real PCM; this
 does not claim advancing-window streaming, start-onlyEOF or completed liveSYNC.
 Power-loss/non-Windows capture, model-unavailable, GPU/native ORT same-model parity,
@@ -343,7 +343,7 @@ installed-model discovery or neural-execution proof. The baseline unused pair
 and muted peer are explicit limitations. Existing ordinary-publication/domain
 guards and whole E11/P5b/resource/music/Human/Goal obligations remain open.
 
-X11-UI's [bounded tasks](../openspec/changes/refine-loop-editor-performance-actions/tasks.md)
+X11-UI's [bounded tasks](../openspec/changes/archive/2026-10-30-refine-loop-editor-performance-actions/tasks.md)
 track E11-04/16/17/18 software evidence independently of H-FINAL. The executed
 pre-fix full-editor wheel negative found late readiness text moving plot/upper
 glyph geometry together, with at most one waveform representation and one visible

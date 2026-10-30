@@ -22,6 +22,6 @@ measured process peaks are reported separately without claiming an ORT memory ca
 Existing source admission, cancellation, stale request fencing and own import ACK
 remain authoritative. No failed or superseded analysis publishes invented metadata.
 
-The [allocation and real-import report](../../../docs/automatic-analysis-memory.md)
+The [allocation and real-import report](../../../../docs/automatic-analysis-memory.md)
 records the executed bounds, exact input extent, detector outputs and separate
 process peaks. Broader musical/model/Human acceptance remains open.

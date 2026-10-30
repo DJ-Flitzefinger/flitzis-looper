@@ -7,6 +7,12 @@ navigation retained during cleanup: several files mix current facts with retired
 SYNC paths and historical programs. Their old execution queues are inactive;
 archival does not establish completion or acceptance.
 
+All 104 formerly active OpenSpec changes now have a
+[dated disposition and source mapping](../openspec/changes/archive/2026-10-30-archive-index.md)
+and a [canonical historical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md).
+Use current top-level specs for supported contracts; archived tasks retain their
+original incomplete gates and do not activate old work programs.
+
 This folder contains maintained project documentation. It should help a human or
 AI contributor understand the current architecture without rereading the entire
 codebase.
@@ -23,7 +29,7 @@ For most code changes:
 2. Read this file.
 3. Read `architecture.md`.
 4. Read `development.md`.
-5. Read the relevant OpenSpec specs or active change deltas.
+5. Read the relevant current OpenSpec specs; consult archived deltas as historical evidence.
 6. Read the relevant tests and source files.
 
 For focused areas:
@@ -67,7 +73,7 @@ For focused areas:
 | `constant-tempo-summary.md` | Offline count/fit API, complete content-bound backend evidence, isolated PCM refinement, independent-count assertions and the G3 adoption boundary. |
 | `selected-backend-bpm.md` | Frozen complete-sequence/representative-region BPM metadata, shared G2 fitting, diagnostic integration and unverified evaluation limits. |
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
-| `../openspec/changes/probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
+| `../openspec/changes/archive/2026-10-30-probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
 
 ## Retired SYNC recovery

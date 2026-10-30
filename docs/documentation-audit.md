@@ -240,3 +240,23 @@ diff review. No App, device, listening, model inference, Native build or audio
 suite was run for this documentation decision. Earlier evidence remains dated
 and source-scoped. Later cleanup must verify actual retained facts and references
 before deleting an original, and final acceptance remains distinct from archival.
+
+## STEP4 executed archival — 2026-10-30
+
+The [archive disposition index](../openspec/changes/archive/2026-10-30-archive-index.md)
+maps all 104 actual active changes to dated complete records. No active change
+directories remain. The [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
+crosslinks exact immutable original reports and the eleven retention overrides.
+Mixed reports remain in place until STEP5/6 verify their current-module destinations.
+The coverage JSON remains byte-identical; no checkbox, failure or acceptance gate
+was promoted, and conflicting historical deltas were not bulk-merged.
+
+The manifest appends actual relocation/disposition references under
+`executed_dispositions`; its original source hashes, spans, headings and inbound
+line identities remain frozen provenance. Old change paths in those frozen fields
+resolve through the archive mapping rather than being rewritten as current paths.
+Current top-level contracts were reconciled for removed timing logs, offline/live
+stem generation versus own-ACK adoption and last-reader cleanup, and integer
+physical bounds versus fractional scalar trajectories/bounded stem transitions,
+plus ordinary single-mode START/STOP and atomic MultiLoop disable semantics.
+This documentation step changes no product behavior or acceptance.

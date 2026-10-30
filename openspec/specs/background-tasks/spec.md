@@ -38,7 +38,7 @@ Stem generation SHALL NOT run as part of the audio callback. It SHALL NOT block 
 rendering while the task is in progress.
 
 #### Scenario: Stem task reports progress
-- **GIVEN** a pad has loaded source audio and is not playing
+- **GIVEN** a stopped, playing or paused pad has loaded source audio and no conflicting task
 - **WHEN** stem generation starts
 - **THEN** the system reports task progress for that pad outside the audio callback
 - **AND** the UI remains responsive while generation runs
@@ -50,7 +50,9 @@ The system SHALL prevent conflicting per-pad tasks from running concurrently wit
 generation.
 
 A stem generation request SHALL be rejected or deferred while the same pad is loading,
-unloading, analyzing, already generating stems, or playing.
+unloading, analyzing, or already generating stems. Playback alone SHALL NOT block
+source-leased offline generation. Compatible equal-material jobs MAY share physical
+work while preserving each subscriber's independent current request and source fences.
 
 #### Scenario: Loading pad blocks stem generation
 - **GIVEN** a pad is currently loading source audio
@@ -67,11 +69,14 @@ unloading, analyzing, already generating stems, or playing.
 
 <!-- Added from add-offline-stem-cache -->
 ### Requirement: Stem Task Completion Is Revalidated Before Publication
-The system SHALL revalidate pad playback state and source version before publishing a
-completed stem task result.
+The system SHALL revalidate each subscriber's current source, content, request and
+material/model intent before accepting a completed stem task result. A running backend
+SHALL retain its source/job leases through actual return even if all public interests end.
 
-If the pad is playing, unloaded, or associated with a different source version when the task
-completes, the result SHALL NOT replace audio-thread stem buffers for that pad.
+Disk verification and saved selection SHALL NOT establish effective audio adoption.
+Playing or paused pads SHALL require their own supported Native adoption transaction,
+fresh timing/window/voice/history permits and own ACK. Unloaded, replaced or cancelled
+subscribers SHALL NOT receive stale publication; existing readers remain protected.
 
 #### Scenario: Completed task is stale
 - **GIVEN** stem generation started for pad source version A
@@ -86,18 +91,18 @@ completes, the result SHALL NOT replace audio-thread stem buffers for that pad.
 The system SHALL route performer stem-generation requests through the non-real-time per-pad
 background-task path.
 
-The request SHALL respect existing loading, analysis, stem-generation, unloading, and playing
-pad gates. Progress, success, and failure SHALL be reported through controller/session state so
-the UI can render status without blocking.
+The request SHALL respect existing loading, analysis, stem-generation and unloading
+gates independently of playback. Progress, success, and failure SHALL be reported
+through controller/session state so the UI can render status without blocking.
 
 #### Scenario: Generate stems action starts a background task
-- **GIVEN** a loaded pad is stopped and has no conflicting per-pad task
+- **GIVEN** a loaded pad has no conflicting per-pad task
 - **WHEN** the performer requests stem generation from the UI
 - **THEN** the system schedules a per-pad stem-generation background task
 - **AND** UI rendering remains responsive while the task runs
 
 #### Scenario: Conflicting task blocks UI stem generation
-- **GIVEN** a pad is currently loading, analyzing, already generating stems, unloading, or playing
+- **GIVEN** a pad is currently loading, analyzing, already generating stems, or unloading
 - **WHEN** the performer requests stem generation from the UI
 - **THEN** the request is rejected or deferred through controller state
 - **AND** no stem generation work is run by the audio callback

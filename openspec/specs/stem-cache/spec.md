@@ -32,25 +32,30 @@ The initial stem set SHALL include vocals, melody, bass, drums, and instrumental
 
 
 <!-- From add-offline-stem-cache -->
-### Requirement: Stem Generation And Replacement Require An Inactive Pad
-The system SHALL allow stem generation and stem-buffer replacement only when the target pad
-is not currently playing.
+### Requirement: Offline Generation And Effective Adoption Have Separate Authority
+The system SHALL permit source-leased offline generation for stopped, playing or paused
+pads without running generation in the audio callback. Conflicting load, analysis,
+unload and generation intent SHALL retain their existing admission fences.
 
-If a pad starts playing while stem generation is in progress, the completed result SHALL
-NOT replace audio-thread stem buffers for that pad until the pad is stopped and the source
-version is still current.
+A verified disk selection, its registration and requested residency SHALL remain distinct
+from effective playback. New-set adoption SHALL use its own state-appropriate source,
+content, request and preparation authority and its own Native acknowledgement.
+Active adoption SHALL additionally require fresh timing, window, voice and history permits.
+Unproved active adoption domains SHALL remain guarded. Same-set residency SHALL NOT
+authorize a different complete stem set. Failure, cancellation or stale completion SHALL
+preserve current audio and actual reader ownership.
 
-#### Scenario: Playing pad blocks generation
-- **GIVEN** a pad is currently playing
-- **WHEN** the performer requests stem generation for that pad
-- **THEN** the system rejects or defers the request
-- **AND** no stem generation work is run for that active pad in the audio callback
+#### Scenario: Playing pad requests offline generation
+- **GIVEN** a playing or paused pad has a current immutable source and no conflicting task
+- **WHEN** the performer requests stem generation
+- **THEN** the bounded background path retains its source lease through actual backend return
+- **AND** existing playback continues independently of generation
 
 #### Scenario: Pad starts during generation
-- **GIVEN** stem generation is running for a pad that was inactive when the task started
-- **WHEN** the pad starts playing before generation completes
-- **THEN** the generated buffers are not published as active stem buffers for that playing pad
-- **AND** current full-mix playback continues unchanged
+- **WHEN** a pad starts before generation completes
+- **THEN** a verified result may commit for still-current material and model intent
+- **AND** effective new-set playback requires the pad's independently guarded transaction and own ACK
+- **AND** an unavailable adoption domain leaves existing audio usable
 
 
 <!-- From add-offline-stem-cache -->
@@ -75,34 +80,37 @@ version.
 
 
 <!-- From add-offline-stem-cache -->
-### Requirement: Stem Cache Is Pad-Scoped And Deletable
-The system SHALL store generated project stem artifacts in a pad-scoped cache directory named
-after the pad label under `samples/stems/`.
+### Requirement: Shared Stem Material Has Independent Assignment And Reader Custody
+The system SHALL store contained immutable stem generations under verified material and
+generation identity. A pad label SHALL NOT define material identity or exclusive ownership.
+Compatible verified material may be shared across independently owned assignments; each
+subscriber SHALL retain its own source, content, selection and publication authority.
+Filename, size, model label or another pad's ACK alone SHALL NOT establish compatibility.
 
-Pad 1 SHALL use `samples/stems/#1/`, pad 2 SHALL use `samples/stems/#2/`, and the same
-numbering pattern SHALL continue through pad 216. Deleting stems SHALL remove only the target
-pad's project-local stem cache directory and SHALL clear the pad's tracked stem cache metadata.
-Unloading a pad SHALL delete its tracked cached stem artifacts before the pad becomes available
-for a different source. Deletion SHALL NOT run inside the audio callback.
+Deletion or unload SHALL withdraw only the addressed assignment's stem intent through its
+guarded control path. Logical completion SHALL NOT certify physical file deletion.
+Saved selections, running jobs, current/outgoing voices, Native/filter history and complete
+PCM readers SHALL retain their exact generations until actual final release. Eligible
+physical cleanup SHALL use the existing off-thread asset worker and exact owned inventory;
+unknown files, changed identities, external paths and sharing failures SHALL be preserved
+or reported without recursive deletion or callback I/O.
 
-#### Scenario: Generated stems use the pad label directory
-- **GIVEN** pad `#1` has loaded source audio
-- **AND** the pad is not currently playing
-- **WHEN** the performer requests stem generation
-- **THEN** the background stem backend writes the generated cache artifacts under `samples/stems/#1/`
-- **AND** the tracked source version remains the current source version for pad `#1`
+#### Scenario: Equal material has independent users
+- **GIVEN** two assignments share a verified immutable stem generation
+- **WHEN** one unloads or selects a different generation
+- **THEN** the other's saved selection and actual readers retain the predecessor
+- **AND** the first assignment's ACK does not authorize the second assignment's adoption
 
-#### Scenario: Unload removes pad stems
-- **GIVEN** pad `#1` has tracked cached stem artifacts under `samples/stems/#1/`
-- **WHEN** the performer unloads audio from pad `#1`
-- **THEN** the system deletes `samples/stems/#1/` outside the audio callback
-- **AND** pad `#1` no longer exposes those stems as available
+#### Scenario: Unload precedes final reader release
+- **WHEN** an own Unload acknowledgement ends the addressed assignment
+- **THEN** its logical selection is withdrawn
+- **AND** files remain protected while any saved, job or actual audio/history reader owns them
+- **AND** only eligible exact owned artifacts are later cleaned outside the callback
 
-#### Scenario: Manual stem deletion preserves full-mix playback
-- **GIVEN** pad `#1` has loaded full-mix audio and cached stems
-- **WHEN** the performer deletes stems for pad `#1`
-- **THEN** the system deletes only pad `#1` stem cache artifacts outside the audio callback
-- **AND** pad `#1` remains playable through its full-mix buffer
+#### Scenario: Manual deletion preserves full-mix playback
+- **WHEN** the performer deletes the selected pad's stems
+- **THEN** guarded withdrawal leaves its full-mix source available
+- **AND** other assignments and unknown content remain protected
 
 
 <!-- From add-offline-stem-cache -->

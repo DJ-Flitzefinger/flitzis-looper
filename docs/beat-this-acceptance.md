@@ -388,7 +388,7 @@ and matching independent grid base documented in [architecture.md](architecture.
 The B2a evidence below remains unchanged and is not a current runtime description.
 
 The user subsequently requested automatic first-waveform loop placement on new
-loads. That separate [change](../openspec/changes/auto-place-new-track-loop-start/proposal.md)
+loads. That separate [change](../openspec/changes/archive/2026-10-30-auto-place-new-track-loop-start/proposal.md)
 does not reinterpret the manually verified grids or complete Beat This acceptance.
 The locked-release controller smoke restored both approved grids, fractional BPMs
 and manual loops unchanged. A new stereo fixture with one second of blank audio,

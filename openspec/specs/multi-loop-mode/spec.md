@@ -57,6 +57,47 @@ Without trigger quantization, the system SHALL start loops immediately when a pa
 - **THEN** pad 1 starts playback at time T1
 - **AND** pad 2 starts playback at time T2
 
+### Requirement: Single-Mode START/STOP Uses The Last Effective Explicit Target
+With MultiLoop OFF, ordinary START/STOP SHALL use one valid source/content-bound
+last effective explicit playable pad choice. Editor selection, request arrival and
+callback observation order SHALL NOT redefine it. Original global order SHALL
+resolve equal effect frames. STOP SHALL retain valid history; source replacement
+or unload SHALL invalidate it, and Move/Swap SHALL follow content.
+
+Only explicit START without valid history MAY use a loaded selected pad. OFF STOP
+SHALL fence older pending starts without becoming STOP ALL or stopping unrelated
+active, paused or Hold peers. Recording group starts and STOP ALL remain global.
+Pending source publication SHALL defer or refuse rather than borrow editor selection.
+
+#### Scenario: Stop and restart preserve one target
+- **GIVEN** A, B and C became effective explicit choices in that order and MultiLoop is OFF
+- **WHEN** the performer selects A in the editor, then uses ordinary STOP and START
+- **THEN** C remains the sole ordinary target and no remembered group is resurrected
+
+#### Scenario: Stop has no valid effective target
+- **WHEN** OFF STOP is admitted without valid effective history
+- **THEN** older starts are fenced with no audible stop entries
+- **AND** it neither starts editor selection nor becomes STOP ALL
+
+### Requirement: Disabling MultiLoop Is One Admitted Playback Transition
+ON-to-OFF SHALL admit the complete runtime image, old launch/group fences and
+source-bound peer stops together. It SHALL retain an actually playable latest
+target without retrigger or resume. Fallible admission SHALL precede mutation;
+accepted work awaiting callback completion SHALL remain pending. Later starts
+SHALL NOT overtake the transition's peer stops. Requested BPM Lock and its
+qualified master owner, tempo and timeline SHALL remain independent of this mode.
+
+#### Scenario: Three playing pads become one without a new attack
+- **WHEN** three pads play and MultiLoop is disabled
+- **THEN** peers stop while the last qualified playable target keeps its voice position
+- **AND** no new attack, generation or master phase is introduced
+
+#### Scenario: Transition refuses or its target is not playable
+- **WHEN** transition resources are unavailable
+- **THEN** the prior mode, voices and fences remain unchanged
+- **WHEN** an admitted transition has no playable target
+- **THEN** it does not resume a paused, stopped or held target
+
 ### Requirement: Triggering an Unloaded Pad Has No Effect
 Triggering a pad with no loaded audio SHALL NOT stop other pads and SHALL NOT change active-pad state.
 

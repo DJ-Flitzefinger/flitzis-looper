@@ -9,14 +9,14 @@ complete source authority from resident storage and restores saved finite loops.
 PCM ownership, process resources, exceptions and lifecycle costs with paired
 finite/full results and their limits. Actual human/device/listening acceptance
 remains open. The active
-[OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
+[OpenSpec change](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/proposal.md)
 records the contracts; its
-[task list](../openspec/changes/cache-full-pcm-and-resident-loops/tasks.md)
+[task list](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/tasks.md)
 records the completed bounded implementation tasks.
 
 C3 preparation releases an unused converted intermediate Vec after channel mapping,
 before playback Arc creation and its declared PCM checkpoint. Complete-cache
-[validation waits cancellably](../openspec/changes/cache-full-pcm-and-resident-loops/specs/pcm-cache-residency/spec.md#requirement-cancellable-concurrent-cache-validation)
+[validation waits cancellably](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/specs/pcm-cache-residency/spec.md#requirement-cancellable-concurrent-cache-validation)
 off-thread for admission, so transient validation contention cannot trigger
 redundant cold decoding or a new cache generation.
 
