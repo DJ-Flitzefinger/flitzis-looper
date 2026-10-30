@@ -83,7 +83,13 @@ pub fn detect_key(samples: &[f32], sample_rate_hz: u32) -> Result<KeyResult, Key
     detect_key_with_frontend(
         samples.len(),
         samples.iter().all(|s| s.abs() < 1e-6_f32),
-        || cqt::compute_cqt(samples, sample_rate_hz, &CqtParams::default()),
+        || {
+            Ok(cqt::compute_cqt(
+                samples,
+                sample_rate_hz,
+                &CqtParams::default(),
+            ))
+        },
     )
 }
 
@@ -93,14 +99,41 @@ pub fn detect_key_f64(samples: &[f64], sample_rate_hz: u32) -> Result<KeyResult,
     detect_key_with_frontend(
         samples.len(),
         samples.iter().all(|s| s.abs() < f64::from(1e-6_f32)),
-        || cqt::compute_cqt_f64(samples, sample_rate_hz, &CqtParams::default()),
+        || {
+            Ok(cqt::compute_cqt_f64(
+                samples,
+                sample_rate_hz,
+                &CqtParams::default(),
+            ))
+        },
     )
+}
+
+/// Detect from complete 44100-Hz f32 LE mono with bounded file-backed octave storage.
+/// The caller owns job-local anonymous scratch creation and cancellation. I/O errors
+/// remain frontend failures; no partial result is classified or published.
+pub fn detect_key_file(
+    file: std::fs::File,
+    frames: usize,
+    factory: &mut dyn FnMut() -> std::io::Result<std::fs::File>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<KeyResult, KeyError> {
+    use librosa_cqt::signal::{Scratch, Signal, check_cancelled};
+    let failure = |error: std::io::Error| KeyError::CqtError(error.to_string());
+    let mut signal = Signal::file(file, frames, 4).map_err(failure)?;
+    let silent = signal.is_silent(cancelled).map_err(failure)?;
+    detect_key_with_frontend(frames, silent, || {
+        let output = cqt::compute_cqt_file(signal, &mut Scratch::Files(factory), cancelled)
+            .map_err(failure)?;
+        check_cancelled(cancelled).map_err(failure)?;
+        Ok(output)
+    })
 }
 
 fn detect_key_with_frontend(
     input_frames: usize,
     is_silent: bool,
-    frontend: impl FnOnce() -> Vec<f32>,
+    frontend: impl FnOnce() -> Result<Vec<f32>, KeyError>,
 ) -> Result<KeyResult, KeyError> {
     // 1. Validate input length.
     // Minimum: at least one hop_length worth of samples to produce a CQT frame.
@@ -115,7 +148,7 @@ fn detect_key_with_frontend(
     }
 
     // 3. Compute CQT spectrogram.
-    let cqt_data = frontend();
+    let cqt_data = frontend()?;
 
     // CQT returns empty vec if signal is too short for any frames.
     if cqt_data.is_empty() {

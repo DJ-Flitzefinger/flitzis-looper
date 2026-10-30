@@ -7,7 +7,12 @@
 //!
 //! Uses librosa-compatible CQT (`librosa_cqt` module) for numerical accuracy.
 
+use super::librosa_cqt::{
+    cqt::cqt_signal,
+    signal::{Scratch, Signal},
+};
 use crate::key_detection::librosa_cqt::{CqtConfig, cqt as librosa_cqt};
+use std::io;
 
 /// CQT preprocessing parameters matching the KeyNet training pipeline.
 #[derive(Debug, Clone)]
@@ -54,8 +59,14 @@ pub fn compute_cqt_f64(samples: &[f64], sample_rate: u32, params: &CqtParams) ->
         return Vec::new();
     }
 
-    // Build librosa CQT config
-    let config = CqtConfig {
+    compress(
+        librosa_cqt(samples, &configuration(sample_rate, params)),
+        params,
+    )
+}
+
+fn configuration(sample_rate: u32, params: &CqtParams) -> CqtConfig {
+    CqtConfig {
         sr: sample_rate as f64,
         hop_length: params.hop_length,
         fmin: params.fmin as f64,
@@ -65,11 +76,22 @@ pub fn compute_cqt_f64(samples: &[f64], sample_rate: u32, params: &CqtParams) ->
         filter_scale: 1.0,
         norm: Some(1.0),
         scale: true,
-    };
+    }
+}
 
-    // Compute CQT magnitude (shape: n_bins × n_frames, row-major)
-    let magnitude = librosa_cqt(samples, &config);
+pub(crate) fn compute_cqt_file(
+    signal: Signal<'_>,
+    scratch: &mut Scratch<'_>,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<Vec<f32>> {
+    let params = CqtParams::default();
+    Ok(compress(
+        cqt_signal(signal, &configuration(44_100, &params), scratch, cancelled)?,
+        &params,
+    ))
+}
 
+fn compress(magnitude: Vec<f64>, params: &CqtParams) -> Vec<f32> {
     if magnitude.is_empty() {
         return Vec::new();
     }
@@ -368,5 +390,69 @@ mod tests {
         }
 
         Ok(mono_samples)
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::super::librosa_cqt::signal::test_file;
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn complete_file_frontend_matches_dense_bits_at_odd_octaves_and_impulses() {
+        for frames in [8821, 16384, 17641, 35279] {
+            for marker in [0, frames - 1] {
+                let mut samples: Vec<f32> = (0..frames)
+                    .map(|index| (index as f32 * 0.17).sin() * 0.25)
+                    .collect();
+                samples[marker] = -0.9375;
+                samples[1] = -0.0;
+                let expected = compute_cqt(&samples, 44_100, &CqtParams::default());
+                let mut file = test_file();
+                for value in &samples {
+                    file.write_all(&value.to_le_bytes()).unwrap();
+                }
+                let actual = compute_cqt_file(
+                    Signal::file(file, frames, 4).unwrap(),
+                    &mut Scratch::Files(&mut || Ok(test_file())),
+                    &|| false,
+                )
+                .unwrap();
+                assert_eq!(actual.len(), expected.len());
+                assert!(
+                    actual
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "frames={frames}, marker={marker}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn file_frontend_propagates_scratch_failure_and_mid_transform_cancellation() {
+        let samples: Vec<f64> = (0..17641)
+            .map(|index| (index as f64 * 0.17).sin())
+            .collect();
+        let error = compute_cqt_file(
+            Signal::Slice(&samples),
+            &mut Scratch::Files(&mut || Err(io::Error::other("scratch fixture"))),
+            &|| false,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "scratch fixture");
+        let checks = std::cell::Cell::new(0);
+        let error = compute_cqt_file(
+            Signal::Slice(&samples),
+            &mut Scratch::Files(&mut || Ok(test_file())),
+            &|| {
+                checks.set(checks.get() + 1);
+                checks.get() >= 12
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     }
 }

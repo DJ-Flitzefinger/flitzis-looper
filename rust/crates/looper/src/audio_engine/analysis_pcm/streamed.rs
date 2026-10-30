@@ -1,6 +1,6 @@
 //! Bounded loaded-source export and file-backed KeyNet preprocessing.
 //!
-//! The job owner must retire its loaded snapshot before constructing key PCM.
+//! The caller keeps original playback PCM alive; admission includes that owner.
 //! A retained native file handle supplies the exact exported mono to both branches.
 
 use super::fft::{RESAMPLE_CHUNK_FRAMES, fft_dimensions, tail_call_budget};
@@ -114,9 +114,16 @@ fn converter_dimensions(rate_hz: u32) -> (usize, usize) {
     )
 }
 
-fn key_peak_bytes(frame_count: usize, rate_hz: u32) -> Result<usize, PcmError> {
-    let frames = output_frames(frame_count, rate_hz)?;
-    let mut peak = add_bytes(pcm_bytes(frames)?, IO_CHUNK_BYTES)?;
+pub(crate) fn key_stream_working_bytes(
+    frame_count: usize,
+    rate_hz: u32,
+) -> Result<usize, PcmError> {
+    output_frames(frame_count, rate_hz)?;
+    // Read bytes, output encoding bytes, and one source chunk for the direct path.
+    let mut peak = IO_CHUNK_BYTES * 2;
+    if rate_hz == KEY_RATE_HZ {
+        peak = add_bytes(peak, pcm_bytes(CHUNK_FRAMES)?)?;
+    }
     if rate_hz != KEY_RATE_HZ {
         let (input, output) = converter_dimensions(rate_hz);
         peak = add_bytes(peak, pcm_bytes(input)?)?;
@@ -183,31 +190,29 @@ fn zeroed_pcm(frames: usize, cancelled: &impl Fn() -> bool) -> Result<Vec<f32>, 
     Ok(samples)
 }
 
-/// Produce the unchanged complete 44100-Hz KeyNet input from the staged file.
-/// The owner must have already dropped the analysis snapshot. The retained
-/// file starts at byte zero; short, oversized and nonfinite contents fail.
-pub(crate) fn key_input_from_f32_le(
+/// Stream the unchanged complete 44100-Hz input through one conversion core.
+fn stream_key_input(
     input: &mut impl Read,
     frame_count: usize,
     rate_hz: u32,
     max_working_bytes: usize,
     cancelled: &impl Fn() -> bool,
-) -> Result<PreparedKeyPcm, PcmError> {
+    emit: &mut impl FnMut(&[f32]) -> Result<(), PcmError>,
+) -> Result<usize, PcmError> {
     check_cancelled(cancelled)?;
     pcm_bytes(frame_count)?;
     let expected_frames = output_frames(frame_count, rate_hz)?;
-    let reservation = key_peak_bytes(frame_count, rate_hz)?;
+    let reservation = key_stream_working_bytes(frame_count, rate_hz)?;
     check_limit(reservation, max_working_bytes, "staged key PCM bytes")?;
     if rate_hz == KEY_RATE_HZ {
-        let mut samples = zeroed_pcm(expected_frames, cancelled)?;
-        let peak_bytes = add_bytes(pcm_bytes(samples.capacity())?, IO_CHUNK_BYTES)?;
-        check_limit(peak_bytes, max_working_bytes, "actual staged key PCM bytes")?;
-        read_samples(input, &mut samples, cancelled)?;
+        let mut chunk = [0.0; CHUNK_FRAMES];
+        for start in (0..frame_count).step_by(CHUNK_FRAMES) {
+            let count = CHUNK_FRAMES.min(frame_count - start);
+            read_samples(input, &mut chunk[..count], cancelled)?;
+            emit(&chunk[..count])?;
+        }
         check_end(input, cancelled)?;
-        return Ok(PreparedKeyPcm {
-            samples,
-            peak_bytes,
-        });
+        return Ok(reservation);
     }
 
     let mut converter = Fft::<f32>::new(
@@ -228,16 +233,11 @@ pub(crate) fn key_input_from_f32_le(
     }
     let mut source_chunk = zeroed_pcm(dimensions.0, cancelled)?;
     let mut converted_chunk = zeroed_pcm(dimensions.1, cancelled)?;
-    let mut samples = zeroed_pcm(expected_frames, cancelled)?;
-    let peak_bytes = [
-        source_chunk.capacity(),
-        converted_chunk.capacity(),
-        samples.capacity(),
-    ]
-    .into_iter()
-    .try_fold(IO_CHUNK_BYTES, |total, capacity| {
-        add_bytes(total, pcm_bytes(capacity)?)
-    })?;
+    let peak_bytes = [source_chunk.capacity(), converted_chunk.capacity()]
+        .into_iter()
+        .try_fold(IO_CHUNK_BYTES * 2, |total, capacity| {
+            add_bytes(total, pcm_bytes(capacity)?)
+        })?;
     check_limit(peak_bytes, max_working_bytes, "actual staged key PCM bytes")?;
 
     let delay_frames = converter.output_delay();
@@ -295,7 +295,7 @@ pub(crate) fn key_input_from_f32_le(
         let count = (produced - start).min(expected_frames - written);
         for chunk in converted_chunk[start..start + count].chunks(CHUNK_FRAMES) {
             check_cancelled(cancelled)?;
-            samples[written..written + chunk.len()].copy_from_slice(chunk);
+            emit(chunk)?;
             written += chunk.len();
         }
         produced_total = produced_total
@@ -306,9 +306,80 @@ pub(crate) fn key_input_from_f32_le(
     if written != expected_frames {
         return Err(PcmError::Resample("staged output length mismatch".into()));
     }
+    Ok(peak_bytes)
+}
+
+/// File output keeps whole-track PCM off the admitted heap. Partial files belong to the job.
+pub(crate) fn key_input_to_f32_le(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    frame_count: usize,
+    rate_hz: u32,
+    max_working_bytes: usize,
+    cancelled: &impl Fn() -> bool,
+) -> Result<usize, PcmError> {
+    let peak = stream_key_input(
+        input,
+        frame_count,
+        rate_hz,
+        max_working_bytes,
+        cancelled,
+        &mut |samples| {
+            check_cancelled(cancelled)?;
+            let mut bytes = [0_u8; IO_CHUNK_BYTES];
+            for (sample, encoded) in samples.iter().zip(bytes.chunks_exact_mut(4)) {
+                encoded.copy_from_slice(&sample.to_le_bytes());
+            }
+            output.write_all(&bytes[..samples.len() * 4])?;
+            Ok(())
+        },
+    )?;
+    output.flush()?;
+    check_cancelled(cancelled)?;
+    Ok(peak)
+}
+
+fn key_peak_bytes(frame_count: usize, rate_hz: u32) -> Result<usize, PcmError> {
+    add_bytes(
+        pcm_bytes(output_frames(frame_count, rate_hz)?)?,
+        key_stream_working_bytes(frame_count, rate_hz)?,
+    )
+}
+
+/// Dense adapter for the existing offline API and independent PCM test oracles.
+pub(crate) fn key_input_from_f32_le(
+    input: &mut impl Read,
+    frame_count: usize,
+    rate_hz: u32,
+    max_working_bytes: usize,
+    cancelled: &impl Fn() -> bool,
+) -> Result<PreparedKeyPcm, PcmError> {
+    check_limit(
+        key_peak_bytes(frame_count, rate_hz)?,
+        max_working_bytes,
+        "dense key PCM bytes",
+    )?;
+    let mut samples = zeroed_pcm(output_frames(frame_count, rate_hz)?, cancelled)?;
+    let owned = pcm_bytes(samples.capacity())?;
+    let available = max_working_bytes
+        .checked_sub(owned)
+        .ok_or(PcmError::Limit("dense key PCM bytes"))?;
+    let mut written = 0;
+    let peak = stream_key_input(
+        input,
+        frame_count,
+        rate_hz,
+        available,
+        cancelled,
+        &mut |chunk| {
+            samples[written..written + chunk.len()].copy_from_slice(chunk);
+            written += chunk.len();
+            Ok(())
+        },
+    )?;
     Ok(PreparedKeyPcm {
         samples,
-        peak_bytes,
+        peak_bytes: add_bytes(owned, peak)?,
     })
 }
 

@@ -1,7 +1,9 @@
 //! STFT implementation matching librosa (extracted from rosa).
 
+use super::signal::Signal;
 use realfft::RealFftPlanner;
 use rustfft::num_complex::Complex;
+use std::io;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -23,8 +25,8 @@ pub struct StftParams {
 
 /// The same centered, windowed FFT as the dense STFT, retaining one frame.
 /// Center padding is addressed virtually so it never copies the complete audio.
-pub(crate) struct StftFrames<'a> {
-    signal: &'a [f64],
+pub(crate) struct StftFrames<'a, 'b> {
+    signal: &'a mut Signal<'b>,
     pad: usize,
     hop_length: usize,
     n_frames: usize,
@@ -35,8 +37,8 @@ pub(crate) struct StftFrames<'a> {
     output: Vec<Complex<f64>>,
 }
 
-impl<'a> StftFrames<'a> {
-    pub(crate) fn new(signal: &'a [f64], params: &StftParams) -> Self {
+impl<'a, 'b> StftFrames<'a, 'b> {
+    pub(crate) fn new(signal: &'a mut Signal<'b>, params: &StftParams) -> Self {
         let win = match &params.window {
             Some(window) => window.clone(),
             None => super::windows::hann(params.win_length, true),
@@ -74,22 +76,24 @@ impl<'a> StftFrames<'a> {
         self.n_frames
     }
 
-    pub(crate) fn process_frame(&mut self, index: usize) -> &[Complex<f64>] {
+    pub(crate) fn process_frame(&mut self, index: usize) -> io::Result<&[Complex<f64>]> {
         assert!(index < self.n_frames, "STFT frame outside signal");
         let start = index * self.hop_length;
-        for (offset, destination) in self.input.iter_mut().enumerate() {
-            let padded_index = start + offset;
-            let sample = padded_index
-                .checked_sub(self.pad)
-                .and_then(|source_index| self.signal.get(source_index))
-                .copied()
-                .unwrap_or(0.0);
-            *destination = sample * self.window[offset];
+        self.input.fill(0.0);
+        let destination_start = self.pad.saturating_sub(start).min(self.input.len());
+        let source_start = start.saturating_sub(self.pad).min(self.signal.len());
+        let count = (self.input.len() - destination_start).min(self.signal.len() - source_start);
+        self.signal.read_range(
+            source_start,
+            &mut self.input[destination_start..destination_start + count],
+        )?;
+        for (sample, window) in self.input.iter_mut().zip(&self.window) {
+            *sample *= window;
         }
         self.fft
             .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
             .expect("FFT failed");
-        &self.output
+        Ok(&self.output)
     }
 }
 
@@ -190,7 +194,8 @@ mod streamed_tests {
                     window: None,
                 };
                 let (real, imaginary) = stft_as_real_imag(&samples, &params);
-                let mut streamed = StftFrames::new(&samples, &params);
+                let mut signal = Signal::Slice(&samples);
+                let mut streamed = StftFrames::new(&mut signal, &params);
                 assert_eq!(streamed.frame_count(), real.cols());
                 let workspace = size_of::<f64>()
                     * (streamed.input.capacity() + streamed.window.capacity())
@@ -198,7 +203,8 @@ mod streamed_tests {
                         * (streamed.scratch.capacity() + streamed.output.capacity());
                 assert!(workspace <= n_fft * 512);
                 for frame in 0..streamed.frame_count() {
-                    for (bin, spectrum) in streamed.process_frame(frame).iter().enumerate() {
+                    for (bin, spectrum) in streamed.process_frame(frame).unwrap().iter().enumerate()
+                    {
                         assert_eq!(spectrum.re.to_bits(), real.get(bin, frame).to_bits());
                         assert_eq!(spectrum.im.to_bits(), imaginary.get(bin, frame).to_bits());
                     }
@@ -219,10 +225,11 @@ mod streamed_tests {
                 window: Some(super::super::windows::hann(18, true)),
             };
             let (real, imaginary) = stft_as_real_imag(&samples, &params);
-            let mut streamed = StftFrames::new(&samples, &params);
+            let mut signal = Signal::Slice(&samples);
+            let mut streamed = StftFrames::new(&mut signal, &params);
             assert_eq!(streamed.frame_count(), real.cols());
             for frame in 0..streamed.frame_count() {
-                for (bin, spectrum) in streamed.process_frame(frame).iter().enumerate() {
+                for (bin, spectrum) in streamed.process_frame(frame).unwrap().iter().enumerate() {
                     assert_eq!(spectrum.re.to_bits(), real.get(bin, frame).to_bits());
                     assert_eq!(spectrum.im.to_bits(), imaginary.get(bin, frame).to_bits());
                 }

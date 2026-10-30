@@ -14,7 +14,10 @@ use std::sync::Arc;
 pub(crate) mod fft;
 mod streamed;
 use fft::{RESAMPLE_CHUNK_FRAMES, tail_call_budget};
-pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le, staging_plan};
+pub(crate) use streamed::{
+    PcmStagingPlan, key_input_from_f32_le, key_input_to_f32_le, key_stream_working_bytes,
+    staging_plan,
+};
 
 pub(crate) const MONO_RULE: &str = "arithmetic-channel-mean-f64-v1";
 pub(crate) const KEY_PREPROCESSING: &str = "rubato-fft-1.0-44100-delay-trim-tail-flush-v1";

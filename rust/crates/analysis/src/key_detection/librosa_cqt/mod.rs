@@ -4,6 +4,7 @@
 
 mod dsp;
 mod matrix;
+pub(crate) mod signal;
 mod stft;
 mod windows;
 

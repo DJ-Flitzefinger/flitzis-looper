@@ -542,6 +542,24 @@ fn primary_neural_authorized_corpus_single_pass_import_and_own_ack() {
     let artifacts = workspace.join("test-artifacts").canonicalize().unwrap();
     assert!(root.is_dir() && root.starts_with(&artifacts) && !root.starts_with(&corpus));
     let (_directory, _cwd) = owned_directory_at(&root);
+    let require_key = std::env::var_os("FLITZI_CORPUS_REQUIRE_KEY").is_some();
+    let key_model_sha256 = if require_key {
+        // The isolated data cwd needs the same committed model as the staged App.
+        let source = workspace.join("repo/assets/models/keynet.onnx");
+        let target = _directory.path().join("keynet.onnx");
+        let expected = hash_file(&source);
+        let executable_model = std::env::current_exe()
+            .unwrap()
+            .with_file_name("keynet.onnx");
+        if executable_model.exists() {
+            assert_eq!(hash_file(&executable_model), expected);
+        }
+        fs::copy(&source, &target).unwrap();
+        assert_eq!(hash_file(&target), expected);
+        Some(expected)
+    } else {
+        None
+    };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         import_and_ack_with_backend_mode(&source, 48_000, true, Some(backend), true)
     }));
@@ -563,6 +581,7 @@ fn primary_neural_authorized_corpus_single_pass_import_and_own_ack() {
         }
     };
     result["authorized_source_sha256"] = json!(expected);
+    result["key_model_sha256"] = json!(key_model_sha256);
     result["exact_source_path"] = json!(source.to_str().unwrap());
     result["compiled_helper_sha256"] = json!(format!(
         "{:x}",
@@ -613,6 +632,18 @@ fn primary_neural_authorized_corpus_single_pass_import_and_own_ack() {
     ));
     if result["key_status"] == "ready" {
         assert!(result["key"].as_str().is_some_and(|key| !key.is_empty()));
+    }
+    if require_key {
+        assert_eq!(
+            result["key_status"], "ready",
+            "repair corpus requires completed Key: {result}"
+        );
+        assert!(
+            result["key"]
+                .as_str()
+                .is_some_and(|key| !key.is_empty() && key != "unknown")
+        );
+        assert!(result["key_error"].is_null());
     }
     println!(
         "CORPUS_SINGLE_PASS {}",

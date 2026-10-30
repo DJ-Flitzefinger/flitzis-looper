@@ -391,7 +391,7 @@ fn arithmetic_dimensions_match_the_pinned_rubato_configuration() {
 }
 
 #[test]
-fn separate_stages_admit_complete_long_96khz_stereo_without_source_key_overlap() {
+fn file_key_workspace_is_bounded_while_caller_source_remains_live() {
     let frames = 96_000 * 660;
     let source_bytes = frames * 2 * 4;
     let cap = 512 * 1024 * 1024;
@@ -399,7 +399,7 @@ fn separate_stages_admit_complete_long_96khz_stereo_without_source_key_overlap()
     assert!(source_bytes + plan.export_bytes > cap);
     assert!(source_bytes + output_frames(frames, 96_000).unwrap() * 4 > cap);
     assert!(plan.export_peak_bytes <= cap);
-    assert!(plan.key_peak_bytes <= cap);
+    assert!(source_bytes + key_stream_working_bytes(frames, 96_000).unwrap() <= cap);
     assert!(plan.export_bytes <= cap);
     assert_eq!(plan.export_peak_bytes, source_bytes + IO_CHUNK_BYTES);
     assert_eq!(plan.export_bytes, frames * 4);
@@ -602,6 +602,67 @@ fn streamed_key_cancels_before_read_and_during_bounded_read_conversion_or_tail()
                 ),
                 "rate={rate}, check={stop_at}"
             );
+        }
+    }
+}
+
+#[test]
+fn file_output_matches_complete_pcm_and_preserves_io_and_cancel_failures() {
+    for rate in [8000, 44_100, 48_000, 96_000, 384_000] {
+        for frames in [1, 1024, 4703] {
+            let mut samples = vec![0.25; frames];
+            samples[0] = -0.0;
+            samples[frames - 1] = -0.9375;
+            let expected =
+                resample_mono_cancellable(samples.clone(), rate, KEY_RATE_HZ, usize::MAX, &|| {
+                    false
+                })
+                .unwrap();
+            let cap = key_stream_working_bytes(frames, rate).unwrap();
+            let mut output = Vec::new();
+            assert_eq!(
+                key_input_to_f32_le(
+                    &mut Cursor::new(bytes(&samples)),
+                    &mut output,
+                    frames,
+                    rate,
+                    cap,
+                    &|| false
+                )
+                .unwrap(),
+                cap
+            );
+            assert_eq!(output, bytes(&expected));
+            let mut reader = Cursor::new(bytes(&samples));
+            assert!(matches!(
+                key_input_to_f32_le(&mut reader, &mut Vec::new(), frames, rate, cap - 1, &|| {
+                    false
+                }),
+                Err(PcmError::Limit(_))
+            ));
+            assert_eq!(reader.position(), 0);
+            assert!(matches!(
+                key_input_to_f32_le(
+                    &mut Cursor::new(bytes(&samples)),
+                    &mut FailingIo,
+                    frames,
+                    rate,
+                    cap,
+                    &|| false
+                ),
+                Err(PcmError::Io(_))
+            ));
+            assert!(matches!(
+                key_input_to_f32_le(
+                    &mut Cursor::new(bytes(&samples)),
+                    &mut Vec::new(),
+                    frames,
+                    rate,
+                    cap,
+                    &|| true
+                ),
+                Err(PcmError::Cancelled)
+            ));
         }
     }
 }

@@ -968,17 +968,19 @@ fn run_key_detection(mono_44100: &[f64]) -> String {
 
 /// Preserve genuine optional-component failures without changing the scientific wrapper.
 fn run_key_detection_result(mono_44100: &[f64]) -> Result<String, String> {
-    #[cfg(debug_assertions)]
-    let _timer = std::time::Instant::now();
+    key_detection_outcome(analysis::detect_key_f64(mono_44100, 44_100))
+}
 
-    match analysis::detect_key_f64(mono_44100, 44_100) {
+fn key_detection_outcome(
+    result: Result<analysis::KeyResult, analysis::KeyError>,
+) -> Result<String, String> {
+    match result {
         Ok(result) => {
             #[cfg(debug_assertions)]
             eprintln!(
-                "[analysis] key detection: {} ({:.0}%) in {:?}",
+                "[analysis] key detection: {} ({:.0}%)",
                 result.key_name,
-                result.confidence * 100.0,
-                _timer.elapsed()
+                result.confidence * 100.0
             );
             Ok(result.key_name)
         }

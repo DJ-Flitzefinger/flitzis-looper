@@ -2,8 +2,9 @@
 //!
 //! Combines wavelet construction and VQT/CQT transform into a single module.
 
+use super::signal::{Scratch, Signal, check_cancelled};
 use realfft::RealFftPlanner;
-use std::borrow::Cow;
+use std::io;
 
 use super::convert::cqt_frequencies;
 use super::dsp::tiny;
@@ -41,6 +42,21 @@ pub fn default_cqt_working_bytes(input_frames: usize) -> Option<usize> {
     resampling
         .checked_add(responses)?
         .checked_add(fixed_workspace)
+}
+
+/// File-backed default uses the same response/FFT/Sinc workspace without retained
+/// whole-track octave vectors. Includes bounded read/write chunks and validation.
+/// This preparation allocation reservation excludes cached model/ORT arenas and
+/// reclaimable OS file cache; it is not a process RSS or process-tree limit.
+pub fn default_file_cqt_working_bytes(input_frames: usize) -> Option<usize> {
+    let responses = input_frames
+        .div_ceil(8820)
+        .checked_add(1)?
+        .checked_mul(105)?
+        .checked_mul(52)?;
+    responses
+        .checked_add(32768 * (1024 + 512 + 512))?
+        .checked_add(64 * 1024)
 }
 
 // ============================================================================
@@ -309,6 +325,7 @@ pub(crate) fn vqt_filter_fft(
 /// Matches librosa's magnitude-only CQT: `|basis| @ |STFT|`.
 /// Librosa takes `np.abs(fft_basis)` and uses `phase=False` (magnitude STFT),
 /// avoiding complex phase cancellation.
+#[cfg(test)]
 pub(crate) fn cqt_response(
     y: &[f64],
     n_fft: usize,
@@ -316,6 +333,25 @@ pub(crate) fn cqt_response(
     basis_re: &Matrix,
     basis_im: &Matrix,
 ) -> (Matrix, Matrix) {
+    cqt_response_signal(
+        &mut Signal::Slice(y),
+        n_fft,
+        hop_length,
+        basis_re,
+        basis_im,
+        &|| false,
+    )
+    .expect("CQT response")
+}
+
+fn cqt_response_signal(
+    y: &mut Signal<'_>,
+    n_fft: usize,
+    hop_length: usize,
+    basis_re: &Matrix,
+    basis_im: &Matrix,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<(Matrix, Matrix)> {
     // STFT with Hann window (librosa default for CQT)
     let stft_params = StftParams {
         n_fft,
@@ -348,7 +384,8 @@ pub(crate) fn cqt_response(
         .expect("CQT response dimensions overflow");
     let mut resp_data = vec![0.0; response_len];
     for f in 0..n_frames {
-        let spectrum = stft.process_frame(f);
+        check_cancelled(cancelled)?;
+        let spectrum = stft.process_frame(f)?;
         for k in 0..n_bins_fft {
             // Preserve the dense reference's operations and summation order.
             stft_mag[k] = (spectrum[k].re.powi(2) + spectrum[k].im.powi(2)).sqrt();
@@ -362,10 +399,10 @@ pub(crate) fn cqt_response(
         }
     }
 
-    (
+    Ok((
         Matrix::from_vec(resp_data, n_freqs, n_frames),
         Matrix::zeros(n_freqs, n_frames),
-    )
+    ))
 }
 
 /// Stack octave responses, trimming to minimum frame count.
@@ -411,11 +448,38 @@ fn trim_stack(responses: &[(Matrix, Matrix, usize, usize)], n_bins: usize) -> (M
 }
 
 /// Resample audio using rubato (simplified 2:1 downsampler for octave decimation).
+#[cfg(test)]
 pub(crate) fn resample_half(y: &[f64]) -> Vec<f64> {
+    match resample_signal(
+        &mut Signal::Slice(y),
+        0.5,
+        y.len().div_ceil(2),
+        &mut Scratch::Memory,
+        &|| false,
+    )
+    .expect("resample")
+    {
+        Signal::Owned(samples) => samples,
+        _ => unreachable!(),
+    }
+}
+
+/// One pinned Sinc kernel for both memory and anonymous file octave storage.
+fn resample_signal(
+    input: &mut Signal<'_>,
+    ratio: f64,
+    frames: usize,
+    scratch: &mut Scratch<'_>,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<Signal<'static>> {
     use rubato::{
         Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
     };
-
+    check_cancelled(cancelled)?;
+    let mut output = scratch.sink(frames)?;
+    if input.len() == 0 {
+        return output.finish(frames);
+    }
     let params = SincInterpolationParameters {
         sinc_len: 256,
         f_cutoff: 0.95,
@@ -423,40 +487,35 @@ pub(crate) fn resample_half(y: &[f64]) -> Vec<f64> {
         oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
     };
-
-    if y.is_empty() {
-        return Vec::new();
-    }
-    let expected_len = y.len().div_ceil(2);
-    let mut output = bounded_resample_output(expected_len).expect("resample output allocation");
-    let chunk_size = 1024.min(y.len());
+    let chunk_size = 1024.min(input.len());
     let mut resampler =
-        SincFixedIn::<f64>::new(0.5, 2.0, params, chunk_size, 1).expect("resampler");
-
-    let mut pos = 0;
-    while pos + chunk_size <= y.len() {
-        let chunk = vec![y[pos..pos + chunk_size].to_vec()];
-        let result = resampler.process(&chunk, None).expect("resample");
-        append_resampled_prefix(&mut output, &result[0], expected_len);
-        pos += chunk_size;
+        SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, 1).map_err(io::Error::other)?;
+    let mut position = 0;
+    let mut chunk = vec![vec![0.0; chunk_size]];
+    while position + chunk_size <= input.len() {
+        check_cancelled(cancelled)?;
+        input.read_range(position, &mut chunk[0])?;
+        let result = resampler.process(&chunk, None).map_err(io::Error::other)?;
+        let count = result[0].len().min(frames - output.len());
+        output.append(&result[0][..count])?;
+        position += chunk_size;
     }
-
-    if pos < y.len() {
-        let remaining = &y[pos..];
-        let chunk = vec![remaining.to_vec()];
-        let result = resampler
+    check_cancelled(cancelled)?;
+    let result = if position < input.len() {
+        chunk[0].resize(input.len() - position, 0.0);
+        input.read_range(position, &mut chunk[0])?;
+        resampler
             .process_partial(Some(&chunk), None)
-            .expect("resample");
-        append_resampled_prefix(&mut output, &result[0], expected_len);
+            .map_err(io::Error::other)?
     } else {
-        let result = resampler
+        resampler
             .process_partial::<Vec<f64>>(None, None)
-            .expect("resample");
-        append_resampled_prefix(&mut output, &result[0], expected_len);
-    }
-
-    output.resize(expected_len, 0.0);
-    output
+            .map_err(io::Error::other)?
+    };
+    let count = result[0].len().min(frames - output.len());
+    output.append(&result[0][..count])?;
+    check_cancelled(cancelled)?;
+    output.finish(frames)
 }
 
 // ============================================================================
@@ -507,7 +566,21 @@ impl Default for CqtConfig {
 /// Returns the magnitude spectrogram as `Vec<f64>` of shape `(n_bins, n_frames)`
 /// in row-major order.
 pub fn cqt(y: &[f64], config: &CqtConfig) -> Vec<f64> {
-    let (re, im) = cqt_complex(y, config);
+    magnitude(cqt_complex(y, config))
+}
+
+pub(crate) fn cqt_signal(
+    y: Signal<'_>,
+    config: &CqtConfig,
+    scratch: &mut Scratch<'_>,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<Vec<f64>> {
+    Ok(magnitude(cqt_complex_signal(
+        y, config, scratch, cancelled,
+    )?))
+}
+
+fn magnitude((re, im): (Matrix, Matrix)) -> Vec<f64> {
     let n_bins = re.rows();
     let n_frames = re.cols();
 
@@ -525,6 +598,16 @@ pub fn cqt(y: &[f64], config: &CqtConfig) -> Vec<f64> {
 ///
 /// Returns (re, im) matrices of shape `(n_bins, n_frames)`.
 pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
+    cqt_complex_signal(Signal::Slice(y), config, &mut Scratch::Memory, &|| false).expect("CQT")
+}
+
+fn cqt_complex_signal(
+    mut y: Signal<'_>,
+    config: &CqtConfig,
+    scratch: &mut Scratch<'_>,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<(Matrix, Matrix)> {
+    check_cancelled(cancelled)?;
     let n_octaves = (config.n_bins as f64 / config.bins_per_octave as f64).ceil() as usize;
 
     // Generate all target frequencies with tuning correction
@@ -551,18 +634,20 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
         0
     };
 
-    let mut my_y: Cow<'_, [f64]>;
+    let mut my_y: Signal<'_>;
     let mut my_sr: f64;
     let mut my_hop: usize;
 
     if downsample_count > 0 {
         let factor = 1u32 << downsample_count;
         let new_sr = (config.sr as u32) / factor;
-        my_y = Cow::Owned(resample_by_factor(y, config.sr as u32, new_sr).expect("resample"));
+        let ratio = new_sr as f64 / config.sr as u32 as f64;
+        let frames = (y.len() as f64 * ratio).ceil() as usize;
+        my_y = resample_signal(&mut y, ratio, frames, scratch, cancelled)?;
         my_sr = new_sr as f64;
         my_hop = config.hop_length >> downsample_count;
     } else {
-        my_y = Cow::Borrowed(y);
+        my_y = y;
         my_sr = config.sr;
         my_hop = config.hop_length;
     }
@@ -573,6 +658,7 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
 
     // Process octaves from highest frequency to lowest
     for oct in 0..n_octaves {
+        check_cancelled(cancelled)?;
         let bin_start = config
             .n_bins
             .saturating_sub((oct + 1) * config.bins_per_octave);
@@ -601,13 +687,15 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
         let basis_im = basis_im.map(|v| v * sr_scale);
 
         // Compute response for this octave
-        let (resp_re, resp_im) = cqt_response(&my_y, n_fft, my_hop, &basis_re, &basis_im);
+        let (resp_re, resp_im) =
+            cqt_response_signal(&mut my_y, n_fft, my_hop, &basis_re, &basis_im, cancelled)?;
 
         responses.push((resp_re, resp_im, n_bins_oct, n_fft));
 
         // Downsample for next octave (if hop_length is even)
         if oct < n_octaves - 1 && my_hop.is_multiple_of(2) {
-            my_y = Cow::Owned(resample_half(&my_y));
+            let frames = my_y.len().div_ceil(2);
+            my_y = resample_signal(&mut my_y, 0.5, frames, scratch, cancelled)?;
             my_sr /= 2.0;
             my_hop /= 2;
         }
@@ -644,7 +732,8 @@ pub fn cqt_complex(y: &[f64], config: &CqtConfig) -> (Matrix, Matrix) {
         }
     }
 
-    (out_re, out_im)
+    check_cancelled(cancelled)?;
+    Ok((out_re, out_im))
 }
 
 /// Find the n_fft for the octave containing a given bin.
@@ -661,57 +750,28 @@ fn find_octave_nfft(bin: usize, responses: &[(Matrix, Matrix, usize, usize)]) ->
     responses.last().map(|r| r.3).unwrap_or(1)
 }
 
+#[cfg(test)]
 pub(crate) fn resample_by_factor(y: &[f64], orig_sr: u32, target_sr: u32) -> Option<Vec<f64>> {
-    if orig_sr == target_sr {
-        let mut output = bounded_resample_output(y.len())?;
-        output.extend_from_slice(y);
-        return Some(output);
-    }
-
     let ratio = target_sr as f64 / orig_sr as f64;
-    let expected_len = (y.len() as f64 * ratio).ceil() as usize;
-    let mut output = bounded_resample_output(expected_len)?;
-    if y.is_empty() {
-        return Some(output);
+    let frames = (y.len() as f64 * ratio).ceil() as usize;
+    if orig_sr == target_sr {
+        return Some(y.to_vec());
     }
-
-    use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-    };
-
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-
-    let chunk_size = 1024.min(y.len());
-    let mut resampler = SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, 1).ok()?;
-
-    let mut pos = 0;
-    while pos + chunk_size <= y.len() {
-        let chunk = vec![y[pos..pos + chunk_size].to_vec()];
-        let result = resampler.process(&chunk, None).ok()?;
-        append_resampled_prefix(&mut output, &result[0], expected_len);
-        pos += chunk_size;
+    match resample_signal(
+        &mut Signal::Slice(y),
+        ratio,
+        frames,
+        &mut Scratch::Memory,
+        &|| false,
+    )
+    .ok()?
+    {
+        Signal::Owned(samples) => Some(samples),
+        _ => None,
     }
-
-    if pos < y.len() {
-        let remaining = &y[pos..];
-        let chunk = vec![remaining.to_vec()];
-        let result = resampler.process_partial(Some(&chunk), None).ok()?;
-        append_resampled_prefix(&mut output, &result[0], expected_len);
-    } else {
-        let result = resampler.process_partial::<Vec<f64>>(None, None).ok()?;
-        append_resampled_prefix(&mut output, &result[0], expected_len);
-    }
-
-    output.resize(expected_len, 0.0);
-    Some(output)
 }
 
+#[cfg(test)]
 /// Reserve once before constructing a resampler, with no geometric Vec growth.
 fn bounded_resample_output(expected_len: usize) -> Option<Vec<f64>> {
     expected_len.checked_mul(size_of::<f64>())?;
@@ -724,15 +784,51 @@ fn bounded_resample_output(expected_len: usize) -> Option<Vec<f64>> {
     Some(output)
 }
 
-fn append_resampled_prefix(output: &mut Vec<f64>, result: &[f64], expected_len: usize) {
-    let remaining = expected_len - output.len();
-    output.extend_from_slice(&result[..result.len().min(remaining)]);
-}
-
 #[cfg(test)]
 mod bounded_tests {
     use super::super::stft::stft_as_real_imag;
     use super::*;
+
+    #[test]
+    fn file_cqt_preserves_generic_odd_hop_and_early_downsampling_bits() {
+        use super::super::signal::test_file;
+        use std::io::Write;
+        for config in [
+            CqtConfig {
+                sr: 44100.0,
+                hop_length: 997,
+                ..CqtConfig::default()
+            },
+            CqtConfig {
+                sr: 44100.0,
+                n_bins: 24,
+                bins_per_octave: 24,
+                fmin: 65.0,
+                ..CqtConfig::default()
+            },
+        ] {
+            let samples: Vec<f64> = (0..8193).map(|index| (index as f64 * 0.17).sin()).collect();
+            let expected = cqt(&samples, &config);
+            let mut file = test_file();
+            for value in &samples {
+                file.write_all(&value.to_le_bytes()).unwrap();
+            }
+            let actual = cqt_signal(
+                Signal::file(file, samples.len(), 8).unwrap(),
+                &config,
+                &mut Scratch::Files(&mut || Ok(test_file())),
+                &|| false,
+            )
+            .unwrap();
+            assert_eq!(actual.len(), expected.len());
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+        }
+    }
 
     #[test]
     fn pinned_default_octave_dimensions_fit_the_working_reservation() {

@@ -1,7 +1,7 @@
 //! Primary neural beat estimates on the existing admitted Cold/analysis workers.
 //! Scalar tempo/key metadata uses complete immutable PCM off realtime.
 
-use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, key_input_from_f32_le};
+use super::analysis_pcm::{LoadedPcmSnapshot, PcmIdentity, key_input_to_f32_le};
 use super::neural_analysis::raw::{BeatThisSourceInput, expected_logit_count, pinned_model};
 use super::neural_analysis::{MonoWriter, invoke_worker, verify_staged};
 use crate::messages::{AnalysisKeyStatus, LoadedAnalysis, SampleBuffer};
@@ -61,6 +61,24 @@ mod tests {
     }
 
     #[test]
+    fn file_key_admission_covers_chaser_geometry_and_exact_limit_without_pcm_allocation() {
+        // Complete Symphonia 44.1k extent measured by the authorized corpus import.
+        for rate in [48_000, 96_000] {
+            let frames = (20_223_360_u128 * u128::from(rate)).div_ceil(44_100) as usize;
+            let plan = admission_plan(frames, 2, rate, 0, false).unwrap();
+            assert!(plan.key_skip_reason.is_none());
+            let peak = plan.key_peak_bytes.unwrap();
+            let extra = LIMIT - peak;
+            for (delta, skipped) in [(extra - 1, false), (extra, false), (extra + 1, true)] {
+                let boundary = admission_plan(frames, 2, rate, delta, false).unwrap();
+                assert_eq!(boundary.key_skip_reason.is_some(), skipped);
+                assert_eq!(boundary.key_peak_bytes.unwrap(), peak + delta);
+            }
+        }
+        assert!(optional_key_peak(usize::MAX, 8000, 0, 0, 0).is_err());
+    }
+
+    #[test]
     fn oversized_finite_source_is_refused_before_complete_pcm_read() {
         for tempo_only in [false, true] {
             let read_started = std::cell::Cell::new(false);
@@ -75,7 +93,7 @@ mod tests {
 
     #[test]
     fn optional_key_overflow_does_not_refuse_complete_bpm_input() {
-        let frames = 600 * 48_000;
+        let frames = 1100 * 48_000;
         let full = admission_plan(frames, 2, 48_000, 0, false).unwrap();
         assert!(full.primary_peak_bytes < LIMIT);
         assert!(full.key_peak_bytes.unwrap() > LIMIT);
@@ -111,7 +129,7 @@ mod tests {
 
     #[test]
     fn skipped_unrequested_failed_and_completed_unknown_keys_remain_distinct() {
-        let large = admission_plan(600 * 48_000, 2, 48_000, 0, false).unwrap();
+        let large = admission_plan(1100 * 48_000, 2, 48_000, 0, false).unwrap();
         let skipped = optional_key(&large, false, || panic!("unadmitted key must not run"));
         assert_eq!(skipped.status, AnalysisKeyStatus::SkippedBudget);
         assert!(skipped.key.is_none() && skipped.error.is_some());
@@ -192,7 +210,14 @@ pub(super) fn admission_plan(
         wire_bytes: wire,
     };
     if !tempo_only {
-        match optional_key_peak(frames, rate, retained, wire, plan.key_peak_bytes) {
+        match optional_key_peak(
+            frames,
+            rate,
+            retained,
+            wire,
+            super::analysis_pcm::key_stream_working_bytes(frames, rate)
+                .map_err(|e| e.to_string())?,
+        ) {
             Ok(peak) => {
                 admission.key_peak_bytes = Some(peak);
                 if peak > LIMIT {
@@ -218,10 +243,11 @@ fn optional_key_peak(
 ) -> Result<usize, String> {
     let converted = usize::try_from((frames as u128 * 44_100).div_ceil(u128::from(rate)))
         .map_err(|_| "neural key extent overflow")?;
-    let cqt = flitzis_looper_analysis::key_detection::librosa_cqt::cqt::default_cqt_working_bytes(
-        converted,
-    )
-    .ok_or("neural key workspace overflow")?;
+    let cqt =
+        flitzis_looper_analysis::key_detection::librosa_cqt::cqt::default_file_cqt_working_bytes(
+            converted,
+        )
+        .ok_or("neural key workspace overflow")?;
     let (input, output) = super::analysis_pcm::fft::fft_dimensions(rate, 44_100);
     let fft = input
         .checked_add(output)
@@ -230,12 +256,7 @@ fn optional_key_peak(
     let key = key_pcm_peak
         .checked_add(fft)
         .ok_or("neural key workspace overflow")?
-        .max(
-            converted
-                .checked_mul(12)
-                .and_then(|v| v.checked_add(cqt))
-                .ok_or("neural key workspace overflow")?,
-        );
+        .max(cqt);
     held.checked_add(wire)
         .and_then(|value| value.checked_add(key))
         .ok_or_else(|| "neural key workspace overflow".into())
@@ -390,14 +411,14 @@ pub(super) fn analyze_with_range(
             let key = optional_key(&admission, tempo_only, || {
                 let mut key_reader = file.try_clone().map_err(|e| e.to_string())?;
                 key_reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-                let input = key_input_from_f32_le(&mut key_reader, frames, rate, LIMIT - held - wire, &cancelled)
+                let mut input = tempfile::tempfile_in(temporary.path()).map_err(|e| e.to_string())?;
+                key_input_to_f32_le(&mut key_reader, &mut input, frames, rate, LIMIT - held - wire, &cancelled)
                     .map_err(|e| e.to_string())?;
-                let mut widened = Vec::new();
-                widened.try_reserve_exact(input.samples.len())
-                    .map_err(|_| "Key widened input allocation unavailable".to_owned())?;
-                widened.extend(input.samples.iter().map(|&value| f64::from(value)));
-                drop(input);
-                super::run_key_detection_result(&widened)
+                let key_frames = usize::try_from((frames as u128 * 44_100).div_ceil(u128::from(rate)))
+                    .map_err(|_| "Key frame count overflow")?;
+                let mut factory = || tempfile::tempfile_in(temporary.path());
+                super::key_detection_outcome(flitzis_looper_analysis::key_detection::detect_key_file(
+                    input, key_frames, &mut factory, &cancelled))
             });
             (beat.join().unwrap_or_else(|_| Err("neural worker panicked".into())), key)
         });

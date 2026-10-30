@@ -8,7 +8,12 @@ To define background audio analysis for BPM, key, beat grid, and downbeat metada
 Configured primary-neural analysis SHALL admit full-source BPM independently of
 optional key work at every pre-read and execution gate, retaining512MiB and all
 source/request/cancellation/publication guards. Optional concurrent key admission
-SHALL include held PCM, wire, conversion, FFT, CQT and widened working storage.
+SHALL include the caller's retained interleaved PCM, additional held storage,
+concurrent wire storage, bounded conversion/I/O buffers, FFT/Sinc workspace and
+retained CQT responses/frontend. Complete Key PCM and octave signals SHALL use
+job-owned file storage with bounded reads rather than whole-track widening or
+octave heaps. The512MiB preparation allocation cap is not a process-tree RSS or
+OS file-cache guarantee; cached model/ORT arenas remain separately owned.
 No source cropping or limit increase SHALL substitute for independent admission.
 Both current loader DTO routes SHALL keep the required key string and explicit
 key_status ready/skipped_budget/not_requested/failed plus available key_error.
@@ -34,9 +39,22 @@ An actual completed unknown classification SHALL remain distinct from skipped wo
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
 The system SHALL analyze a loaded audio sample to determine its BPM, musical key, and beat grid.
 
-The system SHALL decode the audio file once, convert to mono, and resample to 44100 Hz (if the source rate differs). The resulting mono buffer SHALL be shared between the BPM detection pipeline and the key detection pipeline — no pipeline SHALL re-decode or re-resample the audio.
+Configured primary-neural analysis SHALL export the complete immutable loaded PCM
+once as arithmetic-channel-mean f32 LE mono at its actual loaded rate, preserving
+frame zero, source identity and the full tail. Beat This SHALL consume that sealed
+mono through its pinned worker frontend. KeyNet SHALL independently derive complete
+44100-Hz mono with the existing delay-trimmed Rubato FFT conversion, then use the
+existing pinned Sinc octave conversion and shared CQT/classifier math.
+Neither branch SHALL crop or decode another source. Original interleaved PCM
+SHALL remain available for later QM corroboration/fallback and range selection.
 
-The system SHALL execute the BPM detection pipeline (qm-dsp: DetectionFunction → TempoTrackV2 → DownBeat) and the key detection pipeline (KeyNet CNN via ONNX) **concurrently** on separate threads after shared preprocessing completes. The analysis result SHALL be assembled only after both pipelines finish.
+Admitted primary BPM and optional Key work SHALL execute concurrently off realtime;
+the result SHALL be assembled after both finish and staged-input integrity and
+cancellation are checked. Unconfigured scientific callers SHALL retain their shared
+44100-Hz mono and QM-dsp/KeyNet path. File read/write/extent/nonfinite and scratch
+failures SHALL report a failed Key component, never a fabricated classification.
+All job-owned scratch handles SHALL close before cleanup on success, failure,
+cancellation or stale completion.
 
 The system SHALL represent the detected key as a musical-notation string (e.g., `"C#m"`) suitable for display in a professional audio application. When key detection fails or the audio is insufficient, the system SHALL use `"unknown"` as the key value.
 
@@ -49,7 +67,7 @@ The system SHALL represent the detected key as a musical-notation string (e.g., 
 - **AND** the system produces a musical key value in musical notation (e.g., `"C#m"`) from the key detection pipeline
 - **AND** the system produces a beat grid containing beat times from the BPM pipeline
 - **AND** the system produces downbeat times when they can be determined
-- **AND** the total analysis time is bounded by the slower pipeline, not the sum of both
+- **AND** concurrent component execution is followed by integrity checks and any required BPM corroboration/fallback
 
 #### Scenario: Analysis failure is reported
 - **GIVEN** a pad has a loaded audio file
@@ -67,7 +85,7 @@ The system SHALL represent the detected key as a musical-notation string (e.g., 
 ### Requirement: Analysis Can Be Triggered Automatically And Manually
 The system SHALL run analysis automatically as part of the sample loading workflow, and SHALL allow the user to trigger analysis manually for an already-loaded pad.
 
-Manual analysis SHALL enqueue an analysis-only background task and SHALL NOT re-run decoding, resampling, channel mapping, or sample publication.
+Manual analysis SHALL enqueue an analysis-only background task without replacing or republishing the playback source. It MAY prepare analysis-specific mono/resampling from the captured immutable loaded PCM, without re-decoding the original file.
 
 #### Scenario: Automatic analysis runs on load
 - **WHEN** a sample load completes successfully for a pad
