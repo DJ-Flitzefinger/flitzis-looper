@@ -64,6 +64,15 @@ PCM16 reads and exclusive writes; large output uses ds64 counts.
 [stem_artifacts.py](../../src/flitzis_looper/controller/stem_artifacts.py) streams model-output
 resampling/instrumental summation with the established small-file rounding oracle.
 
+Inference already uses owned subprocesses, but this conversion still runs
+per-sample Python loops in App worker threads. The component-residency worker
+also retains a global owners lock across PCM reads; another public request can
+wait for it while holding the shared producer and Python execution. Process-tree
+ownership alone does not budget child CPU threads. These are source-audited
+contention risks, not measured proof of callback glitches. The focused
+[performance plan](../development.md#performance-audit-and-upgrade-plan) separates
+control-lock isolation, detached Rust conversion and background resource policy.
+
 The joint set commit covers both disk areas; fenced config selection points to
 the exact immutable result. It does not force unused components into RAM or
 certify a live effect. FULL MIX with preload off need not retain unused stem

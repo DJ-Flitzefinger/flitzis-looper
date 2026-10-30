@@ -1,0 +1,53 @@
+# Improve trigger latency and background-work isolation
+
+## Why
+
+With Key Lock and BPM Lock enabled, slowed non-master PADs can feel late on
+retrigger and START/STOP. Stem generation or loading during playback can coincide
+with audible glitches. Robust playback takes priority over background throughput.
+
+The initial source audit identifies an explicit 8192-frame preparation lead, a
+single selected-PAD endpoint reserve, global stem ownership locks spanning disk
+work, Python sample-conversion loops and uncoordinated child CPU thread budgets.
+These are concrete risks, not measured proof of every reported symptom.
+
+## What changes
+
+- Measure production input/capture, requested target, actual effect and rendered
+  attack separately; aim for at most 30 ms software trigger-to-significant-output
+  response on the declared ready 2/4/6-PAD workload, including slowed Key Lock.
+- Prepare reusable start resources before presses, retaining exact source and
+  operation guards, independent mutable voices and atomic group effects.
+- Remove slow stem preparation from shared control locks and Python/GIL waits.
+- Port justified bounded stem conversion arithmetic to Rust, releasing the GIL
+  while preserving existing byte-level conversion and publication contracts.
+- Budget background CPU/thread use and retain same-model CUDA-to-CPU fallback.
+- Investigate AMD-capable GPU providers and integrate a practical, equivalent
+  path when supported; retain provider-independent requests and CPU fallback.
+- Audit PCM ownership, process memory, worker concurrency and offline GPU
+  opportunities; implement only changes supported by before/after evidence.
+- Keep Rust domain/processing code independent of Python-specific bindings so
+  further migration, reduced Python/PyTorch footprint and future Windows/Linux/macOS packaging
+  are easier. Attempt practical PyTorch removal/native model-runtime replacement
+  with CPU/CUDA and quality parity; preserve every supported function and interaction.
+- Update existing architecture/development documentation with the implementation
+  and its measured limits. Keep historical evidence and unpassed gates intact.
+
+## Non-goals
+
+No restoration of retired SYNC/phase-following features, plugin hosting, new FX,
+automatic private-data migration or deletion. No mandatory NVIDIA hardware,
+callback GPU synchronization or unsupported universal device-latency guarantee.
+Broad Rust migration and larger engine redesign are authorized when useful;
+neither a full port nor final native packages are required for this performance delivery.
+Preserve the single transport and source authority.
+
+## Delivery
+
+Eight coherent steps are recorded in [tasks](tasks.md). Each important step runs
+in its own chat, finishes its appropriate checks and independent reviews, then
+commits and normally pushes to `performance-upgrade` before its successor starts.
+This assignment does not merge or push these changes to `main`.
+
+This proposal and its deltas describe planned behavior. The initial audit changes
+no runtime code and establishes no performance, device or listening acceptance.

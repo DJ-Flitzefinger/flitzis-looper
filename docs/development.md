@@ -252,6 +252,47 @@ Observed vcpkg runtime DLLs for the current branch are `rubberband-3.dll`,
 `sleefdft.dll`, `sleef.dll`, and `samplerate.dll`. Packaging scripts may copy
 those DLLs next to the built native extension instead of requiring `PATH`.
 
+### Performance audit and upgrade plan
+
+The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
+[performance change](../openspec/changes/improve-performance-isolation/proposal.md),
+with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
+and [eight sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+It is an audit/plan, not a measured speedup or completed runtime optimization.
+
+The first priorities are the 8192-frame prepared-start scheduling lead, selected
+endpoint reserve misses and audible onset; then stem component-loading control
+locks, GIL-bound sample conversion and background CPU budgets. Finite/shared PCM,
+existing offline CUDA and CPU fallback are foundations to measure and preserve.
+Rust conversion is justified for sample arithmetic; wholesale controller/model
+ports and callback CUDA have no demonstrated benefit at this point.
+New Rust processing/domain code should remain independent of thin Python/PyO3
+bindings. The plan also audits PyTorch replacement and dependency footprint for
+further useful Rust migration and future Windows EXE/Linux/macOS packaging. Keep
+common Rust logic portable, OS-specific process/device/resource handling behind
+adapters and CPU as the baseline with optional CUDA. Actual platform tests remain
+distinct from design intent. AMD-capable GPU alternatives are also an explicit
+conditional implementation target, with provider-based selection and CPU fallback.
+Practical PyTorch
+removal is an explicit target, conditional on feasibility and at least current
+model quality, functions and interactions. KeyNet already uses Rust/ONNX; stems
+and separate BeatThis workers retain full Torch pipelines. Model/device/installer
+parity is required before removing their existing inference runtime.
+
+Measure original input, requested target T, actual E, significant sound and
+principal attack separately. The ready 2/4/6-PAD quantization-OFF engineering goal
+is at most 30 ms to significant rendered output, with no lost beginning or hidden
+attack displacement. Declare the machine, rates, partitions and cold/warm/refusal
+coverage. Intentional grid wait, device latency and listening acceptance are
+separate. Include rapid unselected/slowed PADs and concurrent inference,
+conversion and component loading; stress at most 10 PADs.
+
+Use the production-route tests as well as the adapter probe below. Adapter/native
+delay and Rust allocation counters alone do not establish whole-route latency,
+native FFT allocation freedom or audio stability during background work.
+For a machine-local routed workspace, follow its runtime entry with the actual
+checkout; the generic commands below do not override local cache/storage rules.
+
 ### Offline Key Lock Measurement
 
 The standalone `key_lock_latency_probe` example imports the production backend,

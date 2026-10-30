@@ -56,6 +56,17 @@ At effect, [pitch_actions.rs](../../rust/crates/looper/src/audio_engine/pitch_ac
 checks execution frame, source/request/epoch, pitch/Lock, timing/window/publication,
 Native history permit and current feed. Stale work cannot alter replacement content.
 
+The 8192-frame lead is a scheduling cost when an already-due action needs worker
+preparation: about 171 ms at 48 kHz or 85 ms at 96 kHz, before considering DSP
+onset. The existing endpoint reserve covers one selected Normal PAD and is
+consumed on use. A past original target excludes its fast path; ordinary groups
+use a common prepared effect without this reserve-hit route. For ordinary fresh
+starts, exactly neutral Native pitch bypasses preparation. Nonunity costs can
+affect both rate directions;
+slower-only perceived delay still needs separate attack/readiness measurements.
+The [performance audit](../development.md#performance-audit-and-upgrade-plan)
+plans this verification; no latency improvement is implemented by that plan.
+
 For a fresh ordinary PAD or Piano retrigger birth, the physical selected beginning
 is emitted first at actual E. Unheard E-T is not consumed as source/filter history.
 Source phase counts actually emitted frames; this full beginning does not claim
