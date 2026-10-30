@@ -128,10 +128,9 @@ impl EndpointReserveWork {
             || candidate.is_some()
             || self.retired_request.is_some()
             || self.format != Some(render_format)
-            || self
-                .candidate
-                .as_ref()
-                .is_none_or(|state| !state.has_physical_birth_context())
+            || self.candidate.as_ref().is_none_or(|state| {
+                !state.has_physical_birth_context() || state.has_retained_feed()
+            })
         {
             return false;
         }
@@ -146,7 +145,7 @@ impl EndpointReserveWork {
             return false;
         };
         if (original.binding.sample_rate_hz, original.plan.channels) != render_format
-            || !source.same_endpoint_request(original)
+            || !source.same_reserved_endpoint_request(original)
         {
             return false;
         }

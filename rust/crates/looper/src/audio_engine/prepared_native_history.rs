@@ -381,7 +381,44 @@ impl NativeHistoryRequest {
                 .matches_exact(snapshot.actual_feed_checkpoint())
     }
 
-    pub(crate) fn same_endpoint_request(&self, other: &Self) -> bool {
+    /// A silent physical-birth reserve has no performer launch coordinates yet.
+    /// Compare a scalar copy in its phase namespace; the fresh action request and
+    /// all general source/history/adoption comparisons remain unchanged.
+    pub(crate) fn matches_reserved_endpoint(
+        &self,
+        snapshot: &PitchSourceSnapshot,
+        render: super::pitch_actions::FrozenPitchRender,
+    ) -> bool {
+        if self.actual_feed.is_some() || snapshot.actual_feed.is_some() {
+            return false;
+        }
+        let Some(readers) = snapshot.readers() else {
+            return false;
+        };
+        let mut playback = snapshot.playback;
+        playback.carry_launch_reference_from(&self.playback);
+        let feed = ProductiveSourceFeed {
+            sample: &snapshot.sample,
+            stems: readers.current,
+            outgoing_stems: readers.outgoing,
+            sample_rate_hz: snapshot.sample_rate_hz,
+            accepted: snapshot.accepted,
+            plan: snapshot.plan,
+            playback: &playback,
+            permit: None,
+            output_frame: None,
+            pitch_intent: render.pitch,
+            key_lock: render.key_lock,
+        };
+        self.endpoint_data_matches(&feed)
+    }
+
+    pub(crate) fn same_reserved_endpoint_request(&self, other: &Self) -> bool {
+        if self.actual_feed.is_some() || other.actual_feed.is_some() {
+            return false;
+        }
+        let mut playback = other.playback;
+        playback.carry_launch_reference_from(&self.playback);
         let feed = ProductiveSourceFeed {
             sample: &other.sample,
             stems: other.stems.as_ref(),
@@ -389,16 +426,13 @@ impl NativeHistoryRequest {
             sample_rate_hz: other.binding.sample_rate_hz,
             accepted: other.binding.accepted,
             plan: other.plan,
-            playback: &other.playback,
+            playback: &playback,
             permit: None,
             output_frame: None,
             pitch_intent: other.pitch_intent,
             key_lock: other.key_lock,
         };
         self.endpoint_data_matches(&feed)
-            && self
-                .actual_feed_checkpoint()
-                .matches_exact(other.actual_feed_checkpoint())
             && other
                 .permit
                 .current(&other.sample, other.binding.sample_rate_hz)

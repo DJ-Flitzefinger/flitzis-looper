@@ -13,6 +13,9 @@ use crate::audio_engine::buffer_retirement::{
 use crate::audio_engine::mix_capture::SPOOL_HEADER_BYTES;
 use crate::audio_engine::mix_capture_api::MixCaptureTicket;
 use crate::audio_engine::mixer::RtMixer;
+use crate::audio_engine::ordinary_endpoint_reserve_tests::{
+    adopt_current_sources, refresh_actual_runtime_bindings,
+};
 use crate::audio_engine::scheduler::ScheduledCommand;
 use crate::messages::MixCaptureTarget;
 use pyo3::types::PyDictMethods;
@@ -279,6 +282,71 @@ fn measured_capture_callback(fixture: &mut Fixture, output: &mut [f32], phase: &
         "{phase}"
     );
     processed
+}
+
+#[test]
+fn one_ready_wet_group_starts_its_original_recording_at_the_same_immediate_effect() {
+    for late in [false, true] {
+        let mut fixture = Fixture::new(true);
+        adopt_current_sources(&mut fixture, true);
+        refresh_actual_runtime_bindings(&fixture);
+        fixture.mixer.set_bpm_lock(true);
+        fixture.mixer.set_master_bpm(120.0);
+        fixture.mixer.set_pad_bpm(0, Some(150.0));
+        fixture.mixer.set_pad_bpm(1, Some(120.0));
+        fixture.control.engine.select_input_pad(0).unwrap();
+        let deadline = Instant::now() + CAPTURE_WAIT;
+        loop {
+            fixture.render(0);
+            if fixture
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .selected_endpoint_ready()
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mut rig = CaptureRig::with_fixture(fixture, 16);
+        let captured = public_capture(&rig.fixture);
+        rig.fixture.drain();
+        if late {
+            assert!(rig.fixture.render(512).iter().all(|sample| *sample == 0.0));
+        }
+        let execution = if late { 512 } else { 0 };
+        rig.fixture.feedback.reserve(64);
+        let batch = rig.publish(&captured);
+        assert_eq!(
+            measured_capture_callback(
+                &mut rig.fixture,
+                &mut [],
+                "ready group and recording immediate commit",
+            ),
+            1
+        );
+        assert_eq!(batch.publication_status(), "accepted");
+        assert_eq!(rig.status().first_frame, Some(execution));
+        assert!(
+            captured
+                .owner
+                .members
+                .iter()
+                .all(|member| member.start.effective_frame() == Some(execution))
+        );
+        let pcm = rig.fixture.pcm(1024);
+        rig.stop(execution + 1024);
+        let settled = rig.joined();
+        assert_eq!(settled.first_frame, Some(execution));
+        assert_eq!(settled.end_frame, Some(execution + 1024));
+        assert_eq!(settled.written_frames, 1024);
+        assert_eq!(
+            rig.bits(),
+            pcm.into_iter().map(f32::to_bits).collect::<Vec<_>>()
+        );
+    }
 }
 
 #[test]

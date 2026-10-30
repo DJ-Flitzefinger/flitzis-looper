@@ -3,6 +3,12 @@
 #[path = "ordinary_endpoint_reserve_tests/pitch_tests.rs"]
 mod pitch_tests;
 
+#[cfg(windows)]
+mod response_probe;
+
+#[cfg(windows)]
+mod ready_clock_tests;
+
 use super::audio_stream::drain_control_messages;
 use super::input_mapping::launch_admission_tests::RATE;
 use super::ordinary_start::OrdinaryStartWork;
@@ -85,11 +91,7 @@ pub(in crate::audio_engine) fn adopt_current_source_ids(
             placement.content_key(),
             "only the complete actual callback adoption grants this SourceACK"
         );
-        fixture.mixer.set_pad_loop_region(
-            id,
-            LOOP_START as f64 / f64::from(RATE),
-            Some(LOOP_END as f64 / f64::from(RATE)),
-        );
+        fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
         fixture.mixer.set_pad_key_lock(id, key_lock);
         fixture.mixer.set_pad_pitch_intent(id, pitch).unwrap();
     }
@@ -258,7 +260,7 @@ fn wait_real_window(
 
 #[cfg(windows)]
 #[test]
-fn original_prepared_window_ack_reuses_ontime_cache_but_prepares_own_late_history() {
+fn original_prepared_window_ack_reuses_cache_with_fresh_ontime_or_late_authority() {
     let mut ontime_pcm: Vec<f32> = Vec::new();
     for late in [false, true] {
         let mut fixture = fixture();
@@ -339,16 +341,15 @@ fn original_prepared_window_ack_reuses_ontime_cache_but_prepares_own_late_histor
         );
         fixture.drain();
         assert!(original.accepted(), "reason={:?}", original.reason());
-        let execution = if late { 38_192 } else { 24_000 };
+        let execution = if late { 30_000 } else { 24_000 };
         assert_eq!(original.original_frame(), Some(24_000));
         assert_eq!(original.execution_frame(), Some(execution));
         if late {
-            // A past-target original retains its own worker admission. Its new
-            // physical beginning must remain complete despite the late effect.
-            assert_eq!(original.effective_frame(), None);
-            assert_eq!(fixture.starts(0), 0);
-            assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
-            wait_action(&mut fixture, &original);
+            // A past-target original owns a fresh permit over the same complete
+            // physical endpoint. Unheard delay never consumes its beginning.
+            assert_eq!(original.effective_frame(), Some(execution));
+            assert_eq!(fixture.starts(0), 1);
+            assert!(fixture.voice(0).launch_unadvanced);
         } else {
             assert!(
                 fixture
@@ -374,19 +375,11 @@ fn original_prepared_window_ack_reuses_ontime_cache_but_prepares_own_late_histor
             original.reason()
         );
         assert_eq!(original.effective_frame(), Some(execution));
-        if late {
-            assert_ne!(
-                fixture.voice(0).stretch.native_state_address(),
-                cached_native,
-                "the late original owns its worker's complete Native history"
-            );
-        } else {
-            assert_eq!(
-                fixture.voice(0).stretch.native_state_address(),
-                cached_native,
-                "the ontime original retains the eligible cached Native owner"
-            );
-        }
+        assert_eq!(
+            fixture.voice(0).stretch.native_state_address(),
+            cached_native,
+            "each original retains the eligible physical Native owner with its fresh permit"
+        );
         assert_eq!(
             fixture.voice(0).stretch.adopted_request_id(),
             Some(original.sequence())

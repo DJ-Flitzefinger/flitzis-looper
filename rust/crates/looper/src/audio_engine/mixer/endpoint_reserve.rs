@@ -94,7 +94,8 @@ impl RtMixer {
         else {
             return false;
         };
-        source.matches_endpoint(&snapshot, render) && source.permit.same_endpoint_authority(&permit)
+        source.matches_reserved_endpoint(&snapshot, render)
+            && source.permit.same_endpoint_authority(&permit)
     }
 
     pub(crate) fn pitch_endpoint_matches(
@@ -126,7 +127,7 @@ impl RtMixer {
         else {
             return false;
         };
-        source.matches_endpoint(&snapshot, work.action.render())
+        source.matches_reserved_endpoint(&snapshot, work.action.render())
             && source.permit.same_endpoint_authority(&permit)
     }
 }

@@ -516,7 +516,6 @@ impl PitchRuntime {
             work.freeze_launch_clock(timeline, original, callback)?;
             let required = mixer.requires_ordinary_start_preparation(&work)?;
             let hit = required
-                && original >= callback
                 && work.origin().start_behavior()
                     != super::key_lock_start_policy::KeyLockStartBehavior::AttackAtGrid
                 && self.endpoint.ready_for(mixer, &work);
@@ -600,16 +599,31 @@ impl PitchRuntime {
             if count != group.len {
                 return Err(PitchActionReject::Capacity);
             }
-            let mut required = false;
+            let mut required = 0;
+            let mut reserve_member = None;
             for work in group.work.iter_mut().flatten() {
                 work.freeze_launch_clock(timeline, original, callback)?;
             }
-            for work in &group.work {
-                required |= mixer.requires_ordinary_start_preparation(
-                    work.as_ref().ok_or(PitchActionReject::PreparedMismatch)?,
-                )?;
+            for (member, work) in group.work.iter().enumerate() {
+                let work = work.as_ref().ok_or(PitchActionReject::PreparedMismatch)?;
+                if mixer.requires_ordinary_start_preparation(work)? {
+                    required += 1;
+                    if work.origin().start_behavior()
+                        != super::key_lock_start_policy::KeyLockStartBehavior::AttackAtGrid
+                        && self.endpoint.ready_for(mixer, work)
+                    {
+                        reserve_member = Some(member);
+                    }
+                }
             }
-            let execution = execution_frame(original, callback, required);
+            // One reserve owns one independent Native/FIFO. It can make the
+            // complete group ready only when every other member is already dry.
+            let reserve_member = reserve_member.filter(|_| required == 1);
+            let execution = execution_frame(
+                original,
+                callback,
+                required != 0 && reserve_member.is_none(),
+            );
             for work in group.work.iter_mut().flatten() {
                 match work.origin().target_frame() {
                     None => work.origin().capture_target(
@@ -621,6 +635,13 @@ impl PitchRuntime {
                 }
                 work.freeze_frames(original, execution)?;
                 mixer.capture_ordinary_start_request(work, callback, execution)?;
+            }
+            if let Some(member) = reserve_member {
+                let work = group.work[member].as_mut().unwrap();
+                if !self.endpoint.consume(work) {
+                    return Err(PitchActionReject::PreparedMismatch);
+                }
+                work.origin().callback_guard()?;
             }
             Ok(execution)
         })();

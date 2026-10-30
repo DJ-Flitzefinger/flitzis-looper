@@ -58,14 +58,20 @@ Native history permit and current feed. Stale work cannot alter replacement cont
 
 The 8192-frame lead is a scheduling cost when an already-due action needs worker
 preparation: about 171 ms at 48 kHz or 85 ms at 96 kHz, before considering DSP
-onset. The existing endpoint reserve covers one selected Normal PAD and is
-consumed on use. A past original target excludes its fast path; ordinary groups
-use a common prepared effect without this reserve-hit route. For ordinary fresh
+onset. The endpoint reserve covers one selected Normal PAD and is consumed on
+use. Its pure physical-birth comparison excludes the future action's launch
+coordinates, while the transferred request retains that action's fresh phase,
+source permit and original T. A matching ordinary start can use it at a past T;
+E is then the current callback. An atomic group can use this path when exactly
+one member needs Native and every other member is dry/unity. Multiple wet members,
+missing readiness and AttackAtGrid retain worker preparation. For ordinary fresh
 starts, exactly neutral Native pitch bypasses preparation. Nonunity costs can
 affect both rate directions;
 slower-only perceived delay still needs separate attack/readiness measurements.
 The [performance audit](../development.md#performance-audit-and-upgrade-plan)
-plans this verification; no latency improvement is implemented by that plan.
+records production-route measurements and the remaining readiness/attack work.
+The scheduling correction does not compensate the backend's principal attack;
+the 30 ms software attack goal remains unmet on the declared synthetic burst.
 
 For a fresh ordinary PAD or Piano retrigger birth, the physical selected beginning
 is emitted first at actual E. Unheard E-T is not consumed as source/filter history.

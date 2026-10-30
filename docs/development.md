@@ -257,8 +257,10 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [eight sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
-It is an audit/plan, not a measured speedup or completed runtime optimization.
+and [nine sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+Production response measurements and the first exact-ready scheduling correction
+are recorded in the design. The 30 ms principal-attack target remains unmet;
+an additional readiness/DSP step precedes the stem work.
 
 The first priorities are the 8192-frame prepared-start scheduling lead, selected
 endpoint reserve misses and audible onset; then stem component-loading control

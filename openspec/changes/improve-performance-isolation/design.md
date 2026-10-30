@@ -10,6 +10,9 @@ component loading and live adoption must be measured separately.
 
 ## Source findings
 
+This table records the initial audit baseline. The STEP2 receipt below records
+the implemented subset and supersedes its corresponding reserve-miss observations.
+
 | Finding | Evidence | Implication and next verification |
 | --- | --- | --- |
 | Fixed preparation scheduling lead | `pitch_runtime.rs`: `PREPARATION_LEAD_FRAMES`, `execution_frame`, `next_replan`, `accept_ordinary` | An already-due start needing a worker is planned at callback +8192 frames: 185.76 ms at 44.1 kHz, 170.67 ms at 48 kHz, 85.33 ms at 96 kHz. These are arithmetic scheduling costs, not measured input latency. Measure hit/miss and E-T on the actual ordinary route. |
@@ -27,6 +30,95 @@ component loading and live adoption must be measured separately.
 Paths above are under
 [`rust/crates/looper/src/audio_engine`](../../../rust/crates/looper/src/audio_engine/)
 or [`src/flitzis_looper`](../../../src/flitzis_looper/), as qualified.
+
+## STEP2 production response and exact-ready scheduling
+
+Measured 2026-10-30 on Windows x64, Ryzen 9 9955HX3D, optimized Release, pinned
+Rubber Band 4.0.0. Runtime baseline `ef59ae49`; the probe/test setup was added
+before changing runtime behavior. The paired device-free probe uses the public
+GUI-origin captured ordinary/Piano/group APIs, real control admission, preparation
+worker, scheduler and mixer. It paces output callbacks rather than freezing the
+timeline while workers run. This excludes the physical input/UI event pump,
+device/driver and acoustic path. Single-PAD cases have two loaded PADs; group
+cases actually render 2/4/6 voices. No inference/background-job load was added.
+
+Each side covers 30 ordinary cases (48 kHz dense; 44.1/96 kHz representatives;
+512-frame and 127/383/257/769 irregular partitions), six Piano cases and twelve
+2/4/6-PAD groups. One observation per declared configuration is a pilot, not
+p95/p99 evidence. Key Lock ON/OFF and r=.8/1/1.16 controls are included. The
+slowed/faster cases use BPM Lock with a 120 BPM master. "Cold" means no prepared
+selected endpoint, not a cold process; "late" deliberately publishes one 512-frame
+callback after capture. All 48 cases applied before and after; none were omitted.
+
+The fixture has one 1 kHz burst at the selected beginning with a 4 ms exponential
+decay. First output uses an absolute 1e-7 threshold, significant output uses 10%
+of peak, and the declared principal burst landmark is the centre of the strongest
+1 ms energy window. This independent synthetic landmark is not general perceptual
+or musical acceptance. Matched dry rendering retains the same source/rate/silence;
+all output samples, including pre-ringing, remain in the measurements.
+
+| Ready selected case, T=0 | Before E / significant / principal (output frames) | After E / significant / principal |
+| --- | --- | --- |
+| Ordinary r=.8, 48 kHz | 8192 / 11019 / 11183 | 0 / 2827 / 2991 |
+| Ordinary r=1.16, 48 kHz | 8192 / 10947 / 11059 | 0 / 2755 / 2867 |
+| Ordinary r=1, Key Lock ON | 0 / 1 / 24 | 0 / 1 / 24 |
+| Ordinary r=.8, publication at 512 | 8704 / 11531 / 11695 | 512 / 3339 / 3503 |
+| Ordinary r=.8, 44.1 kHz, irregular | 8192 / 11044 / 11172 | 0 / 2852 / 2980 |
+| Ordinary r=.8, 96 kHz, irregular | 8192 / 13201 / 13247 | 0 / 5009 / 5055 |
+| Piano r=.8, 48 kHz | 8192 / 11019 / 11183 | 0 / 2827 / 2991 |
+| Piano r=1.16, 48 kHz | 8192 / 10947 / 11059 | 0 / 2755 / 2867 |
+
+At 48 kHz this removes 170.667 ms of selected-ready scheduling cost. The slowed
+significant/principal response remains 58.896/62.313 ms, faster 57.396/59.729 ms:
+the 30 ms goal is **unmet**. The slowed first tiny output is already at 22.458 ms;
+it cannot pass the later principal attack. Matched dry principal is 30 frames at
+both nonunity rates, leaving 61.688/59.104 ms wet-minus-dry displacement. This
+does not establish a slower-only regression or explain every reported symptom.
+
+For r=.8 with 960 source frames of authored silence, the dry principal is 1230 output
+frames. Late warm wet principal changes 12852->4660, with E changing 8704->512. Subtracting
+the dry landmark and actual E leaves 2918 frames/60.792 ms excess; silence is retained.
+The final ordinary probe records host render-block time spans separately: the
+ready slowed significant/principal block was produced at 53.608–53.942 ms elapsed,
+while its audio-timeline principal is 62.313 ms. Across 30 ordinary cases, maximum
+pacing lateness was 676 us and harness-inclusive render/drain time 1309 us, with zero
+harness overruns. These include test allocation/PCM collection and are not a CPAL
+callback deadline, device latency or acoustic measurement. Baseline host spans
+were not collected, so no paired host-timing speedup is claimed.
+
+Warm groups with exactly one wet member and dry/unity peers share E=512 after
+one-block-late publication, versus 8704 before, at 2/4/6 voices. No-ready and two-wet
+controls retain 8704; a single reserve cannot serve two mutable Native owners.
+Group mix landmarks may be dominated by dry peers; per-wet principal attack is
+not accepted from those mix values. Cold/unselected, refill/rapid misses and
+multiple-wet scheduling still need step 3, together with the actual DSP attack.
+
+The implemented fix keeps phase normalization in reserve comparison copies only.
+An exact silent PhysicalBirth with no actual/retained feed offset predates any
+performer launch coordinates. Its complete fresh action request replaces the
+cache request at transfer; general source/history/adoption equality stays strict.
+Past-T ordinary hits retain the source beginning at E=max(T,callback). One-wet
+groups capture every fresh request before consuming the single reserve and keep
+the existing atomic effect. Future quantized T is never accelerated. Quantize OFF
+adds no musical 1/64/minimum interval or coalescing; four wet originals 16 frames
+apart remain distinct in regression, with actual worker costs still explicit.
+
+Focused verification reuses 101 compatible ordinary/endpoint/group passes and
+includes a final 30-pass ready-clock/captured-global run (five existing codec/controller
+integration tests remain ignored). Exact initial PCM matches independent worker
+owners; existing raw-Native physical-birth/partition tests retain their limits.
+The new original recording test proves S=E at 0/512, Rust callback allocation
+guard, all 1024 spooled output-frame bits and actual writer join/RT release.
+Another 165 Python controller/opaque Native-boundary checks pass with verified
+external Release Native/API. Paced diagnostics pass all three explicit tests.
+No App/device/hearing, background
+stem-generation or whole quality acceptance is inferred. The plan now has nine
+steps so readiness and a justified prepared-attack DSP change remain explicit.
+
+Run the paced probe through the configured workspace adapter's `rust-test` action
+with `-p flitzis-looper --lib paced_production_ --release -- --ignored --nocapture --test-threads=1`.
+The test source is
+[`response_probe.rs`](../../../rust/crates/looper/src/audio_engine/ordinary_endpoint_reserve_tests/response_probe.rs).
 
 ## Measurement contract
 

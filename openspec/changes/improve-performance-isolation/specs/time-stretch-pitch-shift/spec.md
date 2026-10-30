@@ -30,3 +30,19 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **THEN** each accepted attack uses its own guarded mutable state and original capture
 - **AND** readiness misses, deferral and rejection are observable in the validation result
 - **AND** no missing source beginning or dry substitute is used to conceal latency
+
+#### Scenario: Exact physical readiness predates the original launch
+- **GIVEN** a selected Normal physical-birth reserve with no retained feed offset
+- **WHEN** a fresh ordinary action has matching source, render and read trajectory
+- **THEN** the readiness comparison permits different launch coordinates only in its comparison copy
+- **AND** the transferred request retains the original action's fresh phase, source permit and T
+- **AND** a past T executes no earlier than the current callback without consuming the source beginning
+- **AND** a group uses this immediate path only when all members are ready with independent mutable state
+- **AND** future T, AttackAtGrid source measurement and stale/cancel/capacity guards remain enforced
+
+#### Scenario: Quantization controls intentional waiting, not an unquantized rate limit
+- **GIVEN** quantization is enabled with a performer-selected step
+- **WHEN** a prepared start becomes ready before its original quantized T
+- **THEN** it remains scheduled at T rather than starting early
+- **AND** when quantization is disabled, distinct original triggers may arrive faster than 1/64 notes without an artificial musical minimum interval or coalescing
+- **AND** actual preparation/resource limits remain observable while Key Lock, stems and other concurrent functions are optimized together
