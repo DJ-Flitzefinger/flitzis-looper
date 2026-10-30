@@ -1,5 +1,10 @@
 # Documentation Map
 
+This preserved experimental branch's recovery entry is
+[Source SYNC recovery architecture](sync/architecture.md). It records the frozen
+implementation, failures and unpassed acceptance; older design logs below are
+historical sources. Main remains constant-BPM.
+
 This folder contains maintained project documentation. It should help a human or
 AI contributor understand the current architecture without rereading the entire
 codebase.
