@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -108,6 +108,7 @@ def test_bootstrap_isolates_known_developer_bindings(
         "FLITZIS_APPLICATION_SOURCE_STAGE",
         "HF_HUB_CACHE",
         "CUDA_CACHE_PATH",
+        "FLITZIS_UI_STATE_DIR",
     ):
         monkeypatch.setenv(name, str(tmp_path / "foreign"))
     bootstrap.configure(checkout.parent, checkout, runtime)
@@ -116,6 +117,7 @@ def test_bootstrap_isolates_known_developer_bindings(
     assert "FLITZIS_APPLICATION_SOURCE_STAGE" not in os.environ
     assert Path(os.environ["HF_HUB_CACHE"]) == checkout.parent / "models/huggingface/hub"
     assert Path(os.environ["CUDA_CACHE_PATH"]) == checkout.parent / "cache/cuda"
+    assert Path(os.environ["FLITZIS_UI_STATE_DIR"]) == checkout.parent / "cache/ui"
     assert (
         Path(os.environ["FLITZIS_MODEL_CACHE_DIR"])
         == checkout.parent / "models/torch/hub/checkpoints"
@@ -137,11 +139,18 @@ def test_actual_bootstrap_start_binds_worker_and_checks_never_construct_app(
     checkout, runtime = root / "flitzis-looper", root / "Runtime"
     controller_module = ModuleType("flitzis_looper.controller")
     ui_module = ModuleType("flitzis_looper.ui")
-    controller_factory, run_ui, check_runtime = Mock(), Mock(), Mock()
+    ui_run_module = ModuleType("flitzis_looper.ui.run")
+    controller_factory, run_ui, check_runtime, prepare_ui = Mock(), Mock(), Mock(), Mock()
+    sequence = Mock()
+    sequence.attach_mock(prepare_ui, "prepare")
+    sequence.attach_mock(controller_factory, "controller")
+    sequence.attach_mock(run_ui, "ui")
     monkeypatch.setattr(controller_module, "AppController", controller_factory, raising=False)
     monkeypatch.setattr(ui_module, "run_ui", run_ui, raising=False)
+    monkeypatch.setattr(ui_run_module, "prepare_ui_state_directory", prepare_ui, raising=False)
     monkeypatch.setitem(sys.modules, "flitzis_looper.controller", controller_module)
     monkeypatch.setitem(sys.modules, "flitzis_looper.ui", ui_module)
+    monkeypatch.setitem(sys.modules, "flitzis_looper.ui.run", ui_run_module)
     monkeypatch.setattr(bootstrap, "configure", Mock(return_value=[object()]))
     monkeypatch.setattr(bootstrap, "check_runtime", check_runtime)
     arguments = ["bootstrap.py", "--root", str(root), "--runtime", str(runtime)]
@@ -152,12 +161,21 @@ def test_actual_bootstrap_start_binds_worker_and_checks_never_construct_app(
     bootstrap.main()
 
     if check is None:
+        prepare_ui.assert_called_once_with()
         controller_factory.assert_called_once_with(
             beat_this_installation_root=root.resolve() / "analysis-runtime/beat-this"
         )
         run_ui.assert_called_once_with(controller_factory.return_value)
+        assert sequence.mock_calls == [
+            call.prepare(),
+            call.controller(
+                beat_this_installation_root=root.resolve() / "analysis-runtime/beat-this"
+            ),
+            call.ui(controller_factory.return_value),
+        ]
         check_runtime.assert_not_called()
     else:
+        prepare_ui.assert_not_called()
         controller_factory.assert_not_called()
         run_ui.assert_not_called()
         check_runtime.assert_called_once_with(

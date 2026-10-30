@@ -46,6 +46,7 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
     os.environ["HF_HUB_CACHE"] = str(root / "models/huggingface/hub")
     os.environ["XDG_CACHE_HOME"] = str(root / "cache")
     os.environ["DORA_DIR"] = str(root / "cache/dora")
+    os.environ["FLITZIS_UI_STATE_DIR"] = str(root / "cache/ui")
     os.environ["TMP"] = os.environ["TEMP"] = str(root / "cache/temp")
     for name, relative in {
         "PIP_CACHE_DIR": "cache/pip",
@@ -803,7 +804,9 @@ def main() -> None:
     else:
         from flitzis_looper.controller import AppController  # noqa: PLC0415
         from flitzis_looper.ui import run_ui  # noqa: PLC0415
+        from flitzis_looper.ui.run import prepare_ui_state_directory  # noqa: PLC0415
 
+        prepare_ui_state_directory()
         run_ui(AppController(beat_this_installation_root=root / "analysis-runtime/beat-this"))
 
 

@@ -7,6 +7,16 @@ runtime preparation, verification, resumable acquisition and data-preserving upd
 
 ## Requirements
 
+### Requirement: UI State Uses The Selected Runtime Owner
+The application SHALL store window geometry and UI layout in the ordinary clone's ignored `.cache/ui` directory, an explicit developer cache override, or the Portable installation's own `cache/ui`. It SHALL keep the canonical application working directory and existing geometry restoration and shutdown behavior. Invalid protected or aliased UI paths SHALL fail before controller construction or filesystem creation.
+
+#### Scenario: A Portable application starts beside another installation
+- **GIVEN** a verified Portable installation and an inherited UI path from another project
+- **WHEN** its actual application starter runs
+- **THEN** it binds its own absolute UI layout path and disables title-derived filename selection
+- **AND** it does not read or migrate the other installation's user-profile layout
+- **AND** headless dependency checks do not construct a controller or open a UI
+
 ### Requirement: Source Clones Own Required Model Resources
 An ordinary source checkout SHALL default downloaded models and its required BeatThis worker to an ignored repository-root `models/` directory. Source setup SHALL provide explicit resumable pinned acquisition and fresh non-inference worker verification; startup and analysis SHALL NOT acquire dependencies. Explicit managed developer overrides and independent Portable installation bindings SHALL remain authoritative.
 

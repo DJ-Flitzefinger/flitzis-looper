@@ -1,8 +1,11 @@
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from imgui_bundle import hello_imgui, imgui, immapp
 
 from flitzis_looper.controller import AppController
+from flitzis_looper.controller.stem_generation import protected_model_roots
 from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render_ui
@@ -12,6 +15,36 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+def prepare_ui_state_directory() -> Path:
+    """Keep UI geometry inside its explicit owner before starting an Engine."""
+    root = Path.cwd().resolve()
+    configured = os.environ.get("FLITZIS_UI_STATE_DIR")
+    directory = Path(configured) if configured else root / ".cache/ui"
+    if not directory.is_absolute():
+        message = "UI state directory must be absolute"
+        raise ValueError(message)
+    for part in (directory, *directory.parents):
+        if part.is_symlink() or part.is_junction():
+            message = "UI state directory must not traverse links"
+            raise ValueError(message)
+        if part.exists() and not part.is_dir():
+            message = "UI state directory is occupied by a file"
+            raise ValueError(message)
+    directory = directory.resolve()
+    protected = (*protected_model_roots(root), (root / "models").resolve())
+    if (directory.is_relative_to(root) and not directory.is_relative_to(root / ".cache/ui")) or any(
+        directory.is_relative_to(path) for path in protected
+    ):
+        message = "UI state directory overlaps protected project data"
+        raise ValueError(message)
+    ini = directory / "imgui.ini"
+    if ini.is_symlink() or ini.is_junction() or (ini.exists() and not ini.is_file()):
+        message = "UI settings leaf must be an ordinary file"
+        raise ValueError(message)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 def run_ui(
     controller: AppController | None = None,
     *,
@@ -19,11 +52,14 @@ def run_ui(
     on_exit: Callable[[], None] | None = None,
 ) -> None:
     """Start the UI shell."""
+    ui_directory = prepare_ui_state_directory()
     controller = AppController() if controller is None else controller
     context = UiContext(controller)
 
     runner_params = hello_imgui.RunnerParams()
-    runner_params.ini_folder_type = hello_imgui.IniFolderType.app_user_config_folder
+    runner_params.ini_folder_type = hello_imgui.IniFolderType.absolute_path
+    runner_params.ini_filename = str(ui_directory / "imgui.ini")
+    runner_params.ini_filename_use_app_window_title = False
     runner_params.app_window_params.window_title = TITLE
     runner_params.imgui_window_params.menu_app_title = TITLE
     runner_params.app_window_params.window_geometry.size = VIEWPORT_PX

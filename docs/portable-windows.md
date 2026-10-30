@@ -92,6 +92,8 @@ The installation uses these areas:
 - `cache`: useful package preparation caches and bounded failed-install diagnostics;
   successful operation stages and fully owned short backups are removed. Previous
   checkouts containing unregistered contents are preserved in full as described below.
+- `cache/ui`: installation-local window geometry and UI layout; the app does not
+  read or update another installation's user-profile layout file.
 - `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
