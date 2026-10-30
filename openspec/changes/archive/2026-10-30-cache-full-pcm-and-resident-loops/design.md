@@ -1,7 +1,7 @@
 # C0 decisions and C1a/C1b integration
 
 The maintained design and audited code/test/spec map live in
-[PCM cache and residency](../../../../docs/pcm-cache-residency.md).
+[PCM cache and residency](evidence/pcm-cache-residency.md).
 That document distinguishes current implementation from the selected C1-C3
 contracts and supplies slice boundaries, failure behavior and proof requirements.
 

@@ -258,11 +258,11 @@ The current engine constructs 96 unique handles for 32 voices: 64 effective/
 neutral-reserve handles are warmed at setup; 32 source reserves receive exact
 pitch/reset and actual source priming on the worker. Historical 64-handle startup/
 memory figures retain their original scope; current
-[96-handle setup/resource measurements](pcm-cache-measurements.md) are separate.
+[96-handle setup/resource measurements](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md) are separate.
 The fixed wet adapter
 lead remains 511 frames. Native reset/cold pitch work stays off the callback;
 reserve starvation produces bounded wet silence, while dry processing remains
-reactive. See [Key Lock backend](key-lock-backend.md) for the allocation audit,
+reactive. See [Key Lock backend](../openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md) for the allocation audit,
 productive source-prepared ownership/timed adoption and the separate pending
 audible delay/crop/mode-transition work.
 
@@ -448,7 +448,7 @@ Use a fresh output filename for each profile/run. Native Debug/Release installat
 and dependent tests run serially because Windows retains open extension handles.
 The historical C1b warm source probe and 32-second save/export fixture provide
 preliminary integrity accounting. Current 200-pad startup/resources and long-source
-save costs are reported separately in [C3 measurements](pcm-cache-measurements.md).
+save costs are reported separately in [C3 measurements](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md).
 
 ### C2a finite saved-loop and accepted-set relocation probes
 
@@ -472,7 +472,7 @@ against original PCM while only `[42,42.5)` seconds remain resident. The other
 probe prepares real complete stem artifacts, adopts their finite views, then
 relocates the same already accepted complete set through the productive worker
 and native callback with uninterrupted PCM output. These are identity, ownership
-and output proofs. [C3 measurements](pcm-cache-measurements.md) report startup/RAM
+and output proofs. [C3 measurements](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md) report startup/RAM
 separately; human acceptance stays open.
 
 The optional Beat This boundary is available only through explicit diagnostic
@@ -613,13 +613,13 @@ Repeat native checks with `--release` and install the matching debug/release
 extension before the Python suite, serially. The long-cycle test compares the
 actual native ACK/render route with complete-buffer output and an independent
 PCM/period oracle at 75 and 1000 observed cycles. It certifies those numerical
-contracts only. [C3 process-memory/performance measurements](pcm-cache-measurements.md)
+contracts only. [C3 process-memory/performance measurements](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md)
 remain separate from these numerical proofs and the open human device/listening
 gates. Generated source and proof exports stay outside the repository.
 
 ### C3 measured startup/resource acceptance
 
-The [C3 measurement report](pcm-cache-measurements.md) records the isolated
+The [C3 measurement report](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md) records the isolated
 Debug/Release productive controller cold/warm matrix, actual native readiness/ACK,
 PCM and process-resource scopes, current 96-handle setup, complete-context
 exceptions, long-source save and cancellation/cleanup results. Its paired
@@ -677,12 +677,14 @@ resolution during one validation batch.
 
 ## Runtime Local Data
 
-The [pad-owned PCM program](pad-owned-pcm-program.md) is an official pending
-extended serial contract. P0 and R0 use real strict OpenSpec and document/diff/link checks only;
-it changes no product/test/runtime code and establishes no performance acceptance.
-Each later runtime slice needs the actual relevant full validation, frozen runtime
-identity and independent final review in its OpenSpec tasks. Do not run the app,
-CPAL or devices automatically; human hearing/device gates remain separate.
+The [pad-owned PCM program](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md)
+is an inactive historical contract with retained incomplete gates, not an execution
+queue. Current [media/PCM](architecture/media-and-pcm.md),
+[pitch](architecture/pitch-and-key-lock.md) and [stems](architecture/stems.md) describe
+implemented ownership. New work needs its actual relevant checks and review;
+documentation work does not run the App, CPAL or devices. Human hearing/device
+acceptance remains separate. Existing recovery/path readers do not authorize new
+migration or deletion of private data.
 
 The app may create local runtime files:
 
@@ -697,7 +699,7 @@ cleanup or confuse old root preservation snapshots with current session state.
 Hidden `.material.json` and `.material-claims/` carry guarded full-content lookup;
 they do not supply native runtime ACK or physical cleanup permission. Automated
 validation uses isolated fixtures, never private project migration. See
-[readable material validation](readable-material-validation.md).
+[readable material validation](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md).
 Optional durable native birth receipts restore exact root/marker ownership only
 after current config/journal, inventory and fresh Native adoption checks. Existing
 schema/path recognition alone never authorizes cleanup; the inventory gate stays
@@ -766,7 +768,7 @@ owns later complete serialized runtime validation; devices/hearing remain human.
 
 ## Recording and local data
 
-The [E11 plan](pre-rust-extension-20261011.md) separates capture, format and
+The [E11 plan](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) separates capture, format and
 performer-control delivery gates. Native capture now provides bounded exact-segment
 float spooling and truthful terminal/recovery metadata. A spool is an unverified
 candidate, not a successfully published recording.

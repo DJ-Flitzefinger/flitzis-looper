@@ -14,6 +14,10 @@ without reproducing its development chronology:
 | [Runtime and transport](architecture/runtime-and-transport.md) | Callback, clock, scheduler, ordinary transport, rates, rendering and feedback. |
 | [Media and PCM](architecture/media-and-pcm.md) | Material/content/source identity, import, complete disk PCM, finite residency, sharing and last readers. |
 | [State, input and UI](architecture/state-input-and-ui.md) | Controllers, GUI/MIDI intent, persistence, arrangements, restore and shutdown. |
+| [BPM analysis](architecture/bpm-analysis.md) | Productive Beat This, complete-source admission, constant-tempo selection, uncertainty and manual/Tap correction. |
+| [Key analysis](architecture/key-analysis.md) | Complete-file CQT/KeyNet, independent outcomes, memory and source/correction epochs. |
+| [Pitch and Key Lock](architecture/pitch-and-key-lock.md) | Piano/SET/Retrigger, nullable inheritance, Rubber Band preparation, actual source history and limits. |
+| [Stems](architecture/stems.md) | Shared offline jobs, immutable disk selection, component residency, own live adoption and final readers. |
 
 Current [OpenSpec contracts](../openspec/specs/) define supported behavior. Source
 defines implementation facts; historical tests establish only their stated scope.
@@ -118,9 +122,9 @@ recording, holds, deletion and arrangements permit teardown. See
 
 ## Related subsystems and dependencies
 
-Specialist BPM/Key/pitch/stem references are being consolidated separately.
-These existing documents retain current facts and dated evidence; their
-historical plans do not override source or activate old programs:
+The specialist modules describe current behavior; setup and diagnostic references
+retain their narrower contracts. Historical reports are evidence and do not
+override current source or activate old programs:
 
 - [Constant-BPM controls](constant-bpm-guide.md),
   [accepted constant timing](accepted-constant-timing.md) and
@@ -128,12 +132,12 @@ historical plans do not override source or activate old programs:
   Productive automatic BPM uses configured BeatThis policy
   `neural-stable-regions-v4`; scientific QM/diagnostic interfaces remain separate
   from live authority.
-- [Key detection](key-detection.md): automatic classification is independent of
+- [Key analysis](architecture/key-analysis.md): automatic classification is independent of
   pitch and BPM admission. The complete-source file frontend replaces the old
   full-vector memory model. A model result is not musical ground truth.
-- [Key Lock backend](key-lock-backend.md): prepared Rubber Band processing and
+- [Pitch and Key Lock](architecture/pitch-and-key-lock.md): prepared Rubber Band processing and
   timing limits. Global inheritance preserves explicit per-PAD overrides.
-- [Prepared stems](prepared-stem-publication.md) and [model setup](stem-generation-setup.md):
+- [Stems](architecture/stems.md) and [model setup](stem-generation-setup.md):
   offline generation, saved selection, residency and effective Native adoption
   are separate states. Leased offline generation can run during playback;
   adoption has its own state-specific permits.

@@ -6,7 +6,7 @@ scratch admission and the requested live loop/ALL allocation. This report retain
 historical storage implementation evidence and KEYLOCK-OFF measurements from
 2026-10-11; those runs do not certify the later saved finite ON admission work.
 The bounded 2026-10-12 saved physical ON NormalLoop policy is described
-[in the residency contract](pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
+[in the residency contract](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12).
 Initial focused runs passed four low-level admission checks; the corrected public
 wrapper now passes all four physical ON histories in 6.12 seconds. Its failed
 attempts remain recorded. Impacted cold-load/residency/cold-store integrations and

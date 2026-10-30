@@ -148,7 +148,7 @@ relocation preserves accepted authority, voice trajectory and effective native/
 FIFO/filter history, while stale queued jobs retain their old actual readers
 until off-thread retirement. A new load assignment gets fresh runtime source
 authority even for identical complete cache content. See
-[finite residency](pcm-cache-residency.md).
+[finite residency](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md).
 
 C2b shares one source-bound resident transaction across loop/ALL, seek, Key Lock,
 UI and guarded MIDI fallback. Preparation preserves effective audio until native
@@ -419,7 +419,7 @@ the existing rate/ramp, fractional epoch, interpolation and loop/seek rules.
 No second cursor, PCM rebuild, physical-loop rewrite or playhead reset is needed.
 The callback adds bounded fixed/atomic checks and projection copies; large owners
 and evidence remain in off-realtime retirement paths. See
-[prepared stem ownership](prepared-stem-publication.md).
+[prepared stem ownership](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md).
 
 ## Productive voice and native/FIFO history
 
@@ -655,5 +655,5 @@ PCM/onset and unwrapped recurrence proof is separate from actual device and
 sustained human listening evidence, which remain required G3c gates.
 
 See [accepted record identity](accepted-constant-timing.md),
-[prepared stem ownership](prepared-stem-publication.md) and
+[prepared stem ownership](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md) and
 [source coordinates](scalar-source-coordinates.md).

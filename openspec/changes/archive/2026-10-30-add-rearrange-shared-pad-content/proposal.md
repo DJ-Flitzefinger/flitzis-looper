@@ -18,8 +18,8 @@ and guarded ACK. Add Re-Arrange gestures/bank confirmations through existing inp
 
 ## Delivery and related contracts
 
-R0 is official contract/docs revision only. [Program](../../../../docs/pad-owned-pcm-program.md)
-and [full coverage map](../../../../docs/pre-rust-program-coverage.json) own unchanged
+R0 is official contract/docs revision only. [Program](../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md)
+and [full coverage map](../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json) own unchanged
 38 IDs/48 edges/all56+9/seven groups. J0 precedes P1b shared subscriber fanout.
 P1a/b provide identity/leases, R1 CopySnapshot, R2 pair/native HoldRelease proof,
 R3 pad gestures, R4 all36/native hold retirement proof, R5 bank UI; P6/V0 repeat

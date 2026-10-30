@@ -2,7 +2,7 @@
 
 This crate builds the native `flitzis_looper_audio` Python extension. Prepared
 stem tickets and callback feedback are documented in
-[prepared publication](../docs/prepared-stem-publication.md). It owns
+[stem architecture](../docs/architecture/stems.md). It owns
 the realtime audio path and exposes the PyO3 `AudioEngine` class used by the
 Python application package.
 
@@ -90,7 +90,7 @@ copy-first capture, complete compatible warm reuse or snapshot decode, atomic
 artifact commit and guarded native ACK. File ownership and last-reader cleanup
 stay off realtime; full-buffer playback remains. Windows stable sharing,
 decoder/resampler evidence, pending/fault behavior and separate C2/C3 limits
-are maintained in [PCM cache and residency](../docs/pcm-cache-residency.md).
+are maintained in [media and PCM](../docs/architecture/media-and-pcm.md).
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
 `src/flitzis_looper_audio/__init__.pyi` define the Python-facing boundary.

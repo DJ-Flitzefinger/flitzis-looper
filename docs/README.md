@@ -16,10 +16,11 @@ original incomplete gates and do not activate old work programs.
 The current [architecture overview](architecture.md) links focused
 [runtime/transport](architecture/runtime-and-transport.md),
 [media/PCM](architecture/media-and-pcm.md) and
-[state/input/UI](architecture/state-input-and-ui.md) references. Mixed specialist
-reports below retain dated implementation history and unpassed gates while
-analysis/pitch/stem facts are consolidated. Use the new core modules for current
-ownership, not old pending-program descriptions.
+[state/input/UI](architecture/state-input-and-ui.md),
+[BPM](architecture/bpm-analysis.md), [Key](architecture/key-analysis.md),
+[pitch/Key Lock](architecture/pitch-and-key-lock.md) and [stems](architecture/stems.md)
+references. Current ownership is separate from the dated reports and inactive
+programs retained through the canonical evidence index.
 
 This folder contains maintained project documentation. It should help a human or
 AI contributor understand the current architecture without rereading the entire
@@ -45,7 +46,7 @@ For focused areas:
 - Independent Windows installation and testing: `portable-windows.md`.
 - UI/rendering: `ui-toolkit.md`
 - Stems/Demucs setup: `stem-generation-setup.md`
-- Key Lock/time-stretch backend: `key-lock-backend.md`
+- Key Lock/time-stretch backend: [pitch and Key Lock](architecture/pitch-and-key-lock.md)
 - Rust module details: `../rust/README.md`
 
 ## Maintained Files
@@ -56,21 +57,18 @@ For focused areas:
 | `architecture/runtime-and-transport.md` | Current frame clock, scheduler, scalar rendering, ordinary transport, rates and feedback. |
 | `architecture/media-and-pcm.md` | Current material/content/source identity, disk-first PCM, finite views, shared custody and last-reader retirement. |
 | `architecture/state-input-and-ui.md` | Current state, GUI/MIDI input, persistence, arrangements, restore and close. |
+| `architecture/bpm-analysis.md` | Productive Beat This policy, complete-source admission, scalar precision, corroboration/mean, manual/Tap and diagnostic separation. |
+| `architecture/key-analysis.md` | Complete-file CQT/KeyNet, memory/outcomes, current source/correction epochs and classification limits. |
+| `architecture/pitch-and-key-lock.md` | Key/Piano/Retrigger, nullable inheritance, exact rate/pitch, prepared Native/history and onset limits. |
+| `architecture/stems.md` | Shared offline generation, immutable artifacts, saved/resident/effective state, model execution and last readers. |
 | `constant-bpm-guide.md` | Current BPM Lock, loop, Tap BPM, device labels and fresh-project workflow. |
-| `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
-| `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
-| `pad-content-copy.md` | Complete empty-target musical Copy, durable stem intent, own Native acceptance, independent shared custody and close settlement. |
-| `pad-owned-pcm-program.md` | Pending R0 shared-material/pitch/rearrangement/full pre-Rust serial program and genuine acceptance boundaries. |
-| `pre-rust-program-coverage.json` | Required seven-group detail rows, original56/nine obligations and HC26; retained38-ID/48-edge dependencies plus20 E11 rows/ten deliveries (48 IDs/78 edges/189 rows). Scoped software status stays separate from required final gates. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |
-| `prepared-stem-publication.md` | Content identity, current accepted timing permits, artifact integrity, callback adoption and shared stem trajectory. |
 | `native-constant-timing.md` | G3b2a-i actual-pad timing, native/FIFO history, verified persistence/fresh adoption, guarded global batches and explicit publication/derived refresh; separate loop gates. |
-| `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
-| `finite-seek-domain-validation.md` | Bounded production k=0 finite Seek/Intro/Tail, physical-edit and complete-exception return evidence; wider gates retained. |
-| `offline-analysis.md` | Diagnostic PCM/worker API, resource ownership and limits; default cutover remains gated. |
-| `beat-this-setup.md` | Explicit optional Windows CPU worker installation, locked environment and accepted model provenance. |
+| `key-detection.md` | Model background and historical 604-track evaluation; current productive path is in the Key module. |
+| `offline-analysis.md` | Explicit diagnostic PCM/worker API and limits; separate from productive configured Beat This. |
+| `beat-this-setup.md` | Required productive BPM worker setup, CPU/CUDA profiles, pinned environment/model and execution-receipt limits. |
 | `beat-this-reference-evidence.md` | B1b reference parity/resource observations and the remaining quality/live acceptance limits. |
 | `beat-this-acceptance.md` | Frozen B2a private quality/resource gates, independent label requirements and the current acceptance decision. |
 | `beat-this-reference-inputs.md` | Private independent annotation and paired human correction inputs, validation and sealing; no musical scoring or default adoption. |
@@ -86,6 +84,17 @@ For focused areas:
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
 | `../openspec/changes/archive/2026-10-30-probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
+
+## Historical reports
+
+The [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
+links eleven complete reports now retained with their associated archived changes:
+Key Lock, prepared stems, Copy, PCM/residency/measurements, finite Seek, readable
+material, long-source validation and the inactive program/extension/coverage JSON.
+Use current modules above for architecture. The archived bodies preserve every
+original failure, UNKNOWN and unpassed gate; moving a report does not accept it.
+Frozen JSON path literals remain original lineage, resolved by the manifest's
+appended relocation map; its schema, status and bytes are unchanged.
 
 ## Retired SYNC recovery
 
@@ -120,6 +129,11 @@ Use docs for explanatory context:
 - If a doc becomes only historical, remove it or move the durable facts into a
   maintained document.
 
-## Required pre-Rust direct extension
+## Historical pre-Rust extension and open evidence
 
-[Direct extension2026-10-11](pre-rust-extension-20261011.md) maps all20 E11 requirements to normative OpenSpec contracts, bounded implementation slices, actual source seams and real acceptance gates. The maintained program/coverage retains old38/48 and169/56/9/HC26 while adding10 IDs (48 total) and30 edges (78 total). Bounded software reports record only their actual evidence and pending checks; whole E11, integration, final Human testing and correction gates remain OPEN.
+[Direct extension2026-10-11](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md)
+retains all20 original E11 requirements, historical implementation slices/source
+seams and acceptance gates. The archived program/coverage preserves its original
+counts and lineage, not an active execution queue. Bounded software reports retain
+only their actual evidence; unpassed whole E11/integration/Human testing/correction
+gates remain open as recorded. Current modules explain implemented behavior.

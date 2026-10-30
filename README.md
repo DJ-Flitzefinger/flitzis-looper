@@ -277,7 +277,7 @@ Important documents:
 - [docs/ui-toolkit.md](docs/ui-toolkit.md): Dear ImGui UI rules.
 - [docs/stem-generation-setup.md](docs/stem-generation-setup.md): Demucs and
   FFmpeg setup.
-- [docs/key-lock-backend.md](docs/key-lock-backend.md): current Rubber Band Key
+- [Pitch and Key Lock](docs/architecture/pitch-and-key-lock.md): current Rubber Band Key
   Lock backend and native dependency requirements.
 - [docs/todos.md](docs/todos.md): explicit user-requested TODO notes.
 

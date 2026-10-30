@@ -5,7 +5,7 @@ shares verified immutable material, source PCM and matching stem backing, while
 each assignment owns independent source custody, playback and mutable settings.
 Occupied-target overwrite, live Move/Swap, bank operations and Re-Arrange gestures
 have separate contracts in
-[add-rearrange-shared-pad-content](../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/specs/pad-content-arrangement/spec.md).
+[add-rearrange-shared-pad-content](../specs/pad-content-arrangement/spec.md).
 This core does not close those later gates.
 
 ## Internal occupied-target foundation — 2026-10-14
@@ -52,8 +52,8 @@ acceptance while surviving-source changes remain intact. Saved selected stems
 must acquire their own current registration and demanded component/preload ACKs
 through the existing verification path before settlement. Complete history,
 lineage or custody conflicts retain visible fences. See
-[startup ownership](architecture/state-input-and-ui.md#persistence-and-restore) for the controller
-sequence and [Portable validation](portable-windows.md) for kind routing.
+[startup ownership](../../../../../docs/architecture/state-input-and-ui.md#persistence-and-restore) for the controller
+sequence and [Portable validation](../../../../../docs/portable-windows.md) for kind routing.
 
 This is an internal software foundation. Public Re-Arrange gestures, complete
 selection/Hold matrices and whole R2 acceptance remain open, as do musical,

@@ -50,11 +50,26 @@ Changed incoming intent reuses the verified artifact for bounded reselection
 (at most four attempts); repeated change becomes an explicit failure, not an
 unbounded preparation loop or speculative success.
 
+The decoder keeps Symphonia gapless handling disabled and source zero at the first
+decoded frame. Declared delay/padding and actual extent are recorded; leading
+silence, priming and padding are not heuristically trimmed. Continuous Rubato FFT
+playback conversion produces exactly `ceil(N * output_rate / source_rate)` frames
+after one integer algorithmic-delay trim and bounded full-tail flushing. Decoder
+identity and executed transform are recorded separately. These numerical policies
+do not claim decoder equality, subframe acoustic alignment or zero device delay.
+
 [cold_store/warm.rs](../../rust/crates/looper/src/audio_engine/cold_store/warm.rs)
 performs complete integrity verification of fresh warm admissions, including
 original/manifest/decoder/playback artifacts. A cache hit avoids decoding and
 another snapshot copy; it does not eliminate complete verification I/O. Sealed
 handles protect the verified object against pathname replacement during use.
+
+Playback derivatives are versioned by device rate/layout; there is no forced
+48 kHz source domain. Source zero, complete duration and signed grid origin stay
+separate from resident-start indexing. A changed derivative cannot relabel old
+accepted evidence as its own. Waveform complete reads publish only the latest
+matching source/request result; a failed identical-view request requires explicit
+Retry rather than an unchanged-frame retry loop.
 
 ## Complete geometry and finite resident views
 
@@ -86,6 +101,15 @@ captures actual effective voice state with bounded preallocated handoff. A saved
 cursor, address marker or history snapshot cannot grant a new source/timing permit.
 Prepared source/history validity and resident window ownership remain separate.
 
+Every explicit seek advances voice generation and discards pending/adopted Native,
+FIFO and filter history, including an equal-phase seek. Canonical rate target and
+smoothing intent survive. Physical edits compare both next tap addresses and their
+interpolation weight; a coordinate-preserving end edit can still require a cut.
+Clean Native/recycle capacity is reserved before resetting usable audio. Continuous
+edits and storage-only complete-to-finite returns may retain proved chronology
+with its original reader pins. A retained old-A voice keeps A's source/loop/timing/
+selection permit after bank B replaces it; B cannot authorize A or revive stale work.
+
 ## Streaming, analysis, history and stems
 
 [complete_context.rs](../../rust/crates/looper/src/audio_engine/complete_context.rs)
@@ -106,7 +130,8 @@ material and one ready result while retaining individual interests and ACKs.
 Cancelling one interest does not erase other users. Saved stem selection, verified
 disk eligibility, component residency and actual Native mode/mask are distinct.
 Generation during playing/paused states is separate from state-specific adoption
-permits. Details and historical limits remain in [prepared stem publication](../prepared-stem-publication.md).
+permits. [Stems](stems.md) describes these states and their retained limits;
+[Key analysis](key-analysis.md) owns the complete-file CQT frontend.
 
 ## Copy, rearrangement and memory admission
 
@@ -117,6 +142,25 @@ guarded transactions. [pad_copy.rs](../../rust/crates/looper/src/audio_engine/pa
 [pad_copy/control/bank.rs](../../rust/crates/looper/src/audio_engine/pad_copy/control/bank.rs)
 keep source/target, selection, lifetime, publication and all-or-none effect guards.
 No source's ACK can certify another content instance merely because PCM is shared.
+
+The validated immutable Copy snapshot includes analysis/accepted timing, loops/
+grid, Key/inheritance/offset, Gain/EQ and durable stem intent. It creates a fresh
+stopped target content UUID. It excludes playhead, mutable voice/DSP/FIFO/history,
+Hold, pending requests and old tickets. Saved stem mask/preset/custom mask (including
+zero) survives FULL MIX, Delete and unavailable components; actual new assignment
+or Unload resets it. Shared material retains independent assignment acceptance.
+
+Bank36 includes empty-source cells clearing their targets and reserves the whole
+parent transaction before mutation. Each effect still needs own acceptance. Once
+claimed, it cannot partially roll back; recovery accepts complete before/after
+images and rejects mixed-cell authority. Pair can reject a policy change before
+its ACK, but after own ACK durable settlement must finish under the latest
+MultiLoop projection. Later hierarchy changes cannot resurrect stale row authority.
+
+Explicitly importing a saved declared-stem WAV creates its own canonical immutable
+original and loaded source. It cannot merely save a path into an input generation
+that its previous owner is retiring. This uses the existing import/custody path,
+not a new compatibility or migration feature.
 
 [asset_lifecycle.py](../../src/flitzis_looper/controller/asset_lifecycle.py)
 prepares a complete assignment publication image before durable commit, then
@@ -132,6 +176,15 @@ A configured zero budget means automatic policy, not unlimited allocation.
 [resident_proposal.rs](../../rust/crates/looper/src/audio_engine/resident_proposal.rs)
 reserves before I/O/allocation/publication. Admission accounting is not a sampled
 process-RSS guarantee and does not include every model/OS cache/native cost.
+
+Unique backing is charged once within an engine/project scope; another engine's
+first ownership is independently charged. Pending promises and Windows physical/
+commit headroom remain part of admission. Fresh resident settings use automatic
+policy, retain a 512 MiB manual value (valid range 128..16384 MiB) and disable
+preload. Stored manual values remain exact. Lowering a cap preserves live reader
+pins; refusal preserves the existing assignment. Preload-only interest never
+selects audio; disabling it drops that policy interest while explicit/active
+readers keep their owners.
 
 ## Publication, cancellation and retirement
 
@@ -170,13 +223,14 @@ reader release remain necessary before outer retirement.
 
 ## Evidence and limits
 
-The existing [PCM report](../pcm-cache-residency.md),
-[measurements](../pcm-cache-measurements.md), [readable material](../readable-material-validation.md),
-[finite-seek](../finite-seek-domain-validation.md) and
-[long-source](../long-source-streaming-validation.md) reports retain exact
+The existing [PCM report](../../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md),
+[measurements](../../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md), [readable material](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md),
+[finite-seek](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md) and
+[long-source](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md) reports retain exact
 source/decoder/resident identity, warm/cold costs, rejected budgets, initial
-failures and scoped repairs. Mixed reports remain until every current fact has
-a verified module destination; full-report retention is mapped in the
+failures and scoped repairs. Current live spans now have core/specialist module
+destinations; the complete reports retain their historical assertions and gates
+under associated archives. Full-report retention is mapped in the
 [evidence index](../../openspec/changes/archive/2026-10-30-evidence-index.md).
 
 Allocation admission is not RSS; bounded fixture/integrity passes are not power-loss,

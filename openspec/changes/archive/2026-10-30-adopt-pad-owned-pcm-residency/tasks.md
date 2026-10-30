@@ -13,8 +13,8 @@ cleanup are independently accepted. P3 complete paired stem storage and current
 ordinary preparation/publication are independently accepted; later
 storage/audio/UI/Human gates stay open.
 
-The [extended program](../../../../docs/pad-owned-pcm-program.md) and
-[complete coverage map](../../../../docs/pre-rust-program-coverage.json) own the
+The [extended program](evidence/pad-owned-pcm-program.md) and
+[complete coverage map](evidence/pre-rust-program-coverage.json) own the
 canonical38-ID/48-edge order, all56+9, seven groups and full exit gates. Companion
 arrangement and pitch changes share those IDs, not alternative product plans.
 
@@ -169,12 +169,12 @@ P4b, later stages and final Human/hearing acceptance remain open.
 - [ ] Actual finite DSP/KEYLOCK provisioning and continuation for current production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; preserve causality1598/33.292ms, fallback-only leaves the gate open. Nonzero k remains B5
 
-The bounded [initial saved physical ON report](../../../../docs/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
+The bounded [initial saved physical ON report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#initial-saved-finite-keylock-on--2026-10-12)
 records the shared selection implementation, required oracles and passing bounded
 software gates. Its inherited/explicit ON x public SPEED/manual source BPM plus
 display target histories describe physical NormalLoop continuation and do not
 establish initial BPM-lock admission.
-The separate [ordinary incoming report](../../../../docs/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13)
+The separate [ordinary incoming report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass)
 records implemented incoming-timing/default-eight-bars preparation and actual
 initial BPM lock with focused passing receipts and a pending final integrated
 software gate. Accepted-musical admission remains open; no P4b/P5b parent closure follows.
@@ -257,7 +257,7 @@ nonauthor acceptance covers only this lifecycle/source-custody subtask; no
 full P4b parent closes.
 
 The Seek/physical-domain implementation and its final source-bound software
-validation are documented in [finite-seek-domain-validation.md](../../../../docs/finite-seek-domain-validation.md).
+validation are documented in [finite-seek-domain-validation.md](evidence/finite-seek-domain-validation.md).
 It adds real finite prefix/loop and loop/tail provisioning without extending the
 initial finite KEYLOCK-load policy. Explicit complete exceptions remain admitted;
 their success does not prove finite provisioning. Actual next fractional taps
@@ -286,7 +286,7 @@ vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
 - [x] Affected official strict, impacted integrated/Release/import/preflight checks and one independent final review; new-generation L3, whole P4b/P5b, nonzero KEY/B5 and Resource/Music/Human/Device/Hearing remain open
 
 Bounded software delivery and retained negative evidence:
-[P5a validation](../../../../docs/pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
+[P5a validation](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 
 ### P5b
 
@@ -443,14 +443,14 @@ No deferred216, Arc-bytes-as-RSS, directory-only speed claim or device substitut
 
 ## X11 direct extension — new unchecked delivery only
 
-The [full extension](../../../../docs/pre-rust-extension-20261011.md) and [additive coverage](../../../../docs/pre-rust-program-coverage.json) own exact dependencies and real gates. Original38/48 and all historical checked subtasks remain intact.48 IDs/78 edges include ten new bounded deliveries. X11-PLAN was accepted at planning scope only in published commit `027bc1cb74f4cee457ea291b965300c42cbc4caf`; its acceptance does not establish any E11 implementation or Human gate.
+The [full extension](evidence/pre-rust-extension-20261011.md) and [additive coverage](evidence/pre-rust-program-coverage.json) own exact dependencies and real gates. Original38/48 and all historical checked subtasks remain intact.48 IDs/78 edges include ten new bounded deliveries. X11-PLAN was accepted at planning scope only in published commit `027bc1cb74f4cee457ea291b965300c42cbc4caf`; its acceptance does not establish any E11 implementation or Human gate.
 
 - [x] X11-PLAN: strict every affected change, exact full20+169/56/9/HC26/old38/48 retention, forward DAG/docs/diff, independent NONAUTHOR frozen source review and coherent publication at plan scope only. Accepted `027bc1cb` (reviewed tree `571b048d0426d53d8f69640045d80e3e26d32e7f`); no E11 behavior completion.
 - [x] X11-KEYLOCK: productive installed global/pad routes, both directions at nonneutral rate, own-window/native ACK and actual wet continuity/override/UI/stale/error matrix. Delivered at bounded k=0 NormalLoop software scope, including first-live/retrigger readiness and hardware-free controller/draw coverage. Accepted NormalLoop/lifecycle prerequisites only; no full P4b/B5 prerequisite or guard waiver. Human app/device/visual/hearing gates remain OPEN.
 - [ ] X11-LONG: replace complete preparation and warm-verifier total-extent gates with bounded retained-reader streaming; exact normalization/first-onset/alignment/padding and full EOF digests, >10-minute/>1-GiB real cases, reported PAD4 source when accessible, measured scratch/process/live peaks and Cancel/real disk/RAM failure.
 
 Bounded complete-storage conversion and finite Native/restore preparation are
-implemented; [the validation report](../../../../docs/long-source-streaming-validation.md)
+implemented; [the validation report](evidence/long-source-streaming-validation.md)
 records their actual evidence and final software gates. Ordinary UI import now
 prepares verified complete disk storage, resolves genuine incoming activity/BPM
 and default/user demand, then reads the selected live view. Its separate bounded
@@ -471,7 +471,7 @@ aggregate resources, model inference or Human/device gates.
 - [x] Install incoming source/loop/scalar-period/grid-origin together before own callback ACK; project the actually adopted defaults after ACK and prove first public Play with nonunity SPEED and actual initial BPM lock, separate own wet output/later4096 Native adoption and independent complete-PCM/raw-Native/EQ/FIFO/source-clock/215 checks.
 - [x] Validate ordinary external cold/warm first/replacement inherited/explicit ON/OFF histories, held latest-intent edits, no-BPM/activity/short-source fallbacks and stale/cancel/queue/retirement negatives with focused production regressions and impacted integration. Keep whole P4b/P5b, accepted-musical, all216 aggregate resource/music and Human gates open unless their independent required evidence is completed.
 
-The [bounded incoming report](../../../../docs/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13)
+The [bounded incoming report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass)
 records current implementation and software receipts: the actual public Native
 wrapper passes all 22 histories (18.80 seconds initially, current rerun 16.64);
 private Release/API/controller/UI preflight passes. Current 11-file Python passes
@@ -495,7 +495,7 @@ source/default ACK cannot substitute for wet output or later own Native adoption
 - [x] Prove complete unchanged committed StemSet ALL STEMS to FULL MIX to fresh ALL STEMS with distinct own current residency/effect receipts, actual component/ramp/final-reader ownership and paused/resumed chronology; preserve finite return and scheduled ordinary/exclusive supersession before unrelated-stop effects.
 - [x] Run focused meaningful regressions, affected integration and the needed private Release/API preflight, official strict and one independent final review; record honest bounded software disposition while full P4b/P5b/E11/music/resources216/Human gates remain open.
 
-The [bounded public complete report](../../../../docs/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
+The [bounded public complete report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#public-complete-source-play-and-unchanged-all-return--2026-10-13)
 records 34 focused actual histories, 113 affected integrated Rust cases, fresh
 private Release/API preflight and retained failed attempts. The one independent
 final source/evidence review passes with no actionable findings. Actual public births/receipts replace
@@ -521,7 +521,7 @@ frozen-A native restore remains a distinct previously bounded source path.
 - [x] Prove actual target-local reserve admission exhaustion and superseded requests preserve usable per-voice audio and other targets' successful processing, plus actual off-thread mode-view retirement with current own bank/voice PCM owners retained; report observed cross-pad sharing separately and keep unexercised other-pad shared-backing coverage open.
 - [x] Validate affected meaningful regressions, official strict/static and one independent final source/evidence review; distinguish unchanged production/Python evidence and keep complete/ALL/domain/music/resource216/Human and whole-parent gates open.
 
-The [public GLOBAL report](../../../../docs/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) records two focused histories, 24 affected integrated cases, final unchanged-baseline Clippy and official strict/static checks. The one independent final source/evidence review passes with no open findings. Only current own bank/voice PCM continuity is established: every measured cross-pad sharing pair was false. Other-pad shared backing, complete/ALL/global-domain/music/resource216/Human and whole-parent gates remain open. Passing audio histories are explicitly reused across the final type-annotation-only alias; production Release/API and Python-double profiles are unchanged and separately reused.
+The [public GLOBAL report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#public-global-with-independently-audible-voices--2026-10-13) records two focused histories, 24 affected integrated cases, final unchanged-baseline Clippy and official strict/static checks. The one independent final source/evidence review passes with no open findings. Only current own bank/voice PCM continuity is established: every measured cross-pad sharing pair was false. Other-pad shared backing, complete/ALL/global-domain/music/resource216/Human and whole-parent gates remain open. Passing audio histories are explicitly reused across the final type-annotation-only alias; production Release/API and Python-double profiles are unchanged and separately reused.
 
 ### Public complete restore sharing — passing bounded software block
 
@@ -529,13 +529,13 @@ The [public GLOBAL report](../../../../docs/pcm-cache-residency.md#public-global
 - [x] Prove actual outgoing mode-view/history retirement while explicit peers retain and use the identical immutable allocation, then public per-pad unload and actual final shared PCM reader release with preparation/receipt aliases ended; no public Copy, disk deletion or whole-domain claim.
 - [x] Run affected meaningful integration, official strict/static and one independent final source/evidence review; declare unchanged-input reuse and preserve R1/R2/ALL/finite-sharing/music/resource216/Human/full-parent gates.
 
-The [complete Restore sharing report](../../../../docs/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) records one focused and 17 integrated cases, exact unchanged Clippy baseline and official strict/static checks. The one independent final source/evidence review passes with no open findings. The sole public Restore unconditionally shares complete PCM; stopped actual source-message relay and post-START OFF contexts are explicit. Only this complete FullMix sharing/independent GLOBAL/final-reader composition passes; public Copy/ReArrange, selected-ALL, finite sharing, musical/resource216/Human and whole-parent requirements remain open.
+The [complete Restore sharing report](../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#public-complete-restore-sharing-and-final-pcm-readers--2026-10-13) records one focused and 17 integrated cases, exact unchanged Clippy baseline and official strict/static checks. The one independent final source/evidence review passes with no open findings. The sole public Restore unconditionally shares complete PCM; stopped actual source-message relay and post-START OFF contexts are explicit. Only this complete FullMix sharing/independent GLOBAL/final-reader composition passes; public Copy/ReArrange, selected-ALL, finite sharing, musical/resource216/Human and whole-parent requirements remain open.
 
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 
 Bounded M1/M2 software execution and independent source/evidence review pass; the
-[MATERIAL report](../../../../docs/readable-material-validation.md) retains actual
+[MATERIAL report](evidence/readable-material-validation.md) retains actual
 failed attempts and separates required software checks from full E11 outcomes.
 The following checked gates record that bounded software scope. Delivery still
 requires independent acceptance of the exact final staged tree, authorized

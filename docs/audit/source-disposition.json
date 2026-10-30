@@ -477,6 +477,1186 @@
       "coverage_json_unchanged": true,
       "product_behavior_or_acceptance_changed": false,
       "remaining_steps": ["STEP6 BPM/KEY/PITCH/STEM consolidation and full mixed-report disposition", "STEP7 manual/root README", "STEP8 all-original coverage/consistency"]
+    },
+    {
+      "step": "STEP6",
+      "date": "2026-10-30",
+      "source_commit": "3fc2a908d84ad81900bf74bf70a4d66c64244c40",
+      "created_current_modules": [
+        "docs/architecture/bpm-analysis.md",
+        "docs/architecture/key-analysis.md",
+        "docs/architecture/pitch-and-key-lock.md",
+        "docs/architecture/stems.md"
+      ],
+      "section_identity": "Original section IDs/lines and immutable hashes remain audit-baseline provenance; current destinations do not promote historical gates.",
+      "original_architecture_section_mappings": [
+        {
+          "section": 1,
+          "original_lines": [
+            1,
+            196
+          ],
+          "current_targets": [
+            "docs/architecture.md#control-and-signal-flow",
+            "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering",
+            "docs/architecture/bpm-analysis.md#manual-tap-and-diagnostic-boundaries"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-B2",
+            "E-TIMING"
+          ]
+        },
+        {
+          "section": 2,
+          "original_lines": [
+            197,
+            395
+          ],
+          "current_targets": [
+            "docs/architecture/media-and-pcm.md#identity-and-custody",
+            "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-PCM",
+            "E-TIMING"
+          ]
+        },
+        {
+          "section": 3,
+          "original_lines": [
+            396,
+            500
+          ],
+          "current_targets": [
+            "docs/architecture/bpm-analysis.md#complete-source-preparation-and-admission",
+            "docs/architecture/key-analysis.md#complete-file-frontend-and-memory",
+            "docs/architecture/bpm-analysis.md#constant-tempo-selection"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-B2",
+            "E-MEMORY",
+            "E-GRID"
+          ]
+        },
+        {
+          "section": 4,
+          "original_lines": [
+            501,
+            724
+          ],
+          "current_targets": [
+            "docs/architecture/stems.md#disk-resident-and-effective-state",
+            "docs/architecture/stems.md#complete-artifacts-and-durable-selection",
+            "docs/architecture/media-and-pcm.md#identity-and-custody",
+            "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-PCM",
+            "E-STEM",
+            "E-TIMING"
+          ]
+        },
+        {
+          "section": 5,
+          "original_lines": [
+            725,
+            781
+          ],
+          "current_targets": [
+            "docs/architecture/pitch-and-key-lock.md#scalar-rate-and-rubber-band",
+            "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-PITCH"
+          ]
+        },
+        {
+          "section": 6,
+          "original_lines": [
+            782,
+            791
+          ],
+          "current_targets": [],
+          "disposition": "retired or inactive historical record retained; no reactivation",
+          "evidence_groups": [
+            "SYNC"
+          ]
+        },
+        {
+          "section": 7,
+          "original_lines": [
+            792,
+            974
+          ],
+          "current_targets": [
+            "docs/architecture/pitch-and-key-lock.md#captured-set-and-set_retrigger",
+            "docs/architecture/pitch-and-key-lock.md#key-piano-and-inheritance",
+            "docs/architecture/state-input-and-ui.md#persistence-and-restore",
+            "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-PITCH"
+          ]
+        },
+        {
+          "section": 8,
+          "original_lines": [
+            975,
+            1179
+          ],
+          "current_targets": [
+            "docs/architecture/media-and-pcm.md#identity-and-custody",
+            "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering",
+            "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-COPY",
+            "E-STEM",
+            "E-PROGRAM"
+          ]
+        },
+        {
+          "section": 9,
+          "original_lines": [
+            1180,
+            1205
+          ],
+          "current_targets": [],
+          "disposition": "retired or inactive historical record retained; no reactivation",
+          "evidence_groups": [
+            "E-PROGRAM"
+          ]
+        },
+        {
+          "section": 10,
+          "original_lines": [
+            1206,
+            1310
+          ],
+          "current_targets": [
+            "docs/architecture/stems.md#cancellation-batch-work-and-final-readers",
+            "docs/architecture/media-and-pcm.md#publication-cancellation-and-retirement",
+            "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+          ],
+          "disposition": "current core and specialist facts reconciled; dated evidence via canonical index",
+          "evidence_groups": [
+            "E-PCM"
+          ]
+        },
+        {
+          "section": 11,
+          "original_lines": [
+            1311,
+            1313
+          ],
+          "current_targets": [],
+          "disposition": "retired or inactive historical record retained; no reactivation",
+          "evidence_groups": [
+            "E-PROGRAM"
+          ]
+        }
+      ],
+      "report_relocations": [
+        {
+          "from": "docs/finite-seek-domain-validation.md",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md",
+          "pre_move_current_sha256": "a882965a3687cec339e20f526cf2e3c8fc1f1c88aaa0fe3a71d764c4e3988c90",
+          "relocated_sha256": "a882965a3687cec339e20f526cf2e3c8fc1f1c88aaa0fe3a71d764c4e3988c90",
+          "audit_original_blob": "320bc02bfcc2b4c322f71b02e093746d1e789ffd",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                40
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": []
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                41,
+                92
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM",
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                93,
+                141
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/readable-material-validation.md",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md",
+          "pre_move_current_sha256": "6ea765ba9171d1010bb2baa376e58854d874126d24b7d88978b6efc081d1edad",
+          "relocated_sha256": "6ea765ba9171d1010bb2baa376e58854d874126d24b7d88978b6efc081d1edad",
+          "audit_original_blob": "bd18e58d2bafaab5147d3bdff458422c0100581a",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                173
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/stems.md#request-identity-and-shared-work",
+                "docs/architecture/media-and-pcm.md#publication-cancellation-and-retirement"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                174,
+                284
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                285,
+                294
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM",
+                "E-PROGRAM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/long-source-streaming-validation.md",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md",
+          "pre_move_current_sha256": "e4d0edbcb4072f1241fb1b427899e928e909fb44d4f591552067b0710522cb96",
+          "relocated_sha256": "d0c14b765867267199951b569a09ec76f0d89950cf998edd715449bce40b2bf2",
+          "audit_original_blob": "78e5f20340155263dee31cba1cd915fe170fccef",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                80
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts",
+                "docs/architecture/stems.md#complete-artifacts-and-durable-selection"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                81,
+                284
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pad-owned-pcm-program.md",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md",
+          "pre_move_current_sha256": "40f57d88900780b7119e61919973ddd936878e1060031f948489c619f71f29c6",
+          "relocated_sha256": "8eeb9e628681faca9af78e8a5d43c931e6c5138bb459e0fa80c7a989700c2783",
+          "audit_original_blob": "f7b91c1aa75da5d68b7104e0aca47553f13758bc",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                49
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                50,
+                346
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                347,
+                421
+              ],
+              "current_targets": [
+                "docs/architecture.md#limits-and-evidence"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pre-rust-extension-20261011.md",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md",
+          "pre_move_current_sha256": "f724363f8f9e7c7b66ee038aab3ff631d52af92d4f56cdc9e8ad57ec08f71bd7",
+          "relocated_sha256": "6d0d65e7e50ef7249f12c4eff6bb3f0c51af20dbf90d41dd40946618eba79b5a",
+          "audit_original_blob": "25b1f8eb7103c9dde1959bf0608b1ea01354e089",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                40
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                41,
+                59
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                60,
+                71
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 4,
+              "original_lines": [
+                72,
+                76
+              ],
+              "current_targets": [
+                "docs/architecture.md#limits-and-evidence"
+              ],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pre-rust-program-coverage.json",
+          "to": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json",
+          "pre_move_current_sha256": "f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a",
+          "relocated_sha256": "f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a",
+          "audit_original_blob": "2aac6ba18894fb5446f168fcbe0db68f6063c6bb",
+          "reference_only_changes": false,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                12212
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PROGRAM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pcm-cache-residency.md",
+          "to": "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md",
+          "pre_move_current_sha256": "87e4a2f3cb93f2437e6e9a7fe58b1ccc81adb248393701a56e42b3bc5c806363",
+          "relocated_sha256": "c57997073c9c0050030b4bd561a4fc0a759a7de73ed3b32e481885e09d2a66db",
+          "audit_original_blob": "12fc706fecf007f0081e727cbac0f7e13da07cd9",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                33
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": []
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                34,
+                327
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts",
+                "docs/architecture/stems.md#complete-artifacts-and-durable-selection"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                328,
+                370
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts",
+                "docs/architecture/key-analysis.md#complete-file-frontend-and-memory"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 4,
+              "original_lines": [
+                371,
+                461
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts",
+                "docs/architecture/media-and-pcm.md#publication-cancellation-and-retirement"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 5,
+              "original_lines": [
+                462,
+                550
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": []
+            },
+            {
+              "section": 6,
+              "original_lines": [
+                551,
+                925
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 7,
+              "original_lines": [
+                926,
+                1086
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#import-and-complete-disk-artifacts",
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 8,
+              "original_lines": [
+                1087,
+                1168
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 9,
+              "original_lines": [
+                1169,
+                1387
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/media-and-pcm.md#publication-cancellation-and-retirement",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            },
+            {
+              "section": 10,
+              "original_lines": [
+                1388,
+                1445
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PCM",
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 11,
+              "original_lines": [
+                1446,
+                1857
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/pitch-and-key-lock.md#key-piano-and-inheritance",
+                "docs/architecture/stems.md#disk-resident-and-effective-state",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PCM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pcm-cache-measurements.md",
+          "to": "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md",
+          "pre_move_current_sha256": "fbc9eda19d4d83859444a82854d12752585257b80618446d9a54b337c67c0881",
+          "relocated_sha256": "fbc9eda19d4d83859444a82854d12752585257b80618446d9a54b337c67c0881",
+          "audit_original_blob": "ad5a48d5c3fcde669050248dd2dc3cc9ca3b2783",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                263
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/pitch-and-key-lock.md#dependencies-evidence-and-current-limits"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-C3"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/key-lock-backend.md",
+          "to": "openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md",
+          "pre_move_current_sha256": "ed9ed0fb0264780d1dd6fe618bb97d099652f28c63a335135e6754fd30b7a6a9",
+          "relocated_sha256": "b28ed920e19efb353837ebf337cdf26f5119094ecdbab498b0e5783235eb674a",
+          "audit_original_blob": "bdadb589d082a18f2de8d466099c1ddd36a5c847",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                24
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#captured-set-and-set_retrigger"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": []
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                25,
+                171
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                172,
+                791
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#scalar-rate-and-rubber-band",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 4,
+              "original_lines": [
+                792,
+                982
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 5,
+              "original_lines": [
+                983,
+                3198
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 6,
+              "original_lines": [
+                3199,
+                3268
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#scalar-rate-and-rubber-band",
+                "docs/architecture/pitch-and-key-lock.md#dependencies-evidence-and-current-limits"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": []
+            },
+            {
+              "section": 7,
+              "original_lines": [
+                3269,
+                3635
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#key-piano-and-inheritance",
+                "docs/architecture/pitch-and-key-lock.md#captured-set-and-set_retrigger",
+                "docs/architecture/state-input-and-ui.md#input-intent-and-native-dispatch"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 8,
+              "original_lines": [
+                3636,
+                3679
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#key-piano-and-inheritance"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 9,
+              "original_lines": [
+                3680,
+                4004
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 10,
+              "original_lines": [
+                4005,
+                4091
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 11,
+              "original_lines": [
+                4092,
+                4517
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#key-piano-and-inheritance",
+                "docs/architecture/pitch-and-key-lock.md#captured-set-and-set_retrigger",
+                "docs/architecture/stems.md#disk-resident-and-effective-state",
+                "docs/architecture/state-input-and-ui.md#input-intent-and-native-dispatch"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            },
+            {
+              "section": 12,
+              "original_lines": [
+                4518,
+                4542
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-PITCH"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/prepared-stem-publication.md",
+          "to": "openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md",
+          "pre_move_current_sha256": "daef122f055393a4c8eb9aeffb33a4feedd1daa9b38321e7859da84e96063b5d",
+          "relocated_sha256": "2807b7ad3e069a060c14a229067589b0bc38679f72da8c03eeb887c05331a13e",
+          "audit_original_blob": "cb9e9d22baa8c8e5549fe6b3efd739b369205b25",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                265
+              ],
+              "current_targets": [
+                "docs/architecture/stems.md#complete-artifacts-and-durable-selection",
+                "docs/architecture/stems.md#disk-resident-and-effective-state",
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                266,
+                306
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-STEM",
+                "E-PROGRAM"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                307,
+                499
+              ],
+              "current_targets": [
+                "docs/architecture/stems.md#request-identity-and-shared-work",
+                "docs/architecture/stems.md#complete-artifacts-and-durable-selection"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 4,
+              "original_lines": [
+                500,
+                1105
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#identity-and-custody",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 5,
+              "original_lines": [
+                1106,
+                1785
+              ],
+              "current_targets": [
+                "docs/architecture/stems.md#request-identity-and-shared-work",
+                "docs/architecture/stems.md#cancellation-batch-work-and-final-readers",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 6,
+              "original_lines": [
+                1786,
+                2743
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 7,
+              "original_lines": [
+                2744,
+                2771
+              ],
+              "current_targets": [],
+              "disposition": "complete historical/proposed record retained; no active queue or acceptance",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 8,
+              "original_lines": [
+                2772,
+                2948
+              ],
+              "current_targets": [
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement",
+                "docs/architecture/runtime-and-transport.md#rates-loops-and-rendering",
+                "docs/architecture/stems.md#disk-resident-and-effective-state"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 9,
+              "original_lines": [
+                2949,
+                3187
+              ],
+              "current_targets": [
+                "docs/architecture/stems.md#request-identity-and-shared-work",
+                "docs/architecture/stems.md#disk-resident-and-effective-state",
+                "docs/architecture/pitch-and-key-lock.md#captured-set-and-set_retrigger"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            },
+            {
+              "section": 10,
+              "original_lines": [
+                3188,
+                3277
+              ],
+              "current_targets": [
+                "docs/architecture/stems.md#cancellation-batch-work-and-final-readers"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-STEM"
+              ]
+            }
+          ]
+        },
+        {
+          "from": "docs/pad-content-copy.md",
+          "to": "openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md",
+          "pre_move_current_sha256": "01b43b83ec298204065d475ae3fd48e0a033246cf78751b81b6f817eaa45ace2",
+          "relocated_sha256": "fa0234a6226bf56c54abdb08be46caafa542d70d05a32fe2b420e20fd25cc1e7",
+          "audit_original_blob": "8b7e13d44d955df7796d3f8b619dde4219df2cfb",
+          "reference_only_changes": true,
+          "sections": [
+            {
+              "section": 1,
+              "original_lines": [
+                1,
+                241
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/state-input-and-ui.md#copy-pair-bank-and-shared-custody"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 2,
+              "original_lines": [
+                242,
+                486
+              ],
+              "current_targets": [
+                "docs/architecture/state-input-and-ui.md#copy-pair-bank-and-shared-custody",
+                "docs/architecture/runtime-and-transport.md#ordinary-playback-groups-and-temporary-holds"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 3,
+              "original_lines": [
+                487,
+                547
+              ],
+              "current_targets": [
+                "docs/architecture/state-input-and-ui.md#entry-points-and-state-owners",
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 4,
+              "original_lines": [
+                548,
+                694
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 5,
+              "original_lines": [
+                695,
+                716
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/state-input-and-ui.md#persistence-and-restore"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 6,
+              "original_lines": [
+                717,
+                733
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#complete-geometry-and-finite-resident-views",
+                "docs/architecture/pitch-and-key-lock.md#preparation-actual-feed-and-retirement"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            },
+            {
+              "section": 7,
+              "original_lines": [
+                734,
+                767
+              ],
+              "current_targets": [
+                "docs/architecture/media-and-pcm.md#copy-rearrangement-and-memory-admission",
+                "docs/architecture/stems.md#cancellation-batch-work-and-final-readers"
+              ],
+              "disposition": "current facts reconciled; complete dated evidence retained",
+              "evidence_groups": [
+                "E-COPY"
+              ]
+            }
+          ]
+        }
+      ],
+      "reference_repairs": [
+        "README.md",
+        "docs/README.md",
+        "docs/accepted-constant-timing.md",
+        "docs/architecture/media-and-pcm.md",
+        "docs/architecture/state-input-and-ui.md",
+        "docs/development.md",
+        "docs/documentation-audit.md",
+        "docs/native-constant-timing.md",
+        "docs/stem-generation-setup.md",
+        "docs/ui-toolkit.md",
+        "openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md",
+        "openspec/changes/archive/2026-10-30-add-key-transposition-performance/proposal.md",
+        "openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md",
+        "openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/proposal.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/design.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/proposal.md",
+        "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/tasks.md",
+        "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/design.md",
+        "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md",
+        "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/tasks.md",
+        "openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md",
+        "openspec/changes/archive/2026-10-30-extend-shared-stem-generation/proposal.md",
+        "openspec/changes/archive/2026-10-30-inherit-pad-key-lock/tasks.md",
+        "rust/README.md"
+      ],
+      "coverage_json_unchanged": true,
+      "coverage_path_interpretation": "Embedded original docs paths are frozen historical lineage, resolved through this from/to relocation map, not runtime paths. No executable consumer requires the former location.",
+      "frozen_provenance_preserved": true,
+      "retention_overrides_unchanged": true,
+      "product_behavior_or_acceptance_changed": false,
+      "remaining_steps": [
+        "STEP7 detailed manual/root product+Portable+source installation/map",
+        "STEP8 all-original source/reference/provenance/consistency"
+      ],
+      "current_reference_updates": [
+        "AGENTS.md",
+        "README.md",
+        "rust/README.md",
+        "docs/README.md",
+        "docs/architecture.md",
+        "docs/architecture/media-and-pcm.md",
+        "docs/architecture/runtime-and-transport.md",
+        "docs/architecture/state-input-and-ui.md",
+        "docs/constant-bpm-guide.md",
+        "docs/key-detection.md",
+        "docs/stem-generation-setup.md",
+        "docs/documentation-audit.md",
+        "openspec/changes/archive/2026-10-30-evidence-index.md"
+      ],
+      "anchor_repairs": [
+        {
+          "original_fragment": "ordinary-incoming-loader--2026-10-13",
+          "current_fragment": "ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass",
+          "target": "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md",
+          "reason": "Normalize a valid existing explicit HTML alias to the full unchanged heading fragment; reference-only change. The initial checker omitted HTML IDs, not a broken original link.",
+          "references": [
+            "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md",
+            "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md",
+            "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/tasks.md"
+          ]
+        }
+      ]
     }
   ],
   "files": [

@@ -136,8 +136,8 @@ mutable progression/processing state; immutable material may be shared.
 Prepared stems follow the same trajectory with a bounded switching transition.
 Pitch/Key Lock uses prepared source/history and Rubber Band, preserving source
 and content binding. Source Key metadata is distinct from transposition.
-Details and retained limits remain in [Key Lock](../key-lock-backend.md) and
-[prepared stems](../prepared-stem-publication.md).
+Details and retained limits are in [pitch and Key Lock](pitch-and-key-lock.md) and
+[stems](stems.md).
 
 The mixer applies smoothed PAD Gain/Trim, PAD DSP/isolator and trigger velocity,
 then sums and applies master level/momentary output mute. PAD meters are

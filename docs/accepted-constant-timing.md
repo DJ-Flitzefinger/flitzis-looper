@@ -98,7 +98,7 @@ The pure guard alone does not establish these facts.
 
 G3b1 protects productive stem preparation with actual loaded-source pointers,
 content identities, current request/preparation epochs, isolated worker artifacts
-and callback feedback; see [prepared publication](prepared-stem-publication.md).
+and callback feedback; see [prepared publication](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md).
 Its generic epoch does not replace this accepted revision. G3b2a connects native
 adoption and SourceGrid; G3b2b connects current native authority and native
 period/rate consumers; G3b2c adds Python projections and locked controls, G3b2d

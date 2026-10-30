@@ -36,6 +36,14 @@ admitted selection with a Session revision and displayed content, including a
 repeated slot choice. Pair/Bank projections preserve captured intent across
 placement changes.
 
+In Re-Arrange, the original press claims the complete gesture before ordinary PAD
+actions: left Move/Swap, right stopped Copy, with captured original source binding.
+Cancellation, focus loss, hidden editor and close release or settle that owned
+gesture instead of invoking an ordinary action on a new occupant. Temporary
+global mute retains the latest saved master volume and restores that value when
+released; it is not an old-volume overwrite. Native Copy/Pair/Bank still supplies
+the separate source/content/claim/OwnACK authority described in [media](media-and-pcm.md).
+
 ## Input intent and native dispatch
 
 [actions.py](../../src/flitzis_looper/input_mapping/actions.py) defines serializable
@@ -147,7 +155,7 @@ lineage. A recognized written successor receives fresh target-only acceptance;
 it does not copy a potentially changed source again. Ambiguous/unknown histories,
 missing custody and conflicting unfinished owners keep visible fences. Readers
 survive interrupted config/Native settlement. See [media identity](media-and-pcm.md#identity-and-custody)
-and the [Copy report](../pad-content-copy.md) for software cases and open gates.
+and the [Copy report](../../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md) for software cases and open gates.
 
 ## Recording and shutdown
 

@@ -18,6 +18,6 @@
 - [x] 3.3 Pass official strict validation for this change and affected specifications.
 - [x] 3.4 Complete one independent final diff review and record concise evidence.
 
-Evidence: [KEY LOCK backend validation](../../../../docs/key-lock-backend.md#inheritance-validation2026-10-11).
+Evidence: [KEY LOCK backend validation](../2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md#inheritance-validation2026-10-11).
 
 Existing pending Native adoption, musical/device and synchronized-Quantize gates remain pending.

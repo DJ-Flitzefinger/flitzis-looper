@@ -12,7 +12,7 @@ requires a separator model, even when the selected model is absent.
 
 ## Native API and ownership
 
-The [pad-owned PCM program](pad-owned-pcm-program.md) retains generic publication's
+The [pad-owned PCM program](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md) retains generic publication's
 active-pad rejection and relocation's already accepted identical-set requirement.
 P5a adds a separate typed first residency of an already selected unchanged committed
 disk set while FullMix plays. Complete durable five-artifact integrity, selected disk
@@ -70,7 +70,7 @@ by the native loader; same-size/mtime replacement before admission is rejected.
 The productive loader copies/hashes stable bytes first and decodes that sealed
 snapshot, or validates complete compatible warm PCM on retained immutable readers.
 Its byte-exact project original remains separate from the shared digest cache.
-The [PCM cache](pcm-cache-residency.md) records complete decoder/playback lineage;
+The [PCM cache](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md) records complete decoder/playback lineage;
 the prepared ticket still requires its own current source/timing permit.
 
 Capture serializes with real load/unload publication under the request mutex and
@@ -204,7 +204,7 @@ loop/seek/Key Lock effect under one native ACK. Complete source/set identity,
 timing and history still govern adoption; pending/error/cancellation leaves
 previous effective audio available. Complete waveform/analysis readers and
 nonresident seeks use bounded complete-source exceptions, documented in
-[PCM cache and readiness](pcm-cache-residency.md).
+[PCM cache and readiness](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md).
 
 Each separator writes `samples/stems/#<pad>/.generation-<uuid>/`. Events retain the
 original ticket identity, so an old completion cannot consume a new job even after
@@ -265,7 +265,7 @@ inference performance or human/device acceptance.
 
 ## Remaining G3 boundaries
 
-G3b2a/b/c/d connects [explicit acceptance](native-constant-timing.md) to current
+G3b2a/b/c/d connects [explicit acceptance](../../../../../docs/native-constant-timing.md) to current
 native/Python grid, loop, transport/master/rate and MIDI pad consumers. G3b2e
 adds productive prepared-source/stem revision binding with a shared source
 trajectory; the generic preparation epoch remains a separate freshness check.
@@ -287,7 +287,7 @@ rendered/onset/device/listening gates. Numerical ownership tests supply no human
 listening, label or device acceptance. Later B5 audible crop/delay/transition
 compensation stays separate; current 96-native-handle setup/RAM and C3 multi-pad
 save costs remain unmeasured. Preliminary complete native export/project-save
-integrity accounting is recorded in [PCM cache and residency](pcm-cache-residency.md).
+integrity accounting is recorded in [PCM cache and residency](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md).
 
 ## Pending R0 origin independent versions
 
@@ -3086,7 +3086,7 @@ found no open issue. See the scenarios above for the retained acceptance limits.
 
 ## Public Generate completion and live model replacement — 2026-10-13
 
-The bounded [public Generate test](../rust/crates/looper/src/audio_engine/public_generate_adoption_tests.rs) connects the existing public request to
+The bounded [public Generate test](../../../../../rust/crates/looper/src/audio_engine/public_generate_adoption_tests.rs) connects the existing public request to
 completed disk selection and actual live adoption. The production path was already
 implemented: `generate_stems_async` captures a real `OfflineStemSourceLease`,
 the two-worker pool resolves immutable job/subscriber intent, worker completion

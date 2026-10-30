@@ -171,7 +171,7 @@ plugin hosting, a separate FX graph, or realtime stem generation.
 
 ## Runtime Modules
 
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) gives finite DSP
+The pending [pad-owned PCM program](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md) gives finite DSP
 supply its own P4b proof/implementation slice. Current saved KEYLOCK still uses a
 labelled full-track fallback for unproved continuation. Dry loop tap parity does
 not prove native feed/lookahead/FIFO/history/seam coverage or causal availability.
@@ -328,7 +328,7 @@ ACKs do not restart chronology or release still-used pins. The retiring
 and job readers retire separately through the existing registry/recycle paths.
 The ordinary StemController FullMix path uses that retiring command. Its active
 initial None->Some, warm return, retention policy and effective-mode ACK remain
-separate [P5a work](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
+separate [P5a work](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 No resident-transition result alone closes those workflows or the remaining P4b
 matrix.
 
@@ -338,7 +338,7 @@ source rate 1 still needs the new selection's own current-source wet output with
 KEY LOCK OFF or ON. A fresh Native-unity birth can remain dry, while an existing
 matching Native owner retains its aligned history at unity. Completing the
 128-source-frame ramp alone does not certify that wet output. The bounded
-[public Generate profiles](prepared-stem-publication.md#piano-pitch-and-live-generate-mode-acknowledgement--2026-10-17)
+[public Generate profiles](../../2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md#piano-pitch-and-live-generate-mode-acknowledgement--2026-10-17)
 retain the existing own preparation/adoption path and its separate acceptance limits.
 
 The bounded lifecycle/source-custody implementation keeps finite NormalLoop
@@ -396,7 +396,7 @@ real jumps reserve a clean warmed handle before resetting usable old audio.
 Storage-only full-to-finite return can retain adopted chronological state and
 original pins, while pending work stays exact-window/checkpoint bound.
 Complete-backed/non-KEY Seek and explicit ALL exceptions remain supported.
-The [finite seek/domain report](finite-seek-domain-validation.md) records bounded
+The [finite seek/domain report](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md) records bounded
 software evidence and failures. Full P4b, initial finite KEYLOCK-load/P5b, P5a,
 remaining resource/music/history/causality, nonzero KEY/pitch and Human acoustic
 acceptance remain separate.
@@ -431,7 +431,7 @@ source through the shared reader and canonical cursor. Its consumed native
 history and pending FIFOs bind that source's address/shape/loaded rate and full
 effective accepted revision with exact period/signed-origin bits. The expected
 next fractional position, including seek mode, guards continuity before samples
-enter native or pending adapter state. See [native timing ownership](native-constant-timing.md).
+enter native or pending adapter state. See [native timing ownership](../../../../../docs/native-constant-timing.md).
 
 G3b2f1 supplies continuous productive history ownership. G3b2f2 extends the same
 worker with actual source-specific native/FIFO preparation and timed transactional
@@ -610,7 +610,7 @@ Historical standalone Windows measurements for 32 stereo voices observed:
 
 These are single-run process deltas on the measured system, not portable memory
 limits, live callback costs or measurements of the extended 96-handle pool.
-Current [96-handle setup/resource measurements](pcm-cache-measurements.md)
+Current [96-handle setup/resource measurements](../../2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md)
 are recorded separately for the production pool. Fixed reserves bound ownership
 exchange; source preparation throughput remains a separate profiling scope.
 
@@ -786,7 +786,7 @@ The prepared adapter matrix compares independent algebraic-source/raw-native
 20,017-frame suffixes across steady/smoothed mono/stereo, rates and loop/seek/stem
 cases. Actual mixer/worker tests separately prove the transferred handle/FIFOs,
 12,853-frame productive raw-native suffix, current-permit/runtime rejection and
-off-thread pin retirement. See [productive preparation evidence](native-constant-timing.md#productive-prepared-native-continuation)
+off-thread pin retirement. See [productive preparation evidence](../../../../../docs/native-constant-timing.md#productive-prepared-native-continuation)
 for scope; these comparisons do not close the acoustic gates below.
 
 ### Adapter And Measured Delay
@@ -839,7 +839,7 @@ prepared results live in workspace `scratch/`, including
 `slice3-key-lock-latency-findings.md` and
 `slice3-key-lock-latency-{baseline,prepared}.csv`; generated CSVs and logs are
 not repository artifacts. Reproduce the probe using
-[the development guide](development.md#offline-key-lock-measurement).
+[the development guide](../../../../../docs/development.md#offline-key-lock-measurement).
 
 The adapter partition test supplies identical already-varispeed samples. The
 fractional source foundation also compares immutable nonconstant sources,
@@ -899,7 +899,7 @@ clipping and discarded energy, alongside the retained response. Negative residua
 and a discarded original peak must remain visible: cropped output alone can hide
 the lost first transient. This is evidence for selecting a later compensation
 strategy, not audible acceptance. Reproduce the proof and CSV using
-[the development guide](development.md#offline-key-lock-measurement).
+[the development guide](../../../../../docs/development.md#offline-key-lock-measurement).
 
 The optimized Windows proof passed 984 reference comparisons, including 180
 impulse cases with identical metrics in 45 rate/ratio/marker groups across four
@@ -3635,7 +3635,7 @@ full-216 or final product acceptance.
 
 ## Direct live KEYLOCK correction2026-10-11
 
-[E11-01/02](pre-rust-extension-20261011.md) have the bounded X11-KEYLOCK software
+[E11-01/02](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) have the bounded X11-KEYLOCK software
 correction for fixed NormalLoop k=0 through actual global/pad command, current-window/native ACK
 and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. The latest inheritance contract
 supersedes broadcast overwrite: explicit ON/OFF survives later globals, new tracks inherit and

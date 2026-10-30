@@ -63,7 +63,7 @@ The UI shell starts in `src/flitzis_looper/ui/run.py`:
    `controller.prepare_shutdown`, retaining the frame loop and a visible pending
    message until Copy's actual worker/Native/config ownership has settled.
 6. Register `controller.shut_down` for permitted exit; teardown never bypasses
-   pending Copy ownership. See [pad content copies](pad-content-copy.md).
+   pending Copy ownership. See [pad content copies](../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md).
 
 `render_ui()` in `src/flitzis_looper/ui/render/render.py` is the canonical frame
 entrypoint:
@@ -116,13 +116,13 @@ src/flitzis_looper_audio/
 
 ## State Ownership
 
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) specifies lazy
-ALL STEMS requests from valid disk artifacts, distinct desire/pending/ready/
-effective state, and project-persisted startup preload plus RAM estimates/budget
-on the existing Settings surface. Current mode buttons still require resident
-availability; disk existence is not native readiness. Implementation must route
-requests through the shared controller, preserve FullMix during preparation and
-obtain effective native feedback. Rendering continues to use snapshots only.
+The [archived pad-owned PCM program](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md)
+retains historical requirements and incomplete gates, not a pending execution
+queue. Current [stems](architecture/stems.md) and [media/PCM](architecture/media-and-pcm.md)
+separate saved intent, disk eligibility, residency, pending and effective audio.
+Controllers request the required admitted components; disk existence alone is
+not Native readiness. FULL MIX and actual own feedback remain truthful while
+preparing. Rendering uses snapshots and does not load PCM or poll workers.
 
 New-track loading initializes loop and an independent persisted scalar grid base
 at the loaded frame immediately before the first crossing of the symmetric
@@ -567,7 +567,7 @@ does not repeat a line; another deliberate failed attempt does. The sink perform
 no audio-thread work. This is an implemented engineering surface; variable-rate
 SET past/history reconstruction, performer deadlines, full B5 quality/transition/
 latency, B6 and Human device/listening/visual acceptance remain open. It grants no
-whole-arrangement or full-216 acceptance. See [Key Lock backend](key-lock-backend.md#durable-key-intent-and-engineering-pitch-controls).
+whole-arrangement or full-216 acceptance. See [Key Lock backend](../openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md#durable-key-intent-and-engineering-pitch-controls).
 
 ## Re-Arrange surface
 
@@ -656,10 +656,11 @@ remain open.
 
 ## Direct extension2026-10-11 and remaining acceptance
 
-The [E11 UI/control plan](pre-rust-extension-20261011.md) retains final Human
+The [E11 UI/control plan](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) retains final Human
 visual repetition of zoom/layout/confirmation usability after the bounded X11-UI
 software gates. The measured readiness-layout fault does not establish the exact
 Human perceptual duplicate or reported binary. Whole P4b/P5a and later resource,
-music/history, device/hearing, V0/H-FINAL/Goal gates remain open. RECORD remains a
-separate pending delivery using the global button/group implementation, deliberate
-gap, single-edge left/right behavior and truthful capture states.
+music/history, device/hearing and V0/H-FINAL gates remain as recorded in historical
+evidence. Old Goal/RECORD delivery programs are inactive; current recording capture
+and settlement are described in [state/input](architecture/state-input-and-ui.md)
+and [runtime](architecture/runtime-and-transport.md), without promoting those gates.

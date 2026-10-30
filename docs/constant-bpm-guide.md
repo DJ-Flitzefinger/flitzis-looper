@@ -79,12 +79,17 @@ systematic human timing drift cannot be inferred away automatically.
 
 ## Processing device
 
-Long tracks can finish BPM analysis while reporting that optional key analysis
-was skipped because it needs too much preparation memory. A fresh track then
+Key analysis now uses the complete file-backed frontend, retaining all input and
+the original classification semantics. Its preparation admission remains bounded;
+a large request can finish BPM while optional Key reports a budget skip. A fresh track then
 shows an unknown key. Reanalysis preserves the previous detected key and manual
 source-key correction when key work is skipped or fails; a matching successful
 key result can replace the old detection and clear its preexisting correction.
 The BPM result remains available independently.
+
+See [BPM architecture](architecture/bpm-analysis.md) and
+[Key architecture](architecture/key-analysis.md) for productive policy, source
+ownership, exact outcome distinctions and the limits of memory accounting.
 
 The sidebar shows the last confirmed BPM inference device separately from its
 processing stage. CUDA inference can fall back once to a fresh CPU run after a

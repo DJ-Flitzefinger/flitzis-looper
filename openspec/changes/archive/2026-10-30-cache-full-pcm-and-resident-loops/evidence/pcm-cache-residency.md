@@ -9,14 +9,14 @@ complete source authority from resident storage and restores saved finite loops.
 PCM ownership, process resources, exceptions and lifecycle costs with paired
 finite/full results and their limits. Actual human/device/listening acceptance
 remains open. The active
-[OpenSpec change](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/proposal.md)
+[OpenSpec change](../proposal.md)
 records the contracts; its
-[task list](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/tasks.md)
+[task list](../tasks.md)
 records the completed bounded implementation tasks.
 
 C3 preparation releases an unused converted intermediate Vec after channel mapping,
 before playback Arc creation and its declared PCM checkpoint. Complete-cache
-[validation waits cancellably](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/specs/pcm-cache-residency/spec.md#requirement-cancellable-concurrent-cache-validation)
+[validation waits cancellably](../specs/pcm-cache-residency/spec.md#requirement-cancellable-concurrent-cache-validation)
 off-thread for admission, so transient validation contention cannot trigger
 redundant cold decoding or a new cache generation.
 
@@ -47,7 +47,7 @@ and exact EOF before selected residency can be published.
 | --- | --- |
 | Public Native import with finite bounds and automatic analysis | Stream complete storage; retain the requested loop. Attempt separately admitted analysis, then return matching analysis or a visible analysis error with source success. |
 | Public Native import without analysis | Stream complete storage; read supplied finite bounds, or the complete source when bounds are absent. |
-| Ordinary UI import | Prepare and fully verify complete disk storage first; resolve genuine incoming activity/analysis and Auto8bars or newer addressed demand before the selected live read. Finite ON/OFF selection, actual initial BPM lock and source-bound controls have a [passing bounded software gate](#ordinary-incoming-loader--2026-10-13). |
+| Ordinary UI import | Prepare and fully verify complete disk storage first; resolve genuine incoming activity/analysis and Auto8bars or newer addressed demand before the selected live read. Finite ON/OFF selection, actual initial BPM lock and source-bound controls have a [passing bounded software gate](#ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass). |
 | Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Known physical saved ON demand selects KeyLockFiniteLoop for a proper partial range and KeyLockFullTrack for a complete range; its separate passing bounded software gates are [reported below](#initial-saved-finite-keylock-on--2026-10-12). |
 | Noncanonical migration | Prepare a one-frame identity seed and complete lease. Read the subscriber's captured current finite range when adopting. |
 | Complete stem preparation | Use the complete source lease, full WAV scans and bounded alignment/conversion; the metadata seed is never an analysis or playback choice. |
@@ -60,7 +60,7 @@ physical ON demand uses the shared finite selection; no unknown geometry is gues
 One-frame material metadata preparation grants no ALL
 residency. Warm verification scratch is 64 KiB, independent of disk extent.
 Ordinary UI/default-eight-bars preparation now resolves the physical selection
-before live allocation. Its [bounded incoming report](#ordinary-incoming-loader--2026-10-13)
+before live allocation. Its [bounded incoming report](#ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass)
 records bounded ON/OFF, actual initial BPM-lock evidence and its final passing
 software gate. Complete storage, the historical OFF
 paths and the separate saved ON delivery do not close full E11-03/X11-LONG,
@@ -86,7 +86,7 @@ The callback receives prepared resident PCM only; every file/decoder/resampler/
 hash/model operation remains outside realtime. This delivery does not complete
 new active StemSet adoption, P4b/P5a, aggregate P6 resources or Human listening.
 
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this delivered
+The pending [pad-owned PCM program](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md) extends this delivered
 foundation. It replaces obsolete legacy physical containers with canonical immutable material
 versions and equal all-bank content users, with #1..#216 only stable membership,
 adds persistent aligned stem PCM/direct range reads, and requires actual216-slot
@@ -162,7 +162,7 @@ Explicit import and restore intent prevents an absolute canonical restore from
 being recopied as an external import. Safe legacy flat originals, global PCM
 generations, M-ID originals/caches and slot stem sets remain readable during
 verified serial journal/config/reference migration. See
-[readable material validation](readable-material-validation.md).
+[readable material validation](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md).
 
 The native typed resolver rejects traversal before normalization, reparse ancestors,
 Windows leaf aliases, invalid IDs and wrong artifact kinds. Directory ancestors are
@@ -453,7 +453,7 @@ Recognized exclusive failed/crash staging uses the same contained ownership rule
 No file handle, JSON, lock, hash or filesystem destructor enters the callback.
 
 The historical C1b long-source warm and native export/project-save probes
-described in [development](development.md) record preliminary integrity costs.
+described in [development](../../../../../docs/development.md) record preliminary integrity costs.
 They preserve complete save verification, fresh timing ACK and atomic
 previous-config/dirty-state failure behavior. The separate
 [C3 measurements](pcm-cache-measurements.md) cover current 200-pad readiness,
@@ -531,7 +531,7 @@ remain open until the final human-run acceptance stage.
 
 Saved Automatic geometry remains only a hint: unsupported complete evidence
 cannot establish CURRENT. The isolated productive probes and their invocation
-are recorded in [development](development.md).
+are recorded in [development](../../../../../docs/development.md).
 
 The productive 600-second PCM24 fixture restores the saved absolute 42.0–42.5
 second loop as 24,000 stereo frames: 192,000 resident PCM bytes, while complete
@@ -661,13 +661,13 @@ ordered 216-pad test and the separate actual paired relocation test. Ignored lon
 resource/model helpers remain required at their respective final gates; these
 bounded results do not claim those runs or process RAM, hearing or device acceptance.
 
-The separate [ordinary incoming follow-up](#ordinary-incoming-loader--2026-10-13)
+The separate [ordinary incoming follow-up](#ordinary-incoming-loader--2026-10-13-bounded-software-gate-pass)
 now implements preparation before live selection and actual initial BPM lock,
 with a passing bounded software gate. Accepted-
 musical admission, whole P4b/P5b, X11-LONG/MATERIAL, aggregate resources/music and
 Human/device/hearing gates remain OPEN. Historical
 2026-10-11 OFF storage measurements remain unchanged in the
-[complete-source streaming report](long-source-streaming-validation.md).
+[complete-source streaming report](../../2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md).
 
 <a id="ordinary-incoming-loader--2026-10-13"></a>
 
@@ -964,7 +964,7 @@ application/readiness feedback are separate. Active ON waits for usable current
 wet processing, while later exact source-candidate adoption remains independently
 guarded. Full-source scalar commands also carry their own source/generation and
 mode-request ACK rather than settling from a successful enqueue. See
-[live mode feedback](key-lock-backend.md#live-mode-transactions-and-feedback).
+[live mode feedback](../../2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md#live-mode-transactions-and-feedback).
 
 When a start requests the same immutable source, exact resident range and DSP
 context, the transaction reuses the existing full-mix PCM and matching accepted
@@ -1445,7 +1445,7 @@ or implementing the full application Rust port.
 
 ## Active same-set residency (P5a, 2026-10-11)
 
-The typed [committed-set APIs](prepared-stem-publication.md#native-api-and-ownership)
+The typed [committed-set APIs](../../2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md#native-api-and-ownership)
 separate verified selected disk eligibility, current four-component residency and
 effective audio mode. Registration alone cannot activate components. A fresh
 callback capture binds each request to actual source/window/timing/STOP/voice/history

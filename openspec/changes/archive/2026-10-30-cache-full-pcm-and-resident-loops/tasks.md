@@ -56,7 +56,7 @@
 
 ## C3: measured acceptance
 
-Results and measurement limits: [C3 measurement report](../../../../docs/pcm-cache-measurements.md).
+Results and measurement limits: [C3 measurement report](evidence/pcm-cache-measurements.md).
 
 - [x] Freeze real cold/warm protocol, independent oracles and source/cache identities.
 - [x] Measure 200 occupied pads, short loops in long sources, duplicate/shared

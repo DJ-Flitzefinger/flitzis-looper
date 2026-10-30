@@ -10,15 +10,13 @@ callback never runs separators, FFmpeg, disk I/O, model loading, GIL/UI or infer
 
 ## What `uv sync` Installs
 
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes generated
-asset destinations and residency, not separator/model setup. The direct E11 extension targets shared readable source roots, with
-WAV outputs in `samples/<Originalfilename>/stems` and aligned f32 derivatives in
-`samples/<Originalfilename>/.pcm-cache`, with a joint verified set commit across both areas.
-It retains temporary buffers
-only until commit/validation completes. FULL MIX generation with preload off
-will not retain unused stem windows. Existing eager publication and global stem
-container descriptions below remain current until implementation. No model
-download/inference is needed for P0 planning or model-free cache restoration.
+Current [stem architecture](architecture/stems.md) separates source-leased offline
+generation, immutable disk/config selection, component residency and effective
+own-ACK adoption. Source-backed sets use the shared material root's `stems` and
+aligned `.pcm-cache` areas with one verified joint commit. FULL MIX with preload
+off need not retain unused stem windows. Model-free verified restoration needs
+no new model download or inference. Historical programs are retained evidence,
+not a pending implementation queue or current storage contract.
 
 The Python runtime dependencies for stem generation are declared in
 `pyproject.toml` and locked in `uv.lock`:
@@ -174,11 +172,14 @@ GPU kernels and real output are checked separately from human/device acceptance.
 ## Selection And Rollback
 
 Choose **BS-RoFormer MUSDB18HQ** in Settings before requesting generation on a
-stopped pad. To return, choose **Demucs htdemucs**; its saved shifts/overlap values
+loaded source, including during playback or pause under its source lease.
+New-set audio adoption has separate state-specific guards. To return, choose
+**Demucs htdemucs**; its saved shifts/overlap values
 are retained. Running jobs retain their original choice. Existing complete sets
 can restore with either model missing and do not need inference again. Both paths
-use source tickets, immutable private generations, leases, complete-set integrity
-and native ACK before availability. Two worker slots and 32 queued requests bound
+use source tickets, immutable private generations, leases and complete-set
+integrity for disk eligibility; effective audio requires its own Native ACK.
+Two worker slots and 32 queued requests bound
 separator admission; the native cold/preparation limits remain separate.
 The unchanged Demucs CLI retains whole-track neural input/output PCM; the bounded
 shared artifact writer does not establish a total Demucs inference-memory bound.
@@ -192,13 +193,14 @@ does not change the required BeatThis automatic-BPM worker setup.
 
 ## Expected Runtime Errors
 
-Generated sets stay inside `samples/stems/#<pad>/`: workers write private
+Source-backed sets use the shared material root; the implemented legacy
+`samples/stems/#<pad>/` fallback is not the sole current destination. Workers write private
 `.generation-<uuid>` directories and complete sets publish as immutable
 `.ready-<uuid>` directories. Project metadata selects an exact set. Replacing
 or deleting stems revokes eligibility first; contained native cleanup waits for
 assignment, separator-job and native PCM readers before deleting that generation.
-An old cleanup cannot remove a newer set or unknown files in the pad container.
-See [prepared publication](prepared-stem-publication.md) for current ownership.
+An old cleanup cannot remove a newer set, another assignment's readers or unknown
+files. See [stem architecture](architecture/stems.md) for current ownership.
 
 - `no Model installed`: run the Demucs model install command above.
 - `no Model installed: BS-RoFormer MUSDB18HQ`: run its explicit installer above.
@@ -209,16 +211,16 @@ See [prepared publication](prepared-stem-publication.md) for current ownership.
 
 ## Direct live/long-source extension
 
-The [E11 plan](pre-rust-extension-20261011.md) requires streamed full source/five-WAV/PCM/mono alignment and fresh full warm verification without a total-duration/1-GiB extent cap. X11-LONG implements these complete-storage paths through bounded blocks and immutable disk generations; simultaneous scratch, separately admitted analysis and actual loop/ALL live budgets remain distinct. The [validation report](long-source-streaming-validation.md) records actual long/Boris/RF64 evidence and its final acceptance state. Demucs inference/model/activation peaks are not bounded by postprocessing claims.
+The [E11 plan](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) requires streamed full source/five-WAV/PCM/mono alignment and fresh full warm verification without a total-duration/1-GiB extent cap. X11-LONG implements these complete-storage paths through bounded blocks and immutable disk generations; simultaneous scratch, separately admitted analysis and actual loop/ALL live budgets remain distinct. The [validation report](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md) records actual long/Boris/RF64 evidence and its final acceptance state. Demucs inference/model/activation peaks are not bounded by postprocessing claims.
 
-The bounded [L1 identity delivery](prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11) resolves complete actual producer provenance before control-owned duplicate admission. Equal known fingerprints join one physical inference or reuse a verified completed pair; current verified selection disables duplicate generation without render-time hashing. Optional durable v3 provenance preserves historical UNKNOWN and model-free restore. Settings/material ABA fences and independent source/ticket interests prevent obsolete jobs from selecting newer content.
+The bounded [L1 identity delivery](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11) resolves complete actual producer provenance before control-owned duplicate admission. Equal known fingerprints join one physical inference or reuse a verified completed pair; current verified selection disables duplicate generation without render-time hashing. Optional durable v3 provenance preserves historical UNKNOWN and model-free restore. Settings/material ABA fences and independent source/ticket interests prevent obsolete jobs from selecting newer content.
 
 X11-LIVE-STEMS implements source-leased offline generation during playback, joint
 disk/config commit and separately guarded new-set adoption in the supported
 residency domains. Each candidate needs its own current source, window, voice,
 history and Native acknowledgement; older assignments/readers retain immutable
 predecessors until actual last use. Ordinary direct active component publication
-remains guarded. The [prepared publication report](prepared-stem-publication.md)
+remains guarded. The [prepared publication report](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md)
 records the bounded software proofs and remaining domain, resource and Human
 acceptance limits; these are not a combined installed-inference/device/hearing
 acceptance claim. X11-BULK's all216 loaded slots/all banks, bounded fair2-worker/

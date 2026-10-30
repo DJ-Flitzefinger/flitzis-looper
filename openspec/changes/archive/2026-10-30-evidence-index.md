@@ -2,30 +2,36 @@
 
 This is the single evidence index for the [104-change archival](2026-10-30-archive-index.md).
 It preserves report ownership and exact immutable source locators; archival does
-not promote reported results or unfinished gates. Current mixed reports remain
-in docs until STEP5/6 verify their current-module destinations. Original hashes,
+not promote reported results or unfinished gates. STEP6 now retains the eleven
+complete mixed reports at the canonical archive destinations below, after verifying
+their current core/specialist spans. Original hashes,
 section lines, headings and negative evidence remain in the [frozen audit](../../../docs/documentation-audit.md)
 and its [manifest](../../../docs/audit/source-disposition.json).
 
 ## Canonical full-report retention overrides
 
-The following eleven destinations are reserved for later verified extraction,
-not claims that a move already occurred. Each original is retained in full at
-the immutable audit-baseline link. No duplicate report was created.
+The following eleven destinations now contain the complete current pre-move
+reports with reference-only repairs. Current facts have verified core/specialist
+module destinations in the appended STEP6 manifest mappings. Each audit-baseline
+original is also retained at its exact immutable link; baseline hashes below are
+original identities, not hashes of reference-repaired reports. No duplicate report
+was created. Archived programs are inactive and archival passes no acceptance.
+The coverage JSON is byte-identical: its embedded original path literals are
+frozen lineage resolved by the manifest relocation map, not runtime paths.
 
-| Original complete report | Canonical associated archive / later relative destination | Original SHA256 |
+| Original complete report | Canonical associated archive / retained complete report | Original SHA256 |
 | --- | --- | --- |
-| [docs/finite-seek-domain-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/finite-seek-domain-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/finite-seek-domain-validation.md` | `a882965a3687cec339e20f526cf2e3c8fc1f1c88aaa0fe3a71d764c4e3988c90` |
-| [docs/readable-material-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/readable-material-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/readable-material-validation.md` | `6ea765ba9171d1010bb2baa376e58854d874126d24b7d88978b6efc081d1edad` |
-| [docs/long-source-streaming-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/long-source-streaming-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/long-source-streaming-validation.md` | `e4d0edbcb4072f1241fb1b427899e928e909fb44d4f591552067b0710522cb96` |
-| [docs/pad-owned-pcm-program.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pad-owned-pcm-program.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/pad-owned-pcm-program.md` | `e5075c5eef0473b4980cbf73b689fd6f7bcf405aa61f2eb2e570f4dd74188116` |
-| [docs/pre-rust-extension-20261011.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pre-rust-extension-20261011.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/pre-rust-extension-20261011.md` | `c2efbe9d7a4d4c5db342faab8992ab16bb9b41ff1fd9f08cd649bc8e4c160fe4` |
-| [docs/pre-rust-program-coverage.json](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pre-rust-program-coverage.json) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / `evidence/pre-rust-program-coverage.json` | `f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a` |
-| [docs/pcm-cache-residency.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pcm-cache-residency.md) | [cache-full-pcm-and-resident-loops](2026-10-30-cache-full-pcm-and-resident-loops/) / `evidence/pcm-cache-residency.md` | `159a5f8c8733976c44f84388aed1489b141accdedf2085e25689db2364233c11` |
-| [docs/pcm-cache-measurements.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pcm-cache-measurements.md) | [cache-full-pcm-and-resident-loops](2026-10-30-cache-full-pcm-and-resident-loops/) / `evidence/pcm-cache-measurements.md` | `fbc9eda19d4d83859444a82854d12752585257b80618446d9a54b337c67c0881` |
-| [docs/key-lock-backend.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/key-lock-backend.md) | [add-key-transposition-performance](2026-10-30-add-key-transposition-performance/) / `evidence/key-lock-backend.md` | `bf1022750b7c51e0a80a687444cc783c008012b28b183c230c7f90e681b96a06` |
-| [docs/prepared-stem-publication.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/prepared-stem-publication.md) | [extend-shared-stem-generation](2026-10-30-extend-shared-stem-generation/) / `evidence/prepared-stem-publication.md` | `daef122f055393a4c8eb9aeffb33a4feedd1daa9b38321e7859da84e96063b5d` |
-| [docs/pad-content-copy.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pad-content-copy.md) | [add-rearrange-shared-pad-content](2026-10-30-add-rearrange-shared-pad-content/) / `evidence/pad-content-copy.md` | `139ac2ad13f3f00d94e2e1efa9451d2762455ec5641a99dd6a848bc89b9ed7a8` |
+| [docs/finite-seek-domain-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/finite-seek-domain-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/finite-seek-domain-validation.md](2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md) | `a882965a3687cec339e20f526cf2e3c8fc1f1c88aaa0fe3a71d764c4e3988c90` |
+| [docs/readable-material-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/readable-material-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/readable-material-validation.md](2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md) | `6ea765ba9171d1010bb2baa376e58854d874126d24b7d88978b6efc081d1edad` |
+| [docs/long-source-streaming-validation.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/long-source-streaming-validation.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/long-source-streaming-validation.md](2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md) | `e4d0edbcb4072f1241fb1b427899e928e909fb44d4f591552067b0710522cb96` |
+| [docs/pad-owned-pcm-program.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pad-owned-pcm-program.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/pad-owned-pcm-program.md](2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md) | `e5075c5eef0473b4980cbf73b689fd6f7bcf405aa61f2eb2e570f4dd74188116` |
+| [docs/pre-rust-extension-20261011.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pre-rust-extension-20261011.md) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/pre-rust-extension-20261011.md](2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) | `c2efbe9d7a4d4c5db342faab8992ab16bb9b41ff1fd9f08cd649bc8e4c160fe4` |
+| [docs/pre-rust-program-coverage.json](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pre-rust-program-coverage.json) | [adopt-pad-owned-pcm-residency](2026-10-30-adopt-pad-owned-pcm-residency/) / [evidence/pre-rust-program-coverage.json](2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json) | `f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a` |
+| [docs/pcm-cache-residency.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pcm-cache-residency.md) | [cache-full-pcm-and-resident-loops](2026-10-30-cache-full-pcm-and-resident-loops/) / [evidence/pcm-cache-residency.md](2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md) | `159a5f8c8733976c44f84388aed1489b141accdedf2085e25689db2364233c11` |
+| [docs/pcm-cache-measurements.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pcm-cache-measurements.md) | [cache-full-pcm-and-resident-loops](2026-10-30-cache-full-pcm-and-resident-loops/) / [evidence/pcm-cache-measurements.md](2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md) | `fbc9eda19d4d83859444a82854d12752585257b80618446d9a54b337c67c0881` |
+| [docs/key-lock-backend.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/key-lock-backend.md) | [add-key-transposition-performance](2026-10-30-add-key-transposition-performance/) / [evidence/key-lock-backend.md](2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md) | `bf1022750b7c51e0a80a687444cc783c008012b28b183c230c7f90e681b96a06` |
+| [docs/prepared-stem-publication.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/prepared-stem-publication.md) | [extend-shared-stem-generation](2026-10-30-extend-shared-stem-generation/) / [evidence/prepared-stem-publication.md](2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md) | `daef122f055393a4c8eb9aeffb33a4feedd1daa9b38321e7859da84e96063b5d` |
+| [docs/pad-content-copy.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/pad-content-copy.md) | [add-rearrange-shared-pad-content](2026-10-30-add-rearrange-shared-pad-content/) / [evidence/pad-content-copy.md](2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md) | `139ac2ad13f3f00d94e2e1efa9451d2762455ec5641a99dd6a848bc89b9ed7a8` |
 
 ## Evidence groups and associated changes
 

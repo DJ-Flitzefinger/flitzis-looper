@@ -471,7 +471,7 @@ Depending on the current task, consider reading specific documentation.
 - Development workflow and package layout: `docs/development.md`
 - User Interface: `docs/ui-toolkit.md`
 - Stem generation setup: `docs/stem-generation-setup.md`
-- Key Lock backend: `docs/key-lock-backend.md`
+- Key Lock backend: `docs/architecture/pitch-and-key-lock.md`
 - Project TODOs: `docs/todos.md`
 
 ### TODO list policy

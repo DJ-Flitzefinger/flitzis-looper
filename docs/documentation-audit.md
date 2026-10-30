@@ -111,23 +111,23 @@ shared, avoiding repeated archives of the same material.
 | [constant-tempo-summary.md](constant-tempo-summary.md) | L/H/P/R | BPM scientific G2 API; E-G2 preserves conditional precision/count evidence; only actual map plans go to SYNC. |
 | [development.md](development.md) | L/H/R/P | DEV plus modules; E-PITCH/E-PCM/E-TIMING retain dated probes; source-beatmap section to SYNC. |
 | [device-loop-acceptance.md](device-loop-acceptance.md) | L/H/P | DEV diagnostic workflow and RT limits; E-DEVICE retains complete protocol and still-open master/device/listening gate. |
-| [finite-seek-domain-validation.md](finite-seek-domain-validation.md) | L/H/P | PCM/PITCH/RT; E-PCM keeps failures, final bounded numerical evidence and open wider acceptance. |
+| [finite-seek-domain-validation.md](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md) | L/H/P | PCM/PITCH/RT; E-PCM keeps failures, final bounded numerical evidence and open wider acceptance. |
 | [grid-timing-diagnosis.md](grid-timing-diagnosis.md) | H/L/P | BPM/RT precision explanation; E-GRID preserves endpoint/long-source/failed alternative evidence. |
 | [key-detection.md](key-detection.md) | L/H | KEY; E-KEY keeps historical dataset scores without inventing current evaluation or causal proof. |
-| [key-lock-backend.md](key-lock-backend.md) | L/H/P/R | PITCH/STATE/RT; E-PITCH retains test-only experiments, negative onset results and unpassed audible gates. Map-specific history to SYNC. |
-| [long-source-streaming-validation.md](long-source-streaming-validation.md) | L/H/P | PCM/STEM; E-PCM preserves real long/RF64/codec/fault evidence and its limited domains. |
+| [key-lock-backend.md](../openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md) | L/H/P/R | PITCH/STATE/RT; E-PITCH retains test-only experiments, negative onset results and unpassed audible gates. Map-specific history to SYNC. |
+| [long-source-streaming-validation.md](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md) | L/H/P | PCM/STEM; E-PCM preserves real long/RF64/codec/fault evidence and its limited domains. |
 | [loop-period-proof.md](loop-period-proof.md) | L/H/P | RT/PCM; E-LOOP keeps physical-versus-musical proof, original failures and non-device limits. |
 | [native-constant-timing.md](native-constant-timing.md) | L/H/P | RT/BPM/PCM/PITCH/STATE; E-TIMING retains live scalar ownership foundation and original staged evidence. |
 | [offline-analysis.md](offline-analysis.md) | L/H/R/P | BPM/KEY/PCM diagnostic boundary; E-B2 retains original protocol/resource results; retired map acquisition to SYNC. |
-| [pad-content-copy.md](pad-content-copy.md) | L/H/P | PCM/STATE/MAN for empty/occupied Copy, Pair, Bank, Hold and import classification; E-COPY preserves failures/unreproduced reports. |
-| [pad-owned-pcm-program.md](pad-owned-pcm-program.md) | H/P/R/L | E-PROGRAM keeps whole historical program; extract corroborated current facts only, and route original SYNC priority/history to SYNC. |
-| [pcm-cache-measurements.md](pcm-cache-measurements.md) | H/L/P | E-C3 retains complete C3 measurements; PCM/PITCH keep only accurately scoped current architecture/limits. |
-| [pcm-cache-residency.md](pcm-cache-residency.md) | L/H/P | PCM with PITCH/STEM crosslinks; E-PCM retains full old measurements/plans and scoped proofs. |
+| [pad-content-copy.md](../openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md) | L/H/P | PCM/STATE/MAN for empty/occupied Copy, Pair, Bank, Hold and import classification; E-COPY preserves failures/unreproduced reports. |
+| [pad-owned-pcm-program.md](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md) | H/P/R/L | E-PROGRAM keeps whole historical program; extract corroborated current facts only, and route original SYNC priority/history to SYNC. |
+| [pcm-cache-measurements.md](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md) | H/L/P | E-C3 retains complete C3 measurements; PCM/PITCH keep only accurately scoped current architecture/limits. |
+| [pcm-cache-residency.md](../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md) | L/H/P | PCM with PITCH/STEM crosslinks; E-PCM retains full old measurements/plans and scoped proofs. |
 | [portable-windows.md](portable-windows.md) | L/H/R | SETUP remains; remove stale Source Map preflight subsection after SYNC preservation; retain actual installer failure/ownership boundaries. |
-| [pre-rust-extension-20261011.md](pre-rust-extension-20261011.md) | H/P/L | E-PROGRAM preserves original E11 requirements/gates; corroborated current facts to modules, no execution queue. |
-| [pre-rust-program-coverage.json](pre-rust-program-coverage.json) | H/P | E-PROGRAM retains lossless schema, counts, hashes, crosswalk, statuses and gate catalogs; repair embedded document references on relocation. |
-| [prepared-stem-publication.md](prepared-stem-publication.md) | L/H/P/R | STEM/PCM/PITCH/STATE; E-STEM preserves phased adoption, queue/failure/retirement evidence; obsolete map-specific context to SYNC. |
-| [readable-material-validation.md](readable-material-validation.md) | L/H/P | PCM/STEM; E-PCM preserves material/provenance/physical-terminal evidence and remaining limits. |
+| [pre-rust-extension-20261011.md](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md) | H/P/L | E-PROGRAM preserves original E11 requirements/gates; corroborated current facts to modules, no execution queue. |
+| [pre-rust-program-coverage.json](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json) | H/P | E-PROGRAM retains lossless schema, counts, hashes, crosswalk, statuses and gate catalogs; repair embedded document references on relocation. |
+| [prepared-stem-publication.md](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md) | L/H/P/R | STEM/PCM/PITCH/STATE; E-STEM preserves phased adoption, queue/failure/retirement evidence; obsolete map-specific context to SYNC. |
+| [readable-material-validation.md](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md) | L/H/P | PCM/STEM; E-PCM preserves material/provenance/physical-terminal evidence and remaining limits. |
 | [scalar-source-coordinates.md](scalar-source-coordinates.md) | L/H | RT/PCM/STATE; E-GRID retains original precision evidence and dated estimator observations. |
 | [selected-backend-bpm.md](selected-backend-bpm.md) | L/H/P/R | BPM scientific metadata, distinct from `app_tempo`; E-B2/E-G2 preserve unsupported fits and sensitivity; map-era plans to SYNC. |
 | [historical source-map-guide.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/source-map-guide.md) | R/H/L | SYNC recovery/user semantics only; verified ordinary BPM/device facts to MAN/BPM. |
@@ -288,3 +288,52 @@ binary64 scalar timing and stable source-qualified BPM Lock. These changes add
 no product behavior or acceptance. Full analysis/pitch/stem extraction, manual/
 root installation navigation and all-original final consistency remain separate
 sequential steps.
+
+## Executed STEP6 specialist extraction and report retention — 2026-10-30
+
+Current [BPM](architecture/bpm-analysis.md), [Key](architecture/key-analysis.md),
+[pitch and Key Lock](architecture/pitch-and-key-lock.md) and [stems](architecture/stems.md)
+modules are source-grounded productive references. Shared clock/source/content/
+OwnACK/reader rules link the core modules. Setup now distinguishes the complete-file
+Key frontend, live leased generation, material-root disk sets, residency and own
+audio adoption. Key evaluation retains its reported historical scores without an
+unproved causal explanation or a new musical-ground-truth claim.
+
+All eleven original architecture spans now have completed dispositions in the
+APPENDED STEP6 record. STEP5's partial/deferred entries remain honest prior state:
+
+| Original span ID | Actual current destination / retained history |
+| --- | --- |
+| 1 | Hub/runtime plus BPM productive and diagnostic boundaries; E-B2/E-TIMING. |
+| 2 | Runtime/media clock/loading/source/adoption; E-PCM/E-TIMING. |
+| 3 | BPM complete admission/selection and Key complete-file frontend; E-B2/MEMORY/GRID. |
+| 4 | Media/runtime and stem artifacts/own adoption; E-PCM/STEM/TIMING. |
+| 5 | Pitch scalar rate/Rubber Band and runtime; E-PITCH. |
+| 6 | Retired mapped Hold already removed in STEP3; branch-only recovery. |
+| 7 | Pitch captured SET/Retrigger, inheritance and state/input; E-PITCH. |
+| 8 | Core runtime/media/state DSP/input/tasks/persistence; E-COPY/STEM/PROGRAM. |
+| 9 | Media/state content/custody; inactive prior program remains E-PROGRAM. |
+| 10 | Media last readers, stem cancellation/batch and state recovery; E-PCM. |
+| 11 | Inactive queue retained via immutable original/E-PROGRAM; no execution. |
+
+The [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
+now links the EXACT eleven complete reports under their reserved associated
+archives. Before moving, 57 original report sections were mapped, with concrete
+module anchors for their live facts. Bodies/headings/statuses/failures are retained
+with only relative-target repairs; original immutable Git locators remain exact.
+Pre-move current and relocated hashes distinguish later reference edits from the
+frozen audit originals. Shared evidence is retained once and crosslinked.
+
+Original43 file identities/196 spans/479 headings/324 basename candidates and
+eleven retention overrides remain frozen. Prior executed records are unchanged;
+only actual mappings/reference repairs are appended. Coverage JSON bytes/schema/
+lineage/status/counts/requirements/failures are unchanged, including embedded
+original paths as historical lineage; STEP6's from/to map resolves them. No runtime
+or tooling consumer requires the former location. No task box, acceptance or old
+program is promoted. Current source/spec ownership and diagnostic boundaries are
+distinct from historical numeric/software observations and UNKNOWN provenance.
+
+STEP7 retains the extensive performer manual/root product and installation map;
+STEP8 retains ALL-original coverage, raw-reference, source/spec/docs and final
+consistency. This step establishes no new audio/device/listening/model/full216 or
+clean-Windows acceptance and runs no product audio/build/inference for docs.

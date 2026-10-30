@@ -1,5 +1,10 @@
 # Key Detection
 
+Current productive ownership, complete-file processing, independent admission and
+metadata lifetime are described in [Key analysis](architecture/key-analysis.md).
+This companion retains model/frontend background and the historical evaluation;
+the reported dataset scores are not a fresh evaluation of the file frontend.
+
 ## Overview
 
 Key detection in Flitzis-Looper uses a CNN-based approach, adapted from [MusicalKeyCNN](https://github.com/a1ex90/MusicalKeyCNN) by Korzeniowski & Widmer (2018). The original PyTorch model (`keynet.pt`) was [exported to ONNX](../scripts/convert-musical-key-cnn.py) for use with the Rust inference pipeline. The pipeline computes a Constant-Q Transform (CQT) spectrogram from mono audio, runs ONNX inference via `ort`, and maps the 24-class output to a musical key string using the Camelot Wheel.
@@ -43,15 +48,17 @@ full 105-bin transform remains available for numerical CQT validation.
 ### API
 
 ```rust
-pub fn detect_key(samples: &[f32], sample_rate: u32) -> Result<KeyDetectionResult, KeyError>
+pub fn detect_key(samples: &[f32], sample_rate: u32) -> Result<KeyResult, KeyError>
 ```
 
-Returns a `KeyDetectionResult` containing:
+Returns a `KeyResult` containing:
 - `key_name`: Camelot key string (e.g. `"Fm"`, `"C"`, `"D#m"`)
 - `confidence`: softmax probability of the predicted class (0.0–1.0)
-- `logits`: raw 24-class output from the model
 
-## Evaluation
+The public result does not expose raw logits. The productive file adapter and
+shared Signal/Scratch frontend are documented in the current module above.
+
+## Historical evaluation
 
 Evaluated on the **GiantSteps key dataset** (604 EDM tracks from Beatport.com) against manual key annotations. The dataset consists of ~2-minute low-fidelity audio previews annotated via user corrections on the GiantSteps platform.
 
@@ -66,13 +73,15 @@ Evaluated on the **GiantSteps key dataset** (604 EDM tracks from Beatport.com) a
 
 ### Why the 3% gap (Rust vs Python)?
 
-The gap stems from accumulated numerical differences across the pipeline:
+The original report proposed accumulated numerical differences as an explanation:
 
 - **Audio decoding**: `symphonia` (Rust) vs `libsndfile` (Python) — small MP3 decode differences
 - **CQT computation**: `rosa`/`realfft` (Rust) vs `librosa`/`scipy.fft` (Python) — different FFT backends
 - **Inference**: ONNX Runtime (Rust) vs PyTorch (Python) — small matrix operation differences
 
-These only affect borderline tracks where the CNN's top-2 key logits are very close. On 527/604 tracks (87%), both implementations agree.
+That causal explanation was not independently established. The report records
+agreement on 527/604 tracks (87%); this is historical evidence, not proof that only
+borderline tracks differ or current model outputs are musical ground truth.
 
 ## Dependencies
 
@@ -80,7 +89,7 @@ These only affect borderline tracks where the CNN's top-2 key logits are very cl
 |-------|---------|
 | `ort` | ONNX Runtime inference |
 | `realfft` | FFT for STFT computation |
-| `rubato` | Phase vocoder resampling for octave decimation |
+| `rubato` | FFT source conversion and Sinc octave resampling |
 | `matrixmultiply` | BLAS-backed matrix operations |
 | `num-complex` | Complex number support |
 
@@ -100,6 +109,7 @@ rust/crates/analysis/src/key_detection/
     ├── convert.rs      — Unit conversions (Hz, MIDI, note names)
     ├── dsp.rs          — Signal processing utilities
     ├── matrix.rs       — Matrix operations (matmul, views)
+    ├── signal.rs       — Shared memory/file range reads and scratch lifetime
     └── tests.rs        — Unit tests adapted from rosa's cqt_test.rs
 ```
 
