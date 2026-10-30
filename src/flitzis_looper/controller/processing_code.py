@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
 _HOST_TARGETS = {
     "contracts.py": ((), ("WorkerLimits",)),
+    # Explicit acquisition is setup-only; inference executes the pinned verifier.
+    "bs_roformer_assets.py": (("verify_model_assets",), ()),
     "encoder_provenance.py": (
         (
             "supported_encoder_images",

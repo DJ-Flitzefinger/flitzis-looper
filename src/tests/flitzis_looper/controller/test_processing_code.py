@@ -17,7 +17,7 @@ from flitzis_looper import stem_cancellation
 from flitzis_looper.analysis import contracts as analysis_contracts
 from flitzis_looper.analysis import process as analysis_process
 from flitzis_looper.analysis import windows_job
-from flitzis_looper.controller import stem_process
+from flitzis_looper.controller import bs_roformer_assets, stem_process
 from flitzis_looper.controller.processing_code import (
     fresh_python_source_environment,
     loaded_code_identity,
@@ -186,6 +186,40 @@ def test_missing_parent_source_roles_cannot_claim_execution_identity() -> None:
     assert loaded_code_identity(()) is None
 
 
+def test_actual_bs_verifier_role_excludes_setup_only_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert bs_roformer_assets.__file__ is not None
+    paths = (Path(bs_roformer_assets.__file__),)
+    assert "acquire_pinned_asset" in bs_roformer_assets.install_model_assets.__code__.co_names
+    before = _guarded_identity(paths)
+    assert before is not None
+    monkeypatch.setattr(bs_roformer_assets, "install_model_assets", lambda _directory: None)
+    assert _guarded_identity(paths) == before
+
+
+@pytest.mark.parametrize("change", ["verifier_body", "verifier_binding", "model_pins"])
+def test_actual_bs_verifier_role_rejects_changed_processing_evidence(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    assert bs_roformer_assets.__file__ is not None
+    paths = (Path(bs_roformer_assets.__file__),)
+    assert _guarded_identity(paths) is not None
+    if change == "verifier_body":
+        monkeypatch.setattr(
+            bs_roformer_assets.verify_model_assets,
+            "__code__",
+            bs_roformer_assets.install_model_assets.__code__,
+        )
+    elif change == "verifier_binding":
+        monkeypatch.setattr(
+            bs_roformer_assets, "verify_model_assets", bs_roformer_assets.install_model_assets
+        )
+    else:
+        monkeypatch.setattr(bs_roformer_assets, "MODEL_ASSETS", (("different.bin", 1, "0" * 64),))
+    assert _guarded_identity(paths) is None
+
+
 def test_actual_slice_code_constant_matches_current_source_and_rejects_stale_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -206,7 +240,10 @@ def test_actual_timestamp_valid_old_pyc_is_ignored_by_new_owned_empty_child_cach
     original = source.stat()
     inherited = tmp_path / "preexisting-python-cache"
     inherited.mkdir()
-    env = dict(os.environ) | {"PYTHONPYCACHEPREFIX": str(inherited)}
+    env = dict(os.environ) | {
+        "PYTHONPYCACHEPREFIX": str(inherited),
+        "PYTHONPATH": str(tmp_path),
+    }
     env.pop("PYTHONDONTWRITEBYTECODE", None)
 
     def child(child_env: dict[str, str], *, disabled_writes: bool = False) -> dict[str, object]:
