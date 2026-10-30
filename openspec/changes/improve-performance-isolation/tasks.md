@@ -86,14 +86,15 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 
 ## 10. Deferred group-owned Work
 
-- [ ] Address genuinely deferred group-held Work with a complete later-E prepared
+- [x] Address genuinely deferred group-held Work with a complete later-E prepared
       state/request/CAS/physical-origin proof; preserve live ordering, atomic S/E,
       immutable STOP, cancellation, capacity and every source/DSP/OwnACK/last-reader fence.
 
 ## 11. Prepared principal-attack response
 
-- [ ] Address the measured principal-attack delay through a separate justified
-      DSP step; significant pre-ringing cannot pass the 30 ms attack goal.
+- [ ] Assess the measured principal-attack delay and implement a useful DSP
+      improvement where its benefit justifies complexity. The Human's 30 ms
+      suggestion is advisory, not a mandatory gate; retain honest attack evidence.
 - [ ] Retain the complete physical beginning and wet continuation/quality against
       independent source/dry references; extend ordinary/Piano/group and supported
       rate/partition/background cases proportionally. Split further if necessary.

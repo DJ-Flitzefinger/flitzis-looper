@@ -462,7 +462,10 @@ fn wait_burst_ready(fixture: &mut Fixture, originals: &[CapturedPadStart]) {
     assert_eq!(fixture.transport.output_frame(), frame);
 }
 
-fn with_unrelated_marker(fixture: &mut Fixture, operation: impl FnOnce(&mut Fixture)) {
+pub(in crate::audio_engine) fn with_unrelated_marker(
+    fixture: &mut Fixture,
+    operation: impl FnOnce(&mut Fixture),
+) {
     let ownership = fixture.control.engine.input_runtime_ownership.clone();
     let unrelated = ownership.slot_snapshot(1).unwrap();
     let write = ownership
@@ -1497,23 +1500,32 @@ fn global_late_plan_marker_after_first_member_preserves_all_original_plans_until
         assert_eq!((fixture.starts(0), fixture.starts(1)), (0, 0));
         assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
         marker.finish();
-        assert_eq!(fixture.render(1), vec![0.0]);
+        let retry = fixture.transport.output_frame();
+        let first_pcm = fixture.render(1);
+        assert!(first_pcm.iter().all(|sample| sample.is_finite()));
         let common = originals[0].execution_frame().unwrap();
         assert!(common > execution);
         assert_eq!(originals[1].execution_frame(), Some(common));
-        wait_own_group(&mut fixture, &originals);
-        let legacy_common = common;
-        fixture.render(0);
-        let common = originals[0].execution_frame().unwrap();
-        assert!(common <= legacy_common);
-        assert_eq!(originals[1].execution_frame(), Some(common));
-        assert!(
-            fixture
-                .render_to(common)
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
-        assert!(fixture.render(1).iter().all(|sample| sample.is_finite()));
+        let common = if policy == "first_sound_at_grid" {
+            assert_eq!(common, retry);
+            common
+        } else {
+            assert_eq!(first_pcm, vec![0.0]);
+            wait_own_group(&mut fixture, &originals);
+            let legacy_common = common;
+            fixture.render(0);
+            let common = originals[0].execution_frame().unwrap();
+            assert!(common <= legacy_common);
+            assert_eq!(originals[1].execution_frame(), Some(common));
+            assert!(
+                fixture
+                    .render_to(common)
+                    .iter()
+                    .all(|sample| *sample == 0.0)
+            );
+            assert!(fixture.render(1).iter().all(|sample| sample.is_finite()));
+            common
+        };
         assert_eq!(ticket.publication_status(), "accepted");
         assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
         for (id, original) in originals.iter().enumerate() {

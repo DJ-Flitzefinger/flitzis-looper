@@ -7,13 +7,16 @@ It SHALL report principal-attack displacement against the source/dry reference,
 intentional quantization wait, rejected starts and unavailable preparation.
 Nominal Native delay, warmed-handle readiness or queue admission SHALL NOT be
 presented as proof of audible attack or device latency.
+The suggested 30 ms reference SHALL be advisory rather than a mandatory
+acceptance gate. Optimization SHALL seek the shortest practical latency while
+preserving quality and functions, without disproportionate complexity.
 
 #### Scenario: Slowed non-master PAD is compared with controls
 - **GIVEN** the declared ready 2/4/6-PAD reference workload
 - **WHEN** ordinary, Piano or group starts run with quantization disabled
 - **THEN** the report includes slowed, unity-master and faster rates with Key Lock ON/OFF
-- **AND** it evaluates the 30 ms software input-to-significant-output goal and principal-attack goal against declared authored onset/reference timing
-- **AND** late principal attacks cannot pass through earlier pre-ringing, and failed or ambiguous attacks remain explicit
+- **AND** it compares software input-to-significant-output and principal-attack timing against declared authored onset/reference timing and the advisory 30 ms reference
+- **AND** earlier pre-ringing cannot stand in for principal-attack timing, and failed or ambiguous measurements remain explicit
 - **AND** device/driver and physical listening acceptance remain separate
 
 ### Requirement: Prepared Starts Preserve Their Own Beginning and Authority
@@ -67,7 +70,17 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** only the successful off-RT worker releases a previous displaced request; failed or cancelled work retains normal custody and retirement
 - **AND** a new reprepare or successful completion consumes that receipt, without resetting replan count or maximum launch-delay bounds
 - **AND** all group members share the header E and validate before any binding or pending capture S changes, preserving immutable STOP and original order
-- **AND** live earlier originals, group-held deferred Work, SET, AttackAtGrid and history-bound births keep their existing guarded paths
+- **AND** live earlier originals, SET, AttackAtGrid and history-bound births keep their existing guarded paths
+
+#### Scenario: A wholly held deferred group reuses an unconsumed physical birth
+- **GIVEN** the same due event retries with every member already retained in group Work custody from a previous attempt
+- **WHEN** no possible earlier original remains and complete fresh later-E requests prove every unconsumed FirstSound physical beginning, exact owner/source/content/epoch metadata and current permit/DSP controls
+- **THEN** all member plans and capture/session/cancellation/geometry/immutable STOP fences validate before any bind
+- **AND** each prepared or scheduled owner binds the exact expected E to the common actual later E through its guarded CAS, without Native reset or callback preparation
+- **AND** only all-member bind success moves common E and pending capture S, consuming each member's existing replan allowance without resetting delay limits
+- **AND** a lost bind rejects the whole group before audio or spool stores, retaining all displaced and failed request pins for normal off-RT retirement
+- **AND** the same popped event keeps original order and capacity without a new queued-completion receipt, and final all-member/capture claims remain authoritative
+- **AND** occupied displaced-request custody, unavailable proof, live predecessors and unsupported birth/feed states retain genuine legacy reprepare rather than weakening their guards
 
 #### Scenario: Terminal rejection releases ordering without releasing custody
 - **GIVEN** an earlier same-content original is conclusively rejected while its slot, queued event or worker is still retained

@@ -308,6 +308,28 @@ impl RtMixer {
         {
             return Err(PitchActionReject::PreparedMismatch);
         }
+        self.plan_ordinary_completion_request(work, execution, callback)
+    }
+
+    /// A later retry may reuse only the same unconsumed physical beginning.
+    pub(crate) fn plan_ordinary_deferred_completion(
+        &mut self,
+        work: &OrdinaryStartWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<super::super::ordinary_start::OrdinaryCompletionPlan, PitchActionReject> {
+        if execution <= work.execution_frame() || work.early_completion_source().is_none() {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.plan_ordinary_completion_request(work, execution, callback)
+    }
+
+    fn plan_ordinary_completion_request(
+        &mut self,
+        work: &OrdinaryStartWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<super::super::ordinary_start::OrdinaryCompletionPlan, PitchActionReject> {
         let guard = self.ordinary_start_guard(work)?;
         let render = self.ordinary_start_render(guard.id);
         if work.render != Some(render) || !self.ordinary_start_source_controls_current(work) {

@@ -759,12 +759,31 @@ impl CapturedPadStart {
         expected: u64,
         execution: u64,
     ) -> Result<(), PitchActionReject> {
+        if execution >= expected {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.bind_completed_frame(expected, execution)
+    }
+
+    /// Only an already held deferred group may bind a whole fresh later envelope.
+    /// This does not mark unprepared work ready or grant a new preparation attempt.
+    pub(crate) fn bind_deferred_completion_frame(
+        &self,
+        expected: u64,
+        execution: u64,
+    ) -> Result<(), PitchActionReject> {
+        if execution <= expected {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.bind_completed_frame(expected, execution)
+    }
+
+    fn bind_completed_frame(&self, expected: u64, execution: u64) -> Result<(), PitchActionReject> {
         self.preparation_guard()?;
         if self.owner.frames_state.load(Ordering::Acquire) != 2
             || self
                 .target_frame()
                 .is_none_or(|original| execution < original)
-            || execution >= expected
             || self.owner.execution_frame.load(Ordering::Acquire) != expected
         {
             return Err(PitchActionReject::PreparedMismatch);

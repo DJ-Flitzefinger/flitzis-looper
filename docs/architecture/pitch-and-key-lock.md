@@ -104,18 +104,25 @@ After a missed deadline, only genuine successful off-RT legacy reprepare rearms
 completion, through a receipt bound to its exact rebuilt E. The worker releases
 the prior displaced request; a new plan or successful bind consumes the receipt.
 Every replanned group member must match that E before any bind/capture change.
-Replan count and maximum launch delay remain bounded. Group-held deferred Work
-retains its existing path and requires separate later-E prepared-state proof.
+Replan count and maximum launch delay remain bounded. A real deferred group retry
+can reuse wholly group-held, unconsumed FirstSound physical births through
+[deferred_group.rs](../../rust/crates/looper/src/audio_engine/pitch_runtime/deferred_group.rs).
+Exact member/header metadata, no possible predecessor, whole fresh source/permit/DSP
+requests and capture/immutable STOP fences precede every later-E bind. All binds
+succeed before common E/capture S changes; the same popped event retains ordering
+and capacity. Occupied displaced-request pins and unavailable proof retain genuine
+legacy reprepare. Each later bind consumes one existing replan allowance.
 Live SET, gliding/history-bound Piano and AttackAtGrid retain their existing paths. Piano uses
 the exact retained start snapshot and a fresh action-owned permit/DSP intent;
 actual or retained feed is excluded. Principal-attack DSP is
-separate and the 30 ms goal remains
-unmet.
+separate. The Human clarified that 30 ms is advisory: seek the shortest practical
+latency while preserving quality/functions and proportionate complexity.
 
 The [performance audit](../development.md#performance-audit-and-upgrade-plan)
 records production-route measurements and the remaining readiness/attack work.
 The scheduling correction does not compensate the backend's principal attack;
-the 30 ms software attack goal remains unmet on the declared synthetic burst.
+the declared synthetic burst retains its measured attack displacement. The
+advisory 30 ms reference does not require disproportionate redesign.
 
 For a fresh ordinary PAD or Piano retrigger birth, the physical selected beginning
 is emitted first at actual E. Unheard E-T is not consumed as source/filter history.

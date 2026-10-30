@@ -5,6 +5,217 @@ use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::Worke
 use crate::audio_engine::pitch_runtime_tests::publish_tone;
 use crate::messages::SampleBuffer;
 
+/// The real due event, not a queued-completion simulation, retains every Work.
+fn hold_ready_group_at_due(
+    rig: &mut CaptureRig,
+    captured: &CapturedGlobalStart,
+    stop: Option<u64>,
+) -> u128 {
+    use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::with_unrelated_marker;
+    let gate = WorkerGate::for_ordinary(&captured.owner.members[0].start);
+    rig.publish(captured);
+    rig.fixture.drain();
+    gate.wait_for(false);
+    if let Some(stop) = stop {
+        rig.stop(stop);
+    }
+    assert!(
+        rig.fixture
+            .render_to(8192)
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    let released = Instant::now();
+    gate.release();
+    assert_eq!(gate.wait_for(true), None);
+    wait_members(&mut rig.fixture, captured.owner.members.len());
+    let residual = released.elapsed().as_micros();
+    with_unrelated_marker(&mut rig.fixture, |fixture| {
+        assert_eq!(fixture.render(1), vec![0.0]);
+        assert!(fixture.scheduler.deferred_due().is_some());
+    });
+    assert!(
+        captured
+            .owner
+            .members
+            .iter()
+            .all(|member| member.start.execution_frame() == Some(8192)
+                && member.start.effective_frame().is_none())
+    );
+    assert!(!rig.status().started);
+    residual
+}
+
+#[test]
+#[ignore = "explicit frozen-clock deferred-group scheduling/attack diagnostic, not device latency"]
+fn deferred_group_response() {
+    for ratio in [0.8, 1.16] {
+        let mut rig = rate_rig(ratio, true);
+        let captured = capture_members(&rig.fixture, 2);
+        rig.fixture.drain();
+        let residual = hold_ready_group_at_due(&mut rig, &captured, None);
+        rig.fixture.render(0);
+        let mut pcm = Vec::new();
+        while captured.state() != "applied" {
+            assert_ne!(captured.state(), "rejected", "{:?}", captured.reason());
+            wait_members(&mut rig.fixture, 2);
+            rig.fixture.render(0);
+            if captured.state() != "applied" {
+                let next = rig.fixture.scheduler.peek_next_target_frame().unwrap();
+                let next = next.max(rig.fixture.transport.output_frame() + 1);
+                pcm.extend(rig.fixture.render_to(next));
+            }
+        }
+        let execution = captured.owner.members[0].start.effective_frame().unwrap();
+        assert!(pcm.iter().all(|sample| *sample == 0.0));
+        let attack = rig.fixture.pcm(24_000);
+        let (first, significant, principal) = burst_landmarks(&attack);
+        assert_eq!(rig.status().first_frame, Some(execution));
+        rig.stop(execution + 24_000);
+        let settled = rig.joined();
+        assert!(settled.successful_spool);
+        assert_eq!(settled.written_frames, 24_000);
+        assert_eq!(
+            rig.bits(),
+            attack
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "DEFERRED_GROUP ratio={ratio} T=0 admitted_E=8192 ready_observed_frame=8192 retry_frame=8193 residual_release_to_ready_us={residual} actual_E={execution} first_after_E={first} significant_after_E={significant} principal_after_E={principal} n=1 source_resident=true clock_frozen_during_worker=true"
+        );
+    }
+}
+
+#[test]
+fn deferred_recording_group_keeps_common_s_e_original_stop_and_all_spool_bits() {
+    use crate::audio_engine::ordinary_endpoint_reserve_tests::adopt_current_source_ids;
+    use crate::audio_engine::pitch_runtime_tests::{SOURCE_HZ, physical_birth_tone_reference};
+    for ratio in [0.8, 1.16] {
+        for (count, wet) in [(2, 2), (4, 2), (6, 6)] {
+            let mut rig = rate_rig(ratio, false);
+            let sample = rig.fixture.control.engine.sample_cache.lock().unwrap()[0]
+                .clone()
+                .unwrap();
+            for id in 0..count {
+                publish_tone(&rig.fixture.control, id, sample.clone(), true);
+            }
+            adopt_current_source_ids(&mut rig.fixture, true, &(0..count).collect::<Vec<_>>());
+            refresh_actual_runtime_bindings(&rig.fixture);
+            for id in 0..count {
+                rig.fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
+                rig.fixture
+                    .mixer
+                    .set_pad_bpm(id, Some(if id < wet { 120.0 / ratio } else { 120.0 }));
+            }
+            let captured = capture_members(&rig.fixture, count);
+            rig.fixture.drain();
+            hold_ready_group_at_due(&mut rig, &captured, Some(32_193));
+            let gate = WorkerGate::for_ordinary(&captured.owner.members[0].start);
+            measured_capture_callback(
+                &mut rig.fixture,
+                &mut [],
+                "deferred recording whole fresh bind",
+            );
+            assert_eq!(captured.state(), "applied", "{:?}", captured.reason());
+            assert_eq!(rig.status().first_frame, Some(8193));
+            assert!(
+                captured
+                    .owner
+                    .members
+                    .iter()
+                    .all(|member| member.start.original_frame() == Some(0)
+                        && member.start.effective_frame() == Some(8193))
+            );
+            assert!(rig.fixture.scheduler.deferred_due().is_none());
+            assert_eq!(rig.fixture.scheduler.peek_next_target_frame(), Some(32_193));
+            drop(gate);
+            let pcm = rig.fixture.pcm(24_000);
+            let reference = physical_birth_tone_reference(pcm.len(), SOURCE_HZ, 0, 0, ratio, true);
+            for (frame, (actual, expected)) in pcm.iter().zip(reference).enumerate() {
+                assert_eq!(sample.resident_start(), LOOP_START);
+                let dry = sample.samples[frame];
+                assert!(
+                    (*actual - expected * wet as f32 - dry * (count - wet) as f32).abs() < 1.0e-4,
+                    "{ratio}/{count}/{wet}/{frame}"
+                );
+            }
+            let settled = rig.joined();
+            assert!(settled.successful_spool);
+            assert_eq!(
+                (settled.first_frame, settled.end_frame),
+                (Some(8193), Some(32_193))
+            );
+            assert_eq!(
+                (settled.submitted_frames, settled.written_frames),
+                (24_000, 24_000)
+            );
+            assert_eq!(
+                rig.bits(),
+                pcm.iter()
+                    .map(|sample| sample.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn deferred_recording_group_cannot_cross_its_immutable_stop_or_revive_cancellation() {
+    for cancel in [false, true] {
+        let mut rig = rate_rig(0.8, false);
+        let captured = capture_members(&rig.fixture, 2);
+        rig.fixture.drain();
+        hold_ready_group_at_due(
+            &mut rig,
+            &captured,
+            Some(if cancel { 32_193 } else { 8192 }),
+        );
+        if cancel {
+            assert!(captured.owner.members[1].start.cancel());
+        }
+        assert_eq!(rig.fixture.render(1), vec![0.0]);
+        assert!(
+            captured
+                .owner
+                .members
+                .iter()
+                .all(|member| member.start.effective_frame().is_none())
+        );
+        assert_eq!((rig.fixture.starts(0), rig.fixture.starts(1)), (0, 0));
+        let settled = rig.joined();
+        assert!(!settled.successful_spool);
+        assert_eq!((settled.submitted_frames, settled.written_frames), (0, 0));
+        assert!(settled.first_frame.is_none());
+    }
+}
+
+#[test]
+fn deferred_recording_group_retains_start_before_equal_frame_reserved_stop() {
+    let mut rig = rate_rig(0.8, false);
+    let captured = capture_members(&rig.fixture, 2);
+    rig.fixture.drain();
+    hold_ready_group_at_due(&mut rig, &captured, Some(8193));
+    measured_capture_callback(&mut rig.fixture, &mut [], "deferred E equals original STOP");
+    assert_eq!(captured.state(), "applied", "{:?}", captured.reason());
+    assert!(
+        captured
+            .owner
+            .members
+            .iter()
+            .all(|member| member.start.effective_frame() == Some(8193))
+    );
+    let settled = rig.joined();
+    assert_eq!(
+        (settled.first_frame, settled.end_frame),
+        (Some(8193), Some(8193))
+    );
+    assert!(settled.empty);
+    assert_eq!((settled.submitted_frames, settled.written_frames), (0, 0));
+    assert!(rig.bits().is_empty());
+}
+
 #[test]
 fn live_original_chain_recording_keeps_common_s_e_immutable_stop_and_all_spool_bits() {
     use crate::audio_engine::ordinary_start_tests::wait_ready;

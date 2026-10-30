@@ -16,6 +16,9 @@ These are concrete risks, not measured proof of every reported symptom.
 - Measure production input/capture, requested target, actual effect and rendered
   attack separately; aim for at most 30 ms software trigger-to-significant-output
   response on the declared ready 2/4/6-PAD workload, including slowed Key Lock.
+  The Human clarified on 2026-10-31 that 30 ms is advisory, not an acceptance
+  threshold. Seek the shortest practical latency with preserved quality and
+  proportionate complexity; a small miss does not require further redesign.
 - Prepare reusable start resources before presses, retaining exact source and
   operation guards, independent mutable voices and atomic group effects.
 - Remove slow stem preparation from shared control locks and Python/GIL waits.

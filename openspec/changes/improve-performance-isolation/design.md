@@ -8,6 +8,36 @@ The reported direction is specifically slowed non-master PADs with BPM Lock and
 Key Lock; faster PADs and the master are controls. Generation, postprocessing,
 component loading and live adoption must be measured separately.
 
+## Current Human clarification and STEP10 impact
+
+On 2026-10-31 the Human clarified that 30 ms was a suggestion, not a mandatory
+acceptance threshold. Seek the shortest practical latency with complete quality
+and functions and proportionate complexity. Do not force a DSP redesign for a
+small numerical miss or claim technical optimality from bounded measurements.
+Earlier target-unmet statements below retain their historical measurement
+meaning; they do not create a mandatory gate. STEP9's 31 ms was saved scheduling
+wait for the fourth original, not its total latency.
+
+A real deferred group retry may reuse an already prepared physical beginning
+only when every Work was in group custody before the current due attempt.
+Require the exact header/member sequence, owner, original T, content, epoch and
+planned E, no possible preceding original, and unchanged replan/delay bounds.
+Capture all fresh source/permit/DSP requests and validate capture/immutable STOP
+before and after planning, then bind every member through a separate later-E
+PREPARED/SCHEDULED-to-PREPARED CAS with the exact expected E. Only complete success
+moves common E/pending capture S, consuming one existing replan allowance per
+member. The same already-popped DeferredEvent retains scheduler order/capacity;
+it supplies no queued-completion receipt. Final effect/capture claims are unchanged.
+
+This is one bind per unconsumed bundle. Occupied displaced-request custody,
+missing/stale metadata, unavailable proof, live predecessors, AttackAtGrid and
+actual/history/retained-feed paths keep real legacy reprepare. No Native reset,
+prepare, source consumption or heavy allocation enters the callback. A lost
+member bind rejects the whole group before audio/spool stores; Work and every
+old/failed request pin retire through existing off-RT custody. Principal DSP and
+all remaining stem/conversion/budget/provider/native-inference duties stay in
+steps 11–17, under the clarified practical-benefit standard.
+
 ## STEP9 impact and retained scope
 
 Visit reserved originals in captured (T, sequence) order. A successful whole
@@ -718,6 +748,78 @@ step 10 and needs its own later-E prepared-state/request/CAS proof, followed by
 principal DSP and every existing stem/conversion/budget/provider/native-inference
 and final-regression duty. No later-E reuse is inferred from earlier-E completion.
 
+## STEP10 held deferred-group result
+
+The later-E path described above now reuses a wholly retained, unconsumed
+FirstSound group at its actual retry frame. The existing no-predecessor gate
+remains unchanged. Every member gets a complete fresh request/permit/DSP envelope;
+all plans and capture fences precede binding, and only all-bind success moves
+common E/S. Each member consumes one existing replan allowance. A later member
+bind lost to cancellation rejects the whole group without an audible or recorded prefix.
+Already displaced pins, missing proof and unsupported states keep genuine worker
+reprepare. A runtime occupancy check also prevents accidental pin replacement.
+
+Eight new regular regressions prove actual prior group-owned custody, no extra
+worker roundtrip, unchanged independent Native identities, full 24000-frame
+physical PCM at 2/4/6 PADs with mixed/all-wet members and both .8/1.16 rates.
+Recording retains common S/E=8193, original STOP=32193, all 24000 spool sample
+bits and writer/RT settlement. E exactly equal to original STOP=8193 preserves
+the ordered group effect and empty recording. Earlier STOP/cancellation,
+source/control/epoch staleness, missing or wrong metadata, delay/replan bounds
+and a later member's lost bind cannot publish a prefix. Occupied displaced pins
+demonstrably require the real blocked worker again. Existing live-original,
+stem, history, OwnACK, capacity and retirement regressions remain authoritative.
+Rust callback allocation checks do not count C++/FFT allocations.
+
+The identical `deferred_group_response` diagnostic ran before the runtime edits
+at STEP9 `85185140` and after this change. The public two-wet recording route
+uses resident burst PCM at 48 kHz with no selected reserve or background work,
+n=1/ratio/side, on the Windows/Release reference host above. A real worker is held
+while silence advances to 8192; first readiness returns with that clock frozen.
+A genuine publication marker refuses the due event at 8192, leaving all Work in
+the group and the same event deferred. The retry starts at 8193. Subsequent worker
+waits also freeze the software clock on the baseline side.
+
+| Rate | Actual E before / after | First / significant / principal after E, both sides | Residual first release-to-ready before / after (us) |
+| --- | --- | --- | --- |
+| .8 | 8193 / 8193 | 1076 / 2827 / 2991 | 5950 / 4929 |
+| 1.16 | 8193 / 8193 | 1085 / 2755 / 2867 | 5282 / 4945 |
+
+Both sides apply and record all 24000 sample bits correctly. With the clock
+frozen during waits, this probe establishes no scheduling-frame reduction. The
+regular test holds any additional worker while the new path applies immediately,
+proving removal of the redundant real preparation roundtrip. No paired duration
+of that removed roundtrip was measured. The table's residual readiness starts
+at the FIRST release, excluding earlier input/queue/preparation, and cannot prove
+a compute/readiness speedup or headroom distribution. Principal DSP remains
+2991/2867 frames (62.313/59.729 ms); the Human's advisory 30 ms reference is not
+a mandatory gate. No CPAL/device/acoustic, background, p99, other-rate deferred
+timing or whole-quality acceptance is inferred. This bounded change does not
+claim technical optimality; step 11 assesses practical DSP benefit versus complexity.
+
+The final integrated Rust closure passes 325 regular cases with zero failures;
+15 default ignored cases retain their limits, including the new diagnostic run
+explicitly on both sides. The earlier 20-case focused success is overlapping
+evidence, not an additional count. The first Native compile caught the new
+module method's private visibility; `pub(super)` corrected it, and subsequent
+Release Native/API and tests passed without weakening a guard. Release retains
+the existing 22 library warnings and existing einops warning. No ABI, dependency,
+installer, agent App/device or inference session changes are introduced.
+
+Run the explicit probe through the actual-checkout adapter's `rust-test` with
+`-p flitzis-looper --lib --release -- deferred_group_response --ignored --nocapture --test-threads=1`.
+The focused filter is `deferred_`; the integrated filters are
+`ordinary_start_tests pitch_runtime_tests pitch_runtime:: ordinary_endpoint_reserve_tests captured_global_start scheduler:: pad_start:: pitch_actions:: deferred_`.
+The new custody tests are
+[`deferred_group_tests.rs`](../../../rust/crates/looper/src/audio_engine/pitch_runtime/deferred_group_tests.rs).
+Another 280 Python captured-input/MIDI/Piano/group/recording-control and opaque
+Native/API checks pass with verified external Release Native/API. They do not
+replace audio evidence. Systems PRE/frozen/affected, Methods and one independent
+final-diff review chain cover this step. Eight changed Rust files, strict OpenSpec
+and six Markdown files/68 local targets/three anchors pass the static checks;
+whitespace is checked before publication. Principal DSP and all other work remain
+steps 11–17 under the advisory, proportionate-complexity latency standard.
+
 ## Measurement contract
 
 Record original monotonic input capture, control admission/publication, requested
@@ -728,7 +830,7 @@ first nonzero and relative-threshold onset separately so pre-ringing cannot pass
 as a responsive attack. Declare each fixture's authored onset/silence. Record
 rejected/cancelled starts and missing or ambiguous attacks.
 
-The engineering goal is <=30 ms input-to-significant-rendered-output response for
+The advisory reference is <=30 ms input-to-significant-rendered-output response for
 ready, quantization-OFF starts on a declared reference machine/profile at 2/4/6
 PADs, with attack displacement reported separately and no lost beginning or audible
 dry/wet substitution. Quantization-ON reports intentional grid wait separately,
@@ -737,11 +839,12 @@ physical loopback are separate components, never silently subtracted or claimed
 from a software result. Cold/refused/unavailable domains remain explicit and are
 not dropped from aggregate reports to make a warm result look universal.
 
-For fixtures with an authored attack at the beginning, evaluate principal-attack
-response against the same 30 ms goal. For later authored attacks, compare their
-displacement against the matched dry/source reference. Significant output alone
-cannot pass the target if the principal attack remains late; report that case
-as unmet, and ambiguous or missing attacks as unresolved/failed evidence.
+For fixtures with an authored attack at the beginning, compare principal-attack
+response with the same advisory 30 ms reference. For later authored attacks,
+compare displacement against the matched dry/source reference. Significant output
+alone cannot establish principal-attack timing. Report both landmarks without
+turning the reference into a mandatory gate; ambiguous or missing measurements
+remain unresolved/failed evidence.
 
 Use 44.1/48/96 kHz where supported, actual and irregular callback partitions,
 rates 1, 0.8 and 1.16 plus existing 0.5/0.75/1.5/2 DSP cases, Key Lock ON/OFF and

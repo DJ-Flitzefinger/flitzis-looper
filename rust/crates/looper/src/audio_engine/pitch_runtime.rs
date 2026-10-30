@@ -1,6 +1,7 @@
 //! Fixed preparation custody connected to the one transport scheduler.
 
 mod completion;
+mod deferred_group;
 #[cfg(all(test, windows))]
 mod group_peer_tests;
 
@@ -807,6 +808,9 @@ impl PitchRuntime {
             return false;
         }
         let mut group = self.slots[index].group.take().unwrap();
+        // Only a previous real due attempt can have gathered every member here.
+        // Freshly returned slot Work still follows the existing legacy path.
+        let held_deferred = group.work[..group.len].iter().all(Option::is_some);
         for (member, index) in group.slots[..group.len].iter().copied().enumerate() {
             if group.work[member].is_none() {
                 let Some(PreparedActionWork::Ordinary(work)) = self.slots[index].work.take() else {
@@ -815,7 +819,7 @@ impl PitchRuntime {
                 group.work[member] = Some(work);
             }
         }
-        let expected = group.work[0].as_ref().unwrap().execution_frame();
+        let mut expected = group.work[0].as_ref().unwrap().execution_frame();
         if !mixer.group_capture_current(&group.batch, key, expected) {
             group.reject(PitchActionReject::PreparationFailed);
             mixer.reject_pending_group_capture(&group.batch, key);
@@ -824,6 +828,21 @@ impl PitchRuntime {
             }
             retirement.retire_ordinary_start_group(group);
             return true;
+        }
+        if held_deferred && !expired && frame > expected && preceding.is_none() {
+            match self.bind_deferred_group(mixer, index, &mut group, expected, frame) {
+                Ok(true) => expected = frame,
+                Ok(false) => {}
+                Err(reason) => {
+                    group.reject(reason);
+                    mixer.reject_pending_group_capture(&group.batch, key);
+                    for slot_index in &group.slots[..group.len] {
+                        Self::clear_slot_metadata(&mut self.slots[*slot_index]);
+                    }
+                    retirement.retire_ordinary_start_group(group);
+                    return true;
+                }
+            }
         }
         if frame < expected && preceding.is_none_or(|previous| previous <= expected) {
             self.slots[index].planned = expected;

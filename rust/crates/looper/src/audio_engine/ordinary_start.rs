@@ -375,6 +375,24 @@ impl OrdinaryStartWork {
         &mut self,
         plan: OrdinaryCompletionPlan,
     ) -> Result<(), PitchActionReject> {
+        self.bind_completion(plan, false)
+    }
+
+    pub(crate) fn bind_deferred_completion(
+        &mut self,
+        plan: OrdinaryCompletionPlan,
+    ) -> Result<(), PitchActionReject> {
+        self.bind_completion(plan, true)
+    }
+
+    fn bind_completion(
+        &mut self,
+        plan: OrdinaryCompletionPlan,
+        deferred: bool,
+    ) -> Result<(), PitchActionReject> {
+        if self.rejected_request.is_some() {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
         let execution = plan.request.target_output_frame;
         let current = self.completion_request_matches(&plan.request);
         debug_assert!(self.rejected_request.is_none());
@@ -383,8 +401,13 @@ impl OrdinaryStartWork {
         if !current {
             return Err(PitchActionReject::PreparedMismatch);
         }
-        self.origin()
-            .bind_early_completion_frame(self.execution_frame(), execution)?;
+        if deferred {
+            self.origin()
+                .bind_deferred_completion_frame(self.execution_frame(), execution)?;
+        } else {
+            self.origin()
+                .bind_early_completion_frame(self.execution_frame(), execution)?;
+        }
         let fresh = self.rejected_request.take().unwrap();
         self.rejected_request = if self.native_required {
             self.candidate.as_mut().unwrap().source.replace(fresh)

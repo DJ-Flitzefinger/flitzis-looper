@@ -261,8 +261,10 @@ and [seventeen sequential steps](../openspec/changes/improve-performance-isolati
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
-scheduling wait in the paired 48 kHz cold cases. The 30 ms principal-attack target
-remains unmet. Constant independent Piano births now also complete within their
+scheduling wait in the paired 48 kHz cold cases. The Human clarified on 2026-10-31
+that 30 ms is advisory, not a mandatory acceptance threshold. Optimize for the
+shortest practical latency with preserved quality/functions and proportionate
+complexity. Constant independent Piano births now also complete within their
 initial interval: the paired six-case probe removes 160 ms of cold scheduling
 wait at 48 kHz while leaving warm/unity controls and the DSP attack unchanged.
 Initial recording groups also use wholly ready completion with common capture S/E,
@@ -275,8 +277,11 @@ without releasing custody or capacity early. A failed CAS remains a live barrier
 Live-original chains now use only this pass's successful complete fresh binds
 and exact queued-event order, retaining captured gaps inside a callback and the
 final predecessor barrier. Busy/unknown/unbound owners cannot acquire that proof.
-Genuinely deferred group-held Work remains a separate step before principal DSP
-and the stem work; no later-E reuse/CAS semantics are inferred from this fix.
+Genuinely deferred groups now have a separate later-E bind for wholly held,
+unconsumed FirstSound physical births with complete fresh requests and exact
+metadata/capture/STOP/order guards. Occupied displaced pins, live predecessors
+and unavailable proof retain the real worker path. No reset or heavy preparation
+enters the callback; principal DSP and the stem work remain separate.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and
