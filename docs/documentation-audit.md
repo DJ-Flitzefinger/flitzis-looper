@@ -337,3 +337,31 @@ STEP7 retains the extensive performer manual/root product and installation map;
 STEP8 retains ALL-original coverage, raw-reference, source/spec/docs and final
 consistency. This step establishes no new audio/device/listening/model/full216 or
 clean-Windows acceptance and runs no product audio/build/inference for docs.
+
+## Executed STEP7 manual, installation and navigation — 2026-10-30
+
+The [user guide](user-guide.md) explains the current performer workflow from actual
+UI/actions/defaults, including selection versus transport target, pending/effective
+audio, analysis/correction, loops, pitch/Key Lock, mix, stems, Learn, recording,
+persistence/recovery and resources. No device or playback-mode selector is invented;
+musical classification and disk/config state are not audio acceptance.
+
+The [root README](../README.md) is now a concise product/public-source/Portable
+entry, retaining the hero asset. Stable setup paths and all installer/launcher
+code stay unchanged. [The map](README.md) has performer/setup/contributor reading
+orders and all seven architecture modules. Contributor instructions retain their
+technical guards and original history while explicitly disabling old activation
+programs. Development keeps original diagnostic facts/gates, qualifies historical
+Nuitka/R0/pre-port/FULL prose and points to current installation/performance docs.
+
+The APPENDED STEP7 manifest record maps original README sections1–2 and all ten
+development sections, including the STEP3-retired section9. Original43 identities,
+196 spans/479 headings/324 basename candidates/exclusions, eleven overrides and
+all prior executed records remain unchanged. The root README and AGENTS pre-edit
+versions also have exact immutable locators. No report moves/copies, coverage
+regeneration, task-status change, behavior implementation or acceptance promotion.
+
+STEP8 retains the full ALL-original fact/disposition and raw-reference/source/
+spec/manual/install/English consistency audit. Current docs and proportional
+reference/source checks do not establish fresh audio/device/listening/model,
+clean-Windows or whole-216 acceptance.

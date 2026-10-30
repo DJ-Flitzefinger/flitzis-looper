@@ -1,11 +1,14 @@
 # Documentation Map
 
+Start with the [user guide](user-guide.md) for performer controls and workflows,
+or the [root introduction and installation guide](../README.md) for setup.
+Current architecture, contributor references and dated evidence have separate
+reading paths below.
+
 The [complete source/disposition audit](documentation-audit.md) classifies all 43
-original text/JSON documents and records current source owners, contradictions,
-planned module boundaries and evidence retention. The list below is the original
-navigation retained during cleanup: several files mix current facts with retired
-SYNC paths and historical programs. Their old execution queues are inactive;
-archival does not establish completion or acceptance.
+original text/JSON documents and preserves original identities, source owners,
+section mappings and evidence retention. Its appended executed dispositions record
+actual cleanup; its original paths and line numbers remain frozen provenance.
 
 All 104 formerly active OpenSpec changes now have a
 [dated disposition and source mapping](../openspec/changes/archive/2026-10-30-archive-index.md)
@@ -32,27 +35,39 @@ duplicate every scenario already expressed in OpenSpec.
 
 ## Reading Order
 
+For performers and installation:
+
+1. [Introduction and installation](../README.md).
+2. [Full user guide](user-guide.md), including defaults, gestures, recording,
+   recovery and troubleshooting.
+3. [Windows Portable installation/update/repair](portable-windows.md), or
+   [public source setup](development.md#setup).
+4. [BeatThis worker setup](beat-this-setup.md) and optional
+   [stem model/FFmpeg setup](stem-generation-setup.md).
+
 For most code changes:
 
-1. Read `../AGENTS.md` and `../openspec/config.yaml`.
-2. Read this file.
-3. Read `architecture.md`.
-4. Read `development.md`.
-5. Read the relevant current OpenSpec specs; consult archived deltas as historical evidence.
-6. Read the relevant tests and source files.
+1. Read [contributor instructions](../AGENTS.md), current task authority and
+   [OpenSpec configuration](../openspec/config.yaml). Old activation programs
+   retained in instructions are historical and do not start work.
+2. Read this map and the [architecture overview](architecture.md).
+3. Read [Development](development.md) and the affected architecture modules.
+4. Read relevant [current OpenSpec specs](../openspec/specs/), tests and source.
+   Consult archived deltas as historical evidence, not an implementation queue.
 
 For focused areas:
 
 - Independent Windows installation and testing: `portable-windows.md`.
-- UI/rendering: `ui-toolkit.md`
-- Stems/Demucs setup: `stem-generation-setup.md`
+- UI/rendering: [UI toolkit](ui-toolkit.md).
+- Stems/BS-RoFormer/Demucs setup: [stem setup](stem-generation-setup.md).
 - Key Lock/time-stretch backend: [pitch and Key Lock](architecture/pitch-and-key-lock.md)
-- Rust module details: `../rust/README.md`
+- Rust module details: [Rust workspace guide](../rust/README.md).
 
 ## Maintained Files
 
 | File | Purpose |
 | --- | --- |
+| `user-guide.md` | Current performer manual: startup, controls/defaults, loops, tempo/pitch, stems, Learn, recording, recovery and limits. |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
 | `architecture/runtime-and-transport.md` | Current frame clock, scheduler, scalar rendering, ordinary transport, rates and feedback. |
 | `architecture/media-and-pcm.md` | Current material/content/source identity, disk-first PCM, finite views, shared custody and last-reader retirement. |
@@ -63,6 +78,7 @@ For focused areas:
 | `architecture/stems.md` | Shared offline generation, immutable artifacts, saved/resident/effective state, model execution and last readers. |
 | `constant-bpm-guide.md` | Current BPM Lock, loop, Tap BPM, device labels and fresh-project workflow. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
+| `portable-windows.md` | Generic self-contained Windows source installer, update/repair, isolation, locks and validation limits. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |
 | `native-constant-timing.md` | G3b2a-i actual-pad timing, native/FIFO history, verified persistence/fresh adoption, guarded global batches and explicit publication/derived refresh; separate loop gates. |
@@ -116,6 +132,22 @@ Use docs for explanatory context:
 - how the callback stays realtime-safe,
 - how packages and generated extension files fit together,
 - which setup steps are needed for local development.
+
+## Authority and evidence conventions
+
+Current Human instructions define the task and intended scope; current source
+establishes implementation facts; applicable top-level specifications define
+behavior contracts. Resolve contradictions explicitly. An old unchecked task is
+not proof that current implementation is absent, and existing code does not
+override an explicit product requirement.
+
+Current modules explain supported ownership and behavior. Diagnostic references
+describe explicit tools and their limits. Dated reports, archived changes and
+immutable Git links preserve original evidence, including failures, UNKNOWN and
+unfinished acceptance. Archival, software tests, model classifications and
+configuration choices do not establish musical/device/Human acceptance or current
+audio adoption. FULL/pre-Rust/model-stage/waiting Goal programs are inactive.
+Explicit TODO notes remain notes until requested; they do not authorize execution.
 
 ## Maintenance Rules
 

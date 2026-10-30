@@ -1657,6 +1657,75 @@
           ]
         }
       ]
+    },
+    {
+      "step": "STEP7",
+      "date": "2026-10-30",
+      "source_commit": "33cddfe9faa6e61a91ff7fb19d78e175533d16fa",
+      "created_current_documents": ["docs/user-guide.md"],
+      "updated_current_documents": ["README.md", "docs/README.md", "docs/development.md", "AGENTS.md"],
+      "original_section_mappings": [
+        {
+          "path": "docs/README.md",
+          "sections": [1],
+          "current_targets": ["docs/README.md#reading-order", "docs/README.md#maintained-files", "docs/README.md#authority-and-evidence-conventions"],
+          "status": "Current performer/setup/contributor/module/evidence map replaces transitional navigation."
+        },
+        {
+          "path": "docs/README.md",
+          "sections": [2],
+          "current_targets": ["docs/README.md#historical-pre-rust-extension-and-open-evidence"],
+          "status": "Original extension requirements and incomplete gates retained as inactive historical evidence."
+        },
+        {
+          "path": "docs/development.md",
+          "sections": [1, 6],
+          "current_targets": ["docs/development.md#setup", "docs/development.md#branch-and-repository", "docs/development.md#runtime-local-data", "docs/user-guide.md#saving-recovery-and-closing"],
+          "status": "Public setup/launchers/package/data rules retained; current performer navigation added and main distinguished from writer checkout."
+        },
+        {
+          "path": "docs/development.md",
+          "sections": [3, 7, 10],
+          "current_targets": ["docs/development.md#nuitka-installer-direction", "docs/development.md#r0-documentation-validation-boundary", "docs/development.md#latest-performance-workload-decision--2026-10-24", "docs/user-guide.md#memory-and-performance"],
+          "status": "Original binary-packaging/R0/FULL obligations preserved with explicit inactive historical qualifiers; current Portable/performance links repaired."
+        },
+        {
+          "path": "docs/development.md",
+          "sections": [2, 4, 5, 8],
+          "current_targets": ["docs/development.md", "docs/user-guide.md#recording-and-output-files"],
+          "status": "Diagnostic/validation/recording facts and unpassed gates retained in place; no automatic pre-port execution stage."
+        },
+        {
+          "path": "docs/development.md",
+          "sections": [9],
+          "current_targets": [],
+          "status": "Retired SYNC section already disposed by STEP3; not restored or reactivated."
+        }
+      ],
+      "pre_edit_originals": [
+        "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/33cddfe9faa6e61a91ff7fb19d78e175533d16fa/README.md",
+        "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/33cddfe9faa6e61a91ff7fb19d78e175533d16fa/AGENTS.md"
+      ],
+      "manual_source_owners": [
+        "src/flitzis_looper/ui/render",
+        "src/flitzis_looper/ui/context.py",
+        "src/flitzis_looper/ui/run.py",
+        "src/flitzis_looper/models.py",
+        "src/flitzis_looper/input_mapping/controller.py",
+        "src/flitzis_looper/controller/persistence.py",
+        "src/flitzis_looper/controller/recording.py",
+        "src/flitzis_looper/bpm_range_options.py",
+        "src/flitzis_looper/recording_options.py",
+        "rust/crates/looper/src/audio_engine/audio_stream.rs"
+      ],
+      "installation_source_owners": ["INSTALL-LOOPER-PORTABLE.bat", "scripts/portable", "scripts/start-app.bat", "scripts/setup-runtime.py", "pyproject.toml", "rust/crates/looper/build.rs"],
+      "frozen_provenance_preserved": true,
+      "previous_executed_records_unchanged": true,
+      "retention_overrides_unchanged": true,
+      "coverage_json_unchanged": true,
+      "historical_reports_moved_or_rewritten": false,
+      "product_behavior_or_acceptance_changed": false,
+      "remaining_steps": ["STEP8 all-original dispositions/facts/source/reference/English/manual/install consistency and final completion"]
     }
   ],
   "files": [

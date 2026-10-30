@@ -3,13 +3,19 @@
 This guide covers local development, validation, OpenSpec usage, and package
 layout for the current project.
 
+For performance controls use the [user guide](user-guide.md); for independent
+Windows installation use the [Portable guide](portable-windows.md). Current
+[architecture modules](architecture.md) explain implementation ownership.
+Historical diagnostics and acceptance packets below retain their original limits
+and unfinished gates. They do not activate FULL/pre-Rust/model-stage/Goal programs
+or authorize unrelated implementation. Apply the actual current task and its
+relevant checks. Public source defaults below are separate from explicitly
+configured private developer resource routing.
+
 ## Branch And Repository
 
-Expected development branch:
-
-```text
-main
-```
+`main` is the integration branch. Use the task's managed writer checkout for
+implementation and protect unknown local changes before switching or integrating.
 
 Before repository edits:
 
@@ -123,7 +129,9 @@ using it. A failed setup or build stops the launch. Normal double-click starts
 keep the terminal open on failure to show the error. Only the build entrypoints
 require `uv` on `PATH` and the native build setup described below; `start.bat`
 uses the existing environment. Release still runs the Python source app; these
-files do not create the future standalone installer.
+files build/run a source checkout. The existing independent
+[Portable installer](portable-windows.md) bootstraps its own source/runtime/tools;
+it is a separate entrypoint, not a binary bundle produced by these starters.
 
 The accompanying command window also receives timestamped control and worker
 diagnostics, with operation, pad number and available request identity. Technical
@@ -393,6 +401,11 @@ The backend guide defines the raw coordinate mapping, causal bounds and pending 
 
 ### Nuitka Installer Direction
 
+This is a historical packaging direction, not the current installation procedure
+or an active task. Current Windows installation uses the generic
+[Portable source installer](portable-windows.md). The retained binary-bundle
+proposal was:
+
 The later Windows installer should be built so non-technical users do not need
 development tools. The Nuitka packaging step should bundle the app, the PyO3
 extension, the required Rubber Band runtime DLLs, and any MSVC runtime
@@ -627,7 +640,8 @@ finite/current-full comparisons include regressions and single-run/OS-cache limi
 
 Full Debug/Release numerical validation remains a separate required gate; isolated
 phase-origin-zero dry renders do not replace it. Actual human/device/listening
-acceptance remains open until the final pre-port stage. C3 does not begin full
+acceptance remains open in its retained historical packet. No pre-port execution
+stage is active through this guide. C3 does not begin full
 application Rust-port planning or implementation.
 
 ### G3c productive device and listening preparation
@@ -757,6 +771,11 @@ Rules:
 
 ## R0 documentation validation boundary
 
+The following is the original historical R0 delivery boundary. It preserves its
+exact evidence/check obligations; it is not the current documentation workflow
+or authorization to dispatch J0/P1. Use the proportional validation policy above
+for the actual task.
+
 R0 changes official plans/deltas/docs and local handoff only, with no build/install/
 runtime suite or P0 re-audit. Validate each actually affected active change using
 real `openspec validate <id> --strict`; retain genuine failed attempts/exits and
@@ -822,5 +841,8 @@ superseded. Preserve their measured positive AND negative evidence unchanged as
 history; no further20-PAD optimization is required. Current4/6 misses remain real
 until corrected evidence resolves them. Internal32 atomic/capacity/retirement and
 layout correctness stays separate and unchanged. No hard10 app cap or device/
-7–10 performance guarantee is introduced. The user-facing guidance is in README's
-Simultaneous Playback section; all other original FULL-Goal gates remain binding.
+7–10 performance guarantee is introduced. The user-facing guidance is in the
+[manual's performance section](user-guide.md#memory-and-performance) and
+[root introduction](../README.md). Other original FULL-Goal gates remain
+unfinished historical requirements where recorded; no FULL execution program is
+activated by this guidance.

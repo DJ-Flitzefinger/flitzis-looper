@@ -1,4 +1,20 @@
-## Latest direct Human plan — 2026-10-28: waiting BPM-first successor
+## Current authority — documentation cleanup, 2026-10-30
+
+Execute only the actual current Human-authorized task. The FULL, SYNC, pre-Rust,
+model-stage and waiting-for-`weiter` activation programs retained below are
+historical records, superseded by current task authority. They do not activate
+or resume a Goal, old chat, implementation queue or model transition. Create a
+Goal only when the Human explicitly requests one. Archived unfinished gates stay
+unfinished; preservation does not authorize implementing them.
+
+Technical/contributor rules, permanent systems/review/capacity/source/RT/data
+protections and applicable explicit publication authorization remain in force.
+Use the [current documentation map](docs/README.md),
+[user guide](docs/user-guide.md) and [architecture](docs/architecture.md).
+Machine-local workspace instructions, when explicitly supplied, govern their
+private routing and storage; they are not public source-install defaults.
+
+## Historical direct Human plan — 2026-10-28: waiting BPM-first successor
 
 This chat is planning only. The Human opens the next LOOPER chat and writes
 `weiter`; only that actual start activates/reuses ONE NEW matching Goal without
