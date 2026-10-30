@@ -257,7 +257,7 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [seventeen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+and [eighteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -281,7 +281,14 @@ Genuinely deferred groups now have a separate later-E bind for wholly held,
 unconsumed FirstSound physical births with complete fresh requests and exact
 metadata/capture/STOP/order guards. Occupied displaced pins, live predecessors
 and unavailable proof retain the real worker path. No reset or heavy preparation
-enters the callback; principal DSP and the stem work remain separate.
+enters the callback. STEP11's bounded 36-case raw Short/Medium assessment retains
+the current DSP: Medium's principal attack is later in every matched pair, while
+nominal-delay cropping loses genuine response energy. The separate 511-frame
+adapter packing opportunity needs a new physical-birth actual-feed/control/
+retirement proof; it is not a measured or adopted speedup. See the design's STEP11
+result for independent source references and limits. The newly requested
+approximate BPM fallback with a visible inaccuracy warning is next in step 12;
+stem work continues in step 13. This fallback is planned, not yet implemented.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and

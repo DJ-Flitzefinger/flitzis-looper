@@ -193,6 +193,17 @@ mixer/scheduler preparation owner.
 
 ## Dependencies, evidence and current limits
 
+The [STEP11 performance assessment](../../openspec/changes/improve-performance-isolation/design.md#step11-practical-principal-attack-assessment)
+retains the current Short + ChannelsTogether backend and silent physical birth.
+In 36 uncropped synthetic captures, Medium's principal attack is later in every
+matched pair; nominal-delay cropping can remove substantial response energy.
+Removing only the adapter's 511-frame packing lead is a separate potential design,
+requiring new physical-birth actual-feed, live-control, completion and last-reader
+proof. It is not implemented or claimed as a speedup. This bounded no-change
+decision preserves current wet continuation; it establishes neither technical
+optimality nor whole-quality or listening acceptance. The Human's 30 ms suggestion
+is advisory, with practical benefit and proportionate complexity controlling further work.
+
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
 and the Rust test wrapper are described in [development](../development.md).

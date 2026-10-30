@@ -22,6 +22,9 @@ These are concrete risks, not measured proof of every reported symptom.
 - Prepare reusable start resources before presses, retaining exact source and
   operation guards, independent mutable voices and atomic group effects.
 - Remove slow stem preparation from shared control locks and Python/GIL waits.
+- When precise automatic BPM estimation fails, provide a simpler approximate
+  source-derived BPM with a visible inaccuracy warning, as directly requested on
+  2026-10-31. Preserve precise evidence separately from this fallback status.
 - Port justified bounded stem conversion arithmetic to Rust, releasing the GIL
   while preserving existing byte-level conversion and publication contracts.
 - Budget background CPU/thread use and retain mandatory supported NVIDIA CUDA
@@ -51,7 +54,7 @@ Preserve the single transport and source authority.
 
 ## Delivery
 
-Seventeen coherent steps are recorded in [tasks](tasks.md). Each important step runs
+Eighteen coherent steps are recorded in [tasks](tasks.md). Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
 This assignment does not merge or push these changes to `main`.

@@ -10,6 +10,15 @@ component loading and live adoption must be measured separately.
 
 ## Current Human clarification and STEP10 impact
 
+STEP11 has now assessed the principal DSP response and retains the current
+runtime without a new cutover. Its bounded profile measurements and separate
+source-prefeed tradeoff are recorded below; no DSP speedup or optimality is claimed.
+
+The Human subsequently required an approximate BPM fallback with a visible
+inaccuracy warning when the precise method fails. That new behavior is NEXT as
+step 12, followed by every existing stem/resource/provider/inference/final duty
+in steps 13–18. It is planned here, not implemented by the STEP11 assessment.
+
 On 2026-10-31 the Human clarified that 30 ms was a suggestion, not a mandatory
 acceptance threshold. Seek the shortest practical latency with complete quality
 and functions and proportionate complexity. Do not force a DSP redesign for a
@@ -819,6 +828,101 @@ final-diff review chain cover this step. Eight changed Rust files, strict OpenSp
 and six Markdown files/68 local targets/three anchors pass the static checks;
 whitespace is checked before publication. Principal DSP and all other work remain
 steps 11–17 under the advisory, proportionate-complexity latency standard.
+
+## STEP11 practical principal-attack assessment
+
+Decision on 2026-10-31: retain LiveShifter Short + ChannelsTogether and silent
+physical-birth preparation. The alternative window is slower in the measured
+cases; nominal-delay trimming loses genuine response energy. A new source-prefed
+birth needs a wider ownership/control change for a limited packing-only gain.
+Under the Human's advisory 30 ms reference and proportionate-complexity instruction,
+that change is not justified in this step. This bounded decision does not prove
+that no different DSP design could improve latency.
+
+The opt-in `practical_attack_profile_assessment` uses the existing independent
+direct-C-ABI RawNative oracle, not the production adapter, scheduler or detector.
+It records 36 finite uncropped captures: 44.1/48/96 kHz × .8/1/1.16 source rates ×
+Short/Medium × zero/20 ms authored SOURCE silence. Pitch is 1/rate. Source input
+is a declared 1 kHz, 4 ms exponential burst with independent integer-sample linear
+interpolation and stereo levels 1/-.73. Negative input is strictly zero. The
+32768-frame preroll and at least half-second positive capture retain every
+captured output sample; no samples within that window are cropped or shifted.
+One observation per configuration uses the Windows x64/Ryzen/Release/Rubber Band
+4.0 reference host. This stereo fixture differs from the earlier mono production
+burst, so their frame landmarks are not interchangeable.
+
+First output uses max-channel amplitude >1e-7; significant output uses 10% of
+that response's peak. Principal is the center of the strongest
+floor(sample_rate/1000)-frame pooled stereo-energy window, approximately 1 ms.
+Values below are relative to independently declared physical source zero:
+raw audio coordinates, not production E or host readiness timestamps.
+
+| Sample rate / source rate, no authored silence | Dry principal | Short first / significant / principal | Medium principal | Short nominal delay | Energy omitted by nominal-delay prefix cut, Short |
+| --- | --- | --- | --- | --- | --- |
+| 44100 / .8 | 27 | 573 / 2342 / 2470 | 2983 | 2371 | 5.348% |
+| 44100 / 1.16 | 27 | 576 / 2241 / 2350 | 2856 | 2348 | 45.555% |
+| 48000 / .8 | 30 | 567 / 2317 / 2481 | 2985 | 2371 | 6.050% |
+| 48000 / 1.16 | 30 | 582 / 2244 / 2356 | 2859 | 2348 | 19.452% |
+| 96000 / .8 | 59 | 610 / 4498 / 4544 | 5674 | 4419 | 0.028% |
+| 96000 / 1.16 | 59 | 594 / 4617 / 4663 | 5768 | 4723 | 42.352% |
+
+Medium's principal is later in all 18 pairs, including unity and authored silence.
+At 48 kHz, Short/Medium raw unity principal is 2166/2678; productive unity bypasses
+Native and retains the earlier dry principal of 24. Raw unity is not a production
+latency regression. Authored output wait is 20 ms/rate for the source-silence case
+and stays in both capture and dry reference. The last 20 ms contains at most
+6.225e-69 of total response energy across the captures, supporting the finite
+denominator, not infinite tail retention or general musical quality. The
+hypothetical cut is exactly
+[capture start, physical zero + nominal delay); its fraction uses the SAME full
+uncropped response energy. At 96 kHz/1.16 Short it also removes the principal
+window's center. That flag checks the center, not the whole window or raw peak.
+No candidate cut is applied to playback.
+
+There is a distinct, potentially valid adapter-only opportunity: consume its
+initial B-1=511 silence frames off-RT while feeding 511 actual source frames,
+retaining the complete raw response. Removing only that packing lead would save
+11.587/10.646/5.323 ms at 44.1/48/96 kHz. These are arithmetic bounds for that
+opportunity, not measured gains or bounds on all possible DSP designs. It leaves
+logical source zero and a different actual input endpoint/FIFO. Current
+`PhysicalBirth` rejects declared cuts/catchup/DSP; reserve/completion paths refuse
+actual or retained feed. Accepting that state therefore needs a new physical-birth
+contract and complete-source/output proof, fresh ordinary/Piano/group completion,
+live pitch/rate and stem changes, current permits/OwnACK, cancellation and actual-feed
+last-reader retirement. Existing SourceHistory replay evidence does not establish
+those semantics. Keep these guards rather than trade fast completion for unproved
+prefeed. This is the concrete cost/benefit reason for retaining the current runtime.
+
+Readiness, scheduling and DSP remain separate. Compatible production STEP2–10
+evidence is reused: actual E and full PCM/spool guards remain as recorded; 48 kHz
+principal after E remains 62.313/59.729 ms for .8/1.16. Frozen-clock residual
+release-to-ready observations exclude earlier input/queue/prepare time. No new
+input-to-ready, host preparation, p99 or callback-headroom speedup is measured here.
+There is no new production DSP, ABI, dependency, installer or device change.
+Unchanged full physical-birth ordinary/Piano/group and retained-feed continuation
+checks are the proportional regression. Whole quality, background overlap,
+listening/device and distribution gates remain open. Step 12 implements the newly
+requested approximate BPM fallback; stem loading follows in step 13. Approximate
+status must stay explicit rather than masquerade as precise timing acceptance.
+
+Run through the actual-checkout adapter's `rust-test` with
+`-p flitzis-looper --lib --release -- practical_attack_profile_assessment --ignored --nocapture --test-threads=1`.
+The source is
+[`key_lock_physical_onset_tests.rs`](../../../rust/crates/looper/src/audio_engine/key_lock_physical_onset_tests.rs).
+Focused regular filters are `key_lock_physical_onset_tests`,
+`key_lock_tonal_onset_tests`, `physical_birth_history_tests` and
+`prepared_native_history::retained_start::tests`. The explicit diagnostic passes
+all 36 rows; nine regular checks pass (six physical/tonal/production-birth checks
+and three retained-feed continuation/bounds checks). The new diagnostic stays
+opt-in by default. The initial retained-file-name filter matched no tests; the
+three actual test names were subsequently run and passed. Changed-file Rust
+formatting, strict OpenSpec and the affected Markdown local targets/anchors
+pass. A cast line wrap was corrected after the first formatting check; no runtime
+guard or assertion was weakened. External Release Native/API verifies with the
+existing 22 library warnings and einops warning. Systems PRE/frozen POST, Methods and one independent
+final-diff review accompany the assessment; formatting, strict OpenSpec and local
+navigation are checked separately. Historical quality failures are not converted
+into successes by this diagnostic passing.
 
 ## Measurement contract
 

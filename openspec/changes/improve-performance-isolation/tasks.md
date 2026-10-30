@@ -92,21 +92,46 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 
 ## 11. Prepared principal-attack response
 
-- [ ] Assess the measured principal-attack delay and implement a useful DSP
+- [x] Assess the measured principal-attack delay and implement a useful DSP
       improvement where its benefit justifies complexity. The Human's 30 ms
       suggestion is advisory, not a mandatory gate; retain honest attack evidence.
-- [ ] Retain the complete physical beginning and wet continuation/quality against
+- [x] Retain the complete physical beginning and wet continuation/quality against
       independent source/dry references; extend ordinary/Piano/group and supported
       rate/partition/background cases proportionally. Split further if necessary.
 
-## 12. Stem component-loading/control isolation
+STEP11 concludes with an evidenced no-runtime-change decision, not a DSP speedup
+or whole-quality acceptance. A new 36-case uncropped Short/Medium diagnostic
+supports retaining Short; nominal-delay cropping loses source-response energy.
+Removing only the adapter packing lead remains a possible separate design, with
+new physical-birth actual-feed/control/retirement proof needed. The unchanged
+ordinary/Piano/group/continuation checks are reused proportionally; background
+and final combined acceptance remain in steps 13–18. See the design's STEP11 result.
+
+## 12. Approximate BPM fallback
+
+Direct Human request on 2026-10-31: when the complex precise detector fails,
+determine an approximate BPM through a simpler fallback and warn the performer
+that it may be inaccurate. This is a new required behavior, not an implemented
+cutover or permission to report approximate timing as precisely accepted.
+
+- [ ] Reuse current source-derived neural/QM/period evidence or a simpler bounded
+      estimator to return an approximate BPM when precise estimation is insufficient.
+- [ ] Carry explicit approximate status and a visible inaccuracy warning through
+      relevant UI/controller/native consumers and persistence/restore, preserving
+      the single timing authority, current source/content/OwnACK and cancellation.
+- [ ] Verify the reported failed PAD analysis and precise/approximate/failure paths;
+      malformed/unavailable input or cancellation must not invent a BPM.
+- [ ] Preserve the separately reported stem resource-pressure investigation in
+      loading/resource work; do not assume the two failures share one cause.
+
+## 13. Stem component-loading/control isolation
 
 - [ ] Prove the global owner/producer/GIL contention with controlled slow reads.
 - [ ] Separate slow preparation from short guarded control/publication locks.
 - [ ] Verify unrelated trigger/STOP progress, same-PAD ordering, sharing, memory
       reservations, placement/source ABA, cancel/failure and last-reader safety.
 
-## 13. Native bounded stem conversion
+## 14. Native bounded stem conversion
 
 - [ ] Measure Python conversion and control responsiveness against existing oracles.
 - [ ] Port the justified conversion path to detached Rust with exact rounding,
@@ -114,7 +139,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
 
-## 14. Background CPU and process resource policy
+## 15. Background CPU and process resource policy
 
 - [ ] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
@@ -123,7 +148,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
 
-## 15. PCM, multicore and offline GPU refinements
+## 16. PCM, multicore and offline GPU refinements
 
 - [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
 - [ ] Implement justified remaining bottleneck fixes; record measured no-change
@@ -144,7 +169,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       packaging, drivers and maintenance; reject disproportionate or marginal
       paths and record that decision rather than guarantee every GPU.
 
-## 16. Native inference and practical PyTorch removal
+## 17. Native inference and practical PyTorch removal
 
 - [ ] Inventory productive Torch closures/operators and distribution size; reuse
       existing Rust/ONNX KeyNet boundaries and keep new cores Python-independent.
@@ -159,7 +184,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       verify actual footprint. Remove PyTorch only after parity; if not practical,
       record the concrete barrier and preserve the working path.
 
-## 17. Combined regression and final architecture review
+## 18. Combined regression and final architecture review
 
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,

@@ -133,6 +133,98 @@ impl Drop for RawNative {
     }
 }
 
+/// A bounded profile comparison, not a production latency or musical-quality gate.
+#[test]
+#[ignore = "explicit uncropped Short/Medium attack assessment; no runtime cutover"]
+fn practical_attack_profile_assessment() {
+    fn landmarks(input: &[Vec<f32>; CHANNELS], rate: u32) -> [usize; 3] {
+        let magnitude = input[0]
+            .iter()
+            .zip(&input[1])
+            .map(|(a, b)| a.abs().max(b.abs()))
+            .collect::<Vec<_>>();
+        let peak = magnitude.iter().copied().fold(0.0_f32, f32::max);
+        assert!(peak > 1.0e-7);
+        let energy = stereo_energy(input);
+        let width = (rate as usize / 1000).max(1);
+        let mut sum = energy[..width].iter().sum::<f64>();
+        let mut maximum = (sum, 0);
+        for end in width..energy.len() {
+            sum += energy[end] - energy[end - width];
+            if sum > maximum.0 {
+                maximum = (sum, end + 1 - width);
+            }
+        }
+        [
+            magnitude.iter().position(|x| *x > 1.0e-7).unwrap(),
+            magnitude.iter().position(|x| *x >= peak * 0.1).unwrap(),
+            maximum.1 + width / 2,
+        ]
+    }
+
+    for rate in [44_100, 48_000, 96_000] {
+        for ratio in RATES {
+            for silence in [0, rate as usize / 50] {
+                // This source is declared independently of Native or its nominal delay.
+                // Interpolate integer source samples; never borrow a positive tap before
+                // physical zero. The second case retains 20 ms of authored source silence.
+                let frames = (PREROLL + rate as usize / 2).div_ceil(BLOCK) * BLOCK;
+                let source = |frame: usize| {
+                    let Some(age) = frame.checked_sub(silence) else {
+                        return 0.0_f32;
+                    };
+                    let seconds = age as f64 / f64::from(rate);
+                    (0.4 * (-seconds / 0.004).exp()
+                        * (std::f64::consts::TAU * 1000.0 * seconds).sin())
+                        as f32
+                };
+                let dry: [Vec<f32>; CHANNELS] = std::array::from_fn(|channel| {
+                    (0..frames)
+                        .map(|frame| {
+                            let Some(age) = frame.checked_sub(PREROLL) else {
+                                return 0.0;
+                            };
+                            let physical = age as f64 * ratio;
+                            let left = physical.floor() as usize;
+                            let a = source(left);
+                            let b = source(left + 1);
+                            let value = a + (b - a) * physical.fract() as f32;
+                            value * if channel == 0 { 1.0 } else { -0.73 }
+                        })
+                        .collect()
+                });
+                assert!(
+                    dry.iter()
+                        .all(|channel| channel[..PREROLL].iter().all(|x| *x == 0.0))
+                );
+                let dry_marks = landmarks(&dry, rate).map(|x| x - PREROLL);
+                for profile in PROFILES {
+                    let (wet, delay) = RawNative::capture_at_rate(&dry, rate, 1.0 / ratio, profile);
+                    let marks = landmarks(&wet, rate);
+                    let energy = stereo_energy(&wet);
+                    let total = energy.iter().sum::<f64>();
+                    assert!(total.is_finite() && total > 0.0);
+                    let cut = PREROLL + delay as usize;
+                    assert!(cut < frames);
+                    let nominal_discard_fraction = energy[..cut].iter().sum::<f64>() / total;
+                    let tail_start = frames - rate as usize / 50;
+                    let tail_fraction = energy[tail_start..].iter().sum::<f64>() / total;
+                    println!(
+                        "practical_attack profile={} sr={rate} ratio={ratio:.17} source_silence={silence} \
+                         native_block={BLOCK} nominal_delay={delay} dry_first_sig10_principal={dry_marks:?} \
+                         raw_first_sig10_principal={:?} nominal_discard_fraction={nominal_discard_fraction:.12e} \
+                         nominal_discards_principal={} tail_fraction={tail_fraction:.12e} \
+                         frames={frames} n=1 uncropped no_production_E_or_readiness_or_quality_claim",
+                        profile.name,
+                        marks.map(|x| x as i64 - PREROLL as i64),
+                        marks[2] < cut,
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum History {
     Physical,
