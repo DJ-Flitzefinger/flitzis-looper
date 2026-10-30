@@ -39,14 +39,21 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       allocations, rapid originals, future T, stale controls and pending fallback;
       measure paired production cases and retain the explicit remaining limits.
 
-## 4. Remaining completion and readiness
+## 4. Terminal predecessor ordering
+
+- [x] Release only proven terminal rejected predecessors from the shared ordering
+      barrier; retain old queued events, slots, worker/source/Native custody and
+      last-reader retirement. Verify returned and worker-held owners, ordinary/
+      Piano successors and atomic playback groups without weakening live ordering.
+
+## 5. Remaining completion and readiness
 
 - [ ] Remove measured cold/unselected/repeat and multi-wet group scheduling costs
       for Piano, recording groups and results after the fallback deadline through
       coherent completion-driven readiness, preserving original T, one
       group E, ordering, bounded capacity/cancellation and fresh source/DSP fences.
 
-## 5. Prepared principal-attack response
+## 6. Prepared principal-attack response
 
 - [ ] Address the measured principal-attack delay through a separate justified
       DSP step; significant pre-ringing cannot pass the 30 ms attack goal.
@@ -54,14 +61,14 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       independent source/dry references; extend ordinary/Piano/group and supported
       rate/partition/background cases proportionally. Split further if necessary.
 
-## 6. Stem component-loading/control isolation
+## 7. Stem component-loading/control isolation
 
 - [ ] Prove the global owner/producer/GIL contention with controlled slow reads.
 - [ ] Separate slow preparation from short guarded control/publication locks.
 - [ ] Verify unrelated trigger/STOP progress, same-PAD ordering, sharing, memory
       reservations, placement/source ABA, cancel/failure and last-reader safety.
 
-## 7. Native bounded stem conversion
+## 8. Native bounded stem conversion
 
 - [ ] Measure Python conversion and control responsiveness against existing oracles.
 - [ ] Port the justified conversion path to detached Rust with exact rounding,
@@ -69,7 +76,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
 
-## 8. Background CPU and process resource policy
+## 9. Background CPU and process resource policy
 
 - [ ] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
@@ -78,7 +85,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
 
-## 9. PCM, multicore and offline GPU refinements
+## 10. PCM, multicore and offline GPU refinements
 
 - [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
 - [ ] Implement justified remaining bottleneck fixes; record measured no-change
@@ -99,7 +106,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       packaging, drivers and maintenance; reject disproportionate or marginal
       paths and record that decision rather than guarantee every GPU.
 
-## 10. Native inference and practical PyTorch removal
+## 11. Native inference and practical PyTorch removal
 
 - [ ] Inventory productive Torch closures/operators and distribution size; reuse
       existing Rust/ONNX KeyNet boundaries and keep new cores Python-independent.
@@ -114,7 +121,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       verify actual footprint. Remove PyTorch only after parity; if not practical,
       record the concrete barrier and preserve the working path.
 
-## 11. Combined regression and final architecture review
+## 12. Combined regression and final architecture review
 
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,

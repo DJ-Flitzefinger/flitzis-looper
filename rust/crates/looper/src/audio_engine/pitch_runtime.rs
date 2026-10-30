@@ -210,6 +210,10 @@ impl PitchRuntime {
                     && slot.independent_birth
                     && slot.content == current.content
                     && (slot.original, slot.sequence) < (current.original, current.sequence)
+                    // Terminal rejection cannot become an effect. Keep its
+                    // slot/event/worker custody until normal cleanup, but no
+                    // longer make live originals wait for that cleanup deadline.
+                    && slot.owner.as_ref().is_none_or(|owner| !owner.rejected())
             })
             .map(|slot| slot.planned)
             .max()

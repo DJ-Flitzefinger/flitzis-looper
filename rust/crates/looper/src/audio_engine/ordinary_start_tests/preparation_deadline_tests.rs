@@ -90,12 +90,15 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
     gate.changed.notify_all();
 }
 
-pub(super) struct WorkerGate {
+pub(in crate::audio_engine) struct WorkerGate {
     key: GateKey,
     state: Arc<WorkerGateState>,
 }
 
 impl WorkerGate {
+    pub(in crate::audio_engine) fn for_ordinary(start: &CapturedPadStart) -> Self {
+        Self::with_key((Arc::as_ptr(start.ownership()) as usize, start.sequence()))
+    }
     pub(super) fn new(fixture: &Fixture, start: &CapturedPadStart) -> Self {
         Self::with_key((
             Arc::as_ptr(&fixture.control.engine.input_runtime_ownership) as usize,
@@ -122,7 +125,7 @@ impl WorkerGate {
         Self { key, state }
     }
 
-    pub(super) fn wait_for(&self, finished: bool) -> Option<PitchActionReject> {
+    pub(in crate::audio_engine) fn wait_for(&self, finished: bool) -> Option<PitchActionReject> {
         let mut observation = self.state.observation.lock().unwrap();
         while if finished {
             !observation.finished
@@ -143,7 +146,7 @@ impl WorkerGate {
         observation.reason
     }
 
-    pub(super) fn release(&self) {
+    pub(in crate::audio_engine) fn release(&self) {
         self.state.observation.lock().unwrap().released = true;
         self.state.changed.notify_all();
     }
@@ -939,6 +942,98 @@ fn older_native_ordinary_birth(fixture: &mut Fixture) -> (CapturedPadStart, Work
     gate.wait_for(false);
     assert_eq!(fixture.starts(0), 0);
     (first, gate)
+}
+
+#[test]
+fn terminal_worker_owned_predecessors_do_not_delay_an_independent_unity_piano_birth() {
+    use crate::audio_engine::audio_stream::render_scheduled_audio;
+    use crate::audio_engine::constants::NUM_SAMPLES;
+    use crate::audio_engine::ordinary_endpoint_reserve_tests::{
+        adopt_current_sources, refresh_actual_runtime_bindings,
+    };
+    use crate::test_memory::{ThreadAllocations, observe_current_thread};
+    use rtrb::RingBuffer;
+
+    for piano in [false, true] {
+        let mut actual = dry_configured();
+        let mut reference = dry_configured();
+        for fixture in [&mut actual, &mut reference] {
+            // The production ring publishes only source-owned feedback, unlike
+            // the diagnostic Vec sink used by the older reference fixtures.
+            adopt_current_sources(fixture, false);
+            refresh_actual_runtime_bindings(fixture);
+        }
+        let (sequence, gate) = if piano {
+            let (first, gate) = older_native_piano_birth(&mut actual);
+            assert!(first.reject(PitchActionReject::LaunchCancelled));
+            (first.sequence(), gate)
+        } else {
+            let (first, gate) = older_native_ordinary_birth(&mut actual);
+            assert!(first.cancel());
+            (first.sequence(), gate)
+        };
+        let second = actual.capture(0, "pitch.extra:0:set_retrigger");
+        let expected = reference.capture(0, "pitch.extra:0:set_retrigger");
+        actual.publish(&second);
+        reference.publish(&expected);
+        let (mut feedback, mut messages) = RingBuffer::new(64);
+        let ((), allocations) = observe_current_thread(|| {
+            render_scheduled_audio(
+                &mut actual.mixer,
+                &mut actual.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                CAPTURE_FRAME,
+                1,
+                &mut actual.transport,
+                &mut feedback,
+                &mut actual.retirement,
+            )
+        });
+        assert_eq!(allocations, ThreadAllocations::default());
+        while let Ok(message) = messages.pop() {
+            actual.feedback.push(message);
+        }
+        assert!(
+            second.effective(),
+            "piano predecessor={piano}, {:?}",
+            second.reason()
+        );
+        assert_eq!(second.execution_target(), CAPTURE_FRAME);
+        assert_eq!(actual.starts(0), 1);
+        assert_eq!(actual.scheduler.len(), 1);
+        let runtime = actual.mixer.pitch_runtime.as_ref().unwrap();
+        assert_eq!(
+            runtime.unused_action_capacity().0,
+            63,
+            "worker slot remains reserved"
+        );
+        assert!(
+            !runtime.has_ready_action(sequence),
+            "worker still owns predecessor"
+        );
+        // Release only after the younger effect. The genuine rejected Work must
+        // return and reach its old queued cleanup without changing current audio.
+        gate.release();
+        assert_eq!(gate.wait_for(true), Some(PitchActionReject::StaleContent));
+        let actual_pcm = render_partitioned(&mut actual, EMITTED_FRAMES);
+        let expected_pcm = render_partitioned(&mut reference, EMITTED_FRAMES);
+        assert_eq!(
+            actual_pcm, expected_pcm,
+            "full dry/EQ beginning and old cleanup"
+        );
+        assert_eq!(actual.starts(0), 1);
+        assert_eq!(
+            actual
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .unused_action_capacity()
+                .0,
+            64
+        );
+    }
 }
 
 #[test]

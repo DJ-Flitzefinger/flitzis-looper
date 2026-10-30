@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::audio_engine::dsp::PerPadDspChain;
+use crate::audio_engine::ordinary_endpoint_reserve_tests::{
+    adopt_current_sources, refresh_actual_runtime_bindings,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyInt;
 
@@ -30,14 +33,45 @@ fn publish_at_current_frame(fixture: &mut Fixture, action: &CapturedPitchAction)
     assert_eq!(action.execution_target(), fixture.transport.output_frame());
 }
 
-fn active_fixture() -> Fixture {
+fn active_fixture(exclusive: bool) -> Fixture {
     let mut fixture = Fixture::new(false);
+    adopt_current_sources(&mut fixture, false);
+    refresh_actual_runtime_bindings(&fixture);
+    // Settle the real ON->OFF collapse while silent. These independent ordinary
+    // setup births explicitly request nonexclusive intent; the Piano action
+    // under test then captures the already settled runtime policy.
+    set_multi_loop(&fixture, !exclusive);
+    fixture.drain();
+    fixture.render(0);
+    assert!(fixture.scheduler.is_empty());
+    assert!(fixture.mixer.voices.iter().all(|voice| !voice.active));
     for id in [0, 1] {
-        let action = capture_at_current_frame(&fixture, id);
+        fixture.refresh_clock();
+        let action = fixture
+            .control
+            .engine
+            .capture_pad_start(
+                id,
+                LOOP_START as f64 / f64::from(RATE),
+                Some(LOOP_END as f64 / f64::from(RATE)),
+                1.0,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        fixture.drain();
         assert!(!action.exclusive());
-        publish_at_current_frame(&mut fixture, &action);
+        assert!(
+            fixture
+                .control
+                .engine
+                .publish_pad_start(&action, None)
+                .unwrap()
+        );
+        fixture.drain();
         fixture.render(1);
-        assert!(action.effective(), "reason={:?}", action.reason());
+        assert_eq!(action.state(), "applied", "reason={:?}", action.reason());
     }
     assert!(fixture.mixer.voices[0].active);
     assert_eq!(fixture.mixer.voices[0].sample_id, 0);
@@ -130,10 +164,9 @@ fn assert_unchanged_audio_state(actual: &Fixture, baseline: &Fixture) {
 
 #[test]
 fn exclusive_retrigger_at_max_minus_one_rejects_before_any_stop_start_or_eq_reset() {
-    let mut hit = active_fixture();
-    let mut baseline = active_fixture();
+    let mut hit = active_fixture(true);
+    let mut baseline = active_fixture(true);
     for fixture in [&mut hit, &mut baseline] {
-        set_multi_loop(fixture, false);
         set_selected_generation(fixture, u64::MAX - 1);
     }
     let other_generation = hit.voice(1).generation;
@@ -157,10 +190,9 @@ fn exclusive_retrigger_at_max_minus_one_rejects_before_any_stop_start_or_eq_rese
 
 #[test]
 fn exclusive_retrigger_rejects_when_another_active_pad_cannot_be_stopped() {
-    let mut hit = active_fixture();
-    let mut baseline = active_fixture();
+    let mut hit = active_fixture(true);
+    let mut baseline = active_fixture(true);
     for fixture in [&mut hit, &mut baseline] {
-        set_multi_loop(fixture, false);
         let peer = &mut fixture.mixer.voices[1];
         assert!(peer.active && peer.sample_id == 1);
         peer.generation = u64::MAX;
@@ -181,11 +213,8 @@ fn exclusive_retrigger_rejects_when_another_active_pad_cannot_be_stopped() {
 
 #[test]
 fn exclusive_retrigger_at_max_minus_two_can_consume_both_generations_once() {
-    let mut hit = active_fixture();
-    let mut baseline = active_fixture();
-    for fixture in [&mut hit, &mut baseline] {
-        set_multi_loop(fixture, false);
-    }
+    let mut hit = active_fixture(true);
+    let mut baseline = active_fixture(true);
     set_selected_generation(&mut hit, u64::MAX - 2);
     let other_generation = hit.voice(1).generation;
     let action = capture_at_current_frame(&hit, 0);
@@ -214,8 +243,8 @@ fn exclusive_retrigger_at_max_minus_two_can_consume_both_generations_once() {
 
 #[test]
 fn nonexclusive_retrigger_at_max_minus_one_consumes_only_one_and_keeps_other_pad() {
-    let mut hit = active_fixture();
-    let mut baseline = active_fixture();
+    let mut hit = active_fixture(false);
+    let mut baseline = active_fixture(false);
     set_selected_generation(&mut hit, u64::MAX - 1);
     let other_generation = hit.voice(1).generation;
     let action = capture_at_current_frame(&hit, 0);

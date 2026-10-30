@@ -78,6 +78,11 @@ order. The displaced request remains in Work for off-callback retirement. Every
 member, including dry peers, receives the fresh E-bound request; Native/FIFO state
 remains independent. Pending earlier originals cannot be overtaken. Future T is
 never advanced, and quantization OFF imposes no musical minimum or coalescing.
+An earlier owner conclusively marked rejected no longer fences a later ready
+original or playback group. Its old slot, queued event and worker/source/Native
+custody remain reserved until normal cleanup; rejection cannot become an effect.
+Live or unobserved earlier owners retain their ordering barrier, including across
+Piano and recording paths. Recording common S/E and stop reservations still validate.
 This one-time path leaves unfinished workers out of the scheduler's deferred cell.
 Recording groups, Piano and worker completion after the fallback deadline retain
 their existing paths; principal-attack DSP is separate and the 30 ms goal remains

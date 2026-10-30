@@ -97,6 +97,27 @@ fn restore_nonzero(fixture: &mut Fixture) {
     }
 }
 
+fn observe_ready_group_birth(fixture: &mut Fixture, captured: &CapturedGlobalStart) -> u64 {
+    let callback = fixture.transport.output_frame();
+    let expected = captured.original_frame().unwrap().max(callback);
+    assert!(fixture.render(0).is_empty());
+    assert_eq!(fixture.transport.output_frame(), callback);
+    assert_eq!(captured.state(), "applied");
+    for member in &captured.owner.members {
+        assert_eq!(member.start.execution_frame(), Some(expected));
+        assert_eq!(member.start.effective_frame(), Some(expected));
+    }
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.launch_unadvanced)
+    );
+    expected
+}
+
 fn wait_group(fixture: &mut Fixture) {
     let deadline = Instant::now() + WAIT;
     loop {
@@ -202,12 +223,7 @@ fn deferred_public_global_retains_one_original_grid_target_and_native_first_atta
         "later grid is 48000, never a new T"
     );
     wait_group(&mut fixture);
-    assert!(
-        fixture
-            .render_to(38_192)
-            .iter()
-            .all(|sample| *sample == 0.0)
-    );
+    assert_eq!(observe_ready_group_birth(&mut fixture, &captured), 30_000);
     let mut pcm = fixture.render(1);
     pcm.extend(fixture.pcm(GLOBAL_PCM_FRAMES - 1));
     assert_eq!(ticket.publication_status(), "accepted");
@@ -542,12 +558,8 @@ fn original_global_target_and_requested_loop_survive_exact_existing_resident_ack
     assert_eq!(captured.original_frame(), Some(24_000));
     assert_eq!(fixture.scheduler.peek_next_target_frame(), Some(38_192));
     wait_group(&mut fixture);
-    assert!(
-        fixture
-            .render_to(38_192)
-            .iter()
-            .all(|sample| *sample == 0.0)
-    );
+    let execution = observe_ready_group_birth(&mut fixture, &captured);
+    assert_eq!(execution, 30_000);
     let mut pcm = fixture.render(1);
     pcm.extend(fixture.pcm(GLOBAL_PCM_FRAMES - 1));
     assert_eq!(ticket.publication_status(), "accepted");
@@ -559,7 +571,7 @@ fn original_global_target_and_requested_loop_survive_exact_existing_resident_ack
     );
     for (id, member) in captured.owner.members.iter().enumerate() {
         assert_eq!(member.start.original_frame(), Some(24_000));
-        assert_eq!(member.start.effective_frame(), Some(38_192));
+        assert_eq!(member.start.effective_frame(), Some(execution));
         let voice = fixture.voice(id);
         assert_eq!(
             voice.stretch.adopted_request_id(),

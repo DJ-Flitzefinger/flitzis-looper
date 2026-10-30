@@ -149,6 +149,201 @@ fn early_completion_keeps_four_rapid_originals_distinct_and_in_order() {
 }
 
 #[test]
+fn cancelled_ready_predecessor_releases_only_ordering_and_keeps_its_retirement_custody() {
+    for ratio in [0.8, 1.16] {
+        for gap in [0, 16] {
+            let mut fixture = configured(ratio);
+            let first = capture(&fixture, 1.0);
+            publish(&mut fixture, &first);
+            wait_ready(&mut fixture, &[first.sequence()]);
+            assert!(first.cancel());
+            assert!(fixture.render(gap).iter().all(|sample| *sample == 0.0));
+            fixture.refresh_clock();
+            let next = capture(&fixture, 1.0);
+            publish(&mut fixture, &next);
+            wait_ready(&mut fixture, &[next.sequence()]);
+            assert!(first.sequence() < next.sequence());
+            assert_eq!(next.original_frame(), Some(gap as u64));
+            let (mut feedback, mut messages) = RingBuffer::new(64);
+            let ((), allocations) = observe_current_thread(|| {
+                render_scheduled_audio(
+                    &mut fixture.mixer,
+                    &mut fixture.scheduler,
+                    &mut [],
+                    &mut [0.0; NUM_SAMPLES],
+                    gap as u64,
+                    1,
+                    &mut fixture.transport,
+                    &mut feedback,
+                    &mut fixture.retirement,
+                )
+            });
+            assert_eq!(allocations, ThreadAllocations::default());
+            while let Ok(message) = messages.pop() {
+                fixture.feedback.push(message);
+            }
+            assert_eq!(next.effective_frame(), Some(gap as u64));
+            assert_eq!(first.execution_frame(), Some(8192));
+            assert_eq!(first.effective_frame(), None);
+            assert_eq!(first.reason(), Some("launch_cancelled"));
+            assert_eq!(fixture.scheduler.len(), 1, "old event retains its capacity");
+            assert_eq!(
+                fixture
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .unused_action_capacity()
+                    .0,
+                63
+            );
+            assert!(
+                fixture
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .has_ready_action(first.sequence())
+            );
+            assert_eq!(
+                fixture.voice(0).stretch.adopted_request_id(),
+                Some(next.sequence())
+            );
+            let native = fixture.voice(0).stretch.native_state_address();
+            let pcm = fixture.pcm(24_000);
+            assert_physical_birth_tone(&pcm, 0, 0, ratio, true, 1.0);
+            assert_eq!(fixture.starts(0), 1, "old queued cleanup cannot retrigger");
+            assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
+            assert_eq!(
+                fixture
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .unused_action_capacity()
+                    .0,
+                64
+            );
+            assert_eq!(fixture.scheduler.len(), 0);
+        }
+    }
+}
+
+fn playback_group(fixture: &mut Fixture, count: usize) -> Vec<CapturedPadStart> {
+    let captured = Python::attach(|py| {
+        let entries = (0..count)
+            .map(|id| {
+                let binding = fixture
+                    .control
+                    .engine
+                    .current_input_runtime_pad_binding(id)
+                    .unwrap()
+                    .unwrap();
+                (Py::new(py, binding).unwrap(), 0.1, Some(2.1), None)
+            })
+            .collect();
+        fixture
+            .control
+            .engine
+            .capture_global_start(py, entries, None)
+            .unwrap()
+    });
+    fixture.drain();
+    let starts = captured
+        .resolve()
+        .unwrap()
+        .unwrap()
+        .into_iter()
+        .map(|member| member.start)
+        .collect::<Vec<_>>();
+    assert!(
+        fixture
+            .control
+            .engine
+            .publish_captured_global_start(&captured)
+            .unwrap()
+            .is_some()
+    );
+    fixture.drain();
+    starts
+}
+
+#[test]
+fn cancelled_single_and_group_member_predecessors_keep_later_playback_groups_atomic() {
+    for count in [2, 4, 6] {
+        for older_group in [false, true] {
+            let mut fixture = configured(0.8);
+            let sample = fixture.control.engine.sample_cache.lock().unwrap()[0]
+                .clone()
+                .unwrap();
+            for id in 1..count {
+                publish_tone(&fixture.control, id, sample.clone(), true);
+            }
+            adopt_current_source_ids(&mut fixture, true, &(0..count).collect::<Vec<_>>());
+            refresh_actual_runtime_bindings(&fixture);
+            for id in 0..count {
+                fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
+                fixture.mixer.set_pad_bpm(id, Some(150.0));
+            }
+            let first = if older_group {
+                playback_group(&mut fixture, count)
+            } else {
+                let start = capture(&fixture, 1.0);
+                publish(&mut fixture, &start);
+                vec![start]
+            };
+            wait_ready(
+                &mut fixture,
+                &first
+                    .iter()
+                    .map(CapturedPadStart::sequence)
+                    .collect::<Vec<_>>(),
+            );
+            assert!(first[0].cancel());
+            assert!(fixture.render(16).iter().all(|sample| *sample == 0.0));
+            fixture.refresh_clock();
+            let next = if older_group {
+                let start = capture(&fixture, 1.0);
+                publish(&mut fixture, &start);
+                vec![start]
+            } else {
+                playback_group(&mut fixture, count)
+            };
+            wait_ready(
+                &mut fixture,
+                &next
+                    .iter()
+                    .map(CapturedPadStart::sequence)
+                    .collect::<Vec<_>>(),
+            );
+            fixture.render(0);
+            assert!(next.iter().all(|start| start.effective_frame() == Some(16)));
+            assert!(first.iter().all(|start| start.effective_frame().is_none()));
+            assert_eq!(fixture.scheduler.len(), 1, "older event remains queued");
+            let pcm = fixture.pcm(24_000);
+            let reference = physical_birth_tone_reference(pcm.len(), SOURCE_HZ, 0, 0, 0.8, true);
+            assert!(
+                pcm.iter()
+                    .zip(reference)
+                    .all(|(a, b)| (*a - b * next.len() as f32).abs() < 1.0e-4)
+            );
+            assert!(first.iter().all(|start| start.state() == "rejected"));
+            assert!((0..count).all(|id| fixture.starts(id) == usize::from(id < next.len())));
+            assert_eq!(
+                fixture
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .unused_action_capacity()
+                    .0,
+                64
+            );
+        }
+    }
+}
+
+#[test]
 fn early_completion_multiwet_groups_share_one_effect_and_preserve_all_physical_pcm() {
     for (count, wet) in [(2, 2), (4, 2), (6, 6)] {
         let mut fixture = configured(0.8);

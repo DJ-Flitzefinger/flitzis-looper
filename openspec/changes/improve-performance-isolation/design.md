@@ -8,6 +8,21 @@ The reported direction is specifically slowed non-master PADs with BPM Lock and
 Key Lock; faster PADs and the master are controls. Generation, postprocessing,
 component loading and live adoption must be measured separately.
 
+## STEP4 impact and retained scope
+
+Remove only the ordering barrier of a proven terminal rejected original in
+`PitchRuntime::preceding_endpoint`. Rejection is monotonic and cannot win over
+an applying/applied effect. A live or unobserved owner remains a barrier. The
+old slot, queued event, worker, Native/source pins and retirement capacity stay
+owned until their existing cleanup; no callback reclamation is introduced.
+This shared ordering helper affects ordinary/Piano and atomic-group ordering,
+while fresh request/source/DSP/OwnACK guards and recording S/E checks remain.
+Verify returned and worker-held rejected owners, live-order negative controls,
+whole physical PCM, atomic groups and callback allocations. Measure readiness,
+scheduling E and principal attack separately on the targeted cancellation seam.
+Piano/recording/late-result acceleration remains STEP5; principal DSP is STEP6.
+The complete plan grows to twelve steps without dropping the remaining work.
+
 ## Source findings
 
 This table records the initial audit baseline. The STEP2 receipt below records
@@ -198,6 +213,71 @@ API verification passes with the existing 22 library warnings. Changed-file
 Rust formatting, strict OpenSpec, six Markdown files/63 local targets/three anchors
 and whitespace checks pass. Systems PRE/frozen/affected, Methods and the single
 independent final-diff review chain cover the implementation and fixture repairs.
+
+## STEP4 terminal-predecessor result
+
+Only an owner conclusively marked rejected stops being an ordering barrier.
+Its old event, slot, worker and heavy source/Native owners remain reserved until
+normal cleanup. Live or missing owners remain barriers; this also means that
+other members of an older group remain barriers until their own terminal state
+is established. No preparation deadline, request comparator or DSP is weakened.
+
+The targeted public ordinary-capture fixture reuses the 48 kHz single burst and
+reference host/profile above, with source PCM resident and no selected reserve.
+The older prepared original is cancelled, then a distinct original is captured
+at T=16. Both sides admit fallback E=8208 and observe readiness at the frozen
+software coordinate 16, before rendering any PCM. There is one observation per
+ratio per side. The residual host wait starts after publication/drain; it is
+neither complete worker runtime nor input-to-ready latency. Its small difference
+is not a measured readiness speedup.
+
+| Rate | Residual readiness wait before / after (us) | Actual E before / after | Significant / principal from T before | Significant / principal from T after |
+| --- | --- | --- | --- | --- |
+| .8 | 2954 / 2848 | 8208 / 16 | 11019 / 11183 | 2827 / 2991 |
+| 1.16 | 3996 / 2968 | 8208 / 16 | 10947 / 11059 | 2755 / 2867 |
+
+This removes 8192 frames/170.667 ms of scheduling wait in this cancellation seam.
+Principal response remains 2991 frames/62.313 ms and 2867/59.729 ms respectively:
+the 30 ms goal is **unmet**. No DSP, device, acoustic, background-load or p99 gain
+is inferred. The STEP3 48-case paced matrix is retained rather than repeated.
+Run `completed_cancelled_predecessor_response` explicitly through the adapter's
+`rust-test` action with `--release -- --ignored --nocapture --test-threads=1`;
+the source is the existing `response_probe.rs` linked above.
+
+Three deterministic regressions cover returned rejected ordinary owners at equal
+T and 16-frame gaps, genuinely worker-held ordinary/Piano owners with independent
+dry Piano successors, and cancelled single/group-member predecessors at 2/4/6 PADs.
+They retain complete independent PCM/EQ comparisons across old queued cleanup,
+source/request identity, exact start counts and reserved worker/slot capacity.
+Rust callback allocation guards do not count Native C++/FFT allocations.
+
+Broader regression exposed six failing legacy cases reproduced on untouched
+STEP3 `e8e0725f`. Generation-boundary fixtures now settle the real MultiLoop OFF
+collapse while silent, then create two genuine explicit nonexclusive ordinary
+setup voices before the tested exclusive Piano action. Mixed ordinary/Piano
+fixtures hold the actual worker until their intended E=T or T+1 race. Three
+playback-group fixtures observe common actual E with an empty callback before
+any PCM, retaining the admitted fallback assertion separately. All generation,
+peer, source/OwnACK, Native, full PCM/EQ, first-wet history/FIFO and local failure
+assertions remain. The new held-worker fixture also adopts genuine SourceACK
+before testing the production feedback ring. An empty callback is a real due
+observation, so the mixed race adds none before releasing its worker at E.
+
+The resulting regular Rust closure has 258 unique passing cases: 166 compatible
+earlier passes plus 92 final focused cases. This covers 71 ordinary, 102 pitch
+runtime, 25 captured-group, 31 scheduler and 29 endpoint cases. The corrected
+groups all pass; five existing controller cases remain ignored by default.
+The pitch runtime's existing ignored gate and the endpoint diagnostics retain
+their explicit status; the new cancellation diagnostic passed on both sides.
+Another 31 Python capture/cancellation/MIDI tests pass with verified external
+Release Native/API. Release retains the existing 22 library warnings. Changed
+Rust formatting, strict OpenSpec, local links and whitespace are checked
+separately. No App, device, inference or listening session was started.
+
+Piano/recording/late-result completion remains STEP5; principal-attack DSP is
+STEP6. The remaining stem-loading, conversion, budgeting, PCM/providers, native
+inference/Torch parity and combined regression work remains explicit in the
+twelve-step plan. Existing quality, listening and distribution gates stay open.
 
 ## Measurement contract
 

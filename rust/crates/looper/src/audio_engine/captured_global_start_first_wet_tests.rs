@@ -81,16 +81,7 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
             .unwrap();
         fixture.drain();
         wait_group(&mut fixture);
-        let previous_e = predecessor.owner.members[0]
-            .start
-            .execution_frame()
-            .unwrap();
-        assert!(
-            fixture
-                .render_to(previous_e)
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
+        assert_eq!(observe_ready_group_birth(&mut fixture, &predecessor), 0);
         fixture.render(1);
         assert_eq!(predecessor_ticket.publication_status(), "accepted");
         let previous_native = [0, 1].map(|id| {
@@ -134,16 +125,11 @@ fn stopped_confirmed_wet_global_birth_rearms_each_receipt_before_first_output_an
             assert!(member.start.sequence() > predecessor.owner.members[id].start.sequence());
         }
         wait_group(&mut fixture);
-        assert!(
-            fixture
-                .render_to(execution)
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
         assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
 
         // The real empty callback applies all due births, without consuming a PCM sample.
-        assert!(fixture.render(0).is_empty());
+        let execution = observe_ready_group_birth(&mut fixture, &captured);
+        assert_eq!(execution, 30_000);
         assert_eq!(fixture.transport.output_frame(), execution);
         assert_eq!(ticket.publication_status(), "accepted");
         assert_eq!(captured.state(), "applied");

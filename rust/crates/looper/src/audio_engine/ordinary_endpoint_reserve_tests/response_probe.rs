@@ -196,6 +196,65 @@ fn ordinary_case(
 }
 
 #[test]
+#[ignore = "explicit frozen-readiness cancellation diagnostic; software timeline only"]
+fn completed_cancelled_predecessor_response() {
+    for ratio in [0.8, 1.16] {
+        let mut fixture = configured(48_000, true, ratio, 0);
+        let first = fixture
+            .control
+            .engine
+            .capture_pad_start(0, 0.1, Some(2.1), 1.0, false, None, None)
+            .unwrap();
+        fixture.drain();
+        assert!(
+            fixture
+                .control
+                .engine
+                .publish_pad_start(&first, None)
+                .unwrap()
+        );
+        fixture.drain();
+        crate::audio_engine::ordinary_start_tests::wait_ready(&mut fixture, &[first.sequence()]);
+        assert!(first.cancel());
+        assert!(fixture.render(16).iter().all(|value| *value == 0.0));
+        fixture.refresh_clock();
+        let next = fixture
+            .control
+            .engine
+            .capture_pad_start(0, 0.1, Some(2.1), 1.0, false, None, None)
+            .unwrap();
+        fixture.drain();
+        assert!(
+            fixture
+                .control
+                .engine
+                .publish_pad_start(&next, None)
+                .unwrap()
+        );
+        fixture.drain();
+        let admitted = next.execution_frame();
+        let began = Instant::now();
+        crate::audio_engine::ordinary_start_tests::wait_ready(&mut fixture, &[next.sequence()]);
+        let ready_us = began.elapsed().as_micros();
+        let ready_frame = fixture.transport.output_frame();
+        let pcm = fixture.pcm(24_000);
+        let points = landmarks(&pcm, 48_000);
+        eprintln!(
+            "terminal_predecessor ratio={ratio} T={:?} admitted_E={admitted:?} ready_frame={ready_frame} ready_wait_us={ready_us} E={:?} first_from_T={:?} significant_from_T={:?} principal_from_T={:?}; readiness wait freezes timeline, no device/host deadline claim",
+            next.original_frame(),
+            next.effective_frame(),
+            points.0,
+            points.1,
+            points.2
+        );
+        assert_eq!(next.state(), "applied", "{:?}", next.reason());
+        assert_eq!(first.effective_frame(), None);
+        assert_eq!(fixture.starts(0), 1);
+        assert!(points.2.is_some());
+    }
+}
+
+#[test]
 #[ignore = "paced production diagnostic; run explicitly with --ignored --nocapture --test-threads=1"]
 fn paced_production_response_matrix() {
     for ratio in [0.8, 1.0, 1.16] {

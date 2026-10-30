@@ -3,6 +3,7 @@
 #![cfg(windows)]
 
 use super::*;
+use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 
 const RATE_RATIO: f64 = 1.43;
 const ORIGINAL_T: u64 = 36_000;
@@ -362,6 +363,7 @@ fn ordinary_birth_between_piano_capture_and_delivery(policy: &str, birth_after_t
             )
             .unwrap()
     });
+    let gate = WorkerGate::for_ordinary(&ordinary);
     route.render(1);
     route.drain();
     // Ordinary target capture freezes the callback's original coordinate here;
@@ -380,6 +382,23 @@ fn ordinary_birth_between_piano_capture_and_delivery(policy: &str, birth_after_t
     route.drain();
     assert!(ordinary.accepted(), "{:?}", ordinary.reason());
     assert_eq!(ordinary.execution_frame(), Some(ordinary_effect));
+    gate.wait_for(false);
+    // Keep the declared A.E==B.T / B.T+1 race real despite completion-driven
+    // scheduling: the ordinary worker cannot finish before that boundary.
+    render_to(&mut route, PIANO_T);
+    let captured = route.capture("click", Some(-5));
+    let piano = Python::attach(|py| captured.borrow(py).clone());
+    let original = (
+        piano.sequence(),
+        piano.received_timestamp(),
+        piano.original_due_frame(),
+    );
+    assert_eq!(piano.original_due_frame(), PIANO_T);
+    if birth_after_t != 0 {
+        route.render(birth_after_t as usize);
+    }
+    gate.release();
+    assert_eq!(gate.wait_for(true), None);
     let deadline = Instant::now() + WORKER_WAIT;
     loop {
         route.mixer.pitch_runtime.as_mut().unwrap().poll();
@@ -399,16 +418,7 @@ fn ordinary_birth_between_piano_capture_and_delivery(policy: &str, birth_after_t
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    render_to(&mut route, PIANO_T);
-    let captured = route.capture("click", Some(-5));
-    let piano = Python::attach(|py| captured.borrow(py).clone());
-    let original = (
-        piano.sequence(),
-        piano.received_timestamp(),
-        piano.original_due_frame(),
-    );
-    assert_eq!(piano.original_due_frame(), PIANO_T);
-    route.render((ordinary_effect - PIANO_T + 1) as usize);
+    route.render(1);
     assert_eq!(ordinary.state(), "applied", "{:?}", ordinary.reason());
     assert_eq!(ordinary.effective_frame(), Some(ordinary_effect));
     assert_eq!(route.starts(0), 2);

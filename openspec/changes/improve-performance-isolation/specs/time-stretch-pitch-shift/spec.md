@@ -55,3 +55,11 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the old request remains owned until off-callback retirement, without Native reset or source consumption on the callback
 - **AND** an earlier pending original cannot be overtaken, and unfinished workers do not occupy the deferred-due cell through this optimization
 - **AND** recording groups, Piano, AttackAtGrid and completion after the fallback deadline retain their existing guarded paths
+
+#### Scenario: Terminal rejection releases ordering without releasing custody
+- **GIVEN** an earlier same-content original is conclusively rejected while its slot, queued event or worker is still retained
+- **WHEN** an independently ready later original or complete playback group reaches its guarded effect
+- **THEN** the rejected owner does not delay that effect until its old cleanup deadline
+- **AND** live or unobserved earlier owners still preserve original input ordering
+- **AND** the old worker, slot, queued event and heavy source/Native owners retain their existing capacity and last-reader retirement
+- **AND** no rejected original or partial rejected group can later effect, and fresh source/DSP/OwnACK, original T and recording S/E guards remain enforced
