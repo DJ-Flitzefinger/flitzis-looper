@@ -121,7 +121,7 @@ variation and count ambiguity before cutover. Preserve raw predictions and
 existing entered/tapped BPM overrides for the same unchanged source. Aggregate BPM is
 metadata; accepted variable beatmaps remain the later shared timing authority. Do not infer
 correctness by rounding toward an assumed DAW integer tempo. See the operating
-policy in [the implementation design](../../../docs/beatmap-sync-design.md).
+policy in [the historical implementation design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).
 
 For pad-load BPM metadata, evaluate longer stable regions near the source middle
 against complete-track evidence and distant windows, including sparse intro/outro
@@ -302,7 +302,7 @@ provenance. Missing-model handling after successful cutover never silently perfo
 The separate qm-dsp capability is explicitly scoped to legacy/diagnostic use, retaining its
 algorithm contracts without mandating the old backend for new analysis. Repair its sample-hop
 bug when obtaining a trustworthy comparison; that does not block B1a. See the shared slice
-ordering in [selected design](../../../docs/beatmap-sync-design.md).
+ordering in [historical selected design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).
 
 ## B2b1: Lossless bounded final publication
 

@@ -317,14 +317,10 @@ candidate option recording the base commit, Native source commit and source
 fingerprint; the ordinary installer rejects such candidates. Optional Beat This
 diagnostic setup remains a separate environment workflow.
 
-### Source Map editor Native compatibility
+### Current constant-BPM Native compatibility
 
-The launcher and Portable preflight require the manual Source Map creation/edit
-and original-candidate review APIs, plus the shared Native editor/coordinate
-queries. Portable reflects the review call's required keyword-only source
-generation, original candidate and separate intent arguments, the create call's
-optional `expected_source_generation=None` fence, and bounded query defaults
-without constructing an Engine, opening a device or running jobs.
-A stale Native module is rejected before the App starts; rebuild/update the existing
-installation through its ordinary workflow. This API check does not establish
-musical map quality, live-map audio adoption or device/Human acceptance.
+The launcher and Portable preflight validate the supported constant-BPM Native
+profile before startup. The Portable bootstrap explicitly rejects the removed
+`SourceBeatmap` API; an obsolete map-enabled engine is not a valid current runtime.
+Update through the ordinary installation workflow. API checks establish neither
+model quality nor audio/device/Human acceptance.

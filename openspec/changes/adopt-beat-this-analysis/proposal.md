@@ -47,4 +47,4 @@ use; add optional analyzer setup requirements to `distribution-setup`.
 The current implementation adds focused Rust PCM/job modules and Python contracts, process
 supervision and diagnostic result events. Normal analysis routing and persistence remain intact.
 Future stages add result adoption and persisted analysis provenance. KeyNet stays in Rust.
-See [research decision](../../../docs/beatmap-sync-research.md) and the pinned sources in design.
+See [historical research decision](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-research.md) and the pinned sources in design.

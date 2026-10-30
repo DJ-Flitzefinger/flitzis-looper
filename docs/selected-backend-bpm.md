@@ -119,7 +119,7 @@ slope and measured pulse-span slope remain distinct from worst-case sensitivity.
 See [G2 count/evidence contracts](constant-tempo-summary.md),
 [G3 ownership](native-constant-timing.md),
 [scoring workflow](beat-this-scoring-workflow.md) and
-[remaining migration gates](beatmap-sync-design.md).
+[historical migration gates](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).
 
 The frozen policy's actual full-candidate numerical evaluation reports:
 

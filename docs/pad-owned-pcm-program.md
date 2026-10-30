@@ -1,52 +1,9 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Latest Human priority2026-10-22: finish usable original-fullmix SYNC first;
-Drum-D remains a conditional analysis alternative, not a stem prerequisite.
-Add independent global Realtime BPM and SYNC controls while retaining the set
-master tempo. Realtime OFF uses initial constant timing; ON requires qualified
-variable geometry for mapped synchronization. Preserve PAD preferences and
-truthful pending/actual adoption. See
-[global timing policy](../openspec/changes/add-global-tempo-sync-policy/design.md).
-These controls do not close automatic-map, renderer/onset, continuous live,
-B2/default-cutover, musical/Human or other full-program gates. The existing
-48 IDs/78 edges/189 rows and all remaining obligations stay binding; stop before
-the full Rust port/Slice8. Older execution priorities below are historical.
-
-Existing uncertain source-map anchors can be inspected and positioned before
-coverage review: bounded Native positions appear as short inspection marks, and
-either inspected span endpoint can fill the sample-position controls. Exact
-existing-anchor correction preserves count, coverage, meter, review classification
-and complete Raw evidence; it grants no musical or audio qualification. Unsupported
-new-beat insertion remains refused. See
-[uncertain-anchor inspection](../openspec/changes/inspect-uncertain-source-anchors/design.md).
-
-Selected captured maps gain bounded explicit review windows through their existing
-edit/source-custody/publication path. The editor reads embedded observations after
-transient capture discard or restore, extends either end, and replaces a bounded
-interior while preserving corrections and outside qualification. New intervals
-remain uncertain; explicit review does not supply an automatic full-track musical
-qualifier. Shared memory admission precedes large restoration and edit growth.
-See [window contract](../openspec/changes/review-accepted-raw-windows/design.md)
-and [verification status](../openspec/changes/review-accepted-raw-windows/results.md).
-
-A bounded original-owned Short/Medium Native comparison reproduces the earlier
-Short evidence and measures a real classification-readahead variant. Medium improves
-necessary first-attack retention in the +7 profile, but neither variant closes
-extreme-pitch timing or full intended-output acceptance. Production remains unchanged;
-see [comparison results](../openspec/changes/compare-mapped-native-window-profiles/results.md).
-
-The next bounded experiment emits actual aligned Medium +7 PCM through the existing
-retained Native/FIFOs and passes all eight isolated-event cases, including unchanged
-timing, original-peak retention, discarded energy and complete fixed end windows.
-The worst q10/q50 error is 1.75 ms. This is component evidence; production profiles,
-public admission and all other pitch/rate, continuous, full-map and Human gates
-remain unchanged. See
-[actual-output results](../openspec/changes/render-aligned-mapped-native-birth/results.md).
-
-A separate existing-library realtime Stretcher Standard/HighConsistency candidate
-is rejected on all four retained canonical kick cases, despite a valid unity
-coordinate control and complete output capture. Production remains unchanged;
-see [realtime candidate results](../openspec/changes/probe-realtime-mapped-stretcher/results.md).
+This is a historical program and evidence source, not an active execution queue.
+Its former SYNC recovery material is retained on the preserved branch. Original
+non-SYNC requirements, failures and pending gates below remain unchanged for
+truthful archival; old status does not override current source or acceptance.
 
 Latest Human execution priority2026-10-14: finish the current Controller/Durable/
 Hold delivery, then its actually needed remaining R2 ownership/selection foundation

@@ -1,7 +1,7 @@
 ## Current bounded evidence
 
 The existing offline owner and initial comparison against an actual SourceBeatmap
-are implemented. See `../../../docs/accepted-map-render-comparison.md` and the
+are implemented. See [historical accepted-map-render-comparison.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/accepted-map-render-comparison.md) and the
 `compare-accepted-map-renderers` change for measured results and limits. These
 bounded diagnostics do not complete the wider matrix or its acceptance tasks.
 

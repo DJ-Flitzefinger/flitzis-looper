@@ -160,4 +160,4 @@ These software proofs do not certify process RAM, startup deadlines or listening
 
 C1 immutable copy-first/ABA, B5 audible compensation and unmeasured current 96-handle/save-integrity costs
 remain separate. See [native ownership](native-constant-timing.md) and
-[the migration design](beatmap-sync-design.md).
+[the historical migration design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).

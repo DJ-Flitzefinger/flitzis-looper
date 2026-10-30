@@ -172,14 +172,12 @@ Do not replace the independently confirmed origin with a fitted intercept.
 Integer 120 is supported by this reference's exact sample intervals; proximity
 to an integer alone is insufficient to round real fractional tempos.
 
-The pending timing correction must give editor, snap, automatic loop duration,
-native pad timing, MIDI runtime metadata and playback one authoritative accepted
-timing revision. Keep raw predictions separate from accepted constant periods
-or variable maps, preserving source identity, units, count and edit provenance.
-Use exact frame addressing or `f64` seconds through long-file interfaces and
-validate fractional musical loop periods separately before further live SYNC
-changes. The [migration design](beatmap-sync-design.md) and existing OpenSpec
-acceptance gates remain the implementation boundary.
+This historical investigation motivated the accepted scalar timing and fractional
+loop foundations described in [native timing](native-constant-timing.md) and
+[loop-period proof](loop-period-proof.md). Raw detector observations, independent
+musical assertions and actual current-source adoption remain separate. The failed
+estimator alternatives and original measurements above retain their dated scope;
+they are not a current implementation plan or audible acceptance.
 
 The separate Windows stem investigation found `torch 2.12.0+cpu`,
 `torch.version.cuda == None` and `USE_CUDA=0`; the actual backend exposes CPU

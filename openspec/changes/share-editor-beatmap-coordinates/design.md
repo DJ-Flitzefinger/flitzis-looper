@@ -61,4 +61,4 @@ optional persisted base plus manual offset, with legacy analysis fallback. Carry
 loop-relative display coordinate 1+B(s)-B(loop_start) into map mode. Grid0 is an
 invisible preceding reference, not an invented beat between file start and attack.
 The future SYNC contract uses continuous native q and phi_loop, as described in
-beatmap-sync-design.md, without changing current scalar live phase in this slice.
+[historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md), without changing current scalar live phase in this slice.

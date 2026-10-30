@@ -16,8 +16,8 @@ repeatable offline experiment must compare render paths before a SYNC control ca
 Status: the initial affine mechanism and the bounded canonical-map comparison are
 implemented as isolated test diagnostics. The wider experiment matrix, measured
 production recommendation and live adoption remain open. See
-`../../../docs/accepted-map-render-comparison.md` for actual evidence and limits,
-and `../../../docs/beatmap-sync-research.md` for the original experiment scope.
+[historical accepted-map-render-comparison.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/accepted-map-render-comparison.md) for actual evidence and limits,
+and [historical beatmap-sync-research.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-research.md) for the original experiment scope.
 
 ## Non-goals
 

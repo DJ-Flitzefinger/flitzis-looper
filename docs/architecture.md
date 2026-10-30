@@ -578,7 +578,7 @@ loops; adaptive zoom subdivision indices are not beat identities. Global speed,
 BPMLOCK, KEYLOCK, quantization and other-pad playback do not move source grid or
 stored markers. Source SYNC, REALTIME BPM, selected playback maps and phase adoption
 are removed. The previous implementation is retained in the SYNC-REALTIME-BPM
-branch; see [the archive](sync-archive.md). Scalar rate and loop timing remain.
+branch; see [SYNC recovery locator](README.md#retired-sync-recovery). Scalar rate and loop timing remain.
 
 `source_grid.rs` also supplies a pure binary64-period `ScalarSourceGrid` control
 evaluator. A focused Python wrapper uses it for visible grid, snap and automatic
@@ -778,17 +778,6 @@ the same accepted-only domain, including old voices with pinned source/timing.
 `SourceReadPlan::fill_fractional_buffers` supplies fixed planar feed in both the
 live mixer, productive worker and non-live source-preparation proof. These shared rules do not
 compensate audible delay.
-
-Dry mapped waveform-hold continuation uses the same copied source trajectory
-and the original qualified map owner. A checked output-address translation keeps
-the saved source point exact while the actual transport advances during pause.
-A later supported dry master claim preserves that point through an explicit
-claim-frame projection; old actual-read spans keep their original epochs. The
-bounded cohort preflight and actual callback timeline belong to the mixer hold
-path. Its existing own-effect acknowledgement remains separate from ordinary
-Pause/Resume. The latter reuses each changed lane's own saved source pivot and
-the same original qualified map through Stage B of
-[`resume-dry-mapped-playback`](../openspec/changes/resume-dry-mapped-playback/design.md).
 
 Ordinary transport uses the existing content-bound command and callback claim.
 A focused Native observation module retains fixed current state per stable

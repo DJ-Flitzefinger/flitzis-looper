@@ -20,7 +20,7 @@ Status: planning draft, with uncompleted implementation tasks. This is internal 
 diagnostic preparation, not a KEY control or live SYNC activation. It uses accepted map semantics
 from `prepare-versioned-source-beatmaps` or exact synthetic maps, and complements
 `evaluate-variable-tempo-rendering`. This is the B5 core proof in
-`../../../docs/beatmap-sync-design.md`; K1 is the separate future performer feature.
+[historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md); K1 is the separate future performer feature.
 
 ## Non-goals
 

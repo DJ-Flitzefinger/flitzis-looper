@@ -1,6 +1,6 @@
 ## Status and ownership
 
-Draft only, corresponding to B5 in `../../../docs/beatmap-sync-design.md`. Prepare the contract
+Draft only, corresponding to B5 in [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md). Prepare the contract
 and isolated diagnostics before selecting the future live
 renderer. Production KEY intent remains zero; nonzero k is injected only by tests/examples.
 Reuse the canonical Rust map evaluator, source reader and preparation boundaries. Do not add
@@ -22,7 +22,7 @@ Here phi_i is absolute-source phase notation. For the requested loop-relative
 alignment, use phi_i=b0+phi_loop_i, giving S_i(b0+mod(M+phi_loop_i,L)). Displayed
 coordinates are 1+B_i(s)-b0; integer labels are never scheduling identities.
 Changing loop selection updates b0 without translating B/S or the master clock.
-This follows beatmap-sync-design.md and does not change current scalar live phase.
+This follows [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md) and does not change current scalar live phase.
 
 k never enters M, phi, B/S, loop selection or source progression. KEYLOCK holds intended source
 pitch plus k while tempo follows the source map/master; it does not undo deliberate k. The

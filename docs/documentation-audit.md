@@ -28,17 +28,21 @@ fractional loops/grid, accepted constant timing, pitch/Key Lock, stems and
 source/content/OwnACK/last-reader ownership remain. In particular, **accepted
 constant timing is not a retired map API**.
 
-This step only decides classification and destinations. Original documents stay
-available during the intermediate state. The documentation map points here so
-its old list is not mistaken for a list of uniformly current references. No
-source document, OpenSpec change, private input or historical receipt is moved
-or removed in this step.
+STEP2 decided classification and destinations without moving originals. STEP3
+has now published and verified the branch recovery document at
+`f241da3d0bdaf2f8a73adc4600f2773a3f9d7522` before removing six redundant main
+SYNC documents and isolated retired sections. The documentation map's
+[recovery locator](README.md#retired-sync-recovery) identifies the consolidated
+entry; historical source links below retain the full original reports. The
+manifest's appended `executed_dispositions` records actual removals and reference
+repairs separately from immutable original provenance. No implementation or
+acceptance changed. OpenSpec archival and module/manual rewrites remain later steps.
 
 The remaining sequence is explicit:
 
-1. Consolidate recovery documentation on the existing `SYNC-REALTIME-BPM` branch,
-   review and normally publish that documentation-only change, and verify it
-   before removing redundant SYNC documentation from main. Never merge its code.
+1. STEP3: recovery documentation is consolidated and normally published on the
+   existing `SYNC-REALTIME-BPM` branch, with clean HEAD/tracking/fresh remote
+   equality verified before main removal. Its code was not merged.
 2. Archive all actual active OpenSpec changes with their full internal structure
    and actual archive-date prefix. At this audit there are **104**, rather than
    the planning observation of 105. Preserve unchecked tasks, FAIL, UNKNOWN and
@@ -50,7 +54,8 @@ The remaining sequence is explicit:
 
 ## Module boundaries decided before relocation
 
-These are planned destinations, not claims that the files already exist. The
+Except for the published branch SYNC entry, these are planned destinations,
+not claims that the files already exist. The
 manifest uses their short IDs. Setup paths stay stable because contributor and
 installer references already use them; no cosmetic directory move is needed.
 
@@ -90,7 +95,7 @@ shared, avoiding repeated archives of the same material.
 | --- | --- | --- |
 | [README.md](README.md) | L/H | MAP; replace obsolete executable-program prose with current navigation. |
 | [accepted-constant-timing.md](accepted-constant-timing.md) | L/H/P | BPM/RT; E-TIMING preserves construction, independent assertion and adoption history. |
-| [accepted-map-render-comparison.md](accepted-map-render-comparison.md) | R/H/P | SYNC; retain negative renderer/acoustic and unsupported-domain results. |
+| [historical accepted-map-render-comparison.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/accepted-map-render-comparison.md) | R/H/P | SYNC; retain negative renderer/acoustic and unsupported-domain results. |
 | [architecture.md](architecture.md) | L/R/H/P | HUB plus RT/PCM/BPM/KEY/PITCH/STEM/STATE; retire hidden mapped-Hold paragraph to SYNC and old queues to E-PROGRAM. |
 | [automatic-analysis-memory.md](automatic-analysis-memory.md) | H/L | E-MEMORY; reusable exact-tail/admission lessons to BPM/KEY, not its obsolete allocation formula. |
 | [beat-this-acceptance.md](beat-this-acceptance.md) | L/H/P/R | BPM diagnostics; E-B2 retains full frozen protocol, failures and missing independent references/correction sessions. |
@@ -100,8 +105,8 @@ shared, avoiding repeated archives of the same material.
 | [beat-this-scoring-workflow.md](beat-this-scoring-workflow.md) | L/H/P | BPM/DEV scientific reader/CLI; E-B2 retains approved/rejected producer lineage and absent real scores. |
 | [beat-this-setup.md](beat-this-setup.md) | L/H | SETUP remains; BPM describes productive policy; E-CUDA retains dated execution receipts/limits. |
 | [beat-this-temporal-scoring.md](beat-this-temporal-scoring.md) | L/H/P | BPM diagnostic metric contract; E-B2 frozen numeric policy and remaining gates. |
-| [beatmap-sync-design.md](beatmap-sync-design.md) | R/H/P/L | SYNC integrated recovery; extract only independently verified current scalar/pitch/RT invariants. |
-| [beatmap-sync-research.md](beatmap-sync-research.md) | R/H/P/L | SYNC recovery rationale, pins, rejected options and causal limits; current frontend facts to BPM. |
+| [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md) | R/H/P/L | SYNC integrated recovery; extract only independently verified current scalar/pitch/RT invariants. |
+| [historical beatmap-sync-research.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-research.md) | R/H/P/L | SYNC recovery rationale, pins, rejected options and causal limits; current frontend facts to BPM. |
 | [constant-bpm-guide.md](constant-bpm-guide.md) | L/H | MAN/BPM/RT; preserve current mode/target/mean/Tap/device/default behavior; update Key-memory explanation from current implementation. |
 | [constant-tempo-summary.md](constant-tempo-summary.md) | L/H/P/R | BPM scientific G2 API; E-G2 preserves conditional precision/count evidence; only actual map plans go to SYNC. |
 | [development.md](development.md) | L/H/R/P | DEV plus modules; E-PITCH/E-PCM/E-TIMING retain dated probes; source-beatmap section to SYNC. |
@@ -125,10 +130,10 @@ shared, avoiding repeated archives of the same material.
 | [readable-material-validation.md](readable-material-validation.md) | L/H/P | PCM/STEM; E-PCM preserves material/provenance/physical-terminal evidence and remaining limits. |
 | [scalar-source-coordinates.md](scalar-source-coordinates.md) | L/H | RT/PCM/STATE; E-GRID retains original precision evidence and dated estimator observations. |
 | [selected-backend-bpm.md](selected-backend-bpm.md) | L/H/P/R | BPM scientific metadata, distinct from `app_tempo`; E-B2/E-G2 preserve unsupported fits and sensitivity; map-era plans to SYNC. |
-| [source-map-guide.md](source-map-guide.md) | R/H/L | SYNC recovery/user semantics only; verified ordinary BPM/device facts to MAN/BPM. |
+| [historical source-map-guide.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/source-map-guide.md) | R/H/L | SYNC recovery/user semantics only; verified ordinary BPM/device facts to MAN/BPM. |
 | [stem-generation-setup.md](stem-generation-setup.md) | L/H/P | SETUP remains; STEM/PCM explain current paths/adoption; historical eager/pad-root claims to E-STEM/E-PROGRAM. |
-| [sync-archive.md](sync-archive.md) | H/R | SYNC preserves exact accepted baseline versus unaccepted probe; main external locator only after branch verification. |
-| [sync-diagnostics.md](sync-diagnostics.md) | R/H | SYNC only: removed timing-log/cohort protocol, privacy and incomplete-capture truth. |
+| [historical sync-archive.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/9f3ca2d19ad11b0218ccc5ef5dc5353c9981f341/docs/sync-archive.md) | H/R | SYNC preserves exact accepted baseline versus unaccepted probe; main external locator only after branch verification. |
+| [historical sync-diagnostics.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/sync-diagnostics.md) | R/H | SYNC only: removed timing-log/cohort protocol, privacy and incomplete-capture truth. |
 | [todos.md](todos.md) | L/H | TODO remains; preserve explicit optional six-PAD note as a note, with its historical priority context. |
 | [ui-toolkit.md](ui-toolkit.md) | L/H/P | STATE/MAN plus focused DEV style guidance; E-COPY/E-STEM/E-PROGRAM retain historical validation/open gates. |
 
@@ -160,7 +165,7 @@ Git provenance supplements visible failures/open gates; it must not hide them.
 | E-CUDA / `enable-cuda-analysis-execution` | `evidence-index.md`, crosslink `prioritize-tempo-periods`. Preserve actual bounded device receipts, CPU retry provenance, old-pointer/readers and stage-only versus activation/Native rollback; availability/import checks are not inference, and process network denial is not an OS sandbox. Pins are inspected provenance, not a signed-training-rights guarantee. |
 | SYNC / existing branch | `docs/sync/architecture.md` with exact old blob/section locators. Preserve accepted baseline`949cff1dae4b979639dca1cbc1e86c586387cd21` versus uninstalled/unaccepted probe`27ef7f878f55c0955835ca536af8df6ef4a89a28`; the >100-bar positive listening report is for constant-tempo/Tap, not SYNC. Preserve clock/rate/map/pitch/PCM/stem/preparation/retirement seams; logical/raw/actual input ledgers and original future-input ownership. Preserve Native64/64 failures, OfflineR3 14/16 failures, processed-stem residual. Final72 C-ABI/partition-consistent streams still had0/60 timing passes,40 empty timing and44 empty joint intervals. Keep hop-units cast-to-zero/downbeat defects,57.5ms asymmetric window overlap, source-rate bounds and integral phase-debt warning. No unexecuted Windows ONNX/neural/warp claim. |
 
-Full historical reports move only after their current facts have verified module
+Non-SYNC full historical reports move only after their current facts have verified module
 destinations. Do not duplicate their chronological narrative inside current
 architecture. Historical private paths are provenance strings, never instructions
 to scan, move or delete the Human's files.

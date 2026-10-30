@@ -3374,7 +3374,7 @@ test build does not replace an extension held by a running App.
 1. Load an analyzed source, select its PAD, open Piano and enable its Retrigger.
    Press different white and black keys, repeat one note, then choose the same
    root in lower and higher octaves. Each press should select that exact note
-   and restart the regular loop beginning through the current Quantize/SYNC policy.
+   and restart the regular loop beginning through the current Quantize/start policy.
 2. Leave Piano open and select another loaded PAD, then return. Opening stays
    stable; each content restores its own note, octave, offset and both preferences.
 3. With piano C selected, offset +1 should show the nominal C# result while C

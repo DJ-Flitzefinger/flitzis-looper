@@ -40,7 +40,6 @@ For focused areas:
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
 | `constant-bpm-guide.md` | Current BPM Lock, loop, Tap BPM, device labels and fresh-project workflow. |
-| `sync-archive.md` | Preserved SYNC-REALTIME-BPM branch and accepted constant-tempo baseline. |
 | `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
 | `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
 | `pad-content-copy.md` | Complete empty-target musical Copy, durable stem intent, own Native acceptance, independent shared custody and close settlement. |
@@ -68,11 +67,16 @@ For focused areas:
 | `constant-tempo-summary.md` | Offline count/fit API, complete content-bound backend evidence, isolated PCM refinement, independent-count assertions and the G3 adoption boundary. |
 | `selected-backend-bpm.md` | Frozen complete-sequence/representative-region BPM metadata, shared G2 fitting, diagnostic integration and unverified evaluation limits. |
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
-| `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
-| `beatmap-sync-design.md` | Historical source-SYNC design, retained for recovery from the archive branch. |
-| `accepted-map-render-comparison.md` | Measured shared-map renderer comparison, retained acoustic failures, unsupported combinations and limits before live adoption. |
 | `../openspec/changes/probe-signalsmith-canonical-pitch/design.md` | Isolated nondefault Signalsmith canonical pitch prerequisite; pinned sources, natural latency/ending, fixed criteria and remaining audio gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
+
+## Retired SYNC recovery
+
+Source SYNC, REALTIME BPM and source-map editing are removed from main. The
+[preserved branch recovery architecture](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md)
+records the accepted constant BPM/Tap baseline, failed SYNC, later unaccepted
+probes and remaining gates. This is a recovery locator, not a feature or execution
+queue. Ordinary scalar timing, loops and source/ACK ownership remain current.
 
 ## What Belongs In OpenSpec Instead
 

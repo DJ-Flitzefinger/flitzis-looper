@@ -1,43 +1,19 @@
-> Historical diagnostic workflow. Source-map and raw-review editor integration
-> described below is removed from main. Current App BPM uses the verified neural
-> bridge described in [worker setup](beat-this-setup.md).
-
 # Offline analysis boundary
 
-B1a/B1b provide an explicitly invoked diagnostic boundary and real optional Beat
-This worker. The Source Map panel's original-fullmix review now uses that worker
-through the existing Native cold map job. Automatic loading, the normal manual
-Analyze action and saved analysis retain their existing paths. The unconfigured
-diagnostic adapter reports
-`unavailable/missing_worker`. [Explicit setup](beat-this-setup.md) installs the
-locked Windows CPU runtime and verified `final0` separately. Default cutover
-requires B2 acceptance.
-
-The Source Map route requires the explicitly installed sibling
-`analysis-runtime/beat-this`; it never sets up or downloads the worker during
-analysis. Missing or corrupt installation fails visibly, with no QM fallback.
-Native stages complete float32 mono, binds its actual digest/rate/extent to the
-original source and retains its owners until process/readers retire. Its separate
-16-MiB bridge preserves all four binary64 prediction arrays; the existing worker
-8-MiB and diagnostic publication 1-MiB bounds remain unchanged. The new Raw capture
-and accepted map V3 do not certify musical count, meter, coverage or audible SYNC.
-See [the integration contract](../openspec/changes/acquire-original-beat-this-detections/design.md).
-
-The 2026-10-22 integration check ran the actual pinned worker on a generated
-32-second original source (1,536,000 frames at 48 kHz). It retained both complete
-1,601-value logit arrays and the actual staged-input digest, resolved a private
-Raw artifact and built an accepted V3 artifact from two explicitly supplied labels.
-After the original Raw was cancelled and its readers retired, the accepted
-Native owner remained current. Separate composed cancellation tests hold a
-protocol-double reader until retirement; they do not claim real-model quality.
-See [the Native integration tests](../rust/crates/looper/src/audio_engine/source_beatmap_neural_tests.rs).
-These are software composition checks; annotated full-track B2 quality/resources,
-musical count/meter/coverage, renderer/onset and Human/device gates remain open.
+The explicitly invoked diagnostic boundary and optional Beat This worker retain
+their own resource/publication contracts. An unconfigured diagnostic adapter
+reports `unavailable/missing_worker`; [worker setup](beat-this-setup.md) describes
+installation. The current App uses the verified neural bridge and productive
+`neural-stable-regions-v4` scalar BPM policy. Its source-map/Raw-review editor
+route and map-specific Native jobs have been removed. The original composition
+measurements remain immutable historical evidence in the audit provenance.
+Independent full-track B2 references, quality/resource and Human/device gates
+remain unpassed; configured productive use does not retroactively pass them.
 
 ## Legacy qm comparator timebase
 
-Normal analysis still selects qm-dsp until the separate Beat This acceptance and
-cutover. New qm runs and the Rust diagnostic fixture call the same
+The legacy comparator remains a separate diagnostic path. New qm runs and the
+Rust diagnostic fixture call the same
 `flitzis_looper_analysis::analyze_bpm` implementation. `DetectionFunction` exposes
 its actual integer hop in samples; downbeat spectral segments receive that hop,
 and beat/downbeat/bar seconds and BPM intervals use `hop / input_rate`. Casting

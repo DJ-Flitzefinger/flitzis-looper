@@ -144,4 +144,4 @@ Focused public API tests:
 ```
 
 See [G2 evidence](constant-tempo-summary.md), [scalar coordinates](scalar-source-coordinates.md)
-and [the shared-map design](beatmap-sync-design.md).
+and [the historical shared-map design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).

@@ -93,4 +93,4 @@ uses accepted compatible musical periods for productive wrapping while preservin
 physical markers. Its virtual fractional source phase is projected to admitted
 PCM taps only by the reader; beat queries share the same domain. Numerical coordinates do
 not prove audible DSP/device alignment or musical model acceptance. See
-[the diagnosis](grid-timing-diagnosis.md) and [the design](beatmap-sync-design.md).
+[the diagnosis](grid-timing-diagnosis.md) and [the historical design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).

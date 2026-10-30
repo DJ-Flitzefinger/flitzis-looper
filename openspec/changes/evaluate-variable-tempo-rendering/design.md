@@ -1,7 +1,7 @@
 ## Experiment boundary
 
 The affine mechanism and first canonical-map comparison are implemented as isolated
-test diagnostics; measured limits are in `../../../docs/accepted-map-render-comparison.md`.
+test diagnostics; measured limits are in [historical accepted-map-render-comparison.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/accepted-map-render-comparison.md).
 The wider experiment and production recommendation remain open. Use exact synthetic
 maps so detector error cannot be confused with rendering error. Compare (A) mapped
 source reads plus pitch-only LiveShifter and (B) a separate offline

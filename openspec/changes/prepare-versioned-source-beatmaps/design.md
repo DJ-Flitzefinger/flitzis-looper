@@ -15,7 +15,7 @@ This increment preserves the current acknowledged constant-timing authority desc
 ownership, single master/output clock and pending-versus-effective distinctions remain valid.
 The control map does not silently replace them. B4 editor integration and later prepared live
 map/trajectory adoption, continuous SYNC, restore, resource, acoustic, device and Human acceptance
-remain required by `docs/beatmap-sync-design.md` and the full pre-Rust objective. The temporary
+remain required by [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md) and the full pre-Rust objective. The temporary
 offline/editor-only boundary is an implementation stage, not a narrowed final variable-map goal.
 
 ## Data and ownership

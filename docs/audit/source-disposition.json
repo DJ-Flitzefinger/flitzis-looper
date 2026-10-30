@@ -215,6 +215,98 @@
       "related_changes_crosslink_once": true
     }
   },
+  "executed_dispositions": [
+    {
+      "step": "STEP3",
+      "date": "2026-10-30",
+      "sync_recovery_commit": "f241da3d0bdaf2f8a73adc4600f2773a3f9d7522",
+      "sync_recovery_path": "docs/sync/architecture.md",
+      "branch_publication_verified_before_main_removal": true,
+      "removed_main_documents": [
+        "docs/accepted-map-render-comparison.md",
+        "docs/beatmap-sync-design.md",
+        "docs/beatmap-sync-research.md",
+        "docs/source-map-guide.md",
+        "docs/sync-archive.md",
+        "docs/sync-diagnostics.md"
+      ],
+      "mixed_section_edits": {
+        "architecture.md": {
+          "removed_original_lines": [
+            782,
+            792
+          ]
+        },
+        "development.md": {
+          "removed_original_lines": [
+            814,
+            894
+          ]
+        },
+        "portable-windows.md": {
+          "removed_original_lines": [
+            320,
+            330
+          ]
+        },
+        "offline-analysis.md": {
+          "removed_original_lines": [
+            1,
+            36
+          ]
+        },
+        "pad-owned-pcm-program.md": {
+          "removed_original_lines": [
+            3,
+            50
+          ]
+        }
+      },
+      "additional_semantic_edits": [
+        "docs/key-lock-backend.md: ordinary Quantize/start wording only",
+        "docs/grid-timing-diagnosis.md: replace obsolete future map progression with scalar foundation boundary"
+      ],
+      "historical_document_reference_map": {
+        "accepted-map-render-comparison.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/accepted-map-render-comparison.md",
+        "beatmap-sync-design.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md",
+        "beatmap-sync-research.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-research.md",
+        "source-map-guide.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/source-map-guide.md",
+        "sync-archive.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/9f3ca2d19ad11b0218ccc5ef5dc5353c9981f341/docs/sync-archive.md",
+        "sync-diagnostics.md": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/sync-diagnostics.md"
+      },
+      "reference_repairs": [
+        "docs/accepted-constant-timing.md",
+        "docs/architecture.md",
+        "docs/constant-bpm-guide.md",
+        "docs/constant-tempo-summary.md",
+        "docs/documentation-audit.md",
+        "docs/loop-period-proof.md",
+        "docs/scalar-source-coordinates.md",
+        "docs/selected-backend-bpm.md",
+        "openspec/changes/adopt-beat-this-analysis/design.md",
+        "openspec/changes/adopt-beat-this-analysis/proposal.md",
+        "openspec/changes/evaluate-variable-tempo-rendering/design.md",
+        "openspec/changes/evaluate-variable-tempo-rendering/proposal.md",
+        "openspec/changes/evaluate-variable-tempo-rendering/tasks.md",
+        "openspec/changes/prepare-independent-pitch-timing/design.md",
+        "openspec/changes/prepare-independent-pitch-timing/proposal.md",
+        "openspec/changes/prepare-versioned-source-beatmaps/design.md",
+        "openspec/changes/prepare-versioned-source-beatmaps/proposal.md",
+        "openspec/changes/share-editor-beatmap-coordinates/design.md"
+      ],
+      "preserved_frozen_provenance": true,
+      "coverage_json_unchanged": true,
+      "unpassed_acceptance_preserved": true,
+      "remaining_steps": [
+        "STEP4 full truthful OpenSpec archival",
+        "STEP5 core modules",
+        "STEP6 analysis/pitch/stems",
+        "STEP7 manual/README",
+        "STEP8 all-original coverage/consistency"
+      ],
+      "source_line_identity": "Removed line ranges refer to main9f3ca2d1 immediately before STEP3, including adjacent separator lines. Original files[] line identities remain dbc80d3c."
+    }
+  ],
   "files": [
     {
       "path": "docs/README.md",

@@ -269,4 +269,4 @@ and general explicit publication with guarded derived loop/master completion.
 G3c separately tests musical versus physical loop duration. Default analyzer acceptance,
 variable maps and audible synchronization retain their separate gates. See
 [the diagnosis](grid-timing-diagnosis.md), [scalar coordinates](scalar-source-coordinates.md)
-and [the migration design](beatmap-sync-design.md).
+and [the historical migration design](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md).

@@ -3,7 +3,7 @@
 The current runtime uses accurate BPM estimates and constant-rate BPM Lock.
 Source SYNC, REALTIME BPM, source-map editing and live beat-phase correction have
 been removed. The complete previous implementation is preserved in the remote
-`SYNC-REALTIME-BPM` branch. See [the archive record](sync-archive.md).
+`SYNC-REALTIME-BPM` branch. See [SYNC recovery locator](README.md#retired-sync-recovery).
 
 BPM analysis checks stable interior sections and tests a nearby integer tempo
 against separate sections. It retains the fractional estimate when the evidence
