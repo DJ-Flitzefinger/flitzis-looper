@@ -177,6 +177,9 @@ class SharedRestoreProbe(Probe):
         self.pending_content_feedback = deque()
         for sample_id, override in ((0, None), (36, True), (215, False)):
             self.assign(sample_id, saved_path, False)
+            content = self.project.pad_content[sample_id]
+            self.project.pad_content[sample_id] = content.model_copy(
+                update={"material_id": original_asset(saved_path).material_id})
             self.project.pad_key_lock[sample_id] = override
         self.loader = LoaderController(self.project, self.session, self.audio,
                                        self.transport.bpm.on_pad_bpm_changed)
@@ -191,7 +194,8 @@ class SharedRestoreProbe(Probe):
 
     def restore(self):
         self.loader.restore_samples_from_project_state()
-        assert self.session.loading_sample_ids == {0, 36, 215}
+        assert self.session.loading_sample_ids == {0, 36, 215}, (
+            self.session.loading_sample_ids, self.session.sample_load_errors)
         assert not self.session.sample_load_errors
         assert not self.loader._deferred_restores
         assert set(self.loader._load_request_ids) == {0, 36, 215}
@@ -609,9 +613,20 @@ fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap:
             "pad {id} must publish from its original member's own WindowACK"
         );
     });
-    // The original endpoint stays fixed while the worker prepares. Existing
-    // audible owners consume this real lead through their independent PCM/EQ
-    // oracles; the new voice has not been created or moved to compensate.
+    let callback = voices.harness.callback.as_mut();
+    render_scheduled_audio(
+        &mut callback.mixer,
+        &mut callback.scheduler,
+        &mut [],
+        &mut [0.0; NUM_SAMPLES],
+        original_frame,
+        2,
+        &mut callback.transport,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    );
+    let execution = original.execution_frame().unwrap();
+    // Settle the new birth before existing peers render, preserving every prefix.
     let lead = (execution - voices.harness.frame) as usize;
     if lead != 0 {
         voices.render(lead);
@@ -631,9 +646,8 @@ fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap:
     voices.harness.call0("poll");
     assert_eq!(original.effective_frame(), Some(execution));
     assert_eq!(original.received_timestamp(), original_timestamp);
-    let catchup = (execution - original_frame) as usize;
     let mut expected = ExpectedVoice::new_at_range(&voices.harness, id, enabled, 0, FRAMES);
-    expected.prepare_ordinary_start(catchup);
+    expected.prepare_ordinary_start();
     let (frame, fraction, explicit) = expected.clock.physical_position(0);
     let actual = voice(&voices.harness, id);
     assert_eq!(actual.source_playback.position().frame, frame);
@@ -652,7 +666,7 @@ fn start(voices: &mut GlobalVoices, id: usize, enabled: bool, eq: [f32; 3], gap:
                 .productive_history()
                 .unwrap()
                 .fed_output_frames,
-            (HISTORY + catchup) as u64
+            HISTORY as u64
         );
     }
     Python::attach(|py| {

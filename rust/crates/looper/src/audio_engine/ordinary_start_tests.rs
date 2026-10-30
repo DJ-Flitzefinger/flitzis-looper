@@ -50,6 +50,9 @@ mod physical_birth_history_tests;
 #[path = "ordinary_start_tests/preparation_deadline_tests.rs"]
 pub(crate) mod preparation_deadline_tests;
 
+#[cfg(windows)]
+mod early_completion_tests;
+
 fn capture(fixture: &Fixture, volume: f32) -> CapturedPadStart {
     fixture
         .control
@@ -103,6 +106,23 @@ pub(in crate::audio_engine) fn wait_ready(fixture: &mut Fixture, sequences: &[u6
 }
 
 pub(in crate::audio_engine) fn complete_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
+    // A zero-length callback observes an early completion without emitting PCM.
+    fixture.render(0);
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.launch_unadvanced),
+        "the complete prefix must not have been rendered already"
+    );
+    let execution = if fixture.mixer.voices.iter().any(|voice| voice.active) {
+        fixture.transport.output_frame()
+    } else {
+        execution
+    };
+    assert!(execution >= fixture.transport.output_frame());
     let before = fixture.render_to(execution);
     assert!(before.iter().all(|sample| *sample == 0.0));
     // Include the actual first output sample. No startup or FIFO prefix is discarded.
@@ -283,7 +303,8 @@ fn first_ordinary_gui_attack_uses_actual_nonzero_bank_and_complete_native_initia
         "reason={:?}",
         original.reason()
     );
-    assert_eq!(original.effective_frame(), Some(execution));
+    assert_eq!(original.effective_frame(), original.execution_frame());
+    assert!(original.effective_frame().unwrap() <= execution);
     assert_eq!(ordinary.starts(0), 1);
     assert_eq!(ordinary.mixer.pad_pitch_intent(0), Some(pitch));
     let voice = ordinary.voice(0);
@@ -590,7 +611,7 @@ fn original_gui_grid_target_precedes_own_real_window_ack_and_is_never_requantize
     assert_eq!(original.execution_frame(), Some(38_192));
     wait_ready(&mut fixture, &[original.sequence()]);
     let pcm = complete_attack(&mut fixture, 38_192);
-    assert_eq!(original.effective_frame(), Some(38_192));
+    assert_eq!(original.effective_frame(), Some(30_000));
     assert_eq!(fixture.starts(0), 1);
     assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }

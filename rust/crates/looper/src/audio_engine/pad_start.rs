@@ -752,6 +752,38 @@ impl CapturedPadStart {
         Ok(())
     }
 
+    /// A completed, unconsumed physical birth supplies a fresh validated request.
+    /// Only the callback can bind its earlier E; T and the original owner remain.
+    pub(crate) fn bind_early_completion_frame(
+        &self,
+        expected: u64,
+        execution: u64,
+    ) -> Result<(), PitchActionReject> {
+        self.preparation_guard()?;
+        if self.owner.frames_state.load(Ordering::Acquire) != 2
+            || self
+                .target_frame()
+                .is_none_or(|original| execution < original)
+            || execution >= expected
+            || self.owner.execution_frame.load(Ordering::Acquire) != expected
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let status = self.owner.status.load(Ordering::Acquire);
+        if !matches!(status, PREPARED | SCHEDULED) {
+            return Err(PitchActionReject::StaleContent);
+        }
+        self.owner
+            .status
+            .compare_exchange(status, PREPARED, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PitchActionReject::StaleContent)?;
+        self.owner
+            .execution_frame
+            .compare_exchange(expected, execution, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PitchActionReject::PreparedMismatch)?;
+        Ok(())
+    }
+
     /// Called only by the single callback, before any own residency publication.
     pub(crate) fn capture_target(
         &self,

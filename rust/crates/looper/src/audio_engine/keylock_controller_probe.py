@@ -3,9 +3,10 @@
 # ruff: noqa: INP001
 
 from collections import deque
+from uuid import uuid4
 
 from flitzis_looper.controller.transport import TransportController
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper.ui.context import PadSelectors
 
 
@@ -32,6 +33,8 @@ class _ControllerFixture:
 
     def assign(self, sample_id, path, _initial):
         self.project.sample_paths[sample_id] = path
+        if self.project.pad_content[sample_id] is None:
+            self.project.pad_content[sample_id] = PadContentIdentity(instance_id=uuid4().hex)
         self.project.sample_durations[sample_id] = self.duration
         self.project.pad_loop_auto[sample_id] = False
         self.project.pad_loop_start_s[sample_id] = self.start_s
@@ -129,8 +132,10 @@ class _ControllerFixture:
 
     def unload(self, sample_id):
         self.transport.residency.cancel(sample_id)
+        self.transport.playback.forget_pause_intent(sample_id)
         self.audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None
+        self.project.pad_content[sample_id] = None
         self.project.pad_key_lock[sample_id] = None
 
     def scalar_request(self, sample_id):

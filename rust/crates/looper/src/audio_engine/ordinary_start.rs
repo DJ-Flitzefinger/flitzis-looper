@@ -23,6 +23,11 @@ struct PendingLateReprepare {
     previous_execution: u64,
 }
 
+pub(crate) struct OrdinaryCompletionPlan {
+    pub(crate) request: NativeHistoryRequest,
+    pub(crate) intent: super::late_start_dsp::DspInputIntent,
+}
+
 pub(crate) struct OrdinaryStartWork {
     origin: Option<CapturedPadStart>,
     sequence: u64,
@@ -310,6 +315,75 @@ impl OrdinaryStartWork {
     }
     pub(crate) fn validates_render_format(&self, rate: u32, channels: usize) -> bool {
         self.render_format == (rate, channels)
+    }
+
+    /// Only an unconsumed physical birth may move once before its fallback E.
+    /// The displaced request stays in Work custody until worker retirement.
+    pub(crate) fn early_completion_source(&self) -> Option<&NativeHistoryRequest> {
+        if !self.is_ready()
+            || self.rejected_request.is_some()
+            || self.origin().start_behavior() != KeyLockStartBehavior::FirstSoundAtGrid
+            || self.origin().state() == "rejected"
+        {
+            return None;
+        }
+        let source = if self.native_required {
+            let candidate = self.candidate.as_ref()?;
+            if !candidate.has_physical_birth_context() || candidate.has_retained_feed() {
+                return None;
+            }
+            candidate.source.as_ref()?
+        } else {
+            self.request.as_ref()?
+        };
+        (source.actual_feed.is_none()
+            && source.request_id == self.sequence
+            && source.epoch == self.epoch()
+            && source.target_output_frame == self.execution_frame())
+        .then_some(source)
+    }
+
+    pub(crate) fn completion_request_matches(&self, request: &NativeHistoryRequest) -> bool {
+        self.early_completion_source().is_some_and(|source| {
+            request.request_id == self.sequence
+                && request.epoch == self.epoch()
+                && request.actual_feed.is_none()
+                && source.playback.matches_exact(&request.playback)
+                && source.same_reserved_endpoint_request(request)
+                && request.permit.matches_action_owner(
+                    self.origin().ownership(),
+                    self.origin().acknowledgements(),
+                    self.origin().content_key(),
+                    &self.epoch,
+                )
+        })
+    }
+
+    /// All group plans have already succeeded. A concurrent cancellation can
+    /// reject the entire commit, but cannot produce a partially audible group.
+    pub(crate) fn bind_early_completion(
+        &mut self,
+        plan: OrdinaryCompletionPlan,
+    ) -> Result<(), PitchActionReject> {
+        let execution = plan.request.target_output_frame;
+        let current = self.completion_request_matches(&plan.request);
+        debug_assert!(self.rejected_request.is_none());
+        // Retain the new pins too if the original's final CAS loses cancellation.
+        self.rejected_request = Some(plan.request);
+        if !current {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        self.origin()
+            .bind_early_completion_frame(self.execution_frame(), execution)?;
+        let fresh = self.rejected_request.take().unwrap();
+        self.rejected_request = if self.native_required {
+            self.candidate.as_mut().unwrap().source.replace(fresh)
+        } else {
+            self.request.replace(fresh)
+        };
+        self.frames.as_mut().unwrap().1 = execution;
+        self.dsp_intent = Some(plan.intent);
+        Ok(())
     }
 
     /// Move one exact physical endpoint. Its cache permit is retained for worker retirement;

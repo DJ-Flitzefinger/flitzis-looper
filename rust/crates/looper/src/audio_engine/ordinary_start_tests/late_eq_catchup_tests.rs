@@ -190,6 +190,11 @@ fn compare_late_start_contract(rate: f64, policy: &str, semitones: i32, lock: bo
     if semitones != 0 {
         wait_ready(&mut late, &[late_start.sequence()]);
     }
+    let late_execution = if policy == "first_sound_at_grid" {
+        LATE_ACK_FRAME
+    } else {
+        late_execution
+    };
     for start in [&early_start, &late_start] {
         assert_eq!(start.original_frame(), Some(ORIGINAL_TARGET));
         assert_eq!(start.target_frame(), Some(ORIGINAL_TARGET));

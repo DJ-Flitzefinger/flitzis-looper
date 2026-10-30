@@ -94,6 +94,20 @@ fn wait_reference(fixture: &mut Fixture, actions: [&super::pitch_actions::Captur
 }
 
 fn full_initial_attack(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
+    fixture.render(0);
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.launch_unadvanced)
+    );
+    let execution = if fixture.mixer.voices.iter().any(|voice| voice.active) {
+        fixture.transport.output_frame()
+    } else {
+        execution
+    };
     assert!(
         fixture
             .render_to(execution)
@@ -373,13 +387,6 @@ pub(super) fn phase_group(lock: bool) -> (Fixture, GlobalPlaybackBatchTicket) {
     fixture.drain();
     if lock {
         wait_group(&mut fixture, &ticket);
-        let execution = fixture.scheduler.peek_next_target_frame().unwrap();
-        assert!(
-            fixture
-                .render_to(execution)
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
         // Execute the real due claim, without consuming the first output sample.
         assert!(fixture.render(0).is_empty());
     }

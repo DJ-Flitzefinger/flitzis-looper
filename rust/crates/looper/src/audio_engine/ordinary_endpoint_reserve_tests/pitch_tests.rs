@@ -169,7 +169,13 @@ fn ordinary_ready(fixture: &mut Fixture) -> CapturedPadStart {
 
 fn start_ordinary_and_progress(fixture: &mut Fixture) -> CapturedPadStart {
     let start = ordinary_miss(fixture);
-    assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
+    fixture.render(0);
+    assert!(
+        fixture
+            .render_to(start.execution_frame().unwrap())
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
     let mut pcm = fixture.render(1);
     pcm.extend(fixture.render_to(17_000));
     assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
@@ -398,10 +404,7 @@ fn ready_hit_profile(origin: Origin, playing: bool) {
     );
     assert_eq!(miss.state(), "applied");
     assert_eq!(miss.original_frame(), Some(action.original_due_frame()));
-    assert_eq!(
-        miss.execution_frame(),
-        Some(action.original_due_frame() + 8192)
-    );
+    assert_eq!(miss.execution_frame(), Some(action.original_due_frame()));
     assert_eq!(
         uncached.voice(0).source_playback.position().frame,
         LOOP_START + uncached_pcm.len()
@@ -635,12 +638,6 @@ fn ordinary_pitch_competition(pitch_first: bool) {
         ordinary.execution_frame(),
         Some(if pitch_first { 8192 } else { 0 })
     );
-    if pitch_first {
-        wait_action(&mut fixture, &ordinary);
-    } else {
-        fixture.wait_worker(&[&pitch]);
-    }
-    fixture.render(1);
     assert_eq!(fixture.starts(0), 1);
     assert_eq!(fixture.voice(0).stretch.native_state_address(), cached);
     assert_eq!(
@@ -651,8 +648,17 @@ fn ordinary_pitch_competition(pitch_first: bool) {
             ordinary.sequence()
         })
     );
-    fixture.render_to(8192);
+    if pitch_first {
+        wait_action(&mut fixture, &ordinary);
+    } else {
+        fixture.wait_worker(&[&pitch]);
+    }
     fixture.render(1);
+    if !pitch_first {
+        assert_eq!(fixture.starts(0), 1);
+        fixture.render_to(8192);
+        fixture.render(1);
+    }
     assert_eq!(fixture.starts(0), 2);
     assert!(pitch.effective());
     assert_eq!(ordinary.state(), "applied");
@@ -665,11 +671,11 @@ fn ordinary_pitch_competition(pitch_first: bool) {
             pitch.sequence()
         })
     );
-    // Both are fresh births. Original T=0 and own E=8192 remain distinct, while
-    // neither ordinary nor SET_RETRIGGER consumes the un-emitted E-T interval.
+    // Both originals remain distinct. Completed ordinary work may use E=0;
+    // Pitch retains its own fallback. Neither skips its physical beginning.
     if pitch_first {
         assert_eq!(ordinary.original_frame(), Some(0));
-        assert_eq!(ordinary.execution_frame(), Some(8192));
+        assert_eq!(ordinary.execution_frame(), Some(0));
     } else {
         assert_eq!(pitch.original_due_frame(), 0);
         assert_eq!(pitch.execution_target(), 8192);

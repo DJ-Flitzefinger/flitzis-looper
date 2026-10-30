@@ -244,39 +244,29 @@ impl ExpectedVoice {
         }
     }
 
-    fn prepare_ordinary_start(&mut self, catchup_frames: usize) {
+    fn prepare_ordinary_start(&mut self) {
         if self.enabled {
-            // Derive the periodic pre-T past from independent original PCM. The
-            // declared .73 rate returns to T after 100 physical loop periods.
+            // Ordinary physical births have silent negative history and preserve
+            // their source beginning at actual E. Live mode oracles stay separate.
             let mut history_clock = AlgebraicClock::physical(self.start, self.end, RATIO);
-            history_clock.advance((self.end - self.start) * 100 - HISTORY);
+            let silence = SampleBuffer {
+                channels: 1,
+                residency: None,
+                samples: vec![0.0; self.source.samples.len()].into(),
+            };
             self.raw = RawChronology::new(RATIO, true);
-            self.raw.render(&self.source, &mut history_clock, HISTORY);
-            let (frame, fraction, explicit) = history_clock.physical_position(0);
-            assert_eq!(frame, self.start);
-            assert!(fraction.abs() < 1e-8 && !explicit);
+            assert!(
+                self.raw
+                    .render(&silence, &mut history_clock, HISTORY)
+                    .iter()
+                    .all(|sample| *sample == 0.0)
+            );
             self.warm = 0;
             self.raw_fed = HISTORY;
             self.candidate_needed = false;
             self.adoptions = 1;
         }
-        // Keep the canonical T clock separate from the periodic prehistory clock.
-        // The missed suffix reaches E through the same independent Native/FIFO
-        // and EQ state; it contributes no claim about actually emitted energy.
-        let missed = if self.enabled {
-            self.raw_fed += catchup_frames;
-            self.raw
-                .render(&self.source, &mut self.clock, catchup_frames)
-        } else {
-            self.clock.dry(&self.source, catchup_frames)
-        };
-        for sample in missed {
-            self.filter.begin_frame();
-            for channel in 0..2 {
-                self.filter.process_sample(channel, sample);
-            }
-        }
-        self.consumed = catchup_frames;
+        self.consumed = 0;
     }
 
     fn set_mode(&mut self, harness: &Harness, enabled: bool) {
@@ -477,6 +467,19 @@ impl GlobalVoices {
             assert_eq!(original.original_frame(), Some(original_frame));
             let execution = original.execution_frame().unwrap();
             assert_eq!(execution, original_frame + if enabled { 8192 } else { 0 });
+            let callback = result.harness.callback.as_mut();
+            render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                original_frame,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+            let execution = original.execution_frame().unwrap();
             if execution > original_frame {
                 assert!(
                     !result
@@ -512,9 +515,8 @@ impl GlobalVoices {
             assert_eq!(original.original_frame(), Some(original_frame));
             assert_eq!(original.effective_frame(), Some(execution));
             assert_eq!(original.received_timestamp(), timestamp);
-            let catchup = (execution - original_frame) as usize;
             let mut expected = ExpectedVoice::new(&result.harness, id, enabled);
-            expected.prepare_ordinary_start(catchup);
+            expected.prepare_ordinary_start();
             let (frame, fraction, explicit) = expected.clock.physical_position(0);
             let actual = voice(&result.harness, id);
             assert_eq!(actual.source_playback.position().frame, frame);
@@ -532,7 +534,7 @@ impl GlobalVoices {
                         .productive_history()
                         .unwrap()
                         .fed_output_frames,
-                    (HISTORY + catchup) as u64
+                    HISTORY as u64
                 );
             }
             // Actual typed parameter queue is fixture setup; public Mode/Transport routes

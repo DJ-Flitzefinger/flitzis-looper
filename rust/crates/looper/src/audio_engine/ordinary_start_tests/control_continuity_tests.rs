@@ -65,14 +65,17 @@ impl Launch {
         }
     }
 
-    fn assert_applied(&self) {
-        self.assert_original_frames();
+    fn assert_applied_at(&self, execution: u64) {
         match self {
             Self::Ordinary(start) => {
                 assert_eq!(start.state(), "applied", "{:?}", start.reason());
-                assert_eq!(start.effective_frame(), Some(EXECUTION_FRAME));
+                assert_eq!(start.original_frame(), Some(ORIGINAL_FRAME));
+                assert_eq!(start.execution_frame(), Some(execution));
+                assert_eq!(start.effective_frame(), Some(execution));
             }
             Self::FreshPitchRetrigger(action) => {
+                assert_eq!(action.original_due_frame(), ORIGINAL_FRAME);
+                assert_eq!(action.execution_target(), execution);
                 assert!(action.effective(), "{:?}", action.reason());
                 assert_eq!(action.state(), "applied");
             }
@@ -319,21 +322,36 @@ fn unrelated_pad_loop_change_preserves_the_original_and_fresh_retrigger_launch()
         for kind in [LaunchKind::Ordinary, LaunchKind::FreshPitchRetrigger] {
             let (mut fixture, launch) = prepared_launch(kind, policy);
             change_loop(&mut fixture, 1, LOOP_START + 2_400, LOOP_END - 2_400);
-            assert!(
-                fixture
-                    .render(INTERVENING_FRAMES)
-                    .iter()
-                    .all(|sample| *sample == 0.0)
+            fixture.render(0);
+            let execution = match &launch {
+                Launch::Ordinary(start) => start.execution_frame().unwrap(),
+                Launch::FreshPitchRetrigger(action) => action.execution_target(),
+            };
+            assert_eq!(
+                execution,
+                if matches!(kind, LaunchKind::Ordinary) && policy == "first_sound_at_grid" {
+                    ORIGINAL_FRAME
+                } else {
+                    EXECUTION_FRAME
+                }
             );
             assert!(
                 fixture
-                    .render_to(EXECUTION_FRAME)
+                    .mixer
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.active)
+                    .all(|voice| voice.launch_unadvanced)
+            );
+            assert!(
+                fixture
+                    .render_to(execution)
                     .iter()
                     .all(|sample| *sample == 0.0)
             );
-            assert_eq!(fixture.starts(0), 0);
+            assert_eq!(fixture.starts(0), usize::from(execution == ORIGINAL_FRAME));
             let mut pcm = fixture.render(1);
-            launch.assert_applied();
+            launch.assert_applied_at(execution);
             assert_eq!(fixture.starts(0), 1);
             assert_eq!(fixture.starts(1), 0);
             assert_eq!(

@@ -120,6 +120,85 @@ with `-p flitzis-looper --lib paced_production_ --release -- --ignored --nocaptu
 The test source is
 [`response_probe.rs`](../../../rust/crates/looper/src/audio_engine/ordinary_endpoint_reserve_tests/response_probe.rs).
 
+## STEP3 implementation boundary
+
+Early worker completion can accelerate ordinary FirstSoundAtGrid physical births
+and playback-only atomic groups. Retain the admitted fallback deadline until all
+members are ready; do not put an unfinished worker into the scheduler's single
+deferred-due cell. Reuse the existing event in place with its original input order.
+Before changing E, recapture the complete action request/permit from the current
+source, validate the retained physical beginning, render, source controls and DSP,
+then retain the displaced request for off-callback retirement. Mutable Native/FIFO
+state stays unique and unconsumed. General exact/history/adoption matching stays
+strict. Future T, earlier pending originals and callback capacity remain fences.
+
+This is a one-time acceleration before the admitted fallback deadline. Recording
+groups, Piano, worker results after that deadline and principal-attack DSP require
+separate follow-up proof. The full remaining plan is preserved and split further;
+no scheduling-only result passes the 30 ms principal-attack goal.
+
+### STEP3 paired result
+
+The unchanged paced production probe was run before runtime edits at `51017d49`
+and after this implementation: 30 ordinary, six Piano and 12 actual 2/4/6-PAD group
+configurations per side, all 48 applied. Reference host: Windows x64, AMD Ryzen 9
+9955HX3D (16 cores/32 logical processors), rustc 1.95.0, Release, Rubber Band 4.0.0.
+There is one observation per configuration. "Cold" here means no selected ready
+Native reserve with source PCM already resident; it is not cold disk loading.
+
+| Ordinary case at 48 kHz, no selected reserve | Before E / significant / principal (frames) | After E / significant / principal |
+| --- | --- | --- |
+| r=.8, admission at T=0 | 8192 / 11019 / 11183 | 512 / 3339 / 3503 |
+| r=.8, publication one callback late | 8704 / 11531 / 11695 | 1024 / 3851 / 4015 |
+| r=1.16, admission at T=0 | 8192 / 10947 / 11059 | 512 / 3267 / 3379 |
+| r=1.16, publication one callback late | 8704 / 11459 / 11571 | 1024 / 3779 / 3891 |
+
+These cases remove 7680 frames/160 ms of scheduling wait. Cold slowed principal
+response is now 3503 frames/72.979 ms; faster is 3379/70.396 ms. Their principal
+delay after E remains 2991/62.313 ms and 2867/59.729 ms respectively. The 30 ms
+principal-attack goal remains **unmet**, including the unchanged selected-ready
+controls. No DSP attack compensation or output trimming was introduced.
+
+At 2/4/6 PADs, cold one-/two-wet groups and warm two-wet groups change common E
+from 8704 to 1024; selected-ready one-wet groups stay at 512. Every member, including
+dry peers, retains its beginning. Group mix landmarks can still hide wet attack.
+Piano, dry/unity, selected-ready ordinary, and the existing 44.1/96 kHz/irregular/
+authored-silence controls retain their prior frames. Cold early-completion timing
+at those other sample rates is not measured by this matrix.
+
+Across the 30 ordinary observations per side, maximum measured harness drain/render
+span is 1262 us before and 1183 us after, with zero observed harness block overruns.
+These include fixture overhead and are not a CPAL deadline distribution or a
+statistically established speedup. Event-pump, device, acoustic, background-stem,
+p99 and whole-quality acceptance remain separate.
+
+Five deterministic completion tests cover a genuinely held worker, unrelated STOP
+progress, full independent raw-Native PCM, four 16-frame-apart originals, 2/4/6
+groups including mixed wet/dry, future T, stale source/control guards and feedback
+pressure followed by real legacy reprepare from the fresh request. Rust allocation
+guards cover both ordinary and six-member completion callbacks; they do not count
+Native C++/FFT allocations. The strict initial-interval gate leaves later replans
+unchanged. Pending predecessors, including terminal owners awaiting old-slot
+cleanup, can still delay subsequent originals; this remains follow-up work.
+
+The impacted Rust regression supplies 148 compatible passes, followed by the
+corrected 17-case public controller closure (16 passes plus one focused restore
+pass). Three paced diagnostics pass explicitly; the separate Native reserve
+feasibility probe remains ignored. Initial failures exposed stale test assumptions:
+waiting until fallback E consumed early PCM, an older ordinary oracle used periodic
+prehistory/catchup, and legacy controller fixtures omitted real content/material
+identities. Those fixtures now observe actual E without emitting a prefix, use
+silent physical-birth history, and retain strict public identity validation.
+Live-history oracles, negative source/ABA tests and complete PCM/EQ/owner assertions
+remain intact. No ABI, dependency, installer, App/device or inference change.
+
+Another 183 Python controller/opaque-Native-boundary checks pass; two existing
+real-device cases are skipped without `--audio-devices`. External Release Native/
+API verification passes with the existing 22 library warnings. Changed-file
+Rust formatting, strict OpenSpec, six Markdown files/63 local targets/three anchors
+and whitespace checks pass. Systems PRE/frozen/affected, Methods and the single
+independent final-diff review chain cover the implementation and fixture repairs.
+
 ## Measurement contract
 
 Record original monotonic input capture, control admission/publication, requested

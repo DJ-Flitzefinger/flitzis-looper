@@ -90,13 +90,13 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
     gate.changed.notify_all();
 }
 
-struct WorkerGate {
+pub(super) struct WorkerGate {
     key: GateKey,
     state: Arc<WorkerGateState>,
 }
 
 impl WorkerGate {
-    fn new(fixture: &Fixture, start: &CapturedPadStart) -> Self {
+    pub(super) fn new(fixture: &Fixture, start: &CapturedPadStart) -> Self {
         Self::with_key((
             Arc::as_ptr(&fixture.control.engine.input_runtime_ownership) as usize,
             start.sequence(),
@@ -122,7 +122,7 @@ impl WorkerGate {
         Self { key, state }
     }
 
-    fn wait_for(&self, finished: bool) -> Option<PitchActionReject> {
+    pub(super) fn wait_for(&self, finished: bool) -> Option<PitchActionReject> {
         let mut observation = self.state.observation.lock().unwrap();
         while if finished {
             !observation.finished
@@ -143,7 +143,7 @@ impl WorkerGate {
         observation.reason
     }
 
-    fn release(&self) {
+    pub(super) fn release(&self) {
         self.state.observation.lock().unwrap().released = true;
         self.state.changed.notify_all();
     }
@@ -1226,15 +1226,15 @@ fn global_late_plan_marker_after_first_member_preserves_all_original_plans_until
         wait_own_group(&mut fixture, &originals);
         let execution = originals[0].execution_frame().unwrap();
         assert_eq!(originals[1].execution_frame(), Some(execution));
-        assert!(
-            fixture
-                .render_to(execution)
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
         // Genuine callback refusal at E leaves the ready group for E+1, where
         // the existing late-plan loop can be observed between its two members.
         with_unrelated_marker(&mut fixture, |fixture| {
+            assert!(
+                fixture
+                    .render_to(execution)
+                    .iter()
+                    .all(|sample| *sample == 0.0)
+            );
             assert_eq!(fixture.render(1), vec![0.0]);
             assert_eq!(ticket.publication_status(), "pending");
             assert_eq!((fixture.starts(0), fixture.starts(1)), (0, 0));

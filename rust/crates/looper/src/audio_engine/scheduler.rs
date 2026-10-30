@@ -181,6 +181,62 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         self.deferred_at_callback = callback_frame;
     }
 
+    /// The same queued action may wake after worker completion. Preserve its
+    /// input order, capacity and capture reservation; never cross a deferred effect.
+    pub(crate) fn has_queued_pitch_action(
+        &self,
+        slot: usize,
+        action_sequence: u64,
+        target: u64,
+    ) -> bool {
+        self.deferred_due.is_none()
+            && self.events[..self.len].iter().any(|event| {
+                event.as_ref().is_some_and(|event| {
+                    event.target_frame == target
+                        && event.command
+                            == ScheduledCommand::PitchAction {
+                                slot,
+                                action_sequence,
+                            }
+                })
+            })
+    }
+
+    pub(crate) fn retarget_ready_pitch_action(
+        &mut self,
+        slot: usize,
+        action_sequence: u64,
+        expected: u64,
+        target: u64,
+    ) -> bool {
+        if self.deferred_due.is_some() || target >= expected {
+            return false;
+        }
+        let command = ScheduledCommand::PitchAction {
+            slot,
+            action_sequence,
+        };
+        let Some(index) = self.events[..self.len].iter().position(|event| {
+            event
+                .as_ref()
+                .is_some_and(|event| event.target_frame == expected && event.command == command)
+        }) else {
+            return false;
+        };
+        let mut event = self.events[index].take().unwrap();
+        event.target_frame = target;
+        // An earlier target only moves left. No event clone/drop or new order.
+        let mut destination = index;
+        while destination != 0
+            && event_sorts_before(&event, self.events[destination - 1].as_ref().unwrap())
+        {
+            self.events[destination] = self.events[destination - 1].take();
+            destination -= 1;
+        }
+        self.events[destination] = Some(event);
+        true
+    }
+
     pub(crate) fn schedule(
         &mut self,
         target_frame: u64,
@@ -706,6 +762,42 @@ mod tests {
         assert_eq!(first_due.command, first.command);
         assert_eq!(second_due.command, second.command);
         assert_eq!(scheduler.pop_due_through(0, 20), None);
+    }
+
+    #[test]
+    fn ready_action_retarget_preserves_original_order_and_reserved_capture_capacity() {
+        let mut scheduler = FixedCapacityScheduler::<4>::new();
+        scheduler.schedule_capture_start(7, 100).unwrap();
+        let sequence = reserve_input_order().unwrap();
+        let command = ScheduledCommand::PitchAction {
+            slot: 3,
+            action_sequence: sequence,
+        };
+        scheduler.schedule(8192, command.clone()).unwrap();
+        scheduler.schedule(100, ScheduledCommand::StopAll).unwrap();
+        assert!(scheduler.is_full()); // Three events plus the real capture-stop reservation.
+        assert!(!scheduler.retarget_ready_pitch_action(3, sequence + 1, 8192, 100));
+        assert!(!scheduler.retarget_ready_pitch_action(3, sequence, 8191, 100));
+        assert!(scheduler.retarget_ready_pitch_action(3, sequence, 8192, 100));
+        assert!(scheduler.is_full());
+        assert_eq!(
+            scheduler.pop_due_through(0, 100).unwrap().command,
+            ScheduledCommand::CaptureStart { session_id: 7 }
+        );
+        let due = scheduler.pop_due_through(0, 100).unwrap();
+        assert_eq!(due.command, command);
+        scheduler.defer_due(due, 0);
+        assert!(!scheduler.retarget_ready_pitch_action(3, sequence, 100, 99));
+        assert_eq!(scheduler.pop_due_through(1, 100).unwrap().command, command);
+        assert_eq!(
+            scheduler.pop_due_through(1, 100).unwrap().command,
+            ScheduledCommand::StopAll
+        );
+        assert!(
+            scheduler
+                .schedule(200, ScheduledCommand::CaptureStop { session_id: 7 })
+                .is_ok()
+        );
     }
 
     #[test]

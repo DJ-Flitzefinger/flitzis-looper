@@ -553,6 +553,16 @@ impl Harness {
                 Some(execution)
             );
         }
+        self.render(0, false);
+        let execution = original.execution_frame().unwrap();
+        assert!(
+            self.callback
+                .mixer
+                .voices
+                .iter()
+                .filter(|voice| voice.active)
+                .all(|voice| voice.launch_unadvanced)
+        );
         // Prepared ordinary START owns its independent Native history before E.
         // The genuine silent wall-clock lead consumes none of the new birth's
         // source or filter output; its complete beginning remains available at E.
@@ -1561,6 +1571,9 @@ fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_sou
     wait_until(Duration::from_secs(10), || {
         harness.drain();
         assert_eq!(harness.frame, capture_frame);
+        if start.state() == "applied" {
+            return true;
+        }
         assert!(
             harness
                 .callback
@@ -1576,15 +1589,29 @@ fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_sou
     });
     assert_eq!(start.original_frame(), Some(capture_frame));
     let execution = start.execution_frame().unwrap();
-    assert!(execution > capture_frame);
-    assert_eq!(
-        harness.callback.scheduler.peek_next_target_frame(),
-        Some(execution)
-    );
+    assert!(execution >= capture_frame);
+    if execution > capture_frame {
+        assert_eq!(
+            harness.callback.scheduler.peek_next_target_frame(),
+            Some(execution)
+        );
+        assert_eq!(start.effective_frame(), None);
+    } else {
+        assert_eq!(start.effective_frame(), Some(execution));
+    }
     assert!(start.accepted());
-    assert_eq!(start.effective_frame(), None);
-    // An ON start at the non-unity ratio owns a later E. Run actual silent
-    // callback partitions up to E, then execute E without consuming a sample.
+    harness.render(0, false);
+    let execution = start.execution_frame().unwrap();
+    assert!(
+        harness
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.launch_unadvanced)
+    );
+    // Observe the actual completed E before any output, preserving every source sample.
     while harness.frame < execution {
         let frames = (execution - harness.frame).min(257) as usize;
         assert!(

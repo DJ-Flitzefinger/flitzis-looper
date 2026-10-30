@@ -1,5 +1,7 @@
 //! Fixed preparation custody connected to the one transport scheduler.
 
+mod completion;
+
 use super::audio_stream::{AudioMessageSink, ScheduledExecution};
 use super::buffer_retirement::AudioBufferRetirement;
 use super::global_playback_batch::GlobalPlaybackBatch;
@@ -1060,12 +1062,17 @@ impl PitchRuntime {
     }
 }
 
-pub(super) fn service_endpoint_reserve(mixer: &mut RtMixer) {
+pub(super) fn service_endpoint_reserve<const CAPACITY: usize>(
+    mixer: &mut RtMixer,
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback: u64,
+) {
     let mut runtime = mixer
         .pitch_runtime
         .take()
         .expect("one callback owns preparation lane");
     runtime.poll();
+    runtime.accelerate_completed_starts(mixer, scheduler, callback);
     runtime.endpoint.service(mixer, &mut runtime.preparation);
     mixer.pitch_runtime = Some(runtime);
 }

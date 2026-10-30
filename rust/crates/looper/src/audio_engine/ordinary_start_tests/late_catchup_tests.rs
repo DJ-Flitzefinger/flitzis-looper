@@ -122,7 +122,7 @@ fn compare_late_start(rate: f64, policy: &str) {
     wait_ready(&mut early, &[early_start.sequence()]);
 
     // This fixture keeps its real resident transaction queued past T. The eventual
-    // ACK determines E = 30000 + 8192; it must not replace or requantize T.
+    // ACK admits the fallback E=30000+8192 without replacing or requantizing T.
     assert!(
         late.render_to(LATE_ACK_FRAME)
             .iter()
@@ -147,6 +147,11 @@ fn compare_late_start(rate: f64, policy: &str) {
     assert!(late_start.accepted(), "{:?}", late_start.reason());
     assert_eq!(late_start.execution_frame(), Some(LATE_EXECUTION));
     wait_ready(&mut late, &[late_start.sequence()]);
+    let late_execution = if policy == "first_sound_at_grid" {
+        LATE_ACK_FRAME
+    } else {
+        LATE_EXECUTION
+    };
     for start in [&early_start, &late_start] {
         assert_eq!(start.original_frame(), Some(ORIGINAL_TARGET));
         assert_eq!(start.target_frame(), Some(ORIGINAL_TARGET));
@@ -159,7 +164,7 @@ fn compare_late_start(rate: f64, policy: &str) {
             .all(|sample| *sample == 0.0)
     );
     assert!(
-        late.render_to(LATE_EXECUTION)
+        late.render_to(late_execution)
             .iter()
             .all(|sample| *sample == 0.0)
     );
@@ -177,8 +182,8 @@ fn compare_late_start(rate: f64, policy: &str) {
     assert_eq!(late_start.state(), "applied", "{:?}", late_start.reason());
     assert_eq!(early_start.execution_frame(), Some(ORIGINAL_TARGET));
     assert_eq!(early_start.effective_frame(), Some(ORIGINAL_TARGET));
-    assert_eq!(late_start.execution_frame(), Some(LATE_EXECUTION));
-    assert_eq!(late_start.effective_frame(), Some(LATE_EXECUTION));
+    assert_eq!(late_start.execution_frame(), Some(late_execution));
+    assert_eq!(late_start.effective_frame(), Some(late_execution));
     assert_eq!(early_start.original_frame(), Some(ORIGINAL_TARGET));
     assert_eq!(late_start.original_frame(), Some(ORIGINAL_TARGET));
     assert_eq!(early.starts(0), 1);

@@ -889,6 +889,15 @@ fn actual_ui_settings_and_pad_actions_start_both_loaded_pads_after_policy_switch
             std::thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(route.transport.output_frame(), original_frame);
+        route.render(0);
+        assert!(
+            route
+                .mixer
+                .voices
+                .iter()
+                .filter(|voice| voice.active)
+                .all(|voice| voice.launch_unadvanced)
+        );
         let execution = starts[0].execution_frame().unwrap();
         assert!(
             starts

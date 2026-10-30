@@ -291,6 +291,53 @@ impl RtMixer {
         work.capture(request, render)
     }
 
+    /// Capture a whole fresh effect envelope; never relabel an old prepared request.
+    pub(crate) fn plan_ordinary_early_completion(
+        &mut self,
+        work: &OrdinaryStartWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<super::super::ordinary_start::OrdinaryCompletionPlan, PitchActionReject> {
+        if execution
+            < work
+                .origin()
+                .target_frame()
+                .ok_or(PitchActionReject::TimingUnavailable)?
+            || execution >= work.execution_frame()
+            || work.early_completion_source().is_none()
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let guard = self.ordinary_start_guard(work)?;
+        let render = self.ordinary_start_render(guard.id);
+        if work.render != Some(render) || !self.ordinary_start_source_controls_current(work) {
+            return Err(PitchActionReject::TimingChanged);
+        }
+        // This checks the full retained origin (including launch phase), current
+        // source/stem readers, smoothing and physical read domain, not bank time.
+        let snapshot = self.ordinary_start_snapshot(work, guard.id)?;
+        let intent = self.capture_ordinary_start_dsp_intent(work, guard.id, callback)?;
+        let permit = work
+            .capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
+            .ok_or(PitchActionReject::SourceChanged)?;
+        let request = snapshot
+            .into_request(
+                permit,
+                render.pitch,
+                render.key_lock,
+                execution,
+                work.sequence(),
+                work.epoch(),
+            )
+            .ok_or(PitchActionReject::PreparationFailed)?;
+        if !work.completion_request_matches(&request) {
+            // All newly observed source pins are also held by this callback's
+            // bank and the original Work; these temporary clones are not final.
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        Ok(super::super::ordinary_start::OrdinaryCompletionPlan { request, intent })
+    }
+
     /// Validate the current source/control tuple without recapturing its preparation permit.
     /// The new endpoint is projected only from this original's retained T clock.
     pub(crate) fn prepare_ordinary_late_replan(

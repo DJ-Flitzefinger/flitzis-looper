@@ -176,6 +176,23 @@ fn wait_action(fixture: &mut Fixture, start: &CapturedPadStart) {
 }
 
 fn complete_pcm(fixture: &mut Fixture, execution: u64) -> Vec<f32> {
+    // Observe completion at a known callback without consuming any output prefix.
+    fixture.render(0);
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .all(|voice| voice.launch_unadvanced),
+        "the complete prefix must not have been rendered already"
+    );
+    let execution = if fixture.mixer.voices.iter().any(|voice| voice.active) {
+        fixture.transport.output_frame()
+    } else {
+        execution
+    };
+    assert!(execution >= fixture.transport.output_frame());
     assert!(
         fixture
             .render_to(execution)
@@ -473,7 +490,10 @@ fn genuinely_changed_prepared_window_does_not_borrow_old_endpoint_native() {
         fixture.voice(0).source_playback.position().frame,
         72_000 + pcm.len()
     );
-    assert_eq!(fixture.transport.output_frame(), 8192 + pcm.len() as u64);
+    assert_eq!(
+        fixture.transport.output_frame(),
+        original.effective_frame().unwrap() + pcm.len() as u64
+    );
     // The 160Hz fixture has exactly 300 source frames per period. These starts
     // differ by 224 complete periods, and neither capture reaches its loop end.
     assert_eq!((72_000 - LOOP_START) % 300, 0);
@@ -527,7 +547,7 @@ fn selected_stopped_ready_hit_uses_original_t_fresh_action_and_complete_initial_
     let rendered_taps = super::source_reader::tap_observation_for_test();
     let oracle = complete_pcm(&mut reference, 8192);
     // Ready and uncached births emit the same complete physical beginning at
-    // their distinct E values. No unheard source or filter prefix is consumed.
+    // their actual E values. No unheard source or filter prefix is consumed.
     assert_eq!(hit.transport.output_frame(), pcm.len() as u64);
     assert_eq!(
         reference.transport.output_frame(),
@@ -675,15 +695,14 @@ fn selected_endpoint_has_one_consumable_native_and_equal_attacks_remain_distinct
     assert_eq!(second.original_frame(), Some(0));
     assert_eq!(first.execution_frame(), Some(0));
     assert_eq!(second.execution_frame(), Some(8192));
-    wait_action(&mut fixture, &second);
-    fixture.render(1);
     assert_eq!(first.state(), "applied");
     assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
     assert_eq!(fixture.voice(0).volume, 0.4);
-    fixture.render_to(8192);
+    wait_action(&mut fixture, &second);
     fixture.render(1);
     assert_eq!(second.state(), "applied", "reason={:?}", second.reason());
     assert_eq!(fixture.starts(0), 2);
+    assert_eq!(second.effective_frame(), Some(0));
     assert_eq!(fixture.voice(0).volume, 0.7);
     assert_eq!(
         fixture.voice(0).stretch.adopted_request_id(),

@@ -166,7 +166,7 @@ fn one_ready_wet_member_makes_the_whole_group_immediate_without_losing_either_be
 }
 
 #[test]
-fn second_wet_member_requires_own_worker_and_keeps_the_selected_reserve_unconsumed() {
+fn second_wet_member_requires_own_worker_then_accelerates_without_consuming_selected_reserve() {
     let mut fixture = rate_fixture(0.8);
     fixture.mixer.set_pad_bpm(1, Some(150.0));
     let native = select_and_wait(&mut fixture);
@@ -206,7 +206,7 @@ fn second_wet_member_requires_own_worker_and_keeps_the_selected_reserve_unconsum
     assert!(
         starts
             .iter()
-            .all(|start| start.effective_frame() == Some(8192))
+            .all(|start| start.effective_frame() == Some(0))
     );
     assert_ne!(fixture.voice(0).stretch.native_state_address(), native);
     assert_ne!(

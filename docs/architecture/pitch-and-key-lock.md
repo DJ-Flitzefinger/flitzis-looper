@@ -68,6 +68,21 @@ missing readiness and AttackAtGrid retain worker preparation. For ordinary fresh
 starts, exactly neutral Native pitch bypasses preparation. Nonunity costs can
 affect both rate directions;
 slower-only perceived delay still needs separate attack/readiness measurements.
+
+[completion.rs](../../rust/crates/looper/src/audio_engine/pitch_runtime/completion.rs)
+can now accelerate a completed FirstSoundAtGrid ordinary physical birth or an
+entire playback group before that fallback deadline. It recaptures the complete
+action request/permit at E=max(T, callback), checks the retained physical beginning,
+source controls and DSP, and retargets the same scheduler event with its original
+order. The displaced request remains in Work for off-callback retirement. Every
+member, including dry peers, receives the fresh E-bound request; Native/FIFO state
+remains independent. Pending earlier originals cannot be overtaken. Future T is
+never advanced, and quantization OFF imposes no musical minimum or coalescing.
+This one-time path leaves unfinished workers out of the scheduler's deferred cell.
+Recording groups, Piano and worker completion after the fallback deadline retain
+their existing paths; principal-attack DSP is separate and the 30 ms goal remains
+unmet.
+
 The [performance audit](../development.md#performance-audit-and-upgrade-plan)
 records production-route measurements and the remaining readiness/attack work.
 The scheduling correction does not compensate the backend's principal attack;

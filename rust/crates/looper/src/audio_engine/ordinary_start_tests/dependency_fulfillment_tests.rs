@@ -188,6 +188,8 @@ fn prove_original_attack(case: &mut DependencyCase, wet: bool) {
         assert_eq!(voice.stretch.adopted_request_id(), None);
         assert_eq!(voice.stretch.native_primed_output_frames(), 0);
     }
+    case.fixture.render(0);
+    let execution = case.start.execution_frame().unwrap();
     assert!(
         case.fixture
             .render_to(execution)
@@ -582,6 +584,8 @@ fn global_original_group_retains_changed_loop_dependency_before_its_real_ack() {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
+    fixture.render(0);
+    let execution = originals[0].execution_frame().unwrap();
     assert!(
         fixture
             .render_to(execution)

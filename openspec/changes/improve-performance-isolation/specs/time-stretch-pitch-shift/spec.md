@@ -46,3 +46,12 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **THEN** it remains scheduled at T rather than starting early
 - **AND** when quantization is disabled, distinct original triggers may arrive faster than 1/64 notes without an artificial musical minimum interval or coalescing
 - **AND** actual preparation/resource limits remain observable while Key Lock, stems and other concurrent functions are optimized together
+
+#### Scenario: A completed physical birth precedes its admitted fallback deadline
+- **GIVEN** an ordinary FirstSoundAtGrid physical birth or playback-only atomic group has fully completed worker preparation before its fallback E
+- **WHEN** a current complete action request, permit, retained physical origin and source/DSP controls validate at E=max(original T, callback)
+- **THEN** the same queued event may move earlier with its original input order and capacity
+- **AND** every group member receives the same fresh E-bound request before any audible effect
+- **AND** the old request remains owned until off-callback retirement, without Native reset or source consumption on the callback
+- **AND** an earlier pending original cannot be overtaken, and unfinished workers do not occupy the deferred-due cell through this optimization
+- **AND** recording groups, Piano, AttackAtGrid and completion after the fallback deadline retain their existing guarded paths

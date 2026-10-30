@@ -1388,7 +1388,7 @@ fn render_scheduled_audio_tracking_pads<
     pad_activity.clear();
 
     mixer.service_mix_capture(scheduler, retirement);
-    super::pitch_runtime::service_endpoint_reserve(mixer);
+    super::pitch_runtime::service_endpoint_reserve(mixer, scheduler, callback_start_frame);
 
     drain_scheduler_due_at_callback_start(
         scheduler,
