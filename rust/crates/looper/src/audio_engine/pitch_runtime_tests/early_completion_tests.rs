@@ -168,38 +168,134 @@ fn piano_completion_preserves_future_t_and_refuses_cancelled_or_changed_authorit
 }
 
 #[test]
-fn piano_completion_feedback_pressure_uses_real_legacy_reprepare_without_second_acceleration() {
+fn piano_completion_feedback_pressure_rearms_only_after_real_legacy_reprepare() {
     let mut fixture = configured(0.8, true);
     let action = fixture.capture(0, "pitch.extra:0:set_retrigger");
     fixture.publish(&action);
     fixture.wait_worker(&[&action]);
-    let (mut feedback, mut messages) = RingBuffer::new(1);
-    feedback
-        .push(AudioMessage::SampleStarted { id: 1 })
-        .unwrap();
-    render_scheduled_audio(
-        &mut fixture.mixer,
-        &mut fixture.scheduler,
-        &mut [0.0],
-        &mut [0.0; NUM_SAMPLES],
-        0,
-        1,
-        &mut fixture.transport,
-        &mut feedback,
-        &mut fixture.retirement,
-    );
-    fixture.transport.advance_by_rendered_frames(1);
-    assert_eq!(action.execution_target(), 0);
-    assert!(!action.effective());
-    assert!(fixture.scheduler.deferred_due().is_some());
-    messages.pop().unwrap();
-    fixture.render(0);
-    assert_eq!(action.execution_target(), 8193);
-    fixture.wait_worker(&[&action]);
-    assert!(fixture.render_to(8193).iter().all(|value| *value == 0.0));
+    for cycle in 1..=2 {
+        let (mut feedback, mut messages) = RingBuffer::new(1);
+        feedback
+            .push(AudioMessage::SampleStarted { id: 1 })
+            .unwrap();
+        render_scheduled_audio(
+            &mut fixture.mixer,
+            &mut fixture.scheduler,
+            &mut [0.0],
+            &mut [0.0; NUM_SAMPLES],
+            cycle - 1,
+            1,
+            &mut fixture.transport,
+            &mut feedback,
+            &mut fixture.retirement,
+        );
+        fixture.transport.advance_by_rendered_frames(1);
+        assert_eq!(action.execution_target(), cycle - 1);
+        assert!(!action.effective());
+        assert!(fixture.scheduler.deferred_due().is_some());
+        messages.pop().unwrap();
+        fixture.render(0);
+        assert_eq!(action.execution_target(), 8192 + cycle);
+        fixture.wait_worker(&[&action]);
+    }
     fixture.render(0);
     assert!(action.effective(), "{:?}", action.reason());
-    assert_eq!(action.execution_target(), 8193);
+    assert_eq!(action.execution_target(), 2);
     let pcm = fixture.pcm(24_000);
     assert_physical_birth_tone(&pcm, 0, 0, 0.8, true, 1.0);
+}
+
+#[test]
+fn returned_legacy_completion_refuses_cancelled_or_changed_piano_authority() {
+    for fence in ["cancel", "stop", "source", "rate_aba", "gain"] {
+        let mut fixture = configured(0.8, true);
+        let action = fixture.capture(0, "pitch.extra:0:set_retrigger");
+        let gate = WorkerGate::for_pitch(&action);
+        fixture.publish(&action);
+        gate.wait_for(false);
+        assert!(fixture.render_to(8193).iter().all(|value| *value == 0.0));
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        fixture.wait_worker(&[&action]);
+        fixture.render(0);
+        assert_eq!(action.execution_target(), 16385);
+        fixture.wait_worker(&[&action]);
+        match fence {
+            "cancel" => assert!(fixture.control.engine.cancel_pitch_action(&action).unwrap()),
+            "stop" => fixture.control.engine.stop_sample(0).unwrap(),
+            "source" => {
+                let sample = fixture.control.engine.sample_cache.lock().unwrap()[0]
+                    .clone()
+                    .unwrap();
+                publish_tone(&fixture.control, 0, sample, true);
+            }
+            "rate_aba" => {
+                fixture.mixer.set_pad_bpm(0, Some(160.0));
+                fixture.mixer.set_pad_bpm(0, Some(150.0));
+            }
+            _ => fixture.mixer.set_pad_gain(0, -6.0),
+        }
+        fixture.drain();
+        assert!(fixture.render_to(16386).iter().all(|value| *value == 0.0));
+        assert_eq!(action.state(), "rejected", "{fence}: {:?}", action.reason());
+        assert!(!action.effective());
+        assert_eq!(fixture.starts(0), 0);
+    }
+}
+
+#[test]
+fn piano_late_completion_requires_real_reprepare_return_and_preserves_native_and_full_pcm() {
+    for (rate, lock, extra) in [(0.8, true, 0), (1.16, true, 0), (1.0, false, 7)] {
+        let mut fixture = configured(rate, lock);
+        let action = fixture.capture(0, &format!("pitch.extra:{extra}:set_retrigger"));
+        let gate = WorkerGate::for_pitch(&action);
+        fixture.publish(&action);
+        gate.wait_for(false);
+        assert!(fixture.render_to(8193).iter().all(|value| *value == 0.0));
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        fixture.wait_worker(&[&action]);
+        let native = gate.prepared_native();
+        gate.arm_next_attempt();
+        fixture.render(0);
+        assert_eq!(action.execution_target(), 16385);
+        gate.wait_for(false);
+        assert!(fixture.render(512).iter().all(|value| *value == 0.0));
+        assert!(!action.effective());
+        assert_eq!(action.execution_target(), 16385);
+        assert!(fixture.scheduler.deferred_due().is_none());
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        assert_eq!(gate.prepared_native(), native);
+        fixture.wait_worker(&[&action]);
+        let (mut feedback, mut messages) = RingBuffer::new(64);
+        let ((), allocations) = observe_current_thread(|| {
+            render_scheduled_audio(
+                &mut fixture.mixer,
+                &mut fixture.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                8705,
+                1,
+                &mut fixture.transport,
+                &mut feedback,
+                &mut fixture.retirement,
+            );
+        });
+        assert_eq!(allocations, ThreadAllocations::default());
+        while let Ok(message) = messages.pop() {
+            fixture.feedback.push(message);
+        }
+        assert_eq!(action.original_due_frame(), 0);
+        assert!(action.effective(), "{:?}", action.reason());
+        assert_eq!(action.execution_target(), 8705);
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
+        assert_eq!(
+            fixture.voice(0).stretch.adopted_request_id(),
+            Some(action.sequence())
+        );
+        let pcm = fixture.pcm(24_000);
+        assert_physical_birth_tone(&pcm, 0, extra, rate, lock, 1.0);
+        assert_eq!(fixture.starts(0), 1);
+    }
 }

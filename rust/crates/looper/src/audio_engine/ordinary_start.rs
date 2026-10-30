@@ -45,6 +45,7 @@ pub(crate) struct OrdinaryStartWork {
     pub(crate) dsp_intent: Option<super::late_start_dsp::DspInputIntent>,
     launch_origin: Option<SourceReadCheckpoint>,
     pending_late_reprepare: Option<PendingLateReprepare>,
+    late_reprepared_execution: Option<u64>,
     inherit_loop: bool,
     captured_loop: Option<(f64, Option<f64>)>,
     launch_reference: super::loop_phase_reference::LoopPhaseReference,
@@ -84,6 +85,7 @@ impl OrdinaryStartWork {
             dsp_intent: None,
             launch_origin: None,
             pending_late_reprepare: None,
+            late_reprepared_execution: None,
             inherit_loop: false,
             captured_loop: None,
             launch_reference: super::loop_phase_reference::LoopPhaseReference::Unavailable,
@@ -268,6 +270,7 @@ impl OrdinaryStartWork {
             endpoint,
             previous_execution,
         });
+        self.late_reprepared_execution = None;
         self.frames = Some((original, execution));
         self.launch_origin = Some(endpoint);
         self.preparation_required = true;
@@ -317,8 +320,8 @@ impl OrdinaryStartWork {
         self.render_format == (rate, channels)
     }
 
-    /// Only an unconsumed physical birth may move once before its fallback E.
-    /// The displaced request stays in Work custody until worker retirement.
+    /// An unconsumed physical bundle may move once before its fallback E.
+    /// Displaced pins stay in Work until genuine worker reset or retirement.
     pub(crate) fn early_completion_source(&self) -> Option<&NativeHistoryRequest> {
         if !self.is_ready()
             || self.rejected_request.is_some()
@@ -341,6 +344,13 @@ impl OrdinaryStartWork {
             && source.epoch == self.epoch()
             && source.target_output_frame == self.execution_frame())
         .then_some(source)
+    }
+
+    /// A successful worker reset, bound to this exact still-unconsumed bundle.
+    pub(crate) fn late_completion_prepared_for(&self, execution: u64) -> bool {
+        self.late_reprepared_execution == Some(execution)
+            && self.execution_frame() == execution
+            && self.early_completion_source().is_some()
     }
 
     pub(crate) fn completion_request_matches(&self, request: &NativeHistoryRequest) -> bool {
@@ -382,6 +392,7 @@ impl OrdinaryStartWork {
             self.request.replace(fresh)
         };
         self.frames.as_mut().unwrap().1 = execution;
+        self.late_reprepared_execution = None;
         self.dsp_intent = Some(plan.intent);
         Ok(())
     }
@@ -500,6 +511,7 @@ impl OrdinaryStartWork {
         if !self.preparation_required {
             return Ok(());
         }
+        let late_reprepare = self.pending_late_reprepare.is_some();
         if let Some(pending) = self.pending_late_reprepare.take() {
             let mut request = self
                 .request
@@ -565,6 +577,12 @@ impl OrdinaryStartWork {
         self.origin().preparation_guard()?;
         if !self.origin().mark_prepared() {
             return Err(PitchActionReject::StaleContent);
+        }
+        if late_reprepare {
+            // The worker has genuinely rebuilt the physical beginning. Only it
+            // may release the displaced completion pins and rearm one bind.
+            self.rejected_request = None;
+            self.late_reprepared_execution = Some(self.execution_frame());
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-//! One-shot completion of a constant independent Piano physical birth.
+//! One-shot-per-bundle completion of a constant independent Piano physical birth.
 
 use super::*;
 
@@ -8,6 +8,12 @@ pub(crate) struct PitchCompletionPlan {
 }
 
 impl PitchActionWork {
+    pub(crate) fn late_completion_prepared_for(&self, execution: u64) -> bool {
+        self.late_reprepared_execution == Some(execution)
+            && self.action.execution_target() == execution
+            && self.early_completion_source().is_some()
+    }
+
     pub(crate) fn early_completion_source(&self) -> Option<&NativeHistoryRequest> {
         if !self.is_ready()
             || self.rejected_request.is_some()
@@ -80,6 +86,7 @@ impl PitchActionWork {
             self.request.replace(fresh)
         };
         self.launch_delay_frames = execution - self.action.original_due_frame();
+        self.late_reprepared_execution = None;
         self.dsp_intent = Some(plan.intent);
         Ok(())
     }

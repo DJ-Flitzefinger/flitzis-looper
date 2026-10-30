@@ -62,14 +62,21 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       the original event/order and immutable STOP reservation; verify whole PCM,
       exact spool bits and fresh source/DSP/OwnACK/cancel/capacity fences.
 
-## 7. Late completion and live-original readiness
+## 7. Completion after genuine legacy reprepare
 
-- [ ] Address results after the fallback deadline with genuine legacy reprepare,
-      live earlier originals and not-yet-terminal group peers. Preserve full fresh
+- [x] Accelerate returned results after the fallback deadline only after genuine
+      successful off-RT legacy reprepare, with exact E-bound one-shot eligibility
+      and displaced-request pins released only on that worker. Preserve full fresh
       requests, atomic recording S/E, OriginalOrder, bounded capacity/cancellation,
       source/DSP/OwnACK and last-reader fences.
 
-## 8. Prepared principal-attack response
+## 8. Live-original and old-group-peer readiness
+
+- [ ] Address live earlier originals and not-yet-terminal peers of old atomic
+      groups without overtaking a possible earlier effect or releasing custody.
+      Retain full request/order/capacity/recording/source/DSP/OwnACK fences.
+
+## 9. Prepared principal-attack response
 
 - [ ] Address the measured principal-attack delay through a separate justified
       DSP step; significant pre-ringing cannot pass the 30 ms attack goal.
@@ -77,14 +84,14 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       independent source/dry references; extend ordinary/Piano/group and supported
       rate/partition/background cases proportionally. Split further if necessary.
 
-## 9. Stem component-loading/control isolation
+## 10. Stem component-loading/control isolation
 
 - [ ] Prove the global owner/producer/GIL contention with controlled slow reads.
 - [ ] Separate slow preparation from short guarded control/publication locks.
 - [ ] Verify unrelated trigger/STOP progress, same-PAD ordering, sharing, memory
       reservations, placement/source ABA, cancel/failure and last-reader safety.
 
-## 10. Native bounded stem conversion
+## 11. Native bounded stem conversion
 
 - [ ] Measure Python conversion and control responsiveness against existing oracles.
 - [ ] Port the justified conversion path to detached Rust with exact rounding,
@@ -92,7 +99,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
 
-## 11. Background CPU and process resource policy
+## 12. Background CPU and process resource policy
 
 - [ ] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
@@ -101,7 +108,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 - [ ] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
 
-## 12. PCM, multicore and offline GPU refinements
+## 13. PCM, multicore and offline GPU refinements
 
 - [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
 - [ ] Implement justified remaining bottleneck fixes; record measured no-change
@@ -122,7 +129,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       packaging, drivers and maintenance; reject disproportionate or marginal
       paths and record that decision rather than guarantee every GPU.
 
-## 13. Native inference and practical PyTorch removal
+## 14. Native inference and practical PyTorch removal
 
 - [ ] Inventory productive Torch closures/operators and distribution size; reuse
       existing Rust/ONNX KeyNet boundaries and keep new cores Python-independent.
@@ -137,7 +144,7 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
       verify actual footprint. Remove PyTorch only after parity; if not practical,
       record the concrete barrier and preserve the working path.
 
-## 14. Combined regression and final architecture review
+## 15. Combined regression and final architecture review
 
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,

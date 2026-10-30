@@ -98,6 +98,62 @@ fn complete_at_512(rig: &mut CaptureRig, captured: &CapturedGlobalStart) -> u128
     released.elapsed().as_micros()
 }
 
+fn complete_after_real_reprepare(
+    rig: &mut CaptureRig,
+    captured: &CapturedGlobalStart,
+    wet: usize,
+) -> u128 {
+    let gate = WorkerGate::for_ordinary(&captured.owner.members[wet - 1].start);
+    rig.publish(captured);
+    rig.fixture.drain();
+    gate.wait_for(false);
+    assert!(
+        rig.fixture
+            .render_to(8193)
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    assert!(!rig.status().started);
+    gate.release();
+    assert_eq!(gate.wait_for(true), None);
+    wait_members(&mut rig.fixture, captured.owner.members.len());
+    gate.arm_next_attempt();
+    rig.fixture.render(0);
+    assert!(
+        captured
+            .owner
+            .members
+            .iter()
+            .all(|member| member.start.execution_frame() == Some(16385))
+    );
+    gate.wait_for(false);
+    rig.fixture
+        .scheduler
+        .schedule(8300, ScheduledCommand::StopSample { id: 10 })
+        .unwrap();
+    assert!(rig.fixture.render(512).iter().all(|sample| *sample == 0.0));
+    assert_eq!(
+        rig.fixture.scheduler.len(),
+        1,
+        "unrelated STOP progresses while late worker owns the final member"
+    );
+    assert!(rig.fixture.scheduler.deferred_due().is_none());
+    assert!(!rig.status().started);
+    assert!(
+        captured
+            .owner
+            .members
+            .iter()
+            .all(|member| member.start.effective_frame().is_none()
+                && member.start.execution_frame() == Some(16385))
+    );
+    let released = Instant::now();
+    gate.release();
+    assert_eq!(gate.wait_for(true), None);
+    wait_members(&mut rig.fixture, captured.owner.members.len());
+    released.elapsed().as_micros()
+}
+
 fn burst_landmarks(pcm: &[f32]) -> (usize, usize, usize) {
     let peak = pcm
         .iter()
@@ -280,6 +336,174 @@ fn recording_completion_waits_for_every_worker_and_preserves_independent_full_pc
                     .collect::<Vec<_>>()
             );
         }
+    }
+}
+
+#[test]
+fn late_recording_completion_requires_all_real_reprepares_and_keeps_whole_pcm_spool_and_stop() {
+    use crate::audio_engine::ordinary_endpoint_reserve_tests::adopt_current_source_ids;
+    use crate::audio_engine::pitch_runtime_tests::{SOURCE_HZ, physical_birth_tone_reference};
+    for ratio in [0.8, 1.16] {
+        for (count, wet) in [(2, 2), (4, 2), (6, 6)] {
+            let mut rig = rate_rig(ratio, false);
+            let sample = rig.fixture.control.engine.sample_cache.lock().unwrap()[0]
+                .clone()
+                .unwrap();
+            for id in 0..count {
+                publish_tone(&rig.fixture.control, id, sample.clone(), true);
+            }
+            adopt_current_source_ids(&mut rig.fixture, true, &(0..count).collect::<Vec<_>>());
+            refresh_actual_runtime_bindings(&rig.fixture);
+            for id in 0..count {
+                rig.fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
+                rig.fixture
+                    .mixer
+                    .set_pad_bpm(id, Some(if id < wet { 120.0 / ratio } else { 120.0 }));
+            }
+            let captured = capture_members(&rig.fixture, count);
+            rig.fixture.drain();
+            complete_after_real_reprepare(&mut rig, &captured, wet);
+            // Admission of STOP still uses pending S; moving S earlier preserves
+            // this original reservation, including its exact recorded endpoint.
+            rig.stop(32_705);
+            measured_capture_callback(
+                &mut rig.fixture,
+                &mut [],
+                "returned legacy recording completion",
+            );
+            assert_eq!(rig.status().first_frame, Some(8705));
+            assert!(
+                captured
+                    .owner
+                    .members
+                    .iter()
+                    .all(|member| member.start.original_frame() == Some(0)
+                        && member.start.effective_frame() == Some(8705))
+            );
+            let addresses = (0..wet)
+                .map(|id| rig.fixture.voice(id).stretch.native_state_address())
+                .collect::<Vec<_>>();
+            for (id, address) in addresses.iter().enumerate() {
+                assert_ne!(*address, 0);
+                assert!(!addresses[..id].contains(address));
+                assert_eq!(
+                    rig.fixture.voice(id).stretch.adopted_request_id(),
+                    Some(captured.owner.members[id].start.sequence())
+                );
+            }
+            let pcm = rig.fixture.pcm(24_000);
+            let reference = physical_birth_tone_reference(pcm.len(), SOURCE_HZ, 0, 0, ratio, true);
+            for (frame, (actual, expected)) in pcm.iter().zip(reference).enumerate() {
+                let dry = (0.25
+                    * ((LOOP_START + frame % (LOOP_END - LOOP_START)) as f64
+                        * SOURCE_HZ
+                        * std::f64::consts::TAU
+                        / f64::from(RATE))
+                    .sin()) as f32;
+                assert!(
+                    actual.is_finite()
+                        && (*actual - expected * wet as f32 - dry * (count - wet) as f32).abs()
+                            < 1.0e-4,
+                    "{count}/{wet}, r={ratio}, frame={frame}"
+                );
+            }
+            rig.fixture.render(0);
+            let settled = rig.joined();
+            assert!(settled.successful_spool);
+            assert_eq!(
+                (
+                    settled.first_frame,
+                    settled.end_frame,
+                    settled.written_frames
+                ),
+                (Some(8705), Some(32_705), 24_000)
+            );
+            assert_eq!(
+                rig.bits(),
+                pcm.iter()
+                    .map(|sample| sample.to_bits())
+                    .collect::<Vec<_>>()
+            );
+            assert!((0..count).all(|id| rig.fixture.starts(id) == 1));
+        }
+    }
+}
+
+#[test]
+#[ignore = "frozen-clock late recording scheduling/attack diagnostic, not device latency"]
+fn late_reprepared_recording_response() {
+    for ratio in [0.8, 1.16] {
+        let mut rig = rate_rig(ratio, true);
+        let captured = public_capture(&rig.fixture);
+        rig.fixture.drain();
+        let residual_ready_us = complete_after_real_reprepare(&mut rig, &captured, 2);
+        rig.fixture.render(0);
+        let execution = captured.owner.members[0].start.execution_frame().unwrap();
+        let pcm = rig.fixture.pcm(24_000);
+        let (first, significant, principal) = burst_landmarks(&pcm);
+        rig.stop(execution + 24_000);
+        let settled = rig.joined();
+        assert!(settled.successful_spool);
+        assert_eq!(rig.status().first_frame, Some(execution));
+        assert_eq!(
+            rig.bits(),
+            pcm.iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "LATE_REPREPARED_RECORDING ratio={ratio} T=0 admitted_E=8192 legacy_E=16385 ready_observed_frame=8705 residual_release_to_ready_us={residual_ready_us} actual_E={execution} first_from_T={} significant_from_T={} principal_from_T={} principal_after_E={principal} n=1 source_resident=true clock_frozen_during_worker=true",
+            first as u64 + execution,
+            significant as u64 + execution,
+            principal as u64 + execution
+        );
+    }
+}
+
+#[test]
+fn returned_legacy_recording_completion_refuses_cancelled_or_changed_whole_group() {
+    for fence in ["cancel", "source", "rate_aba", "gain"] {
+        let mut rig = rate_rig(0.8, false);
+        let captured = public_capture(&rig.fixture);
+        rig.fixture.drain();
+        complete_after_real_reprepare(&mut rig, &captured, 2);
+        match fence {
+            "cancel" => {
+                assert!(captured.cancel());
+            }
+            "source" => {
+                let sample = rig.fixture.control.engine.sample_cache.lock().unwrap()[1]
+                    .clone()
+                    .unwrap();
+                publish_tone(&rig.fixture.control, 1, sample, true);
+            }
+            "rate_aba" => {
+                rig.fixture.mixer.set_pad_bpm(1, Some(160.0));
+                rig.fixture.mixer.set_pad_bpm(1, Some(150.0));
+            }
+            _ => rig.fixture.mixer.set_pad_gain(1, -6.0),
+        }
+        rig.fixture.drain();
+        assert!(
+            rig.fixture
+                .render_to(16386)
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert_eq!(captured.state(), "rejected", "{fence}");
+        assert!(
+            captured
+                .owner
+                .members
+                .iter()
+                .all(|member| member.start.effective_frame().is_none()
+                    && member.start.execution_frame() == Some(16385))
+        );
+        assert_eq!((rig.fixture.starts(0), rig.fixture.starts(1)), (0, 0));
+        let settled = rig.joined();
+        assert!(!settled.started && !settled.successful_spool);
+        assert_eq!(settled.written_frames, 0);
+        assert!(rig.bits().is_empty());
     }
 }
 

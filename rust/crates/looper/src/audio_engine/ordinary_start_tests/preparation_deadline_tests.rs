@@ -90,6 +90,11 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
     observation.finished = true;
     observation.reason = reason;
     observation.prepared_native = match work {
+        PreparedActionWork::Ordinary(work) if work.is_ready() => work
+            .candidate
+            .as_ref()
+            .and_then(|candidate| candidate.rubberband.as_ref())
+            .map(|native| native.state_address()),
         PreparedActionWork::Pitch(work) if work.is_ready() => work
             .candidate
             .as_ref()
@@ -211,7 +216,7 @@ impl WorkerGate {
         self.state.changed.notify_all();
     }
 
-    fn arm_next_attempt(&self) {
+    pub(in crate::audio_engine) fn arm_next_attempt(&self) {
         let mut observation = self.state.observation.lock().unwrap();
         assert!(observation.finished);
         *observation = GateObservation::default();
@@ -565,6 +570,8 @@ fn late_ordinary_burst(policy: &str, pending_marker: bool) {
             .unwrap()
             .has_ready_action(second.sequence());
         if ready && execution >= frame {
+            actual.render(0);
+            let execution = second.execution_frame().unwrap();
             assert_eq!(actual.render_to(execution), background.render_to(execution));
             break;
         }
@@ -742,6 +749,10 @@ fn late_wet_piano_worker(policy: &str, pending_marker: bool) {
         constructions,
         "the same owned Piano candidate is reused rather than reconstructed"
     );
+    let legacy_execution = execution;
+    actual.render(0);
+    let execution = original.execution_target();
+    assert!(execution <= legacy_execution);
     assert!(
         actual
             .render_to(execution)
@@ -1128,47 +1139,33 @@ fn ontime_unity_piano_birth_retains_its_own_dry_request_behind_older_native_birt
     gate.release();
     assert_eq!(gate.wait_for(true), None);
     wait_ready(&mut actual, &[first.sequence()]);
-    let deadline = Instant::now() + GATE_WAIT;
-    let mut actual_pcm = Vec::new();
-    while !second.effective() {
-        actual.mixer.pitch_runtime.as_mut().unwrap().poll();
-        assert_ne!(
-            second.state(),
-            "rejected",
-            "unity original behind an older Native birth must retain its own dry request; reason={:?}",
-            second.reason()
-        );
-        let frame = actual.transport.output_frame();
-        let ready = actual
-            .mixer
-            .pitch_runtime
-            .as_ref()
-            .unwrap()
-            .has_ready_action(second.sequence());
-        if ready && second.execution_target() >= frame {
-            actual.render_to(second.execution_target());
-            let emitted = actual.render(1);
-            if second.effective() {
-                actual_pcm.extend(emitted);
-            }
-        } else if ready {
-            let emitted = actual.render(1);
-            if second.effective() {
-                actual_pcm.extend(emitted);
-            }
-        } else {
-            assert!(
-                Instant::now() < deadline,
-                "unity original did not return from its own ordered preparation"
+    observe_ordered_effect_before_pcm(
+        &mut actual,
+        || {
+            assert_ne!(
+                second.state(),
+                "rejected",
+                "unity original behind an older Native birth must retain its own dry request; reason={:?}",
+                second.reason()
             );
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
+            second.effective()
+        },
+        |fixture| {
+            let runtime = fixture.mixer.pitch_runtime.as_ref().unwrap();
+            [first.sequence(), second.sequence()]
+                .into_iter()
+                .all(|sequence| {
+                    (sequence == first.sequence() && first.effective())
+                        || (sequence == second.sequence() && second.effective())
+                        || runtime.has_ready_action(sequence)
+                })
+        },
+    );
     assert_eq!(first.state(), "applied", "{:?}", first.reason());
     assert_eq!(actual.starts(0), 2);
     assert!(second.execution_target() > original);
-    assert_eq!(actual_pcm.len(), 1, "retain the first actual unity sample");
-    actual_pcm.extend(render_partitioned(&mut actual, EMITTED_FRAMES - 1));
+    assert_eq!(actual.transport.output_frame(), second.execution_target());
+    let actual_pcm = render_partitioned(&mut actual, EMITTED_FRAMES);
     let expected_pcm = render_partitioned(&mut reference, EMITTED_FRAMES);
     assert!(expected.effective(), "{:?}", expected.reason());
     assert_eq!(
@@ -1193,6 +1190,49 @@ fn ontime_unity_piano_birth_retains_its_own_dry_request_behind_older_native_birt
         identity
     );
     assert!(!actual.voice(0).stretch.loop_acceptance_state().0);
+}
+
+/// Observe due effects without ever discarding the final original's PCM prefix.
+/// A returned completion can clear a live predecessor on one empty callback and
+/// become eligible on the next at the same frame. Advance only to a fresh queued
+/// target after all participating unfinished workers have actually returned.
+fn observe_ordered_effect_before_pcm(
+    fixture: &mut Fixture,
+    effected: impl Fn() -> bool,
+    all_returned: impl Fn(&Fixture) -> bool,
+) {
+    let deadline = Instant::now() + GATE_WAIT;
+    while !effected() {
+        fixture.mixer.pitch_runtime.as_mut().unwrap().poll();
+        let before = (
+            fixture.starts(0),
+            fixture.scheduler.peek_next_target_frame(),
+        );
+        fixture.render(0);
+        if effected() {
+            break;
+        }
+        let after = (
+            fixture.starts(0),
+            fixture.scheduler.peek_next_target_frame(),
+        );
+        assert!(
+            Instant::now() < deadline,
+            "ordered preparation/effect did not progress"
+        );
+        if before != after {
+            continue;
+        }
+        if all_returned(fixture)
+            && fixture.scheduler.deferred_due().is_none()
+            && let Some(next) = fixture.scheduler.peek_next_target_frame()
+            && next > fixture.transport.output_frame()
+        {
+            fixture.render_to(next);
+        } else {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 #[test]
@@ -1285,7 +1325,30 @@ fn eight_equal_t_originals_pipeline_their_own_late_preparation_before_ordered_ef
             "ordering must not add one preparation lead per accepted attack: {planned:?}"
         );
         wait_burst_ready(&mut actual, &originals);
-        actual.render_to(last);
+        observe_ordered_effect_before_pcm(
+            &mut actual,
+            || {
+                for original in &originals {
+                    assert_ne!(original.state(), "rejected", "{:?}", original.reason());
+                }
+                originals.last().unwrap().state() == "applied"
+            },
+            |fixture| {
+                originals.iter().all(|original| {
+                    original.state() == "applied"
+                        || fixture
+                            .mixer
+                            .pitch_runtime
+                            .as_ref()
+                            .unwrap()
+                            .has_ready_action(original.sequence())
+                })
+            },
+        );
+        let legacy_last = last;
+        let last = originals.last().unwrap().effective_frame().unwrap();
+        assert!(last <= legacy_last);
+        assert_eq!(actual.transport.output_frame(), last);
         let mut actual_pcm = actual.render(1);
         actual_pcm.extend(render_partitioned(&mut actual, EMITTED_FRAMES - 1));
         assert_eq!(actual.starts(0), originals.len());
@@ -1439,6 +1502,11 @@ fn global_late_plan_marker_after_first_member_preserves_all_original_plans_until
         assert!(common > execution);
         assert_eq!(originals[1].execution_frame(), Some(common));
         wait_own_group(&mut fixture, &originals);
+        let legacy_common = common;
+        fixture.render(0);
+        let common = originals[0].execution_frame().unwrap();
+        assert!(common <= legacy_common);
+        assert_eq!(originals[1].execution_frame(), Some(common));
         assert!(
             fixture
                 .render_to(common)

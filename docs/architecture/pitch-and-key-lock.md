@@ -88,11 +88,16 @@ geometry, cancellation and immutable admitted STOP before member requests change
 After every member binds, the same callback updates pending capture S to common E;
 the existing event preserves OriginalOrder and its reserved STOP lane. A pre-start
 cancelled recording cannot revive, and final member/capture claims remain atomic.
-This one-time path leaves unfinished workers out of the scheduler's deferred cell.
-Live SET, gliding/history-bound Piano, AttackAtGrid and worker
-completion after the fallback deadline retain their existing paths. Piano uses
+This one-shot-per-bundle path leaves unfinished workers out of the scheduler's deferred cell.
+After a missed deadline, only genuine successful off-RT legacy reprepare rearms
+completion, through a receipt bound to its exact rebuilt E. The worker releases
+the prior displaced request; a new plan or successful bind consumes the receipt.
+Every replanned group member must match that E before any bind/capture change.
+Replan count and maximum launch delay remain bounded. Live earlier originals and
+group-held deferred Work retain their ordering/custody paths.
+Live SET, gliding/history-bound Piano and AttackAtGrid retain their existing paths. Piano uses
 the exact retained start snapshot and a fresh action-owned permit/DSP intent;
-actual or retained feed and legacy replans are excluded. Principal-attack DSP is
+actual or retained feed is excluded. Principal-attack DSP is
 separate and the 30 ms goal remains
 unmet.
 

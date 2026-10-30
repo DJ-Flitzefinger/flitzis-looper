@@ -54,11 +54,20 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** every group member receives the same fresh E-bound request before any audible effect
 - **AND** the old request remains owned until off-callback retirement, without Native reset or source consumption on the callback
 - **AND** an earlier pending original cannot be overtaken, and unfinished workers do not occupy the deferred-due cell through this optimization
-- **AND** Piano completion uses its exact retained physical origin, current action-owned permit and DSP intent, without live/history-bound feed or a previous completion/replan
+- **AND** Piano completion uses its exact retained physical origin, current action-owned permit and DSP intent, without live/history-bound feed
 - **AND** recording validates the original pending capture/session, cancellation, geometry and immutable admitted STOP before any member request or E changes
 - **AND** after all recording members bind, pending capture S moves to their common E in the same callback, preserving the original event order and reserved STOP lane
 - **AND** a pre-start cancelled recording cannot revive, and whole-group capacity failure cannot record or play a partial prefix
-- **AND** live SET, gliding/history-bound Piano, AttackAtGrid and completion after the fallback deadline retain their existing guarded paths
+- **AND** live SET, gliding/history-bound Piano and AttackAtGrid retain their existing guarded paths
+
+#### Scenario: A late original completes genuine legacy reprepare
+- **GIVEN** an independent FirstSound physical birth or complete atomic playback/recording group misses its fallback and follows the existing legacy reprepare path
+- **WHEN** every required worker genuinely rebuilds its original physical beginning and successfully publishes preparation for the exact new E
+- **THEN** a receipt bound to that E permits one fresh completion bind before the new fallback, using the same full request/source/permit/DSP and final effect fences
+- **AND** only the successful off-RT worker releases a previous displaced request; failed or cancelled work retains normal custody and retirement
+- **AND** a new reprepare or successful completion consumes that receipt, without resetting replan count or maximum launch-delay bounds
+- **AND** all group members share the header E and validate before any binding or pending capture S changes, preserving immutable STOP and original order
+- **AND** live earlier originals, group-held deferred Work, SET, AttackAtGrid and history-bound births keep their existing guarded paths
 
 #### Scenario: Terminal rejection releases ordering without releasing custody
 - **GIVEN** an earlier same-content original is conclusively rejected while its slot, queued event or worker is still retained

@@ -4,6 +4,19 @@ use super::*;
 use crate::audio_engine::ordinary_start::OrdinaryCompletionPlan;
 
 impl PitchRuntime {
+    fn completion_bundle_current(slot: &ActionSlot) -> bool {
+        slot.replans == 0
+            || match slot.work.as_ref() {
+                Some(PreparedActionWork::Ordinary(work)) => {
+                    work.late_completion_prepared_for(slot.planned)
+                }
+                Some(PreparedActionWork::Pitch(work)) => {
+                    work.late_completion_prepared_for(slot.planned)
+                }
+                None => false,
+            }
+    }
+
     pub(super) fn accelerate_completed_starts<const CAPACITY: usize>(
         &mut self,
         mixer: &mut RtMixer,
@@ -14,7 +27,7 @@ impl PitchRuntime {
             let slot = &self.slots[index];
             let execution = slot.original.max(callback);
             if slot.sequence == 0
-                || slot.replans != 0
+                || !Self::completion_bundle_current(slot)
                 || execution >= slot.planned
                 || !scheduler.has_queued_pitch_action(index, slot.sequence, slot.planned)
             {
@@ -85,7 +98,10 @@ impl PitchRuntime {
         let mut plans: [Option<OrdinaryCompletionPlan>; super::super::constants::MAX_VOICES] =
             std::array::from_fn(|_| None);
         for (member, slot_index) in group.slots[..group.len].iter().copied().enumerate() {
-            if self.preceding_endpoint(slot_index).is_some() {
+            if self.preceding_endpoint(slot_index).is_some()
+                || self.slots[slot_index].planned != self.slots[index].planned
+                || !Self::completion_bundle_current(&self.slots[slot_index])
+            {
                 return;
             }
             let Some(PreparedActionWork::Ordinary(work)) = self.slots[slot_index].work.as_ref()

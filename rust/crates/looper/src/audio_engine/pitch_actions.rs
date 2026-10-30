@@ -941,6 +941,7 @@ pub(crate) struct PitchActionWork {
     request: Option<NativeHistoryRequest>,
     // Displaced completion envelopes retain every source/permit pin off RT.
     rejected_request: Option<NativeHistoryRequest>,
+    late_reprepared_execution: Option<u64>,
     pub(crate) attack_measurement: Option<PreparedAttackMeasurement>,
     captured: bool,
     execution_frozen: bool,
@@ -991,6 +992,7 @@ impl PitchActionWork {
             render_format: (sample_rate_hz, channels),
             request: None,
             rejected_request: None,
+            late_reprepared_execution: None,
             attack_measurement: None,
             captured: false,
             execution_frozen: false,
@@ -1072,6 +1074,7 @@ impl PitchActionWork {
             .checked_sub(self.action.original_due_frame())
             .ok_or(PitchActionReject::PreparedMismatch)?;
         self.late_replan = Some((endpoint, dsp));
+        self.late_reprepared_execution = None;
         self.normal_launch_origin = Some(endpoint);
         self.preparation_required = true;
         Ok(())
@@ -1322,6 +1325,7 @@ impl PitchActionWork {
     /// Worker-only native reset/warm/read/allocate; each action retains its own tuple and epoch.
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
         self.action.preparation_guard(self.own_window)?;
+        let late_reprepare = self.late_replan.is_some();
         if let Some((_endpoint, dsp)) = self.late_replan.take() {
             let mut request = self
                 .request
@@ -1452,6 +1456,11 @@ impl PitchActionWork {
                 .is_err()
         {
             return Err(PitchActionReject::StaleContent);
+        }
+        if late_reprepare {
+            // Off-RT reset success is the only rearm boundary for completion.
+            self.rejected_request = None;
+            self.late_reprepared_execution = Some(self.action.execution_target());
         }
         Ok(())
     }

@@ -57,6 +57,26 @@ stem, conversion, budget, provider, practical Torch removal and final parity wor
 
 ## Source findings
 
+### STEP7 impact and retained scope
+
+Permit one fresh completion bind after a genuinely successful off-RT legacy
+reprepare of an independent FirstSound physical birth. Ordinary and Piano Work
+record the exact rebuilt E only after full preparation and prepared-status
+publication succeed. The worker then releases displaced completion-request pins;
+the callback never replaces an occupied displaced-request slot. A new reprepare
+or successful completion consumes the receipt. Replanned runtime slots require
+that exact E-bound receipt, while every atomic group member also matches the
+header's planned E. Existing whole fresh request/permit/DSP comparators, physical
+beginning, no actual/retained feed, capture/session/immutable STOP checks and
+same-event order/capacity remain authoritative. Replan count and maximum launch
+delay do not reset. Work already moved into a deferred group's own custody remains
+on its existing path. Live predecessors remain strict barriers; optimizing live
+originals/nonterminal old-group peers is a separate step 8. Principal DSP becomes
+step 9, followed by all existing stem/conversion/budget/provider/Torch/final work:
+the full plan now has fifteen steps. Verify genuine second worker holds, repeated
+completion/reset cycles, complete PCM and exact recording spool, cancellation/
+source/control fences and RT allocations. No 30 ms or readiness-speedup claim.
+
 This table records the initial audit baseline. The STEP2 receipt below records
 the implemented subset and supersedes its corresponding reserve-miss observations.
 
@@ -441,6 +461,69 @@ Regular focused filters are `captured_global_start`, `scheduler::` and
 [`early_completion_tests.rs`](../../../rust/crates/looper/src/audio_engine/captured_global_start_tests/atomic_capture_tests/early_completion_tests.rs).
 Systems PRE/frozen/affected, Methods and one independent final-diff review cover
 this step. Formatting, strict OpenSpec and local navigation are checked separately.
+
+## STEP7 genuine legacy completion result
+
+Successful legacy reprepare now produces the exact E-bound receipt described
+above for ordinary/Piano and playback/recording groups. A previously completed
+bundle cannot rearm itself: only the real off-RT worker resets its original
+physical beginning, finishes guarded preparation and releases displaced pins.
+All fresh-request, source/DSP/OwnACK, original-order, capacity and retirement
+checks remain; live predecessors and deferred group-owned Work remain strict.
+The separate live-original/old-group-peer step 8 retains that remaining work.
+
+The explicit `late_reprepared_recording_response` diagnostic uses the public
+two-wet captured GLOBAL/recording route, resident single-burst PCM and the same
+48 kHz reference Windows/Release host above. It holds the first real worker past
+admitted E=8192, returns it at frame 8193, observes genuine legacy reprepare at
+E=16385, then holds the second worker while rendering silence to 8705. Readiness
+returns while the software clock is frozen at 8705; completion moves E there.
+There is one observation per ratio, no selected-reserve consumption or background
+load. These are observed plans and effects within one run, not a paired empirical
+before/after host-latency or readiness-speed comparison.
+
+| Rate | Legacy planned E / observed ready frame / actual E | First / significant / principal from original T | Principal after actual E | Residual second release-to-ready (us) |
+| --- | --- | --- | --- | --- |
+| .8 | 16385 / 8705 / 8705 | 9781 / 11532 / 11696 | 2991 | 996 |
+| 1.16 | 16385 / 8705 / 8705 | 9790 / 11460 / 11572 | 2867 | 982 |
+
+This retarget removes 7680 frames/160 ms of remaining scheduling wait after the
+real reset. Principal response after E remains 62.313/59.729 ms; the 30 ms goal
+is **unmet**. Original-T response includes the deliberate worker holds. Residual
+host time excludes the first preparation, earlier input/queue time and everything
+before the second release. It cannot establish a compute/readiness speedup, input
+latency distribution, DSP improvement, CPAL/device/acoustic latency, background
+headroom or whole-quality acceptance. Capture first-frame equals actual E and
+all 24000 spool sample bits equal rendered PCM. Other-rate late recording timing
+remains unmeasured.
+
+Six added regular regressions cover genuine second workers, identical reused
+Native handles, full independent physical PCM in both directions and Key Lock OFF
+with nonzero Piano pitch; returned cancellation/source/control fences; and all
+2/4/6-PAD mixed/all-wet recording members with full PCM and exact spool/STOP.
+Ordinary/Piano feedback tests now perform two real reset/completion cycles.
+The recording STOP is admitted before completion at 32705 and retained as S moves
+from 16385 to 8705. Existing equal/short/immutable STOP, future-T, terminal capacity,
+source/OwnACK and last-reader proofs remain compatible and pass. Rust callback
+allocation observations exclude C++/FFT allocations.
+
+The regular closure has 292 distinct passing cases: 290 successful integrated
+cases reused plus two corrected legacy fixtures passing in the focused final run.
+Those two fixtures had rendered toward saved fallback E and discarded real
+earlier PCM. State-driven empty callbacks now observe ordered effects first,
+advance only to a freshly queried scheduler target with all participating workers
+returned, then retain every sample from actual E. All eight originals, original T,
+planned-span bound, Native/request/FIFO/EQ and complete source-phase comparisons
+remain. These empty observations are ownership proofs, not paced throughput or
+device evidence. Twelve default ignored cases retain their limits; the new
+diagnostic passed explicitly. Systems PRE/frozen/affected, Methods and the single
+independent final-diff review chain cover the change. Source formatting, strict
+OpenSpec, local links and whitespace pass. Another 90 Python captured/MIDI/
+recording-controller checks pass with verified external Release Native/API;
+these opaque/control checks do not establish Native/audio acceptance. Release
+retains the known 22 library warnings. No ABI, dependency, installer, App,
+device or inference change is introduced. Run the new diagnostic through the
+actual-checkout adapter's `rust-test` with `-p flitzis-looper --lib --release -- late_reprepared_recording_response --ignored --nocapture --test-threads=1`.
 
 ## Measurement contract
 

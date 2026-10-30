@@ -513,35 +513,140 @@ fn early_completion_preserves_future_quantized_target_and_refuses_stale_control_
 }
 
 #[test]
-fn early_completion_feedback_pressure_reprepares_from_the_fresh_request_without_reacceleration() {
+fn early_completion_feedback_pressure_rearms_only_after_real_legacy_reprepare() {
     let mut fixture = configured(0.8);
     let start = capture(&fixture, 1.0);
     publish(&mut fixture, &start);
     wait_ready(&mut fixture, &[start.sequence()]);
-    let (mut feedback, mut messages) = RingBuffer::new(1);
-    feedback
-        .push(AudioMessage::SampleStarted { id: 1 })
-        .unwrap();
-    render_scheduled_audio(
-        &mut fixture.mixer,
-        &mut fixture.scheduler,
-        &mut [0.0],
-        &mut [0.0; NUM_SAMPLES],
-        0,
-        1,
-        &mut fixture.transport,
-        &mut feedback,
-        &mut fixture.retirement,
-    );
-    fixture.transport.advance_by_rendered_frames(1);
-    assert_eq!(start.execution_frame(), Some(0));
-    assert_eq!(start.effective_frame(), None);
-    assert!(fixture.scheduler.deferred_due().is_some());
-    messages.pop().unwrap();
-    fixture.render(0);
-    assert_eq!(start.execution_frame(), Some(8193));
-    wait_ready(&mut fixture, &[start.sequence()]);
-    let pcm = complete_attack(&mut fixture, 8193);
-    assert_eq!(start.effective_frame(), Some(8193));
+    for cycle in 1..=2 {
+        let (mut feedback, mut messages) = RingBuffer::new(1);
+        feedback
+            .push(AudioMessage::SampleStarted { id: 1 })
+            .unwrap();
+        render_scheduled_audio(
+            &mut fixture.mixer,
+            &mut fixture.scheduler,
+            &mut [0.0],
+            &mut [0.0; NUM_SAMPLES],
+            cycle - 1,
+            1,
+            &mut fixture.transport,
+            &mut feedback,
+            &mut fixture.retirement,
+        );
+        fixture.transport.advance_by_rendered_frames(1);
+        assert_eq!(start.execution_frame(), Some(cycle - 1));
+        assert_eq!(start.effective_frame(), None);
+        assert!(fixture.scheduler.deferred_due().is_some());
+        messages.pop().unwrap();
+        fixture.render(0);
+        assert_eq!(start.execution_frame(), Some(8192 + cycle));
+        wait_ready(&mut fixture, &[start.sequence()]);
+    }
+    let pcm = complete_attack(&mut fixture, 2);
+    assert_eq!(start.effective_frame(), Some(2));
     assert_physical_birth_tone(&pcm, 0, 0, 0.8, true, 1.0);
+}
+
+#[test]
+fn returned_legacy_completion_refuses_cancelled_or_changed_ordinary_authority() {
+    for fence in ["cancel", "stop", "source", "rate_aba", "gain"] {
+        let mut fixture = configured(0.8);
+        let start = capture(&fixture, 1.0);
+        let gate = WorkerGate::new(&fixture, &start);
+        publish(&mut fixture, &start);
+        gate.wait_for(false);
+        assert!(fixture.render_to(8193).iter().all(|value| *value == 0.0));
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        wait_ready(&mut fixture, &[start.sequence()]);
+        fixture.render(0);
+        assert_eq!(start.execution_frame(), Some(16385));
+        wait_ready(&mut fixture, &[start.sequence()]);
+        match fence {
+            "cancel" => assert!(start.cancel()),
+            "stop" => fixture.control.engine.stop_sample(0).unwrap(),
+            "source" => {
+                let sample = fixture.control.engine.sample_cache.lock().unwrap()[0]
+                    .clone()
+                    .unwrap();
+                publish_tone(&fixture.control, 0, sample, true);
+            }
+            "rate_aba" => {
+                fixture.mixer.set_pad_bpm(0, Some(160.0));
+                fixture.mixer.set_pad_bpm(0, Some(150.0));
+            }
+            _ => fixture.mixer.set_pad_gain(0, -6.0),
+        }
+        fixture.drain();
+        assert!(fixture.render_to(16386).iter().all(|value| *value == 0.0));
+        assert_eq!(start.state(), "rejected", "{fence}: {:?}", start.reason());
+        assert_eq!(start.effective_frame(), None);
+        assert_eq!(fixture.starts(0), 0);
+    }
+}
+
+#[test]
+fn late_completion_requires_a_second_genuine_worker_and_keeps_full_pcm_and_native_custody() {
+    for ratio in [0.8, 1.16] {
+        let mut fixture = configured(ratio);
+        let start = capture(&fixture, 1.0);
+        let gate = WorkerGate::new(&fixture, &start);
+        publish(&mut fixture, &start);
+        gate.wait_for(false);
+        assert!(fixture.render_to(8193).iter().all(|sample| *sample == 0.0));
+        assert!(fixture.scheduler.deferred_due().is_some());
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        wait_ready(&mut fixture, &[start.sequence()]);
+        let native = gate.prepared_native();
+        gate.arm_next_attempt();
+        fixture.render(0);
+        assert_eq!(start.execution_frame(), Some(16385));
+        gate.wait_for(false);
+        fixture
+            .scheduler
+            .schedule(8300, ScheduledCommand::StopSample { id: 1 })
+            .unwrap();
+        assert!(fixture.render(512).iter().all(|sample| *sample == 0.0));
+        assert!(fixture.scheduler.deferred_due().is_none());
+        assert_eq!(fixture.scheduler.len(), 1);
+        assert_eq!(start.execution_frame(), Some(16385));
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        assert_eq!(
+            gate.prepared_native(),
+            native,
+            "the genuine worker reset reuses its Native"
+        );
+        wait_ready(&mut fixture, &[start.sequence()]);
+        let (mut feedback, mut messages) = RingBuffer::new(64);
+        let ((), allocations) = observe_current_thread(|| {
+            render_scheduled_audio(
+                &mut fixture.mixer,
+                &mut fixture.scheduler,
+                &mut [],
+                &mut [0.0; NUM_SAMPLES],
+                8705,
+                1,
+                &mut fixture.transport,
+                &mut feedback,
+                &mut fixture.retirement,
+            );
+        });
+        assert_eq!(allocations, ThreadAllocations::default());
+        while let Ok(message) = messages.pop() {
+            fixture.feedback.push(message);
+        }
+        assert_eq!(start.original_frame(), Some(0));
+        assert_eq!(start.effective_frame(), Some(8705));
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), native);
+        assert_eq!(
+            fixture.voice(0).stretch.adopted_request_id(),
+            Some(start.sequence())
+        );
+        let pcm = fixture.pcm(24_000);
+        assert_physical_birth_tone(&pcm, 0, 0, ratio, true, 1.0);
+        assert_eq!(fixture.starts(0), 1);
+    }
 }
