@@ -1,5 +1,38 @@
 # Documentation disposition audit
 
+## Current result — final consistency
+
+The original documentation reorganization is complete. The appended **STEP8**
+manifest record reconciles every one of the 43 original documents and all 196
+classified spans, including their 479 frozen headings. Current ownership lives
+in the [architecture overview](architecture.md) and seven modules; performer
+controls/defaults and recovery live in the [user guide](user-guide.md), with
+public source and Portable installation paths linked from the [root README](../README.md).
+
+All 104 changes have complete archived dispositions; no active change directory
+remains. The [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
+now locates all eleven retained full reports. Their 57 section mappings and the
+eleven original architecture mappings are verified, not future moves. The
+coverage JSON is byte-identical, including original path literals resolved by
+STEP6's from/to map. Frozen source identities and every earlier executed record
+are unchanged; STEP8 adds actual dispositions without rewriting provenance.
+
+The original audit decisions and dated STEP3–7 descriptions below deliberately
+retain their intermediate wording. **“Planned”, “remaining” and “remain in docs”
+there describe those earlier stages**, not a new queue or the current location.
+Use the latest executed record and canonical archive/evidence maps for actual
+destinations. In particular, original report bytes and pre-move current bytes
+are distinct: STEP3 had already retired the program's opening activation text
+and one mixed Key Lock SYNC reference before STEP6's reference-only relocation.
+Both exact originals remain accessible, with those dispositions recorded.
+
+This is documentation consistency, not new musical, device, hearing, model,
+clean-Windows or whole-216 acceptance. Every unique failure, UNKNOWN, unchecked
+task and pending gate remains historical evidence. Archived programs and explicit
+Human TODO notes do not activate work; source SYNC recovery remains branch-only.
+
+## Original audit baseline and decisions
+
 This is the organization decision for the documentation cleanup, audited against
 product source at `dbc80d3c117dcec50996feef2e8c59f1649388a5`. It covers all **43
 original text/JSON documents, 1,894,623 bytes**, including the large historical
@@ -365,3 +398,36 @@ STEP8 retains the full ALL-original fact/disposition and raw-reference/source/
 spec/manual/install/English consistency audit. Current docs and proportional
 reference/source checks do not establish fresh audio/device/listening/model,
 clean-Windows or whole-216 acceptance.
+
+## Executed STEP8 final reconciliation — 2026-10-30
+
+The appended STEP8 manifest ledger lists all 43 original file paths with every
+original section ID, actual retained record, resolved module/evidence destinations
+and mixed-section exceptions. It reuses STEP6/7's detailed mappings rather than
+duplicating report bodies. Exact immutable originals remain supplemental recovery;
+visible archive records/indexes retain failures, UNKNOWN and unfinished gates.
+The pre-edit root README's useful setup/build/check/package facts remain in
+Development, controls/performance in the manual, and ownership/RT/layout in the
+architecture modules. Its immutable STEP7 locator, hero and license remain intact.
+
+Fresh metadata/content checks cover all tracked Markdown local paths, Markdown
+headings and explicit HTML id/name anchors, images, immutable Git links, relocated
+names and raw inbound code/tool/spec references. Historical protocol identifiers,
+upstream README URLs and frozen path strings are distinguished from current
+consumers. No executable consumer needs a former report location. Source setup
+still prepares a matching Release and explicit runtime before launch-only start;
+Portable still uses its own generic relocatable installation and START-LOOPER.
+No installer, launcher, path layout or resource policy changed for this audit.
+
+Original archive trees, task states and older archives remain intact: 104 changes,
+480 original files (467 identical, 13 navigational-reference-only), 1046 checked
+and 211 unchecked tasks, and 67 older archives/349 files. The eleven reports still
+match STEP6's relocated hashes; the coverage JSON retains its original blob and
+SHA256. Nothing was regenerated, moved again or promoted to acceptance.
+
+Current consistency corrections clarify the final audit status, correct the
+archive index's former mixed-report location and align the Rust overview's load
+description with complete disk artifacts, separate analysis/live admission,
+complete warm verification and guarded OwnACK. Productive BPM setup is separated
+from optional diagnostics; G3/B5 notes retain their dated evidence and limits.
+There is no remaining original cleanup step and no automatic successor program.

@@ -1726,6 +1726,909 @@
       "historical_reports_moved_or_rewritten": false,
       "product_behavior_or_acceptance_changed": false,
       "remaining_steps": ["STEP8 all-original dispositions/facts/source/reference/English/manual/install consistency and final completion"]
+    },
+    {
+      "step": "STEP8",
+      "date": "2026-10-30",
+      "source_commit": "7b3cbd0f70fd4d265fde24d160ce2b9259b9dee2",
+      "scope": "Final original documentation consistency; no product implementation or acceptance promotion.",
+      "section_identity": "Every sections value below is the unchanged original file-local section ID; original lines/classes/headings remain in files. Original immutable locator is baseline:path/blob, not the current rewritten location.",
+      "destination_resolution": {
+        "current_module_ids": "Resolve HUB/RT/PCM/BPM/KEY/PITCH/STEM/STATE/MAN/DEV/MAP/SETUP/TODO through unchanged destinations; all current local destinations exist.",
+        "evidence_ids": "openspec/changes/archive/2026-10-30-evidence-index.md#e-<lowercase suffix>, except SYNC below; original histories/failures/UNKNOWN/unchecked gates stay visible in that index and exact reports.",
+        "SYNC": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+        "mixed_sections": "A SYNC destination denotes historical retention, never a current main feature. More specific STEP3/6/7 mappings and section_exceptions take precedence over file-level retained_record."
+      },
+      "all_original_dispositions": [
+        {
+          "path": "docs/README.md",
+          "sections": [
+            1,
+            2
+          ],
+          "retained_record": "docs/README.md",
+          "destination_ids": [
+            "MAP",
+            "E-PROGRAM"
+          ],
+          "disposition": "Current navigation/setup and retained diagnostic history; original stage programs inactive.",
+          "detailed_section_mapping": "STEP7/original_section_mappings/docs/README.md"
+        },
+        {
+          "path": "docs/accepted-constant-timing.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/accepted-constant-timing.md",
+          "destination_ids": [
+            "BPM",
+            "RT",
+            "E-TIMING",
+            "STATE",
+            "PCM",
+            "PITCH",
+            "E-C3"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/accepted-map-render-comparison.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/architecture.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "retained_record": "docs/architecture.md",
+          "destination_ids": [
+            "HUB",
+            "BPM",
+            "RT",
+            "E-B2",
+            "E-TIMING",
+            "PCM",
+            "E-PCM",
+            "KEY",
+            "E-MEMORY",
+            "E-GRID",
+            "STEM",
+            "E-STEM",
+            "PITCH",
+            "E-PITCH",
+            "SYNC",
+            "STATE",
+            "E-COPY",
+            "E-PROGRAM"
+          ],
+          "disposition": "Current hub/modules; exact original and visible canonical historical evidence retained.",
+          "detailed_section_mapping": "STEP6/original_architecture_section_mappings"
+        },
+        {
+          "path": "docs/automatic-analysis-memory.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/automatic-analysis-memory.md",
+          "destination_ids": [
+            "E-MEMORY",
+            "BPM",
+            "KEY"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-acceptance.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "retained_record": "docs/beat-this-acceptance.md",
+          "destination_ids": [
+            "BPM",
+            "DEV",
+            "E-B2",
+            "PCM",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-corrected-legacy.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/beat-this-corrected-legacy.md",
+          "destination_ids": [
+            "BPM",
+            "E-B2",
+            "DEV"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-reference-evidence.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/beat-this-reference-evidence.md",
+          "destination_ids": [
+            "BPM",
+            "KEY",
+            "SETUP",
+            "E-B2"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-reference-inputs.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/beat-this-reference-inputs.md",
+          "destination_ids": [
+            "BPM",
+            "DEV",
+            "E-B2"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-scoring-workflow.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/beat-this-scoring-workflow.md",
+          "destination_ids": [
+            "BPM",
+            "DEV",
+            "E-B2"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-setup.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/beat-this-setup.md",
+          "destination_ids": [
+            "SETUP",
+            "BPM",
+            "DEV",
+            "E-CUDA",
+            "E-B2"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beat-this-temporal-scoring.md",
+          "sections": [
+            1,
+            2
+          ],
+          "retained_record": "docs/beat-this-temporal-scoring.md",
+          "destination_ids": [
+            "BPM",
+            "E-B2"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/beatmap-sync-design.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC",
+            "BPM",
+            "RT",
+            "PITCH",
+            "PCM",
+            "E-PROGRAM"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/beatmap-sync-research.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC",
+            "BPM"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/constant-bpm-guide.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/constant-bpm-guide.md",
+          "destination_ids": [
+            "MAN",
+            "BPM",
+            "RT",
+            "KEY",
+            "SETUP"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/constant-tempo-summary.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/constant-tempo-summary.md",
+          "destination_ids": [
+            "BPM",
+            "E-G2",
+            "RT",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/development.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "retained_record": "docs/development.md",
+          "destination_ids": [
+            "DEV",
+            "SETUP",
+            "PITCH",
+            "E-PITCH",
+            "BPM",
+            "PCM",
+            "E-B2",
+            "E-PCM",
+            "RT",
+            "E-DEVICE",
+            "E-LOOP",
+            "E-C3",
+            "STATE",
+            "E-PROGRAM",
+            "MAN",
+            "SYNC"
+          ],
+          "disposition": "Current navigation/setup and retained diagnostic history; original stage programs inactive.",
+          "detailed_section_mapping": "STEP7/original_section_mappings/docs/development.md"
+        },
+        {
+          "path": "docs/device-loop-acceptance.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/device-loop-acceptance.md",
+          "destination_ids": [
+            "E-DEVICE",
+            "DEV",
+            "RT"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/finite-seek-domain-validation.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md",
+          "destination_ids": [
+            "PCM",
+            "PITCH",
+            "RT",
+            "E-PCM",
+            "E-PITCH"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/finite-seek-domain-validation.md"
+        },
+        {
+          "path": "docs/grid-timing-diagnosis.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/grid-timing-diagnosis.md",
+          "destination_ids": [
+            "E-GRID",
+            "E-G2",
+            "RT",
+            "STATE",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/key-detection.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/key-detection.md",
+          "destination_ids": [
+            "KEY",
+            "E-KEY"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/key-lock-backend.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-add-key-transposition-performance/evidence/key-lock-backend.md",
+          "destination_ids": [
+            "PITCH",
+            "RT",
+            "E-PITCH",
+            "PCM",
+            "SETUP",
+            "STATE",
+            "MAN",
+            "SYNC",
+            "STEM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/key-lock-backend.md",
+          "section_exceptions": {
+            "historical_mixed_reference": "STEP3 already replaced Quantize/SYNC wording with Quantize/start before STEP6 reference-only relocation. Exact original retains former map context; no experimental failure/gate is erased."
+          }
+        },
+        {
+          "path": "docs/long-source-streaming-validation.md",
+          "sections": [
+            1,
+            2
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md",
+          "destination_ids": [
+            "PCM",
+            "STEM",
+            "E-PCM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/long-source-streaming-validation.md"
+        },
+        {
+          "path": "docs/loop-period-proof.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "retained_record": "docs/loop-period-proof.md",
+          "destination_ids": [
+            "RT",
+            "PCM",
+            "E-LOOP"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/native-constant-timing.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "retained_record": "docs/native-constant-timing.md",
+          "destination_ids": [
+            "RT",
+            "BPM",
+            "E-TIMING",
+            "STATE",
+            "STEM",
+            "PITCH",
+            "PCM",
+            "E-C3",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/offline-analysis.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "retained_record": "docs/offline-analysis.md",
+          "destination_ids": [
+            "BPM",
+            "E-B2",
+            "SYNC",
+            "KEY",
+            "PCM",
+            "DEV"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits.",
+          "section_exceptions": {
+            "2": "Former Raw/map preparation removed in STEP3; branch recovery plus immutable original retain it. Remaining scalar diagnostics stay here."
+          }
+        },
+        {
+          "path": "docs/pad-content-copy.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-add-rearrange-shared-pad-content/evidence/pad-content-copy.md",
+          "destination_ids": [
+            "PCM",
+            "STATE",
+            "MAN",
+            "E-COPY",
+            "PITCH",
+            "STEM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pad-content-copy.md"
+        },
+        {
+          "path": "docs/pad-owned-pcm-program.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pad-owned-pcm-program.md",
+          "destination_ids": [
+            "SYNC",
+            "E-PROGRAM",
+            "PCM",
+            "PITCH",
+            "STEM",
+            "STATE"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pad-owned-pcm-program.md",
+          "section_exceptions": {
+            "1": "Original lines1-49 SYNC-first activation removed in STEP3, before STEP6 move. Exact original plus branch/E-PROGRAM retain requirements; current report is explicitly inactive."
+          }
+        },
+        {
+          "path": "docs/pcm-cache-measurements.md",
+          "sections": [
+            1
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md",
+          "destination_ids": [
+            "E-C3",
+            "PCM",
+            "PITCH"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pcm-cache-measurements.md"
+        },
+        {
+          "path": "docs/pcm-cache-residency.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md",
+          "destination_ids": [
+            "PCM",
+            "STEM",
+            "E-PCM",
+            "BPM",
+            "KEY",
+            "PITCH",
+            "RT",
+            "STATE",
+            "E-PROGRAM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pcm-cache-residency.md"
+        },
+        {
+          "path": "docs/portable-windows.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "docs/portable-windows.md",
+          "destination_ids": [
+            "SETUP",
+            "MAN",
+            "DEV",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits.",
+          "section_exceptions": {
+            "4": "Former map preflight removed in STEP3; branch recovery plus immutable original retain it. Current setup rejects SourceBeatmap."
+          }
+        },
+        {
+          "path": "docs/pre-rust-extension-20261011.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-extension-20261011.md",
+          "destination_ids": [
+            "E-PROGRAM",
+            "PCM",
+            "PITCH",
+            "STEM",
+            "STATE",
+            "RT"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pre-rust-extension-20261011.md"
+        },
+        {
+          "path": "docs/pre-rust-program-coverage.json",
+          "sections": [
+            1
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json",
+          "destination_ids": [
+            "E-PROGRAM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/pre-rust-program-coverage.json"
+        },
+        {
+          "path": "docs/prepared-stem-publication.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md",
+          "destination_ids": [
+            "STEM",
+            "PCM",
+            "RT",
+            "E-STEM",
+            "E-PROGRAM",
+            "SYNC",
+            "PITCH",
+            "STATE",
+            "MAN"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/prepared-stem-publication.md"
+        },
+        {
+          "path": "docs/readable-material-validation.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md",
+          "destination_ids": [
+            "PCM",
+            "STEM",
+            "E-PCM",
+            "E-PROGRAM"
+          ],
+          "disposition": "Complete STEP6 pre-move report retained at its exact recorded relocated hash; original baseline separately immutable.",
+          "detailed_section_mapping": "STEP6/report_relocations/docs/readable-material-validation.md"
+        },
+        {
+          "path": "docs/scalar-source-coordinates.md",
+          "sections": [
+            1,
+            2
+          ],
+          "retained_record": "docs/scalar-source-coordinates.md",
+          "destination_ids": [
+            "RT",
+            "PCM",
+            "STATE",
+            "E-GRID",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/selected-backend-bpm.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/selected-backend-bpm.md",
+          "destination_ids": [
+            "BPM",
+            "E-B2",
+            "E-G2",
+            "SYNC"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/source-map-guide.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC",
+            "BPM",
+            "MAN"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/stem-generation-setup.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "retained_record": "docs/stem-generation-setup.md",
+          "destination_ids": [
+            "SETUP",
+            "STEM",
+            "E-STEM",
+            "E-PROGRAM",
+            "MAN",
+            "E-CUDA",
+            "PCM",
+            "E-PCM"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits.",
+          "section_exceptions": {
+            "2": "Obsolete early storage/eager recipe retained in immutable original and E-STEM/E-PROGRAM; current artifacts/selection in STEM."
+          }
+        },
+        {
+          "path": "docs/sync-archive.md",
+          "sections": [
+            1
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC",
+            "MAP"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/sync-diagnostics.md",
+          "sections": [
+            1
+          ],
+          "retained_record": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/f241da3d0bdaf2f8a73adc4600f2773a3f9d7522/docs/sync/architecture.md",
+          "destination_ids": [
+            "SYNC"
+          ],
+          "disposition": "Retired feature; published branch recovery and exact immutable original, not current main architecture."
+        },
+        {
+          "path": "docs/todos.md",
+          "sections": [
+            1,
+            2,
+            3
+          ],
+          "retained_record": "docs/todos.md",
+          "destination_ids": [
+            "TODO",
+            "E-PITCH"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits."
+        },
+        {
+          "path": "docs/ui-toolkit.md",
+          "sections": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "retained_record": "docs/ui-toolkit.md",
+          "destination_ids": [
+            "STATE",
+            "DEV",
+            "PCM",
+            "E-PROGRAM",
+            "RT",
+            "MAN",
+            "E-STEM",
+            "PITCH",
+            "E-COPY",
+            "E-PITCH",
+            "STEM"
+          ],
+          "disposition": "Retained current explanation/diagnostic and dated evidence; obsolete mixed policy resolved by recorded source-grounded edits.",
+          "section_exceptions": {
+            "8": "Historical RECORD-pending program/gates retained as inactive evidence; current capture/control in RT/STATE/MAN."
+          }
+        }
+      ],
+      "verification": {
+        "original_files": 43,
+        "original_spans": 196,
+        "original_headings": 479,
+        "original_bytes": 1894623,
+        "inbound_candidates": 324,
+        "full_report_overrides": 11,
+        "report_section_mappings": 57,
+        "original_architecture_mappings": 11,
+        "review": "All original classified spans/unique-fact notes and changed retained bodies reconciled with actual records, immutable originals, current source/module/spec boundaries and canonical maps; unchanged diagnostic bodies retain their original limits.",
+        "archive": {
+          "new_changes": 104,
+          "original_files": 480,
+          "identical_originals": 467,
+          "navigation_only_originals": 13,
+          "checked": 1046,
+          "unchecked": 211,
+          "older_archives": 67,
+          "older_archive_files": 349,
+          "active_changes": 0
+        },
+        "references": "All tracked Markdown local paths/Markdown+HTML id/name anchors/images and immutable Git links checked. Raw old paths in frozen manifest/coverage and archived prose are historical lineage; no current code/tool document consumer found. Protocol IDs/upstream README URLs are not renamed document paths.",
+        "manual_and_setup": "Current controls/defaults and requested/pending/effective/refused states agree with source. Public matching-Release/setup-runtime/start and generic relocatable Portable START-LOOPER/install/update/repair claims agree with unchanged scripts; private routing is separate.",
+        "branch": "Published SYNC f241da3d recovery verified; accepted constant949cff1d distinct from uninstalled/unaccepted27ef7f87 and retained negative/unpassed evidence. No consolidated main SYNC architecture or code merge.",
+        "english": "Current documentation and this delivery are English; machine identifiers, original paths and intentional protocol/test data preserved."
+      },
+      "root_readme_fact_retention": {
+        "immutable_original": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/33cddfe9faa6e61a91ff7fb19d78e175533d16fa/README.md",
+        "current_destinations": [
+          "README.md",
+          "docs/user-guide.md",
+          "docs/development.md",
+          "docs/architecture.md"
+        ],
+        "disposition": "Product/actions/performance in manual; native prerequisites/build/checks/package/data in development; ownership/layout/RT in modules. Incorrect old gestures/control ranges replaced from source. Hero/license retained; no useful unique installation/architecture fact lost."
+      },
+      "current_consistency_corrections": [
+        "docs/documentation-audit.md current final-status lens",
+        "openspec/changes/archive/2026-10-30-archive-index.md actual report locations",
+        "rust/README.md disk-first/finite load and productive-versus-diagnostic setup; dated G3/B5 qualifiers"
+      ],
+      "coverage_json": {
+        "path": "openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/pre-rust-program-coverage.json",
+        "blob": "2aac6ba18894fb5446f168fcbe0db68f6063c6bb",
+        "sha256": "f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a",
+        "unchanged": true,
+        "old_paths": "Frozen lineage resolved by STEP6 report_relocations; no regeneration or executable consumer."
+      },
+      "frozen_provenance_preserved": true,
+      "previous_executed_records_unchanged": true,
+      "retention_overrides_unchanged": true,
+      "historical_reports_moved_or_rewritten": false,
+      "product_behavior_or_acceptance_changed": false,
+      "limits": "Documentation consistency only. No new audio/Native/build/install/App/device/hearing/model inference/clean-Windows/whole216 acceptance; all historical failures/UNKNOWN/unchecked gates retained.",
+      "remaining_steps": []
     }
   ],
   "files": [

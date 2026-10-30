@@ -33,9 +33,10 @@ Disposition terms:
 - **Superseded recipe**: only the named policy or storage recipe is superseded; retained contracts/evidence remain scoped.
 
 [Canonical evidence ownership and immutable original reports](2026-10-30-evidence-index.md)
-records the eleven full-report retention overrides. Mixed reports remain in docs
-until STEP5/6 verify current module destinations; no placeholder report copies or
-premature deletion were introduced.
+records the eleven full-report retention overrides. STEP6 verified current module
+destinations and relocated all eleven complete reports to those canonical archive
+paths. Original identities and all unfinished gates remain unchanged; no placeholder
+copies or acceptance claims were introduced.
 
 ## Change mapping and disposition
 

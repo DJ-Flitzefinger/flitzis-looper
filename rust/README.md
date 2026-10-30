@@ -6,6 +6,12 @@ stem tickets and callback feedback are documented in
 the realtime audio path and exposes the PyO3 `AudioEngine` class used by the
 Python application package.
 
+Use the [current architecture](../docs/architecture.md) and its focused modules
+for supported behavior. G3/B5 stage-labelled paragraphs and experimental design
+notes below retain dated engineering history, scoped measurements and unfinished
+acceptance. Their old remaining-work descriptions are not a current execution
+queue or evidence that later source-supported paths are absent.
+
 The Python package wrapper lives in:
 
 ```text
@@ -62,7 +68,7 @@ rust/
     |           |-- stretch_processor.rs
     |           |-- rubberband_backend.rs
     |           |-- sample_loader.rs
-    |           |-- sample_loader/cold.rs # same-snapshot decoder/full playback derivative
+    |           |-- sample_loader/cold.rs # immutable-source decoder/streamed playback conversion
     |           |-- stem_cache.rs
     |           |-- progress.rs
     |           |-- channels.rs
@@ -85,12 +91,16 @@ rust/
             `-- window.rs
 ```
 
-The productive load API admits fixed workers and transient PCM before
-copy-first capture, complete compatible warm reuse or snapshot decode, atomic
-artifact commit and guarded native ACK. File ownership and last-reader cleanup
-stay off realtime; full-buffer playback remains. Windows stable sharing,
-decoder/resampler evidence, pending/fault behavior and separate C2/C3 limits
-are maintained in [media and PCM](../docs/architecture/media-and-pcm.md).
+The productive load API captures immutable original custody and reuses fully
+verified disk artifacts or streams complete decoding/playback conversion with
+bounded scratch. Compatible warm reuse still verifies the complete artifacts.
+For new incoming loads, complete-input analysis has separate admission and retires
+before their selected live PCM allocation. Other load/restore paths account for
+any retained live view separately; disk-backed storage does not make complete-source
+demand unlimited. Publication still requires the current request/source and matching
+Native acknowledgement. File ownership and last-reader cleanup stay off realtime.
+Finite residency, Windows stable sharing, decoder/resampler policy and pending/
+failure limits are maintained in [media and PCM](../docs/architecture/media-and-pcm.md).
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
 `src/flitzis_looper_audio/__init__.pyi` define the Python-facing boundary.
@@ -132,8 +142,10 @@ the Python diagnostic supervisor. It retains one native reservation per engine
 until preparation/key work and resource retirement finish. All export,
 resampling, key inference and JSON event publication run outside the callback;
 the existing automatic/manual analyzer remains selected. See
-[Offline analysis boundary](../docs/offline-analysis.md) for limits, terminal
-component semantics and remaining Beat This setup/inference work.
+[Offline analysis boundary](../docs/offline-analysis.md) for limits and terminal
+component semantics. Productive configured analysis and worker installation are
+separate paths described in [BPM architecture](../docs/architecture/bpm-analysis.md)
+and [Beat This setup](../docs/beat-this-setup.md).
 
 The analysis crate's `tempo_evidence`, `tempo_refinement` and `tempo_summary`
 APIs assess complete source-bound evidence offline without implicit automatic
