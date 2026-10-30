@@ -1,1302 +1,166 @@
 # Architecture
 
-This is the maintained technical reference for the current architecture.
-OpenSpec owns behavior requirements; this document explains how the
-implementation is organized and where live authority sits.
+Flitzis Looper is a desktop sample looper with six banks of 36 PADs. Python owns
+the application and saved performer intent; Rust owns current audio sources,
+sample-frame time and rendering. It supports scalar constant-tempo playback,
+quantized launches, independent PAD controls, prepared stems and offline analysis.
+The same source and ownership rules apply to GUI and MIDI.
 
-## Runtime Split
+This is the current system overview. Focused references explain the implementation
+without reproducing its development chronology:
 
-Flitzis Looper is a Rust/Python application:
+| Reference | Responsibility |
+| --- | --- |
+| [Runtime and transport](architecture/runtime-and-transport.md) | Callback, clock, scheduler, ordinary transport, rates, rendering and feedback. |
+| [Media and PCM](architecture/media-and-pcm.md) | Material/content/source identity, import, complete disk PCM, finite residency, sharing and last readers. |
+| [State, input and UI](architecture/state-input-and-ui.md) | Controllers, GUI/MIDI intent, persistence, arrangements, restore and shutdown. |
 
-- Python owns UI rendering, durable `ProjectState`, transient `SessionState`,
-  persistence, settings, mapping edit UX, file dialogs, and offline/background
-  orchestration.
-- Rust owns live audio truth: loaded buffers, transport time, scheduler state,
-  voice playheads, loop wrapping, playback-rate application, Key Lock, prepared
-  stem selection, realtime parameter application, per-pad DSP, metering, and
-  audio-to-control telemetry.
+Current [OpenSpec contracts](../openspec/specs/) define supported behavior. Source
+defines implementation facts; historical tests establish only their stated scope.
+The [documentation audit](documentation-audit.md), [frozen provenance manifest](audit/source-disposition.json)
+and [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
+retain original reports, failures and unpassed gates. Archived changes are
+history, not an execution queue or proof of acceptance.
 
-Targeted migrations from Python to Rust are allowed when they move one bounded
-live-audio responsibility, reduce duplicated authority, improve timing, or make
-the realtime boundary safer. They must preserve Python ownership of UI,
-persistence, settings, and offline orchestration unless a focused OpenSpec
-change says otherwise.
+## Runtime split and source layout
 
-## Signal Path
+| Owner | Entry points and responsibilities |
+| --- | --- |
+| Python application | [__main__.py](../src/flitzis_looper/__main__.py) calls [ui/run.py](../src/flitzis_looper/ui/run.py). [AppController](../src/flitzis_looper/controller/app.py) constructs controllers, loads intent, polls work and coordinates close. |
+| Python state and controls | [models.py](../src/flitzis_looper/models.py), [controller/](../src/flitzis_looper/controller/), [input_mapping/](../src/flitzis_looper/input_mapping/) and [ui/](../src/flitzis_looper/ui/) own validated intent, persistence, input editing, dialogs, presentation and offline orchestration. |
+| Native boundary | [flitzis_looper_audio](../src/flitzis_looper_audio/) wraps the PyO3 module exported by [lib.rs](../rust/crates/looper/src/lib.rs); [__init__.pyi](../src/flitzis_looper_audio/__init__.pyi) describes the Python API. |
+| Rust control and workers | [audio_engine/mod.rs](../rust/crates/looper/src/audio_engine/mod.rs) coordinates non-realtime loading, analysis, preparation, publication and retirement. Rust outside the callback can perform bounded disk work and preparation. |
+| Rust audio | [audio_stream.rs](../rust/crates/looper/src/audio_engine/audio_stream.rs), [transport.rs](../rust/crates/looper/src/audio_engine/transport.rs), [scheduler.rs](../rust/crates/looper/src/audio_engine/scheduler.rs) and [mixer.rs](../rust/crates/looper/src/audio_engine/mixer.rs) own due-frame effects, voices, sources and DSP. |
+| Offline analysis | [analysis crate](../rust/crates/analysis/), [app_analysis.rs](../rust/crates/looper/src/audio_engine/app_analysis.rs), [app_tempo.rs](../rust/crates/looper/src/audio_engine/app_tempo.rs) and Python [analysis/](../src/flitzis_looper/analysis/) implement distinct productive and diagnostic paths outside realtime. |
 
-```text
-Python UI / controllers / persistence / background workers
--> PyO3 AudioEngine API
--> bounded Rust command ring + bounded Rust parameter ring
--> CPAL audio callback
--> bounded command drain and parameter coalescing
--> TransportTimeline + TransportScheduler
--> RtMixer voice slots
--> canonical fractional voice source progression
--> full-mix or prepared-stem source selection
--> source-frame loop wrap and playhead telemetry
--> playback-rate / BPM Lock / Key Lock processing
--> per-pad Gain/Trim (-60 dB..+12 dB, smoothed)
--> per-pad Rust DSP chain
--> trigger velocity
--> per-pad pre-master metering and pad summing
--> Master Volume and momentary output mute
--> master output metering and audio-to-control telemetry
--> system audio output
-```
+Both Python packages are required. The compiled extension and native dependencies
+are build products, not a second Python application.
 
-The CPAL callback must not perform disk I/O, JSON access, Python/GIL work, UI
-work, logging, plugin loading/scanning, neural inference, blocking waits,
-unbounded loops, heavy allocation, or long-running work.
-
-## Source Layout
-
-Private B2 diagnostics use `analysis/beat_scoring_cli.py` to revalidate independent
-reference receipts before reading candidates. `beat_candidates.py` binds approved
-historical full native exports/requests/raw/final artifacts; the pure metric core
-retains unchecked certification and pending acceptance. Explicit T01/T02 path
-aliases preserve frozen source identities. These modules load no engine/model and
-have no application-state or realtime authority. See
-[scoring workflow](beat-this-scoring-workflow.md).
-
-`analysis/selected_bpm.py` adds separate typed full-sequence and regional metadata
-to background diagnostic job snapshots after bounded final publication and native
-finish acceptance. A detached pure Rust helper reuses G2 fitting; request-bound
-metadata stays unverified and does not alter project/accepted/live timing. The
-ordinary scoring readers keep their native-free path. See
-[frozen BPM/region policy](selected-backend-bpm.md).
-
-`analysis/corrected_legacy_models.py`, `corrected_legacy_reader.py` and
-`corrected_legacy_evaluation.py` retain a separate diagnostic-only QM comparator.
-Explicit native `OfflineAnalysisJob.analyze_corrected_legacy` and
-`finish_corrected_legacy` reuse the complete-source export, existing converter
-and shared corrected `QmRawAnalysis` pipeline off GIL/realtime. Complete loaded
-PCM, loaded-rate mono and 44100-Hz analyzer PCM stay distinct; raw binary64
-positions, uint64 downbeat indices and the separate binary32 compatibility projection
-survive exact native finish and actual event publication; the retained result
-copy is distinct from a Python service JobSnapshot. Fixed independently
-reviewed producer profiles bind actual executing programs/dependencies separately
-from unused installed extensions. The private CLI validates genuine reference
-material before optional comparator selection/artifact reads; the pure
-engineering API separately reports complete and region-scoped unverified
-backend disagreement. These paths have no project, saved/manual/TAP/accepted,
-default-selection or realtime authority. See
-[corrected legacy evidence](beat-this-corrected-legacy.md).
+## Control and signal flow
 
 ```text
-src/flitzis_looper/
-    Python application package: controllers, UI, models, persistence,
-    input mapping, stem orchestration, and app entrypoint.
+GUI / captured MIDI or keyboard action / restored performer intent
+  -> controller or guarded native input route
+  -> validate current content + source + requested revision
+  -> prepare immutable data/history off the audio thread when needed
+  -> bounded command / parameter publication
+  -> callback rechecks ownership and capacity
+  -> absolute-frame scheduler / current mixer effect
+  -> operation-specific acknowledgement + observations
+  -> controller updates the matching projection and persistence intent
 
-src/flitzis_looper_audio/
-    Python wrapper package for the Rust extension. The compiled extension is
-    generated by maturin, `__init__.py` re-exports it, and `__init__.pyi`
-    describes the native API for type checking.
-
-rust/crates/looper/src/
-    Rust PyO3 extension and realtime audio engine.
+sealed source -> complete disk PCM -> admitted resident view / prepared readers
+  -> fractional source trajectory + shared source read plan
+  -> full mix or prepared stem selection
+  -> rate / pitch / Key Lock processing
+  -> smoothed PAD gain -> PAD DSP/isolator -> trigger velocity
+  -> PAD metering and sum -> master volume / momentary mute
+  -> master metering / recording capture -> CPAL output
 ```
 
-The two `src/` packages are both required. `flitzis_looper` is the app.
-`flitzis_looper_audio` is the native module imported by the app and tests.
-
-## Rust Audio Modules
-
-```text
-rust/crates/looper/src/
-|-- lib.rs                         # PyO3 module export
-|-- messages.rs                    # fixed-size messages and shared descriptors
-`-- audio_engine/
-    |-- mod.rs                     # AudioEngine API and background orchestration
-    |-- analysis_jobs.rs           # optional diagnostic analysis ownership and events
-    |-- analysis_pcm.rs            # staged full-track mono/export/key input
-    |-- analysis_predictions.rs    # bounded diagnostic prediction validation
-    |-- audio_stream.rs            # CPAL callback and scheduler integration
-    |-- buffer_retirement.rs       # non-audio retirement of large handles
-    |-- cold_jobs.rs               # bounded cold admission and fixed workers
-    |-- cold_load.rs               # source/request guards and native adoption ACK
-    |-- cold_residency.rs          # saved absolute windows and complete source descriptors
-    |-- cold_store.rs              # immutable copy, full manifests and atomic commit
-    |-- complete_context.rs        # sealed full-source waveform/export/analysis readers
-    |-- constants.rs               # banks, grid size, slot count, ranges
-    |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
-    |-- input_mapping.rs           # Rust MIDI capture outside callback
-    |-- initial_loop_start.rs      # off-thread first-activity suggestion for new loads
-    |-- key_lock_preparation.rs    # native reserve/prepared-history ownership lanes and worker
-    |-- prepared_native_history.rs # shared fixed native/FIFO adapter and source preparation
-    |-- native_history_permit.rs   # current source/request/authority prepared-history permits
-    |-- productive_source_history.rs # actual feed source/projection and continuity binding
-    |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
-    |-- scheduler.rs               # fixed-capacity output-frame scheduler
-    |-- source_grid.rs             # signed source beat/bar and loop-cycle mapping
-    |-- source_playback.rs         # fractional source epochs and output-frame ratio smoothing
-    |-- source_reader.rs           # shared loop/seek addressing and stem-source transitions
-    |-- timing.rs                  # shared input epoch and estimated device clock diagnostics
-    |-- transport.rs               # output-frame timeline and musical grid
-    |-- voice_slot.rs              # voice state and per-voice DSP buffers
-    |-- stretch_processor.rs       # bounded Key Lock/master-tempo wrapper
-    |-- sample_loader.rs           # decode/progress helpers
-    |-- sample_loader/cold.rs       # same-snapshot decoder and full playback conversion
-    |-- scalar_grid.rs             # pure binary64 scalar control projection facade
-    |-- stem_cache.rs              # prepared-stem validation/loading
-    |-- progress.rs
-    |-- resident_relocation.rs     # bounded same-source view preparation and adoption ACK
-    |-- waveform.rs                # non-realtime frame bounds and waveform projection
-    |-- channels.rs
-    `-- errors.rs
-```
-
-Most Rust modules are `pub(crate)`. The public Python boundary is the PyO3
-`AudioEngine` class and the type stub in
-`src/flitzis_looper_audio/__init__.pyi`.
-The separate `rust/crates/analysis/` crate provides non-realtime BPM, key and
-beat-grid analysis; the looper's control/worker code publishes its results.
-Its `tempo_acceptance` module owns a pure G3a immutable accepted-period record
-and a non-realtime source/request/intent adoption guard. Constructors recompute
-supported G2 evidence and require explicit acceptance and independent origin
-provenance. The versioned revision binds counts, policies, period/error state and
-complete source/backend evidence. G3b2a's explicit native acceptance API captures
-actual loaded source/QM evidence and uses that guard under current ownership,
-with bounded callback acknowledgement and a precise live SourceGrid projection.
-G3b2b resolves current accepted metadata from actual source/authority and callback
-acknowledgement; transport/master/output clock and BPMLOCK consume binary64 periods
-and rates directly. G3b2c-f integrate precise Python consumers, guarded MIDI,
-prepared stems, continuous voice/native/FIFO history and source-specific worker
-preparation with timed native adoption. G3b2g adds complete source-verified native
-QM persistence and fresh acknowledged loader adoption. G3b2h binds productive
-controller GLOBAL START/STOP, including MIDI, to one fixed-capacity current-source/
-authority/accepted batch with all-or-none native admission and scheduled execution.
-Native messages own active/paused truth; batch execution reserves their complete
-feedback capacity before any effect. Terminal batch feedback updates restore
-intent after actual acceptance, and loader callbacks prune retired pads from
-pending restore intent. G3b2i adds explicit application preparation/publication
-and one current-bound native loop/master refresh with execution acknowledgement.
-Source/authority/full accepted identity and control ordering guard both values;
-completion polling observes explicit work without owning audio timing. See
-[accepted constant timing](accepted-constant-timing.md) for ownership and limits.
-G3c1 characterized actual dry mixer output and exposed accumulated endpoint-rounding
-error. G3c2 uses the compatible accepted musical period in shared SourcePlayback
-and safe source-reader seam interpolation while preserving integer physical markers.
-The [strict musical loop gate](loop-period-proof.md) checks actual rendered output;
-actual device/loopback and sustained human listening remain separate open gates.
-G3c3 adds an opt-in isolated measurement adapter using these same controllers,
-publication and derived acknowledgement. A demand-only fixed atomic snapshot
-observes one effective voice against current source/generation/authority/full
-accepted identity; absent, multiple, stale or mismatched voices remain unavailable.
-It copies existing rate/loop/Key Lock/stem/DSP scalars after a bounded voice scan,
-without processing or controlling audio. Endpoint/configuration strings are
-retained during non-realtime stream setup. Background workers serialize private
-observations and offline captured-WAV features; independent clock uncertainty and
-human listening remain explicit. See [the packet](device-loop-acceptance.md).
-Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
-both production and comparison fixtures. Private independent B2 input validation
-and sealing live separately in Python's analysis package and do not publish
-results into live or saved project state; see [offline analysis](offline-analysis.md)
-and [reference inputs](beat-this-reference-inputs.md).
-
-## Command, Parameter, And Telemetry Rings
-
-Control-to-audio communication is split into bounded rings:
-
-- Ordered command ring: play/stop/pause/resume, load/unload, prepared-stem
-  publication, loop regions, stem mode/mask, trigger quantization, Key Lock,
-  BPM Lock, timing metadata, and ping.
-- Fast parameter ring: master volume, global speed, master BPM, per-pad BPM,
-  per-pad gain, and per-pad EQ/DSP targets.
-- Audio-to-control telemetry ring: pong, sample started/stopped, pad peak,
-  master output peak, and pad playhead messages.
-
-The callback drains bounded budgets per invocation. Parameter messages are
-coalesced by identity before application, so the latest drained value wins for
-each parameter in that callback. The apply step walks only the identities
-touched by the drained batch rather than sweeping every pad slot.
-
-Python does not touch ring buffers directly. It calls `AudioEngine` methods that
-validate inputs and enqueue small Rust values or handles.
-Must-apply `AudioEngine` setters for command and parameter publications report a
-caller-visible `RuntimeError` when the target ring cannot accept the message.
-Only explicitly classified best-effort paths may drop queue failures.
-
-## Transport And Scheduling
-
-`TransportTimeline` is the Rust-owned output-frame clock. It advances by
-rendered output frames, including silence. A complete beat-position/output-frame
-reference derives musical progression from sample rate and master BPM; beat/bar
-phase and the compatibility downbeat frame are derived views.
-
-`TransportScheduler` stores bounded events by absolute output frame. Immediate
-and quantized play/stop paths both execute through scheduler logic.
-
-Quantization chooses the output-frame start time. It does not seek inside the
-source loop. Source-qualified BPMLOCK setup and acknowledged accepted-timing
-refreshes can arm the internal one-time transport bootstrap. There is no public
-unqualified phase-anchor or bootstrap command. The qualified owner retains its
-reference while source/BPM metadata is unavailable, and completion waits until
-that reference is active and valid. Successful bootstrap anchors complete master
-beat position to the reference source beat without resetting output-frame time
-or moving active source playheads. Callback batch completion and successful
-scheduled starts provide bounded retry points. A qualified refresh may requalify
-its pending reference through the same source/ownership checks. Unloading an
-incomplete reference clears its pending id. Successful bootstrap consumes the
-opportunity until a new stream; silence, wraps and stem controls never rearm it.
-Bootstrap state is transient and introduces no performer control.
-
-Launch inputs also carry optional `received_at_ns` metadata from one Rust engine
-monotonic epoch created before stream startup. Native MIDI captures at callback
-entry; keyboard/mouse capture through the UI action facade at the earliest
-accepted gesture. Controllers retain the captured value through preparation,
-exclusive/normal playback and failed-direct MIDI fallback. One global restart
-batch shares one timestamp. Two-argument native callers remain compatible.
-Ordered commands and scheduled launch events retain the fixed-size field;
-current launch scheduling still uses the existing future-grid/loop-start policy.
-
-Output-clock diagnostics combine shared-epoch callback-entry time with CPAL's
-checked callback-to-playback duration to estimate when a buffer's first output
-frame reaches the device. CPAL stream timestamps have their own domain. Bounded
-coherent snapshots expose validity/freshness and map captured inputs to nearest
-grid targets, with midpoint ties toward the future. Unavailable observations
-return no diagnostic target and never reset transport. Driver jitter, device
-precision and unaccounted Rubber Band delay limit these estimates; they are not
-measured audible alignment. The source-grid mapping foundation is internal and
-tested; current launches use the effective loop start. Nearest-target diagnostics
-and source-phase observations provide no permission to change that launch policy.
-
-In CPAL 0.17's Windows WASAPI backend, playback time is an estimate based on
-available buffer frames; additional latency after the device buffer is unknown.
-This is not a direct measurement of pending audio or hardware onset. The live
-acceptance stage must verify this driver-specific estimate before relying on it
-for audible launch alignment.
-
-Accepted master-BPM updates apply to both transport-grid timing and BPM-lock
-tempo matching while preserving complete current transport beat position, not
-only modulo-four phase. Future progression uses the new tempo. Internal clock
-snapshots retain that complete beat reference so target diagnostics do not
-derive phase from a rounded downbeat frame. The native snapshot stores the exact
-binary64 master period; the public snapshot exposes `master_period_seconds` and
-derived compatibility `master_bpm`. Legacy BPM and speed messages retain binary64;
-master admission converts BPM once to the authoritative output period. Explicitly
-accepted pad periods take precedence over legacy BPM in native consumers.
-
-Accepted scheduler events retain their absolute output targets, stable order
-and original optional timestamps across BPM, bootstrap and pad metadata updates.
-They are not rerounded or rescheduled. New requests use the updated grid. At
-execution, current loop-start launches use the latest accepted effective loop
-and BPM metadata. Stop/unload and missing-source safety behavior is unchanged;
-this foundation does not add pending-start cancellation.
-
-Scheduled render segments pass their absolute output-frame bounds into the
-mixer. Every active voice derives fractional source progress from its active
-output-frame count within the current rate epoch, using the actual bounded
-native binary64 ratio. This model avoids segment-level source
-rounding with or without BPM Lock. BPM-locked voices with valid master/pad
-metadata use `source_period / master_output_period`; missing metadata resolves to
-global speed without
-redefining another pad's phase or the shared transport timeline.
-
-## Sample Loading
-
-The [PCM cache/residency design](pcm-cache-residency.md) documents the productive
-copy-first full PCM cache, finite saved-loop residency and C2b control readiness. Complete source
-metadata remains authoritative while ordinary saved loops retain only their
-proved physical PCM range. Unsupported Key Lock context retains an explicitly
-admitted full-track fallback. Complete waveform/analysis leases and source-bound
-loop/ALL/seek/Key Lock preparation share guarded native adoption. The controller
-keeps requested project intent separate from effective audio and routes UI/MIDI
-fallback through one bounded readiness behavior.
-Starts for an identical immutable source/window and DSP context reuse the same
-full-mix and accepted-stem PCM handles without cold-lane admission or stem-file
-reload. The existing native transaction still requires callback ACK and current
-source/window/timing/intent guards before launch; changed storage/context uses
-bounded preparation. Repeated identical pending starts retain their preparation,
-retry count and deadline, replacing only the waiting launch with the latest
-gesture's original timestamp. STOP revokes that launch through the same native
-admission fence. See [prepared publication](prepared-stem-publication.md).
-
-Normal-loop KEYLOCK control preparation now obtains finite physical FullMix and
-four-component ranges through those same retained readers and WindowWork ACK.
-The copied source-read/playback coverage binds actual source/window, timing and
-selection before the existing worker prepares native history and adapter FIFOs;
-callback continuation checks its actual taps against held ranges. Stopped setup
-and current-source storage-only refresh are the first P4b vertical. Pending native
-work is exact-window-bound, while already adopted history preserves native/FIFO/
-filter chronology across a storage-only ACK and retains original reader pins.
-The bounded resident-selection context is active current-source NormalLoop changes
-with the same already ACKed resident committed StemSet. Prospective native
-mode/mask commands check the real current and outgoing selections against their
-held component ranges before mutation; executed feed checks both active sides
-through the existing 128-source-frame ramp. SourceReadPlan/SourcePlayback retain
-tap, fractional period and smoothed-rate authority. Active ramps defer new native
-preparation while the existing wet adapter continues; later preparation/adoption
-still requires its own exact permits and checkpoint.
-
-The bounded P4b lifecycle implementation covers finite NormalLoop at production
-k=0/non-unity with fixed physical geometry. Pause/resume, settled or smoothing rates and storage-only ACKs
-must preserve position and adopted native/FIFO/filter chronology while fencing
-pending exact-window work. Same-source accepted-period refresh/clear uses only
-the existing chronological projection alias; source, marker, seek and position
-cuts cannot use it. An older active or paused source rejects new-bank refresh.
-Bank B cannot relabel voice A's source/timing/FrozenStemView/transition/history.
-New A preparation needs fresh actual Voice/Source/Timing/Selection/History capture
-and its own permits; a retained PCM pin cannot revive a pre-replacement candidate.
-Future B uses real WindowWork and its own ACK, then fresh public capture and
-independent Source/Timing/Stem/History permits for native preparation/adoption.
-Explicit retrigger cuts DSP/history into acknowledged B only after retirement/
-admission reservation; failure preserves old audio, parameters and owners.
-Headless lifecycle tests continue wet output beyond the first resumed callback through
-later real requests/adoptions and count each distinct reader/history final use
-and held peak. Existing source-reader/playback/tap authority and retirement lanes
-remain authoritative. The finite seek/domain implementation additionally uses the
-same capture, range worker and ACK for current and retained sources. Intro holds
-the real prefix through loop end; Tail holds loop start through the actual source
-end. Both return naturally to the loop through the shared fractional tap policy.
-Every explicit seek cuts generation, Native/FIFO and filter history, including
-equal-phase seeks, while the canonical rate target/smoothing intent continues.
-Physical edits compare both next taps and their weight: only a continuous actual
-read retains chronology. A clamp or changed seam tap reserves clean Native state
-through existing recycle lanes before effects. Complete Seek/ALL exceptions and
-return to finite provisioning remain separately admitted. Whole P4b and initial
-finite KEYLOCK-load/default-loop/P5b integration, music/resources and Human gates
-remain open. See [Key Lock coverage](key-lock-backend.md).
-
-[C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
-resource costs, exceptions and lifecycle with paired finite/full results.
-Two fixed workers and 32 queued reservations
-bound preparation; each worker admits at most 1 GiB transient PCM. Windows sealed
-source capture, full decoder/playback manifests and native adoption ACK establish
-the actual source assignment. Warm reuse must validate complete compatible bytes
-on the same immutable readers; path/stat metadata cannot authorize it.
-
-Supported COMPLETE native QM accepted timing is durably saved in
-`SampleAnalysis.accepted_timing` only through verified current native export.
-Historical evidence and exact canonical identity/binary64 values remain separate
-from fresh runtime generation/request ownership. After source load, the controller
-captures new native ownership synchronously, then one bounded restoration worker
-verifies actual source bytes and full mono/timebase evidence. Existing native
-guard/publication/callback acknowledgement establish CURRENT; pending/failed/stale
-records never replay legacy BPM. Automatic is reserved before startup projection.
-Manual/Tap/Legacy intent is explicit in `ProjectState.pad_timing_intent` and manual
-overrides suppress historical acceptance. Verification/export and atomic JSON
-writes stay off the callback. See [native timing](native-constant-timing.md) for
-supported schemas and the separate immutable cache lineage.
-
-Sample loading runs on non-realtime worker threads. The loader reads files,
-decodes audio, derives channel count and sample rate from decoded buffers when
-container metadata is incomplete, resamples to the active output rate when
-needed, maps channels to the output layout, and publishes an immutable buffer
-handle to Rust live-audio state.
-
-For MP3 files, the loader tolerates isolated recoverable frame decode errors.
-Once the stream channel layout is known, a bad packet with a known packet
-duration is replaced with silence for the same number of source frames so the
-decoded timeline does not drift shorter; otherwise the loader keeps scanning
-without fabricating an unknown duration. It still rejects files with no
-decodable audio frames, or streams whose decoded sample rate or channel count
-changes mid-file.
-
-## Audio Analysis And Timing Metadata
-
-Default audio analysis runs on non-realtime worker threads during sample loading
-and manual analysis. The loaded buffer is mixed to mono and resampled once to 44100 Hz,
-then shared by concurrent BPM and key workers. Analysis resampling processes the
-complete track, removes the FFT resampler's leading delay, and flushes its tail
-to preserve duration and transient times at every supported output rate.
-The standard converter and the streamed diagnostic key converter share the
-dimension calculation for the existing Rubato FFT setup (`1024` input frames,
-one subchunk/channel, `FixedSync::Input`). Tail padding may validly emit zero
-frames while an FFT unit fills. Both converters allow those calls within a
-finite bound derived from the source/target rates and remaining required output,
-check cancellation between calls, and fail explicitly if the budget is exhausted.
-They preserve their existing PCM allocations and limits, remove leading delay
-once, and return the exact ceiling-derived output length with source origin intact.
-
-The Rust analysis crate uses the qm-dsp-derived `DetectionFunction`,
-`TempoTrackV2`, and `DownBeat` pipeline for BPM and beat/downbeat positions.
-Key detection computes the librosa-compatible CQT and runs the KeyNet ONNX
-model; see [Key detection](key-detection.md). A key detection failure returns
-`unknown` without discarding the BPM result. Automatic loading and manual
-analysis use the same preprocessing and detection path.
-
-The separate G2a `analysis::tempo_summary` API evaluates complete binary64 raw
-positions against explicit quarter-note count hypotheses outside realtime paths.
-It preserves source/PCM/provenance identity and origin, fits robust constant-period
-candidates with distant-region checks, and reports ambiguity, exclusions and
-conditional uncertainty. It has no runtime publication call
-site. G2b1 adds `analyze_bpm_raw`: the same QM pipeline retains complete binary64
-detector frames, downbeat indices, actual input hop/rate/frame count and requested
-configuration before legacy binary32 projection. Normal `analyze_bpm` still uses
-its existing BPM/grid arithmetic. QM input metadata describes the resampled
-analyzer input, not loaded-source/PCM hash identity or verified musical counts.
-G2b2 adds offline `tempo_evidence` adapters: they hash complete immutable loaded
-mono PCM, retain independent original-source provenance and request generation,
-and preserve whole QM or Beat This evidence beside a summary. QM analyzer input
-has its own actual content hash and transform/timebase. The original-byte
-relationship remains a caller assertion for this standalone evidence API. The
-productive C1a cold loader now copies/hashes immutable actual bytes first, decodes
-that same snapshot and retains a complete PCM manifest; this does not itself
-verify quarter counts or authorize historical accepted timing. See
-[PCM cache and residency](pcm-cache-residency.md). `tempo_refinement` supports only isolated
-bit-identical repeated attacks under a versioned full-source feature policy.
-Generated counts stay unverified; explicit independent source/PCM-bound feature
-counts are the sole verified path. Raw and complete-feature summaries remain
-separate, with uncertainty, displacement and source zero retained. G3 accepted
-timing adoption remains separate; see [constant-tempo candidates](constant-tempo-summary.md).
-
-The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
-`OfflineAnalysisService`; it does not change that default routing or adopt new
-results into saved grids. Rust pins the immutable loaded source and streams its
-f64 arithmetic channel mean to a complete loaded-rate float32-LE mono file in
-bounded chunks. After complete flush and retention of a readable native handle,
-the analysis source pin drops off-thread; independent playback ownership remains.
-The native key branch reads the same file in bounded chunks and derives the
-complete 44100-Hz vector with unchanged Rubato delay/tail handling and CQT/KeyNet
-parameters. No full loaded-rate mono/key-input copy is retained. Python supervises
-the optional local beat process and publishes one independent-component envelope
-through loader events.
-Ready diagnostic envelopes use inline uncompressed binary64/Base64 arrays;
-the native validator checks their complete finite/source/count contract before
-publication. The versioned Python reader reconstructs exact predictions from
-events or snapshots after PCM cleanup, without optional runtime/model files.
-The final 1-MiB bound remains unchanged; worker wire responses retain version 1.
-The optional locked Windows CPU worker derives 22050-Hz input directly with the pinned
-reference frontend. [Explicit setup](beat-this-setup.md) verifies and installs
-its environment and checkpoint; normal analysis never performs acquisition.
-
-One native job per engine and one beat process globally retain their slots
-through cancellation and actual retirement, with zero pending queues. Native PCM
-staging is capped at 512 MiB for the larger of source-plus-bounded-export buffers
-or complete-key-output-plus-bounded-read/conversion buffers. Delay/tail handling
-uses bounded converter output; the final vector has exactly the ceiling-derived
-frame count. Every still-owned analysis PCM allocation counts. The full exported file
-has its own unchanged 512-MiB cap. FFT/CQT/ORT/model workspace is excluded; source
-PCM retained by playback still counts in actual RSS. Native key calls are not
-preemptible; a cancelled call stays retiring until it returns. Read handles close
-off-thread through `retire_pcm()`, and the service retains the file/directory until
-both readers settle. `staging_stats()` exposes the stage reservations and accounted
-PCM capacities separately from process RSS.
-Unconfigured beat analysis reports unavailable while key may succeed. All PCM preparation,
-process management, validation and destruction stay outside the callback.
-See [Offline analysis boundary](offline-analysis.md) for the API, provisional
-limits and exact diagnostic-only scope.
-
-Published analysis BPM values preserve fractional precision for timing and grid
-math. Near-integer tempos are not snapped to integer BPM solely for display
-readability; compact pad overlays may round for scanning, while editable BPM
-fields and the Loop Editor grid use the underlying effective BPM.
-
-Known issue (2026-10-06): the legacy mean-of-intervals BPM estimator reduces to
-the first/last detected position and interval count. Their coarse ODF timing
-can produce a persistent scalar-grid slope hidden by the two-decimal BPM field.
-The exact 120-BPM reference publishes 120.00128936767578, placing its grid about
-5.157/15.472 loaded frames early at 10/30 seconds at 48 kHz. Separate waveform
-and seek/playhead `f32` interfaces lost frame resolution in long files; G1 now
-preserves `f64` through these public address paths. The automatic estimator/slope
-remains pending. See [the diagnosis](grid-timing-diagnosis.md) and
-[the scalar coordinate contract](scalar-source-coordinates.md).
-
-In the legacy grid fallback, beat/downbeat anchors reported very close to file
-start are normalized to `0.0` before deriving editor/native timing. An explicit
-persisted activity base bypasses this normalization and retains its loaded-frame
-position even within that near-start interval.
-
-## Playback, Loops, And Stems
-
-Resident loop-window preparation reads absolute loaded-source intervals directly
-from already verified immutable PCM. A complete FullMix lease binds the sealed
-playback FileID and extent. Paired stem owners retain a shared verified reader
-for the five complete derivatives, while the existing asset registry holds
-equivalent sealed pins for both generations and their common descriptor. A loop
-edit reads only four component intervals into their final f32 backing; it does
-not repeat the complete WAV/PCM verifier, WAV conversion or alignment. Fresh
-pair admission still performs complete integrity verification.
-
-Workers check range arithmetic, complete identity, context, cancellation and
-old/new backing plus bounded scratch before allocating. Exact unchanged views
-share actual backing. Source, timing and window permits and callback adoption
-remain independent per pad; old voices, jobs and live logical history retain
-their own readers. Explicit full-track consumers and the current admitted Key
-Lock fallback retain their complete context. Dry range coverage does not close
-the separate finite Key Lock/DSP gate.
-
-The runtime keeps two time domains separate:
-
-- Output frames: transport and scheduler timing.
-- Source frames: loaded full-mix buffers, prepared stems, loop regions, and
-  voice playheads.
-
-Loaded full-mix buffers and prepared stems use the engine output rate, so their
-source-frame domain and the editor's sample-offset units use that loaded-buffer
-rate rather than the original file rate. Runtime source cursors retain a
-fractional remainder; integer playhead telemetry floors the next source cursor.
-For accepted fractional loops this is a virtual musical position: in a longer
-seam it can reach the physical exclusive end by at most the admitted one-frame
-mismatch. It is never an unchecked PCM index; reader taps stay inside the range.
-
-Waveform query bounds, returned X, loaded duration, seek messages and playhead
-telemetry retain `f64` source seconds through PyO3/Python. Amplitudes remain `f32`;
-only visible UI amplitude arrays are promoted to match ImPlot's `f64` X/Y overload.
-Integer envelope buckets and tight roundoff recovery preserve exact `n/rate`
-one-frame queries. Source clipping and the seek intro/loop/tail policy remain.
-
-Python persists loop intent in seconds. Native loop-region commands and MIDI
-runtime loop metadata retain `f64` seconds until conversion to half-open integer
-source-frame ranges, preserving editor frame markers even at long source
-positions. Rust owns live playhead wrapping. Live loop edits rebase source
-progression while preserving an in-range fractional cursor; a normal
-out-of-range playhead is clamped to the new loop start. Bootstrap configures a
-copy of the canonical source cursor against the current effective loop, then
-uses its integer frame plus fractional remainder for source beat mapping.
-It therefore observes the same fractional source position as rendering,
-including live-loop normalization and explicit seek semantics, without advancing
-the live cursor. There is no live loop-edit crossfade yet.
-
-New track assignments initialize their 8-bar auto-loop and an independent scalar
-grid base at the last loaded frame before first finite any-channel amplitude
-strictly exceeding 0.01 full scale. Both boundaries of the fixed [-0.01, +0.01]
-deadzone count as near-zero. `initial_loop_start.rs` uses one borrowed background
-scan without extra PCM allocation or mono cancellation. No fixed 5-ms pre-roll
-remains. The optional f64 candidate shares existing load/request identity guards.
-The widened tolerance is a screenshot-informed user-test value, independent of
-track peak; noise, pickups and soft fades remain heuristic limits rather than
-certified musical downbeats. Tracks entirely inside this band and invalid candidates retain loop
-zero and legacy grid fallback. Raw analysis and BPM are not rewritten.
-
-The source-time `pad_grid_anchor_s` is optional persisted intent, separate from
-the signed `pad_grid_offset_samples` manual correction. Display, snapping and
-native timing share the rounded base plus offset; when base is absent, legacy
-analysis downbeat/beat/zero fallback applies. This avoids clamping a long-silence
-base to the offset's one-bar range on BPM changes. Restore publishes a base even
-without analysis/BPM; reanalysis and manual loop edits preserve it. New assignment
-or unload clears the old base. Legacy JSON remains compatible.
-
-The resulting source-grid origin is a signed virtual reference, possibly outside
-the audio interval; Rust never uses it as an unchecked buffer index. The editor's
-initial/reset and loop-focused view starts one beat before the selected loop,
-whose displayed beat coordinate is 1. Coordinate 0 is the invisible left reference;
-negative display space adds no source audio. Earlier physical audio remains
-reachable by panning. Numbering is loop-relative and may be fractional for off-grid
-loops; adaptive zoom subdivision indices are not beat identities. Global speed,
-BPMLOCK, KEYLOCK, quantization and other-pad playback do not move source grid or
-stored markers. Source SYNC, REALTIME BPM, selected playback maps and phase adoption
-are removed. The previous implementation is retained in the SYNC-REALTIME-BPM
-branch; see [SYNC recovery locator](README.md#retired-sync-recovery). Scalar rate and loop timing remain.
-
-`source_grid.rs` also supplies a pure binary64-period `ScalarSourceGrid` control
-evaluator. A focused Python wrapper uses it for visible grid, snap and automatic
-endpoints. Origin/period remain independent of labels. Physical markers round each
-absolute boundary once; automatic ends advance original selected intent before
-rounding. G3b2a/b additionally lets the live SourceGrid and native transport/rate
-consumers use explicitly accepted binary64 period/origin/full revision after
-actual mixer adoption; legacy native parameters also preserve binary64. See
-[native accepted timing](native-constant-timing.md).
-
-`source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
-master-beat-to-loop mapping. Source beat is `(frame - origin) / frames_per_beat`;
-Euclidean modulo handles positions before the signed origin. Compatible loops
-have a positive 1/64-note tick count that divides 64 or spans whole bars, with
-at most one source frame of duration rounding. Mapping wraps by the exact
-musical period before frame conversion, so fractional-BPM marker rounding does
-not accumulate each cycle. Short loops repeat evenly within a master bar;
-whole-bar loops retain beat/bar phase across wraps. Arbitrary physical loops
-remain playable and have bounded physical wrapping, with compatibility false
-and no sustained synchronization guarantee. Tempo ratios clipped outside the
-engine's `0.5..2.0` range also fall outside that guarantee. This helper prepares
-the entry phase contract. G3c2 also uses its compatibility rule for accepted-only
-productive musical wrapping; normal starts still read the effective loop start.
-
-Stem generation is offline/background work. G3b1 captures an opaque engine-owned
-source/request/preparation-epoch ticket before each job, requires a full original
-content digest matching the loaded source, and isolates worker artifact writes.
-`StemGenerationRequest.separator` captures either `demucs:htdemucs` or
-`bs-roformer:musdb18hq` at admission. Settings changes affect future requests;
-existing sets and model-free restoration keep their source/timing eligibility.
-`SelectedStemGenerationBackend` routes both through the same file/artifact
-protocol and streaming alignment writer, then the existing controller handles
-promotion and native ACK. No model objects or tensors enter project state or
-Rust messages. Two Python separator workers admit at most 32 additional jobs;
-shutdown cancels job eligibility and drains retained reads without blocking UI.
-The separate native cold lane retains its existing two/32 admission and 1 GiB
-transient PCM limits; startup admissions, assignments and preparation budgets
-remain unchanged. These limits do not describe total process RSS.
-
-BS-RoFormer uses the pinned ZFTurbo v1.0.12 MUSDB18HQ network/config/checkpoint in
-a disposable subprocess, with bounded stereo 44.1-kHz chunks and rolling CPU
-overlap-add. Decoded long inputs are temporary disk PCM; complete tracks are never
-placed on the GPU. The shared artifact writer aligns all components in bounded
-blocks and preserves the previous scalar PCM16 math, including pre-quantization
-instrumental summation. Both adapters resolve CUDA/CPU outside the callback.
-The exact model, explicit installer and CUDA/dependency setup are described in
-[stem generation setup](stem-generation-setup.md). Beat This default acceptance
-is a separate gate; separator selection has no analyzer authority.
-
-The owner rechecks actual state through enqueue; callback adoption checks the
-actual source Arc and atomic permit. G3b2e also captures current native source/
-declared authority and complete acknowledged accepted revision, exact binary64
-period and signed origin. Generation/digest verification occurs in the shared
-resolver at capture; the fixed permit carries source address/shape/rate, authority
-revision and accepted projection with atomic owners. The pinned source,
-source_version digest and request/epoch/monotonic-authority guards preserve that
-ownership without separate generation/digest fields in the callback. Preparation
-rechecks before/after decoding and through enqueue; adoption rechecks the same
-fixed binding. Unavailable Automatic cannot
-admit preparation, and Manual/Tap/Legacy retain their own authority. Shape/rate,
-endpoints, raw revision, source hash or preparation epoch cannot identify current
-accepted ownership. A complete-set marker binds all five artifact digests; legacy stat-only caches
-invalidate. Python enables controls after native adoption feedback and avoids
-full-file hashing on mode/mask clicks. See [prepared publication](prepared-stem-publication.md).
-Cache publication compares the component-stem transient
-sum with the loaded full-mix buffer and, outside the realtime callback, applies
-one shared frame offset to the prepared stem set when an offline separator has
-introduced a measurable global delay. Individual stems are not shifted
-independently.
-
-Restored stem caches are validated in Python before the pad is treated as
-stem-available, but restored prepared stems are published to Rust only after the
-matching restored full-mix sample has completed its async load. If publication
-is rejected, Python marks the cache unavailable for controls and preserves Rust's
-previous playback state. Late callback rejection is observed before availability.
-The callback exposes a fixed rejection reason. A current fully verified pair can
-remain chosen on disk without a component ACK: Python retains its rollback owners
-and uses the existing bounded pool for at most eight current-window preparations.
-Each attempt reserves admission before owner transfer and needs a fresh own ACK;
-pending feedback never starts another attempt. Own-pad activity waits, newer
-source/UUID/selection wins, and shutdown or exhaustion preserves the chosen files
-unavailable without producer rollback. See [prepared publication](prepared-stem-publication.md).
-The preparation epoch is not the G3a accepted revision. G3b2a publishes precise
-accepted SourceGrid metadata; G3b2b/c adds current authority and native/Python
-period/rate/grid/loop/global-control consumers. Frozen Python source timing retains
-complete revision and provenance; Automatic without acknowledgement stays
-unavailable. Passive restore cannot replay Legacy timing over it. Accepted master
-controls publish period/speed directly; physical marker rounding uses loaded rate.
-Explicit current adoption completes through G3b2i's application controller and
-current-bound native loop/master transaction after acknowledgement. G3b2d binds MIDI runtime and scheduled triggers to current
-source/full timing authority. G3b2e binds productive prepared-source/stem admission
-and rendering to current accepted timing. Successful same-source native accepted
-adoption/clear refreshes only the retained stems' fixed effective projection;
-pending/rejected replacement keeps the previous projection and failed stem
-admission keeps previous audio. Rendering matches actual source and exact current
-effective mixer projection while all stems share one SourcePlayback trajectory
-with full mix. Control can revoke acknowledgement before its parameter callback
-clear; a newly captured nonaccepted set can safely reject in that interval,
-preserving prior PCM/audio, then succeed after a fresh capture following clear.
-G3b2f1 binds continuous productive StretchProcessor feed/native/FIFO history and
-active voice source/timing ownership; G3b2f2 adds productive worker-owned native
-continuation as described below. G3b2g additionally connects source-verified
-accepted SampleAnalysis/ProjectState persistence with fresh native loader adoption.
-G3b2h additionally binds controller GLOBAL START/STOP batches including MIDI to
-current native source/authority and acknowledged full accepted timing. G3b2i
-integrates general explicit accepted publication and derived loop/master completion,
-shared with fresh saved adoption. Both native execution and current control intent
-must still agree before Python projects completion.
-The productive full-mix loader now establishes immutable copy-first lineage;
-historical timing records retain their versioned provenance and still require
-fresh complete evidence verification and native acknowledgement.
-
-Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
-transition state with a short 128 source-frame crossfade. Both sides read the
-same loop-relative source frame before Key Lock, Gain/Trim, DSP, metering, and
-telemetry. The `I` performance preset means Drums + Melody + Bass; cached
-`instrumental.wav` is cache data, not a fifth live component.
-
-Finite KEYLOCK admits those scalar mode/mask commands only for proved current-source
-NormalLoop voices with the same already accepted resident component owner. The
-real Some/Some path publishes the verified pair while inactive, keeps FullMix
-selected, then starts playback before `SetStemMixMode`/`SetStemEnabledMask`. Both
-selection sides, including an outgoing stem selection toward FullMix and empty
-masks, remain covered until their actual last ramp use. An interrupted ramp uses
-the existing Rust transition policy and must pass the same prospective coverage
-check. Strict complete-source/component-owner equality remains in force.
-`SetStemPairFullMix` retains its existing component retirement after the ramp;
-native history and preparation owners keep their separate pins until existing
-worker/recycle retirement. The ordinary StemController round-trip uses this
-retiring command, so initial active None->Some, warm return, retention policy and
-effective-mode ACK require the separate
-[typed P5a transaction](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
-
-Unload Audio and Delete Stems revoke durable stem-cache eligibility, return
-durable stem mode to `full_mix`, reset session-only masks and publish neutral
-Rust state. Artifact retirement is separate: original assignments, jobs, queued
-handles, native history and pinned voices retain their source until the final
-reader retires off-thread. Shared digest PCM survives another pad's unload.
-Stem cleanup targets one owned generation inside the pad-labelled container;
-it cannot recursively remove a newer set. Windows sharing failures defer cleanup.
-Shutdown retires runtime readers as they drain while preserving saved assets;
-a stopped live engine may retain loaded PCM for restart.
-
-## Speed, BPM Lock, And Key Lock
-
-An opt-in `signalsmith-probe` Cargo feature isolates a private canonical-input
-pitch experiment from productive playback. It uses pinned MIT Signalsmith
-Stretch/Linear headers behind a small exclusive C ABI owner; normal builds do
-not compile its C++ module. Existing source progression, Native history, public
-APIs and admission remain authoritative. The bounded prerequisite and its
-evidence limits are specified in
-[`probe-signalsmith-canonical-pitch`](../openspec/changes/archive/2026-10-30-probe-signalsmith-canonical-pitch/design.md).
-
-Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
-
-- BPM Lock off: global speed multiplier.
-- BPM Lock on with valid metadata: `source_period / master_output_period`, using
-  acknowledged accepted timing before legacy pad timing.
-- Missing pad BPM metadata: global speed fallback.
-
-Key Lock selects rendering semantics per pad:
-
-- Off: varispeed playback, so pitch follows playback speed.
-- On: `stretch_processor.rs` sends the canonical already-resampled source
-  block through a per-voice Rubber Band LiveShifter with pitch
-  scale derived from the inverse tempo ratio, so tempo changes remain while
-  perceived pitch stays approximately stable.
-
-The global Key Lock control is a master write operation over currently loaded
-per-pad Key Lock entries. Unloaded pads are normalized to disabled Key Lock
-intent and do not receive selected-pad Key Lock controls. After a global update,
-individual loaded-pad controls can change one pad without changing other pads.
-
-Fractional source addressing happens before Key Lock processing. Full-mix
-and prepared-stem playback use the same source progression and interpolation
-path before Rubber Band, Gain/Trim, DSP, metering and telemetry.
-
-`source_reader.rs` owns effective half-open loop regions, explicit before/after-loop
-seek progression, integer source reads, prepared-stem compatibility and source-selection
-crossfades. The mixer and voice state use these shared rules; the module borrows accepted
-immutable buffers and has no native DSP, transport, worker or persistence ownership.
-`source_playback.rs` owns scalar fractional source epochs and rate smoothing. Each
-output sample uses two integer reads through the reader and linear interpolation;
-both taps obey loop wrap and explicit intro/tail seek policy. Rate changes, pause/resume
-and in-range loop edits preserve fractional carry. Source-selection ramps advance by
-fractional source distance. The productive `StretchProcessor` fills its fixed planar
-buffers from the actual borrowed source and canonical cursor instead of interpolating
-segment endpoints.
-For effective accepted timing, `SourceLoopDomain` keeps exact physical integer
-bounds and compatible musical period P in loaded frames. The cursor wraps virtual
-phase modulo P while the reader joins the last admitted integer PCM knot to loop
-start at P. This fractional seam can differ from one frame; it never reads the
-exclusive physical end or scales rate by H/P. Rebases retain virtual phase, and
-copied read plans compare complete period bits. Manual/Tap/Legacy and incompatible
-physical loops retain integer wrapping. Beat queries and paused configuration use
-the same accepted-only domain, including old voices with pinned source/timing.
-`SourceReadPlan::fill_fractional_buffers` supplies fixed planar feed in both the
-live mixer, productive worker and non-live source-preparation proof. These shared rules do not
-compensate audible delay.
-
-Ordinary transport uses the existing content-bound command and callback claim.
-A focused Native observation module retains fixed current state per stable
-content cell, with original command origin, monotone observation freshness and
-nonresurrecting semantic-source custody. Completion capacity is checked before
-effect; the exact command defers under pressure. Same-source resident-window
-refresh preserves custody. Legacy generic feedback keeps its existing resolver.
-Opaque admissions expose current observations for UI polling without becoming
-audio authority. The focused Python pause-intent owner follows existing content
-instances, projects confirmed state through placement/arrangement fences before
-settling requests, and retains bounded monitors for actual lifecycle changes.
-Its bounded current-slot query also discovers a new source or lifecycle state
-without a raw event or prior pause admission; old source receipts stay invalid.
-One fixed pending ordinary origin retains exact superseded Hold cause through
-feedback pressure until the ordered command can confirm its disposition.
-Waveform Hold keeps its separate cause and acknowledgement. Native capability
-version 1 is required by the launcher and Portable preflight for this interface.
-
-`key_lock_preparation.rs` constructs three unique native handles per voice
-before stream rendering: 96 handles for 32 voices, with one shared preparation
-worker. The existing effective/neutral-reserve pair is warmed at setup; the third
-source reserve receives exact pitch/reset and its actual source priming on the
-worker. Historical Windows measurements of the 64-handle neutral pool found
-cold stereo setup took 151.35 ms
-at 48 kHz with 146.67 MiB additional private memory, and 270.09 ms at 96 kHz
-with 230.72 MiB additional private memory. These process deltas belong to
-startup/resource profiling, not the callback budget or the extended 96-handle pool.
-Current [96-handle setup and memory measurements](pcm-cache-measurements.md)
-are recorded separately. Native reset and cold
-pitch setup allocate inside Rubber Band 4.0.0, so only setup/worker preparation
-calls them. Start/retrigger, stop, seek, and leaving wet processing clear adapter
-storage and mark used native state dirty.
-The callback exchanges it for a warmed reserve only when its bounded return
-lane has capacity. The worker resets and warms returned state; the callback
-never waits, constructs or destroys native handles, or resizes buffers. Wet
-segments use silence while a reserve is unavailable; dry varispeed remains
-reactive. Pause/resume retain native state. Stem mode/mask source crossfades
-retain native history.
-
-Productive native and pending FIFO history bind actual source address/shape/rate,
-complete effective accepted revision and bit-exact period/signed origin. The
-processor checks expected next fractional position and seek mode before feed
-consumption. Source mismatch or discontinuity invalidates bounded adapter state
-and marks used native state dirty; existing worker recycling owns native reset
-and warming. Continuous same-source timing adoption/clear refreshes the complete
-projection on productive feed while preserving chronological history.
-Period-only refreshes with unchanged physical bounds preserve the wrapped
-fractional residue; native and filter guards compare the exact new-domain
-representation of their previously expected next phase. True source, seek and
-out-of-range marker discontinuities retain the existing reset rule. Pending,
-failed or rejected timing leaves that effective binding unchanged; rate smoothing,
-pause/resume and stem crossfades retain continuous history.
-
-Active voices pin their actual source and its effective timing. Bank replacement
-cannot label old voice PCM with the replacement's accepted revision. An old voice
-may continue under its previous source/timing until retrigger or stop, separately
-from current pad-bank acceptance. Retrigger adopts current bank PCM and retires
-the old pin off realtime. Same-source successful timing refresh updates only
-matching voices. A warmed neutral reserve remains separate from the productive
-source-specific prepared history below; continuous binding adds no audible compensation.
-
-G3b2f2 extends the existing worker with bounded request/result/recycle lanes and
-retained `prepared_native_history::NativeAdapterState`. Productive requests pin
-actual PCM/stems and copy canonical SourcePlayback/SourceReadPlan. NativeHistoryPermit
-uses distinct Current and RetainedVoice authorities. Current binds tracked
-loaded-request generation, actual source/shape/rate, shared preparation epoch,
-authority/runtime revisions and full CURRENT accepted projection with exact
-period/signed-origin bits. RetainedVoice requires original CURRENT admission and
-a fresh actual live-voice lifetime/generation, own epoch, frozen timing and
-selection/history capture. Replacement fences Current candidates without
-converting them into retained permission. Both retain exact new-work window and
-checkpoint guards. Automatic without current acknowledgement
-cannot capture; Manual/Tap/Legacy remain nonaccepted. A local shared atomic voice
-epoch checks cancellation before/after worker catch-up; adoption additionally
-requires the exact outstanding request ID.
-The worker prepares exact pitch/reset and processes 4096 active output frames
-through the same fixed native adapter and reader, including rate smoothing.
-Active stem-selection transitions defer preparation. Proved finite NormalLoop
-ramps continue through the existing wet native handle, input/output FIFOs and
-chronological filter; deferral does not select dry fallback or reset that owner.
-The subsequent settled-selection request still processes real source input and
-adopts only at its exact checkpoint. Native handle, input/output FIFOs and request
-pins remain one coherent owner until adoption or recycling.
-Large adapter states and pending-request retention are heap-owned before rendering:
-`StretchProcessor` holds `Box<NativeAdapterState>`, and ready/recycle lanes move
-those preallocated boxes. This avoids embedding large retained payloads in all 32
-VoiceSlots on the Windows thread stack. The request ring uses fixed setup-allocated
-storage; callback exchange neither creates boxes nor resizes buffers. Temporary
-source-feed/output scratch for catch-up is allocated only on the worker.
-
-Rendering splits at the exact request output frame plus 4096. Adoption rechecks
-current permit/effective timing, source/stem identities, loop/read plan, complete
-canonical playback checkpoint and local request/epoch. It reserves off-thread
-recycling before exchanging native/FIFO ownership. Pending, failed, unready, late,
-stale or full-recycle results keep previous effective audio/native history. Heavy
-priming/catch-up and prepared-owner destruction remain on the worker. The fixed
-horizon is a preparation bound, not delay/crop/transition compensation, seamless
-handover or device-deadline acceptance. Actual productive ownership/output/failure
-tests establish G3b2f2 completion; G3b2g separately source-verifies complete native
-QM accepted persistence and fresh loader adoption. Later B5 acoustic compensation
-remains separate.
-Stop/reset/wet deactivation cancels local preparation and retires source/stem pins
-through a separate bounded worker lane while retaining dirty native/FIFO state.
-Completed-request atomics settle discarded jobs. Inactive/paused voices poll the
-bounded ready/recycle retirement path each callback without source rendering;
-results published after cancellation and teardown tail owners therefore retire
-off realtime without waiting for another productive source feed.
-
-New voice adoption checks the native control source's fixed generation/address/
-shape/rate fence against effective bank PCM before and after timing availability.
-Loading, unload and run revoke the fence; loaded publication updates command,
-cache, generation and digest under the request owner before publishing it.
-Loading unavailable or control PCM ahead of the callback bank rejects new starts,
-while ongoing pinned voice/history remains valid. One bounded atomic check/recheck
-adds no spin, lock, PCM/evidence owner or digest to the callback marker.
-
-The downstream `PerPadDspChain` also binds actual EQ/isolator filter history to
-the rendered voice's source, complete effective projection and expected next
-fractional position. Continuous same-source timing/rate refresh retains fixed
-filter storage. Source/loaded-rate mismatch or discontinuity clears that bounded
-Rust storage before replacement output. Its ledger counts actual filtered output,
-including wet fallback silence, without claiming audible source content.
-
-Wet activation gives the adapter a fixed `block_size - 1` output lead: 511
-frames for the 512-frame backend, independent of callback partitions. This lead
-and Rubber Band signal delay are still uncompensated. Native API delay is a
-nominal initial alignment value; warmed/dynamic state and transient peaks need
-independent measurement. Source telemetry, loop markers, and the shared clock
-remain unchanged. Source pre-roll, a separate feed-ahead cursor, and click-safe
-wet/bypass transitions, including ratio 1.0 and mode toggles, remain the next
-audible-alignment stage. See [Key Lock backend](key-lock-backend.md) for the
-pinned allocation audit, offline baseline, and measurement limits.
-
-Native tests additionally compile a source-preparation proof fixture with separate
-constant-ratio logical/feed cursors, exact initial pitch-before-reset and coherent
-native/FIFO continuation at an explicit discard index. Its independent algebraic
-source/raw-native oracle covers retained output and later blocks. The fixture is
-absent from production builds. Uncropped and retained transient measurements expose
-discarded startup peaks; equality and nominal delay are not audible acceptance.
-The test-only request can also declare an earlier source epoch and bounded output-frame history H.
-Forward progression must reach the exact requested logical phase; it never infers a backward
-loop/intro/tail path. Native feed begins at that origin and raw discard D remains independent,
-with effective translation D-H. Positive history rejects active source-selection ramps whose
-earlier state is unavailable. The caller's logical state and markers remain unchanged.
-Independent history tests cover fractional origins, loops, intro/tail and full-mix/stems;
-isolated impulse/short-burst sweeps report timing and energy retention under a predeclared
-engineering criterion. A further offline onset gate holds target-relative source content
-constant across longer silent/nonzero histories, measures translation-invariant response
-deformation, and tests a fixed short dry-to-wet bridge. Paired mixture-minus-background
-responses are nonlinear diagnostics; raw native cut loss and temporary varispeed pitch
-remain explicit. The bridge is not a selected live policy. Source-prepared
-ownership/permits and timed native adoption/catch-up are the distinct G3b2f2
-productive contract above; audible transitions and compensation remain later B5 work.
-
-A separate test-only unity-source bridge copies the logical fractional phase into a constant
-ratio-1 source epoch through the same borrowed-buffer reader. Its fixed two-ms hold/five-ms fade
-preserves branch source pitch, while source progression p+n departs from canonical p+r*n.
-Actual-mixture windows use each fixture's own continuous native history; launch and target
-origins, source-phase discrepancy and weighted source/wet interference remain explicit.
-Independent source and wet-suffix equality verify the implementation, not attack acceptance.
-The original failed timing/retention gates and live adoption boundary remain unchanged.
-
-A test-only causal probe maps each fixture's raw native output to a declared target and checks
-fixed early/on-time/late emission boundaries against the same continuous history. It verifies
-canonical source phase and exact prepared continuation while separating unavailable pre-target
-content, controllable gate crop and late missed content. Nominal API translation remains an
-illustrative anchor; neither earlier audible emission nor on-time cropping is an accepted live
-content policy. The backend guide records the policy table and required product decision.
-
-Project persistence stores global Key Lock control intent and per-pad Key Lock
-booleans for loaded-pad intent, with unloaded pads saved and restored as
-disabled. Rubber Band handles, runtime paths, buffers, measured latency,
-algorithmic delay, and backend tuning parameters are not persisted, exposed in
-performer settings, or sent through Python/Rust control messages. Active
-tempo-ratio changes use a maximum internal step of `0.05` every `512` active
-output frames in dry and Key Lock modes. A newly accepted target initiates its
-first step immediately, and rendering splits at subsequent interval boundaries.
-Pause freezes that interval, so callback partitions do not change the source
-ratio sequence. Native pitch-update order is also equivalent with matching
-initialized native/preparation state and reserve availability; reserve starvation
-retains bounded silence without changing canonical source progression.
-This state is not persisted.
-
-## Per-Pad DSP And EQ
-
-The current live EQ path is the Rust per-pad DSP chain in `dsp.rs`. The first
-live node is a 3-band DJ isolator:
-
-- internal normalized controls use `0.0` kill, `0.5` neutral, `1.0` limited
-  boost,
-- Python still persists dB-oriented low/mid/high project intent for UI and
-  compatibility,
-- Rust converts accepted live values to typed normalized DSP parameters and
-  smooths changes before sample processing.
-
-The live EQ path has a single DSP-chain implementation.
-
-Future DSP/FX work should extend the internal Rust DSP-chain path through a
-focused OpenSpec change. Do not add VST, LV2, CLAP, AU, or other plugin-hosting
-infrastructure unless the product direction explicitly changes.
-
-## Per-Pad Gain/Trim
-
-Per-pad Gain is a channel trim stage, not a master volume clone. Python persists
-durable intent as `pad_gain_db` with a `0.0 dB` default and a finite
-`-60.0..=+12.0 dB` range. Project-file migration accepts `pad_gain` linear or
-percent values so unity (`1.0` or `100`) loads as `0.0 dB`.
-
-The Rust mixer converts accepted dB targets with `10^(gain_db / 20)`, smooths
-changes in the realtime path, and applies the multiplier after source/stem
-selection and playback-rate/Key Lock processing, before the per-pad DSP/EQ
-chain, trigger velocity, and master volume. Per-pad metering is based on the
-rendered pad contribution after Gain/Trim and EQ but before master volume, with
-clip hold projected into `SessionState`.
-
-Master output metering is separate from the selected-pad meter. Rust measures it
-after active pad contributions are summed and after Master Volume or momentary
-output mute is applied. Master peak telemetry preserves finite values above
-`1.0`; Python projects the unclamped peak into `SessionState`, and the bottom
-bar Master Volume fader renders the display fill and one-second `CLIP` hold.
-Pad peak and playhead telemetry uses the same cadence gate but publishes only
-pads touched by the render path in that callback; inactive bank slots are not
-scanned for telemetry messages. Python keeps pad peaks with nonzero decay work
-in an active set, so frame rendering decays only pads that recently received
-peak telemetry until they fall back to silence.
-
-## Input Mapping
-
-Keyboard and MIDI Learn share stable action semantics.
-
-Rust MIDI capture runs outside the CPAL callback. It timestamps and normalizes
-supported MIDI messages, resolves in-memory mapping snapshots, and may dispatch
-only small discrete audio-safe commands directly through the command ring.
-Python publishes Learn/capture state to Rust so Learn takes precedence over
-mapped playback: while Learn is active, Rust reports the MIDI input as capture
-data and does not resolve mappings or enqueue direct playback commands.
-Python publishes Rust input-runtime pad state at startup and when current native
-source/authority, full accepted timing revision, effective loop intent or Multi
-Loop changes. It carries one current timing snapshot into endpoint calculation
-and checks an opaque native source/authority binding before publication; unchanged
-frames do not republish the same state. Automatic without acknowledgement cannot
-use saved analysis as runtime authority.
-
-Direct Rust dispatch is all-or-nothing. If the bounded command transaction
-cannot be fully enqueued or current Rust input-runtime state cannot accept it,
-Rust emits the mapped action with `direct=True` and `dispatched=False`; Python
-then resolves fresh runtime and retries pad triggers through the same guarded
-native API outside the MIDI dispatcher. Loop intent and launch form one fixed
-effect, rechecked at actual callback/scheduled execution before loop mutation or
-exclusive stop/start. Source/authority edits and changed effective runtime intent
-retire earlier triggers; unavailable Automatic state never replays an old loop.
-See [current MIDI binding](native-constant-timing.md).
-
-Controller-owned actions such as Tap BPM, stem masks, dB Gain/Trim, EQ, master
-volume, and speed are reported back to Python as small events. Future high-rate
-DSP parameter mappings should derive bounded targets outside the callback, send
-accepted targets through the parameter ring, and smooth on the Rust side.
-
-## Background Task Identity
-
-Per-pad load and analysis work carries request identity across the Rust/Python
-boundary. Python records the current accepted request for each pad and ignores
-stale progress, error, success, and analysis events after unload or replacement.
-Rust also checks the current per-pad load request before publishing decoded
-sample buffers into the cache or command ring, so stale workers cannot restore
-old live-audio state.
-
-## Persistence And Restore
-
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes asset
-ownership/content identity and restore policy in serial slices. Canonical immutable
-material users replace physical per-pad duplicates; #N remains fixed slot membership.
-Current P1b storage/control admission shares compatible immutable PCM in the existing
-ProjectAssets weak-reader registry while retaining ordinary independent assignment
-IDs and fresh native source/window/timing permits. Registered separator interests
-fan out one ready generation with individual ACKs; cancellation detaches one user,
-and actual reads keep their existing physical leases until completion. All-bank
-saved stem owners suppress retirement until the last saved user. Rejection transfers
-the reserved old generation owner under the same registry gate without new owner
-allocation. These operations add no callback file ownership or I/O.
-Its target keeps current musical masks/custom/preset/mutes as independent durable
-CopySnapshot intent and keeps durable ALL STEMS
-desire, disk eligibility, pending work, resident readiness and effective native
-mode distinct; preload defaults off. It requires guarded first lazy activation
-during FullMix playback and actual effective-mode feedback. The startup sequence
-below describes the current eager implementation, not that pending target.
-
-`ProjectState` stores durable performer intent such as sample paths, loop
-regions, BPM metadata, dB Gain/Trim and EQ intent, stem cache metadata,
-settings, and global controls.
-
-`key_intent.py` owns the immutable, validated per-content source key version,
-correction and epochs, base/extra shifts and retrigger intent. `pad_key_intent`
-is the saved truth for all216 slots; legacy `manual_key` is a fixed-size facade
-over that same table. K-META edits remain metadata-only and issue no native pitch
-or playback commands. The existing analyzer publishes a new key version only
-against its real integer request ID, captured content instance and current native
-waveform generation/digest/shape; timing staleness does not erase a newer key
-correction. Native getter failures preserve intent and settle the real request.
-Accepted source replacement resets this intent, including when a newer timing
-edit owns the timing projection. Same-source restore preserves it.
-
-Legacy migration imports correction only when `pad_key_intent` is absent. An
-explicit new correction `None` remains authoritative on every reopen. Key-only
-validation failure recovers valid fields of each slot locally; it preserves other
-performer settings and never restores runtime ownership, requests or native ACKs.
-
-`SessionState` stores recoverable UI projections such as active pads, paused
-pads, load/generation progress, meters, playheads, and edit buffers.
-
-Startup order:
-
-1. Load and validate `ProjectState`.
-2. Create fresh `SessionState`.
-3. Start `AudioEngine`.
-4. Construct controllers, inspect complete current-Config arrangement journal histories,
-   and retain their original/stem readers before ordinary restore and cleanup.
-5. Validate restored sample assignments, retain recovery-owned missing assignments,
-   clear other missing or unusable pads with explicit neutral Rust state, and
-   schedule cached sample loads.
-6. Validate restored stem cache metadata; publish restored prepared stems only
-   after each matching full-mix sample load succeeds.
-7. Publish restored global settings and non-stem loaded-pad live-audio state to
-   Rust.
-8. Publish input-mapping runtime state.
-
-Normal startup projection skips per-pad gain, EQ, BPM, timing metadata, loop
-regions, Key Lock, stem mode, and stem masks for empty pads. Explicit unload,
-clear, or force-reset paths still publish the bounded neutral state needed to
-remove stale Rust live-audio state for that pad. Stem cleanup additionally
-removes the project metadata that would otherwise make a later restored-load
-callback eligible to republish prepared stems.
-
-Occupied Copy uses a distinct `pad_copy_overwrite` journal with immutable source A,
-predecessor B and one fixed fresh successor C. The controller records preparation,
-publication and its own complete Native ACK before removing B's controller owners.
-Every new Config revision first records the latest full pre-C intent, preserving
-newer A and unrelated edits; only an actual `ConfigCommitReceipt` records the
-written after image. Independent A/B/C original and stem readers survive model,
-asset and Native settlement through the terminal journal append.
-
-`CopyArrangementStartup` reads entire bounded Native histories and validates
-Config custody and successor lineage before restoring intent. Original-input
-recovery requires the captured A/B musical seals and transfers one writer to the
-existing live Copy path with the same C identity. A recognized written C receives
-fresh target-only source, selection and timing acceptance; it never copies A again.
-A may have changed or disappeared. Unknown histories, missing custody, ambiguous
-lineages and incompatible unfinished Material/Pair/Copy owners retain visible
-fences. Missing recovery-owned assignments and stem metadata remain intact while
-ordinary loader observers perform genuine restore; custody retry keeps all available
-readers and the same writer.
-
-A saved immutable stem selection is verified through the existing preparation and
-registration path without another selection Config commit. Registration pressure
-retains the prepared owner and disk lease. Recovery waits for the exact current own
-Native registration and, for ALL STEMS, the own component/mask acknowledgement.
-Startup preload requires its own acknowledgement only when enabled. FullMix with
-preload disabled verifies registration without requesting components or preload.
-Restore observers stay reachable until these requirements pass. Historical journal
-tokens and a stable empty selection epoch confer no current acceptance. The broader
-R2 selection/Hold matrix, public gestures and musical/resource/Human gates remain open.
-
-GUI and mapped pad navigation share one selection admission path. Each accepted
-choice, including a repeated slot choice, retains a bounded Session revision and
-the content displayed at admission. This record is display intent only. The Pair
-mirror uses one retained projection for both the Config candidate and live selected
-pad, including newer navigation through interrupted stores. A new Pair captures the
-current complete selected row, so an earlier removed or refilled selection cannot
-redirect it. Empty-target navigation stays at its chosen slot. Ordinary unrelated
-unload or replacement does not request global release of surviving waveform holds;
-matching physical release, editor cancellation and shutdown keep their existing path.
-
-Audio-to-control telemetry is best-effort and controller-owned. Dropped
-telemetry must not silently change durable project intent.
-
-## Current Non-Goals
-
-- Realtime stem separation.
-- Plugin hosting or external plugin scanning.
-- Live loop-edit crossfade/zero-crossing policy.
-- Deck/group/master DSP chains.
-- Audio device selection beyond the default CPAL output device.
-- A richer reliable audio-state snapshot/acknowledgement stream beyond current
-  best-effort telemetry.
-
-These are not forbidden forever. They need explicit user direction, OpenSpec
-coverage, focused design, and validation.
-
-## Pending R0 content and admitted action ownership
-
-Current runtime above remains slot-based. The pending arrangement contract separates
-fixed PadSlotId/epoch, movable ContentInstance/lifetime, immutable material/analysis/
-StemSet versions and current native source/timing/window/ACK authority. Copy creates
-fresh stopped content with musical settings and shared immutable input; Move/Swap
-requires actual voice/history/FIFO/filter/ramps/cohort continuation, not unload/load.
-Prepared pair/all36 transactions linearize native/project/config/journal with full
-ref/capacity reservation; claim-without-ACK retains pins and fences conflicts.
-
-Accepted waveform holds bind lifetime/action/native caused PauseEffect/control
-revision/cohort, follow living moves/swaps, fence removals and never copy tokens.
-Outside release survives selection/editor close/focus through existing control tick;
-release-before-ACK/saturation retains one bounded identity-bound request. Later
-STOP/retrigger/resume/intentional pause supersedes the old claim. Slot-only Python
-paused state is no native effect proof; current successful unload already clears
-the hold. Global middle-hold mute stays output-global/latest intended volume.
-Accepted pitch actions capture selected lifetime/full numeric tuple/timestamp/
-prepared permit; each attack remains distinct in the existing scheduler. Material
-equality, current selection and old telemetry cannot redirect an admitted action.
-Persistence preserves durable content lineage and musical intent, while reopen
-allocates a fresh nonreused runtime lifetime and rejects saved action/hold authority.
-All-bank assignments, readers/old voices/history/jobs/subscribers/actions/versions/
-native unload ACK determine real last use. Full HC/P6/V0 and human gates stay OPEN.
-
-
-### Existing material reference migration
-
-`MaterialMigrationController` coordinates one distinct verified current M-ID or legacy material
-and its matching assignments across all216 slots. App startup captures a bounded
-reference inventory after ordinary restores and admits one material at a time;
-after genuine settlement it rechecks each remaining recognized old-layout reference.
-The single Native resolver returns typed artifact kind, layout and material root
-to Python. New originals live directly in readable filename directories; complete
-SHA/length and the first canonical leaf are held in a hidden binding, independently
-of compact material IDs. A full-SHA claim serializes differently named equal-byte
-imports before the existing derivative preparation gate. Compatible lookup retains
-the incoming and canonical sealed readers, scans complete integrity and creates no
-extra source/snapshot copy. Decoder/rate/channel and stem producer/transform
-compatibility remain separate from source equality.
-The explicit `begin(sample_id)`
-operation uses the same path. Native bounded workers verify/reuse or copy the
-immutable original, FullMix PCM and complete available five-WAV sets. Each pad
-receives a separate actual source request/ACK and fresh supported saved timing
-adoption; path aliases and journal records grant no runtime permission.
-Complete held Native original receipts group equal source SHA/length off-thread;
-each pad retains its captured path, content instance, current request and intent.
-Model/config/producer provenance is recorded only for successful generation with
-known actual inputs. `SealedProcessingFiles` holds complete model/config/code and
-supported converter witnesses through producer execution and verified promotion;
-actual caller-owned Demucs encoder children must match those held images under
-the explicit bounded OS runtime policy. Unknown historical provenance stays
-unknown. Supported Demucs37/BS33 file sets fit Native's bounded 64-file guard and
-bind the relevant actual loaded host code/defaults/constants/import aliases and
-supported decorator wrappers to compiled held source. Exact guarded package roots
-enter the immutable request and precede inherited child import paths under
-safe-path policy; each child owns a fresh empty bytecode namespace with writes
-disabled. Required stale/unsupported
-bindings stay UNKNOWN. These bounded local checks retain standard Python imports
-and the declared dependency-version/OS policy; they do not attest a hostile or
-complete global runtime. Compatible
-completed sets use the existing pair preparation and each subscriber's own ACK,
-without invoking inference again. This does not implement future current-model
-replacement controls or new-generation active adoption.
-
-The common `ProjectPersistence` writer fences autosave/explicit/shutdown saves,
-compares current intent revisions and keeps newer changes dirty. Related-reference
-commits preserve the content-instance UUID and complete current key/settings
-intent. Already reserved owners transfer only after durable config completion;
-old global files remain for full project/reference reconciliation. Pending native
-claims, changed current sources, unknown journal data and interrupted transactions
-stay visible and fenced. `material_migration_recovery` reads bounded sealed native
-journal records, preserving newer captured intent only against the selected actual
-config reference and its exact captured bytes. Other known configs do not inherit
-that journal's intent or fences. Complete WAV hashing and geometry verification
-run on the preparation workers; compatible verified sets from separate legacy
-directories share a canonical generation.
-
-Recovery serializes new child transactions under an uninterrupted writer fence.
-It rebases from current config/content intent, revalidates complete material and
-obtains fresh source/timing acknowledgements. Artifact receipts carry the samples
-root identity plus exact recognized leaf IDs, sizes and complete digests. They
-provide durable evidence rather than saved native permission. Unknown or partial
-records and unreceipted staging remain visible and protected.
-
-Each committed recovery child replaces only its matching parent alias, preserving
-the existing 216-alias limit. A bounded worker durably transfers the exact artifact
-lineage before compacting the fully checked obsolete parent journal; changed,
-gapped or unknown records remain protected. Previously published P2a journals
-without a ledger gain fresh complete old-source proofs. Their new or reused
-canonical targets receive no inferred rollback provenance.
-
-The background artifact reconciler inventories known saved configs and actual
-process records under the same Windows exclusive gate as registration. Saved
-unavailable stem references still count as users. Obsolete exact originals,
-PCM and WAV generations retire through existing native reader registries and
-off-thread queues. The inventory gate remains held while jobs, voices, queued
-history, sealed readers or retry owners delay actual deletion. Full digest and
-FileID checks at the delete handle protect replacement and in-place changes;
-only checked leaves and checked empty containers may be removed. Foreign live
-processes or unqueryable/unknown inventory preserve all candidates. Fault/reopen
-tests establish bounded Windows visibility and lifecycle behavior; they do not
-assert power-loss guarantees or audible acceptance.
-
-New readable roots carry optional typed native birth evidence for their exact
-directory and `.material.json` identities, marker size and full digest. Current
-config/journal, actual inventory and fresh source adoption are checked before
-restoring that receipt into the existing lease/retirement path after restart.
-Unknown roots, replaced markers and valid JSON without actual birth evidence stay
-protected. A recovery-only retired-original path also covers exit after verified
-binding deletion while its native-born empty root remains. It requires the exact
-birth root FileID, contained typed original reference, unchanged latest
-created-target journal with actual original-terminal evidence, matching current
-config/content intent and registered inventory. The original must be absent and
-the root genuinely empty under custody; present markers still require full
-birth FileID/SHA/extent verification. Ordinary resolution still rejects missing
-bindings. This root-terminal route grants no material adoption or missing-source
-ACK, and retains inventory/capacity/real root-reader protection through physical
-deletion. Unknown children, replacement/reparse roots, reappeared source/marker
-or absent terminal/birth evidence are preserved. Its six-mode fresh-process
-execution and complete current-source Debug/Release suites pass. The
-[MATERIAL report](readable-material-validation.md) records actual physical
-last-reader terminal evidence and the separate remaining integration gates.
-
-Physical queue entries retain the inventory gate after callers release or vanish.
-Their visible outcomes settle after exact deletion and the bounded empty-container
-pass, or report a preserved error. New saved ownership cancels queued obsolete
-retirement with a terminal preservation outcome. Config inventory binds opened
-handles and current file identities while allowing access-time changes caused by
-reading alone.
-
-## Pending direct extension2026-10-11
-
-The [E11 plan](pre-rust-extension-20261011.md) adds required bounded source-streaming/readable identity, immutable offline generation with separate active new-set ACK, all-bank bulk interests and exact native segment mix capture. Existing source readers, scheduler, project-assets leases/retirement and worker lanes remain authoritative. Capture requires one preallocated RT data ring and a nonRT spool/encoder; it grants no new playback capacity. Current runtime guards and scoped proofs remain unchanged until each delivery passes. All RT and final Human gates remain.
+Input admission and saved settings describe a request, not proof that audio
+changed. Loading, timing refresh, ordinary pause, pitch, stem adoption and
+arrangements each have their own current-source acceptance/observation path.
+Meters and playheads are best-effort projections; their absence cannot authorize
+replacing an owner or deleting media.
+
+## Time, source and ownership invariants
+
+- `TransportTimeline` advances in rendered output frames, including silence.
+  `TransportScheduler` orders fixed-capacity absolute-frame events. UI polling
+  observes work; it does not advance the musical clock.
+- Scalar periods, rates and source progression retain binary64 precision.
+  Physical PCM bounds are integer frames. A rounded endpoint does not redefine
+  fractional musical duration. Quantization chooses launch time; it does not
+  add source phase following.
+- A PAD number is a slot. Content lifetime, placement, source generation,
+  material identity and preparation request have different meanings. Sharing
+  immutable PCM does not share mutable voice state or current acceptance.
+- Publication is guarded again at effect time. Stale/cancelled work, exhausted
+  capacity or failed preparation must not mutate a replacement source or certify
+  success from enqueue alone.
+- Saved assignments, workers, queued effects, active/paused voices and history
+  readers can keep resources alive. Physical retirement waits for the last
+  reader and checked identity; large ownership is released outside realtime.
+
+The callback must not perform file or JSON I/O, Python/GIL access, UI calls,
+logging, inference, plugin scanning/loading, blocking locks, heavy allocation,
+unbounded loops or long-running work. New non-realtime Rust modules do not
+change that boundary.
+
+## Preparation, publication and retirement
+
+Import captures immutable input and builds complete decoder/playback artifacts
+on disk. Ordinary loading admits the needed finite PCM range rather than making
+full-track RAM residency the default. Complete-source analysis/export and stream
+producers borrow their own checked readers. Pitch/history and stems prepare
+against the same source coordinates and current requested state.
+
+The control owner retains the original request through preparation and enqueue.
+The callback checks its source, lifetime, revisions, timing and available feedback/
+retirement capacity before the effect. A matching acknowledgement settles that
+operation; newer unrelated metadata does not erase a real reader. Conversely,
+an old ticket or journal is no authority for a replacement source. See
+[publication and failure handling](architecture/media-and-pcm.md#publication-cancellation-and-retirement).
+
+## State, persistence and recovery
+
+`ProjectState` stores performer intent and immutable material references;
+`SessionState` is recreated and projects UI/runtime observations. Config writes
+are revision-fenced, timing-verified and atomically replaced. Current Native
+ownership, voices and ACKs are never restored by deserializing JSON.
+
+Startup protects arrangement/recovery custody before ordinary restore, loads
+the current source, and obtains fresh operation-specific acceptance. Copy, Pair
+and Bank have separate journal/settlement paths. Close keeps polling until
+recording, holds, deletion and arrangements permit teardown. See
+[persistence and restore](architecture/state-input-and-ui.md#persistence-and-restore).
+
+## Related subsystems and dependencies
+
+Specialist BPM/Key/pitch/stem references are being consolidated separately.
+These existing documents retain current facts and dated evidence; their
+historical plans do not override source or activate old programs:
+
+- [Constant-BPM controls](constant-bpm-guide.md),
+  [accepted constant timing](accepted-constant-timing.md) and
+  [scalar coordinates](scalar-source-coordinates.md): source-bound scalar timing.
+  Productive automatic BPM uses configured BeatThis policy
+  `neural-stable-regions-v4`; scientific QM/diagnostic interfaces remain separate
+  from live authority.
+- [Key detection](key-detection.md): automatic classification is independent of
+  pitch and BPM admission. The complete-source file frontend replaces the old
+  full-vector memory model. A model result is not musical ground truth.
+- [Key Lock backend](key-lock-backend.md): prepared Rubber Band processing and
+  timing limits. Global inheritance preserves explicit per-PAD overrides.
+- [Prepared stems](prepared-stem-publication.md) and [model setup](stem-generation-setup.md):
+  offline generation, saved selection, residency and effective Native adoption
+  are separate states. Leased offline generation can run during playback;
+  adoption has its own state-specific permits.
+- [Development](development.md), [Rust guide](../rust/README.md) and
+  [Portable Windows](portable-windows.md): toolchains, workers/models and
+  distribution. Source and generic self-contained Portable installations do
+  not require personal developer bindings.
+
+Dear ImGui Bundle renders UI; PyO3 exposes native control; CPAL drives output;
+native decoders/converters and Rubber Band support media/rendering. Offline
+model environments are prepared separately from the callback. Runtime/model
+availability checks do not establish successful inference or audio.
+
+## Limits and evidence
+
+The productive optimization target is 2/4/6 simultaneous PADs. Synthetic
+performance stress is limited to 10; more than 10 can cause performance problems
+or glitches. Internal 32-voice capacity/ownership checks are not a device or
+7–10-PAD performance guarantee. Disk integrity, memory admission, queues, worker
+availability and supported finite reader domains can refuse an operation.
+
+Current scope excludes realtime stem separation, plugin hosting, arbitrary
+deck/group/master DSP chains, a new live loop-edit crossfade policy and a full
+Rust port. Retired SYNC/source-map/phase-following designs are not live runtime
+dependencies; the [documentation map](README.md) holds the recovery locator.
+Device/loopback, sustained listening, musical-reference and clean-Windows gates
+remain as limited in original evidence. A docs rewrite passes none of them.
+The complete [original architecture](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/architecture.md)
+preserves the superseded narrative; current navigation and actual section
+dispositions are recorded separately in the audit.

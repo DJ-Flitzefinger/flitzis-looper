@@ -397,7 +397,8 @@ timing metadata, including origins before source zero. Global playback modes and
 other-pad actions do not move the source grid or persisted markers.
 Native loop-region seconds remain `f64` through ordinary and direct-MIDI paths
 until integer source-frame conversion, keeping long-position editor markers
-sample-accurate. Native BPM parameters retain their existing `f32` precision.
+sample-accurate. Native scalar BPM, period and rate parameters retain binary64
+precision; rounded display values do not replace that authority.
 
 Visible lines, musical snap and automatic endpoints share the pure native scalar
 evaluator through a focused Python wrapper. Waveform X/query, seek and playhead
@@ -406,13 +407,13 @@ X. BPM edit buffers initialize from full precision and publish deliberate text
 changes only. Rounded summaries expose effective precision in tooltips. See
 [scalar source coordinates](scalar-source-coordinates.md) for units and limits.
 
-BPMLOCK enable/restore uses the existing selected-pad reference setup.
-`BpmController.recompute_master_bpm()` publishes a valid master tempo and the
-dedicated native bootstrap request for that reference. Rust latches and completes
-bootstrap once per stream when the reference is active and valid. Repeated
-controller publications do not reanchor an established clock; no additional
-SYNC/MASTER UI or persistent bootstrap state is introduced. Normal launch
-actions continue to use the existing future-grid/effective-loop-start policy.
+BPM Lock is independent of MultiLoop and retains a source-qualified master
+reference; editor selection alone does not replace it. Rust owns requested versus
+effective application and the qualified one-time bootstrap when its reference is
+active and valid. Repeated control publications do not reanchor an established
+clock. Normal launches retain the future-grid/effective-loop-start policy. See
+[runtime and transport](architecture/runtime-and-transport.md) for current clock,
+rate, input ordering and acknowledgement ownership.
 
 Do not move waveform decoding, sample scanning, or source-buffer access into
 render functions.

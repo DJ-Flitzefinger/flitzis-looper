@@ -442,6 +442,41 @@
         "STEP7 manual/README",
         "STEP8 all-original coverage/consistency"
       ]
+    },
+    {
+      "step": "STEP5",
+      "date": "2026-10-30",
+      "source_commit": "3f8940532cdcb6f82106e70c017ee5f1d042f685",
+      "rewritten_current_documents": ["docs/architecture.md"],
+      "created_current_modules": [
+        "docs/architecture/runtime-and-transport.md",
+        "docs/architecture/media-and-pcm.md",
+        "docs/architecture/state-input-and-ui.md"
+      ],
+      "original_architecture_locator": "https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/architecture.md",
+      "section_identity": "Section IDs and original line ranges refer to unchanged files[] audit-baseline provenance, not the rewritten document.",
+      "original_architecture_section_mappings": [
+        {"section": 1, "current_targets": ["docs/architecture.md", "docs/architecture/runtime-and-transport.md"], "status": "core extracted; BPM diagnostic details retained for STEP6", "evidence": ["E-B2", "E-TIMING"]},
+        {"section": 2, "current_targets": ["docs/architecture/runtime-and-transport.md", "docs/architecture/media-and-pcm.md"], "status": "current clock/loading/ACK facts reconciled", "evidence": ["E-PCM", "E-TIMING"]},
+        {"section": 3, "current_targets": ["docs/architecture.md", "docs/key-detection.md", "docs/offline-analysis.md"], "status": "partial overview; dedicated BPM/KEY consolidation remains STEP6", "evidence": ["E-B2", "E-MEMORY", "E-GRID"]},
+        {"section": 4, "current_targets": ["docs/architecture/runtime-and-transport.md", "docs/architecture/media-and-pcm.md", "docs/prepared-stem-publication.md"], "status": "source/scalar/reader facts extracted; STEM detail consolidation remains STEP6", "evidence": ["E-PCM", "E-STEM", "E-TIMING"]},
+        {"section": 5, "current_targets": ["docs/architecture/runtime-and-transport.md", "docs/key-lock-backend.md"], "status": "scalar rates extracted; dedicated PITCH consolidation remains STEP6", "evidence": ["E-PITCH"]},
+        {"section": 6, "current_targets": [], "status": "retired mapped Hold removed in STEP3; branch-only recovery already published", "evidence": ["SYNC"]},
+        {"section": 7, "current_targets": ["docs/architecture/runtime-and-transport.md", "docs/architecture/state-input-and-ui.md", "docs/key-lock-backend.md"], "status": "ordinary transport/Hold/state extracted; PITCH detail consolidation remains STEP6", "evidence": ["E-PITCH"]},
+        {"section": 8, "current_targets": ["docs/architecture/runtime-and-transport.md", "docs/architecture/media-and-pcm.md", "docs/architecture/state-input-and-ui.md"], "status": "current DSP/input/tasks/persistence/restore facts reconciled", "evidence": ["E-COPY", "E-STEM", "E-PROGRAM"]},
+        {"section": 9, "current_targets": ["docs/architecture/media-and-pcm.md", "docs/architecture/state-input-and-ui.md"], "status": "current content/custody replaces old pending narrative; historical program inactive", "evidence": ["E-PROGRAM"]},
+        {"section": 10, "current_targets": ["docs/architecture/media-and-pcm.md", "docs/architecture/state-input-and-ui.md", "docs/prepared-stem-publication.md"], "status": "existing recovery/retirement described; STEM detail consolidation remains STEP6; no new migration", "evidence": ["E-PCM"]},
+        {"section": 11, "current_targets": [], "status": "inactive historical queue retained by immutable original and canonical evidence index", "evidence": ["E-PROGRAM"]}
+      ],
+      "reference_repairs": ["docs/README.md", "docs/pad-content-copy.md", "docs/ui-toolkit.md"],
+      "neighbor_reconciliation": "UI toolkit scalar f32 claim and selected-pad-only BPM Lock description replaced with current binary64/source-qualified ownership.",
+      "historical_evidence_index": "openspec/changes/archive/2026-10-30-evidence-index.md",
+      "full_reports_moved": false,
+      "retention_overrides_unchanged": true,
+      "frozen_provenance_preserved": true,
+      "coverage_json_unchanged": true,
+      "product_behavior_or_acceptance_changed": false,
+      "remaining_steps": ["STEP6 BPM/KEY/PITCH/STEM consolidation and full mixed-report disposition", "STEP7 manual/root README", "STEP8 all-original coverage/consistency"]
     }
   ],
   "files": [

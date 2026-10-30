@@ -260,3 +260,31 @@ stem generation versus own-ACK adoption and last-reader cleanup, and integer
 physical bounds versus fractional scalar trajectories/bounded stem transitions,
 plus ordinary single-mode START/STOP and atomic MultiLoop disable semantics.
 This documentation step changes no product behavior or acceptance.
+
+## Executed STEP5 core extraction — 2026-10-30
+
+The [current overview](architecture.md) now delegates frame/scheduler/rendering
+ownership to [runtime and transport](architecture/runtime-and-transport.md),
+identity/disk-first PCM/finite views/copy/last readers to
+[media and PCM](architecture/media-and-pcm.md), and controllers/input/persistence/
+restore/close to [state, input and UI](architecture/state-input-and-ui.md).
+Actual source links and current specs support these references. Queued intent,
+prepared state and current own acknowledgement remain distinct.
+
+The manifest appends all eleven original architecture section mappings under
+`executed_dispositions/STEP5`. Original file identities, hashes, line ranges,
+headings, candidate referencers and retention overrides remain frozen. Sections
+1/3/4/5/7/10 still have specialist BPM/Key/pitch/stem consolidation in STEP6;
+current summaries link the retained expert documents. Retired section6 was
+already handled in STEP3. Historical queues remain accessible through the exact
+immutable original and the canonical evidence index, without a new copied log.
+
+No whole mixed report or coverage JSON moved. All eleven full-report retention
+overrides and every historical failure/UNKNOWN/pending acceptance remain intact.
+The original architecture remains available through its immutable locator; its
+historical claims are not current implementation authority. Copy's startup link
+now points to the actual state module. Adjacent UI toolkit prose now agrees with
+binary64 scalar timing and stable source-qualified BPM Lock. These changes add
+no product behavior or acceptance. Full analysis/pitch/stem extraction, manual/
+root installation navigation and all-original final consistency remain separate
+sequential steps.

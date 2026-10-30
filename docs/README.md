@@ -13,6 +13,14 @@ and a [canonical historical evidence index](../openspec/changes/archive/2026-10-
 Use current top-level specs for supported contracts; archived tasks retain their
 original incomplete gates and do not activate old work programs.
 
+The current [architecture overview](architecture.md) links focused
+[runtime/transport](architecture/runtime-and-transport.md),
+[media/PCM](architecture/media-and-pcm.md) and
+[state/input/UI](architecture/state-input-and-ui.md) references. Mixed specialist
+reports below retain dated implementation history and unpassed gates while
+analysis/pitch/stem facts are consolidated. Use the new core modules for current
+ownership, not old pending-program descriptions.
+
 This folder contains maintained project documentation. It should help a human or
 AI contributor understand the current architecture without rereading the entire
 codebase.
@@ -45,6 +53,9 @@ For focused areas:
 | File | Purpose |
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
+| `architecture/runtime-and-transport.md` | Current frame clock, scheduler, scalar rendering, ordinary transport, rates and feedback. |
+| `architecture/media-and-pcm.md` | Current material/content/source identity, disk-first PCM, finite views, shared custody and last-reader retirement. |
+| `architecture/state-input-and-ui.md` | Current state, GUI/MIDI input, persistence, arrangements, restore and close. |
 | `constant-bpm-guide.md` | Current BPM Lock, loop, Tap BPM, device labels and fresh-project workflow. |
 | `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
 | `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
