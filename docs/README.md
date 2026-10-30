@@ -1,5 +1,12 @@
 # Documentation Map
 
+The [complete source/disposition audit](documentation-audit.md) classifies all 43
+original text/JSON documents and records current source owners, contradictions,
+planned module boundaries and evidence retention. The list below is the original
+navigation retained during cleanup: several files mix current facts with retired
+SYNC paths and historical programs. Their old execution queues are inactive;
+archival does not establish completion or acceptance.
+
 This folder contains maintained project documentation. It should help a human or
 AI contributor understand the current architecture without rereading the entire
 codebase.

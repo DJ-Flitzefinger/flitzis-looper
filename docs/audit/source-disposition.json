@@ -1,0 +1,3081 @@
+{
+  "schema": "documentation-source-disposition-v1",
+  "audit_date": "2026-10-30",
+  "baseline": "dbc80d3c117dcec50996feef2e8c59f1649388a5",
+  "scope": "All 43 original text/JSON docs. Audit/organization decision only; no product behavior, moves, archival or acceptance.",
+  "classes": {
+    "L": "live",
+    "R": "retired",
+    "P": "proposed",
+    "H": "historical"
+  },
+  "notes": {
+    "headings": "[baseline line,level,title,containing section id]. All level1..3 headings outside code fences; nested facts inherit complete classified spans and companion evidence decisions.",
+    "proposed": "Unaccepted contract or remaining acceptance. Does not by itself mean implementation is absent or authorize an execution queue.",
+    "hashes": "SHA256/bytes describe original Git blob bytes, not checkout line-ending normalization.",
+    "inbound": "Tracked literal basename candidates at baseline, excluding self; values are source line numbers. These are not all resolved links. Apply inbound_exclusions and resolve remaining targets before rewrite. No actual runtime/script document reader found; artifacts.py README match is an upstream license URL. Protocol identifiers are not doc links.",
+    "map_review_lines": "Candidate map/REALTIME/phase-following lines, not an assertion every match is retired. Scalar phase/grids/accepted periods, MIDI mapping and uv sync remain distinct.",
+    "destinations": "Planned extraction/archive destinations, not extant links. Resolve archive date on actual move; preserve statuses/unchecked gates. SYNC is existing branch only.",
+    "evidence_destinations": "[Associated change id, planned relative evidence file]. Archive under openspec/changes/archive/<actual-date>-<change-id>/; an archive/ prefix names an already existing archive. Shared indexes summarize failures/pending and point to immutable original blobs. retention_overrides gives exact per-original canonical reports when a group spans changes."
+  },
+  "totals": {
+    "files": 43,
+    "bytes": 1894623,
+    "headings": 479,
+    "inbound_file_candidates": 324,
+    "active_changes": 104,
+    "additional_retained_binary": "docs/assets/hero1.webp"
+  },
+  "owner_groups": {
+    "CORE": ["rust/crates/looper/src/audio_engine/audio_stream.rs", "rust/crates/looper/src/audio_engine/transport.rs", "rust/crates/looper/src/audio_engine/scheduler.rs", "rust/crates/looper/src/audio_engine/ordinary_transport.rs", "rust/crates/looper/src/audio_engine/source_playback.rs", "rust/crates/looper/src/audio_engine/source_reader.rs", "rust/crates/looper/src/audio_engine/constant_timing.rs", "src/flitzis_looper/controller/transport/global_params.py", "src/flitzis_looper/controller/transport/global_playback.py"],
+    "PCM": ["rust/crates/looper/src/audio_engine/sample_loader/cold/stream.rs", "rust/crates/looper/src/audio_engine/cold_store.rs", "rust/crates/looper/src/audio_engine/cold_residency.rs", "rust/crates/looper/src/audio_engine/complete_context.rs", "rust/crates/looper/src/audio_engine/material_paths/readable.rs", "rust/crates/looper/src/audio_engine/project_assets.rs", "src/flitzis_looper/controller/loader.py", "src/flitzis_looper/controller/asset_lifecycle.py", "src/flitzis_looper/controller/saved_residency.py"],
+    "COPY": ["src/flitzis_looper/copy_snapshot.py", "src/flitzis_looper/pair_snapshot.py", "src/flitzis_looper/bank_snapshot.py", "rust/crates/looper/src/audio_engine/content_lifetime.rs", "rust/crates/looper/src/audio_engine/content_placement.rs", "rust/crates/looper/src/audio_engine/pad_copy.rs", "rust/crates/looper/src/audio_engine/pad_pair.rs"],
+    "BPM": ["rust/crates/looper/src/audio_engine/app_analysis.rs", "rust/crates/looper/src/audio_engine/app_analysis_qm.rs", "rust/crates/looper/src/audio_engine/app_analysis_range.rs", "rust/crates/looper/src/audio_engine/app_analysis_mean.rs", "rust/crates/looper/src/audio_engine/app_tempo.rs", "rust/crates/looper/src/audio_engine/neural_analysis.rs", "src/flitzis_looper/controller/transport/bpm.py", "src/flitzis_looper/analysis/jobs.py", "src/flitzis_looper/analysis/publication.py"],
+    "DIAG": ["rust/crates/looper/src/audio_engine/analysis_jobs.rs", "rust/crates/looper/src/audio_engine/analysis_pcm/streamed.rs", "rust/crates/looper/src/audio_engine/analysis_pcm/fft.rs", "rust/crates/looper/src/audio_engine/analysis_pcm/qm.rs", "rust/crates/analysis/src/tempo_summary", "rust/crates/analysis/src/tempo_evidence", "rust/crates/analysis/src/tempo_refinement", "rust/crates/analysis/src/selected_bpm", "src/flitzis_looper/analysis/beat_scoring_cli.py", "src/flitzis_looper/analysis/beat_candidates.py", "src/flitzis_looper/analysis/corrected_legacy_reader.py", "src/flitzis_looper/analysis/selected_bpm.py"],
+    "KEY": ["rust/crates/analysis/src/key_detection/mod.rs", "rust/crates/analysis/src/key_detection/librosa_cqt/cqt.rs", "rust/crates/analysis/src/key_detection/librosa_cqt/signal.rs", "rust/crates/analysis/src/key_detection/inference.rs", "rust/crates/looper/src/audio_engine/app_analysis.rs", "rust/crates/looper/src/audio_engine/analysis_pcm/streamed.rs", "src/flitzis_looper/controller/key_metadata_persistence.py"],
+    "TIMING": ["rust/crates/analysis/src/tempo_acceptance", "rust/crates/looper/src/audio_engine/constant_timing.rs", "rust/crates/looper/src/audio_engine/constant_timing/persistence.rs", "rust/crates/looper/src/audio_engine/accepted_timing_refresh.rs", "src/flitzis_looper/controller/accepted_publication.py", "src/flitzis_looper/controller/accepted_restore.py", "src/flitzis_looper/controller/current_timing.py", "src/flitzis_looper/controller/timing_persistence.py"],
+    "GRID": ["rust/crates/looper/src/audio_engine/source_grid.rs", "rust/crates/looper/src/audio_engine/scalar_grid.rs", "rust/crates/looper/src/audio_engine/waveform.rs", "src/flitzis_looper/controller/scalar_grid.py", "src/flitzis_looper/ui/waveform_grid.py", "src/flitzis_looper/controller/transport/loop.py"],
+    "PITCH": ["rust/crates/looper/src/audio_engine/key_lock_preparation.rs", "rust/crates/looper/src/audio_engine/prepared_native_history.rs", "rust/crates/looper/src/audio_engine/productive_source_history.rs", "rust/crates/looper/src/audio_engine/source_feed_history.rs", "rust/crates/looper/src/audio_engine/pitch_api.rs", "rust/crates/looper/src/audio_engine/pitch_actions.rs", "src/flitzis_looper/key_intent.py", "src/flitzis_looper/controller/transport/pitch.py", "src/flitzis_looper/ui/render/pitch_keyboard.py"],
+    "STEM": ["src/flitzis_looper/controller/stems.py", "src/flitzis_looper/controller/stem_generation.py", "src/flitzis_looper/controller/stem_workers.py", "src/flitzis_looper/controller/stem_batch.py", "src/flitzis_looper/controller/stem_provenance.py", "src/flitzis_looper/controller/committed_stem_residency.py", "rust/crates/looper/src/audio_engine/offline_stem_source.rs", "rust/crates/looper/src/audio_engine/committed_stem_residency.rs", "rust/crates/looper/src/audio_engine/stem_pair_preparation.rs", "rust/crates/looper/src/audio_engine/stem_cache/streamed.rs"],
+    "STATE": ["src/flitzis_looper/models.py", "src/flitzis_looper/controller/app.py", "src/flitzis_looper/controller/persistence.py", "src/flitzis_looper/ui/context.py", "src/flitzis_looper/ui/run.py", "src/flitzis_looper/ui/render/render.py", "src/flitzis_looper/input_mapping/controller.py", "rust/crates/looper/src/audio_engine/input_mapping.rs"],
+    "SETUP": ["pyproject.toml", "uv.lock", "scripts/setup-runtime.py", "scripts/start-app.bat", "INSTALL-LOOPER-PORTABLE.bat", "scripts/portable/bootstrap.py", "scripts/portable", "src/flitzis_looper/analysis/setup.py", "src/flitzis_looper/analysis/neural_worker.py", "vendor/bs_roformer"],
+    "DEVICE": ["src/flitzis_looper/analysis/productive_loop_packet.py", "src/flitzis_looper/analysis/productive_loop_run.py", "src/flitzis_looper/analysis/productive_loop_snapshot.py", "src/flitzis_looper/analysis/loop_capture.py", "rust/crates/looper/src/audio_engine/loop_acceptance.rs", "rust/crates/looper/src/audio_engine/mixer_loop_acceptance.rs"],
+    "RECORD": ["src/flitzis_looper/recording_options.py", "src/flitzis_looper/controller/recording.py", "src/flitzis_looper/recording_recovery.py", "src/flitzis_looper/recording_finalize.py", "rust/crates/looper/src/audio_engine/mix_capture.rs"],
+    "RETIRED": ["openspec/changes/remove-source-sync/design.md", "scripts/portable/bootstrap.py"]
+  },
+  "base_spec_groups": {
+    "CORE": ["openspec/specs/transport-timeline/spec.md", "openspec/specs/multi-loop-mode/spec.md", "openspec/specs/play-samples/spec.md", "openspec/specs/dsp-fx-foundation/spec.md", "openspec/specs/per-pad-eq3/spec.md", "openspec/specs/per-pad-gain/spec.md", "openspec/specs/per-pad-metering/spec.md", "openspec/specs/master-output-metering/spec.md"],
+    "PCM": ["openspec/specs/load-audio-files/spec.md", "openspec/specs/async-sample-loading/spec.md", "openspec/specs/loop-region/spec.md", "openspec/specs/project-persistence/spec.md"],
+    "COPY": ["openspec/specs/performance-pad-interactions/spec.md", "openspec/specs/project-persistence/spec.md", "openspec/specs/load-audio-files/spec.md"],
+    "BPM": ["openspec/specs/audio-analysis/spec.md", "openspec/specs/qm-dsp-bpm-detection/spec.md", "openspec/specs/pad-manual-bpm/spec.md", "openspec/specs/waveform-editor/spec.md"],
+    "KEY": ["openspec/specs/audio-analysis/spec.md", "openspec/specs/musical-key-cnn/spec.md", "openspec/specs/background-tasks/spec.md"],
+    "PITCH": ["openspec/specs/time-stretch-pitch-shift/spec.md", "openspec/specs/input-mapping/spec.md", "openspec/specs/play-samples/spec.md", "openspec/specs/project-persistence/spec.md"],
+    "STEM": ["openspec/specs/stem-cache/spec.md", "openspec/specs/loop-source-stem-alignment/spec.md", "openspec/specs/project-persistence/spec.md", "openspec/specs/audio-analysis/spec.md"],
+    "STATE": ["openspec/specs/ui-state/spec.md", "openspec/specs/performance-ui/spec.md", "openspec/specs/performance-pad-interactions/spec.md", "openspec/specs/input-mapping/spec.md", "openspec/specs/project-persistence/spec.md"],
+    "SETUP": ["openspec/specs/distribution-setup/spec.md"],
+    "DEVICE": ["openspec/specs/transport-timeline/spec.md", "openspec/specs/time-stretch-pitch-shift/spec.md"],
+    "RECORD": ["openspec/specs/project-persistence/spec.md", "openspec/specs/performance-ui/spec.md"]
+  },
+  "change_groups": {
+    "CORE": ["openspec/changes/remove-source-sync", "openspec/changes/fix-ordinary-transport", "openspec/changes/correct-fractional-musical-loops"],
+    "PCM": ["openspec/changes/cache-full-pcm-and-resident-loops", "openspec/changes/adopt-pad-owned-pcm-residency", "openspec/changes/admit-long-remix-residency"],
+    "COPY": ["openspec/changes/add-rearrange-shared-pad-content", "openspec/changes/fix-copy-assignment-custody", "openspec/changes/import-declared-stem-audio"],
+    "BPM": ["openspec/changes/prioritize-tempo-periods", "openspec/changes/add-interior-tempo-mean", "openspec/changes/fix-bpm-admission-coherence", "openspec/changes/adopt-beat-this-analysis", "openspec/changes/derive-robust-constant-tempo", "openspec/changes/configure-automatic-bpm-range"],
+    "KEY": ["openspec/changes/decouple-bpm-key-admission", "openspec/changes/bound-complete-automatic-analysis"],
+    "TIMING": ["openspec/changes/bind-accepted-constant-timing", "openspec/changes/adopt-native-constant-timing", "openspec/changes/persist-source-verified-constant-timing"],
+    "GRID": ["openspec/changes/preserve-scalar-source-precision", "openspec/changes/correct-fractional-musical-loops"],
+    "PITCH": ["openspec/changes/add-key-transposition-performance", "openspec/changes/inherit-pad-key-lock", "openspec/changes/preserve-full-start-onset", "openspec/changes/fix-late-start-filter-history"],
+    "STEM": ["openspec/changes/extend-shared-stem-generation", "openspec/changes/bind-prepared-stem-publication", "openspec/changes/guard-stem-resource-pressure", "openspec/changes/fix-stem-effect-receipts", "openspec/changes/fix-restored-stem-settlement"],
+    "STATE": ["openspec/changes/refine-loop-editor-performance-actions", "openspec/changes/fix-stable-pitch-control-layout", "openspec/changes/route-control-errors-to-console"],
+    "SETUP": ["openspec/changes/add-windows-portable-installation", "openspec/changes/integrate-bs-roformer-musdb18hq", "openspec/changes/enable-cuda-analysis-execution"],
+    "DEVICE": ["openspec/changes/prepare-productive-loop-acceptance"],
+    "RECORD": ["openspec/changes/add-live-mix-recording", "openspec/changes/set-fresh-defaults"],
+    "RETIRED": ["openspec/changes/remove-source-sync", "openspec/changes/prepare-versioned-source-beatmaps", "openspec/changes/resume-dry-mapped-playback", "openspec/changes/compare-accepted-map-renderers"]
+  },
+  "destinations": {
+    "HUB": "docs/architecture.md",
+    "RT": "docs/architecture/runtime-and-transport.md",
+    "PCM": "docs/architecture/media-and-pcm.md",
+    "BPM": "docs/architecture/bpm-analysis.md",
+    "KEY": "docs/architecture/key-analysis.md",
+    "PITCH": "docs/architecture/pitch-and-key-lock.md",
+    "STEM": "docs/architecture/stems.md",
+    "STATE": "docs/architecture/state-input-and-ui.md",
+    "MAN": "docs/user-guide.md",
+    "DEV": "docs/development.md",
+    "MAP": "docs/README.md; README.md",
+    "TODO": "docs/todos.md",
+    "SETUP": "docs/portable-windows.md; docs/beat-this-setup.md; docs/stem-generation-setup.md",
+    "SYNC": "SYNC-REALTIME-BPM:docs/sync/architecture.md"
+  },
+  "evidence_destinations": {
+    "E-B2": ["adopt-beat-this-analysis", "evidence-index.md"],
+    "E-G2": ["derive-robust-constant-tempo", "evidence-index.md"],
+    "E-GRID": ["preserve-scalar-source-precision", "evidence-index.md"],
+    "E-MEMORY": ["bound-complete-automatic-analysis", "evidence-index.md"],
+    "E-KEY": ["archive/2026-06-08-musical-key-cnn", "evidence-index.md"],
+    "E-TIMING": ["adopt-native-constant-timing", "evidence-index.md"],
+    "E-LOOP": ["correct-fractional-musical-loops", "evidence-index.md"],
+    "E-DEVICE": ["prepare-productive-loop-acceptance", "evidence-index.md"],
+    "E-PITCH": ["add-key-transposition-performance", "evidence/key-lock-backend.md"],
+    "E-COPY": ["add-rearrange-shared-pad-content", "evidence/pad-content-copy.md"],
+    "E-PCM": ["cache-full-pcm-and-resident-loops", "evidence/pcm-cache-residency.md"],
+    "E-C3": ["cache-full-pcm-and-resident-loops", "evidence/pcm-cache-measurements.md"],
+    "E-STEM": ["extend-shared-stem-generation", "evidence/prepared-stem-publication.md"],
+    "E-PROGRAM": ["adopt-pad-owned-pcm-residency", "evidence/"],
+    "E-CUDA": ["enable-cuda-analysis-execution", "evidence-index.md"]
+  },
+  "json_artifact": {
+    "path": "docs/pre-rust-program-coverage.json",
+    "schema": "official-pre-rust-r0-obligation-map-v1",
+    "status": "REQUIRED_PROGRAM_SCOPED_SOFTWARE_STATUS_FINAL_GATES_OPEN",
+    "preserve_entire_artifact": true,
+    "retain_original_hash_if_links_repaired": true,
+    "field_groups": ["human_execution_priority_20261014", "lineage", "counts", "ordered_slice_ids", "dependency_edges", "aliases", "canonical_crosswalk", "new_requirements", "original56", "feature9", "hold26_future_proofs", "unresolved_technical_limits", "historical_C1_status_observations", "actual_R0_prerequisite_disposition", "row_additional_integration_gates", "future_proof_catalogs", "extension_delivery_slices", "extension_requirements", "extension_checkpoint_prerequisites", "p4b_finite_seek_domain_software"],
+    "counts": {
+      "ordered_slice_ids": 48,
+      "dependency_edges": 78,
+      "new_requirements": 169,
+      "original56": 56,
+      "feature9": 9,
+      "HC": 26,
+      "unresolved_technical_limits": 25,
+      "extension_delivery_slices": 10,
+      "extension_requirements": 20
+    },
+    "destination": "E-PROGRAM",
+    "link_fields_require_review": ["protocol", "evidence_document", "extension_authoritative_document", "all embedded docs/ references"]
+  },
+  "inbound_exclusions": {
+    "docs/README.md": {
+      "src/flitzis_looper/analysis/artifacts.py": {"59": "Upstream BeatThis license URL, not a document reader."},
+      "docs/beat-this-setup.md": {"46": "workers/metrical_prior/README.md", "177": "Upstream BeatThis README license URL."},
+      "docs/beatmap-sync-research.md": {"140": "Upstream C++ port README URL."},
+      "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/design.md": {"205": "Historical root README reference."},
+      "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/proposal.md": {"74": "Historical root README reference."},
+      "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/tasks.md": {"43": "Historical root README reference."}
+    }
+  },
+  "retention_overrides": {
+    "docs/finite-seek-domain-validation.md": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/finite-seek-domain-validation.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/readable-material-validation.md": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/readable-material-validation.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/long-source-streaming-validation.md": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/long-source-streaming-validation.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pad-owned-pcm-program.md": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/pad-owned-pcm-program.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pre-rust-extension-20261011.md": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/pre-rust-extension-20261011.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pre-rust-program-coverage.json": {
+      "state": "planned",
+      "associated_change": "adopt-pad-owned-pcm-residency",
+      "relative_path": "evidence/pre-rust-program-coverage.json",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pcm-cache-residency.md": {
+      "state": "planned",
+      "associated_change": "cache-full-pcm-and-resident-loops",
+      "relative_path": "evidence/pcm-cache-residency.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pcm-cache-measurements.md": {
+      "state": "planned",
+      "associated_change": "cache-full-pcm-and-resident-loops",
+      "relative_path": "evidence/pcm-cache-measurements.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/key-lock-backend.md": {
+      "state": "planned",
+      "associated_change": "add-key-transposition-performance",
+      "relative_path": "evidence/key-lock-backend.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/prepared-stem-publication.md": {
+      "state": "planned",
+      "associated_change": "extend-shared-stem-generation",
+      "relative_path": "evidence/prepared-stem-publication.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    },
+    "docs/pad-content-copy.md": {
+      "state": "planned",
+      "associated_change": "add-rearrange-shared-pad-content",
+      "relative_path": "evidence/pad-content-copy.md",
+      "preserve_original_blob": true,
+      "related_changes_crosslink_once": true
+    }
+  },
+  "files": [
+    {
+      "path": "docs/README.md",
+      "blob": "9c3acc6185c39fee7472c120d0b76f97c0c12b3c",
+      "sha256": "44342ee3c8f8f2b01a24bce30a8f357bb839aa4426ea774d20581d9cbf874601",
+      "bytes": 7775,
+      "line_count": 97,
+      "headings": [
+        [1, 1, "Documentation Map", 1],
+        [11, 2, "Reading Order", 1],
+        [30, 2, "Maintained Files", 1],
+        [70, 2, "What Belongs In OpenSpec Instead", 1],
+        [83, 2, "Maintenance Rules", 1],
+        [95, 2, "Required pre-Rust direct extension", 2]
+      ],
+      "inbound": {
+        "AGENTS.md": [469, 507],
+        "README.md": [270],
+        "docs/beat-this-setup.md": [46, 177],
+        "docs/beatmap-sync-research.md": [140],
+        "docs/development.md": [735],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/design.md": [205],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/proposal.md": [74],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/tasks.md": [43],
+        "src/flitzis_looper/analysis/artifacts.py": [59]
+      },
+      "map_review_lines": [36, 64, 65, 66],
+      "owner_groups": ["STATE", "SETUP"],
+      "summary": "Original navigation plus obsolete pre-Rust activation prose.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 94],
+          "classes": ["live", "historical"],
+          "destinations": ["MAP", "E-PROGRAM"],
+          "note": "Reading order/map/policy; old maintained-file descriptions are not uniformly current."
+        },
+        {
+          "id": 2,
+          "lines": [95, 97],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM", "MAP"],
+          "note": "Required extension/counts are historical and inactive."
+        }
+      ]
+    },
+    {
+      "path": "docs/accepted-constant-timing.md",
+      "blob": "fa3d4599701e49588828f323adc0f15cb1a21e18",
+      "sha256": "1ddcf1087b4a4cad57d863ad675cbae140a609c0029065ea9aa57f0c582c2932",
+      "bytes": 10316,
+      "line_count": 147,
+      "headings": [
+        [1, 1, "Accepted constant timing foundation", 1],
+        [18, 2, "Explicit construction", 2],
+        [40, 2, "Revision and uncertainty", 2],
+        [61, 2, "Control-only adoption guard", 3],
+        [86, 2, "Remaining consumer and loop gates", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [63],
+        "docs/architecture.md": [176],
+        "docs/beatmap-sync-design.md": [106],
+        "docs/constant-tempo-summary.md": [263],
+        "docs/native-constant-timing.md": [657],
+        "docs/scalar-source-coordinates.md": [90],
+        "rust/README.md": [105]
+      },
+      "map_review_lines": [147],
+      "owner_groups": ["TIMING", "CORE", "BPM"],
+      "summary": "Live independent-assertion/immutable scalar acceptance, with historical stages/gates.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 17],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "RT", "E-TIMING"],
+          "note": "Overview contains old staging; scalar API is not SYNC."
+        },
+        {
+          "id": 2,
+          "lines": [18, 60],
+          "classes": ["live"],
+          "destinations": ["BPM", "RT"],
+          "note": "Recompute evidence; complete source/unit/origin assertions, exact identity."
+        },
+        {
+          "id": 3,
+          "lines": [61, 85],
+          "classes": ["live"],
+          "destinations": ["RT", "STATE"],
+          "note": "Opaque guard/intent/stale adoption; no musical truth inferred."
+        },
+        {
+          "id": 4,
+          "lines": [86, 147],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["RT", "PCM", "PITCH", "STATE", "E-TIMING", "E-C3"],
+          "note": "Consumer chronology/old cost gaps need newer C3 reconciliation."
+        }
+      ]
+    },
+    {
+      "path": "docs/accepted-map-render-comparison.md",
+      "blob": "7099496354e6091e016c00c47a2fb50d86953bf4",
+      "sha256": "12bb625beb535d1f0074c4084cabbae57e1cf3c878034ecfd1e2a34469cf27b2",
+      "bytes": 7067,
+      "line_count": 122,
+      "headings": [
+        [3, 1, "Accepted-map renderer comparison", 1],
+        [10, 2, "Frozen inputs and execution", 2],
+        [41, 2, "Measured result, 2026-10-21", 3],
+        [89, 2, "Limits and next integration", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [66],
+        "docs/beatmap-sync-design.md": [432],
+        "openspec/changes/evaluate-variable-tempo-rendering/design.md": [4],
+        "openspec/changes/evaluate-variable-tempo-rendering/proposal.md": [19],
+        "openspec/changes/evaluate-variable-tempo-rendering/tasks.md": [4]
+      },
+      "map_review_lines": [3, 5, 14, 99],
+      "owner_groups": ["RETIRED", "PITCH"],
+      "summary": "Retired map renderer recovery comparison and negative acoustics.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 9],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Retired main scope."
+        },
+        {
+          "id": 2,
+          "lines": [10, 40],
+          "classes": ["historical"],
+          "destinations": ["SYNC"],
+          "note": "Frozen map/source/rate/test identities."
+        },
+        {
+          "id": 3,
+          "lines": [41, 88],
+          "classes": ["historical"],
+          "destinations": ["SYNC"],
+          "note": "Native/OfflineR3/tonal/stem-residual failures and unsupported cases."
+        },
+        {
+          "id": 4,
+          "lines": [89, 122],
+          "classes": ["historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Natural-tail/Signalsmith kick/acceptance limits."
+        }
+      ]
+    },
+    {
+      "path": "docs/architecture.md",
+      "blob": "6f324a15f29fad52d28a0e58312f2cdab65d0a4a",
+      "sha256": "0af7de81caee8859dfefadc79029ff8f3417220486389fe73ae8cacced9207e9",
+      "bytes": 87079,
+      "line_count": 1313,
+      "headings": [
+        [1, 1, "Architecture", 1],
+        [7, 2, "Runtime Split", 1],
+        [25, 2, "Signal Path", 1],
+        [52, 2, "Source Layout", 1],
+        [103, 2, "Rust Audio Modules", 1],
+        [197, 2, "Command, Parameter, And Telemetry Rings", 2],
+        [220, 2, "Transport And Scheduling", 2],
+        [296, 2, "Sample Loading", 2],
+        [396, 2, "Audio Analysis And Timing Metadata", 3],
+        [501, 2, "Playback, Loops, And Stems", 4],
+        [725, 2, "Speed, BPM Lock, And Key Lock", 5],
+        [975, 2, "Per-Pad DSP And EQ", 8],
+        [993, 2, "Per-Pad Gain/Trim", 8],
+        [1018, 2, "Input Mapping", 8],
+        [1050, 2, "Background Task Identity", 8],
+        [1059, 2, "Persistence And Restore", 8],
+        [1167, 2, "Current Non-Goals", 8],
+        [1180, 2, "Pending R0 content and admitted action ownership", 9],
+        [1206, 3, "Existing material reference migration", 10],
+        [1311, 2, "Pending direct extension2026-10-11", 11]
+      ],
+      "inbound": {
+        "AGENTS.md": [470, 506],
+        "README.md": [246, 274],
+        "docs/README.md": [17, 34],
+        "docs/beat-this-acceptance.md": [387],
+        "docs/beatmap-sync-research.md": [54],
+        "docs/development.md": [737],
+        "docs/pad-content-copy.md": [55],
+        "docs/ui-toolkit.md": [343],
+        "openspec/changes/archive/2025-12-19-minimal-audio-engine/tasks.md": [22],
+        "openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/proposal.md": [28],
+        "openspec/changes/archive/2026-06-08-add-low-jitter-input-mapping/proposal.md": [29],
+        "openspec/changes/archive/2026-06-08-add-offline-stem-cache/proposal.md": [45],
+        "openspec/changes/archive/2026-06-08-add-per-pad-key-lock/proposal.md": [60],
+        "openspec/changes/archive/2026-06-08-add-phase-aware-playback-sync/proposal.md": [31],
+        "openspec/changes/archive/2026-06-08-add-rust-transport-timeline/proposal.md": [36],
+        "openspec/changes/archive/2026-06-08-add-stem-performance-controls/proposal.md": [33],
+        "openspec/changes/archive/2026-06-08-clarify-loop-source-stem-alignment/proposal.md": [25],
+        "openspec/changes/archive/2026-06-08-clarify-state-ownership-boundary/proposal.md": [27],
+        "openspec/changes/archive/2026-06-08-prepare-click-free-stem-transitions/proposal.md": [25],
+        "openspec/changes/archive/2026-06-08-prepare-command-parameter-path/proposal.md": [29],
+        "openspec/changes/archive/2026-06-08-prepare-dsp-fx-foundation/proposal.md": [24],
+        "openspec/changes/archive/2026-06-08-prepare-realtime-callback-safety/proposal.md": [32],
+        "openspec/changes/archive/2026-06-08-repair-key-lock-master-tempo/proposal.md": [48],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/proposal.md": [75],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/tasks.md": [42],
+        "rust/README.md": [342]
+      },
+      "map_review_lines": [152, 579, 580, 782, 791],
+      "owner_groups": ["CORE", "PCM", "BPM", "KEY", "PITCH", "STEM", "STATE", "TIMING", "GRID", "RECORD"],
+      "summary": "Split current owners from retired mapped Hold and historical execution queues.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 196],
+          "classes": ["live", "historical"],
+          "destinations": ["HUB", "BPM", "RT", "E-B2", "E-TIMING"],
+          "note": "Runtime/layout/live ownership plus dated diagnostic/scalar integration chronology."
+        },
+        {
+          "id": 2,
+          "lines": [197, 395],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["RT", "PCM", "E-PCM", "E-TIMING"],
+          "note": "Clock/rings/loading/current-source ACK; older finite/persistence prose needs later-source reconciliation."
+        },
+        {
+          "id": 3,
+          "lines": [396, 500],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "KEY", "E-B2", "E-MEMORY", "E-GRID"],
+          "note": "QM-primary/full-vector/optional-only BeatThis claims stale; separate diagnostic APIs live."
+        },
+        {
+          "id": 4,
+          "lines": [501, 724],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "RT", "STEM", "E-PCM", "E-STEM", "E-TIMING"],
+          "note": "Source domains/scalar grid/fractional loops/stems; source/reader guards retained."
+        },
+        {
+          "id": 5,
+          "lines": [725, 781],
+          "classes": ["live", "historical"],
+          "destinations": ["PITCH", "RT", "E-PITCH"],
+          "note": "Scalar tempo/shared fractional reader; old global Key Lock semantics superseded by inheritance."
+        },
+        {
+          "id": 6,
+          "lines": [782, 791],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Retired dry mapped Hold/Pause original-map/claim projection."
+        },
+        {
+          "id": 7,
+          "lines": [792, 974],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PITCH", "STATE", "E-PITCH"],
+          "note": "Ordinary transport/preparation/history live; test-only onset experiments historical."
+        },
+        {
+          "id": 8,
+          "lines": [975, 1179],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "PCM", "RT", "E-COPY", "E-STEM", "E-PROGRAM"],
+          "note": "DSP/gain/mapping/tasks/persistence live; eager/slot/pending claims reconciled with later source."
+        },
+        {
+          "id": 9,
+          "lines": [1180, 1205],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM", "PCM", "STATE"],
+          "note": "Pending R0 architecture/execution is an old cut, not current truth."
+        },
+        {
+          "id": 10,
+          "lines": [1206, 1310],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "STATE", "E-PCM"],
+          "note": "Existing material recovery/retirement implementation and dated validation; no new compatibility work."
+        },
+        {
+          "id": 11,
+          "lines": [1311, 1313],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Historical direct-extension queue, inactive."
+        }
+      ]
+    },
+    {
+      "path": "docs/automatic-analysis-memory.md",
+      "blob": "d7333be637b726cb4ab0bcf62968f29e05f484c9",
+      "sha256": "a4970fbc33a813405bdee5780941ed713cc10c146cc79c98ae46478a91e69ef2",
+      "bytes": 8061,
+      "line_count": 130,
+      "headings": [
+        [1, 1, "Complete automatic analysis memory — 2026-10-13", 1],
+        [8, 2, "Cause and repair", 1],
+        [29, 2, "Allocation accounting", 1],
+        [60, 2, "Actual authorized MP3 evidence", 2],
+        [92, 2, "Verification and preserved limitations", 3],
+        [116, 2, "Delivery closure", 3]
+      ],
+      "inbound": {
+        "openspec/changes/bound-complete-automatic-analysis/design.md": [25],
+        "openspec/changes/bound-complete-automatic-analysis/tasks.md": [8]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["BPM", "KEY", "PCM"],
+      "summary": "Historical2026-10-13 accounting, not post-fix configured-app model.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 59],
+          "classes": ["historical", "live"],
+          "destinations": ["E-MEMORY", "BPM", "KEY"],
+          "note": "Old concurrent/full-vector formula; reusable STFT/nonfinite/overflow/tail invariants."
+        },
+        {
+          "id": 2,
+          "lines": [60, 91],
+          "classes": ["historical"],
+          "destinations": ["E-MEMORY"],
+          "note": "Decoded extent versus ffprobe and161.6187/unknownKey/OwnACK."
+        },
+        {
+          "id": 3,
+          "lines": [92, 130],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-MEMORY"],
+          "note": "Fixture failures/corrections,old216PAD gate; admission not RSS."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-acceptance.md",
+      "blob": "170fb5b8556328654c3b05171fac23e190df379e",
+      "sha256": "a9030f8080c3194011889811a68e3905a73ffbdbf1e3f358699c5f0031671785",
+      "bytes": 25203,
+      "line_count": 409,
+      "headings": [
+        [1, 1, "Beat This B2a finite acceptance", 1],
+        [9, 2, "Frozen private corpus", 1],
+        [36, 2, "Independent labels and scoring", 1],
+        [87, 2, "Held-out manual correction burden", 1],
+        [105, 2, "Independent reference input preparation", 1],
+        [129, 2, "Temporal metric core boundary", 1],
+        [147, 2, "Resource and publication gates", 2],
+        [191, 2, "Historical B2a resource decision", 3],
+        [243, 2, "B2b1 lossless publication remediation", 3],
+        [284, 2, "B2b2 complete native staging remediation", 3],
+        [353, 2, "Native key completion correction", 4],
+        [373, 2, "Current musical decision and initial-marker feature", 5]
+      ],
+      "inbound": {
+        "docs/README.md": [52],
+        "docs/beat-this-corrected-legacy.md": [8],
+        "docs/beat-this-reference-evidence.md": [153],
+        "docs/beat-this-reference-inputs.md": [4],
+        "docs/beat-this-temporal-scoring.md": [4],
+        "docs/offline-analysis.md": [342],
+        "openspec/changes/adopt-beat-this-analysis/tasks.md": [77, 87]
+      },
+      "map_review_lines": [56, 403],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Frozen B2 diagnostic protocol/evidence; old default prescription superseded.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 146],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Frozen corpus/independence/reference/correction/input/metrics; full references and6 sessions absent."
+        },
+        {
+          "id": 2,
+          "lines": [147, 190],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "PCM", "E-B2"],
+          "note": "Scientific protocolv1 resource/publication, not app preparation policy."
+        },
+        {
+          "id": 3,
+          "lines": [191, 352],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2"],
+          "note": "Native cap/envelope failures,v2 remediation,exact-tail correction."
+        },
+        {
+          "id": 4,
+          "lines": [353, 372],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2"],
+          "note": "G#m/Abm validator and forced-cleanup failures/correction."
+        },
+        {
+          "id": 5,
+          "lines": [373, 409],
+          "classes": ["historical", "proposed", "retired"],
+          "destinations": ["E-B2", "SYNC"],
+          "note": "Musical/default/map decision historical, not configured default status."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-corrected-legacy.md",
+      "blob": "2a38ab613b74ff0645f1596bd67c8c4e6b86626c",
+      "sha256": "3944cb44f9aa23bf8443b59c456b7eaf218351be28822b77d3785283f51d3577",
+      "bytes": 15876,
+      "line_count": 242,
+      "headings": [
+        [1, 1, "Corrected legacy comparator evidence", 1],
+        [14, 2, "Native execution and source domains", 2],
+        [54, 2, "Complete raw contract and native publication", 2],
+        [99, 2, "Fixed reader profiles", 2],
+        [137, 2, "Engineering comparison and sealed musical scoring", 3],
+        [194, 2, "Observed complete-track results", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [56],
+        "docs/architecture.md": [84],
+        "docs/beat-this-scoring-workflow.md": [144],
+        "docs/development.md": [72],
+        "docs/offline-analysis.md": [84],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [68],
+        "rust/README.md": [24]
+      },
+      "map_review_lines": [108],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Live complete scientific QM comparator distinct from app/f32 path.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 13],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "E-B2"],
+          "note": "Old future-default gate historical."
+        },
+        {
+          "id": 2,
+          "lines": [14, 136],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Complete loaded/analyzer/hop/f64/u64/f32 domains,exact finish,profiles,slot/GIL guards."
+        },
+        {
+          "id": 3,
+          "lines": [137, 193],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-B2"],
+          "note": "Rational engineering disagreement not correctness/production fit."
+        },
+        {
+          "id": 4,
+          "lines": [194, 242],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2"],
+          "note": "Five-track results,120/300s coldACK failure,900s TEST guard; no quality/RSS/Human pass."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-reference-evidence.md",
+      "blob": "efb758187ad7d22009870fafb83b37e736615e12",
+      "sha256": "39c5909fa95a4e9deb395ea243f1014157a7f42125f56c09ce5b9593b46b5c0e",
+      "bytes": 10114,
+      "line_count": 175,
+      "headings": [
+        [1, 1, "Beat This B1b reference evidence", 1],
+        [7, 2, "Reproducible identities", 1],
+        [27, 2, "Reference checks", 1],
+        [42, 2, "Resource observation method", 2],
+        [66, 2, "Full-track observations", 2],
+        [103, 2, "Lifecycle and offline checks", 2],
+        [141, 2, "Installed footprint", 2],
+        [151, 2, "Remaining gates", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [51],
+        "docs/beat-this-acceptance.md": [6],
+        "docs/beat-this-setup.md": [228],
+        "docs/beatmap-sync-design.md": [222, 426],
+        "docs/offline-analysis.md": [216, 340],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [17, 403],
+        "openspec/changes/adopt-beat-this-analysis/tasks.md": [41]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["DIAG", "BPM", "KEY"],
+      "summary": "Dated frontend/parity/resource observations with missing independent quality proof.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 41],
+          "classes": ["historical", "live"],
+          "destinations": ["BPM", "KEY", "SETUP", "E-B2"],
+          "note": "Frozen identities/reference parity."
+        },
+        {
+          "id": 2,
+          "lines": [42, 150],
+          "classes": ["historical"],
+          "destinations": ["E-B2"],
+          "note": "Full-track/lifecycle/footprint observations not fresh performance."
+        },
+        {
+          "id": 3,
+          "lines": [151, 175],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2", "BPM"],
+          "note": "Missing labels/counts/correction,nonpreemptible Key,provisional RSS; old sequence superseded."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-reference-inputs.md",
+      "blob": "057c62b2dc1cfc8f932252b46be2f7b34ea06aac",
+      "sha256": "d9c629cbeb1a232aaf0511811d98363cf764721ae795eb7f406e8ac9c0e09cd1",
+      "bytes": 11868,
+      "line_count": 177,
+      "headings": [
+        [1, 1, "Private B2 reference and correction input workflow", 1],
+        [17, 2, "Private identity and listening material", 1],
+        [58, 2, "Independent full references", 2],
+        [115, 2, "Actual paired correction measurements", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [53],
+        "docs/architecture.md": [195],
+        "docs/beat-this-acceptance.md": [107],
+        "docs/beat-this-reference-evidence.md": [163],
+        "docs/beat-this-scoring-workflow.md": [4],
+        "docs/offline-analysis.md": [77],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [36]
+      },
+      "map_review_lines": [56],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Live diagnostic reference/schema, historical missing actual inputs.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 57],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Source/PCM identity,finite duplicate-free JSON, independent receipt."
+        },
+        {
+          "id": 2,
+          "lines": [58, 114],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Full90% coverage versus event eligibility,halfwidth,group split."
+        },
+        {
+          "id": 3,
+          "lines": [115, 177],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Balanced6 genuine Human sessions; hash not truth, actual inputs absent."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-scoring-workflow.md",
+      "blob": "6a0bee12af380de3417c0fee3f981c1b3be09a32",
+      "sha256": "4c7a335e8160edfa833f6372d8f6dc1b99136950c5dcd7ff766bc7bc5ef6b70c",
+      "bytes": 12975,
+      "line_count": 196,
+      "headings": [
+        [1, 1, "Private B2 seal-bound scoring workflow", 1],
+        [12, 2, "Explicit original-source aliases", 1],
+        [27, 2, "Reference-first commands", 1],
+        [55, 2, "Supported complete native lineage", 1],
+        [78, 3, "Fresh fixed native v2 profiles", 2],
+        [142, 2, "Corrected legacy comparisons", 3],
+        [183, 2, "Actual remaining acceptance", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [55],
+        "docs/architecture.md": [60],
+        "docs/beat-this-acceptance.md": [141],
+        "docs/beat-this-corrected-legacy.md": [186],
+        "docs/beat-this-reference-inputs.md": [13],
+        "docs/beat-this-temporal-scoring.md": [41, 117],
+        "docs/development.md": [62],
+        "docs/selected-backend-bpm.md": [121],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [101],
+        "openspec/changes/adopt-beat-this-analysis/tasks.md": [119, 134]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Live reference-first CLI/lineage; rejected old producers and no real scoring.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 77],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Source aliases/full-native lineage, references before candidate read."
+        },
+        {
+          "id": 2,
+          "lines": [78, 141],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "T01-T03v1 rejected/T04-T05 accepted,freshv2 executing EXE profiles and initial import failure."
+        },
+        {
+          "id": 3,
+          "lines": [142, 182],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "DEV", "E-B2"],
+          "note": "Corrected comparator separate; receipt cannot self-register producer."
+        },
+        {
+          "id": 4,
+          "lines": [183, 196],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2"],
+          "note": "No full seal/scores/sessions; old cutover schedule historical."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-setup.md",
+      "blob": "6ec2f712b6bd098355bd4a494a1da75d38ff1ae4",
+      "sha256": "65a499da63ba727ddf27bed62a81db9a7f047a1224e93faa97fb53e2c577c0f5",
+      "bytes": 15084,
+      "line_count": 260,
+      "headings": [
+        [1, 1, "Beat This worker profiles", 1],
+        [12, 2, "Optional automatic BPM range", 1],
+        [29, 2, "Accurate period and beat level", 1],
+        [48, 2, "Locked Windows runtime", 1],
+        [77, 2, "Explicit setup", 2],
+        [162, 2, "Accepted artifact and provenance", 3],
+        [194, 2, "Diagnostic use", 3],
+        [214, 2, "Verification", 3],
+        [235, 3, "Local CUDA execution check, 2026-10-27", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [50],
+        "docs/architecture.md": [461],
+        "docs/beat-this-reference-evidence.md": [24],
+        "docs/beatmap-sync-design.md": [222],
+        "docs/development.md": [47, 481],
+        "docs/offline-analysis.md": [3, 12],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [17]
+      },
+      "map_review_lines": [5],
+      "owner_groups": ["SETUP", "BPM"],
+      "summary": "Stable setup/range/period/profile path with dated device observations.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 76],
+          "classes": ["live", "historical"],
+          "destinations": ["SETUP", "BPM"],
+          "note": "Current routing/range/period/profiles with provenance limits."
+        },
+        {
+          "id": 2,
+          "lines": [77, 161],
+          "classes": ["live", "historical"],
+          "destinations": ["SETUP", "DEV", "E-CUDA"],
+          "note": "Check/stage/activation,atomic pointer/readers,closed-App Native+pointer rollback."
+        },
+        {
+          "id": 3,
+          "lines": [162, 234],
+          "classes": ["live", "historical"],
+          "destinations": ["SETUP", "BPM", "E-B2"],
+          "note": "Inspected frontend/model identities and diagnostic verification; import not inference."
+        },
+        {
+          "id": 4,
+          "lines": [235, 260],
+          "classes": ["historical", "live"],
+          "destinations": ["SETUP", "E-CUDA"],
+          "note": "Actual bounded CUDA/CPU fallback receipt; network denial not OS sandbox."
+        }
+      ]
+    },
+    {
+      "path": "docs/beat-this-temporal-scoring.md",
+      "blob": "660ae44ce3b0ad4f8c3a1293b8472cc646c22b42",
+      "sha256": "052d481e7ff24410183710952723f0b1c2f88e02e032b1ce54d7abfccdb2b6d6",
+      "bytes": 7807,
+      "line_count": 132,
+      "headings": [
+        [1, 1, "Offline B2 temporal metric core", 1],
+        [16, 2, "Pure APIs and supplied extent", 1],
+        [44, 2, "Frozen matching and uncertainty", 1],
+        [73, 2, "Reported metrics and spans", 1],
+        [105, 2, "Explicit resource failures", 1],
+        [115, 2, "Acceptance and next integration boundary", 2]
+      ],
+      "inbound": {
+        "docs/README.md": [54],
+        "docs/beat-this-acceptance.md": [131],
+        "docs/beat-this-reference-inputs.md": [10],
+        "docs/beat-this-scoring-workflow.md": [5],
+        "openspec/changes/adopt-beat-this-analysis/tasks.md": [111]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Live pure scientific metrics and frozen policy; musical gate unpassed.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 114],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-B2"],
+          "note": "Exact max-cardinality/min-cost/lexicographic matching,dyadic ties,uncertainty denominators,1M-edge refusal."
+        },
+        {
+          "id": 2,
+          "lines": [115, 132],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-B2"],
+          "note": "Default-blocked report is diagnostic history, not app status."
+        }
+      ]
+    },
+    {
+      "path": "docs/beatmap-sync-design.md",
+      "blob": "10af42b3b883d5363da2ce7077657b379206f8b4",
+      "sha256": "02cd112b5a8d5574178288cdae15bb30c726ac093501858e34b8c04d9a118295",
+      "bytes": 61005,
+      "line_count": 827,
+      "headings": [
+        [3, 1, "Beat This migration and independent pad pitch: implementation design", 1],
+        [7, 2, "Current beat-phase correction — 2026-10-27", 1],
+        [46, 2, "Fixed architectural decisions", 2],
+        [60, 2, "What sample accuracy means here", 2],
+        [93, 2, "Analysis migration", 3],
+        [95, 3, "Automatic BPM and optional SYNC operating policy", 3],
+        [241, 2, "Timing and transposition are independent", 4],
+        [283, 3, "Current implementation traps that the plan must remove", 4],
+        [305, 2, "Rendering and state ownership", 5],
+        [350, 2, "Ordered implementation slices", 6],
+        [385, 2, "Required joint validation matrix", 6],
+        [411, 2, "OpenSpec and evidence ownership", 6],
+        [437, 2, "R0 extended compatibility and preserved gates", 6],
+        [449, 2, "Original full-mix raw acquisition — 2026-10-21", 7],
+        [508, 2, "Explicit Raw interpretation and complete accepted records — 2026-10-21", 7],
+        [553, 2, "Manual Source Map Loop Editor — 2026-10-21", 8],
+        [597, 3, "Interval count, meter, downbeat and coverage corrections", 8],
+        [635, 2, "Independent source SYNC control", 9],
+        [646, 3, "Current single-SYNC activation — 2026-10-27", 9],
+        [658, 3, "Earlier focused native delivery — 2026-10-26", 9]
+      ],
+      "inbound": {
+        "docs/README.md": [65],
+        "docs/accepted-constant-timing.md": [147],
+        "docs/beatmap-sync-research.md": [10, 391],
+        "docs/constant-tempo-summary.md": [272],
+        "docs/development.md": [893],
+        "docs/grid-timing-diagnosis.md": [181],
+        "docs/loop-period-proof.md": [163],
+        "docs/scalar-source-coordinates.md": [96],
+        "docs/selected-backend-bpm.md": [122],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [124, 305],
+        "openspec/changes/prepare-independent-pitch-timing/design.md": [3, 25],
+        "openspec/changes/prepare-independent-pitch-timing/proposal.md": [23],
+        "openspec/changes/prepare-versioned-source-beatmaps/design.md": [18],
+        "openspec/changes/prepare-versioned-source-beatmaps/proposal.md": [17],
+        "openspec/changes/share-editor-beatmap-coordinates/design.md": [64]
+      },
+      "map_review_lines": [5, 29, 36, 49, 84, 179, 257, 320, 365, 413, 414, 418, 432, 451, 456, 486, 489, 503, 514, 527, 553, 555, 572, 599, 609, 649, 653, 654, 662, 673, 674, 715, 726],
+      "owner_groups": ["RETIRED", "BPM", "PITCH", "PCM"],
+      "summary": "Branch recovery; only source-confirmed scalar/pitch/RT facts extract to main.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 45],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Beat-phase implementation history."
+        },
+        {
+          "id": 2,
+          "lines": [46, 92],
+          "classes": ["retired", "historical", "live"],
+          "destinations": ["SYNC", "BPM", "RT"],
+          "note": "Fixed decisions/evidence-domain distinctions and retired map contracts."
+        },
+        {
+          "id": 3,
+          "lines": [93, 240],
+          "classes": ["retired", "historical", "proposed", "live"],
+          "destinations": ["SYNC", "BPM"],
+          "note": "Diagnostic delivery history and obsolete default plans."
+        },
+        {
+          "id": 4,
+          "lines": [241, 304],
+          "classes": ["retired", "historical", "proposed", "live"],
+          "destinations": ["SYNC", "PITCH"],
+          "note": "Pitch invariants versus map equations and old future claims."
+        },
+        {
+          "id": 5,
+          "lines": [305, 349],
+          "classes": ["retired", "historical", "proposed", "live"],
+          "destinations": ["SYNC", "RT", "PCM", "PITCH"],
+          "note": "Reusable RT/lifetime rules and unaccepted rendering."
+        },
+        {
+          "id": 6,
+          "lines": [350, 448],
+          "classes": ["historical", "proposed"],
+          "destinations": ["SYNC", "E-PROGRAM"],
+          "note": "Slices/matrix/ownership/R0 execution proposals inactive."
+        },
+        {
+          "id": 7,
+          "lines": [449, 552],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Raw acquisition/interpretation/cancellation ownership."
+        },
+        {
+          "id": 8,
+          "lines": [553, 634],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Removed manual editor/review/coordinates."
+        },
+        {
+          "id": 9,
+          "lines": [635, 827],
+          "classes": ["retired", "historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Future-input/claim/continuation and negative acoustic timing."
+        }
+      ]
+    },
+    {
+      "path": "docs/beatmap-sync-research.md",
+      "blob": "61e0dfc3197912836eee78a5fce90e83a6f8486f",
+      "sha256": "367c95e1d0917377a5ce473a3b316481ac9c3f2af49a423df0765046cea32851",
+      "bytes": 33733,
+      "line_count": 416,
+      "headings": [
+        [3, 1, "Variable beatmaps, Quantize and SYNC: feasibility decision", 1],
+        [13, 2, "Recommendation", 1],
+        [38, 2, "1. Baseline: preserve what already exists, repair the comparator", 1],
+        [58, 3, "Reproduced downbeat defect", 1],
+        [78, 2, "2. Detector comparison", 2],
+        [129, 3, "Native portability is plausible, not yet verified", 2],
+        [147, 2, "3. Shared coordinates and storage", 3],
+        [198, 2, "4. Rendering choices and stem limits", 3],
+        [250, 2, "5. Proposed independent controls", 4],
+        [270, 3, "Subdivision, tolerance and bar intent are different", 4],
+        [288, 3, "Late entry and sufficient preparation", 4],
+        [327, 3, "State transitions and monitoring", 4],
+        [346, 2, "6. Local benchmark and measurable gates", 5],
+        [389, 2, "7. Implementation sequence after the user's selection", 5],
+        [409, 2, "8. Evidence boundaries", 5]
+      ],
+      "inbound": {
+        "docs/README.md": [64],
+        "docs/beatmap-sync-design.md": [36],
+        "openspec/changes/adopt-beat-this-analysis/proposal.md": [50],
+        "openspec/changes/evaluate-variable-tempo-rendering/proposal.md": [20]
+      },
+      "map_review_lines": [3, 10, 29, 30, 49, 55, 183, 391],
+      "owner_groups": ["RETIRED", "BPM", "PITCH"],
+      "summary": "Dated feasibility research/rejected approaches/unpassed map gates.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 77],
+          "classes": ["retired", "historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Historical recommendation/baseline/probe, including reproduced hop-units cast-to-zero/downbeat defect."
+        },
+        {
+          "id": 2,
+          "lines": [78, 146],
+          "classes": ["historical", "proposed", "live"],
+          "destinations": ["SYNC", "BPM"],
+          "note": "Limited neural/native portability research, detector comparisons and model-lattice limits."
+        },
+        {
+          "id": 3,
+          "lines": [147, 249],
+          "classes": ["retired", "historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Map coordinates/rendering/causal limits."
+        },
+        {
+          "id": 4,
+          "lines": [250, 345],
+          "classes": ["retired", "historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Old proposed controls and launch policy."
+        },
+        {
+          "id": 5,
+          "lines": [346, 416],
+          "classes": ["historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Planned benchmarks/sequence; no Windows ONNX/warp proof, old workloads superseded."
+        }
+      ]
+    },
+    {
+      "path": "docs/constant-bpm-guide.md",
+      "blob": "02b109741865d5a3971a30e84b1bed46f56f8c23",
+      "sha256": "a954fb417676d8153317327b8726ab193aa49da42450a293bf181dadbbac2ccf",
+      "bytes": 6309,
+      "line_count": 105,
+      "headings": [
+        [1, 1, "BPM and constant-tempo loops", 1],
+        [20, 2, "Mean estimates and possible drift", 1],
+        [43, 2, "Normal use", 1],
+        [80, 2, "Processing device", 2],
+        [96, 2, "Fresh project", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [35],
+        "docs/source-map-guide.md": [2],
+        "openspec/changes/remove-source-sync/tasks.md": [19]
+      },
+      "map_review_lines": [4, 6],
+      "owner_groups": ["CORE", "BPM", "KEY", "STATE", "RECORD"],
+      "summary": "Current performer modes/targets/mean/Tap/device/defaults; Key-memory explanation needs post-fix context.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 79],
+          "classes": ["live"],
+          "destinations": ["MAN", "BPM", "RT"],
+          "note": "Precise/mean/manual/Tap priority; played-content target, peer stop and stable independent Lock."
+        },
+        {
+          "id": 2,
+          "lines": [80, 95],
+          "classes": ["live", "historical"],
+          "destinations": ["MAN", "BPM", "KEY"],
+          "note": "Device receipts/fallback live; optional Key explanation must reflect bounded complete-source files."
+        },
+        {
+          "id": 3,
+          "lines": [96, 105],
+          "classes": ["live", "historical"],
+          "destinations": ["MAN", "SETUP"],
+          "note": "Fresh defaults current; Human data-clearing history grants no deletion."
+        }
+      ]
+    },
+    {
+      "path": "docs/constant-tempo-summary.md",
+      "blob": "14e2a0f462df62e575929c21c6148178463f0726",
+      "sha256": "bdea20299f37954abf3680ed3588063627b43214fa2b23fdcfe4596df239c2c7",
+      "bytes": 17276,
+      "line_count": 272,
+      "headings": [
+        [1, 1, "Offline constant-tempo candidates", 1],
+        [14, 2, "Lossless QM capture", 2],
+        [46, 2, "Content binding and adapter scope", 2],
+        [90, 2, "Comparable PCM features and count support", 2],
+        [139, 2, "Evidence and count interpretation", 2],
+        [161, 2, "Decisions", 2],
+        [176, 2, "Versioned engineering policy", 2],
+        [218, 2, "Validation and remaining stages", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [61],
+        "docs/accepted-constant-timing.md": [146],
+        "docs/architecture.md": [442],
+        "docs/beat-this-corrected-legacy.md": [180],
+        "docs/beatmap-sync-design.md": [97],
+        "docs/grid-timing-diagnosis.md": [7],
+        "docs/offline-analysis.md": [53],
+        "docs/selected-backend-bpm.md": [119],
+        "rust/README.md": [143]
+      },
+      "map_review_lines": [272],
+      "owner_groups": ["DIAG", "BPM", "TIMING"],
+      "summary": "Live scientific G2 APIs; inferred ordinals not verified musical counts.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 13],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-G2"],
+          "note": "Overview with old stage."
+        },
+        {
+          "id": 2,
+          "lines": [14, 217],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-G2"],
+          "note": "Lossless arrays,source/analyzer binding,features,evidence and explicit count assertions."
+        },
+        {
+          "id": 3,
+          "lines": [218, 259],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-G2"],
+          "note": "600s/1200pulse refined-versus-raw conditional numerical observations."
+        },
+        {
+          "id": 4,
+          "lines": [260, 272],
+          "classes": ["live", "historical", "proposed", "retired"],
+          "destinations": ["BPM", "RT", "E-G2", "SYNC"],
+          "note": "Live scalar G3 foundation differs from retired map plans/old sequencing."
+        }
+      ]
+    },
+    {
+      "path": "docs/development.md",
+      "blob": "0174cb8ef219f8edcb2de2bdecd30ccf7687e9c1",
+      "sha256": "794d3544413f55a80d750729bd2c1a7d5ad232f2b2ca5da490f0fd1f51afb525",
+      "bytes": 48543,
+      "line_count": 905,
+      "headings": [
+        [1, 1, "Development Guide", 1],
+        [6, 2, "Branch And Repository", 1],
+        [25, 2, "Setup", 1],
+        [76, 3, "Windows Start Files", 1],
+        [135, 2, "Native Rubber Band Dependency", 1],
+        [143, 3, "Linux", 1],
+        [178, 3, "Windows", 1],
+        [247, 3, "Offline Key Lock Measurement", 2],
+        [394, 3, "Nuitka Installer Direction", 3],
+        [407, 2, "Validation", 4],
+        [409, 3, "Checks at product boundaries", 4],
+        [427, 3, "Offline and device validation", 4],
+        [453, 3, "C2a finite saved-loop and accepted-set relocation probes", 4],
+        [536, 2, "OpenSpec", 5],
+        [565, 3, "Hardware-free G3c loop evidence", 5],
+        [588, 3, "Hardware-free C2b complete-context and residency evidence", 5],
+        [620, 3, "C3 measured startup/resource acceptance", 5],
+        [633, 3, "G3c productive device and listening preparation", 5],
+        [648, 2, "Python Packages Under `src/`", 6],
+        [678, 2, "Runtime Local Data", 6],
+        [733, 2, "Documentation Policy", 6],
+        [741, 2, "TODO List Policy", 6],
+        [756, 2, "R0 documentation validation boundary", 7],
+        [767, 2, "Recording and local data", 8],
+        [814, 2, "Offline source-beatmap foundation", 9],
+        [895, 2, "Latest performance workload decision — 2026-10-24", 10]
+      ],
+      "inbound": {
+        "AGENTS.md": [471],
+        "README.md": [275],
+        "docs/README.md": [18, 42],
+        "docs/beat-this-setup.md": [216],
+        "docs/key-lock-backend.md": [842, 902],
+        "docs/offline-analysis.md": [353],
+        "docs/pcm-cache-residency.md": [456, 534],
+        "openspec/changes/archive/2026-06-08-add-low-jitter-input-mapping/proposal.md": [29],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/design.md": [206],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/proposal.md": [74],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/tasks.md": [43],
+        "rust/README.md": [238]
+      },
+      "map_review_lines": [814, 816, 819, 823, 824, 826, 832, 834, 840, 842, 846, 854, 855, 868, 877, 881, 893],
+      "owner_groups": ["SETUP", "CORE", "PCM", "BPM", "KEY", "PITCH", "STATE", "RECORD", "DIAG", "DEVICE"],
+      "summary": "Contributor/setup/checks remain; extract current modules and remove retired map instructions after branch preservation.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 246],
+          "classes": ["live", "historical"],
+          "destinations": ["DEV", "SETUP", "PITCH"],
+          "note": "Public setup/native dependencies/launchers; private workspace binding separate."
+        },
+        {
+          "id": 2,
+          "lines": [247, 393],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "E-PITCH"],
+          "note": "Supported diagnostic commands plus historical onset/bridge/causal probes; no live policy selected."
+        },
+        {
+          "id": 3,
+          "lines": [394, 406],
+          "classes": ["proposed", "historical"],
+          "destinations": ["DEV"],
+          "note": "Nuitka installer direction historical; actual source Portable exists."
+        },
+        {
+          "id": 4,
+          "lines": [407, 535],
+          "classes": ["live", "historical"],
+          "destinations": ["DEV", "BPM", "PCM", "E-B2", "E-PCM"],
+          "note": "Proportionate checks/diagnostics live; old default-QM/optional-only BeatThis stale."
+        },
+        {
+          "id": 5,
+          "lines": [536, 647],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "RT", "PCM", "E-DEVICE", "E-LOOP", "E-C3"],
+          "note": "OpenSpec/testing and historical proof; device packet readiness unpassed."
+        },
+        {
+          "id": 6,
+          "lines": [648, 755],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "STATE", "PCM", "E-PROGRAM"],
+          "note": "Packages/data/recovery/UNKNOWN provenance; old program not authority."
+        },
+        {
+          "id": 7,
+          "lines": [756, 766],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Historical R0 validation/dispatch."
+        },
+        {
+          "id": 8,
+          "lines": [767, 813],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["RT", "PCM", "STATE", "MAN", "E-PROGRAM"],
+          "note": "Recording exists; selected fresh format is FLAC, not WAV."
+        },
+        {
+          "id": 9,
+          "lines": [814, 894],
+          "classes": ["retired", "historical", "proposed"],
+          "destinations": ["SYNC"],
+          "note": "Removed source-beatmap validator/acquisition/artifact/review/editor APIs."
+        },
+        {
+          "id": 10,
+          "lines": [895, 905],
+          "classes": ["live", "historical"],
+          "destinations": ["DEV", "MAN", "E-PROGRAM"],
+          "note": "Current2/4/6 and stress<=10; historical FULL assertion inactive."
+        }
+      ]
+    },
+    {
+      "path": "docs/device-loop-acceptance.md",
+      "blob": "fed680b6bf768718857a37d98d8ffaa9b7c33a69",
+      "sha256": "1b0d34cd579c70e213eebedc85cf71f3bf8c8b6c5ce2de8217b46259aaf917e8",
+      "bytes": 20454,
+      "line_count": 280,
+      "headings": [
+        [1, 1, "Productive loopback and sustained listening packet", 1],
+        [13, 2, "Quick guide: what is being tested?", 2],
+        [57, 2, "Evidence that must travel together", 2],
+        [74, 2, "Concrete commands", 2],
+        [189, 2, "Recording conditions and coverage", 3],
+        [234, 2, "Thirty-minute human session", 4],
+        [263, 2, "Assessment and continuation", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [59],
+        "docs/architecture.md": [190],
+        "docs/development.md": [635],
+        "docs/loop-period-proof.md": [8],
+        "docs/pre-rust-program-coverage.json": [9755]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["DEVICE", "TIMING", "CORE"],
+      "summary": "Existing diagnostic tools, no packet-readiness/device/listening pass.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 12],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-DEVICE"],
+          "note": "Historical deferral, acceptance unpassed."
+        },
+        {
+          "id": 2,
+          "lines": [13, 188],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "RT", "E-DEVICE"],
+          "note": "Supported protocol/commands with private examples; fresh source/ACK required."
+        },
+        {
+          "id": 3,
+          "lines": [189, 233],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "RT", "E-DEVICE"],
+          "note": "Independent recorder/clock calibration, complete capture comparison."
+        },
+        {
+          "id": 4,
+          "lines": [234, 280],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-DEVICE"],
+          "note": "Actual>=1800s Human listening; missing-master baseline still open."
+        }
+      ]
+    },
+    {
+      "path": "docs/finite-seek-domain-validation.md",
+      "blob": "320bc02bfcc2b4c322f71b02e093746d1e789ffd",
+      "sha256": "a882965a3687cec339e20f526cf2e3c8fc1f1c88aaa0fe3a71d764c4e3988c90",
+      "bytes": 9087,
+      "line_count": 141,
+      "headings": [
+        [1, 1, "Finite Seek and physical-domain software validation", 1],
+        [8, 2, "Production behavior and authority", 1],
+        [41, 2, "Meaningful evidence and retained limits", 2],
+        [93, 2, "Final corrected software results", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [48],
+        "docs/key-lock-backend.md": [399],
+        "docs/pad-owned-pcm-program.md": [201],
+        "docs/pre-rust-program-coverage.json": [12202],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [260]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "PITCH", "CORE"],
+      "summary": "Live finite k=0 read/seek behavior with historical failures/fixes.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 40],
+          "classes": ["live"],
+          "destinations": ["PCM", "PITCH", "RT"],
+          "note": "Prefix/loop/tail/complete exceptions, same-phase cut,taps+weight,reserve-before-cut."
+        },
+        {
+          "id": 2,
+          "lines": [41, 92],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM", "E-PITCH"],
+          "note": "Broad failures/order bugs/fixture repairs and C3678/U2080 causal limit."
+        },
+        {
+          "id": 3,
+          "lines": [93, 141],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM"],
+          "note": "Historical1070+168/profile,3656Python+36skip; not fresh/device acceptance."
+        }
+      ]
+    },
+    {
+      "path": "docs/grid-timing-diagnosis.md",
+      "blob": "4543a8cf0c99fe1fd7904ddfe4eca8bd77999aaf",
+      "sha256": "4ddf984f6773cd27a8c6fce967a151e56edd8319c16f49bcf691e2b24aab5185",
+      "bytes": 12041,
+      "line_count": 208,
+      "headings": [
+        [1, 1, "Grid timing drift: diagnosis and correction direction", 1],
+        [19, 2, "Reference and reproduction", 1],
+        [57, 2, "Root cause and propagation", 1],
+        [97, 2, "Separate precision and loop findings", 2],
+        [125, 3, "G1 coordinate correction", 2],
+        [150, 2, "Correction direction and evidence limits", 3],
+        [200, 2, "Validation scope", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [57],
+        "docs/architecture.md": [493],
+        "docs/beatmap-sync-design.md": [112],
+        "docs/constant-tempo-summary.md": [271],
+        "docs/scalar-source-coordinates.md": [96]
+      },
+      "map_review_lines": [181],
+      "owner_groups": ["GRID", "BPM", "DIAG"],
+      "summary": "Historical endpoint diagnosis/alternatives/G1 proof, not current default estimator.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 96],
+          "classes": ["historical"],
+          "destinations": ["E-GRID", "E-G2"],
+          "note": "Reference hash/endpoint telescoping/120.001289 and extrapolated slope."
+        },
+        {
+          "id": 2,
+          "lines": [97, 149],
+          "classes": ["live", "historical"],
+          "destinations": ["RT", "STATE", "E-GRID"],
+          "note": "Delivered binary64 coordinates and before/after evidence."
+        },
+        {
+          "id": 3,
+          "lines": [150, 199],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-GRID", "E-G2", "SYNC"],
+          "note": "Dated BeatThis/CUDA/default/phase research proposals superseded."
+        },
+        {
+          "id": 4,
+          "lines": [200, 208],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-GRID"],
+          "note": "Historical focused validation and limits."
+        }
+      ]
+    },
+    {
+      "path": "docs/key-detection.md",
+      "blob": "49a816b11bfc973162ab39afdd2eba3f2ebe6373",
+      "sha256": "8e6f5be35ebb2a39464d4e0a0182572b61bf7e560b76c5bb929b37b6d7125a0f",
+      "bytes": 5375,
+      "line_count": 111,
+      "headings": [
+        [1, 1, "Key Detection", 1],
+        [3, 2, "Overview", 1],
+        [9, 2, "Architecture", 1],
+        [17, 3, "CQT Parameters", 1],
+        [29, 3, "ONNX Model", 1],
+        [43, 3, "API", 1],
+        [54, 2, "Evaluation", 2],
+        [58, 3, "Results", 2],
+        [67, 3, "Why the 3% gap (Rust vs Python)?", 2],
+        [77, 2, "Dependencies", 3],
+        [87, 2, "Files", 3],
+        [106, 2, "Notes", 3]
+      ],
+      "inbound": {
+        "docs/architecture.md": [415],
+        "openspec/changes/archive/2026-06-08-libkeyfinder/design.md": [5]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["KEY"],
+      "summary": "Current KeyNet/file+dense API missing from old explanation; evaluation historical.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 53],
+          "classes": ["live", "historical"],
+          "destinations": ["KEY"],
+          "note": "CQT/model concepts live; KeyResult key_name/confidence and file API replace inaccurate logits DTO."
+        },
+        {
+          "id": 2,
+          "lines": [54, 76],
+          "classes": ["historical"],
+          "destinations": ["E-KEY"],
+          "note": "Reported604-track scores/agreement; causal3% explanation unsubstantiated."
+        },
+        {
+          "id": 3,
+          "lines": [77, 111],
+          "classes": ["live", "historical"],
+          "destinations": ["KEY"],
+          "note": "Add Signal/Scratch/file sources; FFT source conversion/Sinc octaves not phase vocoder."
+        }
+      ]
+    },
+    {
+      "path": "docs/key-lock-backend.md",
+      "blob": "bdadb589d082a18f2de8d466099c1ddd36a5c847",
+      "sha256": "bf1022750b7c51e0a80a687444cc783c008012b28b183c230c7f90e681b96a06",
+      "bytes": 306020,
+      "line_count": 4542,
+      "headings": [
+        [1, 1, "Key Lock Backend", 1],
+        [172, 2, "Runtime Modules", 3],
+        [443, 2, "Live mode transactions and feedback", 3],
+        [517, 2, "Playback Semantics", 3],
+        [537, 2, "Source Timing And Resampling", 3],
+        [590, 2, "Rubber Band Processing", 3],
+        [592, 3, "Preparation Ownership", 3],
+        [657, 3, "Productive Source-Specific Preparation", 3],
+        [792, 3, "Adapter And Measured Delay", 4],
+        [871, 3, "Non-live Exact-source Proof", 4],
+        [916, 3, "Explicit Source History And Musical Criterion", 4],
+        [983, 2, "Continuous Onset And Content Feasibility", 5],
+        [1041, 3, "Fixed Unity-Source Attack Candidate", 5],
+        [1081, 3, "Causal Scheduling Limit", 5],
+        [1096, 3, "Explicit Frame Mapping And Policy Alternatives", 5],
+        [1165, 3, "Product Decision And Acceptance Boundary", 5],
+        [1192, 3, "First Original-Source Offline Stretcher Comparison — 2026-10-16", 5],
+        [1254, 3, "Rejected Causal AR2 Source-Filter Candidate — 2026-10-16", 5],
+        [1300, 3, "Rejected Source-Segmented PCM Overlap Candidate — 2026-10-16", 5],
+        [1380, 3, "Centered Full-Phase-Gradient Diagnostic — 2026-10-16", 5],
+        [1466, 3, "Complete Causal Subband AM/FM Diagnostic — 2026-10-16", 5],
+        [1564, 3, "Fixed-Bank Synthesis Calibration — 2026-10-16", 5],
+        [1625, 3, "Independent Source Modes And Complete Residual — 2026-10-16", 5],
+        [1732, 3, "Source Certificates And Trailing Envelopes — 2026-10-16", 5],
+        [1824, 3, "Independent Known-Mode Mixture Reference — 2026-10-16", 5],
+        [1869, 3, "Causal Affine Endpoint Diagnostic — 2026-10-16", 5],
+        [1959, 3, "Projected Affine Prediction Diagnostic — 2026-10-16", 5],
+        [2051, 3, "Positive Current-Weight Diagnostic — 2026-10-16", 5],
+        [2143, 3, "Source-Certified Positive-AM Families — 2026-10-16", 5],
+        [2241, 3, "Fixed Positive-AM Fitting Basis — 2026-10-16", 5],
+        [2345, 3, "Source-Certified Integrated Linear Chirplets — 2026-10-16", 5],
+        [2445, 3, "Conditional Finite Positive-AM Source Gate — 2026-10-16", 5],
+        [2570, 3, "Independent Multiple-Feasible Finite-AM Gates — 2026-10-16", 5],
+        [2640, 3, "Independent Finite Carrier Gates And Sparse PCM — 2026-10-17", 5],
+        [2749, 3, "Explicit Source-Group Amplitude Replacement — 2026-10-17", 5],
+        [2840, 3, "Residual Noise Band-Energy Attribution — 2026-10-17", 5],
+        [2913, 3, "Complete-Bank Joint Residual Phase — 2026-10-17", 5],
+        [3005, 3, "Fixed Symmetric Quadrature With Joint Phase — 2026-10-17", 5],
+        [3105, 3, "Public Exact-Model Complex-Gauge Bound — 2026-10-17", 5],
+        [3199, 2, "Settings Contract", 6],
+        [3219, 2, "Realtime Constraints", 6],
+        [3239, 2, "Native Dependency", 6],
+        [3269, 2, "Durable key intent and engineering pitch controls", 7],
+        [3636, 2, "Direct live KEYLOCK correction2026-10-11", 8],
+        [3649, 2, "Inheritance validation2026-10-11", 8],
+        [3680, 2, "Prepared endpoint resource probe — 2026-10-15", 9],
+        [3728, 3, "Productive successful pitch custody — 2026-10-17", 9],
+        [3772, 3, "Public piano and global-rate controller composition — 2026-10-17", 9],
+        [3809, 3, "Piano retrigger preserves an unfinished actual rate glide — 2026-10-17", 9],
+        [3879, 3, "Wet Normal piano retrigger uses original glide epochs — 2026-10-17", 9],
+        [3954, 3, "Actual Native lifetime and complete callback-owner close — 2026-10-17", 9],
+        [4005, 2, "Inverse Seconds, Loaded Frames And Native Rate — 2026-10-16", 10],
+        [4092, 3, "Stable complete selected StemSet attacks during rate glides — 2026-10-17", 11],
+        [4189, 3, "Already acknowledged finite Normal windows during a glide — 2026-10-17", 11],
+        [4273, 3, "Lower combined piano/offset during a public glide — 2026-10-17", 11],
+        [4325, 3, "Upper combined piano/offset during a public glide — 2026-10-18", 11],
+        [4376, 3, "Rendered fixed-offset Learn — 2026-10-18", 11],
+        [4451, 3, "Independent Source correction beside the central piano — 2026-10-18", 11],
+        [4518, 2, "Confirmed recorded-source follow-up — 2026-10-20", 12]
+      ],
+      "inbound": {
+        "AGENTS.md": [474],
+        "README.md": [280],
+        "docs/README.md": [27, 47],
+        "docs/architecture.md": [359, 922],
+        "docs/beatmap-sync-research.md": [304],
+        "docs/development.md": [265],
+        "docs/pcm-cache-residency.md": [967],
+        "docs/ui-toolkit.md": [569],
+        "openspec/changes/add-key-transposition-performance/tasks.md": [374],
+        "openspec/changes/archive/2026-06-08-add-per-pad-key-lock/proposal.md": [60],
+        "openspec/changes/archive/2026-06-08-repair-key-lock-master-tempo/proposal.md": [48],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/proposal.md": [75],
+        "openspec/changes/archive/2026-06-08-replace-key-lock-with-rubberband/tasks.md": [42],
+        "openspec/changes/inherit-pad-key-lock/tasks.md": [21]
+      },
+      "map_review_lines": [580, 1059, 2148],
+      "owner_groups": ["PITCH", "CORE", "PCM", "STATE"],
+      "summary": "Live pitch contracts coexist with test-only acoustic/probe history.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 24],
+          "classes": ["live"],
+          "destinations": ["PITCH", "RT"],
+          "note": "Physical full-onset T/E,silent prebirth versus genuine SET/resume history."
+        },
+        {
+          "id": 2,
+          "lines": [25, 171],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PITCH"],
+          "note": "Historical allocation/latency observations."
+        },
+        {
+          "id": 3,
+          "lines": [172, 791],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PITCH", "PCM", "RT", "E-PITCH"],
+          "note": "Runtime/transactions/timing/preparation with scoped evidence."
+        },
+        {
+          "id": 4,
+          "lines": [792, 982],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PITCH"],
+          "note": "Source-preparation proof/failures."
+        },
+        {
+          "id": 5,
+          "lines": [983, 3198],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PITCH"],
+          "note": "Test-only AR2/WSOLA/phase-gradient/AMFM/mode/certificate/affine/chirplet/gauge/noise; not productive."
+        },
+        {
+          "id": 6,
+          "lines": [3199, 3268],
+          "classes": ["live", "historical"],
+          "destinations": ["PITCH", "SETUP"],
+          "note": "Settings/RT/dependency."
+        },
+        {
+          "id": 7,
+          "lines": [3269, 3635],
+          "classes": ["live", "historical", "proposed", "retired"],
+          "destinations": ["PITCH", "STATE", "MAN", "E-PITCH", "SYNC"],
+          "note": "Source-key/Piano/MIDI/retrigger live; old SYNC test pairs/map gates historical."
+        },
+        {
+          "id": 8,
+          "lines": [3636, 3679],
+          "classes": ["live", "historical"],
+          "destinations": ["PITCH", "STATE", "E-PITCH"],
+          "note": "Nullable inheritance preserves explicit override."
+        },
+        {
+          "id": 9,
+          "lines": [3680, 4004],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PITCH", "STATE", "E-PITCH"],
+          "note": "Historical endpoint/glide/custody/close proof supports current contracts, not acoustic acceptance."
+        },
+        {
+          "id": 10,
+          "lines": [4005, 4091],
+          "classes": ["live", "historical"],
+          "destinations": ["PITCH", "RT", "PCM", "E-PITCH"],
+          "note": "Inverse seconds/loaded-frame/scalar math and dated probes."
+        },
+        {
+          "id": 11,
+          "lines": [4092, 4517],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PITCH", "STATE", "STEM", "E-PITCH"],
+          "note": "Stem glides/combined shifts/Learn/source correction evidence."
+        },
+        {
+          "id": 12,
+          "lines": [4518, 4542],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PITCH", "PITCH"],
+          "note": "Bounded recorded-source Human follow-up, no general acceptance."
+        }
+      ]
+    },
+    {
+      "path": "docs/long-source-streaming-validation.md",
+      "blob": "78e5f20340155263dee31cba1cd915fe170fccef",
+      "sha256": "e4d0edbcb4072f1241fb1b427899e928e909fb44d4f591552067b0710522cb96",
+      "bytes": 24098,
+      "line_count": 284,
+      "headings": [
+        [1, 1, "Complete-source streaming: implementation and validation", 1],
+        [19, 2, "Implemented paths", 1],
+        [81, 2, "Actual complete-source runs", 2],
+        [140, 2, "Measured memory and owner return", 2],
+        [192, 2, "Fault coverage and retained validation state", 2]
+      ],
+      "inbound": {
+        "docs/pcm-cache-residency.md": [670],
+        "docs/pre-rust-extension-20261011.md": [63],
+        "docs/pre-rust-program-coverage.json": [11634],
+        "docs/readable-material-validation.md": [12],
+        "docs/stem-generation-setup.md": [212],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [453]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "STEM", "PITCH"],
+      "summary": "Live bounded storage kernels and historical long/RF64/codec/resource/fault evidence.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 80],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "E-PCM"],
+          "note": "Kernels live; NoHint/full-allocation warning37-50 superseded by later disk-first finite."
+        },
+        {
+          "id": 2,
+          "lines": [81, 284],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM"],
+          "note": "Actual>1GiB/RF64source/parser,not5RF64/inference;fault injection not real disk exhaustion/powerloss;failed broad runs and later passes retained."
+        }
+      ]
+    },
+    {
+      "path": "docs/loop-period-proof.md",
+      "blob": "89c91777e0e132c9f4c576caad49a603a1116eee",
+      "sha256": "c6c021ac88b49ff70369c5f64e17f23debd35ed412de3b34f0f31959cc579965",
+      "bytes": 10150,
+      "line_count": 163,
+      "headings": [
+        [1, 1, "Musical and physical loop periods", 1],
+        [12, 2, "Independent domains", 1],
+        [35, 2, "Productive evidence contract", 2],
+        [57, 2, "Preserved G3c1 failure", 3],
+        [91, 2, "Actual unchanged private control", 4],
+        [108, 2, "Productive fractional seam policy", 5]
+      ],
+      "inbound": {
+        "docs/README.md": [58],
+        "docs/architecture.md": [180],
+        "docs/development.md": [586],
+        "docs/device-loop-acceptance.md": [8],
+        "docs/grid-timing-diagnosis.md": [116],
+        "docs/native-constant-timing.md": [649]
+      },
+      "map_review_lines": [163],
+      "owner_groups": ["CORE", "GRID", "PITCH"],
+      "summary": "Live musical P versus physical H seam and scoped proof history.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 34],
+          "classes": ["live", "historical"],
+          "destinations": ["RT", "PCM", "E-LOOP"],
+          "note": "Independent musical/physical/rendered/device domains."
+        },
+        {
+          "id": 2,
+          "lines": [35, 56],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-LOOP"],
+          "note": "Historical source evidence/limits."
+        },
+        {
+          "id": 3,
+          "lines": [57, 90],
+          "classes": ["historical"],
+          "destinations": ["E-LOOP"],
+          "note": "Original63/63 fractional failures,26/343 output offsets."
+        },
+        {
+          "id": 4,
+          "lines": [91, 107],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-LOOP"],
+          "note": "Private control IEEE threshold sensitivity."
+        },
+        {
+          "id": 5,
+          "lines": [108, 163],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["RT", "PCM", "E-LOOP"],
+          "note": "Current seam/no H/P rate scaling; corrected cases not device/B5 acceptance."
+        }
+      ]
+    },
+    {
+      "path": "docs/native-constant-timing.md",
+      "blob": "75fbe2858c66327dbcfe7ac39e31750dea82e813",
+      "sha256": "5dc489b7ddde9285f81fa76fcef35f02e67d8964bb15b6ac9397da34aa3ffd79",
+      "bytes": 44377,
+      "line_count": 659,
+      "headings": [
+        [1, 1, "Native accepted timing adoption", 1],
+        [9, 2, "Explicit preparation and acceptance", 1],
+        [50, 2, "Publication ownership and feedback", 1],
+        [132, 2, "Source verification limits", 1],
+        [162, 2, "Native shared-period and rate consumers", 1],
+        [186, 2, "Python current consumers and global controls", 2],
+        [274, 2, "MIDI current source and authority", 2],
+        [318, 2, "Controller GLOBAL START/STOP batches", 3],
+        [383, 2, "Prepared source and stem timing binding", 3],
+        [424, 2, "Productive voice and native/FIFO history", 4],
+        [500, 2, "Productive prepared native continuation", 4],
+        [584, 2, "Source-verified accepted project persistence", 5],
+        [632, 2, "Remaining shared-period and loop work", 6]
+      ],
+      "inbound": {
+        "docs/README.md": [46],
+        "docs/accepted-constant-timing.md": [7],
+        "docs/architecture.md": [379, 590, 1043],
+        "docs/beatmap-sync-design.md": [108],
+        "docs/constant-tempo-summary.md": [266],
+        "docs/key-lock-backend.md": [434, 789],
+        "docs/loop-period-proof.md": [162],
+        "docs/prepared-stem-publication.md": [268],
+        "docs/scalar-source-coordinates.md": [84],
+        "docs/selected-backend-bpm.md": [120],
+        "rust/README.md": [104, 202]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["TIMING", "CORE", "PCM", "PITCH", "STATE"],
+      "summary": "Live scalar native ownership/ACK foundation plus dated receipts.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 185],
+          "classes": ["live", "historical"],
+          "destinations": ["RT", "BPM", "E-TIMING"],
+          "note": "Preparation/publication/verification/shared period."
+        },
+        {
+          "id": 2,
+          "lines": [186, 317],
+          "classes": ["live", "historical"],
+          "destinations": ["STATE", "RT", "E-TIMING"],
+          "note": "Python/MIDI current intent and own-source ACK."
+        },
+        {
+          "id": 3,
+          "lines": [318, 423],
+          "classes": ["live", "historical"],
+          "destinations": ["RT", "STEM", "E-TIMING"],
+          "note": "Whole-feedback global batches and stem permits."
+        },
+        {
+          "id": 4,
+          "lines": [424, 583],
+          "classes": ["live", "historical"],
+          "destinations": ["PITCH", "PCM", "E-TIMING"],
+          "note": "Old voice versus bank, actual4096frame Native/FIFO continuation."
+        },
+        {
+          "id": 5,
+          "lines": [584, 631],
+          "classes": ["live", "historical"],
+          "destinations": ["STATE", "PCM", "E-TIMING"],
+          "note": "Source-verified save/export versus fresh current adoption; failure preserves dirty/file."
+        },
+        {
+          "id": 6,
+          "lines": [632, 659],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-TIMING", "E-C3", "SYNC"],
+          "note": "Old cost/progression/SYNC gaps historical; reconcile newer C3."
+        }
+      ]
+    },
+    {
+      "path": "docs/offline-analysis.md",
+      "blob": "1874f5770dea1842952298065f9bba91cdbcdddf",
+      "sha256": "4ce0235e68588a80afcc5929a467f8d5392e41a4583c0472796089844ffb7c54",
+      "bytes": 23475,
+      "line_count": 354,
+      "headings": [
+        [5, 1, "Offline analysis boundary", 2],
+        [37, 2, "Legacy qm comparator timebase", 3],
+        [89, 2, "Entry points and ownership", 4],
+        [91, 3, "Normal-load analysis resampler repair", 4],
+        [168, 3, "Complete-source access with a finite playback bank", 4],
+        [185, 2, "Admission and retirement limits", 5],
+        [259, 2, "Local-only worker protocol and results", 5],
+        [320, 2, "Verification scope", 6]
+      ],
+      "inbound": {
+        "docs/README.md": [49],
+        "docs/architecture.md": [194, 478],
+        "docs/beat-this-acceptance.md": [173, 249],
+        "docs/beat-this-reference-evidence.md": [161],
+        "docs/beat-this-setup.md": [201],
+        "docs/beatmap-sync-design.md": [192, 215],
+        "docs/development.md": [483],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [185],
+        "rust/README.md": [135]
+      },
+      "map_review_lines": [1, 8, 16, 23, 33],
+      "owner_groups": ["DIAG", "BPM", "KEY", "PCM", "RETIRED"],
+      "summary": "Live scientific service/lifetimes distinct from app and removed map acquisition.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 4],
+          "classes": ["historical"],
+          "destinations": ["BPM", "E-B2"],
+          "note": "Historical banner."
+        },
+        {
+          "id": 2,
+          "lines": [5, 36],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Removed Source Map/Raw/V3 composition and absent map-test reference."
+        },
+        {
+          "id": 3,
+          "lines": [37, 88],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-B2"],
+          "note": "QM hop/raw/corrected facts live; normal-QM-until-cutover stale."
+        },
+        {
+          "id": 4,
+          "lines": [89, 184],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "KEY", "PCM"],
+          "note": "Exact FFT tail/full-source lease; diagnostic dense Key differs from new app file Key."
+        },
+        {
+          "id": 5,
+          "lines": [185, 319],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "PCM", "E-B2"],
+          "note": "Protocolv1 scientific limits/retirement, not app512MiB policy."
+        },
+        {
+          "id": 6,
+          "lines": [320, 354],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["DEV", "E-B2"],
+          "note": "Meaningful tests versus historical geometry failures and unpassed gates."
+        }
+      ]
+    },
+    {
+      "path": "docs/pad-content-copy.md",
+      "blob": "8b7e13d44d955df7796d3f8b619dde4219df2cfb",
+      "sha256": "139ac2ad13f3f00d94e2e1efa9451d2762455ec5641a99dd6a848bc89b9ed7a8",
+      "bytes": 52251,
+      "line_count": 767,
+      "headings": [
+        [1, 1, "Independent pad content copies", 1],
+        [11, 2, "Internal occupied-target foundation — 2026-10-14", 1],
+        [63, 2, "Scheduled pitch across an occupied Copy — 2026-10-17", 1],
+        [90, 3, "Selected-component extension", 1],
+        [127, 2, "Durable intent and the snapshot", 1],
+        [164, 2, "One complete acceptance and durable publication", 1],
+        [213, 2, "Closing and verification boundaries", 1],
+        [242, 2, "Hold/Pair controllers and durable completion — 2026-10-18", 2],
+        [318, 2, "Public Cold/Hold removal, replacement and Close — 2026-10-18", 2],
+        [420, 2, "Owned Hold, rejected Pair and actual editor retarget — 2026-10-18", 2],
+        [487, 2, "Re-Arrange pad interface and original source admission", 3],
+        [548, 2, "Bank36 Native and durable foundations", 4],
+        [695, 2, "Pair settlement across a later Multi Loop change", 5],
+        [717, 2, "Copied finite readers through Seek and later placement", 6],
+        [734, 2, "Saved direct stem sets and source replacement", 7]
+      ],
+      "inbound": {
+        "docs/README.md": [39],
+        "docs/ui-toolkit.md": [66]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["COPY", "PCM", "STATE", "PITCH", "STEM"],
+      "summary": "Empty/occupied Copy plus Hold/Pair/Bank/import and dated bounded proof.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 241],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STATE", "MAN", "E-COPY"],
+          "note": "Fresh musical snapshot/seal/ownACK/config/close, no history token copying."
+        },
+        {
+          "id": 2,
+          "lines": [242, 486],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STATE", "E-COPY"],
+          "note": "Genuine Hold/Pair/removal/retarget/close."
+        },
+        {
+          "id": 3,
+          "lines": [487, 547],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "PCM", "MAN", "E-COPY"],
+          "note": "Re-Arrange pointer/warning/source guard/global middle mute."
+        },
+        {
+          "id": 4,
+          "lines": [548, 694],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STATE", "E-COPY"],
+          "note": "Bank36 aggregate reservation/journal,133retirements,no partial rollback after claim."
+        },
+        {
+          "id": 5,
+          "lines": [695, 716],
+          "classes": ["live", "historical"],
+          "destinations": ["PCM", "STATE", "E-COPY"],
+          "note": "Pair settles postACK despite newer MultiLoop."
+        },
+        {
+          "id": 6,
+          "lines": [717, 733],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "PITCH", "E-COPY"],
+          "note": "Finite copied reader/Seek/Move/Swap; Human incident unreproduced."
+        },
+        {
+          "id": 7,
+          "lines": [734, 767],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "E-COPY"],
+          "note": "Declared saved stems/import custody; broader gates unpassed."
+        }
+      ]
+    },
+    {
+      "path": "docs/pad-owned-pcm-program.md",
+      "blob": "f7b91c1aa75da5d68b7104e0aca47553f13758bc",
+      "sha256": "e5075c5eef0473b4980cbf73b689fd6f7bcf405aa61f2eb2e570f4dd74188116",
+      "bytes": 46172,
+      "line_count": 421,
+      "headings": [
+        [1, 1, "Shared-material PCM and extended pre-Rust delivery program", 1],
+        [347, 2, "Required direct extension 2026-10-11", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [40],
+        "docs/architecture.md": [1061],
+        "docs/beatmap-sync-design.md": [439],
+        "docs/development.md": [680],
+        "docs/key-lock-backend.md": [174],
+        "docs/pcm-cache-residency.md": [89],
+        "docs/pre-rust-extension-20261011.md": [3],
+        "docs/pre-rust-program-coverage.json": [12176],
+        "docs/prepared-stem-publication.md": [15],
+        "docs/stem-generation-setup.md": [13],
+        "docs/ui-toolkit.md": [119],
+        "openspec/changes/add-key-transposition-performance/proposal.md": [32],
+        "openspec/changes/add-rearrange-shared-pad-content/proposal.md": [21],
+        "openspec/changes/adopt-pad-owned-pcm-residency/design.md": [562],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [16]
+      },
+      "map_review_lines": [5, 15],
+      "owner_groups": ["PCM", "COPY", "PITCH", "STEM", "STATE"],
+      "summary": "Whole historical/deferred program; statuses not current implementation truth.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 49],
+          "classes": ["historical", "proposed", "retired"],
+          "destinations": ["SYNC", "E-PROGRAM"],
+          "note": "Old SYNC priorities/anchor/raw-window/profile experiments inactive."
+        },
+        {
+          "id": 2,
+          "lines": [50, 346],
+          "classes": ["historical", "proposed", "live"],
+          "destinations": ["E-PROGRAM", "PCM", "PITCH", "STEM", "STATE"],
+          "note": "P/J/K/R/B48ID cuts; requirements retained, actual code reconciled."
+        },
+        {
+          "id": 3,
+          "lines": [347, 421],
+          "classes": ["historical", "proposed", "live"],
+          "destinations": ["E-PROGRAM"],
+          "note": "E11/hashes/aliases/gates preserved, not queue."
+        }
+      ]
+    },
+    {
+      "path": "docs/pcm-cache-measurements.md",
+      "blob": "ad5a48d5c3fcde669050248dd2dc3cc9ca3b2783",
+      "sha256": "fbc9eda19d4d83859444a82854d12752585257b80618446d9a54b337c67c0881",
+      "bytes": 34167,
+      "line_count": 263,
+      "headings": [
+        [1, 1, "Measured PCM cache and resident-loop acceptance (C3)", 1],
+        [7, 2, "Startup and readiness", 1],
+        [38, 2, "PCM ownership and process memory", 1],
+        [69, 2, "Actual integrity work and cache footprint", 1],
+        [100, 2, "Finite minus current full-storage baseline", 1],
+        [119, 2, "Actual 96-handle pool", 1],
+        [134, 2, "Full-context exceptions and complete analysis", 1],
+        [182, 2, "Unchanged actual 600-second accepted save", 1],
+        [215, 2, "Productive cancellation and last-reader cleanup", 1],
+        [240, 2, "Dry renderer and separate numerical acceptance", 1],
+        [259, 2, "Evidence and freeze binding", 1]
+      ],
+      "inbound": {
+        "docs/architecture.md": [361, 819],
+        "docs/development.md": [261, 451, 475, 616, 622],
+        "docs/key-lock-backend.md": [613],
+        "docs/pcm-cache-residency.md": [8, 459, 527, 1084, 1131, 1166, 1266, 1409, 1430],
+        "openspec/changes/cache-full-pcm-and-resident-loops/tasks.md": [59]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "PITCH", "CORE"],
+      "summary": "Whole dated C3 evidence, not fresh tests or renewed stress target.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 263],
+          "classes": ["historical", "live", "proposed"],
+          "destinations": ["E-C3", "PCM", "PITCH"],
+          "note": "Allocation-vs-process,finite/full,warm hash cost,600s512MiB refusal/test1GiB,96handles/internal32voice,dependency/table hashes; no device guarantee."
+        }
+      ]
+    },
+    {
+      "path": "docs/pcm-cache-residency.md",
+      "blob": "12fc706fecf007f0081e727cbac0f7e13da07cd9",
+      "sha256": "159a5f8c8733976c44f84388aed1489b141accdedf2085e25689db2364233c11",
+      "bytes": 139665,
+      "line_count": 1857,
+      "headings": [
+        [1, 1, "Complete PCM cache and finite loop residency", 1],
+        [34, 2, "Delivered cold path (C1a)", 2],
+        [36, 3, "Complete-extent streaming (X11-LONG)", 2],
+        [328, 2, "Decoder and playback boundary evidence", 3],
+        [371, 2, "Delivered warm reuse and ownership (C1b)", 4],
+        [462, 2, "Finite saved-loop residency (C2a)", 5],
+        [551, 2, "Initial saved finite KEYLOCK ON — 2026-10-12", 6],
+        [674, 2, "Ordinary incoming Loader — 2026-10-13, bounded software gate PASS", 6],
+        [768, 2, "Public complete-source Play and unchanged ALL return — 2026-10-13", 6],
+        [867, 2, "Public active KEY LOCK ON-to-OFF — 2026-10-13", 6],
+        [926, 2, "Complete access and acknowledged controls (C2b)", 7],
+        [1087, 2, "Historical preliminary C1b integrity measurements", 8],
+        [1134, 2, "Audited C0 baseline (historical)", 8],
+        [1169, 2, "Data and time domains", 9],
+        [1200, 2, "Stable capture and full artifact commit", 9],
+        [1257, 2, "Integrity policy and bounded workers", 9],
+        [1283, 2, "Resident geometry and processing context", 9],
+        [1320, 2, "Finite readiness and controls", 9],
+        [1355, 2, "Ownership, retirement and cleanup", 9],
+        [1388, 2, "Bounded implementation and evidence plan", 10],
+        [1446, 2, "Active same-set residency (P5a, 2026-10-11)", 11],
+        [1526, 2, "R0 shared material and content boundary", 11],
+        [1577, 2, "Public GLOBAL with independently audible voices — 2026-10-13", 11],
+        [1667, 2, "Public complete restore sharing and final PCM readers — 2026-10-13", 11],
+        [1755, 2, "Scoped runtime admission and lazy preload policy — 2026-10-13", 11]
+      ],
+      "inbound": {
+        "docs/README.md": [37],
+        "docs/architecture.md": [298, 437, 713],
+        "docs/key-lock-backend.md": [331],
+        "docs/long-source-streaming-validation.md": [9],
+        "docs/native-constant-timing.md": [151],
+        "docs/pad-owned-pcm-program.md": [157, 203, 205, 372, 374, 376],
+        "docs/pre-rust-program-coverage.json": [11433, 11466, 11485, 11554, 11635],
+        "docs/prepared-stem-publication.md": [73, 207, 290],
+        "openspec/changes/adopt-pad-owned-pcm-residency/design.md": [425],
+        "openspec/changes/adopt-pad-owned-pcm-residency/proposal.md": [46, 49, 55, 57],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [172, 177, 289, 474, 498, 524, 532],
+        "openspec/changes/cache-full-pcm-and-resident-loops/design.md": [4],
+        "openspec/changes/cache-full-pcm-and-resident-loops/proposal.md": [29],
+        "rust/README.md": [93]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "PITCH", "STEM", "CORE"],
+      "summary": "Current disk-first/shared/readable finite residency with historical staged proofs/plans.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 33],
+          "classes": ["live", "historical"],
+          "destinations": ["PCM"],
+          "note": "Overview copy-first not universal; compatible incoming can hash/reuse without snapshot."
+        },
+        {
+          "id": 2,
+          "lines": [34, 327],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "E-PCM"],
+          "note": "X11-LONG bounded storage/current live admission."
+        },
+        {
+          "id": 3,
+          "lines": [328, 370],
+          "classes": ["live", "historical"],
+          "destinations": ["PCM", "BPM", "KEY", "E-PCM"],
+          "note": "Decoder origin,gapless=false,priming,FFT transform."
+        },
+        {
+          "id": 4,
+          "lines": [371, 461],
+          "classes": ["live", "historical"],
+          "destinations": ["PCM", "E-PCM"],
+          "note": "Fresh complete-integrity warm reuse/independent leases."
+        },
+        {
+          "id": 5,
+          "lines": [462, 550],
+          "classes": ["live", "historical"],
+          "destinations": ["PCM"],
+          "note": "CompleteSourceIdentity versus ResidentSourceView."
+        },
+        {
+          "id": 6,
+          "lines": [551, 925],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "PITCH", "STEM", "RT", "E-PCM"],
+          "note": "SavedON,NoHint disk-first finite8bar,ALL/play/activeOFF; ownACK."
+        },
+        {
+          "id": 7,
+          "lines": [926, 1086],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STATE", "E-PCM"],
+          "note": "Complete waveform/export/analysis/readiness."
+        },
+        {
+          "id": 8,
+          "lines": [1087, 1168],
+          "classes": ["historical"],
+          "destinations": ["E-PCM"],
+          "note": "Preliminary C1/C0 measurements/source line facts historical."
+        },
+        {
+          "id": 9,
+          "lines": [1169, 1387],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "RT", "E-PCM"],
+          "note": "Identity/time/capture/integrity/geometry/readiness/retirement."
+        },
+        {
+          "id": 10,
+          "lines": [1388, 1445],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM", "E-PROGRAM"],
+          "note": "Historical delivery plan."
+        },
+        {
+          "id": 11,
+          "lines": [1446, 1857],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "PITCH", "STATE", "E-PCM"],
+          "note": "Same-set/shared/global inheritance/restore/lazy budgets and scoped tests."
+        }
+      ]
+    },
+    {
+      "path": "docs/portable-windows.md",
+      "blob": "85102c99cafbe4e61ebc81eb4489324b7bfd5446",
+      "sha256": "e0d04ca89c9b54b780577a9faaf9430ddaf3215585e54f9d25e3f61daaf842d3",
+      "bytes": 21480,
+      "line_count": 330,
+      "headings": [
+        [1, 1, "Portable Looper for Windows x64", 1],
+        [13, 2, "Install, start and update", 1],
+        [196, 2, "Installer maintenance and validation", 2],
+        [286, 2, "Advanced maintainer bundle utility", 3],
+        [320, 3, "Source Map editor Native compatibility", 4]
+      ],
+      "inbound": {
+        "AGENTS.md": [390],
+        "README.md": [92],
+        "docs/README.md": [24],
+        "docs/pad-content-copy.md": [56]
+      },
+      "map_review_lines": [113, 320, 322],
+      "owner_groups": ["SETUP", "CORE", "PITCH", "STATE", "RECORD", "RETIRED"],
+      "summary": "Keep generic relocatable setup; terminal map preflight contradicts current absence checks.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 195],
+          "classes": ["live", "historical"],
+          "destinations": ["SETUP", "MAN"],
+          "note": "Actual install/update/runtime/models/ownership/failure/rollback."
+        },
+        {
+          "id": 2,
+          "lines": [196, 285],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["SETUP", "DEV"],
+          "note": "Reflective API/Native custody; not clean-Windows/device acceptance."
+        },
+        {
+          "id": 3,
+          "lines": [286, 319],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["SETUP", "DEV"],
+          "note": "Advanced bundle distinct from ordinary install; optional-only BeatThis stale."
+        },
+        {
+          "id": 4,
+          "lines": [320, 330],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC", "SETUP"],
+          "note": "Source Map preflight retired; bootstrap rejects SourceBeatmap."
+        }
+      ]
+    },
+    {
+      "path": "docs/pre-rust-extension-20261011.md",
+      "blob": "25b1f8eb7103c9dde1959bf0608b1ea01354e089",
+      "sha256": "c2efbe9d7a4d4c5db342faab8992ab16bb9b41ff1fd9f08cd649bc8e4c160fe4",
+      "bytes": 31004,
+      "line_count": 76,
+      "headings": [
+        [1, 1, "Direct pre-Rust extension — 2026-10-11", 1],
+        [7, 2, "Required behavior, normative owners and actual exit gates", 1],
+        [41, 2, "Additive dependency and delivery order", 2],
+        [60, 2, "Concrete source seams and bounded implementation choices", 3],
+        [72, 2, "Effective contract lineage and stop boundary", 4]
+      ],
+      "inbound": {
+        "docs/README.md": [97],
+        "docs/architecture.md": [1313],
+        "docs/development.md": [769],
+        "docs/key-lock-backend.md": [3638],
+        "docs/pad-owned-pcm-program.md": [349],
+        "docs/pre-rust-program-coverage.json": [12175],
+        "docs/stem-generation-setup.md": [212],
+        "docs/ui-toolkit.md": [658],
+        "openspec/changes/adopt-pad-owned-pcm-residency/design.md": [689],
+        "openspec/changes/adopt-pad-owned-pcm-residency/proposal.md": [106],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [446]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "PITCH", "STEM", "STATE", "RECORD"],
+      "summary": "Historical20 E11 requirements/DAG/gates, only confirmed facts extract.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 40],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Original requirement/owner/exit table unchanged."
+        },
+        {
+          "id": 2,
+          "lines": [41, 59],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Historical sequence inactive."
+        },
+        {
+          "id": 3,
+          "lines": [60, 71],
+          "classes": ["historical", "proposed", "live"],
+          "destinations": ["E-PROGRAM", "PCM", "PITCH", "STEM", "STATE", "RT"],
+          "note": "Source seams; global-KeyLock overwrite and WAV-default claims superseded."
+        },
+        {
+          "id": 4,
+          "lines": [72, 76],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Lineage/STOP/final gates retained."
+        }
+      ]
+    },
+    {
+      "path": "docs/pre-rust-program-coverage.json",
+      "blob": "2aac6ba18894fb5446f168fcbe0db68f6063c6bb",
+      "sha256": "f2ecabc66c1c649c916015b0e270858c6bdbe91f0446100854917562083ca23a",
+      "bytes": 393695,
+      "line_count": 12212,
+      "headings": [],
+      "inbound": {
+        "docs/README.md": [41],
+        "docs/beatmap-sync-design.md": [439],
+        "docs/pad-owned-pcm-program.md": [226],
+        "docs/pre-rust-extension-20261011.md": [3],
+        "openspec/changes/add-key-transposition-performance/proposal.md": [33],
+        "openspec/changes/add-rearrange-shared-pad-content/proposal.md": [22],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [17, 446]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "COPY", "PITCH", "STEM", "STATE"],
+      "summary": "Historical lossless obligation map, not generated current truth/queue.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 12212],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM"],
+          "note": "Preserve all schema/status/counts/hashes/aliases/crosswalk/25limits/integration catalogs/bounded substatuses; explicit embedded-link relocation, no status promotion."
+        }
+      ]
+    },
+    {
+      "path": "docs/prepared-stem-publication.md",
+      "blob": "cb9e9d22baa8c8e5549fe6b3efd739b369205b25",
+      "sha256": "daef122f055393a4c8eb9aeffb33a4feedd1daa9b38321e7859da84e96063b5d",
+      "bytes": 221808,
+      "line_count": 3277,
+      "headings": [
+        [1, 1, "Source-bound prepared stem publication", 1],
+        [13, 2, "Native API and ownership", 1],
+        [173, 2, "Artifacts and restoration", 1],
+        [266, 2, "Remaining G3 boundaries", 2],
+        [292, 2, "Pending R0 origin independent versions", 2],
+        [307, 2, "L1 effective generation identity — 2026-10-11", 3],
+        [400, 2, "L2 offline source custody and joint disk commit — 2026-10-11", 3],
+        [500, 2, "L3 finite NormalLoop new-set adoption — 2026-10-11", 4],
+        [554, 3, "Complete resident NormalLoop new-set adoption — 2026-10-12", 4],
+        [619, 3, "Current resident Tail new-set adoption with KEY LOCK ON — 2026-10-12", 4],
+        [690, 3, "Public StemController adoption after acknowledged Tail Seek — 2026-10-12", 4],
+        [742, 3, "Running KEY LOCK OFF Tail with complete resident source — 2026-10-12", 4],
+        [795, 3, "Paused nonmusical Tail waits for own resumed effectiveness — 2026-10-12", 4],
+        [848, 3, "Running nonmusical Intro new-set adoption — 2026-10-12", 4],
+        [902, 3, "Paused Intro and accepted-musical Intro/Tail adoption — 2026-10-12", 4],
+        [982, 3, "Own Seek and complete-resident partial loops — 2026-10-12", 4],
+        [1060, 3, "Consolidated task3.3 domain closure — 2026-10-12", 4],
+        [1080, 3, "Consolidated task3.2 closure — 2026-10-12", 4],
+        [1106, 3, "Sidebar distinguishes saved replacement and last confirmed audio", 5],
+        [1140, 3, "Productive V1 replacement and actual final-reader retirement", 5],
+        [1176, 3, "Queued V2 Unload and actual final-reader cleanup", 5],
+        [1222, 3, "Saved independent C after A's final audio readers and Unload", 5],
+        [1271, 3, "Actual Engine shutdown, late leases and sharing retry", 5],
+        [1292, 3, "Queued targets changed after retirement admission", 5],
+        [1314, 3, "Paired PCM unknown child after admission and actual Native readers", 5],
+        [1361, 3, "Shared running Python job after its final public Unload", 5],
+        [1413, 3, "Postcommit action custody after a public Unload", 5],
+        [1457, 3, "Actual post-admission external/reparse containment", 5],
+        [1479, 3, "Task4.2 software owner-family consolidation", 5],
+        [1526, 3, "Seek and one-shot final-reader lifetime — 2026-10-12", 5],
+        [1601, 3, "Frozen unfinished handover and own Unload — 2026-10-12", 5],
+        [1657, 3, "Progressive frozen readers and retained-A Native — 2026-10-12", 5],
+        [1747, 3, "Native current-bank eligibility does not transfer to retained A", 5],
+        [1786, 3, "Bounded BPM and KEY LOCK OFF continuation evidence", 6],
+        [1822, 3, "Bounded new-set rate-smoothing evidence", 6],
+        [1852, 3, "Stopped new-set replacement and ordinary Play", 6],
+        [1896, 3, "Stopped replacement and ordinary Play with KEY LOCK OFF", 6],
+        [1919, 3, "First new set after an already productive FullMix voice was paused", 6],
+        [1957, 3, "Public empty handover and a deferred third complete set", 6],
+        [2000, 3, "Public FullMix withdraws an actually queued V2 adoption before claim", 6],
+        [2039, 3, "Public queue-full admission retains V1 and requires explicit ALL retry", 6],
+        [2079, 3, "Public worker Adopt-post failure after successful Capture", 6],
+        [2119, 3, "Public BPM target and productive replacement", 6],
+        [2169, 3, "Public live BPM after an already queued replacement Adopt", 6],
+        [2228, 3, "Public live BPM rejection and dry retry with KEY LOCK OFF", 6],
+        [2276, 3, "Public source assignment fences old-source V2 before replacement ACK", 6],
+        [2321, 3, "Public Play of the acknowledged replacement original", 6],
+        [2363, 3, "Public Unload cancels queued V2 before its own callback stop", 6],
+        [2408, 3, "Public KEY LOCK ON confirms the playing replacement original", 6],
+        [2452, 3, "New original adopts live stems after its own public KEY LOCK ON", 6],
+        [2501, 3, "New original prepares and adopts its own live dry stems", 6],
+        [2553, 3, "Public loop expansion requires fresh V2 preparation", 6],
+        [2604, 3, "Ordinary public Play supersedes an unclaimed queued V2 adoption", 6],
+        [2654, 3, "Public mask supersedes an actually queued V2 adoption before claim", 6],
+        [2699, 3, "Latest public mask during a claimed nonempty V2 handover", 6],
+        [2744, 3, "Historical fresh candidate rejection after genuine paused Intro Seek", 7],
+        [2772, 3, "Fresh public adoption during an ongoing BPM glide", 8],
+        [2802, 3, "Public live BPM while an already effective V1 is paused", 8],
+        [2847, 3, "Public KEY LOCK OFF first candidate after Pause", 8],
+        [2877, 3, "Public paused replacement after V1's own effect", 8],
+        [2905, 3, "Real worker Capture deadline and unchanged late Capture", 8],
+        [2949, 2, "Public A birth, ordinary B assignment and candidate readers — 2026-10-13", 9],
+        [3040, 2, "Piano pitch and live Generate mode acknowledgement — 2026-10-17", 9],
+        [3087, 2, "Public Generate completion and live model replacement — 2026-10-13", 9],
+        [3188, 2, "B1 software foundation: independent interests and original outcomes", 10],
+        [3226, 2, "B1 confirmed operation and cancellation ownership", 10]
+      ],
+      "inbound": {
+        "docs/README.md": [45],
+        "docs/accepted-constant-timing.md": [101],
+        "docs/architecture.md": [313, 645, 663],
+        "docs/key-lock-backend.md": [341],
+        "docs/native-constant-timing.md": [422, 658],
+        "docs/pad-owned-pcm-program.md": [376, 379],
+        "docs/pcm-cache-residency.md": [1448],
+        "docs/pre-rust-program-coverage.json": [11554],
+        "docs/stem-generation-setup.md": [201, 214, 221],
+        "openspec/changes/extend-shared-stem-generation/design.md": [6, 274, 324, 373, 393, 435, 688],
+        "openspec/changes/extend-shared-stem-generation/proposal.md": [41],
+        "openspec/changes/extend-shared-stem-generation/tasks.md": [57, 63, 78, 103, 129, 135],
+        "rust/README.md": [5]
+      },
+      "map_review_lines": [1710],
+      "owner_groups": ["STEM", "PCM", "PITCH", "STATE", "TIMING"],
+      "summary": "Current stem phases/currentness and dated proofs with obsolete early scope.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 265],
+          "classes": ["live", "historical"],
+          "destinations": ["STEM", "PCM", "RT", "E-STEM"],
+          "note": "Source tickets/immutable five-artifact pair/timing/window/ownACK/four-component shared cursor."
+        },
+        {
+          "id": 2,
+          "lines": [266, 306],
+          "classes": ["historical", "proposed", "retired"],
+          "destinations": ["E-STEM", "E-PROGRAM", "SYNC"],
+          "note": "Early G3/R0 slot/pending/map prose obsolete, not current live-generation prohibition."
+        },
+        {
+          "id": 3,
+          "lines": [307, 499],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "PCM", "E-STEM"],
+          "note": "L1 captured provenance/fingerprint and L2 leased source/joint commit."
+        },
+        {
+          "id": 4,
+          "lines": [500, 1105],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "PITCH", "PCM", "E-STEM"],
+          "note": "L3 finite/complete Normal/Intro/Tail,ON/OFF,pause/resume/seek/adoption closure."
+        },
+        {
+          "id": 5,
+          "lines": [1106, 1785],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "STATE", "PCM", "E-STEM"],
+          "note": "Sidebar,V1/V2/A/B/C workers/last-reader/unknown/reparse/freeze."
+        },
+        {
+          "id": 6,
+          "lines": [1786, 2743],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "PITCH", "RT", "E-STEM"],
+          "note": "Mode/rate/play/pause/queuefull/postACK/deadline/window/currentness retries."
+        },
+        {
+          "id": 7,
+          "lines": [2744, 2771],
+          "classes": ["historical"],
+          "destinations": ["E-STEM"],
+          "note": "Former paused-Intro rejection superseded by later902-1079 supported software domain."
+        },
+        {
+          "id": 8,
+          "lines": [2772, 2948],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "PITCH", "RT", "E-STEM"],
+          "note": "Remaining deadline/window/currentness evidence."
+        },
+        {
+          "id": 9,
+          "lines": [2949, 3187],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "STATE", "PITCH", "E-STEM"],
+          "note": "Public replacement/Piano/Generate/model replacement."
+        },
+        {
+          "id": 10,
+          "lines": [3188, 3277],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STEM", "STATE", "MAN", "E-STEM"],
+          "note": "Fair batch interests/confirm/cancel;Done=saved not audioACK,no216resource acceptance."
+        }
+      ]
+    },
+    {
+      "path": "docs/readable-material-validation.md",
+      "blob": "bd18e58d2bafaab5147d3bdff458422c0100581a",
+      "sha256": "6ea765ba9171d1010bb2baa376e58854d874126d24b7d88978b6efc081d1edad",
+      "bytes": 38138,
+      "line_count": 294,
+      "headings": [
+        [1, 1, "Readable material contract and validation", 1],
+        [18, 2, "Source identity and compatible reuse", 1],
+        [48, 2, "Completed stem reuse and producer custody", 1],
+        [126, 2, "Migration, recovery and exact cleanup", 1],
+        [174, 2, "Execution evidence and retained negatives", 2],
+        [285, 2, "Required remaining integration", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [38],
+        "docs/architecture.md": [1301],
+        "docs/development.md": [700],
+        "docs/pad-owned-pcm-program.md": [355],
+        "docs/pcm-cache-residency.md": [165],
+        "docs/pre-rust-extension-20261011.md": [64],
+        "docs/pre-rust-program-coverage.json": [11489, 11799, 11832, 11865],
+        "openspec/changes/adopt-pad-owned-pcm-residency/design.md": [687],
+        "openspec/changes/adopt-pad-owned-pcm-residency/tasks.md": [538]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["PCM", "STEM", "COPY", "STATE"],
+      "summary": "Full-hash reuse/provenance/exact-birth retirement with dated bounded evidence.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 173],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "E-PCM"],
+          "note": "First canonical leaf,MaterialID vs fullSHA,37/33files/64cap,UNKNOWN/config/inventory/birth/last-reader."
+        },
+        {
+          "id": 2,
+          "lines": [174, 284],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM"],
+          "note": "Dated92packet/child/terminal evidence;NN outputs/ACK doubles not installed neural acceptance."
+        },
+        {
+          "id": 3,
+          "lines": [285, 294],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PCM", "E-PROGRAM"],
+          "note": "Historical remaining list; do not reopen delivered Copy/live adoption/old Goal."
+        }
+      ]
+    },
+    {
+      "path": "docs/scalar-source-coordinates.md",
+      "blob": "71a239ee7da90c6b9bef8c939c3615bd30426c3a",
+      "sha256": "874b357182c1987abbebd9a739a89fb8dd99d5576c3103bd3580792a037ef65a",
+      "bytes": 6105,
+      "line_count": 96,
+      "headings": [
+        [1, 1, "Scalar source coordinates", 1],
+        [6, 2, "Domains and authority", 1],
+        [27, 2, "Projection and markers", 1],
+        [56, 2, "Public address precision", 1],
+        [75, 2, "BPM presentation and publication", 1],
+        [86, 2, "Remaining timing work", 2]
+      ],
+      "inbound": {
+        "docs/README.md": [60],
+        "docs/accepted-constant-timing.md": [146],
+        "docs/architecture.md": [494],
+        "docs/constant-tempo-summary.md": [271],
+        "docs/grid-timing-diagnosis.md": [131],
+        "docs/native-constant-timing.md": [659],
+        "docs/ui-toolkit.md": [407],
+        "rust/README.md": [304]
+      },
+      "map_review_lines": [96],
+      "owner_groups": ["GRID", "CORE", "TIMING"],
+      "summary": "Live signed scalar precision/domain/rounding foundation.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 85],
+          "classes": ["live", "historical"],
+          "destinations": ["RT", "PCM", "STATE", "E-GRID"],
+          "note": "Original/loaded/resident/output domains, once-rounded physical boundaries and binary64 public addressing."
+        },
+        {
+          "id": 2,
+          "lines": [86, 96],
+          "classes": ["historical"],
+          "destinations": ["E-GRID", "SYNC"],
+          "note": "Dated estimator/old future-SYNC progression."
+        }
+      ]
+    },
+    {
+      "path": "docs/selected-backend-bpm.md",
+      "blob": "74d9ae4334cba78c7e9d08a23a9a6d2de6f53444",
+      "sha256": "b037c4ae89f8bfd0407b1660e0954f56d246e9b267f262a2f25acf5607b4e40b",
+      "bytes": 9972,
+      "line_count": 157,
+      "headings": [
+        [1, 1, "Complete selected-backend BPM metadata", 1],
+        [9, 2, "Frozen policies", 1],
+        [74, 2, "Integration and bounds", 2],
+        [107, 2, "Evaluation boundary", 3]
+      ],
+      "inbound": {
+        "docs/README.md": [62],
+        "docs/architecture.md": [67],
+        "docs/constant-tempo-summary.md": [4],
+        "docs/offline-analysis.md": [120],
+        "openspec/changes/adopt-beat-this-analysis/design.md": [137],
+        "openspec/changes/adopt-beat-this-analysis/tasks.md": [147],
+        "rust/README.md": [148]
+      },
+      "map_review_lines": [122],
+      "owner_groups": ["DIAG", "BPM"],
+      "summary": "Live selected_bpm diagnostic metadata, separate app_tempo authority.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 73],
+          "classes": ["live", "historical"],
+          "destinations": ["BPM", "E-B2", "E-G2"],
+          "note": "OLS/robust/regional frozen policies,unverified ordinals."
+        },
+        {
+          "id": 2,
+          "lines": [74, 106],
+          "classes": ["live", "historical", "retired"],
+          "destinations": ["BPM", "E-B2", "SYNC"],
+          "note": "Errors/retirement live; map-era adoption prose not main authority."
+        },
+        {
+          "id": 3,
+          "lines": [107, 157],
+          "classes": ["historical", "proposed", "retired"],
+          "destinations": ["E-B2", "E-G2", "SYNC"],
+          "note": "Unsupported five-track fits,600s parity/conditional lattice,retired map plan; no seal/quality pass."
+        }
+      ]
+    },
+    {
+      "path": "docs/source-map-guide.md",
+      "blob": "efeee0b9afbcebecf5e5946e3ed56537c701a681",
+      "sha256": "37b63c30dd59ad2bc7561abecacdc5e1302b3506cfa13f77cf53ed4c0fecb7c7",
+      "bytes": 4987,
+      "line_count": 83,
+      "headings": [
+        [4, 1, "BPM, SYNC and source maps", 2],
+        [43, 2, "Normal use", 4],
+        [60, 2, "Optional manual correction", 4],
+        [74, 2, "Pending maps and recovery", 4]
+      ],
+      "inbound": {
+        "docs/beatmap-sync-design.md": [5, 654]
+      },
+      "map_review_lines": [1, 4, 6, 26, 30, 33, 35],
+      "owner_groups": ["RETIRED", "BPM", "GRID"],
+      "summary": "Retired map UI; verified ordinary BPM/device facts separately reusable.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 3],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Retirement notice."
+        },
+        {
+          "id": 2,
+          "lines": [4, 26],
+          "classes": ["retired", "historical", "live"],
+          "destinations": ["SYNC", "BPM", "MAN"],
+          "note": "Scalar/device observations need current-source verification."
+        },
+        {
+          "id": 3,
+          "lines": [27, 42],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Removed controls/compatibility/MultiLoop-dependent phase policy."
+        },
+        {
+          "id": 4,
+          "lines": [43, 83],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Removed normal/correction/recovery UI, not current instructions."
+        }
+      ]
+    },
+    {
+      "path": "docs/stem-generation-setup.md",
+      "blob": "6a461573a7ccad2e385508bf54962350608edd3e",
+      "sha256": "e8bf89302cb2a0f0a389a2a8c78981d051f2dd1199da6fba397e18ea27b99aad",
+      "bytes": 12594,
+      "line_count": 226,
+      "headings": [
+        [1, 1, "Stem Generation Setup", 1],
+        [11, 2, "What `uv sync` Installs", 1],
+        [58, 2, "Install The Exact BS-RoFormer Model", 3],
+        [95, 2, "Install FFmpeg", 3],
+        [128, 2, "Install The Demucs Model", 3],
+        [149, 2, "Verify Stem Prerequisites", 3],
+        [157, 2, "CUDA", 3],
+        [174, 2, "Selection And Rollback", 3],
+        [193, 2, "Expected Runtime Errors", 4],
+        [210, 2, "Direct live/long-source extension", 5]
+      ],
+      "inbound": {
+        "AGENTS.md": [473],
+        "README.md": [211, 278],
+        "docs/README.md": [26, 44],
+        "docs/architecture.md": [628],
+        "docs/development.md": [40],
+        "docs/grid-timing-diagnosis.md": [197],
+        "openspec/changes/archive/2026-06-08-add-offline-stem-cache/proposal.md": [45],
+        "openspec/changes/archive/2026-06-08-add-stem-performance-controls/proposal.md": [33]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["SETUP", "STEM", "PCM"],
+      "summary": "Keep stable setup/pins; reconcile old eager/pad-root statements.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 12],
+          "classes": ["live"],
+          "destinations": ["SETUP", "STEM"],
+          "note": "Fresh separator and RT boundary."
+        },
+        {
+          "id": 2,
+          "lines": [13, 23],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-STEM", "E-PROGRAM"],
+          "note": "Old eager/global-container/pending preface superseded."
+        },
+        {
+          "id": 3,
+          "lines": [24, 192],
+          "classes": ["live", "historical"],
+          "destinations": ["SETUP", "STEM", "MAN", "E-CUDA"],
+          "note": "Pinned dependencies/models/chunks/device/fallback; observations dated."
+        },
+        {
+          "id": 4,
+          "lines": [193, 209],
+          "classes": ["live", "historical"],
+          "destinations": ["STEM", "PCM", "MAN", "E-STEM"],
+          "note": "Error labels useful; old samples/stems/#pad not universal current path."
+        },
+        {
+          "id": 5,
+          "lines": [210, 226],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["PCM", "STEM", "E-STEM", "E-PCM", "E-PROGRAM"],
+          "note": "Delivered long/L1/live-generation contracts and scoped evidence; bulk queue text historical."
+        }
+      ]
+    },
+    {
+      "path": "docs/sync-archive.md",
+      "blob": "6175e48e9e8075a4e948a68c1c5923650b731990",
+      "sha256": "46c199dec1110172828bf95c21949ccc108250f13326e33b06008b450a551e64",
+      "bytes": 1421,
+      "line_count": 24,
+      "headings": [
+        [1, 1, "Archived source SYNC and REALTIME BPM", 1]
+      ],
+      "inbound": {
+        "docs/README.md": [36],
+        "docs/accepted-map-render-comparison.md": [1],
+        "docs/architecture.md": [581],
+        "docs/beatmap-sync-design.md": [1],
+        "docs/beatmap-sync-research.md": [1],
+        "docs/constant-bpm-guide.md": [6],
+        "docs/sync-diagnostics.md": [1]
+      },
+      "map_review_lines": [1, 7],
+      "owner_groups": ["RETIRED", "CORE"],
+      "summary": "Historical removal/listening decision; positive constant baseline is not SYNC acceptance.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 24],
+          "classes": ["historical", "retired"],
+          "destinations": ["SYNC", "MAP"],
+          "note": "949cff1d accepted baseline versus27ef7f87 unaccepted probe; exact two-track/Tap context; main external locator after branch verification."
+        }
+      ]
+    },
+    {
+      "path": "docs/sync-diagnostics.md",
+      "blob": "56b4001e1000f84fde8253713cbdae2a4c86006f",
+      "sha256": "c3e76f4b7427840ef150370a9557b9e5f88306f8c35bf218bd64729e278c8a59",
+      "bytes": 2597,
+      "line_count": 42,
+      "headings": [
+        [3, 1, "Timing log for a listening test", 1]
+      ],
+      "inbound": {},
+      "map_review_lines": [],
+      "owner_groups": ["RETIRED", "CORE"],
+      "summary": "Removed timing-log/cohort evidence protocol.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 42],
+          "classes": ["retired", "historical"],
+          "destinations": ["SYNC"],
+          "note": "Consumed source versus audible, same-frame cohort,10minute/16MiB/privacy/gap/crash/offRT truth."
+        }
+      ]
+    },
+    {
+      "path": "docs/todos.md",
+      "blob": "3b02fdacef2adf0b294d04a003147eee51c89694",
+      "sha256": "9c756c24b9d348ae189702e7fef17ec991a4ceeacd145b93f737498b4e666498",
+      "bytes": 1983,
+      "line_count": 62,
+      "headings": [
+        [1, 1, "Project TODOs", 1],
+        [13, 2, "How To Use This File", 1],
+        [37, 2, "Inbox", 1],
+        [41, 2, "Bugs", 1],
+        [45, 2, "Features", 1],
+        [49, 2, "Refactors And Chores", 2],
+        [60, 2, "Documentation", 3]
+      ],
+      "inbound": {
+        "AGENTS.md": [475, 478],
+        "README.md": [282, 286],
+        "docs/README.md": [68, 89],
+        "docs/development.md": [743]
+      },
+      "map_review_lines": [54],
+      "owner_groups": ["PITCH"],
+      "summary": "Preserve optional six-PAD note; historical priority is not activation.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 48],
+          "classes": ["live"],
+          "destinations": ["TODO"],
+          "note": "Human-only TODO policy and empty inbox."
+        },
+        {
+          "id": 2,
+          "lines": [49, 59],
+          "classes": ["live", "historical"],
+          "destinations": ["TODO", "E-PITCH"],
+          "note": "Explicit optional note; old SYNC priority historical."
+        },
+        {
+          "id": 3,
+          "lines": [60, 62],
+          "classes": ["live"],
+          "destinations": ["TODO"],
+          "note": "Empty documentation TODO."
+        }
+      ]
+    },
+    {
+      "path": "docs/ui-toolkit.md",
+      "blob": "14d7cfde49db7d603ab0005fa0de2a2512da48ed",
+      "sha256": "98cef7af095ce6d40626600dab85524b3ccc72537fbd35a3199131eaa28b399f",
+      "bytes": 35416,
+      "line_count": 664,
+      "headings": [
+        [1, 1, "UI Toolkit: Dear ImGui Guidelines", 1],
+        [12, 2, "Goals", 1],
+        [20, 2, "Core/UI Separation Pattern (required)", 1],
+        [54, 2, "Current UI Runtime Flow", 1],
+        [92, 2, "Project File Map", 1],
+        [117, 2, "State Ownership", 2],
+        [161, 2, "`UiContext` Contract", 3],
+        [165, 3, "Read path", 3],
+        [180, 3, "Write path", 3],
+        [218, 2, "Immediate-Mode Rules", 3],
+        [241, 2, "What Belongs In The Core", 3],
+        [260, 2, "What Belongs In The UI", 3],
+        [281, 2, "Slow Work And Background Tasks", 3],
+        [315, 2, "Audio Boundary", 3],
+        [345, 2, "Waveform Editor Pattern", 4],
+        [420, 2, "Input Mapping Pattern", 5],
+        [456, 2, "Testing Implications", 5],
+        [497, 2, "Change Checklist", 5],
+        [512, 2, "Implemented Key + Transposition engineering surface", 6],
+        [571, 2, "Re-Arrange surface", 6],
+        [594, 2, "All-loaded stem generation", 7],
+        [616, 2, "All-loaded stem deletion", 7],
+        [656, 2, "Direct extension2026-10-11 and remaining acceptance", 8]
+      ],
+      "inbound": {
+        "AGENTS.md": [472],
+        "README.md": [277],
+        "docs/README.md": [25, 43],
+        "openspec/changes/extend-shared-stem-generation/tasks.md": [235]
+      },
+      "map_review_lines": [],
+      "owner_groups": ["STATE", "CORE", "GRID", "COPY", "PITCH", "STEM", "RECORD"],
+      "summary": "Thin UI/current captured actions with obsolete early pending/f32/default claims.",
+      "sections": [
+        {
+          "id": 1,
+          "lines": [1, 116],
+          "classes": ["live"],
+          "destinations": ["STATE", "DEV"],
+          "note": "Controller/UiContext/Project/Session/Native frame/close boundary."
+        },
+        {
+          "id": 2,
+          "lines": [117, 160],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "PCM", "E-PROGRAM"],
+          "note": "Scalar seed/display live; lazy-stem pending prose historical."
+        },
+        {
+          "id": 3,
+          "lines": [161, 344],
+          "classes": ["live"],
+          "destinations": ["STATE", "DEV"],
+          "note": "Selectors/actions/confirmation/immediate-mode/background/RT."
+        },
+        {
+          "id": 4,
+          "lines": [345, 419],
+          "classes": ["live", "historical"],
+          "destinations": ["STATE", "RT", "MAN"],
+          "note": "Waveform geometry/readiness/precision; f32 BPM and bootstrap wording need current-source correction."
+        },
+        {
+          "id": 5,
+          "lines": [420, 511],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "DEV", "E-STEM"],
+          "note": "Captured MIDI/dispatch/input/layout tests, unpassed Human visual."
+        },
+        {
+          "id": 6,
+          "lines": [512, 593],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "PITCH", "PCM", "MAN", "E-COPY", "E-PITCH"],
+          "note": "Current Piano/correction/retrigger/Re-Arrange, bounded evidence."
+        },
+        {
+          "id": 7,
+          "lines": [594, 655],
+          "classes": ["live", "historical", "proposed"],
+          "destinations": ["STATE", "STEM", "MAN", "E-STEM"],
+          "note": "All-loaded generation/deletion, own interests and logical versus physical settlement."
+        },
+        {
+          "id": 8,
+          "lines": [656, 664],
+          "classes": ["historical", "proposed"],
+          "destinations": ["E-PROGRAM", "STATE", "MAN"],
+          "note": "RECORD-pending/execution prose historical; gates not passed."
+        }
+      ]
+    }
+  ]
+}
