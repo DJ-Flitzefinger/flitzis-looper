@@ -1,6 +1,7 @@
 //! An active constant-rate piano retrigger owns the same original attack as an early peer.
 #![cfg(windows)]
 
+use super::preparation_deadline_tests::WorkerGate;
 use super::*;
 use crate::audio_engine::input_mapping::PitchPadProjection;
 use crate::audio_engine::pitch_actions::CapturedPitchAction;
@@ -114,10 +115,16 @@ fn compare_active_retrigger(rate: f64, policy: &str) {
     let old_native = late.voice(0).stretch.native_state_address();
     let old_lifetime = late.voice(0).history_lifetime.clone();
     let late_action = late.capture(0, "pitch.extra:7:set_retrigger");
+    let gate =
+        (policy == "first_sound_at_grid").then(|| WorkerGate::for_pitch_return(&late_action));
     assert_eq!(late_action.original_due_frame(), ORIGINAL_TARGET);
     late.publish(&late_action);
     assert_eq!(late_action.execution_target(), LATE_EXECUTION);
-    late.wait_worker(&[&late_action]);
+    if let Some(gate) = &gate {
+        assert_eq!(gate.wait_for(true), None);
+    } else {
+        late.wait_worker(&[&late_action]);
+    }
     let old_before_e = late.render_to(LATE_EXECUTION);
     assert!(old_before_e.iter().any(|sample| sample.abs() > 0.01));
     assert!(!late_action.effective());
@@ -125,6 +132,10 @@ fn compare_active_retrigger(rate: f64, policy: &str) {
     assert_eq!(late.voice(0).generation, old_generation);
     assert_eq!(late.voice(0).stretch.native_state_address(), old_native);
     assert_eq!(old_lifetime.load(Ordering::Acquire), old_generation);
+
+    if let Some(gate) = &gate {
+        gate.release_pitch_into(&mut late, &late_action);
+    }
 
     // Only the declared absolute T/E boundaries exclude the old voices. Every
     // sample actually emitted at/after late E participates, including first FIFO PCM.
@@ -204,6 +215,7 @@ fn active_equal_execution_distinct_pitch_retriggers_keep_both_original_attacks_a
     let old_lifetime = fixture.voice(0).history_lifetime.clone();
     let first = fixture.capture(0, "pitch.extra:7:set_retrigger");
     let second = fixture.capture(0, "pitch.extra:3:set_retrigger");
+    let gate = WorkerGate::for_pitch(&second);
     assert!(first.sequence() < second.sequence());
     assert_eq!(first.content_key(), second.content_key());
     assert_eq!(first.original_due_frame(), EARLY_CAPTURE);
@@ -218,8 +230,10 @@ fn active_equal_execution_distinct_pitch_retriggers_keep_both_original_attacks_a
     assert_eq!(first.execution_target(), execution);
     assert_eq!(second.execution_target(), execution);
     assert_eq!(fixture.scheduler.len(), 2);
-    fixture.wait_worker(&[&first, &second]);
+    gate.wait_for(false);
     fixture.render_to(execution);
+    gate.release();
+    fixture.wait_worker(&[&first, &second]);
     assert!(!first.effective() && !second.effective());
     assert_eq!(fixture.starts(0), 0);
     assert_eq!(fixture.voice(0).generation, old_generation);
@@ -268,8 +282,9 @@ fn active_prepared_new_launch_survives_the_old_voices_pause_resume_aba() {
     let old_lifetime = fixture.voice(0).history_lifetime.clone();
     let old_position = fixture.voice(0).source_playback.position();
     let action = fixture.capture(0, "pitch.extra:7:set_retrigger");
+    let gate = WorkerGate::for_pitch_return(&action);
     fixture.publish(&action);
-    fixture.wait_worker(&[&action]);
+    assert_eq!(gate.wait_for(true), None);
     let execution = EARLY_CAPTURE + 8192;
     assert_eq!(action.original_due_frame(), EARLY_CAPTURE);
     assert_eq!(action.execution_target(), execution);
@@ -291,6 +306,7 @@ fn active_prepared_new_launch_survives_the_old_voices_pause_resume_aba() {
     assert!(!action.effective());
     assert_eq!(fixture.voice(0).generation, old_generation);
     assert_eq!(fixture.voice(0).stretch.native_state_address(), old_native);
+    gate.release_pitch_into(&mut fixture, &action);
     let mut beginning = fixture.render(1);
     assert_applied(&action, EARLY_CAPTURE, execution);
     assert_eq!(fixture.starts(0), 1);

@@ -29,16 +29,26 @@ impl PitchRuntime {
             if self.preceding_endpoint(index).is_some() {
                 continue;
             }
-            let Some(PreparedActionWork::Ordinary(work)) = self.slots[index].work.as_ref() else {
+            let Some(work) = self.slots[index].work.as_mut() else {
                 continue;
             };
-            let Ok(plan) = mixer.plan_ordinary_early_completion(work, execution, callback) else {
-                continue;
+            let result = match work {
+                PreparedActionWork::Ordinary(work) => {
+                    let Ok(plan) = mixer.plan_ordinary_early_completion(work, execution, callback)
+                    else {
+                        continue;
+                    };
+                    work.bind_early_completion(plan)
+                }
+                PreparedActionWork::Pitch(work) => {
+                    let Ok(plan) = mixer.plan_pitch_early_completion(work, execution, callback)
+                    else {
+                        continue;
+                    };
+                    work.bind_early_completion(plan)
+                }
             };
-            let Some(PreparedActionWork::Ordinary(work)) = self.slots[index].work.as_mut() else {
-                unreachable!("the callback retains its original work");
-            };
-            if let Err(reason) = work.bind_early_completion(plan) {
+            if let Err(reason) = result {
                 work.reject(reason);
                 continue;
             }

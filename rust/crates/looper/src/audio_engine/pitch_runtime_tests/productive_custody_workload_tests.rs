@@ -12,6 +12,7 @@ use crate::audio_engine::c3_process_metrics;
 use crate::audio_engine::constants::MAX_SCHEDULED_EVENTS;
 use crate::audio_engine::dsp::PerPadDspChain;
 use crate::audio_engine::ordinary_endpoint_reserve_tests::adopt_current_source_ids;
+use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 use crate::audio_engine::pitch_runtime_tests::source_feed_tests::RawRubberBand;
 use crate::test_memory::{ThreadAllocations, observe_current_thread};
 use rtrb::{Consumer, Producer};
@@ -156,6 +157,8 @@ struct Original {
     content: crate::audio_engine::content_placement::ContentKey,
     original_t: u64,
     execution: u64,
+    admitted_execution: u64,
+    gate: Option<WorkerGate>,
     slot: usize,
     note: i32,
     prepared_native: usize,
@@ -476,9 +479,11 @@ impl Workload {
             self.route.mixer.pad_pitch_intent(slot).unwrap(),
             PitchIntent::new(note, 0).unwrap()
         );
+        let hold_first = self.usage().0 == 0;
         let captured = self.capture(slot, note, midi, false);
         let action = Python::attach(|py| captured.borrow(py).clone());
         assert_eq!(action.original_due_frame(), frame);
+        let gate = hold_first.then(|| WorkerGate::for_pitch(&action));
         self.callback(0); // Same actual frame freezes the original E.
         self.discard_nonattack_feedback();
         assert!(
@@ -493,6 +498,8 @@ impl Workload {
             content: action.content_key(),
             original_t: action.original_due_frame(),
             execution: action.execution_target(),
+            admitted_execution: action.execution_target(),
+            gate,
             slot,
             note,
             captured,
@@ -512,10 +519,19 @@ impl Workload {
     }
 
     fn wait_ready(&mut self, originals: &mut [Original]) {
+        // The first real serial worker has remained unfinished through the entire
+        // admission burst. Only now may all independent Native owners complete.
+        for original in originals.iter_mut() {
+            if let Some(gate) = original.gate.take() {
+                gate.wait_for(false);
+                gate.release();
+                assert_eq!(gate.wait_for(true), None);
+            }
+        }
         let frame = self.route.transport.output_frame();
         let deadline = Instant::now() + HOST_WAIT;
         loop {
-            self.callback(0);
+            self.route.mixer.pitch_runtime.as_mut().unwrap().poll();
             self.discard_nonattack_feedback();
             let runtime = self.route.mixer.pitch_runtime.as_ref().unwrap();
             if originals
@@ -557,11 +573,7 @@ impl Workload {
         }
     }
 
-    fn effect(&mut self, original: &Original) {
-        self.render_to(original.execution);
-        original.assert_original();
-        assert!(!original.action.effective());
-        self.callback(1);
+    fn record_effect(&mut self, original: &Original) {
         assert!(
             original.action.effective(),
             "{:?}",
@@ -615,32 +627,70 @@ impl Workload {
             native: original.prepared_native,
             generation,
         });
-        let mut messages = self.messages.lock().unwrap();
-        let mut attacks = 0;
-        while let Ok(message) = messages.pop() {
-            if let AudioMessage::ContentFeedback {
-                id,
-                cell,
-                lifetime,
-                kind: 1,
-                ..
-            } = message
-            {
-                attacks += 1;
-                assert_eq!(id, original.slot);
-                assert_eq!(cell, original.content.cell().index());
-                assert_eq!(lifetime, original.content.lifetime());
-            } else {
-                assert!(
-                    !matches!(message, AudioMessage::SampleStarted { .. }),
-                    "tracked sources require actual content-tagged attack feedback"
-                );
+    }
+
+    fn effect_batch(&mut self, originals: &mut [Original]) {
+        while originals
+            .iter()
+            .any(|original| !original.action.effective())
+        {
+            let pending: Vec<_> = originals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, original)| (!original.action.effective()).then_some(index))
+                .collect();
+            let frame = self.route.transport.output_frame();
+            // Each newly effective birth contributes a real first output sample.
+            // No empty callback may replace it before this positive callback.
+            self.callback(1);
+            let mut expected = Vec::new();
+            for index in pending {
+                let original = &mut originals[index];
+                if !original.action.effective() {
+                    original.assert_original();
+                    continue;
+                }
+                let execution = original.action.execution_target();
+                assert_eq!(execution, frame);
+                assert!(execution >= original.original_t);
+                assert!(execution < original.admitted_execution);
+                assert_eq!(original.admitted_execution, original.original_t + 8192);
+                original.execution = execution;
+                self.record_effect(original);
+                expected.push((
+                    original.slot,
+                    original.content.cell().index(),
+                    original.content.lifetime(),
+                ));
             }
+            assert!(
+                !expected.is_empty(),
+                "genuinely ready independent work made no progress"
+            );
+            let mut actual = Vec::new();
+            let mut messages = self.messages.lock().unwrap();
+            while let Ok(message) = messages.pop() {
+                match message {
+                    AudioMessage::ContentFeedback {
+                        id,
+                        cell,
+                        lifetime,
+                        kind: 1,
+                        ..
+                    } => {
+                        actual.push((id, cell, lifetime));
+                    }
+                    AudioMessage::SampleStarted { .. } => {
+                        panic!("tracked source lacks own feedback tags")
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                actual, expected,
+                "every distinct original needs its own ordered attack feedback"
+            );
         }
-        assert_eq!(
-            attacks, 1,
-            "each distinct E must have its own attack feedback"
-        );
     }
 
     fn wait_retired(&mut self) {
@@ -706,10 +756,10 @@ fn verify_after_measurement(workload: &Workload) -> f32 {
             for _ in 0..history {
                 assert_eq!(raw.sample(0.0, pitch), 0.0);
             }
-            // Immutable T retains its real preparation lead. Physical source
+            // Immutable T and admitted fallback are distinct from actual E. Physical source
             // age begins at actual E; only H primes the independent Raw Native,
             // and the fresh neutral filter has consumed no unheard PCM.
-            assert_eq!(effect.frame.checked_sub(effect.original_t), Some(8192));
+            assert!(effect.frame >= effect.original_t);
             let filter = PerPadDspChain::new(effect.id, RATE as f32, 1);
             oracles[effect.id] = Some(Oracle {
                 raw,
@@ -807,7 +857,7 @@ fn run_row(row: usize) {
     for id in 0..profile.count {
         let mut originals = [workload.admit(id, 2, false)];
         workload.wait_ready(&mut originals);
-        workload.effect(&originals[0]);
+        workload.effect_batch(&mut originals);
         workload.wait_retired();
         retained.extend(originals);
         workload.settle_controller();
@@ -854,10 +904,8 @@ fn run_row(row: usize) {
         );
         phases.push(json!({"cycle":cycle,"phase":"64_genuinely_ready", "process":c3_process_metrics::snapshot(),
             "claims":prepared.0,"work_allocations":prepared.1.0,"native_constructions":prepared.1.1,
-            "first_E":originals[0].execution,"last_E":originals[CLAIMS-1].execution}));
-        for original in &originals {
-            workload.effect(original);
-        }
+            "first_admitted_E":originals[0].admitted_execution,"last_admitted_E":originals[CLAIMS-1].admitted_execution}));
+        workload.effect_batch(&mut originals);
         workload.wait_retired();
         assert!(originals.iter().all(|original| original.action.effective()));
         retained.extend(originals); // Receipts remain live across every later cycle.
@@ -876,7 +924,7 @@ fn run_row(row: usize) {
         // storage reuse while all successful and rejected receipts are retained.
         let mut recovery = [workload.admit(0, 2, true)];
         workload.wait_ready(&mut recovery);
-        workload.effect(&recovery[0]);
+        workload.effect_batch(&mut recovery);
         workload.wait_retired();
         retained.extend(recovery);
         workload.settle_controller();

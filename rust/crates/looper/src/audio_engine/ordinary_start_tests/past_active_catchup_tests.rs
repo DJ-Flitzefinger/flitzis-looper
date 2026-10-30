@@ -100,11 +100,21 @@ fn compare_past_active_piano(rate: f64, policy: &str, delivery_delay: usize) {
     assert_eq!(action.original_due_frame(), ORIGINAL_TARGET);
     assert_eq!(action.received_timestamp(), timestamp);
     late.wait_worker(&[&action]);
-    late.render_to(execution);
     assert!(!action.effective());
     assert_eq!(late.starts(0), 0);
     assert_eq!(late.voice(0).generation, old_generation);
     assert_eq!(late.voice(0).stretch.native_state_address(), old_native);
+    late.render(0);
+    let execution = action.execution_target();
+    assert_eq!(
+        execution,
+        if policy == "first_sound_at_grid" {
+            callback
+        } else {
+            callback + PREPARATION_LEAD
+        }
+    );
+    late.render_to(execution);
 
     let reference_pcm = render_partitioned(&mut early, EMITTED_FRAMES, &[127, 1, 509, 31, 256]);
     let actual_pcm = render_partitioned(&mut late, EMITTED_FRAMES, &[257, 17, 1, 383, 96]);
@@ -511,8 +521,9 @@ fn past_active_and_paused_new_launch_survives_old_voice_pause_or_independent_bir
                     fixture.mixer.pause_sample_at_output_frame(0, frame);
                     fixture.mixer.resume_sample_at_output_frame(0, frame);
                 }
-                fixture.render_to(action.execution_target());
                 assert!(!action.effective());
+                fixture.render(0);
+                fixture.render_to(action.execution_target());
                 fixture.render(1);
                 assert_eq!(
                     action.state(),

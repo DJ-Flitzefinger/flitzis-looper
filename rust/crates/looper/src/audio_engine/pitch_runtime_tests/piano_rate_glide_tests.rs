@@ -81,7 +81,7 @@ fn initial_birth(route: &mut RateRoute, id: usize, speed: f64) -> Original {
 }
 
 fn initial_birth_note(route: &mut RateRoute, id: usize, speed: f64, note: i32) -> Original {
-    let original = route.admit(id, note, false);
+    let original = route.admit_held(id, note, false);
     initial_birth_admitted(route, id, speed, original)
 }
 
@@ -698,6 +698,7 @@ fn apply_wet_attack_from(
     let live_phase = route.references[0].as_ref().unwrap().clock.phase();
     assert!((live_phase - expected.phase()).abs() < 2e-7);
     let peer_at_e = VoiceWitness::capture(route, 1);
+    route.release_return(&mut attack);
     route.callback(0);
     assert!(attack.action.effective(), "{:?}", attack.action.reason());
     assert_eq!(attack.action.state(), "applied");

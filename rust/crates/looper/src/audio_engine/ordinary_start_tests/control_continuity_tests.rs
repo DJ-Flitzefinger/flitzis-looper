@@ -329,7 +329,7 @@ fn unrelated_pad_loop_change_preserves_the_original_and_fresh_retrigger_launch()
             };
             assert_eq!(
                 execution,
-                if matches!(kind, LaunchKind::Ordinary) && policy == "first_sound_at_grid" {
+                if policy == "first_sound_at_grid" {
                     ORIGINAL_FRAME
                 } else {
                     EXECUTION_FRAME

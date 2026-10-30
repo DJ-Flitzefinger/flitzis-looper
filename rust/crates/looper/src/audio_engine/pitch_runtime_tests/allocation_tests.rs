@@ -80,7 +80,10 @@ fn started_fixture(
     callback_into(&mut fixture, &mut [], &mut feedback);
     if !start.effective() {
         fixture.wait_worker(&[&start]);
-        fixture.render_to(start.execution_target());
+        // Keep feedback on this measured callback's genuine producer while
+        // observing completion-driven E before consuming any source history.
+        callback_into(&mut fixture, &mut [], &mut feedback);
+        measured_render_to(&mut fixture, start.execution_target(), &mut feedback);
     }
     callback_into(&mut fixture, &mut [0.0], &mut feedback);
     assert!(start.effective());

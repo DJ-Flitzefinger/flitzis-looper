@@ -19,6 +19,10 @@ mod unity_birth_tests;
 mod controller_route_tests;
 mod piano_mouse_tests;
 
+#[cfg(windows)]
+#[path = "pitch_runtime_tests/early_completion_tests.rs"]
+mod early_completion_tests;
+
 #[path = "pitch_runtime_tests/allocation_tests.rs"]
 mod allocation_tests;
 
@@ -453,6 +457,8 @@ impl Fixture {
 
     fn apply(&mut self, action: &CapturedPitchAction) -> Vec<f32> {
         self.wait_worker(&[action]);
+        // Observe completion-driven E without consuming any physical beginning.
+        self.render(0);
         let before = self.render_to(action.execution_target());
         self.render(1);
         assert!(
@@ -951,6 +957,7 @@ fn assert_live_scalar_set_continuity(extra: i32, lock: bool) {
             // Only the initial independent nonzero attack needs Native preparation.
             // The live SET below has no worker wait or host-time readiness escape.
             current.wait_worker(&[&initial]);
+            current.render(0);
             assert!(
                 current
                     .render_to(initial.execution_target())
@@ -1286,7 +1293,11 @@ fn nonzero_equal_t_retriggers_each_own_a_worker_candidate_and_attack() {
     assert_eq!(fixture.scheduler.len(), 2);
     assert_eq!(first.execution_target(), second.execution_target());
     fixture.wait_worker(&[&first, &second]);
-    fixture.render_to(first.execution_target());
+    // Preserve equal-T original ordering without emitting/discarding either beginning.
+    fixture.render(0);
+    fixture.render(0);
+    assert_eq!(first.execution_target(), first.original_due_frame());
+    assert_eq!(second.execution_target(), second.original_due_frame());
     fixture.render(1);
     assert!(
         first.effective() && second.effective(),

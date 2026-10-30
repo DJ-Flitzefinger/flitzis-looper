@@ -23,6 +23,23 @@ scheduling E and principal attack separately on the targeted cancellation seam.
 Piano/recording/late-result acceleration remains STEP5; principal DSP is STEP6.
 The complete plan grows to twelve steps without dropping the remaining work.
 
+## STEP5 impact and retained scope
+
+Extend initial-interval completion to constant independent Piano SetRetrigger
+FirstSoundAtGrid physical births. Reuse the current pitch guard, exact retained
+start snapshot, fresh action-owned history permit and DSP intent to capture a
+whole E-bound request. Exact playback plus endpoint/source/render equality must
+hold; no actual/retained feed or history-bound reset is eligible. Retain the
+displaced request in the original Work until off-callback retirement, then move
+the same scheduler event with its original order and capacity. Original T stays
+immutable. SET, AttackAtGrid, glides and any legacy replan stay on existing paths.
+Verify held workers, full physical PCM/EQ, rapid originals, future T, stale/cancel/
+feedback/capacity and callback allocations. Measure ready completion, scheduling
+and principal attack separately. Recording S/E/STOP, late genuine reprepare and
+remaining live/group ordering become STEP6; principal DSP becomes STEP7. The
+remaining stem, conversion, budget, provider, Torch and regression scope remains
+in the now thirteen-step plan. No scheduling result passes the 30 ms DSP goal.
+
 ## Source findings
 
 This table records the initial audit baseline. The STEP2 receipt below records
@@ -278,6 +295,72 @@ Piano/recording/late-result completion remains STEP5; principal-attack DSP is
 STEP6. The remaining stem-loading, conversion, budgeting, PCM/providers, native
 inference/Torch parity and combined regression work remains explicit in the
 twelve-step plan. Existing quality, listening and distribution gates stay open.
+
+## STEP5 Piano completion result
+
+Constant independent FirstSoundAtGrid Piano SetRetrigger births now use the same
+one-shot initial-interval completion boundary. The mixer captures a whole fresh
+request, current action-owned permit and DSP intent at E=max(original T, callback),
+checks exact retained playback and source/render identity, then retains the old
+request in Work before retargeting the same ordered scheduler event. No Native
+reset, feed consumption, source trimming or callback preparation is introduced.
+SET, AttackAtGrid, gliding/history-bound births and legacy replans remain excluded.
+Recording common S/E/STOP and remaining completion/order work is STEP6; principal
+DSP is STEP7. All later work remains in the thirteen-step plan.
+
+The unchanged six-case `paced_production_piano_response` probe ran before runtime
+edits at `a2c2d348` and after this implementation, on the reference host/profile
+above. Each configuration applied on both sides, n=1/configuration. Two PADs are
+loaded; source PCM is resident. Cold means no selected ready Native reserve,
+not cold disk or model loading. T=0, callbacks are paced in 512-frame partitions.
+
+| Cold Piano at 48 kHz | Before E / significant / principal (frames from T) | After E / significant / principal |
+| --- | --- | --- |
+| r=.8, Key Lock ON | 8192 / 11019 / 11183 | 512 / 3339 / 3503 |
+| r=1.16, Key Lock ON | 8192 / 10947 / 11059 | 512 / 3267 / 3379 |
+
+This removes 7680 frames/160 ms of scheduling wait. Principal response is now
+72.979/70.396 ms from T; after E it remains 62.313/59.729 ms. The 30 ms goal is
+**unmet**. Warm reserve controls keep E=0 and principal=2991/2867; both unity
+controls keep E=0 and principal=24. No DSP attack improvement is claimed.
+
+Readiness is separate: deterministic real-worker tests observe returned work at
+the frozen coordinate 512, then effect at 512 without consuming any prior source
+sample. That is a completion/ordering proof, not an input-to-ready duration.
+The paired paced probe did not timestamp worker completion, so no readiness-speed
+gain or paired input-to-ready latency is inferred. Admission, T, E and complete
+rendered landmarks are retained. The unchanged ordinary/group paced matrix is
+reused. Other-rate cold Piano timing, background overlap, input event-pump, CPAL,
+device/acoustic, distributions and whole-quality acceptance remain open.
+
+Four deterministic regressions cover real unfinished work/unrelated STOP,
+complete independent raw-Native PCM, Key Lock OFF with nonzero pitch, four equal
+and 16-frame originals, future quantized T, cancellation/source/control ABA and
+feedback pressure followed by real legacy reprepare from the fresh request.
+Rust callback allocation observations exclude Native C++/FFT allocations.
+
+Affected legacy fixtures now observe actual E before any PCM, or hold a real
+worker at the intended boundary. Prepared-return gates retain the genuinely
+prepared Work/Native on the worker until release; they never block the callback.
+Hold old-PCM windows, T/T+1 races, independent master references, exact complete
+PCM/EQ/FIFO/source/lifetime/OwnACK assertions and failure guards remain intact.
+The internal 64-claim fixture still proves simultaneous distinct ready Native
+owners, the 65th refusal, actual retirement and full independent PCM. Its positive
+one-frame effect batches retain every original and exact ordered content tags;
+immutable admitted E=T+8192 is recorded separately from actual E.
+
+The regular Rust closure has 282 distinct passing cases: 106 pitch runtime,
+71 ordinary, 29 endpoint, 25 captured-group, 31 scheduler and 20 pitch-action
+unit cases, reusing source-compatible successes between the focused final runs.
+The final corrected ordinary/endpoint/request/completion run passes all 124 cases;
+the earlier six Hold/glide/rate failures are closed. Another 159 Python Piano/
+pitch/controller checks pass with verified external Release Native/API and the
+existing 22 library warnings. Five capture-controller cases remain ignored by
+default; Native diagnostics and the separate feasibility probe retain their
+limits. The six-case Piano diagnostic was explicitly run on both sides.
+Systems, Methods and one independent final-diff review cover this coherent step;
+formatting, strict OpenSpec, local navigation and whitespace are checked at delivery.
+No ABI, dependency, installer, App/device or inference change is introduced.
 
 ## Measurement contract
 

@@ -28,6 +28,8 @@ struct GateObservation {
     released: bool,
     finished: bool,
     reason: Option<PitchActionReject>,
+    return_held: bool,
+    prepared_native: Option<usize>,
 }
 
 #[derive(Default)]
@@ -87,7 +89,23 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
     let mut observation = gate.observation.lock().unwrap();
     observation.finished = true;
     observation.reason = reason;
+    observation.prepared_native = match work {
+        PreparedActionWork::Pitch(work) if work.is_ready() => work
+            .candidate
+            .as_ref()
+            .and_then(|candidate| candidate.rubberband.as_ref())
+            .map(|native| native.state_address()),
+        _ => None,
+    };
     gate.changed.notify_all();
+    while observation.return_held {
+        let waited = gate.changed.wait_timeout(observation, GATE_WAIT).unwrap();
+        observation = waited.0;
+        assert!(
+            !waited.1.timed_out(),
+            "owned prepared worker return was not released"
+        );
+    }
 }
 
 pub(in crate::audio_engine) struct WorkerGate {
@@ -106,11 +124,51 @@ impl WorkerGate {
         ))
     }
 
-    fn for_pitch(action: &CapturedPitchAction) -> Self {
+    pub(in crate::audio_engine) fn for_pitch(action: &CapturedPitchAction) -> Self {
         Self::with_key((
             Arc::as_ptr(action.preparation_epoch()) as usize,
             action.sequence(),
         ))
+    }
+
+    /// The real worker completes Native preparation before its return is held.
+    /// This gate is armed before publication and never runs on the callback.
+    pub(in crate::audio_engine) fn for_pitch_return(action: &CapturedPitchAction) -> Self {
+        let gate = Self::for_pitch(action);
+        {
+            let mut observation = gate.state.observation.lock().unwrap();
+            observation.released = true;
+            observation.return_held = true;
+        }
+        gate
+    }
+
+    pub(in crate::audio_engine) fn prepared_native(&self) -> usize {
+        let observation = self.state.observation.lock().unwrap();
+        assert!(observation.finished && observation.reason.is_none());
+        observation
+            .prepared_native
+            .filter(|address| *address != 0)
+            .expect("genuine prepared Native owner")
+    }
+
+    pub(in crate::audio_engine) fn release_pitch_into(
+        &self,
+        fixture: &mut Fixture,
+        action: &CapturedPitchAction,
+    ) {
+        let native = self.prepared_native();
+        self.release();
+        fixture.wait_worker(&[action]);
+        assert_eq!(
+            fixture
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .ready_pitch_native_address(action.sequence()),
+            Some(native)
+        );
     }
 
     fn with_key(key: GateKey) -> Self {
@@ -147,7 +205,9 @@ impl WorkerGate {
     }
 
     pub(in crate::audio_engine) fn release(&self) {
-        self.state.observation.lock().unwrap().released = true;
+        let mut observation = self.state.observation.lock().unwrap();
+        observation.released = true;
+        observation.return_held = false;
         self.state.changed.notify_all();
     }
 
@@ -1061,6 +1121,10 @@ fn ontime_unity_piano_birth_retains_its_own_dry_request_behind_older_native_birt
         second.received_timestamp(),
         second.original_due_frame(),
     );
+    // The real due callback must first observe the older unfinished worker.
+    assert_eq!(actual.render(1), vec![0.0]);
+    assert!(!first.effective() && !second.effective());
+    assert!(second.execution_target() > original);
     gate.release();
     assert_eq!(gate.wait_for(true), None);
     wait_ready(&mut actual, &[first.sequence()]);

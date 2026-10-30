@@ -195,7 +195,6 @@ fn compare_late_mouse_beginning(lock: bool, policy: &str, prior: PriorPlayback, 
     }
 
     render_to(&mut early, ORIGINAL_T);
-    render_to(&mut late, execution);
     assert!(!early_action.effective());
     assert_eq!(late_action.effective(), shift == 0);
     assert_eq!(early.starts(0), 0);
@@ -212,6 +211,11 @@ fn compare_late_mouse_beginning(lock: bool, policy: &str, prior: PriorPlayback, 
         );
     }
 
+    // Preserve the independent reference and every first output bit at the
+    // observed E; an empty callback consumes no EQ/Native/source history.
+    late.render(0);
+    let execution = late_action.execution_target();
+    render_to(&mut late, execution);
     let early_pcm = render_partitioned(&mut early, EMITTED_FRAMES, &[127, 1, 509, 31, 256]);
     // Every actual sample from E participates, including the first emitted sample.
     // The independent on-time reference supplies its complete emitted beginning.
@@ -444,8 +448,9 @@ fn actual_late_piano_refuses_unproved_eq_gain_history_preserves_voice_and_fresh_
         hit.drain();
         assert!(fresh.accepted(), "{invalidation:?} {:?}", fresh.reason());
         wait_ready(&mut hit, &fresh);
-        render_to(&mut hit, fresh.execution_target());
         assert_eq!(hit.starts(0), 0);
+        hit.render(0);
+        render_to(&mut hit, fresh.execution_target());
         let initial = hit.render(1);
         assert!(initial.iter().all(|sample| sample.is_finite()));
         assert!(fresh.effective(), "{invalidation:?} {:?}", fresh.reason());

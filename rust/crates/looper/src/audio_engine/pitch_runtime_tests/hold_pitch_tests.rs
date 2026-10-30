@@ -7,6 +7,7 @@ use super::*;
 use crate::audio_engine::content_placement::ContentKey;
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::hold_action::{HoldActionState, HoldActionTicket, NativeHoldProjection};
+use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 use crate::audio_engine::pitch_runtime_tests::source_feed_tests::RawRubberBand;
 use crate::audio_engine::source_feed_history::SourceFeedSnapshot;
 use crate::audio_engine::source_playback::SourcePlayback;
@@ -169,10 +170,15 @@ impl HoldRoute {
         // physical source reads precede the later waveform Hold and new pitch.
         let initial = route.capture("click", Some(2));
         let initial_t = Python::attach(|py| initial.borrow(py).original_due_frame());
+        route.drain();
+        assert_eq!(
+            Python::attach(|py| initial.borrow(py).execution_target()),
+            initial_t + 8_192
+        );
         route.apply(&initial, 2, lock);
         let initial_receipt = Python::attach(|py| Receipt::capture(&initial.borrow(py)));
         assert_eq!(initial_receipt.original_t, initial_t);
-        assert_eq!(initial_receipt.preparation_delay(), 8_192);
+        assert_eq!(initial_receipt.preparation_delay(), 0);
         let mut result = Self { route, helper };
         result.start_phase_peer();
         result
@@ -301,7 +307,10 @@ impl HoldRoute {
         })
     }
 
-    fn prepare(&mut self, captured: &Py<CapturedPitchAction>) -> (CapturedPitchAction, Receipt) {
+    fn prepare(
+        &mut self,
+        captured: &Py<CapturedPitchAction>,
+    ) -> (CapturedPitchAction, Receipt, Option<WorkerGate>) {
         let action = Python::attach(|py| captured.borrow(py).clone());
         let original = (
             action.sequence(),
@@ -309,6 +318,8 @@ impl HoldRoute {
             action.received_timestamp(),
             action.original_due_frame(),
         );
+        let gate = (action.variant() == PitchActionVariant::SetRetrigger)
+            .then(|| WorkerGate::for_pitch_return(&action));
         self.route.drain();
         assert!(action.accepted(), "{:?}", action.reason());
         assert!(!action.effective());
@@ -317,21 +328,25 @@ impl HoldRoute {
         assert_eq!(receipt.execution, receipt.original_t + 8_192);
         let frame = self.route.transport.output_frame();
         let deadline = Instant::now() + WORKER_WAIT;
-        while !self
-            .route
-            .mixer
-            .pitch_runtime
-            .as_ref()
-            .unwrap()
-            .has_ready_action(action.sequence())
-        {
-            self.route.mixer.pitch_runtime.as_mut().unwrap().poll();
-            assert_ne!(action.state(), "rejected", "{:?}", action.reason());
-            assert!(
-                Instant::now() < deadline,
-                "held pitch worker did not prepare"
-            );
-            std::thread::sleep(Duration::from_millis(1));
+        if let Some(gate) = &gate {
+            assert_eq!(gate.wait_for(true), None);
+        } else {
+            while !self
+                .route
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .has_ready_action(action.sequence())
+            {
+                self.route.mixer.pitch_runtime.as_mut().unwrap().poll();
+                assert_ne!(action.state(), "rejected", "{:?}", action.reason());
+                assert!(
+                    Instant::now() < deadline,
+                    "held pitch worker did not prepare"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
         assert_eq!(self.route.transport.output_frame(), frame);
         assert_eq!(
@@ -344,7 +359,7 @@ impl HoldRoute {
             original
         );
         receipt.assert_unchanged(&action);
-        (action, receipt)
+        (action, receipt, gate)
     }
 
     fn applied(&self, captured: &Py<CapturedPitchAction>, receipt: &Receipt) {
@@ -649,6 +664,46 @@ impl EndpointOracle {
     }
 }
 
+fn release_prepared_return(
+    route: &mut HoldRoute,
+    action: &CapturedPitchAction,
+    gate: Option<&WorkerGate>,
+) -> Option<usize> {
+    let Some(gate) = gate else { return None };
+    let native = gate.prepared_native();
+    gate.release();
+    let deadline = Instant::now() + WORKER_WAIT;
+    loop {
+        route.route.mixer.pitch_runtime.as_mut().unwrap().poll();
+        if route
+            .route
+            .mixer
+            .pitch_runtime
+            .as_ref()
+            .unwrap()
+            .has_ready_action(action.sequence())
+        {
+            assert_eq!(
+                route
+                    .route
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .ready_pitch_native_address(action.sequence()),
+                Some(native)
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "prepared return did not reach callback custody"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Some(native)
+}
+
 fn render_held_to(
     route: &mut HoldRoute,
     frozen: &Frozen,
@@ -697,13 +752,17 @@ fn real_waveform_hold_gui_set_adopts_prepared_pitch_and_matching_release_resumes
         );
         let mut oracle = EndpointOracle::held_endpoint(&frozen.sample, source_frames);
         let captured = route.capture_set();
-        let (action, receipt) = route.prepare(&captured);
+        let (action, receipt, gate) = route.prepare(&captured);
         assert_eq!(action.variant(), PitchActionVariant::Set);
         assert_eq!(action.render().key_lock, lock);
         route.assert_intent(true);
         frozen.assert_before_effect(&route);
         assert_eq!(hold_projection(&ticket), hold);
         render_held_to(&mut route, &frozen, &ticket, hold, &action, &receipt, &peer);
+        assert_eq!(
+            release_prepared_return(&mut route, &action, gate.as_ref()),
+            None
+        );
         assert_eq!(route.route.render(1), vec![0.0]);
         assert!(action.effective(), "{:?}", action.reason());
         frozen.assert_physical_hold(&route);
@@ -794,7 +853,7 @@ fn real_waveform_hold_midi_set_retrigger_supersedes_only_at_e_and_all_releases_l
         let frozen = Frozen::capture(&route);
         let peer = Peer::capture(&route);
         let captured = route.midi(true, false).unwrap();
-        let (action, receipt) = route.prepare(&captured);
+        let (action, receipt, gate) = route.prepare(&captured);
         assert_eq!(action.variant(), PitchActionVariant::SetRetrigger);
         assert_eq!(action.render().key_lock, lock);
         assert!(!action.exclusive());
@@ -806,8 +865,13 @@ fn real_waveform_hold_midi_set_retrigger_supersedes_only_at_e_and_all_releases_l
         assert_eq!(hold_projection(&ticket), hold);
         receipt.assert_unchanged(&action);
         render_held_to(&mut route, &frozen, &ticket, hold, &action, &receipt, &peer);
+        let returned_native = release_prepared_return(&mut route, &action, gate.as_ref()).unwrap();
         let mut oracle = EndpointOracle::restart(&frozen.sample, &receipt);
         let first = route.route.render(1);
+        assert_eq!(
+            route.voice(0).stretch.native_state_address(),
+            returned_native
+        );
         assert!(action.effective(), "{:?}", action.reason());
         oracle.compare(&route, &first);
         let superseded = hold_projection(&ticket);
@@ -924,7 +988,7 @@ fn real_waveform_release_before_e_resumes_old_pcm_and_fences_set_but_preserves_n
             } else {
                 route.capture_set()
             };
-            let (action, receipt) = route.prepare(&captured);
+            let (action, receipt, gate) = route.prepare(&captured);
             assert_eq!(
                 action.variant(),
                 if retrigger {
@@ -937,8 +1001,8 @@ fn real_waveform_release_before_e_resumes_old_pcm_and_fences_set_but_preserves_n
             assert_eq!(route.route.transport.output_frame(), receipt.original_t);
             frozen.assert_before_effect(&route);
             assert_eq!(hold_projection(&ticket), hold);
-            // prepare() has observed the genuine candidate ready before this
-            // matching physical release. No candidate or clock is reconstructed.
+            // The real worker has prepared its candidate before this physical
+            // release; its return is held until E. No candidate/clock is invented.
             route.call("release");
             route.route.drain();
             route.call("observe_terminal");
@@ -975,11 +1039,16 @@ fn real_waveform_release_before_e_resumes_old_pcm_and_fences_set_but_preserves_n
             }
             assert_eq!(before_pcm.len(), 8_192);
             assert_tone(&before_pcm, 2, 0, 1.0, lock);
+            let returned_native = release_prepared_return(&mut route, &action, gate.as_ref());
             // The scheduler now reaches the original E. SET's paused read
             // projection is stale; a Normal restart has no such read dependency.
             let mut fresh = EndpointOracle::restart(&frozen.sample, &receipt);
             let first = route.route.render(1);
             if retrigger {
+                assert_eq!(
+                    Some(route.voice(0).stretch.native_state_address()),
+                    returned_native
+                );
                 assert!(action.effective(), "{:?}", action.reason());
                 fresh.compare(&route, &first);
                 assert_eq!(route.voice(0).generation, frozen.generation + 1);

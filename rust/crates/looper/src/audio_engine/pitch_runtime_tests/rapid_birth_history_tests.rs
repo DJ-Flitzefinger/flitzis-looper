@@ -145,12 +145,13 @@ fn birth_between_capture_and_delivery(policy: &str, birth_after_t: u64, second_n
     render_to(&mut burst, first_target);
     let first_capture = burst.capture("click", Some(FIRST_NOTE));
     let first = Python::attach(|py| first_capture.borrow(py).clone());
+    let first_gate = WorkerGate::for_pitch(&first);
     assert_eq!(first.original_due_frame(), first_target);
     burst.render(1);
     burst.drain();
     assert!(first.accepted(), "{:?}", first.reason());
     assert_eq!(first.execution_target(), first_effect);
-    wait_ready(&mut burst, &first);
+    first_gate.wait_for(false);
     render_to(&mut burst, ORIGINAL_T);
     assert!(!first.effective());
 
@@ -171,8 +172,13 @@ fn birth_between_capture_and_delivery(policy: &str, birth_after_t: u64, second_n
     assert!(second.sequence() > first.sequence());
     // Actual Native/scheduler work starts A while B's original GUI message remains
     // queued. This crosses a birth, with no rate/loop/source/EQ/control change.
-    burst.render((first_effect - ORIGINAL_T + 1) as usize);
+    render_to(&mut burst, first_effect);
+    first_gate.release();
+    assert_eq!(first_gate.wait_for(true), None);
+    wait_ready(&mut burst, &first);
+    burst.render(1);
     assert!(first.effective(), "{:?}", first.reason());
+    assert_eq!(first.execution_target(), first_effect);
     assert_eq!(burst.starts(0), 1);
     assert_eq!(burst.mixer.pad_pitch_intent(0), Some(first.render().pitch));
     let first_native = voice(&burst, 0).stretch.native_state_address();
@@ -198,7 +204,6 @@ fn birth_between_capture_and_delivery(policy: &str, birth_after_t: u64, second_n
         .ready_pitch_native_address(second.sequence())
         .unwrap();
     assert_ne!(second_native, first_native);
-    render_to(&mut burst, execution);
     assert!(!second.effective());
     assert_eq!(voice(&burst, 0).generation, first_generation);
     assert_eq!(
@@ -206,6 +211,10 @@ fn birth_between_capture_and_delivery(policy: &str, birth_after_t: u64, second_n
         first_native
     );
     assert_eq!(burst.mixer.pad_pitch_intent(0), Some(first.render().pitch));
+
+    burst.render(0);
+    let execution = second.execution_target();
+    render_to(&mut burst, execution);
 
     let primary_expected =
         render_partitioned(&mut reference, EMITTED_FRAMES, &[127, 1, 509, 31, 256]);
@@ -442,12 +451,14 @@ fn ordinary_birth_between_piano_capture_and_delivery(policy: &str, birth_after_t
         .ready_pitch_native_address(piano.sequence())
         .unwrap();
     assert_ne!(piano_native, ordinary_native);
-    render_to(&mut route, execution);
     assert_eq!(voice(&route, 0).generation, generation);
     assert_eq!(
         voice(&route, 0).stretch.native_state_address(),
         ordinary_native
     );
+    route.render(0);
+    let execution = piano.execution_target();
+    render_to(&mut route, execution);
     let pcm = render_partitioned(&mut route, EMITTED_FRAMES, &[1, 127, 509, 31, 257]);
     assert!(piano.effective(), "{:?}", piano.reason());
     assert!(pcm.iter().all(|sample| sample.is_finite()));

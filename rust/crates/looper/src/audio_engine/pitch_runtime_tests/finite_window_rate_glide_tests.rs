@@ -640,14 +640,17 @@ fn finite_actual_window_change_refuses_original_then_fresh_retry() {
     let retry_prefeed_frames = retry_h_e.div_ceil(512) * 512;
     // The shared helper retains exact T/E, primes independent silent Native input
     // ending at E and emits the complete physical beginning with fresh EQ.
-    apply_wet_attack(
+    apply_wet_attack_from(
         &mut route,
         &originals,
         &accepted,
         INITIAL_SPEED,
-        7,
-        ("finite-new-WindowACK-fresh-gui-retry", false),
-        None,
+        WetAttack {
+            case: "finite-new-WindowACK-fresh-gui-retry",
+            pitch: PitchIntent::new(7, 0).unwrap(),
+            cached: None,
+        },
+        |route| route.admit_return_held(0, 7, false),
     );
     expanded.current(&route);
     // The E-anchored Native prefix reads no source PCM, including at settled r=2.

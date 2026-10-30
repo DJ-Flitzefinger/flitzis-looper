@@ -122,7 +122,6 @@ fn late_mouse_case(rate: f64, policy: &str, prior: PriorPlayback) {
         .unwrap()
         .ready_pitch_native_address(action.sequence())
         .unwrap();
-    render_to(&mut route, execution);
     assert!(!action.effective());
     assert_eq!(route.starts(0), 0);
     if let Some((generation, native, paused)) = predecessor {
@@ -136,6 +135,11 @@ fn late_mouse_case(rate: f64, policy: &str, prior: PriorPlayback) {
             (generation, native, paused)
         );
     }
+    // Observe the true E only after inspecting the unchanged predecessor and
+    // before collecting any of this independent birth's physical beginning.
+    route.render(0);
+    let execution = action.execution_target();
+    render_to(&mut route, execution);
     let mut initial_pcm = route.render(1);
     initial_pcm.extend(route.render(511));
     assert!(action.effective(), "{:?}", action.reason());

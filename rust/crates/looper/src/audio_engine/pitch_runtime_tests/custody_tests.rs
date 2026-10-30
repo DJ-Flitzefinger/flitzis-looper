@@ -143,9 +143,10 @@ fn sixty_four_cancelled_publications_hold_custody_until_retired_then_fresh_pcm_r
         let content = fresh.content_key();
         let starts = fixture.starts(0);
         fixture.publish(&fresh);
+        assert_eq!(fresh.execution_target(), original + 8192);
         fixture.apply(&fresh);
         assert_eq!(fresh.original_due_frame(), original);
-        assert_eq!(fresh.execution_target(), original + 8192);
+        assert_eq!(fresh.execution_target(), original);
         assert_eq!(fresh.received_timestamp(), timestamp);
         assert_eq!(fresh.content_key(), content);
         assert_eq!(fixture.starts(0), starts + 1);

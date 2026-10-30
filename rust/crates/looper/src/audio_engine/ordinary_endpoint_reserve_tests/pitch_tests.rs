@@ -5,6 +5,7 @@
 use super::*;
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::input_mapping::{InputRuntimeEvent, PitchPadProjection};
+use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchActionVariant, PitchKeyMode};
 use crate::audio_engine::source_reader::ExplicitSeekMode;
 
@@ -537,6 +538,7 @@ fn equal_ready_pitch_attacks_consume_one_endpoint_and_preserve_both_originals() 
     let cached = select_ready(&mut fixture, Origin::PublicGui);
     let first = capture_pitch(&fixture, Origin::PublicGui);
     let second = capture_pitch(&fixture, Origin::PublicGui);
+    let gate = WorkerGate::for_pitch(&second);
     let identities = [
         (
             first.content_key(),
@@ -556,11 +558,14 @@ fn equal_ready_pitch_attacks_consume_one_endpoint_and_preserve_both_originals() 
     assert_eq!(second.original_due_frame(), 0);
     assert_eq!(first.execution_target(), 0);
     assert_eq!(second.execution_target(), 8192);
-    fixture.wait_worker(&[&second]);
+    gate.wait_for(false);
     fixture.render(1);
     assert_native_attack(&fixture, &first, cached, 1);
     assert_eq!(fixture.starts(0), 1);
-    fixture.render_to(8192);
+    gate.release();
+    fixture.wait_worker(&[&second]);
+    fixture.render(0);
+    assert_eq!(second.execution_target(), 1);
     fixture.render(1);
     assert!(first.effective() && second.effective());
     assert_eq!(fixture.starts(0), 2);
@@ -604,8 +609,18 @@ fn rapid_unselected_pitch_misses_keep_every_equal_t_attack_while_workers_prepare
         assert_eq!(action.execution_target(), 8192);
     }
     fixture.wait_worker(&actions.iter().collect::<Vec<_>>());
-    assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
-    fixture.render(1);
+    for (index, action) in actions.iter().enumerate() {
+        fixture.render(1);
+        assert!(action.effective(), "{:?}", action.reason());
+        assert_eq!(action.execution_target(), index as u64);
+        assert_eq!(fixture.starts(0), index + 1);
+        assert_eq!(fixture.voice(0).generation, index as u64 + 1);
+        assert_eq!(
+            fixture.voice(0).stretch.adopted_request_id(),
+            Some(action.sequence())
+        );
+        assert_one_emitted_birth(&fixture);
+    }
     assert!(actions.iter().all(CapturedPitchAction::effective));
     assert_eq!(fixture.starts(0), 4);
     assert_eq!(fixture.voice(0).generation, 4);
@@ -654,11 +669,6 @@ fn ordinary_pitch_competition(pitch_first: bool) {
         fixture.wait_worker(&[&pitch]);
     }
     fixture.render(1);
-    if !pitch_first {
-        assert_eq!(fixture.starts(0), 1);
-        fixture.render_to(8192);
-        fixture.render(1);
-    }
     assert_eq!(fixture.starts(0), 2);
     assert!(pitch.effective());
     assert_eq!(ordinary.state(), "applied");
@@ -671,14 +681,14 @@ fn ordinary_pitch_competition(pitch_first: bool) {
             pitch.sequence()
         })
     );
-    // Both originals remain distinct. Completed ordinary work may use E=0;
-    // Pitch retains its own fallback. Neither skips its physical beginning.
+    // Both originals remain distinct. Either completed independent birth may
+    // use E=0 after its predecessor, preserving its physical beginning.
     if pitch_first {
         assert_eq!(ordinary.original_frame(), Some(0));
         assert_eq!(ordinary.execution_frame(), Some(0));
     } else {
         assert_eq!(pitch.original_due_frame(), 0);
-        assert_eq!(pitch.execution_target(), 8192);
+        assert_eq!(pitch.execution_target(), 0);
     }
     assert_one_emitted_birth(&fixture);
 }
@@ -731,7 +741,15 @@ fn changed_pitch_loop_or_rate_misses_with_original_pitch_action_and_target_intac
         assert_eq!(action.original_due_frame(), 0, "change={change}");
         assert_eq!(action.execution_target(), 8192, "change={change}");
         fixture.wait_worker(&[&action]);
-        assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
+        fixture.render(0);
+        let execution = action.execution_target();
+        assert_eq!(execution, 0);
+        assert!(
+            fixture
+                .render_to(execution)
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
         fixture.render(1);
         assert!(
             action.effective(),
@@ -781,7 +799,8 @@ fn selection_epoch_revoked_before_pitch_admission_cannot_lend_its_old_endpoint()
     assert_eq!(action.original_due_frame(), 0);
     assert_eq!(action.execution_target(), 8192);
     fixture.wait_worker(&[&action]);
-    fixture.render_to(8192);
+    fixture.render(0);
+    assert_eq!(action.execution_target(), 0);
     fixture.render(1);
     assert!(action.effective());
     assert_eq!(fixture.starts(0), 1);

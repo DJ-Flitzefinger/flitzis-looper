@@ -16,6 +16,7 @@ use crate::audio_engine::constant_timing::{self, l3_constant_timing_fixture};
 use crate::audio_engine::constants::MAX_SCHEDULED_EVENTS;
 use crate::audio_engine::dsp::PerPadDspChain;
 use crate::audio_engine::ordinary_endpoint_reserve_tests::adopt_current_sources;
+use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 use crate::audio_engine::pitch_runtime_tests::source_feed_tests::RawRubberBand;
 use crate::messages::ControlParameterMessage;
 use rtrb::{Consumer, Producer};
@@ -227,6 +228,8 @@ struct Original {
     note: i32,
     extra: i32,
     prepared_native: Option<usize>,
+    initial_gate: Option<WorkerGate>,
+    return_gate: Option<WorkerGate>,
 }
 
 impl Original {
@@ -848,6 +851,15 @@ impl RateRoute {
 
     fn capture(&self, id: usize, note: i32, midi: bool) -> Py<CapturedPitchAction> {
         self.publish_clock();
+        self.capture_on_published_clock(id, note, midi)
+    }
+
+    fn capture_on_published_clock(
+        &self,
+        id: usize,
+        note: i32,
+        midi: bool,
+    ) -> Py<CapturedPitchAction> {
         Python::attach(|py| {
             if midi {
                 assert_eq!((id, note), (0, 7));
@@ -881,6 +893,23 @@ impl RateRoute {
         self.admit_capture(id, note, 0, py)
     }
 
+    fn admit_held(&mut self, id: usize, note: i32, midi: bool) -> Original {
+        let py = self.capture(id, note, midi);
+        let expected = self.route.transport.output_frame();
+        self.admit_capture_at(id, note, 0, py, expected, true)
+    }
+
+    fn admit_return_held(&mut self, id: usize, note: i32, midi: bool) -> Original {
+        let py = self.capture(id, note, midi);
+        let action = Python::attach(|context| py.borrow(context).clone());
+        let gate = WorkerGate::for_pitch_return(&action);
+        assert!(self.references[id].is_some());
+        let mut original = self.admit_capture(id, note, 0, py);
+        assert!(original.initial_gate.is_none());
+        original.return_gate = Some(gate);
+        original
+    }
+
     fn admit_capture(
         &mut self,
         id: usize,
@@ -888,9 +917,27 @@ impl RateRoute {
         extra: i32,
         py: Py<CapturedPitchAction>,
     ) -> Original {
+        let expected = self.route.transport.output_frame();
+        self.admit_capture_at(id, note, extra, py, expected, false)
+    }
+
+    fn admit_capture_at(
+        &mut self,
+        id: usize,
+        note: i32,
+        extra: i32,
+        py: Py<CapturedPitchAction>,
+        expected: u64,
+        hold_initial: bool,
+    ) -> Original {
         let frame = self.route.transport.output_frame();
         let action = Python::attach(|py_context| py.borrow(py_context).clone());
-        assert_eq!(action.original_due_frame(), frame);
+        assert_eq!(action.original_due_frame(), expected);
+        assert!(expected >= frame);
+        // Preserve the initial independent oracle's original absolute anchor
+        // using an actually unfinished worker, rather than discarding early PCM.
+        let initial_gate =
+            (hold_initial || self.references[id].is_none()).then(|| WorkerGate::for_pitch(&action));
         self.callback(0);
         let original = Original {
             sequence: action.sequence(),
@@ -904,12 +951,26 @@ impl RateRoute {
             py,
             action,
             prepared_native: None,
+            initial_gate,
+            return_gate: None,
         };
         original.unchanged();
         original
     }
 
     fn wait_action(&mut self, original: &mut Original) {
+        if let Some(gate) = &original.return_gate {
+            assert_eq!(gate.wait_for(true), None);
+            original.prepared_native = Some(gate.prepared_native());
+            original.unchanged();
+            return;
+        }
+        if let Some(gate) = original.initial_gate.take() {
+            gate.wait_for(false);
+            self.render_to(original.e);
+            gate.release();
+            assert_eq!(gate.wait_for(true), None);
+        }
         let frame = self.route.transport.output_frame();
         let deadline = Instant::now() + WAIT;
         loop {
@@ -930,12 +991,23 @@ impl RateRoute {
                 Instant::now() < deadline,
                 "host pitch preparation exceeded 15 s"
             );
-            self.callback(0);
+            self.route.mixer.pitch_runtime.as_mut().unwrap().poll();
             self.assert_no_attacks();
             std::thread::sleep(Duration::from_millis(1));
         }
         original.unchanged();
         assert_eq!(self.route.transport.output_frame(), frame);
+    }
+
+    fn release_return(&mut self, original: &mut Original) {
+        let Some(gate) = original.return_gate.take() else {
+            return;
+        };
+        assert_eq!(self.route.transport.output_frame(), original.e);
+        let native = gate.prepared_native();
+        gate.release();
+        self.wait_action(original);
+        assert_eq!(original.prepared_native, Some(native));
     }
 
     fn install_birth_reference(&mut self, original: &Original) {
@@ -1025,7 +1097,7 @@ impl RateRoute {
     }
 
     fn start(&mut self, id: usize, note: i32, midi: bool) -> Original {
-        let mut original = self.admit(id, note, midi);
+        let mut original = self.admit_held(id, note, midi);
         if !original.action.effective() {
             self.assert_no_attacks();
             self.wait_action(&mut original);
@@ -1184,10 +1256,54 @@ fn history(lock: bool, midi: bool) {
         .mixer
         .source_control_revision(first.content)
         .unwrap();
-    let mut old = route.admit(0, 7, midi);
+    // The old prepared request must remain genuinely future while the public
+    // rate transaction commits. Readiness alone no longer supplies that wait.
+    Python::attach(|py| {
+        let project = route.route.probe.bind(py).getattr("project").unwrap();
+        project
+            .setattr("trigger_quantization_enabled", true)
+            .unwrap();
+        project
+            .setattr("trigger_quantization_step", "1_16")
+            .unwrap();
+        route
+            .route
+            .probe
+            .bind(py)
+            .getattr("input_mapping")
+            .unwrap()
+            .call_method0("refresh_pitch_runtime_state")
+            .unwrap();
+    });
+    // A genuine elapsed input-clock interval while this headless callback is
+    // held supplies a future selected grid T. No timestamp/output-frame edit.
+    route.publish_clock();
+    std::thread::sleep(Duration::from_millis(300));
+    let old_capture = route.capture_on_published_clock(0, 7, midi);
+    let target = Python::attach(|py| old_capture.borrow(py).original_due_frame());
+    assert!(target > route.route.transport.output_frame() + HISTORY as u64);
+    let mut old = route.admit_capture_at(0, 7, 0, old_capture, target, false);
+    Python::attach(|py| {
+        route
+            .route
+            .probe
+            .bind(py)
+            .getattr("project")
+            .unwrap()
+            .setattr("trigger_quantization_enabled", false)
+            .unwrap();
+        route
+            .route
+            .probe
+            .bind(py)
+            .getattr("input_mapping")
+            .unwrap()
+            .call_method0("refresh_pitch_runtime_state")
+            .unwrap();
+    });
     assert_eq!(old.content, first.content);
     route.assert_no_attacks();
-    assert_eq!(old.e, old.t + 8192);
+    assert_eq!(old.e, old.t);
     route.wait_action(&mut old);
     let original_guard = old.action.callback_guard(None).unwrap();
     assert_eq!(

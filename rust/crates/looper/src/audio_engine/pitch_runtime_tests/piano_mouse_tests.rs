@@ -539,8 +539,7 @@ impl MouseRoute {
         assert_eq!(action.original_due_frame(), frame);
         self.drain();
         assert!(action.accepted() && !action.effective());
-        let execution_frame = action.execution_target();
-        assert!(execution_frame >= frame);
+        assert!(action.execution_target() >= frame);
         let deadline = Instant::now() + WORKER_WAIT;
         while !self
             .mixer
@@ -557,6 +556,8 @@ impl MouseRoute {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+        self.render(0);
+        let execution_frame = action.execution_target();
         while self.transport.output_frame() < execution_frame {
             self.render((execution_frame - self.transport.output_frame()).min(512) as usize);
             assert!(
@@ -715,6 +716,8 @@ impl MouseRoute {
         }
         assert_eq!(self.transport.output_frame(), frame);
         assert_eq!(action.execution_target(), execution);
+        self.render(0);
+        let execution = action.execution_target();
         while self.transport.output_frame() < execution {
             self.render((execution - self.transport.output_frame()).min(512) as usize);
             assert!(!action.effective());

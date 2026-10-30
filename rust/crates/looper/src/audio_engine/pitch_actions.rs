@@ -26,7 +26,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
+mod completion;
 mod preparation;
+pub(crate) use completion::PitchCompletionPlan;
 pub(crate) use preparation::{
     PitchActionPreparation, PitchActionPreparationWorker, PreparedActionWork,
 };
@@ -937,6 +939,8 @@ pub(crate) struct PitchActionWork {
     pub(crate) candidate: Option<Box<NativeAdapterState>>,
     render_format: (u32, usize),
     request: Option<NativeHistoryRequest>,
+    // Displaced completion envelopes retain every source/permit pin off RT.
+    rejected_request: Option<NativeHistoryRequest>,
     pub(crate) attack_measurement: Option<PreparedAttackMeasurement>,
     captured: bool,
     execution_frozen: bool,
@@ -986,6 +990,7 @@ impl PitchActionWork {
             candidate: None,
             render_format: (sample_rate_hz, channels),
             request: None,
+            rejected_request: None,
             attack_measurement: None,
             captured: false,
             execution_frozen: false,

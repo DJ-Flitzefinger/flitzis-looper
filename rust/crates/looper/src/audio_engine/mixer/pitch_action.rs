@@ -74,6 +74,51 @@ pub(super) fn captured_feedback(
 }
 
 impl RtMixer {
+    /// Recapture current action authority, retaining this birth's exact physical origin.
+    pub(crate) fn plan_pitch_early_completion(
+        &mut self,
+        work: &PitchActionWork,
+        execution: u64,
+        callback: u64,
+    ) -> Result<super::super::pitch_actions::PitchCompletionPlan, PitchActionReject> {
+        if execution < work.action.original_due_frame()
+            || execution >= work.action.execution_target()
+            || work.early_completion_source().is_none()
+        {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        let guard = self.pitch_action_guard(work)?;
+        let projection = execution
+            .checked_sub(callback)
+            .ok_or(PitchActionReject::PreparedMismatch)?;
+        let snapshot = self.pitch_action_start_snapshot(work, guard.id, projection)?;
+        let intent = self.capture_fresh_start_dsp_intent(
+            work.action.content_key(),
+            work.action.original_due_frame(),
+            guard.id,
+            callback,
+            work.dsp_intent,
+        )?;
+        let permit = work
+            .capture_history_permit(&snapshot.sample, snapshot.sample_rate_hz)
+            .ok_or(PitchActionReject::SourceChanged)?;
+        let render = work.action.render();
+        let request = snapshot
+            .into_request(
+                permit,
+                render.pitch,
+                render.key_lock,
+                execution,
+                work.action.sequence(),
+                work.action.epoch(),
+            )
+            .ok_or(PitchActionReject::PreparationFailed)?;
+        if !work.completion_request_matches(&request) {
+            return Err(PitchActionReject::PreparedMismatch);
+        }
+        Ok(super::super::pitch_actions::PitchCompletionPlan { request, intent })
+    }
+
     /// Reprepare only the same proved constant independent birth; no live SET/glide replay.
     pub(crate) fn prepare_pitch_late_replan(
         &mut self,
