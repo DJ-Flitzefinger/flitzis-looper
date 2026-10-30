@@ -76,3 +76,12 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** live or unobserved earlier owners still preserve original input ordering
 - **AND** the old worker, slot, queued event and heavy source/Native owners retain their existing capacity and last-reader retirement
 - **AND** no rejected original or partial rejected group can later effect, and fresh source/DSP/OwnACK, original T and recording S/E guards remain enforced
+
+#### Scenario: A terminal member proves its exact old atomic group impossible
+- **GIVEN** a retained atomic group has a member conclusively marked rejected
+- **WHEN** the runtime polls its exact reserved member owners before readiness acceleration
+- **THEN** it attempts rejection of the remaining peers through their normal guarded CAS
+- **AND** only peers actually observed rejected cease being ordering barriers; a lost CAS remains live until a later successful retry
+- **AND** missing owners, preparation epochs, deadlines or suspicion do not prove impossibility
+- **AND** applying/applied effects remain protected, and all slots, events, worker/Native/source owners and capacity remain in normal custody until cleanup
+- **AND** recording failure, immutable STOP and last-reader retirement continue through the existing capture lifecycle without an audio or spool prefix

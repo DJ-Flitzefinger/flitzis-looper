@@ -1,6 +1,8 @@
 //! Fixed preparation custody connected to the one transport scheduler.
 
 mod completion;
+#[cfg(all(test, windows))]
+mod group_peer_tests;
 
 use super::audio_stream::{AudioMessageSink, ScheduledExecution};
 use super::buffer_retirement::AudioBufferRetirement;
@@ -366,6 +368,40 @@ impl PitchRuntime {
                 .expect("returned preparation retains its reserved action slot");
             debug_assert!(slot.work.is_none());
             slot.work = Some(work);
+        }
+        self.reject_impossible_group_peers();
+    }
+
+    fn reject_impossible_group_peers(&self) {
+        for group in self.slots.iter().filter_map(|slot| slot.group.as_ref()) {
+            let members = &group.slots[..group.len];
+            // The retained group owns these exact reserved slots until cleanup.
+            // Missing metadata, epochs and deadlines cannot prove impossibility.
+            if !members.iter().all(|index| {
+                self.slots[*index].sequence != 0
+                    && matches!(
+                        self.slots[*index].owner,
+                        Some(OriginalActionOwner::Ordinary(_))
+                    )
+            }) || !members
+                .iter()
+                .any(|index| self.slots[*index].owner.as_ref().unwrap().rejected())
+            {
+                continue;
+            }
+            // Every member must claim before any group audio store. A terminal
+            // rejected member makes that effect impossible, even with Work on
+            // the worker. Each peer still needs its own successful rejection CAS;
+            // a lost CAS remains an ordering barrier and is retried next poll.
+            for index in members {
+                self.slots[*index]
+                    .owner
+                    .as_ref()
+                    .unwrap()
+                    .reject(PitchActionReject::PreparationFailed);
+            }
+            group.batch.finish(false);
+            // No epoch, slot, event, Work or capture custody is released here.
         }
     }
 

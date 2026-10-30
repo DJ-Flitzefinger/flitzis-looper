@@ -82,6 +82,11 @@ never advanced, and quantization OFF imposes no musical minimum or coalescing.
 An earlier owner conclusively marked rejected no longer fences a later ready
 original or playback group. Its old slot, queued event and worker/source/Native
 custody remain reserved until normal cleanup; rejection cannot become an effect.
+A conclusively rejected member also proves its exact retained atomic group
+impossible. Polling attempts the other members' normal rejection CAS; only
+actually rejected peers cease fencing later originals. A lost CAS retries on a
+later poll. Missing owners, epochs and deadlines supply no such proof. This
+propagation releases no event, slot, worker, source pin or capture custody.
 Live or unobserved earlier owners retain their ordering barrier, including across
 Piano and recording paths. Recording validates its exact pending capture/session,
 geometry, cancellation and immutable admitted STOP before member requests change.

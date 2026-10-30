@@ -255,6 +255,97 @@ fn completed_cancelled_predecessor_response() {
 }
 
 #[test]
+#[ignore = "explicit old-group-peer diagnostic; frozen readiness, software timeline only"]
+fn rejected_group_peer_response() {
+    for ratio in [0.8, 1.16] {
+        let mut fixture = configured(48_000, true, ratio, 0);
+        publish_tone_with_rate(&fixture.control, 1, burst(48_000, 0), true, 48_000);
+        adopt_current_source_ids(&mut fixture, true, &[0, 1]);
+        refresh_actual_runtime_bindings(&fixture);
+        fixture.mixer.set_pad_bpm(1, Some(120.0 / ratio));
+        let captured = Python::attach(|py| {
+            let entries = (0..2)
+                .map(|id| {
+                    let binding = fixture
+                        .control
+                        .engine
+                        .current_input_runtime_pad_binding(id)
+                        .unwrap()
+                        .unwrap();
+                    (Py::new(py, binding).unwrap(), 0.1, Some(2.1), None)
+                })
+                .collect();
+            fixture
+                .control
+                .engine
+                .capture_global_start(py, entries, None)
+                .unwrap()
+        });
+        fixture.drain();
+        let originals = captured.resolve().unwrap().unwrap();
+        assert!(
+            fixture
+                .control
+                .engine
+                .publish_captured_global_start(&captured)
+                .unwrap()
+                .is_some()
+        );
+        fixture.drain();
+        crate::audio_engine::ordinary_start_tests::wait_ready(
+            &mut fixture,
+            &originals
+                .iter()
+                .map(|member| member.start.sequence())
+                .collect::<Vec<_>>(),
+        );
+        assert!(originals[0].start.cancel());
+        // The successor uses the OTHER, still-live peer's content.
+        assert_ne!(originals[1].start.state(), "rejected");
+        assert!(fixture.render(16).iter().all(|sample| *sample == 0.0));
+        fixture.refresh_clock();
+        let next = fixture
+            .control
+            .engine
+            .capture_pad_start(1, 0.1, Some(2.1), 1.0, false, None, None)
+            .unwrap();
+        fixture.drain();
+        assert!(
+            fixture
+                .control
+                .engine
+                .publish_pad_start(&next, None)
+                .unwrap()
+        );
+        fixture.drain();
+        let admitted = next.execution_frame();
+        let began = Instant::now();
+        crate::audio_engine::ordinary_start_tests::wait_ready(&mut fixture, &[next.sequence()]);
+        let ready_us = began.elapsed().as_micros();
+        let ready_frame = fixture.transport.output_frame();
+        let pcm = fixture.pcm(24_000);
+        let points = landmarks(&pcm, 48_000);
+        eprintln!(
+            "rejected_group_peer ratio={ratio} T={:?} admitted_E={admitted:?} ready_frame={ready_frame} residual_wait_us={ready_us} E={:?} first={:?} significant={:?} principal={:?}; n1 residentPCM frozenclock no device/readiness-speedup claim",
+            next.original_frame(),
+            next.effective_frame(),
+            points.0,
+            points.1,
+            points.2
+        );
+        assert_eq!(next.state(), "applied", "{:?}", next.reason());
+        assert!(
+            originals
+                .iter()
+                .all(|member| member.start.effective_frame().is_none())
+        );
+        assert_eq!(fixture.starts(0), 0);
+        assert_eq!(fixture.starts(1), 1);
+        assert!(points.2.is_some());
+    }
+}
+
+#[test]
 #[ignore = "paced production diagnostic; run explicitly with --ignored --nocapture --test-threads=1"]
 fn paced_production_response_matrix() {
     for ratio in [0.8, 1.0, 1.16] {

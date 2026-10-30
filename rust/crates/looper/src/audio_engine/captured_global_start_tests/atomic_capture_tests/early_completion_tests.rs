@@ -585,7 +585,7 @@ fn recording_completion_updates_pending_start_and_preserves_the_original_reserve
 
 #[test]
 fn recording_completion_cannot_revive_a_stop_cancelled_or_stale_original_group() {
-    for fence in ["own_stop", "cancel", "source", "rate_aba", "gain"] {
+    for fence in ["own_stop", "cancel", "member", "source", "rate_aba", "gain"] {
         let mut rig = rate_rig(0.8, false);
         let captured = public_capture(&rig.fixture);
         rig.fixture.drain();
@@ -594,7 +594,7 @@ fn recording_completion_cannot_revive_a_stop_cancelled_or_stale_original_group()
         rig.fixture.drain();
         gate.wait_for(false);
         assert!(rig.fixture.render(512).iter().all(|sample| *sample == 0.0));
-        let held_cancellation = matches!(fence, "own_stop" | "cancel");
+        let held_cancellation = matches!(fence, "own_stop" | "cancel" | "member");
         if !held_cancellation {
             gate.release();
             assert_eq!(gate.wait_for(true), None);
@@ -604,6 +604,9 @@ fn recording_completion_cannot_revive_a_stop_cancelled_or_stale_original_group()
             "own_stop" => rig.stop(512),
             "cancel" => {
                 assert!(captured.cancel());
+            }
+            "member" => {
+                assert!(captured.owner.members[1].start.cancel());
             }
             "source" => {
                 let sample = rig.fixture.control.engine.sample_cache.lock().unwrap()[1]

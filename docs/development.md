@@ -257,7 +257,7 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [fifteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+and [sixteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -269,8 +269,11 @@ Initial recording groups also use wholly ready completion with common capture S/
 the original event order and immutable reserved STOP. Genuine successful off-RT
 legacy reprepare now rearms one completion for the exact rebuilt E, releasing
 displaced request pins only on that worker. Every replanned group member needs
-that receipt before the common E/capture S moves. Live-original/group-peer
-readiness remains a separate step before principal DSP and the stem work.
+that receipt before the common E/capture S moves. A conclusively rejected old
+atomic-group member now propagates rejection through the peers' own guarded CAS,
+without releasing custody or capacity early. A failed CAS remains a live barrier.
+Live-original and group-held deferred-Work readiness remain a separate step
+before principal DSP and the stem work.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and

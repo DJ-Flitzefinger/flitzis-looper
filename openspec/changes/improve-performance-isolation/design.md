@@ -8,6 +8,23 @@ The reported direction is specifically slowed non-master PADs with BPM Lock and
 Key Lock; faster PADs and the master are controls. Generation, postprocessing,
 component loading and live adoption must be measured separately.
 
+## STEP8 impact and retained scope
+
+An actually rejected member proves its exact retained atomic group cannot pass
+all member effect claims. Polling now attempts each peer's existing rejection
+CAS before readiness acceleration. Only actual terminal owners stop ordering;
+a lost CAS remains a barrier until a subsequent successful retry. Missing owner
+metadata, epochs and deadlines are not proof. Slots, queued events, Work, worker
+and Native/source pins, capacity and recording lifecycle remain untouched until
+normal cleanup. Applying/applied effects stay protected by the existing CAS.
+This serves ordinary, Piano and whole-group successors on a different old peer.
+Live earlier originals and group-held deferred Work keep their strict paths and
+become step 9; principal DSP becomes step 10. All remaining work is retained in
+the sixteen-step plan. Verify real held/returned workers, full physical PCM,
+source/request identity, allocation/capacity custody, CAS loss and live/unknown/
+epoch-only negative controls, plus recording no-prefix failure. Measure the
+affected peer seam separately from readiness compute and principal DSP.
+
 ## STEP4 impact and retained scope
 
 Remove only the ordering barrier of a proven terminal rejected original in
@@ -524,6 +541,76 @@ these opaque/control checks do not establish Native/audio acceptance. Release
 retains the known 22 library warnings. No ABI, dependency, installer, App,
 device or inference change is introduced. Run the new diagnostic through the
 actual-checkout adapter's `rust-test` with `-p flitzis-looper --lib --release -- late_reprepared_recording_response --ignored --nocapture --test-threads=1`.
+
+## STEP8 terminal atomic-group peer result
+
+Polling now propagates an actual rejected member through its exact retained
+atomic group using the existing peer rejection CAS. A lost CAS remains live
+until a later successful retry. Live originals, missing owners, epochs and
+deadlines provide no terminal proof. No epoch, queued event, slot, Work, worker,
+Native/source pin, capacity or capture custody is released by this propagation.
+Every member still claims before any group audio store; applying/applied owners
+remain protected. Recording uses its existing failure and retirement lifecycle.
+Live-original and group-held deferred-Work optimization remains step 9 of 16.
+
+The identical `rejected_group_peer_response` public captured-route diagnostic
+ran before runtime changes at STEP7 `ec9cd178` and after this implementation,
+using the reference Windows/Release host above. Two wet members hold resident
+single-burst PCM, with no selected reserve or background work. One older member
+is cancelled; the later ordinary start uses the OTHER, formerly live peer's
+content. Both sides admit E=8208, T=16 and observe returned readiness with the
+software clock frozen at 16, n=1/ratio/side. Landmarks below are PCM-local offsets
+from T=16; add 16 for absolute output frames. No initial samples are removed.
+
+| Rate | Actual E before / after | First / significant / principal from T before | First / significant / principal from T after | Residual post-publication readiness wait before / after (us) |
+| --- | --- | --- | --- | --- |
+| .8 | 8208 / 16 | 9270 / 11019 / 11183 | 1078 / 2827 / 2991 | 4535 / 4355 |
+| 1.16 | 8208 / 16 | 9285 / 10947 / 11059 | 1093 / 2755 / 2867 | 3015 / 3005 |
+
+This removes 8192 frames/170.667 ms of scheduling wait in this terminal-peer
+seam. Principal attack after E remains 2991/62.313 ms and 2867/59.729 ms: the
+30 ms goal is **unmet**. Residual readiness observation starts after publication,
+excluding prior input, queue and preparation time. Its small difference is not
+a readiness/compute speedup. There is no DSP, CPAL/device/acoustic, background,
+p99, other-rate peer-latency or whole-quality acceptance claim. The earlier
+ordinary/Piano/group matrices retain their own independent limits.
+
+Five new regular regressions cover actual different-peer and whole-group
+successors at 2/4/6 PADs in both rate directions, real held old workers with an
+independent dry Piano successor, full 24000-frame raw-Native/dry PCM, distinct
+Native owners, source/request identity, retained old capacity and Rust callback
+allocations. Three of those tests isolate CAS loss, missing/epoch-only metadata
+and genuine live-group ordering. An existing recording cancellation matrix also
+now cancels an individual held member and proves no audio/spool prefix.
+Rust allocation observations do not cover Native C++/FFT allocations.
+
+There are 282 distinct regular Rust successes: 279 successful integrated cases
+reused with the three corrected private fixtures' final passes. The integrated
+invocation initially failed those three fixtures because a dry group at immediate
+T already effects during admission's due drain. The corrected real Grid16 setup
+at frame 17000 keeps original T=24000 pending, retaining every CAS/metadata/order
+assertion. The held unity-Piano fixture's earlier Native-unity oracle was also
+incorrect for dry bypass; its final comparison is bit-exact against all 24000
+resident source samples, with the resident start explicitly checked. No product
+contract or guard was weakened. The final four-case invocation passes all three
+corrected regulars and the explicit diagnostic. Thirteen default ignored cases
+retain their status; the new diagnostic ran explicitly, while the other twelve
+retain their previous limits. No ABI, dependency, installer, App/device or
+inference change is introduced.
+
+Another 110 Python captured/MIDI/recording-control checks and three verification
+checks pass (113 total): changed five-file Rust formatting, strict OpenSpec and
+six Markdown files/64 local targets/three anchors. These control/opaque-boundary
+checks do not replace Native/audio evidence. External Release Native/API passes,
+retaining the 22 known library warnings and existing einops warning. Systems
+PRE/frozen/affected, Methods and one independent final-diff review chain cover
+this step; whitespace is checked before publication.
+
+Run the diagnostic through the actual-checkout adapter's `rust-test` with
+`-p flitzis-looper --lib --release -- rejected_group_peer_response --ignored --nocapture --test-threads=1`.
+The focused regular filter is `group_peer`; broader compatible filters are
+`ordinary_start_tests`, `pitch_runtime_tests`, `captured_global_start`,
+`scheduler::`, `ordinary_endpoint_reserve_tests` and `pad_start::`.
 
 ## Measurement contract
 
