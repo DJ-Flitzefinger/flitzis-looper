@@ -3,6 +3,17 @@
 use super::*;
 use crate::audio_engine::ordinary_start::OrdinaryCompletionPlan;
 
+#[derive(Clone, Copy)]
+struct CompletionReceipt {
+    header: usize,
+    sequence: u64,
+    execution: u64,
+}
+
+#[cfg(all(test, windows))]
+#[path = "completion_tests.rs"]
+mod tests;
+
 impl PitchRuntime {
     fn completion_bundle_current(slot: &ActionSlot) -> bool {
         slot.replans == 0
@@ -23,10 +34,21 @@ impl PitchRuntime {
         scheduler: &mut FixedCapacityScheduler<CAPACITY>,
         callback: u64,
     ) {
-        for index in 0..self.slots.len() {
+        // Slot reuse need not follow original input order. Visit each reserved
+        // slot once in chronological order, using only this pass's fresh binds.
+        let mut visited = [false; MAX_PITCH_ACTIONS];
+        let mut receipts = [None; MAX_PITCH_ACTIONS];
+        for _ in 0..self.slots.len() {
+            let Some(index) = (0..self.slots.len())
+                .filter(|index| !visited[*index] && self.slots[*index].sequence != 0)
+                .min_by_key(|index| (self.slots[*index].original, self.slots[*index].sequence))
+            else {
+                break;
+            };
+            visited[index] = true;
             let slot = &self.slots[index];
-            let execution = slot.original.max(callback);
-            if slot.sequence == 0
+            let mut execution = slot.original.max(callback);
+            if slot.owner.is_none()
                 || !Self::completion_bundle_current(slot)
                 || execution >= slot.planned
                 || !scheduler.has_queued_pitch_action(index, slot.sequence, slot.planned)
@@ -34,12 +56,48 @@ impl PitchRuntime {
                 continue;
             }
             if slot.group.is_some() {
-                self.accelerate_group(mixer, scheduler, index, execution, callback);
+                let group = slot.group.as_ref().unwrap();
+                let mut eligible = true;
+                for member in &group.slots[..group.len] {
+                    match self.completion_execution(*member, execution, &receipts) {
+                        Some(frame) => execution = frame,
+                        None => {
+                            eligible = false;
+                            break;
+                        }
+                    }
+                }
+                if !eligible
+                    || execution >= slot.planned
+                    || !group.slots[..group.len].iter().all(|member| {
+                        self.completion_predecessors_queued(
+                            *member, index, execution, &receipts, scheduler,
+                        )
+                    })
+                {
+                    continue;
+                }
+                if self.accelerate_group(mixer, scheduler, index, execution, callback) {
+                    let group = self.slots[index].group.as_ref().unwrap();
+                    for member in &group.slots[..group.len] {
+                        receipts[*member] = Some(CompletionReceipt {
+                            header: index,
+                            sequence: self.slots[index].sequence,
+                            execution,
+                        });
+                    }
+                }
                 continue;
             }
-            // Later originals wait for their predecessor to actually finish.
-            // A group member has no separate scheduler event and never enters here.
-            if self.preceding_endpoint(index).is_some() {
+            // A live predecessor is eligible only after its exact fresh bind in
+            // this pass. Retain captured spacing rather than collapse originals.
+            let Some(execution) = self.completion_execution(index, execution, &receipts) else {
+                continue;
+            };
+            if execution >= slot.planned
+                || !self
+                    .completion_predecessors_queued(index, index, execution, &receipts, scheduler)
+            {
                 continue;
             }
             let Some(work) = self.slots[index].work.as_mut() else {
@@ -74,7 +132,75 @@ impl PitchRuntime {
             );
             assert!(moved, "single callback retains the exact queued original");
             slot.planned = execution;
+            receipts[index] = Some(CompletionReceipt {
+                header: index,
+                sequence: slot.sequence,
+                execution,
+            });
         }
+    }
+
+    fn completion_execution(
+        &self,
+        index: usize,
+        mut execution: u64,
+        receipts: &[Option<CompletionReceipt>; MAX_PITCH_ACTIONS],
+    ) -> Option<u64> {
+        let current = &self.slots[index];
+        if !current.independent_birth {
+            return Some(execution);
+        }
+        for (previous_index, previous) in self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, previous)| previous.precedes_endpoint(current))
+        {
+            let receipt = receipts[previous_index]?;
+            if previous.owner.is_none()
+                || previous.planned != receipt.execution
+                || self.slots[receipt.header].sequence != receipt.sequence
+                || self.slots[receipt.header].planned != receipt.execution
+            {
+                return None;
+            }
+            execution = execution.max(
+                receipt
+                    .execution
+                    .checked_add(current.original.checked_sub(previous.original)?)?,
+            );
+        }
+        Some(execution)
+    }
+
+    fn completion_predecessors_queued<const CAPACITY: usize>(
+        &self,
+        index: usize,
+        header: usize,
+        execution: u64,
+        receipts: &[Option<CompletionReceipt>; MAX_PITCH_ACTIONS],
+        scheduler: &FixedCapacityScheduler<CAPACITY>,
+    ) -> bool {
+        let current = &self.slots[index];
+        !current.independent_birth
+            || self
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(_, previous)| previous.precedes_endpoint(current))
+                .all(|(previous, _)| {
+                    receipts[previous].is_some_and(|receipt| {
+                        scheduler.queued_pitch_action_precedes(
+                            (receipt.header, receipt.sequence, receipt.execution),
+                            (
+                                header,
+                                self.slots[header].sequence,
+                                self.slots[header].planned,
+                            ),
+                            execution,
+                        )
+                    })
+                })
     }
 
     fn accelerate_group<const CAPACITY: usize>(
@@ -84,7 +210,7 @@ impl PitchRuntime {
         index: usize,
         execution: u64,
         callback: u64,
-    ) {
+    ) -> bool {
         let group = self.slots[index].group.as_ref().unwrap();
         let key = OrdinaryGroupKey {
             slot: index,
@@ -93,28 +219,28 @@ impl PitchRuntime {
         // The original capture, including its immutable admitted STOP, must
         // still own this group before any member request or E can change.
         if !mixer.group_capture_current(&group.batch, key, execution) {
-            return;
+            return false;
         }
         let mut plans: [Option<OrdinaryCompletionPlan>; super::super::constants::MAX_VOICES] =
             std::array::from_fn(|_| None);
         for (member, slot_index) in group.slots[..group.len].iter().copied().enumerate() {
-            if self.preceding_endpoint(slot_index).is_some()
+            if self.slots[slot_index].owner.is_none()
                 || self.slots[slot_index].planned != self.slots[index].planned
                 || !Self::completion_bundle_current(&self.slots[slot_index])
             {
-                return;
+                return false;
             }
             let Some(PreparedActionWork::Ordinary(work)) = self.slots[slot_index].work.as_ref()
             else {
-                return;
+                return false;
             };
             let Ok(plan) = mixer.plan_ordinary_early_completion(work, execution, callback) else {
-                return;
+                return false;
             };
             plans[member] = Some(plan);
         }
         if !mixer.group_capture_current(&group.batch, key, execution) {
-            return;
+            return false;
         }
         // Every plan has passed before any Work, receipt or E changes. Temporary
         // failed-plan clones above share pins with the bank and unchanged Work.
@@ -156,5 +282,6 @@ impl PitchRuntime {
             }
         }
         self.slots[index].group = Some(group);
+        failure.is_none()
     }
 }

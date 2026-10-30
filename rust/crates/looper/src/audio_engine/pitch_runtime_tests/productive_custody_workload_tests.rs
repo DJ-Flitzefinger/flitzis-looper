@@ -630,10 +630,22 @@ impl Workload {
     }
 
     fn effect_batch(&mut self, originals: &mut [Original]) {
+        let mut planned = false;
+        let mut captured_delays = vec![None; self.profile.count];
         while originals
             .iter()
             .any(|original| !original.action.effective())
         {
+            if planned {
+                // The first completion pass can bind later originals ahead of
+                // their effects. Preserve every real E cut and all intervening
+                // PCM, rather than assuming one original per callback.
+                let next = self.scheduler.peek_next_target_frame().unwrap();
+                assert!(self.scheduler.deferred_due().is_none());
+                if next > self.route.transport.output_frame() {
+                    self.render_to(next);
+                }
+            }
             let pending: Vec<_> = originals
                 .iter()
                 .enumerate()
@@ -643,6 +655,22 @@ impl Workload {
             // Each newly effective birth contributes a real first output sample.
             // No empty callback may replace it before this positive callback.
             self.callback(1);
+            planned = true;
+            for original in originals.iter_mut() {
+                let execution = original.action.execution_target();
+                assert!(execution <= original.execution);
+                assert!(execution >= original.original_t);
+                assert!(execution < original.admitted_execution);
+                assert_eq!(original.admitted_execution, original.original_t + 8192);
+                // All genuinely ready originals on one content retain their
+                // captured spacing through one common shift. This also proves
+                // the newly bound, not-yet-effective E instead of accepting an
+                // arbitrary replacement of the immutable admission receipt.
+                let delay = execution - original.original_t;
+                assert_eq!(*captured_delays[original.slot].get_or_insert(delay), delay);
+                original.execution = execution;
+                original.assert_original();
+            }
             let mut expected = Vec::new();
             for index in pending {
                 let original = &mut originals[index];

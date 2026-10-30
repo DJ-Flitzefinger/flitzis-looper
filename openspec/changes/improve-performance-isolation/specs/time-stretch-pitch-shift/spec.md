@@ -85,3 +85,13 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** missing owners, preparation epochs, deadlines or suspicion do not prove impossibility
 - **AND** applying/applied effects remain protected, and all slots, events, worker/Native/source owners and capacity remain in normal custody until cleanup
 - **AND** recording failure, immutable STOP and last-reader retirement continue through the existing capture lifecycle without an audio or spool prefix
+
+#### Scenario: Ready live originals retain their captured spacing within a callback
+- **GIVEN** each earlier live independent original has successfully bound a whole fresh completion request and retargeted its exact queued event in this pass
+- **WHEN** a later independently ready original or complete atomic group validates its own fresh completion
+- **THEN** its E preserves every captured predecessor gap using checked predecessor E plus the original T difference
+- **AND** the actual retained predecessor header event sorts before the proposed later event, including equal-T event order
+- **AND** every original retains an independent effect and mutable DSP owner, without a musical minimum interval or coalescing
+- **AND** unknown, busy, unbound, partially bound and deferred predecessors remain barriers
+- **AND** final execution still waits for all possible earlier effects; predecessor failure or replan cannot be overtaken
+- **AND** group members share E and recording S with the original immutable STOP and all fresh source/permit/DSP/cancellation/last-reader fences

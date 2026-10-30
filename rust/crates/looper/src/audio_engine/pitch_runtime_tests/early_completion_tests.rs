@@ -96,15 +96,29 @@ fn piano_completion_keeps_equal_and_sixteen_frame_originals_distinct_and_ordered
         assert_eq!(gate.wait_for(true), None);
         fixture.wait_worker(&actions.iter().collect::<Vec<_>>());
         let mut prefix = Vec::new();
-        for (ordinal, action) in actions.iter().enumerate() {
+        if gap == 0 {
             prefix = fixture.render(16);
-            assert!(action.effective(), "{:?}", action.reason());
-            assert_eq!(action.execution_target(), 64 + ordinal as u64 * 16);
-            assert_eq!(fixture.starts(0), ordinal + 1);
+            assert!(
+                actions
+                    .iter()
+                    .all(|action| action.effective() && action.execution_target() == 64)
+            );
+            assert_eq!(fixture.starts(0), actions.len());
             assert_eq!(
                 fixture.voice(0).stretch.adopted_request_id(),
-                Some(action.sequence())
+                Some(actions.last().unwrap().sequence())
             );
+        } else {
+            for (ordinal, action) in actions.iter().enumerate() {
+                prefix = fixture.render(16);
+                assert!(action.effective(), "{:?}", action.reason());
+                assert_eq!(action.execution_target(), 64 + ordinal as u64 * 16);
+                assert_eq!(fixture.starts(0), ordinal + 1);
+                assert_eq!(
+                    fixture.voice(0).stretch.adopted_request_id(),
+                    Some(action.sequence())
+                );
+            }
         }
         assert!(
             actions
@@ -114,6 +128,67 @@ fn piano_completion_keeps_equal_and_sixteen_frame_originals_distinct_and_ordered
         let mut pcm = prefix;
         pcm.extend(fixture.pcm(24_000));
         assert_physical_birth_tone(&pcm, 0, 0, 0.8, true, 1.0);
+    }
+}
+
+#[test]
+fn live_original_chain_piano_keeps_full_physical_pcm_and_independent_native_owners() {
+    for (ratio, lock, extra) in [(0.8, true, 0), (1.16, true, 0), (1.0, false, 7)] {
+        let mut fixture = configured(ratio, lock);
+        let first = fixture.capture(0, &format!("pitch.extra:{extra}:set_retrigger"));
+        let gate = WorkerGate::for_pitch(&first);
+        fixture.publish(&first);
+        gate.wait_for(false);
+        let mut actions = vec![first];
+        for frame in [16, 32, 48] {
+            fixture.render_to(frame);
+            let next = fixture.capture(0, &format!("pitch.extra:{extra}:set_retrigger"));
+            fixture.publish(&next);
+            actions.push(next);
+        }
+        fixture.render_to(64);
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        fixture.wait_worker(&actions.iter().collect::<Vec<_>>());
+        let natives = actions
+            .iter()
+            .map(|action| {
+                fixture
+                    .mixer
+                    .pitch_runtime
+                    .as_ref()
+                    .unwrap()
+                    .ready_pitch_native_address(action.sequence())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            natives
+                .iter()
+                .enumerate()
+                .all(|(i, native)| *native != 0 && !natives[..i].contains(native))
+        );
+        let mut pcm = fixture.render(512);
+        assert_eq!(fixture.starts(0), 4);
+        for (ordinal, action) in actions.iter().enumerate() {
+            assert_eq!(action.original_due_frame(), ordinal as u64 * 16);
+            assert!(action.effective(), "{:?}", action.reason());
+            assert_eq!(action.execution_target(), 64 + ordinal as u64 * 16);
+        }
+        assert_eq!(fixture.voice(0).stretch.native_state_address(), natives[3]);
+        assert_eq!(
+            fixture.voice(0).stretch.adopted_request_id(),
+            Some(actions[3].sequence())
+        );
+        pcm.extend(fixture.pcm(24_048 - pcm.len()));
+        let reference = physical_birth_tone_reference(24_000, SOURCE_HZ, 0, extra, ratio, lock);
+        for (frame, actual) in pcm.iter().enumerate() {
+            let age = if frame < 48 { frame % 16 } else { frame - 48 };
+            assert!(
+                (*actual - reference[age]).abs() < 1.0e-4,
+                "{ratio}/{lock}/{extra}/{frame}"
+            );
+        }
     }
 }
 

@@ -257,7 +257,7 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [sixteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+and [seventeen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -272,8 +272,11 @@ displaced request pins only on that worker. Every replanned group member needs
 that receipt before the common E/capture S moves. A conclusively rejected old
 atomic-group member now propagates rejection through the peers' own guarded CAS,
 without releasing custody or capacity early. A failed CAS remains a live barrier.
-Live-original and group-held deferred-Work readiness remain a separate step
-before principal DSP and the stem work.
+Live-original chains now use only this pass's successful complete fresh binds
+and exact queued-event order, retaining captured gaps inside a callback and the
+final predecessor barrier. Busy/unknown/unbound owners cannot acquire that proof.
+Genuinely deferred group-held Work remains a separate step before principal DSP
+and the stem work; no later-E reuse/CAS semantics are inferred from this fix.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and

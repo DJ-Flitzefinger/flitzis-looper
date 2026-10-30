@@ -7,6 +7,78 @@ use crate::messages::SampleBuffer;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+#[test]
+#[ignore = "explicit live-original diagnostic; frozen readiness, software timeline only"]
+fn live_original_chain_response() {
+    use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
+    for ratio in [0.8, 1.16] {
+        let mut fixture = configured(48_000, true, ratio, 0);
+        let mut originals = Vec::new();
+        let mut gate = None;
+        for frame in [0, 16, 32, 48] {
+            assert!(fixture.render_to(frame).iter().all(|value| *value == 0.0));
+            fixture.refresh_clock();
+            let start = fixture
+                .control
+                .engine
+                .capture_pad_start(0, 0.1, Some(2.1), 1.0, false, None, None)
+                .unwrap();
+            if frame == 0 {
+                gate = Some(WorkerGate::for_ordinary(&start));
+            }
+            fixture.drain();
+            assert!(
+                fixture
+                    .control
+                    .engine
+                    .publish_pad_start(&start, None)
+                    .unwrap()
+            );
+            fixture.drain();
+            if frame == 0 {
+                gate.as_ref().unwrap().wait_for(false);
+            }
+            assert_eq!(start.original_frame(), Some(frame));
+            originals.push(start);
+        }
+        assert!(fixture.render_to(64).iter().all(|value| *value == 0.0));
+        let admitted = originals
+            .iter()
+            .map(CapturedPadStart::execution_frame)
+            .collect::<Vec<_>>();
+        let began = Instant::now();
+        let gate = gate.unwrap();
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        crate::audio_engine::ordinary_start_tests::wait_ready(
+            &mut fixture,
+            &originals
+                .iter()
+                .map(CapturedPadStart::sequence)
+                .collect::<Vec<_>>(),
+        );
+        let ready_us = began.elapsed().as_micros();
+        assert_eq!(fixture.transport.output_frame(), 64);
+        let mut pcm = Vec::new();
+        for _ in 0..4 {
+            pcm.extend(fixture.render(512));
+        }
+        let effects = originals
+            .iter()
+            .map(CapturedPadStart::effective_frame)
+            .collect::<Vec<_>>();
+        assert!(originals.iter().all(|start| start.state() == "applied"));
+        assert_eq!(fixture.starts(0), 4);
+        let last = (effects[3].unwrap() - 64) as usize;
+        pcm.extend(fixture.pcm(last + 24_000 - pcm.len()));
+        eprintln!(
+            "live_chain ratio={ratio} T=[0,16,32,48] admitted={admitted:?} ready_frame=64 residual_release_ready_us={ready_us} effects={effects:?} last_attack_from_E={:?}; residentPCM n1 frozenclock512partitions no device/readiness-speedup claim",
+            landmarks(&pcm[last..], 48_000)
+        );
+        assert!(landmarks(&pcm[last..], 48_000).2.is_some());
+    }
+}
+
 fn burst(rate: u32, silence: usize) -> SampleBuffer {
     let start = rate as usize / 10;
     let samples = (0..3 * rate as usize)

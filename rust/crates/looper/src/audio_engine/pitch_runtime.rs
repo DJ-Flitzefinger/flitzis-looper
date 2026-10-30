@@ -61,6 +61,17 @@ struct ActionSlot {
     group: Option<OrdinaryStartGroup>,
 }
 
+impl ActionSlot {
+    fn precedes_endpoint(&self, current: &Self) -> bool {
+        self.sequence != 0
+            && self.independent_birth
+            && self.content == current.content
+            && (self.original, self.sequence) < (current.original, current.sequence)
+            // Rejected owners retain custody but can never effect again.
+            && self.owner.as_ref().is_none_or(|owner| !owner.rejected())
+    }
+}
+
 pub(crate) struct PitchRuntime {
     slots: Box<[ActionSlot]>,
     preparation: PitchActionPreparation,
@@ -207,16 +218,7 @@ impl PitchRuntime {
         }
         self.slots
             .iter()
-            .filter(|slot| {
-                slot.sequence != 0
-                    && slot.independent_birth
-                    && slot.content == current.content
-                    && (slot.original, slot.sequence) < (current.original, current.sequence)
-                    // Terminal rejection cannot become an effect. Keep its
-                    // slot/event/worker custody until normal cleanup, but no
-                    // longer make live originals wait for that cleanup deadline.
-                    && slot.owner.as_ref().is_none_or(|owner| !owner.rejected())
-            })
+            .filter(|slot| slot.precedes_endpoint(current))
             .map(|slot| slot.planned)
             .max()
     }

@@ -8,6 +8,31 @@ The reported direction is specifically slowed non-master PADs with BPM Lock and
 Key Lock; faster PADs and the master are controls. Generation, postprocessing,
 component loading and live adoption must be measured separately.
 
+## STEP9 impact and retained scope
+
+Visit reserved originals in captured (T, sequence) order. A successful whole
+fresh completion bind and exact same-event retarget supplies a scalar receipt
+only for this bounded pass. A later independent birth may use a live predecessor
+only through that receipt and its actual queued header event, which must sort
+before the proposed later event using the scheduler's real retained order.
+Preserve captured spacing with E=max(T, callback, predecessor E + T - predecessor T),
+using checked arithmetic. Equal T gains no minimum interval; distinct originals
+retain their gaps rather than collapse into one attack. Every original retains
+its own request, any required mutable Native and final effect claim. Group receipts require
+every member bind, common E and the existing capture/immutable STOP checks.
+
+Unreturned, unknown, unbound, deferred and partially bound predecessors remain
+barriers. Final execution still uses the unchanged preceding-endpoint rule, so
+a predecessor's transient failure or replan cannot be overtaken. No heavy prepare,
+reset, source consumption, early retirement or fallback/replan-budget change.
+Verify complete piecewise physical PCM, chronological slot reuse, actual event
+order, busy and final-deferred predecessors, mixed ordinary/Piano/groups and
+recording bits. Measure readiness separately from scheduling and principal DSP.
+Genuinely deferred group-held Work requires separate later-E prepared-state/CAS
+proof and remains open as step 10. Principal DSP becomes 11; the full plan grows
+to seventeen steps without dropping stem, conversion, budgets, providers, native
+inference/Torch parity or combined regression work.
+
 ## STEP8 impact and retained scope
 
 An actually rejected member proves its exact retained atomic group cannot pass
@@ -611,6 +636,87 @@ Run the diagnostic through the actual-checkout adapter's `rust-test` with
 The focused regular filter is `group_peer`; broader compatible filters are
 `ordinary_start_tests`, `pitch_runtime_tests`, `captured_global_start`,
 `scheduler::`, `ordinary_endpoint_reserve_tests` and `pad_start::`.
+
+## STEP9 ordered live-original result
+
+Completion visits the fixed 64-slot custody in captured (T, sequence) order.
+Only a successful whole fresh bind and exact same-event retarget creates a
+current-pass receipt. A later original requires that exact predecessor header,
+sequence and E, the actual retained scheduler order, and checked captured
+spacing. Every group member must bind before its header supplies any receipt.
+The final preceding-endpoint barrier is unchanged: a predecessor's transient
+failure, replan or deferred effect cannot be overtaken. Unknown, busy, unbound
+and genuinely deferred Work remain strict; no Native reset, heavy callback
+prepare, early retirement or fallback/replan-budget change was added.
+
+The identical `live_original_chain_response` public ordinary-capture probe ran
+before runtime edits at `a373ff28` and after the change on 2026-10-31, using the
+reference Windows/Release host above. Source PCM is resident, no selected reserve
+is consumed, and there is no background inference. Four distinct originals have
+T=0/16/32/48. A real worker is held until frame 64, then released while the
+software clock stays frozen at 64 until all work returns. Both sides admit
+E=8192/8208/8224/8240. Rendering then uses 512-frame partitions, n=1/ratio/side.
+
+| Rate | Actual effects before | Actual effects after | Last attack first / significant / principal after its own E, both sides | Residual release-to-ready before / after (us) |
+| --- | --- | --- | --- | --- |
+| .8 | 64 / 576 / 1088 / 1600 | 64 / 80 / 96 / 112 | 1078 / 2827 / 2991 | 7880 / 8377 |
+| 1.16 | 64 / 576 / 1088 / 1600 | 64 / 80 / 96 / 112 | 1093 / 2755 / 2867 | 7892 / 7956 |
+
+All four originals apply on both sides. Their captured 16-frame gaps now survive
+inside one callback rather than accumulating a 512-frame wait for each effect.
+The second/third/fourth effects remove 496/992/1488 frames of scheduling wait;
+the fourth saves 31 ms at 48 kHz. Equal-T originals retain zero captured gap and
+their separate ordered effects; no musical minimum or coalescing is introduced.
+Residual host readiness excludes time before release and does not demonstrate a
+compute or input-to-ready speedup. Principal delay after the last E remains
+62.313/59.729 ms; the 30 ms goal is **unmet**. No DSP, device/acoustic, CPAL/p99,
+background, other-rate chain timing or whole-quality acceptance is inferred.
+
+Nine new regular regressions cover ordinary/Piano captured gaps, equal T,
+chronological slot reuse, exact receipt/order/metadata and overflow negatives,
+a genuinely held wet predecessor with an independently ready dry Piano follower,
+final feedback deferral, and old-group peer/header mapping at 2/4/6 PADs in both
+directions. Complete piecewise PCM retains intermediate rendered prefixes and
+the final retrigger's full 24000-frame continuation against independent Native
+references. Simultaneously held Native owners and final request identities stay
+distinct. Recording preserves common S/E=80, immutable STOP=24080, independent
+160/320 Hz sources, all 24000 spool sample bits and actual writer/RT settlement.
+Rust callback allocation checks exclude C++/FFT allocations. The focused source is
+[`live_original_tests.rs`](../../../rust/crates/looper/src/audio_engine/ordinary_start_tests/live_original_tests.rs)
+and [`completion_tests.rs`](../../../rust/crates/looper/src/audio_engine/pitch_runtime/completion_tests.rs).
+
+The final regular closure has 311 distinct successes: 309 source-compatible
+integrated passes plus the two corrected legacy fixtures' final targeted passes.
+All nine new regulars pass in that integrated input. Fourteen cases remain ignored
+by default; the new paired diagnostic ran explicitly, and the earlier thirteen
+retain their independent limits. The new recording oracle initially assumed two
+160 Hz sources; the actual fixture has 160/320 Hz, now both independently verified.
+One legacy equal-T fixture had required one effect per callback. It now retains
+all four E=0 effects, four simultaneous Native owners, exact starts/generations,
+request/FIFO/history and the complete final 48000-frame Native reference.
+The 64-owner GUI/MIDI custody harness had treated a bound-but-pending E as the old
+admitted E. It now proves monotone E in [T, admitted E), one captured-gap-preserving
+shift per content, every actual scheduler cut and positive one-frame effect.
+All intervening PCM, exact feedback, independent Native/source/EQ/FIFO checks,
+64-owner/65th-refusal and off-RT retirement remain; all sixteen child rows pass.
+This is ownership/PCM pressure evidence, not a 64-owner performance workload.
+
+Another 155 Python captured/MIDI/recording-control and opaque API checks pass with
+verified external Release Native/API. They do not replace Native/audio proof.
+Release retains the 22 known library warnings and the existing einops warning.
+There is no ABI, dependency, installer, App/device or inference change. Systems
+PRE/frozen/affected, Methods and one independent final-diff review chain cover
+this step. Changed-source formatting, strict OpenSpec and local navigation are
+checked separately before publication. Run `live_original_chain_response` through
+the actual-checkout adapter's `rust-test` with `--release -- --ignored --nocapture --test-threads=1`.
+The affected regular filters are `ordinary_start_tests`, `pitch_runtime_tests`,
+`pitch_runtime::`, `ordinary_endpoint_reserve_tests`, `captured_global_start`,
+`scheduler::`, `pad_start::` and `pitch_actions::`.
+
+The full plan now has seventeen steps. Genuinely deferred group-owned Work remains
+step 10 and needs its own later-E prepared-state/request/CAS proof, followed by
+principal DSP and every existing stem/conversion/budget/provider/native-inference
+and final-regression duty. No later-E reuse is inferred from earlier-E completion.
 
 ## Measurement contract
 

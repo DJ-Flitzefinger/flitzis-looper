@@ -237,6 +237,34 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         true
     }
 
+    /// Compare the actual retained order, including reinsertion, against the
+    /// proposed later target. Tuples are (slot, action sequence, current target).
+    pub(crate) fn queued_pitch_action_precedes(
+        &self,
+        earlier: (usize, u64, u64),
+        later: (usize, u64, u64),
+        target: u64,
+    ) -> bool {
+        if self.deferred_due.is_some() {
+            return false;
+        }
+        let exact = |key: (usize, u64, u64)| {
+            self.events[..self.len].iter().flatten().find(|event| {
+                event.target_frame == key.2
+                    && event.command
+                        == ScheduledCommand::PitchAction {
+                            slot: key.0,
+                            action_sequence: key.1,
+                        }
+            })
+        };
+        let (Some(earlier), Some(later)) = (exact(earlier), exact(later)) else {
+            return false;
+        };
+        earlier.target_frame < target
+            || (earlier.target_frame == target && earlier.order_sequence < later.order_sequence)
+    }
+
     pub(crate) fn schedule(
         &mut self,
         target_frame: u64,
@@ -798,6 +826,49 @@ mod tests {
                 .schedule(200, ScheduledCommand::CaptureStop { session_id: 7 })
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn live_original_chain_checks_actual_event_order_and_exact_retained_identity() {
+        let mut scheduler = FixedCapacityScheduler::<4>::new();
+        // Action sequence alone is deliberately the reverse of real event order.
+        scheduler
+            .schedule(
+                8192,
+                ScheduledCommand::PitchAction {
+                    slot: 1,
+                    action_sequence: 90,
+                },
+            )
+            .unwrap();
+        scheduler
+            .schedule(
+                8208,
+                ScheduledCommand::PitchAction {
+                    slot: 2,
+                    action_sequence: 10,
+                },
+            )
+            .unwrap();
+        // Production currently derives this from action_sequence. Deliberately
+        // vary the private field to ensure the query observes actual event order.
+        scheduler.events[0].as_mut().unwrap().order_sequence = 1;
+        scheduler.events[1].as_mut().unwrap().order_sequence = 2;
+        assert!(scheduler.retarget_ready_pitch_action(1, 90, 8192, 64));
+        assert!(scheduler.queued_pitch_action_precedes((1, 90, 64), (2, 10, 8208), 64));
+        assert!(!scheduler.queued_pitch_action_precedes((1, 90, 65), (2, 10, 8208), 80));
+        assert!(!scheduler.queued_pitch_action_precedes((1, 91, 64), (2, 10, 8208), 80));
+        assert!(!scheduler.queued_pitch_action_precedes((1, 90, 64), (2, 11, 8208), 80));
+        assert!(!scheduler.queued_pitch_action_precedes((1, 90, 64), (2, 10, 8207), 80));
+        assert!(!scheduler.queued_pitch_action_precedes((1, 90, 64), (2, 10, 8208), 63));
+        assert!(scheduler.retarget_ready_pitch_action(2, 10, 8208, 64));
+        assert!(!scheduler.queued_pitch_action_precedes((2, 10, 64), (1, 90, 64), 64));
+        assert!(scheduler.queued_pitch_action_precedes((2, 10, 64), (1, 90, 64), 65));
+        scheduler.schedule(0, ScheduledCommand::StopAll).unwrap();
+        let due = scheduler.pop_due_at_callback_start(0).unwrap();
+        assert_eq!(due.command, ScheduledCommand::StopAll);
+        scheduler.defer_due(due, 64);
+        assert!(!scheduler.queued_pitch_action_precedes((2, 10, 64), (1, 90, 64), 65));
     }
 
     #[test]

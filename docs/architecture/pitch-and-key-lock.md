@@ -87,8 +87,14 @@ impossible. Polling attempts the other members' normal rejection CAS; only
 actually rejected peers cease fencing later originals. A lost CAS retries on a
 later poll. Missing owners, epochs and deadlines supply no such proof. This
 propagation releases no event, slot, worker, source pin or capture custody.
-Live or unobserved earlier owners retain their ordering barrier, including across
-Piano and recording paths. Recording validates its exact pending capture/session,
+During one bounded chronological completion pass, a live earlier original may
+provide a receipt only after its whole fresh bind and exact queued-event retarget.
+Later originals preserve captured gaps with E at least predecessor E plus their
+original T difference; equal T adds no minimum. The actual retained header event
+must sort before the proposed successor. Unknown, busy, unbound and deferred
+owners remain barriers, and final execution still waits for every possible
+earlier effect. This also covers Piano and atomic groups without coalescing
+originals. Recording validates its exact pending capture/session,
 geometry, cancellation and immutable admitted STOP before member requests change.
 After every member binds, the same callback updates pending capture S to common E;
 the existing event preserves OriginalOrder and its reserved STOP lane. A pre-start
@@ -98,8 +104,8 @@ After a missed deadline, only genuine successful off-RT legacy reprepare rearms
 completion, through a receipt bound to its exact rebuilt E. The worker releases
 the prior displaced request; a new plan or successful bind consumes the receipt.
 Every replanned group member must match that E before any bind/capture change.
-Replan count and maximum launch delay remain bounded. Live earlier originals and
-group-held deferred Work retain their ordering/custody paths.
+Replan count and maximum launch delay remain bounded. Group-held deferred Work
+retains its existing path and requires separate later-E prepared-state proof.
 Live SET, gliding/history-bound Piano and AttackAtGrid retain their existing paths. Piano uses
 the exact retained start snapshot and a fresh action-owned permit/DSP intent;
 actual or retained feed is excluded. Principal-attack DSP is

@@ -5,6 +5,98 @@ use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::Worke
 use crate::audio_engine::pitch_runtime_tests::publish_tone;
 use crate::messages::SampleBuffer;
 
+#[test]
+fn live_original_chain_recording_keeps_common_s_e_immutable_stop_and_all_spool_bits() {
+    use crate::audio_engine::ordinary_start_tests::wait_ready;
+    use crate::audio_engine::pitch_runtime_tests::{SOURCE_HZ, physical_birth_tone_reference};
+    for ratio in [0.8, 1.16] {
+        let mut rig = rate_rig(ratio, false);
+        let first = rig
+            .fixture
+            .control
+            .engine
+            .capture_pad_start(0, 0.1, Some(2.1), 1.0, false, None, None)
+            .unwrap();
+        let gate = WorkerGate::for_ordinary(&first);
+        rig.fixture.drain();
+        assert!(
+            rig.fixture
+                .control
+                .engine
+                .publish_pad_start(&first, None)
+                .unwrap()
+        );
+        rig.fixture.drain();
+        gate.wait_for(false);
+        assert!(rig.fixture.render(16).iter().all(|sample| *sample == 0.0));
+        rig.fixture.refresh_clock();
+        let captured = capture_members(&rig.fixture, 2);
+        rig.fixture.drain();
+        rig.publish(&captured);
+        rig.fixture.drain();
+        assert!(
+            rig.fixture
+                .render_to(64)
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        gate.release();
+        assert_eq!(gate.wait_for(true), None);
+        wait_ready(&mut rig.fixture, &[first.sequence()]);
+        wait_members(&mut rig.fixture, 2);
+        rig.stop(24_080);
+        let mut initial = [0.0; 512];
+        measured_capture_callback(
+            &mut rig.fixture,
+            &mut initial,
+            "live predecessor and recording group",
+        );
+        assert_eq!(first.effective_frame(), Some(64));
+        assert!(
+            captured
+                .owner
+                .members
+                .iter()
+                .all(|member| member.start.original_frame() == Some(16)
+                    && member.start.effective_frame() == Some(80))
+        );
+        assert_eq!(rig.status().first_frame, Some(80));
+        assert_eq!(rig.fixture.starts(0), 2);
+        assert_eq!(rig.fixture.starts(1), 1);
+        let mut pcm = initial[16..].to_vec();
+        pcm.extend(rig.fixture.pcm(24_000 - pcm.len()));
+        let reference = physical_birth_tone_reference(24_000, SOURCE_HZ, 0, 0, ratio, true);
+        // Fixture's second PAD has its own 320 Hz source, not PAD 0's 160 Hz.
+        let peer = physical_birth_tone_reference(24_000, 320.0, 0, 0, ratio, true);
+        for (frame, ((actual, expected), peer)) in pcm.iter().zip(reference).zip(peer).enumerate() {
+            assert!(
+                (*actual - expected - peer).abs() < 1.0e-4,
+                "{ratio}/{frame}"
+            );
+        }
+        assert_ne!(
+            rig.fixture.voice(0).stretch.native_state_address(),
+            rig.fixture.voice(1).stretch.native_state_address()
+        );
+        let settled = rig.joined();
+        assert!(settled.successful_spool);
+        assert_eq!(
+            (settled.first_frame, settled.end_frame),
+            (Some(80), Some(24_080))
+        );
+        assert_eq!(
+            (settled.submitted_frames, settled.written_frames),
+            (24_000, 24_000)
+        );
+        assert_eq!(
+            rig.bits(),
+            pcm.iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 fn wait_members(fixture: &mut Fixture, count: usize) {
     let deadline = Instant::now() + CAPTURE_WAIT;
     loop {

@@ -609,17 +609,33 @@ fn rapid_unselected_pitch_misses_keep_every_equal_t_attack_while_workers_prepare
         assert_eq!(action.execution_target(), 8192);
     }
     fixture.wait_worker(&actions.iter().collect::<Vec<_>>());
-    for (index, action) in actions.iter().enumerate() {
-        fixture.render(1);
+    let natives = actions
+        .iter()
+        .map(|action| {
+            fixture
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .ready_pitch_native_address(action.sequence())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        natives
+            .iter()
+            .enumerate()
+            .all(|(index, native)| *native != 0 && !natives[..index].contains(native))
+    );
+    let mut pcm = fixture.render(1);
+    for action in &actions {
         assert!(action.effective(), "{:?}", action.reason());
-        assert_eq!(action.execution_target(), index as u64);
-        assert_eq!(fixture.starts(0), index + 1);
-        assert_eq!(fixture.voice(0).generation, index as u64 + 1);
+        assert_eq!(action.original_due_frame(), 0);
         assert_eq!(
-            fixture.voice(0).stretch.adopted_request_id(),
-            Some(action.sequence())
+            action.execution_target(),
+            0,
+            "equal captured T adds no callback-sized spacing"
         );
-        assert_one_emitted_birth(&fixture);
     }
     assert!(actions.iter().all(CapturedPitchAction::effective));
     assert_eq!(fixture.starts(0), 4);
@@ -628,7 +644,10 @@ fn rapid_unselected_pitch_misses_keep_every_equal_t_attack_while_workers_prepare
         fixture.voice(0).stretch.adopted_request_id(),
         Some(actions[3].sequence())
     );
+    assert_eq!(fixture.voice(0).stretch.native_state_address(), natives[3]);
     assert_one_emitted_birth(&fixture);
+    pcm.extend(fixture.pcm(47_999));
+    assert_physical_birth_tone(&pcm, 0, 7, 1.0, true, 1.0);
 }
 
 fn ordinary_pitch_competition(pitch_first: bool) {

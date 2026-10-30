@@ -13,6 +13,9 @@ use crate::test_memory::{ThreadAllocations, observe_current_thread};
 use pyo3::prelude::*;
 use rtrb::RingBuffer;
 
+#[path = "live_original_tests.rs"]
+mod live_original_tests;
+
 fn configured(ratio: f64) -> Fixture {
     let mut fixture = Fixture::new(true);
     adopt_current_sources(&mut fixture, true);
