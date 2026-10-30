@@ -62,3 +62,21 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **WHEN** an operator, quality, device or distribution requirement remains unproved
 - **THEN** the working productive path remains available and the barrier is reported
 - **AND** no successful-load or synthetic-only result is presented as full no-regression acceptance
+
+### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
+Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
+GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model
+capabilities and transfer-inclusive cost/resource evidence. Selection/calibration
+SHALL remain outside realtime and preserve playback headroom. Actual execution
+and fallback SHALL be observable; missing acceleration SHALL retain CPU operation.
+NVIDIA CUDA SHALL remain a mandatory supported acceleration path, including
+native inference replacements, with same-model CPU fallback on systems without
+usable CUDA. Cost/benefit discretion SHALL apply to additional non-CUDA providers
+and SHALL NOT justify dropping CUDA support. CUDA installation SHALL NOT be
+mandatory on CPU-only systems.
+
+#### Scenario: An integrated GPU is present but unsuitable for a workload
+- **GIVEN** a system has a supported integrated GPU and a working CPU path
+- **WHEN** model support, available memory or measured total performance favors CPU
+- **THEN** automatic selection may choose CPU without treating GPU presence as a speed guarantee
+- **AND** GPU initialization/execution failure retains the same model's guarded CPU fallback

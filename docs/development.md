@@ -270,9 +270,15 @@ New Rust processing/domain code should remain independent of thin Python/PyO3
 bindings. The plan also audits PyTorch replacement and dependency footprint for
 further useful Rust migration and future Windows EXE/Linux/macOS packaging. Keep
 common Rust logic portable, OS-specific process/device/resource handling behind
-adapters and CPU as the baseline with optional CUDA. Actual platform tests remain
+adapters and CPU as the baseline with hardware-conditional CUDA. Actual platform tests remain
 distinct from design intent. AMD-capable GPU alternatives are also an explicit
 conditional implementation target, with provider-based selection and CPU fallback.
+This includes Intel/AMD integrated GPUs and automatic per-workload selection
+from supported CPU/GPU paths using measured total cost and resource headroom;
+GPU presence alone is not a reason to offload or claim a speedup.
+NVIDIA CUDA support is mandatory for this upgrade and any inference replacement;
+its use/install is hardware-conditional with CPU fallback. Cost/benefit discretion
+applies to additional AMD/Intel/iGPU backends, not removal of CUDA support.
 Practical PyTorch
 removal is an explicit target, conditional on feasibility and at least current
 model quality, functions and interactions. KeyNet already uses Rust/ONNX; stems

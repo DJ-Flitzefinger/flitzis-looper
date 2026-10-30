@@ -58,12 +58,22 @@ next chat. Do not merge into `main`, mix private bindings or touch unknown work.
 
 - [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
 - [ ] Implement justified remaining bottleneck fixes; record measured no-change
-      decisions when broad porting, callback parallelism or CUDA adds no benefit.
+      decisions when broad porting, callback parallelism or additional CUDA
+      offloads add no benefit, preserving mandatory CUDA inference support.
 - [ ] Preserve CPU-only operation, one scheduler/time authority and bounded memory;
       verify transfer-inclusive CUDA gains only where an actual route changes.
+- [ ] Retain and validate NVIDIA CUDA as a mandatory supported path, including
+      native model replacements; optional-provider tradeoffs cannot remove CUDA.
 - [ ] Investigate AMD-capable provider alternatives and implement a practical
       equivalent path where supported; retain CPU fallback and distinguish real
       AMD hardware evidence from capability/mocked tests.
+- [ ] Include Intel/AMD integrated GPUs; implement hardware/provider-aware
+      automatic per-workload selection using actual support, total measured cost
+      and playback/memory headroom, with bounded off-path calibration, truthful
+      effective device receipts and reliable CPU fallback.
+- [ ] Weigh each additional non-CUDA provider's measured benefit against implementation/testing,
+      packaging, drivers and maintenance; reject disproportionate or marginal
+      paths and record that decision rather than guarantee every GPU.
 
 ## 7. Native inference and practical PyTorch removal
 

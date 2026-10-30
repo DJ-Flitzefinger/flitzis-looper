@@ -109,7 +109,7 @@ Keep common logic portable across Windows, Linux and macOS. Put process-tree
 control, device/backend integration and OS-specific resource observations behind
 platform adapters/conditional modules. Use typed paths and standard portable file
 semantics; do not spread Windows DLL/path/priority assumptions into the core.
-CPU inference/rendering is the portable baseline, CUDA an optional capability.
+CPU inference/rendering is the portable baseline; CUDA use is hardware-conditional.
 Preserve binary64 resampling/channel mapping, exact PCM16 MIN/endpoints and
 ties-even rounding, nonfinite handling, ordered intermediate clipping of the
 instrumental sum, RIFF/RF64 and output geometry. Retain exclusive private output,
@@ -150,7 +150,8 @@ not delete PyTorch or promise a smaller/faster package before those proofs.
 Future packaging targets Windows EXE as well as Linux and macOS distributions.
 Review native audio/inference libraries, CPU architectures and provider availability
 on each OS; distinguish actual platform build/run evidence from design intent.
-Do not infer Linux/macOS support from Windows-only tests or make CUDA mandatory.
+Do not infer Linux/macOS support from Windows-only tests or require CUDA
+installation on unsupported/CPU-only systems.
 Keep GPU selection capability/provider-based rather than hard-code NVIDIA versus
 CPU. Investigate AMD-capable providers and implement a practical equivalent path
 when operator support, packaging, quality and transfer-inclusive performance fit.
@@ -161,6 +162,37 @@ and [MIGraphX](https://onnxruntime.ai/docs/execution-providers/MIGraphX-Executio
 provider references are candidate starting points, not proof our pinned runtime
 or models support them. Record actual AMD execution separately from mocked tests;
 do not require a new GPU runtime in the common CPU-only installation.
+
+The final Human refinement also includes Intel/AMD integrated GPUs and automatic
+background choice of the best practical execution path for the user's hardware.
+Discover actual adapters/provider/model/operator capabilities outside realtime,
+distinguishing discrete and integrated/shared-memory devices. Compare end-to-end
+model/frontend/transfers/synchronization cost, memory/VRAM/shared-RAM pressure and
+concurrent playback deadlines. Keep CPU as a candidate even when a GPU exists;
+the preferred provider can differ by model/workload and available headroom.
+
+Any calibration is bounded, off the audio/control hot path and must not start an
+uncontrolled competing inference load during performance. Reuse compatible
+measurements keyed to hardware/driver/runtime/model identities and revalidate
+capabilities after changes. Missing libraries, unsupported operators, allocation
+or device failure must produce a usable CPU route with truthful device/fallback
+receipts. Do not retry corruption/cancellation as provider failure, oscillate
+between devices during a job or treat successful provider creation as proof of
+actual acceleration. A safe initial CPU path may run while optional acceleration
+is evaluated. User-facing controls should remain simple; diagnostics identify
+the selected route and reason. Test capability detection, ranking, model-specific
+fallback and CPU-only installs without claiming real iGPU performance from mocks.
+The Human explicitly prioritizes proportionate engineering: weigh measured gains
+against implementation/validation effort, installer size, drivers, maintenance,
+quality and stability. Reject or defer marginal/high-cost provider additions;
+automatic selection need not guarantee acceleration on every GPU. Prefer a robust
+CPU path when extra backend complexity does not produce worthwhile benefit.
+The final clarification makes NVIDIA CUDA a mandatory supported acceleration
+path, including after any PyTorch replacement. Do not remove or defer CUDA on
+the optional-provider cost/benefit rationale. That discretion applies to extra
+AMD/Intel/iGPU paths. CPU-only systems retain CPU operation without a mandatory
+CUDA installation. Validate actual CUDA model execution/failure-to-CPU behavior
+on compatible hardware; do not equate an available provider with that evidence.
 
 The follow-up request makes practical PyTorch removal an explicit investigation
 and implementation target, conditional on feasibility and retaining at least

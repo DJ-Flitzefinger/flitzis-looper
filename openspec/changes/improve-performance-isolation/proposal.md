@@ -21,9 +21,13 @@ These are concrete risks, not measured proof of every reported symptom.
 - Remove slow stem preparation from shared control locks and Python/GIL waits.
 - Port justified bounded stem conversion arithmetic to Rust, releasing the GIL
   while preserving existing byte-level conversion and publication contracts.
-- Budget background CPU/thread use and retain same-model CUDA-to-CPU fallback.
+- Budget background CPU/thread use and retain mandatory supported NVIDIA CUDA
+  acceleration with same-model CPU fallback; CUDA support is not discretionary.
 - Investigate AMD-capable GPU providers and integrate a practical, equivalent
   path when supported; retain provider-independent requests and CPU fallback.
+- Include Intel/AMD integrated GPUs and automatic hardware-aware selection per
+  workload, using measured total cost and resource headroom rather than assuming
+  a GPU is always faster. Preserve functional fallback to CPU.
 - Audit PCM ownership, process memory, worker concurrency and offline GPU
   opportunities; implement only changes supported by before/after evidence.
 - Keep Rust domain/processing code independent of Python-specific bindings so
