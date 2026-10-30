@@ -48,7 +48,7 @@ Preserve the single transport and source authority.
 
 ## Delivery
 
-Thirteen coherent steps are recorded in [tasks](tasks.md). Each important step runs
+Fourteen coherent steps are recorded in [tasks](tasks.md). Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
 This assignment does not merge or push these changes to `main`.

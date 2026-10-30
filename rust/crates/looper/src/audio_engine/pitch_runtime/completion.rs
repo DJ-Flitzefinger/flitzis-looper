@@ -73,9 +73,13 @@ impl PitchRuntime {
         callback: u64,
     ) {
         let group = self.slots[index].group.as_ref().unwrap();
-        // Recording owns a separately admitted S/stop reservation. Its existing
-        // exact path is unchanged until a separate complete transaction is proved.
-        if group.batch.capture_publication.is_some() {
+        let key = OrdinaryGroupKey {
+            slot: index,
+            action_sequence: self.slots[index].sequence,
+        };
+        // The original capture, including its immutable admitted STOP, must
+        // still own this group before any member request or E can change.
+        if !mixer.group_capture_current(&group.batch, key, execution) {
             return;
         }
         let mut plans: [Option<OrdinaryCompletionPlan>; super::super::constants::MAX_VOICES] =
@@ -92,6 +96,9 @@ impl PitchRuntime {
                 return;
             };
             plans[member] = Some(plan);
+        }
+        if !mixer.group_capture_current(&group.batch, key, execution) {
+            return;
         }
         // Every plan has passed before any Work, receipt or E changes. Temporary
         // failed-plan clones above share pins with the bank and unchanged Work.
@@ -125,6 +132,9 @@ impl PitchRuntime {
                 execution,
             );
             assert!(moved, "single callback retains the exact queued group");
+            // The same event keeps OriginalOrder and the reserved STOP lane.
+            // Later STOP admission must observe the new common capture S=E.
+            mixer.replan_group_capture(&group.batch, key, execution);
             for slot_index in &group.slots[..group.len] {
                 self.slots[*slot_index].planned = execution;
             }

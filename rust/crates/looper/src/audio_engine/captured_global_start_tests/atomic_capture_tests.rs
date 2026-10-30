@@ -4,6 +4,9 @@ use super::*;
 #[path = "atomic_capture_tests/controller_tests.rs"]
 mod controller_tests;
 #[cfg(windows)]
+#[path = "atomic_capture_tests/early_completion_tests.rs"]
+mod early_completion_tests;
+#[cfg(windows)]
 #[path = "atomic_capture_tests/stem_group_tests.rs"]
 mod stem_group_tests;
 use crate::audio_engine::buffer_retirement::{
@@ -675,28 +678,24 @@ fn real_group_and_spool_share_nonzero_effective_frame_and_exact_complete_mix_ext
     let captured = public_capture(&rig.fixture);
     drain_grid(&mut rig.fixture);
     assert_eq!(captured.original_frame(), Some(24_000));
-    assert!(
-        rig.fixture
-            .render_to(30_000)
-            .iter()
-            .all(|sample| *sample == 0.0)
-    );
+    let lead = rig.fixture.render_to(30_000);
+    assert!(lead.iter().all(|sample| *sample == 0.0));
     let batch = rig.publish(&captured);
     drain_grid(&mut rig.fixture);
-    let execution = rig.fixture.scheduler.peek_next_target_frame().unwrap();
-    assert_eq!(execution, 38_192);
+    let admitted = rig.fixture.scheduler.peek_next_target_frame().unwrap();
+    assert_eq!(admitted, 38_192);
     assert_eq!(rig.fixture.scheduler.len(), 1, "one existing group action");
     assert!(rig.status().start_queued);
     assert!(!rig.status().started);
     wait_group(&mut rig.fixture);
-    assert!(
-        rig.fixture
-            .render_to(execution - 7)
-            .iter()
-            .all(|sample| *sample == 0.0)
-    );
+    let execution = observe_ready_group_birth(&mut rig.fixture, &captured);
+    assert_eq!(execution, 30_000);
+    assert_eq!(rig.status().first_frame, Some(execution));
     rig.stop(execution + GLOBAL_PCM_FRAMES as u64);
     let mut around = Vec::with_capacity(GLOBAL_PCM_FRAMES + 67);
+    // Keep the actual seven pre-effect samples from the contiguous rendered
+    // lead; observing E above emits no PCM and retains every first wet sample.
+    around.extend_from_slice(&lead[lead.len() - 7..]);
     let callback_frames = [29, 511, 1024, 557];
     let mut callback = 0;
     while around.len() < GLOBAL_PCM_FRAMES + 67 {

@@ -257,7 +257,7 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [thirteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+and [fourteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -265,7 +265,10 @@ scheduling wait in the paired 48 kHz cold cases. The 30 ms principal-attack targ
 remains unmet. Constant independent Piano births now also complete within their
 initial interval: the paired six-case probe removes 160 ms of cold scheduling
 wait at 48 kHz while leaving warm/unity controls and the DSP attack unchanged.
-Recording/late completion and attack DSP steps still precede the stem work.
+Initial recording groups also use wholly ready completion with common capture S/E,
+the original event order and immutable reserved STOP. Late genuine reprepare and
+live-original/group-peer readiness remain a separate step before principal DSP
+and the stem work. Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and
 worker/Native custody. Live-original ordering and recording S/E guards remain.

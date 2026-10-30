@@ -40,6 +40,21 @@ remaining live/group ordering become STEP6; principal DSP becomes STEP7. The
 remaining stem, conversion, budget, provider, Torch and regression scope remains
 in the now thirteen-step plan. No scheduling result passes the 30 ms DSP goal.
 
+## STEP6 impact and retained scope
+
+Extend initial-fallback completion to attached recording groups. Validate the
+original pending capture/session, geometry, cancellation and immutable admitted
+STOP at the proposed common E before binding any member. Reuse every member's
+whole fresh source/permit/DSP plan and retain displaced requests off realtime.
+After all binds succeed, retarget the same scheduler event and update pending
+capture S to the same E in this callback. Preserve OriginalOrder, STOP reservation,
+capacity and final all-member/capture effect claims. No worker reset or source
+consumption enters the callback. Verify genuine partial readiness, independent
+full PCM and exact spool bits, equal-E/immutable STOP, future T and failure fences.
+Late genuine reprepare and still-live original/group-peer ordering remain STEP7;
+principal DSP becomes STEP8. The full plan grows to fourteen steps, retaining all
+stem, conversion, budget, provider, practical Torch removal and final parity work.
+
 ## Source findings
 
 This table records the initial audit baseline. The STEP2 receipt below records
@@ -361,6 +376,71 @@ limits. The six-case Piano diagnostic was explicitly run on both sides.
 Systems, Methods and one independent final-diff review cover this coherent step;
 formatting, strict OpenSpec, local navigation and whitespace are checked at delivery.
 No ABI, dependency, installer, App/device or inference change is introduced.
+
+## STEP6 initial recording completion result
+
+Attached recording groups now validate their exact pending capture/session before
+and after planning every fresh member request. Only after every bind succeeds does
+the callback retarget the same event and update pending capture S to common E.
+OriginalOrder, reserved capacity and the original admitted STOP remain unchanged.
+Final member/capture claims still precede any audio stores. A pre-start cancelled
+capture cannot revive; whole-group capacity failure remains terminal. Late genuine
+reprepare and live original/nonterminal group-peer ordering remain step 7 of 14.
+
+The paired `completed_recording_response` diagnostic uses the public captured
+GLOBAL/capture route on the reference Windows/Ryzen/Release host above. Both PADs
+are independent wet members with the same single-burst source and rate; dry peers
+cannot mask the wet landmark. Source PCM is resident, with no selected reserve
+consumption or background inference. A real worker is held while output advances
+silently to frame 512, then released while the software clock stays frozen there.
+Both sides admit E=8192 and observe returned readiness at frame 512,
+n=1/ratio/side. This is
+targeted scheduling/attack evidence, not paced input-to-ready or device latency.
+
+| Two-wet recording group, 48 kHz, T=0 | Before E / significant / principal (frames from T) | After E / significant / principal |
+| --- | --- | --- |
+| r=.8, Key Lock ON | 8192 / 11019 / 11183 | 512 / 3339 / 3503 |
+| r=1.16, Key Lock ON | 8192 / 10947 / 11059 | 512 / 3267 / 3379 |
+
+Capture first-frame equals all-member E on both sides, with all 24000 recorded
+sample bits matching the rendered output. This removes 7680 frames/160 ms of
+scheduling wait. Principal response is 72.979/70.396 ms from T; after E it remains
+62.313/59.729 ms. The 30 ms goal is **unmet**. First tiny output changes 9268->1588
+and 9277->1597; it does not pass the late principal attack. Residual host wait
+from worker-gate release to observed readiness is 4469/5031 us before and 4624/4520 us
+after. It excludes earlier queue/preparation/input time and supplies no measured
+readiness speedup. DSP, CPAL, event-pump, device/acoustic, background, distributions,
+other-rate recording timing and whole-quality acceptance remain unproved.
+
+Four deterministic regressions cover genuine partial readiness at 2/4/6 PADs with
+mixed/two/all-wet members and both nonunity directions, unrelated STOP progress,
+independent Native identities, complete 24000-frame raw-Native/dry references,
+bit-identical spool data and actual RT release/writer join. They also verify
+equal-E/short recording STOP, the original later STOP at full scheduler capacity,
+public same-target STOP idempotence/different-target refusal, raw duplicate STOP,
+held cancellation, stale source/control ABA and whole-group feedback rejection.
+Rust allocation guards exclude C++/FFT allocations. The existing 48000-frame
+recording oracle retains actual contiguous pre-E samples and its complete Native,
+spectral, continuation, source/lifetime and spool assertions while observing E
+before rendering. Existing future-T, atomic claim and late-STOP fences still pass.
+
+The current regular Rust closure supplies 71 distinct successes: 29 captured-group,
+31 scheduler, 7 ordinary-completion and 4 Piano-completion cases. The combined 70 passes
+are reused with the corrected STOP case's focused final pass. Another 215 unchanged
+STEP5 cases remain compatible, giving 286 distinct regular checks including the four
+new regressions. The paired diagnostic passes explicitly on both sides; five
+existing controller integrations remain ignored. Another 138 Python controller/recording
+checks pass with verified external Release Native/API; these controller/opaque
+boundary checks do not substitute for Native/audio proof. Release retains 22 known
+library warnings. No ABI, dependency, installer, App/device or inference change.
+
+Run the paired diagnostic through the actual-checkout adapter's `rust-test` with
+`-p flitzis-looper --lib --release -- completed_recording_response --ignored --nocapture --test-threads=1`.
+Regular focused filters are `captured_global_start`, `scheduler::` and
+`early_completion_tests`; the source is
+[`early_completion_tests.rs`](../../../rust/crates/looper/src/audio_engine/captured_global_start_tests/atomic_capture_tests/early_completion_tests.rs).
+Systems PRE/frozen/affected, Methods and one independent final-diff review cover
+this step. Formatting, strict OpenSpec and local navigation are checked separately.
 
 ## Measurement contract
 

@@ -71,7 +71,7 @@ slower-only perceived delay still needs separate attack/readiness measurements.
 
 [completion.rs](../../rust/crates/looper/src/audio_engine/pitch_runtime/completion.rs)
 can now accelerate a completed FirstSoundAtGrid ordinary or constant independent
-Piano SetRetrigger physical birth, or an entire playback group, before that
+Piano SetRetrigger physical birth, or an entire playback/recording group, before that
 fallback deadline. It recaptures the complete
 action request/permit at E=max(T, callback), checks the retained physical beginning,
 source controls and DSP, and retargets the same scheduler event with its original
@@ -83,9 +83,13 @@ An earlier owner conclusively marked rejected no longer fences a later ready
 original or playback group. Its old slot, queued event and worker/source/Native
 custody remain reserved until normal cleanup; rejection cannot become an effect.
 Live or unobserved earlier owners retain their ordering barrier, including across
-Piano and recording paths. Recording common S/E and stop reservations still validate.
+Piano and recording paths. Recording validates its exact pending capture/session,
+geometry, cancellation and immutable admitted STOP before member requests change.
+After every member binds, the same callback updates pending capture S to common E;
+the existing event preserves OriginalOrder and its reserved STOP lane. A pre-start
+cancelled recording cannot revive, and final member/capture claims remain atomic.
 This one-time path leaves unfinished workers out of the scheduler's deferred cell.
-Recording groups, live SET, gliding/history-bound Piano, AttackAtGrid and worker
+Live SET, gliding/history-bound Piano, AttackAtGrid and worker
 completion after the fallback deadline retain their existing paths. Piano uses
 the exact retained start snapshot and a fresh action-owned permit/DSP intent;
 actual or retained feed and legacy replans are excluded. Principal-attack DSP is
