@@ -2,9 +2,54 @@
 
 ## Purpose
 
-<!-- Purpose to be updated after merge -->
+Define native dependency discovery and installation-owned Windows Portable
+runtime preparation, verification, resumable acquisition and data-preserving updates.
 
 ## Requirements
+
+### Requirement: Source Clones Own Required Model Resources
+An ordinary source checkout SHALL default downloaded models and its required BeatThis worker to an ignored repository-root `models/` directory. Source setup SHALL provide explicit resumable pinned acquisition and fresh non-inference worker verification; startup and analysis SHALL NOT acquire dependencies. Explicit managed developer overrides and independent Portable installation bindings SHALL remain authoritative.
+
+#### Scenario: A new clone prepares automatic BPM
+- **GIVEN** installed main dependencies and a built Native extension
+- **WHEN** the documented source setup command completes
+- **THEN** the required worker is verified before selection under `models/beat-this/`
+- **AND** optional separator setup uses `models/torch/hub/checkpoints/` unless explicitly overridden
+- **AND** setup retains interrupted transfers outside temporary environment staging without an overall download deadline
+
+### Requirement: Portable Analysis Readiness Is Installation Owned
+The source-main Windows Portable installer SHALL prepare and verify the required BeatThis analysis runtime before declaring a candidate ready. Fresh installations SHALL use the existing pinned CPU profile; updates SHALL retain a valid selected CUDA profile. The worker interpreter, standard library, packages, checkpoint and relative receipts SHALL remain usable after moving the installation without a host virtual environment or developer workspace.
+
+#### Scenario: A fresh candidate has no analysis worker
+- **GIVEN** a verified current-main candidate and no installed worker
+- **WHEN** the Portable installer prepares its dependencies
+- **THEN** it acquires the pinned private worker resources and verifies their real non-inference environment
+- **AND** the final runtime check rejects an absent or invalid worker
+- **AND** candidate and final checks select the explicit installation Root, not the candidate checkout's parent
+
+#### Scenario: Unchanged main needs worker repair
+- **GIVEN** an otherwise healthy installed main whose worker is missing or damaged
+- **WHEN** the same installer runs again
+- **THEN** it repairs and verifies the worker without rebuilding an unchanged healthy Native runtime
+- **AND** inherited personal cache/profile overrides do not redirect the private runtime
+
+### Requirement: Portable Updates Preserve Recording and Worker Custody
+Portable update transactions SHALL preserve samples, input settings, recordings and recovery data with their file identities. A candidate worker selection SHALL be journaled before activation, and failed updates SHALL restore the previous selection without deleting previous worker installations. Recovery SHALL remain compatible with older journals that have no recording or worker-selection fields.
+
+#### Scenario: Recording data survives an update or rollback
+- **GIVEN** an installed recording/recovery tree and no active installation owner
+- **WHEN** an update succeeds or is rolled back
+- **THEN** the appropriate active checkout retains the same recording bytes and file identities
+- **AND** unknown files or conflicting selections are preserved and stop unsafe cleanup
+
+### Requirement: Portable Payload Transfers Resume Verified Bytes
+Pinned Portable payload downloads SHALL retain stable partial bytes, resume transient interruptions with interruptible backoff and impose no overall transfer deadline. Complete hashes SHALL be verified before publication; permanent unavailable or authentication failures SHALL report a concrete prerequisite while retaining evidence.
+
+#### Scenario: A pinned download is interrupted
+- **GIVEN** a partial owned payload from an interrupted transfer
+- **WHEN** the installer retries
+- **THEN** it resumes or verifies the retained prefix rather than restarting into another UUID download
+- **AND** incorrect complete bytes are not published as a ready dependency
 
 <!-- From replace-key-lock-with-rubberband -->
 ### Requirement: Cross-platform Rubber Band Dependency Discovery

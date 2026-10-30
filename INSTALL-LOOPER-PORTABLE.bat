@@ -45,13 +45,97 @@ function Assert-PlainPath([string] $Path) {
     }
 }
 
-function Read-Payload([Uri] $Uri, [string] $Destination) {
+function Open-PortablePayloadResponse([Uri] $Uri, [long] $Offset) {
+    $request = [Net.HttpWebRequest]::Create($Uri)
+    $request.Timeout = 60000; $request.ReadWriteTimeout = 60000
+    $request.UserAgent = 'FlitzisLooper-Portable/2'
+    if ($Offset) { $request.AddRange($Offset) }
+    return $request.GetResponse()
+}
+
+function Read-Payload([Uri] $Uri, [string] $Destination, [string] $Sha256 = '', [long] $ExpectedBytes = 0) {
+    Assert-PlainPath $Destination
+    if ($Sha256 -and $Sha256 -notmatch '^[a-f0-9]{64}$') { throw 'A payload pin must be a complete SHA256.' }
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        if (-not $Sha256 -or (Get-Sha256 $Destination) -eq $Sha256) { return }
+        # Retain corrupt owned download bytes instead of discarding them.
+        [IO.File]::Move($Destination, "$Destination.corrupt-$([Guid]::NewGuid().ToString('N'))")
+    }
+    $partial = "$Destination.partial"
+    Assert-PlainPath $partial
     if ($Uri.IsFile) {
-        Copy-Item -LiteralPath $Uri.LocalPath -Destination $Destination
+        if (-not (Test-Path -LiteralPath $partial)) { [IO.File]::Copy($Uri.LocalPath, $partial) }
     } elseif ($Uri.Scheme -eq 'https') {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $Uri.AbsoluteUri -UseBasicParsing -OutFile $Destination -TimeoutSec 1800
+        $delay = 20
+        while ($true) {
+            [long] $offset = if (Test-Path -LiteralPath $partial) { (Get-Item -LiteralPath $partial).Length } else { 0 }
+            if ($ExpectedBytes -gt 0 -and $offset -gt $ExpectedBytes) { throw 'Retained payload exceeds its pinned byte length.' }
+            if ($ExpectedBytes -gt 0 -and $offset -eq $ExpectedBytes) { break }
+            $response = $null; $inputStream = $null; $outputStream = $null
+            try {
+                $response = Open-PortablePayloadResponse $Uri $offset
+                if ($response.ResponseUri.Scheme -ne 'https') { throw 'Payload redirect left HTTPS.' }
+                $status = [int]$response.StatusCode
+                $inputStream = $response.GetResponseStream()
+                $buffer = New-Object byte[] (1024 * 1024)
+                if ($status -eq 206) {
+                    if (-not $response.Headers['Content-Range'].StartsWith("bytes $offset-")) { throw 'Payload resumed at an unexpected offset.' }
+                } elseif ($status -eq 200 -and $offset) {
+                    # A server may ignore Range. Verify the retained prefix first.
+                    $previous = [IO.File]::OpenRead($partial)
+                    try {
+                        $compare = New-Object byte[] $buffer.Length
+                        while (($count = $previous.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                            $read = 0
+                            while ($read -lt $count) {
+                                $piece = $inputStream.Read($compare, $read, $count - $read)
+                                if ($piece -eq 0) { throw [IO.IOException]::new('Payload prefix response was incomplete.') }
+                                $read += $piece
+                            }
+                            for ($index = 0; $index -lt $count; $index++) {
+                                if ($buffer[$index] -ne $compare[$index]) { throw 'Server payload differs from retained prefix.' }
+                            }
+                        }
+                    } finally { $previous.Dispose() }
+                } elseif ($status -ne 200) { throw "Unexpected payload HTTP status: $status" }
+                $outputStream = [IO.File]::Open($partial, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    if ($ExpectedBytes -gt 0 -and $outputStream.Length + $count -gt $ExpectedBytes) { throw 'Payload exceeds its pinned byte length.' }
+                    $outputStream.Write($buffer, 0, $count)
+                }
+                $outputStream.Flush($true)
+                [long] $actual = $outputStream.Length
+                [long] $responseTotal = if ($status -eq 206) { $offset + $response.ContentLength } else { $response.ContentLength }
+                if (($ExpectedBytes -gt 0 -and $actual -ne $ExpectedBytes) -or
+                    ($response.ContentLength -ge 0 -and $actual -ne $responseTotal)) {
+                    throw [IO.IOException]::new('Payload transfer ended before its expected extent.')
+                }
+                break
+            } catch [Net.WebException] {
+                $failure = $_.Exception
+                while ($failure -isnot [Net.WebException] -and $failure.InnerException) { $failure = $failure.InnerException }
+                if ($failure.Response) {
+                    $response = $failure.Response
+                    $code = [int]$response.StatusCode
+                    if ($code -in @(400,401,403,404,410)) { throw "Pinned payload unavailable (HTTP $code); retained bytes: $partial" }
+                    if ($code -eq 416 -and $Sha256 -and (Test-Path -LiteralPath $partial) -and (Get-Sha256 $partial) -eq $Sha256) { break }
+                }
+                Write-Host "Payload transfer interrupted; retained bytes. Retrying in $delay seconds."
+            } catch [IO.IOException] {
+                Write-Host "Payload transfer interrupted; retained bytes. Retrying in $delay seconds."
+            } finally {
+                if ($outputStream) { $outputStream.Dispose() }
+                if ($inputStream) { $inputStream.Dispose() }
+                if ($response) { $response.Dispose() }
+            }
+            Start-Sleep -Seconds $delay
+            $delay = [Math]::Min($delay * 2, 60)
+        }
     } else { throw 'Only local files or HTTPS downloads are supported.' }
+    if ($ExpectedBytes -gt 0 -and (Get-Item -LiteralPath $partial).Length -ne $ExpectedBytes) { throw 'Payload byte length differs from its pin.' }
+    if ($Sha256) { Assert-Hash $partial $Sha256 }
+    [IO.File]::Move($partial, $Destination)
 }
 
 function Get-Sha256([string] $Path) {
@@ -209,10 +293,64 @@ function Invoke-PortableCheck([string] $Root, [string] $Checkout, [string] $Runt
         '-RuntimeDirectory',$Runtime,'-Check','-InstallerOwned')
 }
 
+function Invoke-PortableBuildCheck([string] $Root, [string] $Checkout, [string] $Runtime) {
+    Invoke-Checked 'powershell.exe' @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
+        '-RuntimeDirectory',$Runtime,'-Check','-BuildRuntimeCheck','-InstallerOwned')
+}
+
 function Invoke-PortableModels([string] $Root, [string] $Checkout, [string] $Runtime, [string] $Mode) {
     Invoke-Checked 'powershell.exe' @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
         (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
         '-RuntimeDirectory',$Runtime,'-ModelMode',$Mode,'-InstallerOwned')
+}
+
+function Invoke-PortableAnalysis([string] $Root, [string] $Checkout, [string] $Runtime,
+    [string] $Mode, [string] $Report) {
+    $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (Join-Path $Runtime 'launch.ps1'),'-Root',$Root,'-CheckoutDirectory',$Checkout,
+        '-RuntimeDirectory',$Runtime,'-AnalysisMode',$Mode,'-InstallerOwned')
+    if ($Report) { $arguments += @('-AnalysisReport',$Report) }
+    Invoke-Checked 'powershell.exe' $arguments
+}
+
+function Get-PortableWorkerPointer([string] $Root) {
+    $path = Join-Path $Root 'analysis-runtime/beat-this/current.json'
+    Assert-PlainPath $path
+    if (Test-Path -LiteralPath $path) {
+        if ((Get-Item -LiteralPath $path).Length -gt 4096) { throw 'Worker pointer exceeds its bound.' }
+        return [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+    }
+    return $null
+}
+
+function Set-PortableWorkerSelection([string] $Root, $Record, [switch] $Restore) {
+    # Old journals have no worker selection and keep their previous behavior.
+    if (-not $Record.PSObject.Properties['worker_before']) { return }
+    $before = $Record.worker_before
+    $candidate = if ($Record.PSObject.Properties['worker_candidate']) { $Record.worker_candidate } else { $null }
+    $current = Get-PortableWorkerPointer $Root
+    if ($current -ne $before -and $current -ne $candidate) {
+        throw 'Worker selection changed outside this transaction; files will be preserved.'
+    }
+    $selected = if ($Restore) { $before } else { $candidate }
+    if (-not $Restore -and -not $candidate) { throw 'Verified worker selection is missing.' }
+    if ($current -eq $selected) { return }
+    $path = Join-Path $Root 'analysis-runtime/beat-this/current.json'
+    Assert-PlainPath $path
+    if ($null -eq $selected) {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+    } else {
+        $bytes = [Convert]::FromBase64String($selected)
+        if ($bytes.Length -gt 4096) { throw 'Worker pointer exceeds its bound.' }
+        if (-not $Restore) {
+            $pointer = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+            if ($pointer.schema_version -ne 1 -or $pointer.directory -notmatch '^installation-[a-f0-9]{32}$' -or
+                $pointer.manifest_sha256 -notmatch '^[a-f0-9]{64}$') { throw 'Invalid worker pointer in transaction.' }
+        }
+        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) | Out-Null
+        Write-PortableBytes $path $bytes
+    }
 }
 
 function Invoke-PortableRelocation([string] $Root, [string] $Checkout, [string] $Runtime,
@@ -277,7 +415,7 @@ function Assert-PortableInventory([string] $Directory, $Inventory, $Directories 
     $extras = $false
     foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -File)) {
         $relative = $file.FullName.Substring($Directory.TrimEnd('\').Length + 1).Replace('\','/')
-        if ($Persistent -and ($relative.StartsWith('samples/') -or $relative.StartsWith('config/input/'))) { continue }
+        if ($Persistent -and ($relative.StartsWith('samples/') -or $relative.StartsWith('config/input/') -or $relative.StartsWith('record/'))) { continue }
         if ($ReleaseManifest -and $relative -eq 'release-manifest.json') { continue }
         if (-not $known.ContainsKey($relative)) {
             if (-not $AllowExtras) { throw "Unknown file will be preserved: $($file.FullName)" }
@@ -300,8 +438,8 @@ function Assert-PortableInventory([string] $Directory, $Inventory, $Directories 
     if ($null -ne $Directories -or -not $IgnoreUnrecordedDirectories) {
         foreach ($folder in @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -Directory)) {
             $relative = $folder.FullName.Substring($Directory.TrimEnd('\').Length + 1).Replace('\','/')
-            if ($Persistent -and ($relative -in @('samples','config','config/input') -or
-                $relative.StartsWith('samples/') -or $relative.StartsWith('config/input/'))) { continue }
+            if ($Persistent -and ($relative -in @('samples','config','config/input','record') -or
+                $relative.StartsWith('samples/') -or $relative.StartsWith('config/input/') -or $relative.StartsWith('record/'))) { continue }
             if (-not $knownDirectories.ContainsKey($relative)) {
                 if (-not $AllowExtras) { throw "Unknown directory will be preserved: $($folder.FullName)" }
                 $extras = $true
@@ -454,6 +592,15 @@ function Undo-PortableTransaction([string] $Root, $Record) {
             Move-PortableDirectory $inputTarget $inputSource
         }
     }
+    if ($Record.PSObject.Properties['had_record'] -and $Record.had_record) {
+        $sourceRoot = Get-PortableDataSource $Root $Record $paths
+        $recordSource = Join-Path $sourceRoot 'record'
+        $recordTarget = Join-Path $paths.checkout 'record'
+        if ($recordSource -ne $recordTarget -and -not (Test-Path -LiteralPath $recordSource) -and (Test-Path -LiteralPath $recordTarget)) {
+            Assert-PortableInventory $recordTarget $Record.record_files -VerifyHashes -IgnoreUnrecordedDirectories
+            Move-PortableDirectory $recordTarget $recordSource
+        }
+    }
     if (-not (Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath $paths.checkout) -and
         (-not $Record.had_checkout -or (Test-Path -LiteralPath $paths.old_checkout))) {
         Move-PortableDirectory $paths.checkout $paths.source
@@ -474,6 +621,7 @@ function Undo-PortableTransaction([string] $Root, $Record) {
     }
     if ($Record.old) { Write-AtomicJson (Join-Path $Root 'current.json') $Record.old }
     elseif (Test-Path -LiteralPath (Join-Path $Root 'current.json')) { Remove-Item -LiteralPath (Join-Path $Root 'current.json') }
+    Set-PortableWorkerSelection $Root $Record -Restore
     Save-PortableTransaction $Root $Record 'rolled_back'
     # Failed candidates remain recorded as diagnostic material. A repeat can
     # clean only these exact paths after the accepted installation is restored.
@@ -487,11 +635,15 @@ function Recover-PortableTransaction([string] $Root) {
         $custody = Get-PortableCandidateCustody $paths $record
         if ($custody.checkout -ne $paths.checkout -or $custody.runtime -ne $paths.runtime) { throw 'Accepted candidate was not fully activated.' }
         Invoke-PortableCheck $Root $paths.checkout $paths.runtime
+        if ($record.PSObject.Properties['worker_candidate']) {
+            Invoke-PortableAnalysis $Root $paths.checkout $paths.runtime 'check' ''
+        }
         Invoke-PortableModels $Root $paths.checkout $paths.runtime 'check'
         Complete-PortableTransaction $Root $record
         return
     }
     if ($record.phase -notin @('staging','prepared','rolled_back')) { Undo-PortableTransaction $Root $record }
+    Set-PortableWorkerSelection $Root $record -Restore
     $proven = $false
     if ((Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath (Join-Path $paths.candidate 'release-manifest.json'))) {
         $release = Get-Content -LiteralPath (Join-Path $paths.candidate 'release-manifest.json') -Raw | ConvertFrom-Json
@@ -696,9 +848,9 @@ function Get-PortableGit([string] $Root) {
     $executable = Join-Path $directory 'ucrt64/bin/git.exe'
     Assert-PlainPath $directory
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-        $archive = Join-Path $Root "cache/git-$([Guid]::NewGuid().ToString('N')).zip"
+        $archive = Join-Path $Root 'cache/git-2.56.0.2.zip'
         Write-Host 'Git is missing: downloading the private Git version ...'
-        Read-Payload ([Uri]'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip') $archive
+        Read-Payload ([Uri]'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip') $archive 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be'
         Assert-Hash $archive 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be'
         # MinGit's cmd launcher also canonicalizes its executable directory.
         $fresh = Join-Path $Root "tools/g-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
@@ -788,10 +940,24 @@ try {
             if ($checkoutExtras) { Write-Host 'Unregistered checkout files or directories will be preserved; preparing a clean source/runtime without executing that checkout.' }
             if ($old.git_commit -eq $commit -and -not $checkoutExtras) {
                 $healthy = $false
-                try { Invoke-PortableCheck $actualTarget $checkout $runtime; $healthy = $true }
+                try { Invoke-PortableBuildCheck $actualTarget $checkout $runtime; $healthy = $true }
                 catch { Write-Host 'The existing runtime is not ready to start; preparing it again.' }
                 if ($healthy) {
-                    Invoke-PortableModels $actualTarget $checkout $runtime 'repair'
+                    $repairReport = Join-Path $target ("cache/analysis-repair-" + [Guid]::NewGuid().ToString('N') + '.json')
+                    $selection = [pscustomobject]@{worker_before=(Get-PortableWorkerPointer $target); worker_candidate=$null}
+                    try {
+                        Invoke-PortableAnalysis $actualTarget $checkout $runtime 'repair' $repairReport
+                        $analysis = Get-Content -LiteralPath $repairReport -Raw | ConvertFrom-Json
+                        if ($analysis.portable_analysis -ne 'passed') { throw 'Worker repair did not establish readiness.' }
+                        $selection.worker_candidate = $analysis.pointer_bytes
+                        Set-PortableWorkerSelection $target $selection
+                        Invoke-PortableAnalysis $actualTarget $checkout $runtime 'check' ''
+                        Invoke-PortableCheck $actualTarget $checkout $runtime
+                        Invoke-PortableModels $actualTarget $checkout $runtime 'repair'
+                    } catch {
+                        Set-PortableWorkerSelection $target $selection -Restore
+                        throw
+                    }
                     Write-Host 'Current main and both models are ready to start; no Native build is required.' -ForegroundColor Green
                     exit 0
                 }
@@ -806,10 +972,13 @@ try {
     $dataRoot = if ($legacyDirectory) { Join-Path $target 'data' } else { $checkout }
     $hadSamples = Test-Path -LiteralPath (Join-Path $dataRoot 'samples')
     $hadInput = Test-Path -LiteralPath (Join-Path $dataRoot 'config/input')
+    $hadRecord = Test-Path -LiteralPath (Join-Path $dataRoot 'record')
     $record = [pscustomobject]@{schema_version=1; operation=$operation; git_commit=$commit; phase='staging';
         old=$old; old_release=$oldRelease; legacy_directory=$legacyDirectory;
         had_checkout=(Test-Path -LiteralPath $checkout); had_runtime=(Test-Path -LiteralPath $runtime);
-        had_samples=$hadSamples; capture_completed=$false; had_input=$hadInput; input_files=(Get-PortableInputInventory (Join-Path $dataRoot 'config/input'))}
+        had_samples=$hadSamples; capture_completed=$false; had_input=$hadInput; input_files=(Get-PortableInputInventory (Join-Path $dataRoot 'config/input'));
+        had_record=$hadRecord; record_files=(Get-PortableInputInventory (Join-Path $dataRoot 'record'));
+        worker_before=(Get-PortableWorkerPointer $target); worker_candidate=$null}
     Save-PortableTransaction $target $record 'staging'
     Write-Host "Downloading source revision $($commit.Substring(0,12)) from main ..."
     Invoke-Checked $git @('-c','init.templateDir=','clone','--no-checkout','--depth','1','--single-branch','--branch','main',$Repository,$paths.source)
@@ -826,6 +995,13 @@ try {
     $release = Get-Content -LiteralPath (Join-Path $paths.candidate 'release-manifest.json') -Raw | ConvertFrom-Json
     if ($release.schema_version -ne 2 -or $release.git_commit -ne $commit -or $release.source_dirty) { throw 'The runtime does not belong to the unmodified main source revision.' }
     Get-PortableCandidateCustody $paths $record | Out-Null
+    $analysisReport = Join-Path $target ("cache/analysis-" + $operation + '.json')
+    Invoke-PortableAnalysis $actualTarget $paths.source $paths.candidate 'repair' $analysisReport
+    $analysis = Get-Content -LiteralPath $analysisReport -Raw | ConvertFrom-Json
+    if ($analysis.portable_analysis -ne 'passed') { throw 'Worker preparation did not establish readiness.' }
+    $record.worker_candidate = $analysis.pointer_bytes
+    Save-PortableTransaction $target $record 'staging'
+    Set-PortableWorkerSelection $target $record
     Invoke-PortableCheck $actualTarget $paths.source $paths.candidate
     Invoke-PortableModels $actualTarget $paths.source $paths.candidate 'repair'
     if ($legacyDirectory -and -not $oldRelease.PSObject.Properties['runtime_files']) {
@@ -843,6 +1019,7 @@ try {
     }
     if ($hadSamples -and (Test-Path -LiteralPath (Join-Path $paths.source 'samples'))) { throw 'New source samples conflict with existing samples.' }
     if ($hadInput -and (Test-Path -LiteralPath (Join-Path $paths.source 'config/input'))) { throw 'New input templates conflict with existing inputs.' }
+    if ($hadRecord -and (Test-Path -LiteralPath (Join-Path $paths.source 'record'))) { throw 'New source recordings conflict with existing recordings.' }
     $starters = @{}
     foreach ($name in @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) {
         $path = Join-Path $target $name; Assert-PlainPath $path
@@ -877,10 +1054,15 @@ try {
         Move-PortableDirectory (Join-Path $sourceRoot 'config/input') (Join-Path $paths.checkout 'config/input')
         Assert-PortableInventory (Join-Path $paths.checkout 'config/input') $record.input_files -VerifyHashes -IgnoreUnrecordedDirectories
     } else { [IO.Directory]::CreateDirectory((Join-Path $paths.checkout 'config/input')) | Out-Null }
+    if ($hadRecord) {
+        Move-PortableDirectory (Join-Path $sourceRoot 'record') (Join-Path $paths.checkout 'record')
+        Assert-PortableInventory (Join-Path $paths.checkout 'record') $record.record_files -VerifyHashes -IgnoreUnrecordedDirectories
+    }
     Save-PortableTransaction $target $record 'verifying'
     Get-PortableCandidateCustody $paths $record | Out-Null
     if ($hadSamples) { Invoke-PortableRelocation $actualTarget $paths.checkout $paths.runtime (Join-Path $sourceRoot 'samples') (Join-Path $paths.checkout 'samples') $paths.relocation 'recover' }
     Invoke-PortableCheck $actualTarget $paths.checkout $paths.runtime
+    Invoke-PortableAnalysis $actualTarget $paths.checkout $paths.runtime 'check' ''
     Invoke-PortableModels $actualTarget $paths.checkout $paths.runtime 'check'
     foreach ($name in @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) {
         $path = Join-Path $target $name; Assert-PlainPath $path
@@ -891,13 +1073,17 @@ try {
     Save-PortableTransaction $target $record 'accepted'
     Complete-PortableTransaction $target $record
     Write-Host "Looper is ready: $actualTarget\START-LOOPER.bat" -ForegroundColor Green
-    Write-Host 'Samples, PCM caches, configuration, inputs and both models were preserved/verified.'
+    Write-Host 'Samples, PCM caches, recordings/recovery, configuration, inputs and models/workers were preserved/verified.'
     exit 0
 } catch {
     $failure = $_.Exception.Message
     if ($null -ne $record -and $record.phase -notin @('staging','prepared','accepted','rolled_back')) {
         try { Undo-PortableTransaction $target $record }
         catch { Write-Warning "Recovery stopped: $($_.Exception.Message). Please run the same installer again." }
+    }
+    elseif ($null -ne $record -and $record.phase -in @('staging','prepared','rolled_back')) {
+        try { Set-PortableWorkerSelection $target $record -Restore }
+        catch { Write-Warning "Worker selection recovery stopped: $($_.Exception.Message)" }
     }
     Write-Host "Installation failed: $failure" -ForegroundColor Red
     Write-Host 'Existing data and recovery evidence will be preserved. The same installer can be run again.'

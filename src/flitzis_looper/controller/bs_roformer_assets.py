@@ -2,9 +2,9 @@ import argparse
 import hashlib
 import os
 import sys
-import tempfile
-import urllib.request
 from pathlib import Path
+
+from flitzis_looper.analysis.acquisition import acquire_pinned_asset
 
 UPSTREAM_COMMIT = "aef04b2e52fb3beaf25e333199f5a7236e628e7b"
 UPSTREAM_RELEASE = "v1.0.12"
@@ -47,34 +47,16 @@ def verify_model_assets(directory: Path) -> None:
 
 
 def install_model_assets(directory: Path) -> None:
-    """Explicitly download the pinned release assets and expose verified files."""
+    """Explicitly resume pinned release assets without an overall transfer deadline."""
+    directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     for filename, size, expected in MODEL_ASSETS:
-        target = directory / filename
-        if target.is_file():
-            with target.open("rb") as source:
-                digest = hashlib.file_digest(source, "sha256").hexdigest()
-            if target.stat().st_size == size and digest == expected:
-                continue
-        with tempfile.TemporaryDirectory(prefix=".install-", dir=directory) as temporary:
-            staged = Path(temporary) / filename
-            with (
-                urllib.request.urlopen(ASSET_BASE_URL + filename, timeout=120) as response,
-                staged.open("xb") as destination,
-            ):
-                written = 0
-                while chunk := response.read(1024 * 1024):
-                    written += len(chunk)
-                    if written > size:
-                        msg = f"Model download exceeds pinned size: {filename}"
-                        raise RuntimeError(msg)
-                    destination.write(chunk)
-            with staged.open("rb") as source:
-                digest = hashlib.file_digest(source, "sha256").hexdigest()
-            if written != size or digest != expected:
-                msg = f"Model download integrity check failed: {filename}"
-                raise RuntimeError(msg)
-            staged.replace(target)
+        acquire_pinned_asset(
+            directory / filename,
+            source_url=ASSET_BASE_URL + filename,
+            sha256=expected,
+            size_bytes=size,
+        )
     verify_model_assets(directory)
 
 

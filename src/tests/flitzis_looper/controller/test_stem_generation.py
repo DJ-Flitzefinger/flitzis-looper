@@ -1,5 +1,6 @@
 import os
 import struct
+import subprocess
 import sys
 import tomllib
 import wave
@@ -40,7 +41,7 @@ def test_demucs_declared_as_runtime_dependency() -> None:
     assert any(dependency.lower().startswith("torchcodec") for dependency in dependencies)
 
 
-def test_default_demucs_model_cache_uses_standard_torch_checkpoint_dir(tmp_path: Path) -> None:
+def test_default_demucs_model_cache_uses_clone_models_checkpoint_dir(tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     home = tmp_path / "home"
 
@@ -50,21 +51,57 @@ def test_default_demucs_model_cache_uses_standard_torch_checkpoint_dir(tmp_path:
         home_dir=home,
     )
 
-    assert cache_dir == home / ".cache" / "torch" / "hub" / "checkpoints"
+    assert cache_dir == project_root / "models" / "torch" / "hub" / "checkpoints"
 
 
-def test_default_demucs_model_cache_avoids_project_root(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "relative", ["samples/models", "record/models", "config/models", ".git", "src"]
+)
+def test_model_override_rejects_protected_repository_paths(tmp_path: Path, relative: str) -> None:
     project_root = tmp_path / "repo"
     project_root.mkdir()
 
-    cache_dir = default_demucs_model_cache_dir(
-        env={},
-        project_root=project_root,
-        home_dir=project_root,
-    )
+    with pytest.raises(ValueError, match="owned models directory"):
+        default_demucs_model_cache_dir(
+            env={MODEL_CACHE_DIR_ENV_VAR: str(project_root / relative)}, project_root=project_root
+        )
 
-    assert not _is_relative_to(cache_dir, project_root)
-    assert not _is_relative_to(cache_dir, project_root / "samples")
+
+def test_model_override_preserves_owned_clone_models_and_explicit_external_cache(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    for cache in (project / "models/custom", tmp_path / "dev-cache/models/checkpoints"):
+        assert (
+            default_demucs_model_cache_dir(
+                env={MODEL_CACHE_DIR_ENV_VAR: str(cache)}, project_root=project
+            )
+            == cache
+        )
+
+
+@pytest.mark.parametrize("aliased", ["models", "record"])
+def test_model_alias_cannot_overlap_models_and_recordings(tmp_path: Path, aliased: str) -> None:
+    project = tmp_path / "repo"
+    target = project / ("record" if aliased == "models" else "models")
+    target.mkdir(parents=True)
+    alias = project / aliased
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        alias.symlink_to(target, target_is_directory=True)
+    try:
+        for environment in ({}, {MODEL_CACHE_DIR_ENV_VAR: str(alias / "checkpoints")}):
+            with pytest.raises(ValueError, match="owned models directory"):
+                default_demucs_model_cache_dir(env=environment, project_root=project)
+    finally:
+        alias.rmdir() if os.name == "nt" else alias.unlink()
 
 
 @pytest.mark.parametrize("project_directory", ["data", "flitzis-looper"])

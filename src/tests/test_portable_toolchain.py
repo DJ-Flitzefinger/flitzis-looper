@@ -153,7 +153,7 @@ Write-ToolchainResult @{ selected=$selected; downloads=$script:downloads;
     signatures = result["signatures"]
     assert isinstance(signatures, list)
     assert len(signatures) == 2
-    assert str(signatures[0]).endswith(".partial.exe")
+    assert str(signatures[0]).endswith("vs_buildtools-17.exe.download.exe")
     assert Path(str(signatures[1])) == installer
     launches = result["launches"]
     assert isinstance(launches, list)

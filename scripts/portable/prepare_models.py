@@ -26,6 +26,7 @@ class ModelContext:
     checkout: Path
     runtime: Path | None
     mode: ModelMode
+    source_clone: bool = False
 
 
 class ModelCheckError(RuntimeError):
@@ -39,6 +40,13 @@ class ModelCheckError(RuntimeError):
 
 def configure(context: ModelContext) -> list[object]:
     """Use this checkout's bootstrap before any application or Torch import."""
+    if context.source_clone:
+        sys.path.insert(0, str(context.checkout / "src"))
+        os.chdir(context.checkout)
+        generation = importlib.import_module("flitzis_looper.controller.stem_generation")
+        cache = generation.default_demucs_model_cache_dir(project_root=context.checkout)
+        os.environ.update(generation.demucs_cache_environment(cache))
+        return []
     path = context.checkout / "scripts" / "portable" / "bootstrap.py"
     spec = importlib.util.spec_from_file_location("portable_model_bootstrap", path)
     if spec is None or spec.loader is None:
@@ -61,8 +69,9 @@ def model_cache_dirs(context: ModelContext) -> dict[StemSeparator, Path]:
         cache = separators.separator_model_cache_dir(
             separator, env=dict(os.environ), project_root=context.checkout
         ).resolve()
-        if not cache.is_relative_to(context.root / "models") or cache.is_relative_to(
-            context.checkout
+        if not context.source_clone and (
+            not cache.is_relative_to(context.root / "models")
+            or cache.is_relative_to(context.checkout)
         ):
             msg = f"Portable model cache leaves the owned sibling models directory: {cache}"
             raise RuntimeError(msg)
@@ -81,6 +90,47 @@ def demucs_checkpoints(cache: Path) -> Iterator[tuple[Path, str]]:
         yield path, Path(filename).stem.rsplit("-", 1)[1]
 
 
+def asset_metadata(context: ModelContext) -> list[dict[str, object]]:
+    """Describe only pinned owned targets; shared PowerShell acquires the bytes."""
+    caches = model_cache_dirs(context)
+    pins = importlib.import_module("flitzis_looper.controller.model_pins").DEMUCS_ASSETS
+    result: list[dict[str, object]] = []
+    for path, prefix in demucs_checkpoints(caches["demucs:htdemucs"]):
+        if path.name not in pins:
+            message = f"No full Portable model pin for {path.name}"
+            raise RuntimeError(message)
+        size, checksum, url = pins[path.name]
+        if not checksum.startswith(prefix):
+            message = "Portable Demucs pin differs from the locked product identity"
+            raise RuntimeError(message)
+        result.append({
+            "relative_path": path.relative_to(context.root).as_posix(),
+            "bytes": size,
+            "sha256": checksum,
+            "url": url,
+        })
+    assets = importlib.import_module("flitzis_looper.controller.bs_roformer_assets")
+    for filename, size, checksum in assets.MODEL_ASSETS:
+        path = caches["bs-roformer:musdb18hq"] / filename
+        if not path.resolve().is_relative_to((context.root / "models").resolve()):
+            message = "Portable model target escapes its owned directory"
+            raise RuntimeError(message)
+        result.append({
+            "relative_path": path.relative_to(context.root).as_posix(),
+            "bytes": size,
+            "sha256": checksum,
+            "url": assets.ASSET_BASE_URL + filename,
+        })
+    return result
+
+
+def deny_model_network(event: str, _arguments: tuple[object, ...]) -> None:
+    """CPU checks must consume verified local assets, never repair via a library."""
+    if event in {"socket.connect", "socket.getaddrinfo"}:
+        message = "Portable model checks require pre-acquired pinned local assets"
+        raise RuntimeError(message)
+
+
 def verify_demucs(cache: Path) -> None:
     """Rehash cache hits, which Demucs' remote downloader otherwise trusts."""
     repo = importlib.import_module("demucs.repo")
@@ -92,21 +142,7 @@ def verify_demucs(cache: Path) -> None:
 
 
 def repair_demucs(cache: Path) -> None:
-    """Let the locked Demucs downloader replace only absent or corrupt required files."""
-    repo = importlib.import_module("demucs.repo")
-    cache.mkdir(parents=True, exist_ok=True)
-    needs_download = False
-    for path, checksum in demucs_checkpoints(cache):
-        if not path.exists():
-            needs_download = True
-            continue
-        try:
-            repo.check_checksum(path, checksum)
-        except repo.ModelLoadingError:
-            path.unlink()
-            needs_download = True
-    if needs_download:
-        importlib.import_module("demucs.pretrained").get_model("htdemucs")
+    """Validate assets acquired through resumable shared Portable transfers."""
     verify_demucs(cache)
 
 
@@ -124,7 +160,7 @@ def operate_model(separator: StemSeparator, cache: Path, action: ModelAction) ->
         raise ValueError(msg)
     assets = importlib.import_module("flitzis_looper.controller.bs_roformer_assets")
     if action == "prepare":
-        assets.install_model_assets(cache)
+        assets.verify_model_assets(cache)
         return
     assets.verify_model_assets(cache)
     importlib.import_module("flitzis_bs_roformer.model").load_model(
@@ -152,6 +188,8 @@ def run_model_child(context: ModelContext, separator: StemSeparator, action: Mod
     ]
     if context.runtime is not None:
         command.extend(["--runtime", str(context.runtime)])
+    if context.source_clone:
+        command.append("--source-clone")
     result = subprocess.run(
         command,
         cwd=context.checkout,
@@ -200,6 +238,7 @@ def run_internal_child(context: ModelContext, separator: str, action: ModelActio
         msg = "Invalid Portable model child action"
         raise ValueError(msg)
     selected = cast("StemSeparator", separator)
+    sys.addaudithook(deny_model_network)
     operate_model(selected, caches[selected], action)
 
 
@@ -212,19 +251,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--child-action", choices=("prepare", "load"), help=argparse.SUPPRESS)
     parser.add_argument("--separator", help=argparse.SUPPRESS)
+    parser.add_argument("--source-clone", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--asset-metadata",
+        action="store_true",
+        help="Return pinned targets for shared resumable installer acquisition",
+    )
     args = parser.parse_args(argv)
     context = ModelContext(
         args.root.resolve(),
         args.checkout.resolve(),
         None if args.runtime is None else args.runtime.resolve(),
         args.mode,
+        args.source_clone,
     )
     dll_handles: list[object] = []
     try:
         dll_handles = configure(context)
-        if args.child_action is not None:
-            run_internal_child(context, args.separator, args.child_action)
+        if args.asset_metadata:
+            if args.child_action is not None:
+                parser.error("Asset metadata is separate from model execution")
             report: dict[str, object] = {
+                "portable_models": "passed",
+                "assets": asset_metadata(context),
+                "model_loading_executed": False,
+            }
+        elif args.child_action is not None:
+            run_internal_child(context, args.separator, args.child_action)
+            report = {
                 "portable_models": "passed",
                 "mode": context.mode,
                 "stage": args.child_action,

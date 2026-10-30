@@ -27,8 +27,9 @@ or credential changes. Workspace-local continuation rights stay in local memory.
 Run commands from the repository root:
 
 ```powershell
-uv sync
-uv run maturin develop
+uv sync --locked
+uv run --no-sync maturin develop --locked
+uv run --no-sync python scripts/setup-runtime.py
 ```
 
 On Windows the lock resolves Torch 2.12.0 and TorchAudio 2.11.0 from the explicit
@@ -37,7 +38,13 @@ official CUDA 13.0 index. CUDA wheels still support CPU execution. The local
 it installs through `uv sync`, without installing training/model families.
 Model assets remain an explicit separate installation. See
 [stem setup](stem-generation-setup.md) for identities, driver verification and rollback.
-The optional Beat This environment and its frozen CPU/model acceptance are unchanged.
+Automatic BPM analysis requires the separately locked BeatThis worker. The setup
+command above provisions and verifies it at ignored `models/beat-this/`, with
+resumable acquisition/scratch in `.cache/runtime-setup/`; it opens no App or audio
+device and performs no inference. Use `--check` for non-acquiring verification and
+`--with-stems` to additionally acquire and CPU-load both optional separator models
+at `models/torch/hub/checkpoints/`. Explicit managed developer model/cache overrides
+remain supported. See [BeatThis setup](beat-this-setup.md).
 
 On Windows, double-click `build-release.bat` to build the Release once, then
 double-click the official `start.bat` entrypoint for normal starts. For direct

@@ -210,7 +210,7 @@ class AppController:
             or beat_this_installation_root is not None
         ):
             self._beat_this_installation_root = (
-                Path.cwd().absolute().parent / "analysis-runtime" / "beat-this"
+                Path.cwd().absolute() / "models" / "beat-this"
                 if beat_this_installation_root is None
                 else beat_this_installation_root.absolute()
             )

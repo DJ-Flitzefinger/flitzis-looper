@@ -106,7 +106,8 @@ Prerequisites:
 - [uv](https://docs.astral.sh/uv/)
 - Rust toolchain
 - Rubber Band native development/runtime library for Rubber Band Key Lock builds
-- FFmpeg and Demucs model files only if you use stem generation
+- FFmpeg and both separator models only if you use stem generation
+- The separately locked Python 3.12 BeatThis worker for automatic BPM analysis
 
 ### Native Rubber Band Dependency
 
@@ -175,9 +176,30 @@ Install dependencies and build the editable native extension from the repository
 root:
 
 ```powershell
-uv sync
-uv run maturin develop
+uv sync --locked
+uv run --no-sync maturin develop --locked
+uv run --no-sync python scripts/setup-runtime.py
 ```
+
+The last command prepares and verifies the required BeatThis worker without
+starting the App, audio devices or inference. Its files stay in ignored
+`models/beat-this/`; setup scratch and retained downloads stay in `.cache/runtime-setup/`.
+Run the same command again to verify or repair it. Package/model transfers retain
+partial bytes and have no total download deadline. Use `--check` for a fresh
+non-inference environment check without acquisition.
+
+For optional Stem generation, after installing FFmpeg, also run:
+
+```powershell
+uv run --no-sync python scripts/setup-runtime.py --with-stems
+```
+
+This acquires the exact Demucs and BS-RoFormer models into ignored
+`models/torch/hub/checkpoints/` and loads both on CPU in fresh processes without
+inference. An explicit `FLITZIS_MODEL_CACHE_DIR` remains authoritative for managed
+developer caches and independent installations. No old workspace or test artifact
+folder is needed. Portable installations keep their independent installation-owned
+model and worker directories.
 
 Start the app:
 

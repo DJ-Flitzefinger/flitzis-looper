@@ -7,7 +7,6 @@ import importlib
 import inspect
 import json
 import os
-import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +25,17 @@ def physical_path(path: Path) -> Path:
 
 def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[object]:
     """Select one checkout and its private interpreter before importing the app."""
+    for name in tuple(os.environ):
+        if name.startswith("FLITZIS_WORKSPACE") or name in {
+            "FLITZIS_NATIVE_EXTENSION_DIR",
+            "FLITZIS_BEAT_THIS_ROOT",
+            "FLITZIS_RUNTIME_ACTIVE",
+            "FLITZIS_RUNTIME_ARGS",
+            "FLITZIS_APPLICATION_SOURCE_STAGE",
+            "PYTHONSTARTUP",
+            "PYTHONUSERBASE",
+        }:
+            os.environ.pop(name, None)
     runtime = runtime or Path(sys.executable).absolute().parent.parent
     sys.path.insert(0, str(checkout / "src"))
     os.environ["PYTHONPATH"] = str(checkout / "src")
@@ -33,9 +43,24 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
     os.environ["FLITZIS_MODEL_CACHE_DIR"] = str(root / "models/torch/hub/checkpoints")
     os.environ["TORCH_HOME"] = str(root / "models/torch")
     os.environ["HF_HOME"] = str(root / "models/huggingface")
+    os.environ["HF_HUB_CACHE"] = str(root / "models/huggingface/hub")
     os.environ["XDG_CACHE_HOME"] = str(root / "cache")
     os.environ["DORA_DIR"] = str(root / "cache/dora")
     os.environ["TMP"] = os.environ["TEMP"] = str(root / "cache/temp")
+    for name, relative in {
+        "PIP_CACHE_DIR": "cache/pip",
+        "UV_CACHE_DIR": "cache/uv",
+        "HF_ASSETS_CACHE": "models/huggingface/assets",
+        "HUGGINGFACE_HUB_CACHE": "models/huggingface/hub",
+        "NUMBA_CACHE_DIR": "cache/numba",
+        "CUDA_CACHE_PATH": "cache/cuda",
+        "TRITON_CACHE_DIR": "cache/triton",
+        "TORCHINDUCTOR_CACHE_DIR": "cache/torchinductor",
+        "TORCH_EXTENSIONS_DIR": "cache/torch-extensions",
+        "MPLCONFIGDIR": "cache/matplotlib",
+        "PYTHONPYCACHEPREFIX": "cache/pycache",
+    }.items():
+        os.environ[name] = str(root / relative)
     ffmpeg = runtime / "runtime/ffmpeg"
     os.environ["FLITZIS_FFMPEG_DIR"] = str(ffmpeg)
     os.environ["PATH"] = os.pathsep.join(
@@ -647,15 +672,31 @@ def check_bpm_only_runtime_api(native_module: object) -> None:
 def check_beat_this_execution_api(engine_type: object, installation_root: Path) -> None:
     """Only a selected CUDA profile requires the new Native execution protocol."""
     if not (installation_root / "current.json").is_file():
-        return
+        message = "Portable BeatThis worker is missing; run the installer to repair it"
+        raise RuntimeError(message)
     execution = importlib.import_module("flitzis_looper.analysis.execution")
     setup = importlib.import_module("flitzis_looper.analysis.setup")
     configuration = setup.load_worker_configuration(installation_root, installation_root.parent)
+    setup.load_staged_worker_configuration(
+        installation_root, configuration.manifest.parent, installation_root.parent
+    )
+    helper_path = Path(__file__).with_name("prepare_analysis.py")
+    if not helper_path.is_file():
+        message = "Portable analysis verification helper is missing"
+        raise RuntimeError(message)
+    specification = importlib.util.spec_from_file_location(
+        "portable_analysis_verification", helper_path
+    )
+    helper = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(helper)
+    helper.verify_python(configuration.manifest.parent / ".venv", installation_root.parents[1])
     if isinstance(configuration.model, execution.CudaBeatModelIdentity):
         execution.require_cuda_native_capability(engine_type)
 
 
-def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
+def check_runtime(
+    root: Path, checkout: Path, runtime: Path, *, require_analysis: bool = True
+) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
     native = physical_path(Path(native_module.flitzis_looper_audio.__file__))
@@ -673,9 +714,10 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     check_global_rate_api(native_module.AudioEngine)
     check_mix_capture_api(native_module)
     check_bpm_only_runtime_api(native_module)
-    check_beat_this_execution_api(
-        native_module.AudioEngine, checkout.parent / "analysis-runtime" / "beat-this"
-    )
+    if require_analysis:
+        check_beat_this_execution_api(
+            native_module.AudioEngine, root / "analysis-runtime" / "beat-this"
+        )
     check_ordinary_transport_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
@@ -724,6 +766,7 @@ def check_runtime(root: Path, checkout: Path, runtime: Path) -> None:
     sys.stdout.write(
         json.dumps({
             "portable_preflight": "passed",
+            "analysis_checked": require_analysis,
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
@@ -740,7 +783,14 @@ def main() -> None:
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-runtime", action="store_true")
+    parser.add_argument(
+        "--check-build-runtime",
+        action="store_true",
+        help="Internal bundle preflight before installer worker selection; not App readiness",
+    )
     args = parser.parse_args()
+    if args.check_build_runtime and (args.check or args.check_runtime):
+        parser.error("Build runtime preflight is distinct from final readiness")
     # Preserve the starter's short operational path; use resolved paths only
     # when proving that imports/DLLs belong to this private runtime.
     runtime = args.runtime or Path(__file__).absolute().parent
@@ -748,10 +798,13 @@ def main() -> None:
     checkout = args.checkout or root / "flitzis-looper"
     dll_handles = configure(root, checkout, runtime)
     assert dll_handles
-    if args.check or args.check_runtime:
-        check_runtime(root, checkout, runtime)
+    if args.check or args.check_runtime or args.check_build_runtime:
+        check_runtime(root, checkout, runtime, require_analysis=not args.check_build_runtime)
     else:
-        runpy.run_module("flitzis_looper", run_name="__main__")
+        from flitzis_looper.controller import AppController  # noqa: PLC0415
+        from flitzis_looper.ui import run_ui  # noqa: PLC0415
+
+        run_ui(AppController(beat_this_installation_root=root / "analysis-runtime/beat-this"))
 
 
 if __name__ == "__main__":

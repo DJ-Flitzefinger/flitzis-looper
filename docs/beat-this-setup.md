@@ -51,7 +51,7 @@ The separate `workers/beat_this` project pins Python 3.12.13, Beat This 1.1.0,
 Torch/torchaudio 2.8.0 CPU, NumPy 2.2.6, soxr 0.5.0.post1, einops 0.8.1 and
 rotary-embedding-torch 0.8.9. `uv.lock` pins the complete dependency closure and
 distribution hashes. This initial environment supports Windows x64 only. It is
-independent of the application's Python 3.14 environment; optional Beat This
+independent of the application's Python 3.14 environment; separate Beat This
 setup does not remove the base application's existing Torch/Demucs dependencies.
 
 The worker runs CPU FP32 with one Torch computation thread and one interop
@@ -76,23 +76,39 @@ retains its two-minute limit, independently of inference and audio-process guard
 
 ## Explicit setup
 
-Run from the repository root. Keep the runtime/model outside the Git repository
-and use absolute paths. For this workspace, the following uses local sibling
-directories:
+Automatic BPM needs this worker in addition to `uv sync` and the main Native
+build. For an ordinary source clone, run from the repository root:
 
 ```powershell
-$workspacePath = (Resolve-Path ..).Path
+uv run --no-sync python scripts/setup-runtime.py
+uv run --no-sync python scripts/setup-runtime.py --check
+```
+
+Setup verifies a fresh non-inference environment before selecting a new worker.
+It preserves a valid selected CUDA profile unless `--profile` explicitly chooses
+another profile. It opens no App/audio device and performs no inference. Use
+`--with-stems` to additionally prepare and CPU-load both optional separator models.
+The source default is ignored `models/beat-this/`; scratch and retained downloads
+stay in ignored `.cache/runtime-setup/`. No historical workspace is required.
+Portable and managed developer launchers explicitly bind their own installation
+roots instead of inheriting this clone default.
+
+The lower-level setup API also accepts absolute installation/scratch paths.
+For the same source-clone layout:
+
+```powershell
+$repositoryPath = (Get-Location).Path
 uv run python -m flitzis_looper.analysis.setup `
-  --install-dir "$workspacePath\analysis-runtime\beat-this" `
-  --scratch-dir "$workspacePath\scratch\b1b\setup"
+  --install-dir "$repositoryPath\models\beat-this" `
+  --scratch-dir "$repositoryPath\.cache\runtime-setup"
 ```
 
 This is the operation that can download the locked interpreter/packages and the
 selected checkpoint. Normal startup, loading, restoration and analysis never
-invoke it. `uv` uses its normal package/interpreter caches. Setup logs stay in
-the requested scratch directory.
+invoke it. `uv` uses its normal package/interpreter caches. Setup logs and resumable pinned checkpoint downloads stay in
+the requested scratch directory, outside temporary environment staging.
 
-The application binds this documented sibling installation for normal BPM
+The application binds this documented repo-local installation for normal BPM
 analysis. Missing or invalid installations are reported without silently falling
 back to QM. Worker inference retains complete Beat This observations for the
 stable-section estimator; it does not create playback maps.
@@ -129,9 +145,9 @@ that exact retained directory with:
 
 ```powershell
 uv run python -m flitzis_looper.analysis.setup `
-  --install-dir "$workspacePath\analysis-runtime\beat-this" `
-  --scratch-dir "$workspacePath\scratch\b1b\setup" `
-  --activate-installation "$workspacePath\analysis-runtime\beat-this\installation-<UUID>"
+  --install-dir "$repositoryPath\models\beat-this" `
+  --scratch-dir "$repositoryPath\.cache\runtime-setup" `
+  --activate-installation "$repositoryPath\models\beat-this\installation-<UUID>"
 ```
 
 Activation rechecks the known manifest, files and checkpoint of a direct child of

@@ -2,7 +2,8 @@
 
 ## Purpose
 
-<!-- Purpose to be updated after merge -->
+Define background stem generation, isolated model acquisition and verified publication
+while preserving source-owned audio and realtime playback boundaries.
 
 ## Requirements
 
@@ -286,19 +287,22 @@ invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and
 
 <!-- From add-offline-stem-cache -->
 ### Requirement: Demucs Model Cache And Device Fallback Stay Off The Audio Path
-The system SHALL use Demucs' standard Torch Hub checkpoint cache and resolve GPU-to-CPU fallback
+The system SHALL use the configured, isolated model directory and resolve GPU-to-CPU fallback
 only on the background generation path.
 
-On Windows the default Demucs model checkpoint directory SHALL be
-`C:\Users\<YOUR_NAME>\.cache\torch\hub\checkpoints`. The default `htdemucs` model SHALL require
+The source-clone default Demucs model checkpoint directory SHALL be
+`models/torch/hub/checkpoints` inside the repository and ignored by Git. Explicit
+external model-cache overrides SHALL retain precedence, including managed developer
+and installation-owned Portable caches. Model paths inside protected sample,
+recording, configuration or source trees SHALL be rejected without a global TEMP fallback. The default `htdemucs` model SHALL require
 the `955717e8-8726e21a.th` checkpoint in that directory before UI-driven generation invokes
 Demucs. The default device policy SHALL attempt CUDA only when Torch reports it is available, then
 retry once on CPU if the CUDA run fails.
 
-#### Scenario: Model files are not stored in the project cache
+#### Scenario: Models are separate from generated stem artifacts
 - **GIVEN** a performer starts Demucs stem generation
 - **WHEN** the backend prepares model cache configuration
-- **THEN** model lookup uses the standard Torch Hub checkpoint cache outside the repository and outside `samples/stems/`
+- **THEN** model lookup uses the ignored repo-local models directory or its explicit external override, outside `samples/stems/`
 - **AND** the project cache stores only generated stem artifacts
 
 #### Scenario: CUDA failure falls back to CPU

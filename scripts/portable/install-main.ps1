@@ -18,8 +18,8 @@ function Get-VerifiedArchive([string] $Name, [string] $Url, [string] $Hash) {
     $directory = Join-Path $Root "tools/$Name"
     Assert-PlainPath $directory
     if (-not (Test-Path -LiteralPath (Join-Path $directory 'verified.json'))) {
-        $archive = Join-Path $Root "cache/$Name-$([Guid]::NewGuid().ToString('N')).zip"
-        Read-Payload ([Uri]$Url) $archive
+        $archive = Join-Path $Root "cache/$Name.zip"
+        Read-Payload ([Uri]$Url) $archive $Hash
         Assert-Hash $archive $Hash
         $directory = "$directory-$([Guid]::NewGuid().ToString('N'))"
         [IO.Directory]::CreateDirectory($directory) | Out-Null

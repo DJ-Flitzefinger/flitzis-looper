@@ -41,13 +41,19 @@ provide the selected Windows/Python 3.14 CUDA wheel.
 For a fresh checkout, run:
 
 ```powershell
-uv --no-cache sync
-$env:UV_NO_CACHE='1'; uv --no-cache run maturin develop
+uv sync --locked
+uv run --no-sync maturin develop --locked
+uv run --no-sync python scripts/setup-runtime.py --with-stems
 ```
 
-Normal `uv sync` uses the standard uv package cache; models use the standard Torch
-Hub checkpoint cache. These are runtime/tool caches outside the repository. No
-checkpoint, private audio or generated separation is committed.
+Normal `uv sync` uses its package cache. Downloaded models belong to this clone's
+ignored `models/` directory: Stem checkpoints use `models/torch/hub/checkpoints/`,
+and required automatic-BPM resources use `models/beat-this/`. Setup scratch and
+retained transfers use `.cache/runtime-setup/`. An explicit `FLITZIS_MODEL_CACHE_DIR`
+keeps precedence, including managed developer C caches and Portable's independent
+installation Root. Model paths inside samples, recordings or repository code are
+rejected rather than redirected to a global temporary directory. No checkpoint,
+private audio or generated separation is committed.
 
 ## Install The Exact BS-RoFormer Model
 
@@ -57,7 +63,7 @@ different from the similarly named single-vocals training example in the reposit
 Install explicitly once; Generate Stems and Settings never download models:
 
 ```powershell
-uv run --no-sync python -m flitzis_looper.controller.bs_roformer_assets --directory "$env:USERPROFILE\.cache\torch\hub\checkpoints\bs-roformer-musdb18hq"
+uv run --no-sync python scripts/setup-runtime.py --with-stems
 ```
 
 | Release asset | Bytes | SHA256 |
@@ -65,7 +71,7 @@ uv run --no-sync python -m flitzis_looper.controller.bs_roformer_assets --direct
 | `config_bs_roformer_384_8_2_485100.yaml` | 4566 | `d8afb980318d0c08b9c2e24a7adc00d4f3150320c127a7e4de861800d1321939` |
 | `model_bs_roformer_ep_17_sdr_9.6568.ckpt` | 527385512 | `3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb` |
 
-The explicit installer checks full size/hash before atomic replacement. The
+The explicit installer resumes retained transfers and checks full size/hash before atomic replacement. The
 adapter and worker verify identities before deserialization; the worker hashes
 and loads weights from the same retained file handle with `weights_only=True`
 and strict state matching. Missing/corrupt files fail with an offline model error.
@@ -113,7 +119,7 @@ The Looper resolves FFmpeg in this order:
 If the app cannot find FFmpeg even though PowerShell can, start it with an explicit FFmpeg folder:
 
 ```powershell
-$env:FLITZIS_FFMPEG_DIR="C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build-shared\bin"
+$env:FLITZIS_FFMPEG_DIR="C:\Tools\ffmpeg\bin"
 uv --no-cache run --no-sync python -m flitzis_looper
 ```
 
@@ -125,13 +131,13 @@ The Looper does not download the model from the UI. Install the default model
 once from the project environment:
 
 ```powershell
-uv --no-cache run --no-sync python -c "from demucs.pretrained import get_model; get_model('htdemucs'); print('htdemucs model installed')"
+uv run --no-sync python scripts/setup-runtime.py --with-stems
 ```
 
-The expected Windows checkpoint path is:
+The expected checkpoint path, relative to the repository root, is:
 
 ```text
-C:\Users\<YOUR_NAME>\.cache\torch\hub\checkpoints\955717e8-8726e21a.th
+models/torch/hub/checkpoints/955717e8-8726e21a.th
 ```
 
 If this file is missing, **Generate Stems** reports:
@@ -145,7 +151,7 @@ no Model installed
 Run this from the repository root after `uv sync`, FFmpeg install, and model install:
 
 ```powershell
-uv --no-cache run --no-sync python -c "from pathlib import Path; import subprocess, sys; from flitzis_looper.controller.stem_generation import demucs_cache_environment; env=demucs_cache_environment(Path.home()/'.cache'/'torch'/'hub'/'checkpoints'); subprocess.run(['ffprobe','-version'], env=env, check=True); subprocess.run(['ffmpeg','-version'], env=env, check=True); subprocess.run([sys.executable,'-c','import demucs, torch, torchaudio, torchcodec.encoders'], env=env, check=True); print('Stem prerequisites OK')"
+uv --no-cache run --no-sync python -c "from pathlib import Path; import subprocess, sys; from flitzis_looper.controller.stem_generation import demucs_cache_environment; from flitzis_looper.controller.stem_generation import default_demucs_model_cache_dir; env=demucs_cache_environment(default_demucs_model_cache_dir()); subprocess.run(['ffprobe','-version'], env=env, check=True); subprocess.run(['ffmpeg','-version'], env=env, check=True); subprocess.run([sys.executable,'-c','import demucs, torch, torchaudio, torchcodec.encoders'], env=env, check=True); print('Stem prerequisites OK')"
 ```
 
 ## CUDA
@@ -182,7 +188,7 @@ it never switches BS-RoFormer to Demucs automatically. CUDA wheels themselves ca
 execute CPU operations. For a broken install, rerun `uv sync --locked`, then
 `uv run --no-sync maturin develop`; verify both model/tool prerequisites. Returning
 to Demucs is a model choice, not a dependency removal or cache reset. This selector
-does not authorize or activate the separate Beat This automatic-analyzer cutover.
+does not change the required BeatThis automatic-BPM worker setup.
 
 ## Expected Runtime Errors
 

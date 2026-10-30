@@ -1,5 +1,6 @@
 """Exercise model repair boundaries; fixtures do not claim actual CPU model loading."""
 
+import base64
 import hashlib
 import importlib.util
 import io
@@ -58,6 +59,20 @@ def test_shared_resolver_keeps_both_portable_models_outside_checkout(tmp_path: P
 
     assert paths["demucs:htdemucs"] == cache
     assert paths["bs-roformer:musdb18hq"] == cache / "bs-roformer-musdb18hq"
+
+
+def test_source_clone_mode_allows_owned_models_without_relaxing_portable_guard(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(MODEL_CACHE_DIR_ENV_VAR, raising=False)
+    monkeypatch.chdir(tmp_path)
+    source = helper.ModelContext(tmp_path, tmp_path, None, "check", source_clone=True)
+    assert helper.model_cache_dirs(source)["demucs:htdemucs"] == (
+        tmp_path / "models/torch/hub/checkpoints"
+    )
+    portable = helper.ModelContext(tmp_path, tmp_path, None, "check")
+    with pytest.raises(RuntimeError, match="owned sibling models directory"):
+        helper.model_cache_dirs(portable)
 
 
 def test_parent_prepares_both_before_sequential_fresh_cpu_checks(
@@ -181,7 +196,7 @@ def fake_demucs(
 
 
 @pytest.mark.parametrize("existing", ["missing", "valid", "corrupt"])
-def test_demucs_repairs_only_required_invalid_checkpoint(
+def test_demucs_prepare_only_verifies_preacquired_checkpoint(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch, existing: str
 ) -> None:
     cache = tmp_path / "checkpoints"
@@ -192,11 +207,14 @@ def test_demucs_repairs_only_required_invalid_checkpoint(
     if existing != "missing":
         checkpoint.write_bytes(payload if existing == "valid" else b"x" * len(payload))
 
-    helper.repair_demucs(cache)
-
-    assert checkpoint.read_bytes() == payload
+    if existing == "valid":
+        helper.repair_demucs(cache)
+        assert checkpoint.read_bytes() == payload
+    else:
+        with pytest.raises(RuntimeError, match=r"no Model installed|invalid pinned checksum"):
+            helper.repair_demucs(cache)
     assert unrelated.read_bytes() == b"preserve this model"
-    assert downloader.call_count == (0 if existing == "valid" else 1)
+    downloader.assert_not_called()
 
 
 @pytest.mark.parametrize("existing", ["missing", "corrupt"])
@@ -213,16 +231,16 @@ def test_demucs_check_rejects_bad_cache_before_loader_or_download(
     downloader.assert_not_called()
 
 
-def test_demucs_rejects_corrupt_download_before_final_cpu_check(
+def test_demucs_prepare_never_falls_back_to_library_download(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     payload, checkpoint, downloader = fake_demucs(helper, monkeypatch, tmp_path)
     downloader.side_effect = lambda _name: checkpoint.write_bytes(b"x" * len(payload))
 
-    with pytest.raises(RuntimeError, match="invalid pinned checksum"):
+    with pytest.raises(RuntimeError, match="no Model installed"):
         helper.repair_demucs(tmp_path)
 
-    downloader.assert_called_once_with("htdemucs")
+    downloader.assert_not_called()
 
 
 def test_demucs_valid_cache_is_verified_and_loaded_on_cpu(
@@ -240,19 +258,22 @@ def test_demucs_valid_cache_is_verified_and_loaded_on_cpu(
     cpu.assert_called_once_with("cpu")
 
 
-def test_bs_repair_uses_existing_pinned_atomic_installer(
+def test_bs_prepare_verifies_without_legacy_temporary_downloads(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     installer = Mock()
+    verifier = Mock()
     monkeypatch.setattr(bs_roformer_assets, "install_model_assets", installer)
+    monkeypatch.setattr(bs_roformer_assets, "verify_model_assets", verifier)
 
     helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
 
-    installer.assert_called_once_with(tmp_path)
+    verifier.assert_called_once_with(tmp_path)
+    installer.assert_not_called()
 
 
 @pytest.mark.parametrize("existing", ["missing", "valid", "corrupt"])
-def test_bs_asset_repair_reuses_size_digest_and_atomic_resolver(
+def test_bs_prepare_rejects_invalid_preacquired_bytes_without_downloading(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch, existing: str
 ) -> None:
     payloads = {
@@ -281,15 +302,18 @@ def test_bs_asset_repair_reuses_size_digest_and_atomic_resolver(
         return io.BytesIO(payloads[filename])
 
     monkeypatch.setattr(urllib.request, "urlopen", download)
-    helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
-
-    bs_roformer_assets.verify_model_assets(tmp_path)
+    if existing == "valid":
+        helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
+        bs_roformer_assets.verify_model_assets(tmp_path)
+    else:
+        with pytest.raises(RuntimeError, match=r"no Model installed|integrity check failed"):
+            helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
     assert unrelated.read_bytes() == b"unchanged"
-    assert downloads == ([] if existing == "valid" else list(payloads))
+    assert downloads == []
     assert not list(tmp_path.glob(".install-*"))
 
 
-def test_bs_failed_download_preserves_existing_asset_and_blocks_repair(
+def test_bs_invalid_preacquired_asset_is_preserved_and_blocks_repair(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / bs_roformer_assets.CONFIG_FILENAME
@@ -306,11 +330,152 @@ def test_bs_failed_download_preserves_existing_asset_and_blocks_repair(
         lambda _url, **_kwargs: io.BytesIO(b"x" * len(payload)),
     )
 
-    with pytest.raises(RuntimeError, match="download integrity check failed"):
+    with pytest.raises(RuntimeError, match="integrity check failed"):
         helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
 
     assert target.read_bytes() == b"old invalid config"
     assert not list(tmp_path.glob(".install-*"))
+
+
+def test_asset_metadata_has_complete_public_pins_and_owned_relative_targets(
+    helper: ModuleType,
+    context: ModelContext,
+) -> None:
+    metadata = helper.asset_metadata(context)
+    assert len(metadata) == 3
+    assert all(
+        item["relative_path"].startswith("models/torch/hub/checkpoints/") for item in metadata
+    )
+    assert all(len(item["sha256"]) == 64 and item["bytes"] > 0 for item in metadata)
+    assert all(item["url"].startswith("https://") for item in metadata)
+    demucs = next(
+        item for item in metadata if item["relative_path"].endswith("955717e8-8726e21a.th")
+    )
+    assert demucs["sha256"] == "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4"
+    assert demucs["bytes"] == 84141911
+
+
+def test_model_child_network_guard_forbids_implicit_library_acquisition(helper: ModuleType) -> None:
+    helper.deny_model_network("open", ())
+    for event in ("socket.connect", "socket.getaddrinfo"):
+        with pytest.raises(RuntimeError, match="pre-acquired pinned local assets"):
+            helper.deny_model_network(event, ())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Portable launcher orchestration")
+def test_actual_launcher_acquires_full_pins_before_model_checks(
+    helper: ModuleType, context: ModelContext, tmp_path: Path
+) -> None:
+    """Use the real launch script with a tiny executable and network-free transfers."""
+    portable = Path(__file__).resolve().parents[2] / "scripts" / "portable"
+    runtime = context.runtime
+    assert runtime is not None
+    python = runtime / "python" / "python.exe"
+    python.parent.mkdir(parents=True)
+    trace = tmp_path / "model-orchestration.jsonl"
+    metadata = helper.asset_metadata(context)
+    (runtime / "common.ps1").write_text(
+        (portable / "common.ps1").read_text(encoding="utf-8")
+        + r"""
+function Read-Payload([Uri] $Uri, [string] $Destination, [string] $Sha256,
+    [long] $ExpectedBytes) {
+    $entry = @{event='transfer'; url=$Uri.AbsoluteUri; destination=$Destination;
+        sha256=$Sha256; bytes=$ExpectedBytes} | ConvertTo-Json -Compress
+    [IO.File]::AppendAllText($env:LOOPER_TEST_MODEL_TRACE,$entry + "`n")
+    [IO.File]::WriteAllText($Destination,'mock acquired bytes; never a real model')
+}
+""",
+        encoding="utf-8-sig",
+    )
+    # Keep the actual script's long-path branch deterministic without SUBST side effects.
+    (runtime / "build-path.ps1").write_text(
+        r"""
+function Resolve-PortablePhysicalPath([string] $Path) { return [IO.Path]::GetFullPath($Path) }
+function New-PortableBuildDrive([string] $Root) { return @{Path=$Root.TrimEnd('\') + '\'} }
+function Remove-PortableBuildDrive($Drive) {}
+""",
+        encoding="utf-8-sig",
+    )
+    fixture = r"""
+using System;
+using System.IO;
+using System.Text;
+public static class ModelLauncherFixture {
+    static string Enc(string value) {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    }
+    public static int Main(string[] args) {
+        bool metadata = Array.IndexOf(args, "--asset-metadata") >= 0;
+        string entry = "{\"event\":\"" + (metadata ? "metadata" : "load") +
+            "\",\"home\":\"" + Enc(Environment.GetEnvironmentVariable("PYTHONHOME")) +
+            "\",\"arguments\":\"" + Enc(String.Join("\u001f", args)) + "\"}";
+        File.AppendAllText(Environment.GetEnvironmentVariable("LOOPER_TEST_MODEL_TRACE"),
+            entry + "\n");
+        Console.WriteLine(metadata ?
+            Environment.GetEnvironmentVariable("LOOPER_TEST_MODEL_METADATA")
+            : "{\"portable_models\":\"passed\"}");
+        return 0;
+    }
+}
+"""
+    compiler = tmp_path / "compile-model-fixture.ps1"
+    escaped = str(python).replace("'", "''")
+    compiler.write_text(
+        "$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n"
+        + fixture
+        + f"'@ -OutputAssembly '{escaped}' -OutputType ConsoleApplication\n",
+        encoding="utf-8-sig",
+    )
+    command = ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"]
+    compiled = subprocess.run(
+        [*command, "-File", str(compiler)], capture_output=True, text=True, check=False
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    launched = subprocess.run(
+        [
+            *command,
+            "-File",
+            str(portable / "launch.ps1"),
+            "-Root",
+            str(context.root),
+            "-InstallerOwned",
+            "-ModelMode",
+            "repair",
+        ],
+        env=os.environ
+        | {
+            "LOOPER_TEST_MODEL_TRACE": str(trace),
+            "LOOPER_TEST_MODEL_METADATA": json.dumps({
+                "portable_models": "passed",
+                "assets": metadata,
+            }),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    events = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == [
+        "metadata",
+        "transfer",
+        "transfer",
+        "transfer",
+        "load",
+    ]
+    for event, asset in zip(events[1:-1], metadata, strict=True):
+        assert event["url"] == asset["url"]
+        assert event["sha256"] == asset["sha256"]
+        assert event["bytes"] == asset["bytes"]
+        assert Path(event["destination"]) == context.root / asset["relative_path"]
+    for event in (events[0], events[-1]):
+        arguments = base64.b64decode(event["arguments"]).decode().split("\x1f")
+        assert arguments[arguments.index("--root") + 1] == str(context.root)
+        assert arguments[arguments.index("--checkout") + 1] == str(context.checkout)
+        assert arguments[arguments.index("--runtime") + 1] == str(runtime)
+        assert Path(base64.b64decode(event["home"]).decode()) == python.parent
+    assert "--asset-metadata" in base64.b64decode(events[0]["arguments"]).decode()
+    assert base64.b64decode(events[-1]["arguments"]).decode().endswith("--mode\x1frepair")
 
 
 def test_bs_check_verifies_before_actual_cpu_loader_without_download(

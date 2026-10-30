@@ -178,14 +178,13 @@ def default_demucs_model_cache_dir(
     project_root: Path | None = None,
     home_dir: Path | None = None,
 ) -> Path:
-    """Resolve an explicit portable cache or the standard Torch checkpoint directory."""
+    """Resolve an explicit cache or this clone's ignored model directory."""
     environment = os.environ if env is None else env
     root = Path.cwd() if project_root is None else project_root
     if override := environment.get(MODEL_CACHE_DIR_ENV_VAR):
         return _safe_model_cache_dir(Path(override), root)
-    home = Path.home() if home_dir is None else home_dir
-
-    candidate = home / ".cache" / "torch" / "hub" / "checkpoints"
+    # Keep home_dir accepted for callers of the former home-cache resolver.
+    candidate = root / "models" / "torch" / "hub" / "checkpoints"
     return _safe_model_cache_dir(candidate, root)
 
 
@@ -385,14 +384,45 @@ def _format_demucs_float(value: float) -> str:
     return f"{value:g}"
 
 
+def protected_model_roots(root: Path) -> tuple[Path, ...]:
+    """Resolve source/data roots that model and setup outputs must never overlap."""
+    protected = (
+        "samples",
+        "record",
+        "config",
+        ".git",
+        "src",
+        "rust",
+        "assets",
+        "scripts",
+        "docs",
+        "openspec",
+        "exports",
+        "output",
+        "outputs",
+        "dist",
+        "build",
+    )
+    return tuple((root / name).resolve(strict=False) for name in protected)
+
+
 def _safe_model_cache_dir(candidate: Path, project_root: Path) -> Path:
+    logical_candidate = candidate.absolute()
+    logical_root = project_root.absolute()
     candidate = candidate.resolve(strict=False)
     root = project_root.resolve(strict=False)
-    samples = (root / "samples").resolve(strict=False)
-    if _is_relative_to(candidate, root) or _is_relative_to(candidate, samples):
-        return (Path(tempfile.gettempdir()) / "flitzis-looper" / "models" / "demucs").resolve(
-            strict=False
-        )
+    logical_inside = _is_relative_to(logical_candidate, logical_root)
+    physical_models = _is_relative_to(candidate, root / "models")
+    aliases_protected = any(
+        _is_relative_to(candidate, protected) for protected in protected_model_roots(root)
+    )
+    invalid_logical = logical_inside and (
+        not _is_relative_to(logical_candidate, logical_root / "models") or not physical_models
+    )
+    invalid_physical = _is_relative_to(candidate, root) and not physical_models
+    if invalid_logical or invalid_physical or aliases_protected:
+        message = "Repository model files must stay inside the owned models directory"
+        raise ValueError(message)
     return candidate
 
 

@@ -1,4 +1,5 @@
 /rust/target
+/models/
 
 # Local runtime sample cache/config generated while using the app
 samples/
@@ -12,6 +13,7 @@ __pycache__/
 
 # C extensions
 *.so
+/src/flitzis_looper_audio/*.pyd
 
 # Distribution / packaging
 .Python

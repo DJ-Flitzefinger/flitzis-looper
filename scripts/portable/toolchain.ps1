@@ -32,10 +32,10 @@ function Get-PortableVerifiedTool([string] $Root, [string] $Name, [Uri] $Uri, [s
     $destination = Join-Path $cache $Name
     Assert-PlainPath $destination
     if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
-        $temporary = "$destination.$([Guid]::NewGuid().ToString('N')).partial"
+        $temporary = "$destination.download"
         Assert-PlainPath $temporary
         Write-Host "Download: $Name"
-        Read-Payload $Uri $temporary
+        Read-Payload $Uri $temporary $Sha256
         Assert-Hash $temporary $Sha256
         [IO.File]::Move($temporary, $destination)
     }
@@ -255,7 +255,7 @@ function Install-PortableMsvc([string] $Root) {
     $installer = Join-Path $cache 'vs_buildtools-17.exe'
     Assert-PlainPath $installer
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
-        $temporary = "$installer.$([Guid]::NewGuid().ToString('N')).partial.exe"
+        $temporary = "$installer.download.exe"
         Assert-PlainPath $temporary
         Write-Host 'Downloading Microsoft Build Tools and Windows SDK.'
         Read-Payload 'https://aka.ms/vs/17/release/vs_buildtools.exe' $temporary

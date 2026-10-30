@@ -6,6 +6,10 @@ Copy that single file into your chosen folder and double-click it. It creates
 commands, preinstalled Git/Python/Rust or project binary release are required.
 Internet access is needed for installation, updates and missing model downloads.
 
+The BAT is independent of a development workspace or Codex installation. It
+fetches one exact current remote `main` revision, including its portable recipes.
+Use the updated installer BAT when updating an older installation.
+
 ## Install, start and update
 
 The installer pins and verifies its private Git, uv, CPython 3.14.2, Rust 1.95.0,
@@ -42,6 +46,21 @@ Model failures prevent activation. Running the installer on an unchanged healthy
 `main` repairs missing or corrupt model assets and repeats both CPU loads without
 invoking the Native builder.
 
+The installer also prepares a pinned BeatThis worker under
+`analysis-runtime/beat-this`. Fresh installations use the existing CPU profile
+(CPython3.12.13, Torch/Torchaudio2.8.0+cpu); a valid selected CUDA-auto-v2 profile
+is retained on update. The worker includes a physical private interpreter,
+standard library and locked packages with relative search paths. Its runtime
+does not depend on the provisioning interpreter, a host venv or the install
+folder's original name. Worker verification checks the checkpoint, receipts and
+actual import environment without inference. An absent worker is an error,
+not successful App readiness.
+
+Candidate bundle creation first checks its Python/Native/codec runtime. The
+installer then selects a verified worker and performs the complete preflight
+before activating the candidate. Failed updates restore the previous worker
+selection; unchanged-main repair does not require a Native rebuild.
+
 The starter holds the same exclusive installation lock as the updater for the
 entire private app process lifetime. Updates stop with a close-and-retry message
 when the app is running. They also detect an older installation's actual private
@@ -63,6 +82,10 @@ The installation uses these areas:
 - `flitzis-looper/samples`: project samples, PCM caches, material inventories and
   `flitzis_looper.config.json`.
 - `flitzis-looper/config/input`: persisted input configuration.
+- `flitzis-looper/record`: recordings and recovery custody, transferred with
+  their file identities during updates and restored on rollback.
+- `analysis-runtime/beat-this`: private pinned analysis installations and one
+  verified active pointer; previous installations are retained.
 - `Runtime`: the fixed private interpreter, dependencies, FFmpeg and launch files.
 - `models`: persistent model caches shared by install checks and offline workers.
 - `tools`: verified bootstrap and build tools.
@@ -72,46 +95,22 @@ The installation uses these areas:
 - `b`: reusable Native build output; its short name protects linker paths.
 - `logs`: installation-local diagnostics.
 
-The runtime preflight also requires `AudioEngine.pad_source_sync_status(id)` by
-reflection, before starting an engine or opening a device. Source-SYNC intent is
-separate from BPM Lock; saved intent and restored map metadata never substitute
-for callback-confirmed mapped playback.
+Stem asset acquisition uses the same resumable pinned transfer helper before
+network-forbidden CPU checks; legacy library downloaders are not used by the
+Portable repair path.
 
-Ordinary transport now requires `AudioEngine.ORDINARY_TRANSPORT_API_VERSION = 2`,
-the immutable admission and observation types, their durable current-state queries
-and the distinct ordinary feedback message. The current-slot observation query
-also ensures a missing lifecycle event or a new source cannot strand the pause
-display. Installer activation and the local launcher reflect the complete
-interface before App start. Version2 also understands the explicitly qualified
-ordinary Play row used while a variable map is missing; actual ordinary playback
-does not acknowledge SYNC. Older binaries are rejected. The existing locked Release build
-provides this API without another dependency or installation stage. Admission
-alone does not confirm a pause, and this compatibility check does not establish
-full SYNC or listening acceptance.
+Downloads retain stable partial files and resume transient interruptions with
+interruptible backoff and no overall deadline. SHA256 pins are checked before
+publication. Permanent unavailable/authentication responses fail explicitly and
+retain the partial evidence. Portable launch and child processes bind package,
+model and compute caches to this installation, ignoring inherited personal
+workspace bindings.
 
-Native source-beatmap exports store immutable `map.json` sidecars under
-`samples/<material>/.pcm-cache/source-beatmaps/v1/.ready-<32 hex>/`, or directly
-under `samples/.pcm-cache/source-beatmaps/v1/` for flat legacy originals. The
-existing sealed sample-tree relocation retains these files and their identities
-without a bootstrap change. A compact receipt still needs fresh source
-qualification after reopening; relocation grants no current map/audio authority.
-This prerequisite does not yet save selected maps in Config or arrangement journals.
-
-Portable validation and the local launchers require the exact integer
-`SourceBeatmap.EDITOR_CORRECTION_API_VERSION = 4`, the existing bounded
-`editor_span(first_anchor_index, last_anchor_index)` signature and the embedded
-capture methods `editor_review_info()` and
-`editor_review_page(first_anchor_index, last_anchor_index, start_index, max_events=128)`
-before opening the App. Captured maps can be reviewed after transient candidate
-discard or restore; legacy maps report this feature unavailable and retain their
-existing edits. Native builds with only the earlier editor methods are refused.
-These checks reflect the API without creating an Engine, evaluating a map or
-starting an editor job. Explicit review labels do not qualify musical coverage.
-Capability4 also permits an explicit detector-missed beat at a physical original
-source sample, bound to the current map, embedded capture and fixed endpoints.
-It preserves complete detector evidence; new intervals remain uncertain with
-unknown meter and phase until separately reviewed. Earlier capability3 builds
-are refused before opening the App.
+The runtime preflight enforces the current constant-BPM and ordinary-transport
+API, including immutable admission/observation receipts and their current-state
+queries. Source SYNC, REALTIME BPM, tempo-map adoption and phase-following are
+retired on main; old map/editor prerequisites are historical, not current
+installation gates. Native checks do not establish hearing/device acceptance.
 
 There is no second `Runtime/app` copy and no permanent per-version runtime tree.
 The full checkout's installed-file inventory distinguishes shipped files from

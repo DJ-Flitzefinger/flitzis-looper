@@ -17,7 +17,7 @@ from uuid import uuid4
 from pydantic import ConfigDict, TypeAdapter
 
 from flitzis_looper.analysis import artifacts
-from flitzis_looper.analysis.acquisition import acquire_to_quarantine, copy_to_quarantine
+from flitzis_looper.analysis.acquisition import acquire_pinned_asset, copy_to_quarantine
 from flitzis_looper.analysis.cuda_artifacts import (
     CUDA_MANIFEST_ADAPTER,
     CUDA_WORKER_FILES,
@@ -74,14 +74,20 @@ def install_worker(
         raise ValueError(msg)
     install_dir.mkdir(parents=True, exist_ok=True)
     scratch_dir.mkdir(parents=True, exist_ok=True)
+    if checkpoint_file is None:
+        expected = artifacts.ACCEPTED_ARTIFACT
+        # Keep resumable bytes outside the disposable environment staging tree.
+        checkpoint_file = scratch_dir / "downloads" / f"beat-this-{expected.sha256}.ckpt"
+        acquire_pinned_asset(
+            checkpoint_file,
+            source_url=expected.source_url,
+            sha256=expected.sha256,
+            size_bytes=expected.size_bytes,
+        )
     with TemporaryDirectory(prefix=".staging-", dir=install_dir) as temporary:
         staging = Path(temporary)
         checkpoint = staging / "final0.ckpt"
-        acquired = (
-            copy_to_quarantine(checkpoint_file, checkpoint)
-            if checkpoint_file is not None
-            else acquire_to_quarantine(checkpoint)
-        )
+        acquired = copy_to_quarantine(checkpoint_file, checkpoint)
         if (
             acquired.sha256 != artifacts.ACCEPTED_ARTIFACT.sha256
             or acquired.size_bytes != artifacts.ACCEPTED_ARTIFACT.size_bytes

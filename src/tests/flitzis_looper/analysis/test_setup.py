@@ -18,7 +18,12 @@ from typing import BinaryIO
 import pytest
 
 from flitzis_looper.analysis import acquisition, artifacts, cuda_artifacts, setup
-from flitzis_looper.analysis.contracts import AnalysisIdentity, BeatWorkerRequest, MonoPcmInput
+from flitzis_looper.analysis.contracts import (
+    AnalysisIdentity,
+    BeatModelIdentity,
+    BeatWorkerRequest,
+    MonoPcmInput,
+)
 from flitzis_looper.analysis.execution import (
     CUDA_LOCK_SHA256,
     CudaBeatModelIdentity,
@@ -51,11 +56,15 @@ def test_explicit_download_streams_bytes_and_measures_digest(
     assert result.sha256 == hashlib.sha256(content).hexdigest()
     assert result.size_bytes == len(content)
     assert requested == [acquisition.CHECKPOINT_URL]
-    assert list(tmp_path.iterdir()) == [destination]
+    assert {path.name for path in tmp_path.iterdir()} == {
+        destination.name,
+        destination.name + ".lock",
+        destination.name + ".source.json",
+    }
 
 
 @pytest.mark.parametrize("content", [b"", b"x" * 17])
-def test_empty_and_oversize_downloads_remove_only_their_partial_output(
+def test_empty_and_oversize_downloads_retain_their_partial_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes
 ) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: _Response(content))
@@ -65,6 +74,7 @@ def test_empty_and_oversize_downloads_remove_only_their_partial_output(
         acquisition.acquire_to_quarantine(tmp_path / "incomplete.ckpt", max_bytes=16)
     assert previous.read_bytes() == b"previous installed artifact"
     assert not (tmp_path / "incomplete.ckpt").exists()
+    assert (tmp_path / "incomplete.ckpt.partial").read_bytes() == content
 
 
 def test_local_quarantine_never_overwrites_a_previous_artifact(tmp_path: Path) -> None:
@@ -77,7 +87,7 @@ def test_local_quarantine_never_overwrites_a_previous_artifact(tmp_path: Path) -
     assert destination.read_bytes() == b"previous bytes"
 
 
-def test_failed_stream_removes_partial_quarantine(tmp_path: Path) -> None:
+def test_failed_stream_retains_partial_quarantine(tmp_path: Path) -> None:
     class BrokenStream(io.BytesIO):
         def read(self, size: int | None = -1) -> bytes:
             if self.tell():
@@ -87,7 +97,7 @@ def test_failed_stream_removes_partial_quarantine(tmp_path: Path) -> None:
 
     with pytest.raises(OSError, match="interrupted"):
         acquisition._copy_quarantined(BrokenStream(b"1234"), tmp_path / "partial.ckpt", 10)
-    assert not (tmp_path / "partial.ckpt").exists()
+    assert (tmp_path / "partial.ckpt").read_bytes() == b"12"
 
 
 @dataclass(frozen=True)
@@ -360,6 +370,35 @@ def test_offline_without_checkpoint_fails_before_acquisition(prepared: _SetupFix
     assert not prepared.install.exists()
 
 
+def test_failed_environment_setup_retains_download_for_retry_outside_staging(
+    prepared: _SetupFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = prepared.checkpoint.read_bytes()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    def fail_provision(staging: Path, scratch: Path, *, offline: bool) -> None:
+        raise subprocess.CalledProcessError(1, "uv")
+
+    monkeypatch.setattr(setup, "_provision_environment", fail_provision)
+    with pytest.raises(subprocess.CalledProcessError):
+        setup.install_worker(prepared.install, prepared.scratch)
+    retained = (
+        prepared.scratch / "downloads" / f"beat-this-{artifacts.ACCEPTED_ARTIFACT.sha256}.ckpt"
+    )
+    assert retained.read_bytes() == payload
+    assert list(prepared.install.glob(".staging-*")) == []
+    assert not (prepared.install / "current.json").exists()
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("redownloaded retained model"),
+    )
+    monkeypatch.setattr(setup, "_provision_environment", _fake_provision)
+    installed = setup.install_worker(prepared.install, prepared.scratch)
+    assert installed.checkpoint.read_bytes() == payload
+    assert prepared.checkpoint.read_bytes() == payload
+
+
 @pytest.mark.parametrize(
     "corruption", ["script", "license", "package", "metadata", "manifest", "package_source"]
 )
@@ -388,6 +427,7 @@ def test_installed_provenance_changes_cannot_start_inference(
         manifest_path.write_text(json.dumps(receipt), encoding="utf-8")
     pcm = prepared.scratch / "mono.f32"
     pcm.write_bytes(bytes(400))
+    assert isinstance(configuration.model, BeatModelIdentity)
     request = BeatWorkerRequest(
         AnalysisIdentity(1, 1, "fixture", 1), MonoPcmInput(pcm, 22050, 100), configuration.model
     )

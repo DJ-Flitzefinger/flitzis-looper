@@ -1,5 +1,6 @@
 """Reject stale Native interfaces before a portable runtime can activate."""
 
+import json
 import runpy
 from inspect import Parameter, signature
 from pathlib import Path
@@ -416,7 +417,9 @@ def test_bpm_lock_without_qualified_api_cannot_activate(method: str, *, missing:
 )
 def test_bpm_lock_rejects_unqualified_setter_signatures(variant: str, method: str) -> None:
     check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
-    complete = signature(_GLOBAL_RATE_IMPLEMENTATIONS[method])
+    implementation = _GLOBAL_RATE_IMPLEMENTATIONS[method]
+    assert callable(implementation)
+    complete = signature(implementation)
     anchor = complete.parameters["anchor_binding"]
     if variant == "positional":
         anchor = anchor.replace(kind=Parameter.POSITIONAL_OR_KEYWORD)
@@ -972,6 +975,7 @@ def test_runtime_rejects_native_without_ordinary_start_before_app_imports(
 def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Reflect the built bundle before installer worker selection, without App/device work."""
     bootstrap = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))
     checkout = tmp_path / "flitzis-looper"
     runtime = tmp_path / "Runtime"
@@ -1016,9 +1020,11 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     monkeypatch.setitem(bootstrap["check_runtime"].__globals__, "private_dlls", lambda *_: {})
     runner = Mock()
     monkeypatch.setattr(bootstrap["subprocess"], "run", runner)
-    bootstrap["check_runtime"](tmp_path, checkout, runtime)
+    bootstrap["check_runtime"](tmp_path, checkout, runtime, require_analysis=False)
     assert runner.call_count == 3
-    assert '"portable_preflight": "passed"' in capsys.readouterr().out
+    report = json.loads(capsys.readouterr().out)
+    assert report["portable_preflight"] == "passed"
+    assert report["analysis_checked"] is False
 
 
 @pytest.mark.parametrize("method", ["global_rate_status", "bpm_lock_status"])

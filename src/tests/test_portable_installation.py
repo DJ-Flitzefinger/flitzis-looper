@@ -32,10 +32,11 @@ GIT_ARCHIVE = (
 )
 GIT_SHA256 = "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be"
 LAUNCH = r"""
-param([string] $Root, [switch] $Check, [string] $CheckoutDirectory,
+param([string] $Root, [switch] $Check, [switch] $BuildRuntimeCheck, [string] $CheckoutDirectory,
     [string] $RuntimeDirectory, [switch] $InstallerOwned, [switch] $StartLockHeld,
     [string] $ModelMode, [string] $RelocationAction, [string] $RelocationSource,
-    [string] $RelocationTarget, [string] $RelocationRecord)
+    [string] $RelocationTarget, [string] $RelocationRecord,
+    [string] $AnalysisMode, [string] $AnalysisReport)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $runtime = $PSScriptRoot
@@ -95,6 +96,31 @@ if ($RelocationAction) {
     }
     exit 0
 }
+if ($AnalysisMode) {
+    $worker = Join-Path $Root 'analysis-runtime/beat-this'
+    $versionHash = Get-Sha256 (Join-Path $CheckoutDirectory 'fixture-version.txt')
+    $directory = 'installation-' + $versionHash.Substring(0,32)
+    $manifest = Join-Path $worker ($directory + '/manifest.json')
+    if ($AnalysisMode -eq 'repair') {
+        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($manifest)) | Out-Null
+        [IO.File]::WriteAllText($manifest,'verified worker @VERSION@')
+        if ('@FAILURE@' -eq 'worker') { exit 42 }
+    } else {
+        $pointerPath = Join-Path $worker 'current.json'
+        if (-not (Test-Path -LiteralPath $pointerPath)) { exit 41 }
+        $pointer = Get-Content -LiteralPath $pointerPath -Raw | ConvertFrom-Json
+        if ($pointer.directory -ne $directory -or
+            $pointer.manifest_sha256 -ne (Get-Sha256 $manifest)) { exit 41 }
+    }
+    $pointer = @{schema_version=1; directory=$directory;
+        manifest_sha256=(Get-Sha256 $manifest)} | ConvertTo-Json
+    $report = @{portable_analysis='passed'; profile='legacy-cpu-v1';
+        pointer_bytes=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pointer))}
+    if ($AnalysisReport) { Write-AtomicJson $AnalysisReport $report }
+    [IO.File]::AppendAllText((Join-Path $Root 'cache/analysis-history.jsonl'),
+        (@{mode=$AnalysisMode; fixture_version='@VERSION@'} | ConvertTo-Json -Compress) + "`n")
+    exit 0
+}
 if ($ModelMode) {
     foreach ($name in @('demucs-fixture.th','bs-fixture.ckpt')) {
         $path = Join-Path $Root "models/$name"
@@ -108,6 +134,8 @@ if ($ModelMode) {
     exit 0
 }
 if (-not $Check) { exit 90 }
+$workerPointer = Join-Path $Root 'analysis-runtime/beat-this/current.json'
+if (-not $BuildRuntimeCheck -and -not (Test-Path -LiteralPath $workerPointer)) { exit 41 }
 if (-not (Test-Path -LiteralPath (Join-Path $runtime '@VERSION@-required.txt'))) {
     throw 'Unusable private runtime'
 }
@@ -444,6 +472,8 @@ def _user_data(installation: Installation) -> dict[Path, bytes]:
         checkout / "samples/.material-migrations/unknown.dat": b"history bytes",
         checkout / "config/input/keyboard.json": b'{"Human": "keyboard"}',
         checkout / "config/input/midi.json": b'{"Human": "MIDI"}',
+        checkout / "record/take-001/take.flac": b"original recorded take",
+        checkout / "record/.recovery/pending.json": b'{"custody": "unsettled evidence"}',
         installation.target / "models/my-model.bin": b"Human model",
     }
     for path, content in contents.items():
@@ -462,6 +492,8 @@ def test_repeat_and_update_preserve_native_data_and_clean_owned_stages(
     require_success(installation.run())
     assert installation.pointer() == original
     assert len(installation.trace("helper-invocations.jsonl")) == 1
+    for name in ("demucs-fixture.th", "bs-fixture.ckpt"):
+        assert (installation.target / "models" / name).read_text() == "verified fixture"
     second = installation.publish("second")
     require_success(installation.run())
     assert installation.pointer()["git_commit"] == second
@@ -498,8 +530,46 @@ def test_same_main_model_repair_does_not_invoke_native_builder(installation: Ins
     require_success(installation.run())
     assert installation.pointer() == original
     assert len(installation.trace("helper-invocations.jsonl")) == 1
-    for name in ("demucs-fixture.th", "bs-fixture.ckpt"):
-        assert (installation.target / "models" / name).read_text() == "verified fixture"
+
+
+def test_same_main_repairs_missing_worker_without_native_rebuild(
+    installation: Installation,
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    pointer = installation.target / "analysis-runtime/beat-this/current.json"
+    pointer.unlink()
+    require_success(installation.run())
+    assert pointer.is_file()
+    assert len(installation.trace("helper-invocations.jsonl")) == 1
+    assert installation.trace("analysis-history.jsonl")[-1]["mode"] == "check"
+
+
+def test_failed_worker_preparation_preserves_old_pointer_and_recordings(
+    installation: Installation,
+) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    pointer = installation.target / "analysis-runtime/beat-this/current.json"
+    original = pointer.read_bytes()
+    installation.publish("second", failure="worker")
+    assert installation.run().returncode != 0
+    assert pointer.read_bytes() == original
+    for path, data in contents.items():
+        assert path.read_bytes() == data
+
+
+def test_record_directory_moves_with_same_file_identities(installation: Installation) -> None:
+    installation.publish("first")
+    require_success(installation.run())
+    contents = _user_data(installation)
+    recorded = {path: path.stat().st_ino for path in contents if "record" in path.parts}
+    installation.publish("second")
+    require_success(installation.run())
+    for path, identity in recorded.items():
+        assert path.stat().st_ino == identity
+        assert path.read_bytes() == contents[path]
 
 
 def test_same_main_runtime_defect_rebuilds_before_activation(installation: Installation) -> None:
@@ -1017,8 +1087,11 @@ def test_legacy_native_data_moves_once_with_same_file_identities(
     (data / "config").mkdir(parents=True)
     samples_identity = (checkout / "samples").stat().st_ino
     original_identity = (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino
+    record_identity = (checkout / "record").stat().st_ino
+    take_identity = (checkout / "record/take-001/take.flac").stat().st_ino
     (checkout / "samples").rename(data / "samples")
     (checkout / "config/input").rename(data / "config/input")
+    (checkout / "record").rename(data / "record")
     assert checkout.resolve().is_relative_to(installation.target.resolve())
     _remove_fixture_checkout(checkout, installation.target)
     (data / "unknown-human.bin").write_bytes(b"unknown preserved")
@@ -1038,6 +1111,8 @@ def test_legacy_native_data_moves_once_with_same_file_identities(
     assert (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino == (
         original_identity
     )
+    assert (checkout / "record").stat().st_ino == record_identity
+    assert (checkout / "record/take-001/take.flac").stat().st_ino == take_identity
     assert (data / "unknown-human.bin").read_bytes() == b"unknown preserved"
     assert not legacy.exists()
     assert not (installation.target / "versions").exists()
@@ -1084,6 +1159,35 @@ class ActivationPaths:
         )
 
 
+def _prepare_simulated_worker(
+    installation: Installation, paths: ActivationPaths, record: dict[str, object]
+) -> None:
+    # The fixture helper interrupted before the real installer stages a worker.
+    # Reproduce that mandatory step before simulating any later activation seam.
+    if not record.get("worker_candidate"):
+        analysis_report = installation.target / "cache" / "simulated-analysis.json"
+        require_success(
+            _run_powershell([
+                "-File",
+                str(paths.candidate / "launch.ps1"),
+                "-Root",
+                str(installation.target),
+                "-CheckoutDirectory",
+                str(paths.source),
+                "-RuntimeDirectory",
+                str(paths.candidate),
+                "-InstallerOwned",
+                "-AnalysisMode",
+                "repair",
+                "-AnalysisReport",
+                str(analysis_report),
+            ])
+        )
+        report = json.loads(analysis_report.read_text(encoding="utf-8-sig"))
+        assert report["portable_analysis"] == "passed"
+        record["worker_candidate"] = report["pointer_bytes"]
+
+
 def _simulate_activation_interrupt(
     installation: Installation,
     seam: str,
@@ -1092,6 +1196,11 @@ def _simulate_activation_interrupt(
     journal = installation.target / "portable-transaction.json"
     record = json.loads(journal.read_text())
     paths = ActivationPaths.for_transaction(installation.target, str(record["operation"]))
+    _prepare_simulated_worker(installation, paths, record)
+    if record.get("worker_candidate"):
+        (installation.target / "analysis-runtime/beat-this/current.json").write_bytes(
+            base64.b64decode(record["worker_candidate"])
+        )
     record["starters"] = {
         name: base64.b64encode((installation.target / name).read_bytes()).decode("ascii")
         for name in ("launch.ps1", "START-LOOPER.bat", "start.bat", "start-release.bat")
@@ -1132,6 +1241,8 @@ def _simulate_activation_interrupt(
     if reached >= 6:
         (paths.checkout / "config").mkdir(exist_ok=True)
         (paths.old_checkout / "config/input").rename(paths.checkout / "config/input")
+        if (paths.old_checkout / "record").exists():
+            (paths.old_checkout / "record").rename(paths.checkout / "record")
     record["phase"] = "accepted" if reached == 8 else "verifying" if reached >= 7 else "swapping"
     if reached >= 7:
         release = json.loads((paths.runtime / "release-manifest.json").read_text())
@@ -1243,7 +1354,7 @@ def test_interrupted_update_preserves_changed_old_generated_native(
     _assert_changed_mock_native_was_never_imported(installation)
 
 
-@pytest.mark.parametrize("relative", ["samples", "config/input"])
+@pytest.mark.parametrize("relative", ["samples", "config/input", "record"])
 @pytest.mark.parametrize("kind", ["file", "empty-directory"])
 def test_accepted_cleanup_preserves_old_checkout_with_leftover_persistent_paths(
     installation: Installation, relative: str, kind: str
@@ -1587,6 +1698,82 @@ def test_download_hash_requires_the_exact_sha256(tmp_path: Path) -> None:
     payload.write_bytes(b"modified bootstrap fixture")
     assert _run_embedded(tmp_path, f"Assert-Hash {_ps_string(payload)} '{digest}'").returncode != 0
     assert _run_embedded(tmp_path, f"Assert-Hash {_ps_string(payload)} 'not-a-sha'").returncode != 0
+
+
+def test_payload_retry_resumes_retained_bytes_without_total_deadline(tmp_path: Path) -> None:
+    destination = tmp_path / "payload.bin"
+    commands = r"""
+$script:requests = @(); $script:waits = @()
+function Start-Sleep([int] $Seconds) { $script:waits += $Seconds }
+function Open-PortablePayloadResponse([Uri] $Uri, [long] $Offset) {
+    $script:requests += $Offset
+    if ($script:requests.Count -eq 1) {
+        [IO.File]::WriteAllText(@DESTINATION@ + '.partial','abc')
+        throw [IO.IOException]::new('simulated interrupted transfer')
+    }
+    if ($script:requests.Count -eq 2) { throw [IO.IOException]::new('still interrupted') }
+    $response = [pscustomobject]@{ResponseUri=$Uri; StatusCode=206;
+        Headers=@{'Content-Range'='bytes 3-5/6'}; ContentLength=3}
+    $response | Add-Member -MemberType ScriptMethod -Name GetResponseStream -Value {
+        return [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes('def'))
+    }
+    $response | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
+    return $response
+}
+Read-Payload ([Uri]'https://fixture.invalid/pinned') @DESTINATION@ '@SHA256@' 6
+if (($script:requests -join ',') -ne '0,3,3') { throw 'Retained offset was not resumed' }
+if (($script:waits -join ',') -ne '20,40') { throw 'Unexpected interruptible backoff' }
+""".replace("@DESTINATION@", _ps_string(destination)).replace(
+        "@SHA256@", hashlib.sha256(b"abcdef").hexdigest()
+    )
+    require_success(_run_embedded(tmp_path, commands))
+    assert destination.read_bytes() == b"abcdef"
+    assert not destination.with_name("payload.bin.partial").exists()
+
+
+def test_payload_pin_failure_retains_bytes_for_diagnosis(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"unexpected upstream bytes")
+    destination = tmp_path / "download.bin"
+    result = _run_embedded(
+        tmp_path,
+        f"Read-Payload ([Uri]{_ps_string(source.as_uri())}) {_ps_string(destination)} '{'0' * 64}'",
+    )
+    assert result.returncode != 0
+    assert destination.with_name("download.bin.partial").read_bytes() == source.read_bytes()
+    assert not destination.exists()
+
+
+def test_permanent_wrapped_http_error_preserves_partial_without_retry(tmp_path: Path) -> None:
+    destination = tmp_path / "unavailable.bin"
+    partial = destination.with_name("unavailable.bin.partial")
+    partial.write_bytes(b"retained original prefix")
+    commands = r"""
+Add-Type @'
+using System;
+using System.Net;
+public sealed class PortableFixtureMissingResponse : WebResponse {
+    public HttpStatusCode StatusCode { get { return HttpStatusCode.NotFound; } }
+    public override Uri ResponseUri { get { return new Uri("https://fixture.invalid/missing"); } }
+}
+public static class PortableFixtureTransfer {
+    public static void Fail() {
+        throw new WebException("Fixture missing", null, WebExceptionStatus.ProtocolError,
+            new PortableFixtureMissingResponse());
+    }
+}
+'@
+function Open-PortablePayloadResponse([Uri] $Uri, [long] $Offset) {
+    [PortableFixtureTransfer]::Fail()
+}
+function Start-Sleep { throw 'Permanent HTTP failure was incorrectly retried' }
+Read-Payload ([Uri]'https://fixture.invalid/missing') @DESTINATION@ '@SHA256@'
+""".replace("@DESTINATION@", _ps_string(destination)).replace("@SHA256@", "0" * 64)
+    result = _run_embedded(tmp_path, commands)
+    assert result.returncode != 0
+    assert "HTTP 404" in result.stdout + result.stderr
+    assert partial.read_bytes() == b"retained original prefix"
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize(

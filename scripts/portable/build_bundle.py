@@ -225,7 +225,14 @@ def copy_application(staging: Path, checkout: Path, native_wheel: Path) -> Path:
         require(not native.exists(), "Native destination must be a fresh checkout")
         with archive.open(native_entries[0]) as source, native.open("xb") as target:
             shutil.copyfileobj(source, target)
-    for name in ["bootstrap.py", "launch.ps1", "dispatch.ps1", "common.ps1", "build-path.ps1"]:
+    for name in [
+        "bootstrap.py",
+        "launch.ps1",
+        "dispatch.ps1",
+        "common.ps1",
+        "build-path.ps1",
+        "prepare_analysis.py",
+    ]:
         shutil.copyfile(PORTABLE / name, staging / name)
     (staging / "START-LOOPER.bat").write_bytes(STARTER.encode("ascii"))
     return native
@@ -296,7 +303,7 @@ def preflight(staging: Path, checkout: Path, root: Path) -> None:
             str(checkout),
             "--runtime",
             str(staging),
-            "--check-runtime",
+            "--check-build-runtime",
         ],
         env=env,
         check=True,
