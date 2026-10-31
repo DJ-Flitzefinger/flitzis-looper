@@ -926,6 +926,15 @@ runtime files.
 
 ## Latest performance workload decision — 2026-10-24
 
+The opt-in `native-inference-trial` analysis feature now provides a standalone
+BeatThis fixed1500 ONNX experiment, separate from the application. The
+[performance design](../openspec/changes/improve-performance-isolation/design.md)
+records its exporter/tooling lock, exact native-logit/provider evidence and
+remaining complete-source/CUDA/quality/distribution gates. It has no PyO3 or
+LibTorch dependency. This is a developer experiment; productive Torch workers,
+CPU fallback, normal installation and recovery remain required. A Windows x64
+Debug EXE is not a self-contained portable bundle or Linux/macOS acceptance.
+
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly
 and unconditionally. All older20 targets/20-to-conditional10 recipes below are

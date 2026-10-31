@@ -1,0 +1,3 @@
+# Export-only tooling. Install into separate scratch, never a productive worker.
+onnx==1.19.1
+numpy==2.2.6

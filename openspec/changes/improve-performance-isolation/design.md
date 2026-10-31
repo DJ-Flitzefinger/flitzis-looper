@@ -1,5 +1,173 @@
 # Performance audit and implementation design
 
+## STEP18 impact: candidate native BeatThis inference
+
+The opt-in `native-inference-trial` analysis feature and developer exporter evaluate
+the original pinned BeatThis final0 network as self-contained ONNX, using a
+Python-independent Rust/ORT core and standalone executable. The application does
+not select this experiment. No productive Torch dependency, weight pin, dispatcher,
+installer or recovery path is removed or replaced. Existing source/OwnACK/last-reader,
+resource admission, playback and realtime authorities remain unchanged.
+
+The first boundary is exactly one finite float32 `[1,1500,128]` spectrogram and
+both `[1,1500]` raw logit outputs, compared with the same original strict-loaded
+model. Model bytes are bounded and SHA-verified before in-memory ORT parsing;
+session-local threads and actual executed-node profiling are separate from model
+quality. The trial caller must use an admitted disposable offline process.
+Synchronous chunk cancellation is checked before/after ORT, with process retirement
+required for prompt interruption. No Python binding or LibTorch is involved.
+
+This is not complete-source replacement: soxr HQ, centered Hann/Slaney log-mel,
+short chunks (padding them to 1500 changes attention), border6/keep_first,
+minimal postprocessing and physical duration exclusion still use the original
+worker. Productive cutover requires their full parity, actual native NVIDIA CUDA
+and real same-model device failure followed by fresh CPU execution, CPU-only
+distribution/recovery and cancellation/memory evidence. Windows executable evidence
+does not establish a portable bundle or Linux/macOS build/run acceptance.
+
+### STEP18 productive closure inventory and measured footprint
+
+| Closure | Remaining productive work and concrete migration boundary |
+| --- | --- |
+| App Python 3.14 / Torch 2.12 cu130 | Demucs 4.0.1 owns normalization, complete-track input/output, shifts/overlap, hybrid spectral/time network, complex STFT/ISTFT, convolutions, recurrent/attention operations and resampling. The existing streaming adapter replaces output encoding, not this neural closure. |
+| Same App closure, vendored BS-RoFormer | Strict pinned MUSDB18HQ checkpoint (527,385,512 bytes) and config; complex STFT/view-as-real/complex masking/ISTFT, frequency/time attention, RMSNorm, rotary/gating/SDPA, chunk reflection/overlap and CUDA AMP. A real-tensor mask-network export alone would not preserve the full spectral frontend/reconstruction and current quality. |
+| Separate BeatThis Python 3.12 / Torch 2.8 CPU or cu128 | Exact final0, soxr HQ, torchaudio Hann/Slaney log-mel, Conv/BN/GELU, RMSNorm/Linear/rotary/SDPA, variable chunks, border/aggregation, minimal postprocessor and execution/fallback protocol. STEP18 actually exports and executes the fixed network below; the rest remains required. |
+| Provider probe | App Torch capability/runtime/allocator identity is also used by the original guarded device probe. Removing inference imports alone cannot preserve those receipts. |
+| Already native / other runtimes | KeyNet uses independent Rust CQT plus ORT; PCM conversion is independent Rust. The metrical-prior worker uses its separate JS runtime. None constitutes removal of a productive Torch closure. |
+
+Observed logical file bytes on Windows x64 (including files such as existing
+bytecode; not allocated disk size or deduplicated physical ownership):
+
+| Actual directory/artifact | Files | Bytes |
+| --- | ---: | ---: |
+| App `site-packages/torch` | 11,768 | 2,878,212,219 |
+| App `site-packages/torchaudio` | 81 | 8,451,029 |
+| Existing BeatThis **CUDA** `site-packages/torch` | 12,303 | 7,402,993,596 |
+| Exported inline ONNX graph | 1 | 82,573,488 |
+| Final standalone Debug Windows EXE | 1 | 24,413,184 |
+| Original final0 checkpoint | 1 | 81,058,141 |
+
+The existing measured worker is actually `2.8.0+cu128`, even though export and
+reference execute on CPU using the original CPU loader. CPU-only worker size,
+complete dependency/DLL/CRT closure, hardlink deduplication, optimized release
+bundle size and Linux/macOS packages are **unmeasured**. These are not complete
+installation totals. No installed runtime was removed; actual installed saving
+is zero. Export tooling is separately hash-locked for Windows CPython 3.12 and
+installed in disposable scratch, never into the productive worker environment.
+Production App/CPU/CUDA locks, original model pins, installer and recovery remain
+unchanged. The installer does not download or select the candidate graph/EXE.
+
+### STEP18 actual export and independent native execution
+
+One deterministic mono float32 source at 22,050 Hz, 661,059 frames, is generated
+from binary64 `t=arange(1499*441)/22050` and
+`(.2*sin(2*pi*220*t)+.1*sin(2*pi*431*t)).astype('<f4')`.
+The original complete-source frontend yields exactly 1500 by 128 float32 values.
+This is a roughly 30-second synthetic fixture, not private audio or listening
+acceptance. Source SHA256 is
+`6e6a1c4ce61a3e8f57823940c18c0e39fff4541a2771cedc1781649472a6cd23`;
+spectrogram SHA256 is
+`63c68d1c0d2df56331bf958297d1700ca356fba8f4809902b6a79ff1a80cac38`.
+
+The original `load_local_model` hashes and loads the same retained final0 handle,
+strictly reconstructing hyperparameters/state_dict. Pinned checkpoint SHA256 is
+`8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331`.
+Cold legacy `torch.onnx.export(dynamo=False, opset_version=18)` and ONNX 1.19.1
+full checker produce one inline graph, 138 initializers / 2280 nodes, standard
+ONNX domain only. No quantization, altered weights, model rewrite, warm-up,
+LibTorch or external weight files. Export warnings about fixed shape, tensor
+iteration and rotary cache branches are retained; this graph is not dynamic.
+Actual graph SHA256 is
+`22ac0c62301709a53834453a608aeaf85a12b8ecb4b3bfbf26aafee42c21b7fa`.
+
+The same original model/input supplies both reference streams, SHA256
+`79e7039f37f91d9f2351e97a6e2cdeac14172d24fc58f724ad2c5218a505702a`.
+One standalone Rust/ORT execution on Windows x86_64 produces 3000 finite logits:
+
+| Stream | Maximum absolute difference | RMS difference | Relative L2 |
+| --- | ---: | ---: | ---: |
+| Beat | 0.0000025033950805664062 | 0.0000007906240276194365 | 0.000000504598233199382 |
+| Downbeat | 0.000003337860107421875 | 0.000000960786692802246 | 0.0000004817917689484372 |
+
+These are measured numerical differences for one exact chunk, not bit equality
+or an audio-quality acceptance tolerance. Native output SHA256 is
+`f75602be01ba9035690d0769c647ee746a4d2262d1658ff81c1142af46006273`.
+ORT's actual executed-node profile assigns all 992 optimized executed nodes to
+`CPUExecutionProvider`. The candidate explicitly replaces rc12's automatic device
+policy and configures CPU, sequential execution, local intra/inter-op threads1
+and disabled spinning. This evidence does not retroactively attest KeyNet's EP.
+
+The owned command, including startup/load/hash/run/output/profile and real
+tree/pipe-reader retirement, takes 2.8970175 seconds. No paired Torch inference
+wall was measured, so this is not a speedup. Original supervisor observation:
+88 samples, child lifetime peak commit 628,264,960 bytes / peak WS 641,540,096;
+sampled concurrent owned private 629,424,128 / WS 642,453,504 bytes; one scope
+starts/closes, pending/inflight0, errors[]. The existing observer classifies only
+known productive modules as inference trees (candidate counter0), so the actual
+EXE command and ORT profile establish this candidate's execution. Ordinary Job
+admission/half-budget and actual final-reader settlement are reused unchanged.
+No leak, hard-paging, memory plateau, playback deadline or pressure-cause claim.
+
+### STEP18 verification, reproduction and remaining split
+
+Build the opt-in candidate with the normal configured contributor environment:
+
+```text
+cargo build --locked --manifest-path rust/Cargo.toml -p flitzis-looper-analysis --example beat_this_native --features native-inference-trial
+beat_this_native GRAPH GRAPH_SHA256 SPECTROGRAM_F32 NEW_OUTPUT_F32 PROFILE_PREFIX
+```
+
+First install `scripts/native-inference-requirements.lock` with `--require-hashes`
+into separate export-tool scratch, using the existing BeatThis interpreter and
+a temporary `PYTHONPATH`. In a **fresh process**, run
+`scripts/export_beat_this_trial.py --worker workers/beat_this/worker.py
+--checkpoint ABSOLUTE_FINAL0 --spectrogram SPECTROGRAM_F32 --output NEW_DIRECTORY`.
+Use the original frontend/fixture above; do not silently pad a short piece to
+1500. Both output streams are contiguous little-endian float32, beat first.
+Developer trial assets are not product provenance or a portable installation.
+
+Two Rust negatives pass: changed/empty graph rejected before runtime parsing and
+cancel-before-load. Five actual EXE negative cases pass without neural execution:
+wrong graph SHA, truncated spectrogram, nonfinite input, existing output (original
+bytes retained) and invalid ONNX with a matching digest. Each original owned
+scope closes once, pending/inflight0 and no sampling errors. The positive run's
+core is byte-identical to final `beat_inference.rs`, SHA256
+`0fcc47e18277f457cdce3b834d77044968c61e8f6d1ce61cadc0ddce8bfc6729`.
+Final CLI adds only early invalid-input/output refusal; its normal inference
+path is unchanged. The successful Debug EXE SHA256 was
+`5e28b3081392657a63e7f9c23f1587d8a80f82090eef9ce292a04b8bbd97133e`.
+The measured exporter SHA256 was
+`55a427a45b7d4d924e78011a723d0a754d2d1ae405a9dfd5d09852b65e1436db`;
+later bounded-read/local-name/stdout cleanup changes no export/model arithmetic.
+No duplicate NN run is used solely to improve these numbers.
+
+The first harness incorrectly configured Torch inter-op threads twice in one
+process and failed **before model load**. The frontend bytes were retained and
+the real export then succeeded in a fresh process. Initial two Ruff issues were
+fixed without suppression. Positive and failed logs remain separately retained.
+This is scoped native inference progress, not a green whole-model/system matrix.
+Final four static/runtime checks pass (16.66 seconds), including both repeated
+Rust negatives, Ruff/format, three Rust format checks, strict OpenSpec, 42 local
+Markdown targets/whitespace, unchanged productive pins and both complete-host
+UNKNOWN probes. All old/new provider/resource roles remain present; the original
+unsupported `StemExecution` validator still fails closed. Default Release Native/API
+verification passes with the same 22 known library warnings and retained einops
+pin. Systems PRE/frozen POST, Methods PRE and one independent actual-diff review
+chain are clear for this candidate only. Existing overlapping checks are not added
+into a claimed whole-system success total.
+
+The migration therefore splits coherently: **STEP19** must attempt the complete
+native BeatThis frontend/variable-length/chunk/aggregate/postprocessor/provider
+path and practical remaining Torch removal, with actual native CUDA and true
+same-model device-failure-to-fresh-CPU proof, resources/cancel/reader/provenance/
+distribution before any cutover. Concrete Demucs/BS barriers above retain their
+working paths unless equivalent replacements are actually proved. **STEP20**
+retains ALL former final STEP19 gates: complete-host original-validator/schema/
+Pydantic and every old/new role attestation, exact 32 parent Rust failures,
+distinct216 watchdog, registry UNKNOWN, pressure cause UNKNOWN, CPU/CUDA overlap,
+combined 2/4/6 and <=10 stress, all quality/functions/interactions and architecture/
+documentation/distribution acceptance. No remaining work is omitted by renumbering.
+
 ## Initial audit boundary
 
 Baseline: `69a8098d84ae58d616f988f5662e6038afdcf0e0`, inspected 2026-10-30.

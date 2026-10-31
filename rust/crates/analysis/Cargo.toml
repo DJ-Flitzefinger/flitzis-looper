@@ -6,6 +6,13 @@ edition = "2024"
 [lib]
 name = "flitzis_looper_analysis"
 
+[features]
+native-inference-trial = []
+
+[[example]]
+name = "beat_this_native"
+required-features = ["native-inference-trial"]
+
 [dependencies]
 matrixmultiply = "0.3"
 num-complex = "0.4"

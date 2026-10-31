@@ -54,7 +54,9 @@ Preserve the single transport and source authority.
 
 ## Delivery
 
-Nineteen coherent steps are recorded in [tasks](tasks.md). Each important step runs
+Twenty coherent steps are recorded in [tasks](tasks.md). STEP18's real native
+BeatThis chunk experiment is separated from complete-pipeline parity in STEP19;
+all former final STEP19 gates remain required in STEP20. Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
 This assignment does not merge or push these changes to `main`.

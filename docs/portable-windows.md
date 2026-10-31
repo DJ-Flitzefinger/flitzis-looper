@@ -340,3 +340,10 @@ the shared commit budget. This adds no dependency or OS setting. Windows uses th
 existing suspended Job Object adapter; Linux/macOS process-tree and host-monitoring
 evidence remains a separate distribution gate. No running installation is updated
 by development verification.
+
+The opt-in native BeatThis fixed-chunk experiment is not part of installation or
+model repair. Its ONNX graph and standalone developer EXE have no productive
+cutover or complete CUDA/CPU-only/quality/DLL-closure acceptance. Keep the original
+App and separate BeatThis locks/models/workers; their runtime removal requires
+the complete parity and recovery gates in the
+[performance design](../openspec/changes/improve-performance-isolation/design.md).

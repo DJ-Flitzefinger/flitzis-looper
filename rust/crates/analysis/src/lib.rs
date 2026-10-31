@@ -6,6 +6,8 @@
 //! **Key detection** (KeyNet CNN): mono audio → CQT spectrogram → ONNX inference
 //! → Camelot key string.
 
+#[cfg(feature = "native-inference-trial")]
+pub mod beat_inference;
 mod bpm_pipeline;
 mod canonical_digest;
 mod detection_function;

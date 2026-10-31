@@ -214,14 +214,14 @@ and all new roles require final attestation. The CUDA checkbox remains open for
 BS/BeatThis and native replacements, quality, CPU-only/distribution and combined
 acceptance. These are retained FINAL19 gates, not a failure to preserve CUDA.
 
-## 18. Native inference and practical PyTorch removal
+## 18. Native inference candidate and practical PyTorch-removal attempt
 
-- [ ] Inventory productive Torch closures/operators and distribution size; reuse
+- [x] Inventory productive Torch closures/operators and observed footprint; reuse
       existing Rust/ONNX KeyNet boundaries and keep new cores Python-independent.
 - [ ] Preserve portable Windows/Linux/macOS core boundaries and CPU baseline;
       assess each OS's native dependencies/providers/packaging and report actual
       build/run evidence separately from untested portability targets.
-- [ ] Investigate and implement practical native replacements for Torch-dependent
+- [x] Investigate and implement a practical native candidate for Torch-dependent
       paths; split substantial model migrations into separate coherent chats.
 - [ ] Require at least current complete-source/frontend/model quality, functions,
       interactions, CPU/CUDA/fallback, memory and cancellation behavior before cutover.
@@ -229,7 +229,29 @@ acceptance. These are retained FINAL19 gates, not a failure to preserve CUDA.
       verify actual footprint. Remove PyTorch only after parity; if not practical,
       record the concrete barrier and preserve the working path.
 
-## 19. Combined regression and final architecture review
+STEP18 actually exports the pinned original BeatThis final0 and executes both
+fixed1500 logits in a standalone Rust/ORT CPU process. The design records exact
+differences, effective executed-node provider, memory/retirement, footprint and
+negative checks. Full frontend/variable-length/quality/CUDA/distribution parity
+remains unproved. No productive runtime is removed and no installation saving is
+claimed. The unchecked cutover/OS requirements above continue in STEP19 below.
+
+## 19. Complete native pipeline and remaining practical Torch removal
+
+- [ ] Attempt the original complete BeatThis frontend, variable true chunk lengths,
+      border6/keep_first aggregation and minimal postprocessor with exact full-source
+      geometry, model/weight/operator/quality parity; never pad short attention inputs
+      merely to fit the fixed1500 experiment.
+- [ ] Prove actual native NVIDIA CUDA execution and real same-model device failure
+      followed by fresh CPU execution, CPU-only behavior, bounded memory/cancellation,
+      real process/last-reader end and truthful provider/runtime identity.
+- [ ] Review complete weight/provenance/locks/installer/recovery/portable dependency
+      implications and observed footprint together before any productive cutover.
+- [ ] Preserve working Demucs/BS and BeatThis paths where concrete full-parity
+      barriers remain; keep every function/interaction and report OS/architecture
+      build/run evidence honestly. Split further only where coherent work requires it.
+
+## 20. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
