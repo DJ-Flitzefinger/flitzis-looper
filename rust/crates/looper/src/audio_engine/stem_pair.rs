@@ -258,9 +258,66 @@ pub(super) struct VerifiedStemPair {
     pub files: Vec<File>,
     #[cfg(test)]
     fail_next_component_read: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    component_read_observer: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+#[cfg(test)]
+pub(super) struct ComponentReadHold {
+    state: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    entered: std::sync::mpsc::Receiver<()>,
+}
+#[cfg(test)]
+impl ComponentReadHold {
+    pub(super) fn new(pair: &VerifiedStemPair) -> Self {
+        let state = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let gate = state.clone();
+        let (sender, entered) = std::sync::mpsc::channel();
+        let first = std::sync::atomic::AtomicBool::new(true);
+        pair.set_component_read_observer_for_test(Some(Arc::new(move || {
+            if first.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                sender.send(()).unwrap();
+                let (lock, ready) = &*gate;
+                let (released, timeout) = ready
+                    .wait_timeout_while(
+                        lock.lock().unwrap(),
+                        std::time::Duration::from_secs(10),
+                        |v| !*v,
+                    )
+                    .unwrap();
+                assert!(
+                    *released && !timeout.timed_out(),
+                    "component reader was not released"
+                );
+            }
+        })));
+        Self { state, entered }
+    }
+    pub(super) fn wait(&self) {
+        self.entered
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+    }
+    pub(super) fn release(&self) {
+        *self.state.0.lock().unwrap() = true;
+        self.state.1.notify_all();
+    }
+}
+#[cfg(test)]
+impl Drop for ComponentReadHold {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 impl VerifiedStemPair {
+    #[cfg(test)]
+    pub(super) fn set_component_read_observer_for_test(
+        &self,
+        observer: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) {
+        *self.component_read_observer.lock().unwrap() = observer;
+    }
     /// Exercise actual worker error handling with immutable Windows file pins intact.
     #[cfg(test)]
     pub(super) fn fail_next_component_read_for_test(&self) {
@@ -387,6 +444,13 @@ impl VerifiedStemPair {
                 }
                 #[cfg(test)]
                 observe_range_read(index, start + read, chunk_length);
+                #[cfg(test)]
+                {
+                    let observer = self.component_read_observer.lock().unwrap().clone();
+                    if let Some(observer) = observer {
+                        observer();
+                    }
+                }
                 read += chunk_length;
             }
         }
@@ -553,6 +617,8 @@ pub(super) fn open_verified_pair(
         files,
         #[cfg(test)]
         fail_next_component_read: std::sync::atomic::AtomicBool::new(false),
+        #[cfg(test)]
+        component_read_observer: std::sync::Mutex::new(None),
     })
 }
 

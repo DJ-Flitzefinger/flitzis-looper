@@ -422,6 +422,96 @@ fn actual_blocked_committed_worker_own_pair_mirror_keeps_pin_and_rejects_equal_p
 }
 
 #[test]
+fn actual_component_read_own_pair_pending_move_and_equal_pcm_lifetime_are_revalidated() {
+    for replaced_during_read in [false, true] {
+        let mut fixture = PairWorkerFixture::new();
+        let hold = crate::audio_engine::stem_pair::ComponentReadHold::new(
+            &fixture.source.owner.pair.reader,
+        );
+        let ticket = fixture
+            .source
+            .fixture
+            .engine
+            .request_committed_stem_residency_with_interest_and_producer(
+                &fixture.selection,
+                "all_stems",
+                STEM_COMPONENT_MASK,
+                "explicit",
+                &fixture.producer,
+            )
+            .unwrap();
+        let capture = fixture.consumer.pop().unwrap();
+        fixture.dispatch(capture);
+        hold.wait();
+        let pair = fixture.pair_ack();
+        assert!(
+            fixture
+                .source
+                .fixture
+                .engine
+                .resident_stem_cache
+                .try_lock()
+                .is_ok()
+        );
+        if replaced_during_read {
+            assert!(pad_pair::reconcile(&fixture.source.fixture.engine, &pair).unwrap());
+            fixture.replace_equal_pcm_lifetime();
+            hold.release();
+            wait_until(|| fixture.source.fixture.engine.cold_jobs.counts_for_test().0 == 0);
+            assert_eq!(ticket.residency_status(), "rejected");
+            assert!(fixture.consumer.is_empty());
+        } else {
+            hold.release();
+            wait_until(|| ticket.status.control_wait_observed.load(Ordering::Acquire));
+            assert_eq!(ticket.residency_status(), "captured");
+            assert!(ticket.is_current());
+            assert!(fixture.consumer.is_empty());
+            assert!(pad_pair::reconcile(&fixture.source.fixture.engine, &pair).unwrap());
+            wait_until(|| ticket.status.control_published.load(Ordering::Acquire));
+            wait_until(|| !fixture.consumer.is_empty());
+            let message = fixture.consumer.pop().unwrap();
+            let ControlMessage::CommittedStemWork(work) = &message else {
+                panic!("own moved adoption required")
+            };
+            let CommittedStemRtWork::Adopt(transaction) = work.as_ref() else {
+                panic!("prepared adoption required")
+            };
+            assert_eq!(
+                transaction.binding.placement.unwrap().content_key(),
+                fixture.source.fixture.placement.content_key()
+            );
+            assert!(Arc::ptr_eq(&transaction.status, &ticket.status));
+            assert!(
+                transaction.pin.sample.same_source(
+                    fixture.source.fixture.engine.sample_cache.lock().unwrap()[1]
+                        .as_ref()
+                        .unwrap(),
+                )
+            );
+            fixture.dispatch(message);
+            assert_eq!(ticket.residency_status(), "accepted");
+            assert!(ticket.is_current());
+        }
+        resident_relocation::reconcile(&fixture.source.fixture.engine).unwrap();
+        assert!(fixture.source.fixture.engine.sample_cache.lock().unwrap()[0].is_none());
+        let settled = fixture
+            .source
+            .fixture
+            .engine
+            .project_assets
+            .resident_budget_status(&fixture.source.fixture.engine.resident_account)
+            .unwrap();
+        assert_eq!(
+            (
+                settled.pending_resident_bytes,
+                settled.pending_reservation_count
+            ),
+            (0, 0)
+        );
+    }
+}
+
+#[test]
 fn actual_window_ack_after_pair_ack_catches_up_original_custody_before_control_mirror() {
     let mut fixture = PairWorkerFixture::new();
     fixture.attach_runtime_for_swap();

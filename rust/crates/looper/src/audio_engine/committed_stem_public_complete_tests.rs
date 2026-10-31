@@ -1298,10 +1298,10 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
         runtime.poll();
         runtime.has_ready_action(ordinary_birth.sequence())
     });
-    let execution = ordinary_birth.execution_frame().unwrap();
+    let admitted_execution = ordinary_birth.execution_frame().unwrap();
     assert_eq!(ordinary_birth.original_frame(), Some(0));
     assert_eq!(
-        execution > 0,
+        admitted_execution > 0,
         needs_native,
         "only the actual non-unity Native tuple needs preparation"
     );
@@ -1328,6 +1328,11 @@ assert captured_start_calls == [(ordinary_birth, original_timestamp)]
         );
     });
     assert_eq!(ordinary_birth.received_timestamp(), original_timestamp);
+    let execution = l3_controller_productive_tests::observe_ready_stopped_start_before_pcm(
+        &mut h.callback,
+        &ordinary_birth,
+    );
+    assert!(execution <= admitted_execution);
     while h.callback.transport.output_frame() < execution {
         let frame = h.callback.transport.output_frame();
         let frames = (execution - frame).min(257) as usize;

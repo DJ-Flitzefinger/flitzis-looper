@@ -864,14 +864,19 @@ assert ordinary_start.effective_frame() is None
         Some(launch_timeline),
         ordinary_start.original_frame().unwrap(),
     );
-    let execution = ordinary_start.execution_frame().unwrap();
+    let admitted_execution = ordinary_start.execution_frame().unwrap();
     assert!(
-        execution > capture_frame,
+        admitted_execution > capture_frame,
         "non-unity Native start owns a later E"
     );
-    assert_eq!(callback.scheduler.peek_next_target_frame(), Some(execution));
+    assert_eq!(
+        callback.scheduler.peek_next_target_frame(),
+        Some(admitted_execution)
+    );
     assert!(ordinary_start.accepted());
     assert_eq!(ordinary_start.effective_frame(), None);
+    let execution = observe_ready_stopped_start_before_pcm(&mut callback, &ordinary_start);
+    assert!(execution <= admitted_execution);
     let mut partitions = [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle();
     while callback.transport.output_frame() < execution {
         let frame = callback.transport.output_frame();

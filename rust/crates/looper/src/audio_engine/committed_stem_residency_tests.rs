@@ -42,6 +42,9 @@ mod public_key_lock_off_tests;
 #[path = "retained_committed_stem_tests.rs"]
 mod retained_committed_stem_tests;
 
+#[path = "committed_stem_control_isolation_tests.rs"]
+mod committed_stem_control_isolation_tests;
+
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;
 
@@ -2487,6 +2490,16 @@ struct ReadyPlaybackAudio {
 
 #[pymethods]
 impl ReadyPlaybackAudio {
+    fn configure_automatic_bpm_range(
+        &self,
+        enabled: bool,
+        minimum_bpm: f64,
+        maximum_bpm: f64,
+    ) -> PyResult<()> {
+        self.engine
+            .configure_automatic_bpm_range(enabled, minimum_bpm, maximum_bpm)
+    }
+
     fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
         self.engine.set_input_mapping_snapshot(mappings)
     }
@@ -3788,8 +3801,8 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     });
     let capture_frame = callback.transport.output_frame();
     assert_eq!(start.original_frame(), Some(capture_frame));
-    let execution = start.execution_frame().unwrap();
-    assert!(execution > capture_frame);
+    let admitted_execution = start.execution_frame().unwrap();
+    assert!(admitted_execution > capture_frame);
     wait_until(|| {
         callback.mixer.pitch_runtime.as_mut().unwrap().poll();
         assert_ne!(start.state(), "rejected", "{:?}", start.reason());
@@ -3800,6 +3813,9 @@ assert not session.stem_generation_errors, session.stem_generation_errors
             .unwrap()
             .has_ready_action(start.sequence())
     });
+    let execution =
+        l3_controller_productive_tests::observe_ready_stopped_start_before_pcm(callback, &start);
+    assert!(execution <= admitted_execution);
     while callback.transport.output_frame() < execution {
         let frame = callback.transport.output_frame();
         let frames = (execution - frame).min(257) as usize;

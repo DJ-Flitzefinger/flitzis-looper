@@ -308,6 +308,78 @@ assert all(owner is ordinary_start and dependency is ordinary_launch.dependency
     start
 }
 
+/// Observe an already-ready, due stopped FirstSound birth before consuming PCM.
+/// The admitted preparation deadline can move earlier after completion; it is
+/// not an instruction to render silence through a stale saved E.
+pub(super) fn observe_ready_stopped_start_before_pcm(
+    callback: &mut Callback,
+    start: &crate::audio_engine::pad_start::CapturedPadStart,
+) -> u64 {
+    if start.state() != "applied" {
+        assert!(
+            callback
+                .mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.is_playing_sample(0))
+        );
+    }
+    observe_ready_due_start_before_pcm(callback, start)
+}
+
+fn observe_ready_due_start_before_pcm(
+    callback: &mut Callback,
+    start: &crate::audio_engine::pad_start::CapturedPadStart,
+) -> u64 {
+    use crate::audio_engine::key_lock_start_policy::KeyLockStartBehavior;
+
+    let frame = callback.transport.output_frame();
+    let original = start.original_frame().unwrap();
+    let admitted = start.execution_frame().unwrap();
+    let sequence = start.sequence();
+    let timestamp = start.received_timestamp();
+    assert_eq!(
+        start.start_behavior(),
+        KeyLockStartBehavior::FirstSoundAtGrid
+    );
+    assert!(original <= frame && frame <= admitted);
+    if start.state() == "applied" {
+        // The caller's original control drain owns its START feedback check.
+        assert_eq!(start.effective_frame(), Some(frame));
+        return frame;
+    }
+    let runtime = callback.mixer.pitch_runtime.as_mut().unwrap();
+    runtime.poll();
+    assert!(runtime.has_ready_action(sequence));
+    let before = callback.feedback.events.len();
+    let expected = ExpectedStoppedFeedback::capture_started(&callback.mixer, 0, start);
+    wait_until(|| {
+        assert_eq!(callback.transport.output_frame(), frame);
+        assert_eq!(start.original_frame(), Some(original));
+        assert_eq!(start.sequence(), sequence);
+        assert_eq!(start.received_timestamp(), timestamp);
+        assert_ne!(start.state(), "rejected", "{:?}", start.reason());
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut [],
+            &mut [0.0; NUM_SAMPLES],
+            frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        start.state() == "applied"
+    });
+    assert_eq!(start.execution_frame(), Some(frame));
+    assert_eq!(start.effective_frame(), Some(frame));
+    assert_eq!(callback.transport.output_frame(), frame);
+    assert_eq!(callback.feedback.events.len(), before + 1);
+    expected.assert_message(&callback.feedback.events[before]);
+    frame
+}
+
 fn execute_public_start_at_frame(
     callback: &mut Callback,
     start: &crate::audio_engine::pad_start::CapturedPadStart,
@@ -6828,7 +6900,8 @@ assert audio.worker_call_count() == source_worker_calls
     );
     let launch_timeline = playback.callback.transport;
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
-    let birth = start.execution_frame().unwrap();
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    let birth = observe_ready_stopped_start_before_pcm(&mut playback.callback, &start);
     let original_start = start.original_frame().unwrap();
     assert!(original_start < launch_timeline.output_frame());
     let launch = LoopPhaseReference::capture(Some(launch_timeline), original_start);
@@ -6852,7 +6925,6 @@ assert audio.worker_call_count() == source_worker_calls
         assert!(output.iter().all(|sample| *sample == 0.0));
         assert!(is_stopped(playback) && start.effective_frame().is_none());
     }
-    let other_clock = other_voice(&playback.callback.mixer).source_playback;
     execute_public_start_at_frame(&mut playback.callback, &start);
     assert!(consumer.is_empty());
     let current = voice(&playback.callback.mixer);
@@ -8433,7 +8505,8 @@ for _ in range(16):
     synchronize_callback_frame(&mut playback.callback, playback.frame);
     let launch_timeline = playback.callback.transport;
     let start = admit_original_public_start(&mut playback.callback, consumer, locals);
-    let birth = start.execution_frame().unwrap();
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    let birth = observe_ready_due_start_before_pcm(&mut playback.callback, &start);
     playback.scheduled = true;
     let original_start = start.original_frame().unwrap();
     assert!(original_start < launch_timeline.output_frame());
@@ -8450,7 +8523,6 @@ for _ in range(16):
         assert_eq!(voice(&playback.callback.mixer).generation, old_generation);
         assert!(start.effective_frame().is_none());
     }
-    let other_clock = other_voice(&playback.callback.mixer).source_playback;
     execute_public_start_at_frame(&mut playback.callback, &start);
     playback.scheduled = false;
     assert!(consumer.is_empty());
@@ -9636,7 +9708,7 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     });
     let launch_timeline = callback.transport;
     let start = admit_original_public_start(callback, consumer, locals);
-    let execution = start.execution_frame().unwrap();
+    let execution = observe_ready_stopped_start_before_pcm(callback, &start);
     let original = start.original_frame().unwrap();
     let launch = LoopPhaseReference::capture(Some(launch_timeline), original);
     assert!(execution >= original);

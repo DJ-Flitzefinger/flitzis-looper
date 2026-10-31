@@ -1999,6 +1999,7 @@ struct WindowWork {
     requests: Arc<Mutex<Vec<u64>>>,
     cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     owners: Arc<Mutex<Vec<ResidentStemCache>>>,
+    preparation_gate: Arc<Mutex<()>>,
     assets: Arc<super::project_assets::ProjectAssets>,
     pcm_history: Arc<super::project_assets::PcmHistory>,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
@@ -2312,6 +2313,10 @@ impl WindowWork {
         if !self.current() {
             return Err("resident source/window was superseded".into());
         }
+        // Committed components and window peaks retain their existing cross-worker serialization.
+        // Always acquire the worker-only gate BEFORE owners; controls never acquire it.
+        let gate = self.preparation_gate.clone();
+        let preparation = super::resident_proposal::lock_preparation(&gate, || self.current())?;
         // Public admission already holds this existing ownership gate. Hold the same gate from
         // the worker's peak snapshot until every source/component allocation is registered, so
         // another queued WindowWork cannot overlook partial or cancelled pair preparation.
@@ -2435,6 +2440,7 @@ impl WindowWork {
         #[cfg(not(test))]
         let _ = peak;
         drop(preparation_owners);
+        drop(preparation);
         self.publish_prepared(sample, stems)
     }
 
@@ -3334,6 +3340,7 @@ fn prepare_window_with_producer_and_trigger(
         requests: engine.pad_request_ids.clone(),
         cache: engine.sample_cache.clone(),
         owners: engine.resident_stem_cache.clone(),
+        preparation_gate: engine.resident_preparation_gate.clone(),
         assets: engine.project_assets.clone(),
         pcm_history: engine.cold_pcm_history.clone(),
         producer: producer.clone(),

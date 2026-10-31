@@ -47,6 +47,20 @@ placement, intent, memory reservations and operation-specific acknowledgement.
 - **THEN** those controls can reach their ordinary admission path independently of the slow read
 - **AND** same-PAD ordering, cancellation, immutable sharing and last-reader retirement remain correct
 
+#### Scenario: A committed component request waits in native admission
+- **GIVEN** a public committed residency request has captured its source-bound admission state
+- **WHEN** its native admission phase waits outside Python
+- **THEN** it retains no Python Engine borrow or interpreter execution
+- **AND** source, placement, launch, selection and reservations are revalidated before mutation
+- **AND** an older captured request cannot supersede a newer admitted intent
+- **AND** a failed newer admission does not revoke an earlier viable request or current proposal
+
+#### Scenario: Intent changes during a committed component read
+- **GIVEN** a worker holds immutable source and file pins with a scoped component reservation
+- **WHEN** cancellation, source/content replacement or a newer intent supersedes it during the read
+- **THEN** its obsolete result cannot publish or borrow another PAD's acknowledgement
+- **AND** actual readers and pending promises retire only after their real use ends
+
 ### Requirement: Background Throughput Preserves Playback Headroom
 Offline jobs SHALL use a coordinated bounded resource policy for concurrent
 child/native CPU work. CPU-only systems SHALL retain a usable same-model path;

@@ -763,6 +763,7 @@ def test_global_start_waits_for_pending_region_without_splitting_native_batch(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
+    controller.project.multi_loop = True
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
@@ -945,6 +946,7 @@ def test_deferred_global_queue_pressure_is_bounded_and_retains_input_timestamp(
     controller: AppController, audio_engine_mock: Mock, *, succeeds: bool
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
+    controller.project.multi_loop = True
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
@@ -987,6 +989,7 @@ def test_new_global_gesture_supersedes_ready_deferred_timestamp(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
+    controller.project.multi_loop = True
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
@@ -1012,6 +1015,7 @@ def test_deferred_global_deadline_exposes_error_without_launching(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
+    controller.project.multi_loop = True
     controller.session.active_sample_ids.add(0)
     controller.transport.loop.set_end(0, 7.0)
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=123)
@@ -1146,6 +1150,7 @@ def test_global_stop_targets_claimed_start_before_active_feedback(
     controller: AppController, audio_engine_mock: Mock, status: str
 ) -> None:
     resident(controller, audio_engine_mock)
+    controller.project.multi_loop = True
     controller.session.active_sample_ids.add(0)
     start_ticket = FakeGlobalPlaybackBatchTicket(status)
     audio_engine_mock.publish_captured_global_start.side_effect = lambda capture: capture.publish(

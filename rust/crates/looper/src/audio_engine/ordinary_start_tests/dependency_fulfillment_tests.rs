@@ -447,7 +447,7 @@ fn sibling_membership_cannot_publish_another_original_even_over_the_same_real_ro
     case.fixture.drain();
     assert!(other.accepted(), "{:?}", other.reason());
     wait_work(&mut case.fixture, &[&other]);
-    let execution = other.execution_frame().unwrap();
+    let execution = observe_ready_due_effects(&mut case.fixture, &[&other]);
     assert!(
         case.fixture
             .render_to(execution)

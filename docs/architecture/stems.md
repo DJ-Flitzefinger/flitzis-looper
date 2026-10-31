@@ -65,11 +65,22 @@ PCM16 reads and exclusive writes; large output uses ds64 counts.
 resampling/instrumental summation with the established small-file rounding oracle.
 
 Inference already uses owned subprocesses, but this conversion still runs
-per-sample Python loops in App worker threads. The component-residency worker
-also retains a global owners lock across PCM reads; another public request can
-wait for it while holding the shared producer and Python execution. Process-tree
-ownership alone does not budget child CPU threads. These are source-audited
-contention risks, not measured proof of callback glitches. The focused
+per-sample Python loops in App worker threads. Committed component preparation
+uses a cancellable worker-only gate, preserving serialized sharing and memory
+peaks without retaining owners or the control producer during reads, allocations,
+ledger commits or file-pin retention. Short owners sections revalidate the exact
+proposal, source, content placement and intent before and after preparation;
+the existing guarded publication and own effective ACK remain necessary.
+The public request captures owned admission state, releases its Engine borrow
+and detaches Python for the native admission phase, revalidating before mutation.
+
+Source/window preparation still holds owners across I/O for physical-slot
+history/peak/copy custody. It acquires the same worker-only gate before owners
+to preserve cross-worker serialization. Borrowed preflight reconciliation and
+binding capture can still wait on that path: complete global/GIL isolation is
+mandatory follow-up work, not an achieved claim. Process-tree ownership alone
+does not budget child CPU threads. Controlled-read progress does not establish
+the cause of callback glitches. The focused
 [performance plan](../development.md#performance-audit-and-upgrade-plan) separates
 control-lock isolation, detached Rust conversion and background resource policy.
 

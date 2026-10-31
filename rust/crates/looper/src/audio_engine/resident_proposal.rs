@@ -9,8 +9,31 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+/// Serialize preparation peaks and immutable reuse, independently of control admission.
+/// Never enter this gate while holding requests, owners, the producer or Python.
+pub(super) fn lock_preparation(
+    gate: &Mutex<()>,
+    current: impl Fn() -> bool,
+) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    loop {
+        if !current() {
+            return Err("resident preparation superseded while waiting".into());
+        }
+        match gate.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("resident preparation lock poisoned".into());
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+
 pub(super) struct ResidentProposals {
     epochs: Vec<[Arc<AtomicU64>; 4]>,
+    stem_admission_orders: Vec<[Arc<ResidentAdmissionClock>; 2]>,
     sources: Vec<Mutex<Option<SourceEventFence>>>,
 }
 struct SourceEventFence {
@@ -26,10 +49,35 @@ impl Default for ResidentProposals {
             epochs: (0..super::constants::NUM_SAMPLES)
                 .map(|_| std::array::from_fn(|_| Arc::new(AtomicU64::new(0))))
                 .collect(),
+            stem_admission_orders: (0..super::constants::NUM_SAMPLES)
+                .map(|_| std::array::from_fn(|_| Arc::default()))
+                .collect(),
             sources: (0..super::constants::NUM_SAMPLES)
                 .map(|_| Mutex::new(None))
                 .collect(),
         }
+    }
+}
+
+#[derive(Default)]
+struct ResidentAdmissionClock {
+    next: AtomicU64,
+    admitted: AtomicU64,
+}
+
+/// Capturing never revokes another context or an admitted proposal/reader.
+pub(super) struct ResidentAdmissionOrder {
+    clock: Arc<ResidentAdmissionClock>,
+    expected: u64,
+}
+impl ResidentAdmissionOrder {
+    pub(super) fn current(&self) -> bool {
+        self.clock.admitted.load(Ordering::Acquire) < self.expected
+    }
+    /// Caller holds requests through the successful reserved capture enqueue.
+    pub(super) fn mark_admitted(&self) {
+        debug_assert!(self.current());
+        self.clock.admitted.store(self.expected, Ordering::Release);
     }
 }
 
@@ -43,6 +91,29 @@ pub(crate) struct ResidentProposal {
 }
 
 impl ResidentProposals {
+    /// The caller serializes successful preflight and admission with pad requests.
+    /// Explicit/candidate and policy domains retain their independent live interests.
+    pub(super) fn capture_stem_admission_order(
+        &self,
+        cell: ContentCell,
+        policy: bool,
+    ) -> Result<ResidentAdmissionOrder, String> {
+        let clock = &self
+            .stem_admission_orders
+            .get(cell.index())
+            .ok_or("resident admission content cell out of range")?[usize::from(policy)];
+        let expected = clock
+            .next
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| "resident admission order exhausted")?
+            + 1;
+        Ok(ResidentAdmissionOrder {
+            clock: clock.clone(),
+            expected,
+        })
+    }
     /// Preparation domains belong to stable content cells. Physical loader request
     /// filters below remain at their original slots and are never permuted.
     pub(super) fn capture_pair_fences_for_cell(

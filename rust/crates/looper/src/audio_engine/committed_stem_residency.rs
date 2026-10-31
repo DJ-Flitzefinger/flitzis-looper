@@ -1163,6 +1163,24 @@ impl AudioEngine {
         )
     }
 
+    #[cfg(test)]
+    pub(super) fn request_committed_stem_residency(
+        &self,
+        selection: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+        interest: &str,
+    ) -> PyResult<ResidentStemTicket> {
+        self.request_committed_stem_residency_with_interest_and_producer(
+            selection,
+            mode,
+            enabled_mask,
+            interest,
+            self.control_producer()?,
+        )
+    }
+
+    #[cfg(test)]
     pub(super) fn request_committed_stem_residency_with_interest_and_producer(
         &self,
         selection: &CommittedStemSetTicket,
@@ -1171,6 +1189,18 @@ impl AudioEngine {
         interest: &str,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<ResidentStemTicket> {
+        self.capture_committed_stem_residency(selection, mode, enabled_mask, interest, producer)?
+            .admit()
+    }
+
+    pub(super) fn capture_committed_stem_residency(
+        &self,
+        selection: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+        interest: &str,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<CommittedStemResidencyAdmission> {
         let policy_only = match interest {
             "explicit" => false,
             "preload" | "withdraw_preload" if mode == "full_mix" => true,
@@ -1247,6 +1277,159 @@ impl AudioEngine {
         {
             return Err(PyValueError::new_err("committed source generation changed"));
         }
+        let source_epoch = self.stable_committed_placement_read(|| {
+            self.prepared_source_epoch(id)
+                .cloned()
+                .map_err(PyRuntimeError::new_err)
+        })?;
+        // Capture order must serialize with admission's last validation. It is
+        // separate from live proposal epochs: a failed newer admission leaves
+        // an already admitted predecessor and its actual readers untouched.
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let admission_order = self.stable_committed_placement_read(|| {
+            if !binding.admitted_current() || !selection.is_current() {
+                return Err(PyValueError::new_err(
+                    "committed source changed during preflight",
+                ));
+            }
+            self.input_runtime_ownership
+                .ensure_no_copy_reservation(id)?;
+            self.resident_proposals
+                .capture_stem_admission_order(original_key.cell(), policy_only)
+                .map_err(PyRuntimeError::new_err)
+        })?;
+        Ok(CommittedStemResidencyAdmission {
+            id,
+            binding,
+            selection: selection.clone(),
+            target,
+            enabled_mask,
+            policy_only,
+            preload,
+            candidate,
+            source_expected: source_epoch.load(Ordering::Acquire),
+            source_epoch,
+            admission_order,
+            pad_request_ids: self.pad_request_ids.clone(),
+            input_runtime_ownership: self.input_runtime_ownership.clone(),
+            resident_stem_cache: self.resident_stem_cache.clone(),
+            preparation_gate: self.resident_preparation_gate.clone(),
+            resident_proposals: self.resident_proposals.clone(),
+            global_timing_revision: self.global_timing_revision.clone(),
+            project_assets: self.project_assets.clone(),
+            resident_account: self.resident_account.clone(),
+            cold_cancelled: self.cold_cancelled.clone(),
+            cold_jobs: self.cold_jobs.handle(),
+            producer: producer.clone(),
+        })
+    }
+}
+
+/// Owned post-preflight admission: no Python Engine borrow survives a native lock wait.
+/// Source/window reconciliation and binding capture remain the separate short preflight.
+pub(super) struct CommittedStemResidencyAdmission {
+    id: usize,
+    binding: InputRuntimePadBinding,
+    selection: CommittedStemSetTicket,
+    target: StemMixMode,
+    enabled_mask: u8,
+    policy_only: bool,
+    preload: bool,
+    candidate: Option<Arc<CandidateAuthority>>,
+    source_epoch: Arc<AtomicU64>,
+    source_expected: u64,
+    admission_order: super::resident_proposal::ResidentAdmissionOrder,
+    pad_request_ids: Arc<Mutex<Vec<u64>>>,
+    input_runtime_ownership: Arc<InputRuntimeOwnership>,
+    resident_stem_cache: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
+    preparation_gate: Arc<Mutex<()>>,
+    resident_proposals: Arc<super::resident_proposal::ResidentProposals>,
+    global_timing_revision: Arc<AtomicU64>,
+    project_assets: Arc<super::project_assets::ProjectAssets>,
+    resident_account: Arc<super::resident_accounting::ResidentAccount>,
+    cold_cancelled: Arc<AtomicBool>,
+    cold_jobs: super::cold_jobs::ColdJobsHandle,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+}
+
+impl CommittedStemResidencyAdmission {
+    fn stable_committed_placement_read<T>(
+        &self,
+        read: impl FnOnce() -> PyResult<T>,
+    ) -> PyResult<T> {
+        let before = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        let result = read();
+        let after = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        if before != after {
+            return Err(placement_admission_error(PlacementError::Pending));
+        }
+        result
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        self.stable_committed_placement_read(|| {
+            let key = self
+                .binding
+                .binding
+                .placement
+                .and_then(|p| p.content_key())
+                .ok_or_else(|| PyValueError::new_err("committed content key unavailable"))?;
+            match self.input_runtime_ownership.observe_control_key(key) {
+                PlacementObservation::Pending => {
+                    return Err(placement_admission_error(PlacementError::Pending));
+                }
+                PlacementObservation::Current(slot) if slot.slot() == self.id => {}
+                _ => {
+                    return Err(PyValueError::new_err(
+                        "committed content placement changed before admission",
+                    ));
+                }
+            }
+            if self.cold_cancelled.load(Ordering::Acquire)
+                || !self.admission_order.current()
+                || !self.selection.is_current()
+                || !self.binding.available()
+                || !self.binding.admitted_current()
+                || self.source_epoch.load(Ordering::Acquire) != self.source_expected
+                || !self.input_runtime_ownership.binding_launch_current(
+                    self.id,
+                    self.binding.binding,
+                    self.binding.launch_revision(),
+                )
+            {
+                return Err(PyValueError::new_err(
+                    "committed source or launch changed before admission",
+                ));
+            }
+            self.input_runtime_ownership
+                .ensure_no_copy_reservation(self.id)
+        })
+    }
+
+    pub(super) fn admit(self) -> PyResult<ResidentStemTicket> {
+        #[cfg(test)]
+        super::native_owned_work::observe(
+            super::native_owned_work::WorkPoint::CommittedStemAdmission,
+        );
+        let id = self.id;
+        let binding = self.binding.clone();
+        let selection = &self.selection;
+        let target = self.target;
+        let enabled_mask = self.enabled_mask;
+        let policy_only = self.policy_only;
+        let preload = self.preload;
+        let candidate = self.candidate.clone();
+        let source_epoch = &self.source_epoch;
+        let producer = &self.producer;
         let reservation = self.cold_jobs.reserve().map_err(PyRuntimeError::new_err)?;
         let _requests = self
             .pad_request_ids
@@ -1254,10 +1437,7 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         self.input_runtime_ownership
             .ensure_no_copy_reservation(id)?;
-        let source_epoch = self.stable_committed_placement_read(|| {
-            self.prepared_source_epoch(id)
-                .map_err(PyRuntimeError::new_err)
-        })?;
+        self.validate()?;
         let mut producer_guard = producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
@@ -1268,6 +1448,7 @@ impl AudioEngine {
             .resident_stem_cache
             .lock()
             .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+        self.validate()?;
         let owner = &mut owners[id];
         if policy_only && owner.committed.explicit_busy() {
             return Err(PyRuntimeError::new_err(
@@ -1395,6 +1576,7 @@ impl AudioEngine {
                 CommittedStemRtWork::Capture(capture),
             )))
             .map_err(|_| PyRuntimeError::new_err("reserved capture capacity lost"))?;
+        self.admission_order.mark_admitted();
         let acknowledgements = binding.acknowledgements.clone();
         let ticket_binding = binding.binding;
         let work = ResidencyWork {
@@ -1411,6 +1593,7 @@ impl AudioEngine {
             candidate: candidate.clone(),
             assets: self.project_assets.clone(),
             owners: self.resident_stem_cache.clone(),
+            preparation_gate: self.preparation_gate.clone(),
             producer: producer.clone(),
             cancelled: self.cold_cancelled.clone(),
             proposal,
@@ -1579,6 +1762,7 @@ struct ResidencyWork {
     candidate: Option<Arc<CandidateAuthority>>,
     assets: Arc<super::project_assets::ProjectAssets>,
     owners: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
+    preparation_gate: Arc<Mutex<()>>,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     cancelled: Arc<AtomicBool>,
     proposal: super::resident_proposal::ResidentProposal,
@@ -1631,12 +1815,27 @@ impl ResidencyWork {
             if !self.current() {
                 return Err("Committed stem preparation superseded".into());
             }
-            let owners = self
+            let mut owners = self
                 .owners
                 .lock()
                 .map_err(|_| "resident ownership lock poisoned")?;
+            if !self.current() {
+                return Err("Committed stem preparation superseded".into());
+            }
             match self.observe_control() {
                 PlacementObservation::Current(resolved) => {
+                    let proposed = owners[resolved.slot()]
+                        .committed
+                        .proposal_slot(self.policy_only)
+                        .as_ref()
+                        .ok_or("committed preparation proposal changed")?;
+                    if !Arc::ptr_eq(&proposed.status, &self.status)
+                        || !Arc::ptr_eq(&proposed.owner, &self.selection)
+                        || !proposed.owner.source_current()
+                        || !self.current()
+                    {
+                        return Err("committed preparation ownership changed".into());
+                    }
                     self.status
                         .preparation_clock
                         .observe_at(false, Instant::now())?;
@@ -1674,8 +1873,11 @@ impl ResidencyWork {
         let stems = if self.target == StemMixMode::FullMix {
             pin.stems.clone()
         } else {
-            // Serialize admission and allocation against every existing same-pad resident reader.
-            let (_owners, _preparation_slot) = self.current_owners()?;
+            // Preserve shared reuse and preparation peaks without monopolizing live controls.
+            let gate = self.preparation_gate.clone();
+            let _preparation =
+                super::resident_proposal::lock_preparation(&gate, || self.current())?;
+            drop(self.current_owners()?);
             if !self.current() {
                 return Err("Committed stem preparation superseded".into());
             }
@@ -1766,6 +1968,7 @@ impl ResidencyWork {
             set.accepted_timing = pin.accepted;
             set.reference_samples = pin.sample.samples.clone();
             set.reference_residency = pin.sample.residency.clone();
+            drop(self.current_owners()?);
             resident
                 .commit_stems(&set)
                 .map_err(|error| error.to_string())?;
@@ -1789,6 +1992,7 @@ impl ResidencyWork {
                     &mut resident,
                 )
                 .map_err(|error| error.to_string())?;
+            drop(self.current_owners()?);
             Some(set)
         };
         self.publish_prepared(pin, stems)

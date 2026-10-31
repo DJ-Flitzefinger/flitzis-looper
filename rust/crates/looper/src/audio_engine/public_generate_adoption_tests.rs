@@ -400,6 +400,8 @@ persistence.mark_dirty()
 persistence.flush()
 controller.bind_disk_selection_commit(persistence.commit_stem_selection, persistence.flush)
 settings = SettingsController(project, session, audio, persistence.mark_dirty)
+settings.set_stem_separator('demucs:htdemucs')
+persistence.flush()
 assert project.stem_separator == 'demucs:htdemucs'
 assert project.pad_stem_mix_mode[0] == 'full_mix' and project.pad_key_lock[0] is key_lock
 assert session.active_sample_ids == {0, 215}

@@ -105,7 +105,7 @@ supports retaining Short; nominal-delay cropping loses source-response energy.
 Removing only the adapter packing lead remains a possible separate design, with
 new physical-birth actual-feed/control/retirement proof needed. The unchanged
 ordinary/Piano/group/continuation checks are reused proportionally; background
-and final combined acceptance remain in steps 13–18. See the design's STEP11 result.
+and final combined acceptance remain in steps 13–19. See the design's STEP11 result.
 
 ## 12. Approximate BPM fallback
 
@@ -124,14 +124,31 @@ failed precision checks retain their outcome and do not become precise acceptanc
 - [x] Preserve the separately reported stem resource-pressure investigation in
       loading/resource work; do not assume the two failures share one cause.
 
-## 13. Stem component-loading/control isolation
+## 13. Committed stem component-loading/control isolation
 
-- [ ] Prove the global owner/producer/GIL contention with controlled slow reads.
-- [ ] Separate slow preparation from short guarded control/publication locks.
-- [ ] Verify unrelated trigger/STOP progress, same-PAD ordering, sharing, memory
+- [x] Prove committed-component owner/control/Python contention with controlled slow reads.
+- [x] Separate slow preparation from short guarded control/publication locks.
+- [x] Verify unrelated trigger/STOP progress, same-PAD ordering, sharing, memory
       reservations, placement/source ABA, cancel/failure and last-reader safety.
 
-## 14. Native bounded stem conversion
+The design records overlapping affected checks, unchanged-parent fixture failures
+and their corrected reruns. Source/window and remaining borrowed Python paths are
+still mandatory STEP14; this result does not claim complete global isolation.
+
+## 14. Remaining source/window control-lock and GIL isolation
+
+- [ ] Replace WindowWork's owners-held source/component I/O with complete
+      same-PAD peak/history/reader reservations and placement/copy/ABA revalidation.
+- [ ] Remove remaining long waits from borrowed reconciliation/binding preflight
+      and affected public registration/control paths without losing performer intent.
+- [ ] Verify source/window and committed work together, actual Python mutable
+      controls, sharing, capacity, cancellation/failure and final-reader custody.
+
+This separate step preserves the original cross-worker history/peak guarantees;
+STEP13's worker-only gate is acquired before WindowWork's existing owners guard.
+Do not describe committed-component isolation as complete global/GIL isolation.
+
+## 15. Native bounded stem conversion
 
 - [ ] Measure Python conversion and control responsiveness against existing oracles.
 - [ ] Port the justified conversion path to detached Rust with exact rounding,
@@ -139,7 +156,7 @@ failed precision checks retain their outcome and do not become precise acceptanc
 - [ ] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
 
-## 15. Background CPU and process resource policy
+## 16. Background CPU and process resource policy
 
 - [ ] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
@@ -148,7 +165,7 @@ failed precision checks retain their outcome and do not become precise acceptanc
 - [ ] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
 
-## 16. PCM, multicore and offline GPU refinements
+## 17. PCM, multicore and offline GPU refinements
 
 - [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
 - [ ] Implement justified remaining bottleneck fixes; record measured no-change
@@ -169,7 +186,7 @@ failed precision checks retain their outcome and do not become precise acceptanc
       packaging, drivers and maintenance; reject disproportionate or marginal
       paths and record that decision rather than guarantee every GPU.
 
-## 17. Native inference and practical PyTorch removal
+## 18. Native inference and practical PyTorch removal
 
 - [ ] Inventory productive Torch closures/operators and distribution size; reuse
       existing Rust/ONNX KeyNet boundaries and keep new cores Python-independent.
@@ -184,7 +201,7 @@ failed precision checks retain their outcome and do not become precise acceptanc
       verify actual footprint. Remove PyTorch only after parity; if not practical,
       record the concrete barrier and preserve the working path.
 
-## 18. Combined regression and final architecture review
+## 19. Combined regression and final architecture review
 
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,

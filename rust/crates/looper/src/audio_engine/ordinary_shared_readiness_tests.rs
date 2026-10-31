@@ -101,6 +101,46 @@ fn wait_work(fixture: &mut Fixture, starts: &[&CapturedPadStart]) {
     }
 }
 
+fn observe_ready_due_effects(fixture: &mut Fixture, starts: &[&CapturedPadStart]) -> u64 {
+    let frame = fixture.transport.output_frame();
+    let admitted: Vec<_> = starts
+        .iter()
+        .map(|start| start.execution_frame().unwrap())
+        .collect();
+    assert!(starts.iter().all(|start| start.original_frame() == Some(0)));
+    let deadline = Instant::now() + WAIT;
+    while starts.iter().any(|start| start.state() != "applied") {
+        assert!(
+            Instant::now() < deadline,
+            "ready original effects did not progress"
+        );
+        assert!(starts.iter().all(|start| start.state() != "rejected"));
+        assert!(fixture.render(0).is_empty());
+        assert_eq!(fixture.transport.output_frame(), frame);
+    }
+    for (start, admitted) in starts.iter().zip(admitted) {
+        assert_eq!(start.original_frame(), Some(0));
+        assert_eq!(start.effective_frame(), Some(frame));
+        assert!(frame <= admitted);
+    }
+    frame
+}
+
+fn drain_grid_targets(fixture: &mut Fixture) {
+    while let Ok(message) = fixture.control.consumer.pop() {
+        crate::audio_engine::audio_stream::process_control_message(
+            message,
+            &mut fixture.scheduler,
+            fixture.transport.output_frame(),
+            &mut crate::messages::TriggerQuantization::Grid { step_64ths: 16 },
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut fixture.feedback,
+            &mut fixture.retirement,
+        );
+    }
+}
+
 #[test]
 fn equal_original_gui_starts_share_one_real_window_but_keep_two_native_effects() {
     let (mut fixture, _files) = fixture();
@@ -161,14 +201,14 @@ fn equal_original_gui_starts_share_one_real_window_but_keep_two_native_effects()
         (Some(8192), Some(8192))
     );
     wait_work(&mut fixture, &[&first, &second]);
-    assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
+    let execution = observe_ready_due_effects(&mut fixture, &[&first, &second]);
     let mut pcm = fixture.render(1);
     pcm.extend(fixture.pcm(47_999));
     assert_eq!(fixture.starts(0), 2);
     assert_eq!((first.state(), second.state()), ("applied", "applied"));
     assert_eq!(
         (first.effective_frame(), second.effective_frame()),
-        (Some(8192), Some(8192))
+        (Some(execution), Some(execution))
     );
     assert_eq!(
         fixture.voice(0).volume,
@@ -200,8 +240,10 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
     use crate::audio_engine::pitch_runtime_tests::{LOOP_END, LOOP_START};
 
     let (mut fixture, _files) = fixture();
+    assert!(fixture.render_to(1000).iter().all(|sample| *sample == 0.0));
     let first = capture(&fixture, 0.25, 1.5);
-    fixture.drain();
+    drain_grid_targets(&mut fixture);
+    assert_eq!(first.original_frame(), Some(24_000));
     let a = fixture
         .control
         .engine
@@ -217,7 +259,7 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
     );
     fixture.drain();
     wait_work(&mut fixture, &[&first]);
-    assert_eq!(first.execution_frame(), Some(8192));
+    assert_eq!(first.execution_frame(), Some(24_000));
     assert!(first.accepted());
     let older_unpublished = capture(&fixture, 0.5, 1.5);
     let ownership = fixture.control.engine.input_runtime_ownership.clone();
@@ -234,8 +276,10 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
         .binding;
 
     // Use the production RuntimeState publication and genuine current bindings.
-    // MultiLoop changes input routing only; actual bank/window/loop/timing stay fixed.
-    for multi_loop in [false, true] {
+    // Vary only input geometry, then restore it without an intervening input.
+    // MultiLoop stays enabled: disabling it is a real global STOP/cancel intent.
+    // Actual renderer bank/window/loop/timing stay fixed throughout.
+    for projected_start in [1.5 + 1.0 / f64::from(RATE), 1.5] {
         let mut loaded = vec![false; NUM_SAMPLES];
         let mut starts = vec![0.0; NUM_SAMPLES];
         let mut ends = vec![None; NUM_SAMPLES];
@@ -243,7 +287,7 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
         for id in [0, 1] {
             loaded[id] = true;
             (starts[id], ends[id]) = if id == 0 {
-                (1.5, Some(2.75))
+                (projected_start, Some(2.75))
             } else {
                 (
                     LOOP_START as f64 / f64::from(RATE),
@@ -263,7 +307,7 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
             .as_ref()
             .unwrap()
             .set_runtime_state(
-                multi_loop,
+                true,
                 loaded,
                 starts,
                 ends,
@@ -293,6 +337,8 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
     );
     older_unpublished.cancel();
     let second = capture(&fixture, 0.75, 1.5);
+    drain_grid_targets(&mut fixture);
+    assert_eq!(second.original_frame(), Some(24_000));
     let b = fixture
         .control
         .engine
@@ -320,13 +366,18 @@ fn fresh_member_after_real_runtime_projections_reuses_readiness_without_revoking
     fixture.drain();
     assert_eq!(fixture.scheduler.len(), 2);
     wait_work(&mut fixture, &[&first, &second]);
-    assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
+    assert!(
+        fixture
+            .render_to(24_000)
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
     let mut pcm = fixture.render(1);
     pcm.extend(fixture.pcm(47_999));
     assert_eq!((first.state(), second.state()), ("applied", "applied"));
     assert_eq!(
         (first.effective_frame(), second.effective_frame()),
-        (Some(8192), Some(8192))
+        (Some(24_000), Some(24_000))
     );
     assert_eq!(fixture.starts(0), 2);
     assert_eq!(fixture.voice(0).volume, 0.75);
@@ -378,7 +429,7 @@ fn cancelling_one_real_member_before_or_after_ack_preserves_its_sibling() {
         );
         fixture.drain();
         wait_work(&mut fixture, &[&second]);
-        assert!(fixture.render_to(8192).iter().all(|sample| *sample == 0.0));
+        observe_ready_due_effects(&mut fixture, &[&second]);
         fixture.render(2048);
         assert_eq!(fixture.starts(0), 1);
         assert_eq!(first.state(), "rejected");

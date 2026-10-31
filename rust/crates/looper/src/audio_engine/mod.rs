@@ -1138,6 +1138,7 @@ pub struct AudioEngine {
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
     resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
+    resident_preparation_gate: Arc<Mutex<()>>,
     resident_restore_guards: Mutex<Vec<Option<Arc<cold_residency::ResidentLoadGuard>>>>,
     incoming_loads: Mutex<Vec<Option<Arc<incoming_load::IncomingLoad>>>>,
     pad_copies: Mutex<Vec<Option<Arc<pad_copy::PadCopyState>>>>,
@@ -1686,21 +1687,26 @@ impl AudioEngine {
         )
     }
 
-    #[pyo3(signature = (selection_ticket, *, mode="all_stems", enabled_mask=15, interest="explicit"))]
-    pub fn request_committed_stem_residency(
-        &self,
+    #[pyo3(name = "request_committed_stem_residency", signature = (selection_ticket, *, mode="all_stems", enabled_mask=15, interest="explicit"))]
+    pub fn request_committed_stem_residency_py(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
         selection_ticket: &CommittedStemSetTicket,
         mode: &str,
         enabled_mask: u8,
         interest: &str,
     ) -> PyResult<ResidentStemTicket> {
-        self.request_committed_stem_residency_with_interest_and_producer(
-            selection_ticket,
-            mode,
-            enabled_mask,
-            interest,
-            self.control_producer()?,
-        )
+        let admission = {
+            let engine = slf.try_borrow()?;
+            engine.capture_committed_stem_residency(
+                selection_ticket,
+                mode,
+                enabled_mask,
+                interest,
+                engine.control_producer()?,
+            )?
+        };
+        py.detach(move || admission.admit())
     }
 
     /// Configure automatic host admission or an additional manual limit, without eviction.
@@ -1827,6 +1833,7 @@ impl AudioEngine {
                     .map(|_| resident_relocation::ResidentStemCache::default())
                     .collect(),
             )),
+            resident_preparation_gate: Arc::new(Mutex::new(())),
             resident_restore_guards: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             incoming_loads: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             pad_copies: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),

@@ -60,6 +60,32 @@ impl<T, F> Drop for OwnedDelivery<T, F> {
 }
 
 impl ColdJobsHandle {
+    pub(super) fn reserve(&self) -> Result<Reservation, String> {
+        reserve_shared(&self.shared)
+    }
+
+    /// The same lane and shutdown fence, without retaining its Engine owner.
+    pub(super) fn submit(
+        &self,
+        reservation: Reservation,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| "cold queue lock poisoned")?;
+        if state.stopped {
+            drop(state);
+            return Err("cold lane stopped".into());
+        }
+        state.jobs.push_back(AdmittedJob {
+            job: Box::new(job),
+            reservation,
+        });
+        self.shared.ready.notify_one();
+        Ok(())
+    }
     /// Direct public preparation enters the same bounded workers. Nested
     /// kernels already running there execute under their enclosing admission.
     pub(super) fn execute_owned<T: Send + 'static>(
@@ -357,21 +383,7 @@ impl ColdJobs {
         reservation: Reservation,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .map_err(|_| "cold queue lock poisoned")?;
-        if state.stopped {
-            drop(state);
-            return Err("cold lane stopped".into());
-        }
-        state.jobs.push_back(AdmittedJob {
-            job: Box::new(job),
-            reservation,
-        });
-        self.shared.ready.notify_one();
-        Ok(())
+        self.handle().submit(reservation, job)
     }
 
     /// Close worker claims before releasing active jobs through cancellation.

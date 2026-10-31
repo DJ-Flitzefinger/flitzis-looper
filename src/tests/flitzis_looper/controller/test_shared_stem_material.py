@@ -128,6 +128,7 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     stem_backend: FakeStemGenerationBackend,
     tmp_path: Path,
 ) -> None:
+    controller.settings.set_stem_separator("demucs:htdemucs")
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
     execution = StemExecution(backend="demucs", model_name="htdemucs", device="cuda")
     stem_backend.result = replace(stem_backend.result, execution=execution)

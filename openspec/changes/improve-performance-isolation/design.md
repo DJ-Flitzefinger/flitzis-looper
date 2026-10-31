@@ -17,7 +17,85 @@ source-prefeed tradeoff are recorded below; no DSP speedup or optimality is clai
 The Human subsequently required an approximate BPM fallback with a visible
 inaccuracy warning when the precise method fails. STEP12 implements that separate
 scalar-only contract, followed by every existing stem/resource/provider/inference/
-final duty in steps 13–18. STEP11 itself introduced no such runtime change.
+final duty in steps 13–19. STEP11 itself introduced no such runtime change.
+
+## STEP13 committed component isolation
+
+The controlled positioned-read baseline holds the real first component chunk.
+Owners remains unavailable and another native request cannot return during a
+roughly 212–215 ms observation. A public Python request and independent Python
+controls also cannot progress during the held read. These are deterministic
+control-stall observations, not device/audio latency or proof of crackle cause.
+
+Committed components now use a separate cancellable worker-only preparation
+gate. It preserves the previous serialized shared lookup, memory peaks and
+complete reader registration. Owners is held only to validate current source,
+content placement, exact proposal/status owner and intent before preparation,
+after reads and after registration. Existing scoped byte/owner/reader promises,
+immutable pins, cancellation checks and final publication CAS remain authoritative.
+The gate is released before control publication. FullMix and unrelated controls
+never acquire it. A cancelled waiter can retire while another reader remains held.
+
+The public residency request captures owned post-preflight admission state,
+drops the Python Engine borrow and detaches native admission. The same bounded
+cold lane is used; no new worker pool is created. Under-lock revalidation checks
+source/epoch, placement, launch, copy and selection before proposal mutation.
+Separate per-content explicit/candidate and policy capture sequences retain
+admission order across detach. Only successful reserved capture enqueue advances
+the admitted watermark. A late older context cannot supersede a newer admitted
+intent; a failed/Pending newer admission leaves both older viable contexts and
+already admitted proposals/readers intact. Capture order is not a live proposal
+epoch and grants no audio acknowledgement.
+
+WindowWork still holds owners across source/window/component I/O. Its lock also
+protects physical-slot PCM history and peak/copy accounting. It now acquires the
+same worker-only gate BEFORE owners, preserving cross-worker serialization.
+Removing that owners span needs a separate complete reservation/history/placement
+proof. Borrowed reconciliation and binding-capture preflight can still wait there;
+registration wrappers also remain borrowed. Mandatory STEP14 owns those residual
+control/GIL stalls. The full plan grows to nineteen steps: conversion15,
+budgets16, PCM/providers17, native inference/Torch18 and combined regression19.
+All original functionality, CUDA/CPU fallback, quality and portability duties remain.
+
+### STEP13 verification boundary
+
+Focused checks cover held component reads, actual unrelated START/STOP, public
+Python and mutable Engine progress during detached admission, same-PAD cancel/
+FullMix supersession, concurrent sharing with independent own ACK, reservations,
+placement Pending/move and equal-PCM lifetime ABA. Existing source/window,
+admission, failure, history, effective-ramp and last-reader checks remain required.
+Nine new regular checks and two explicitly invoked diagnostics pass. During the
+held component chunk, owners and an independent native admission remain available
+(the latter reports 180 microseconds in the final affected run); public Python
+controls and actual unrelated START/STOP also progress. FullMix requires its own
+effective ACK and produces the independent 1024-frame PCM reference while the old
+read remains held. This is controlled progress evidence, not total audio latency.
+
+The first selected integrated Rust run reports 215 passes, 42 failures and two
+ignored diagnostics. An unchanged-parent comparison reproduces 41 failures with
+matching leaf assertions/messages and printed values. The remaining reader-registry
+case passes independently on both versions and in the affected rerun; its earlier
+cause is unproved. Narrow fixture repairs restore explicit model/global-mode
+inputs, observe actual due-ready E with genuine empty callbacks before consuming
+PCM, retain a real future grid T for scheduled sharing, and initialize independent
+range-reference domains and launch coordinates. Original PCM, Native, source,
+provenance, ordering, ACK and reader assertions remain intact. The affected
+66-case run reports 61 passes and five further fixture failures; those exact five
+then pass after the final setup corrections. Compatible earlier successes are
+reused; these overlapping results are not a single clean integrated-run claim.
+
+The selected Python controller/reservation/transport/Portable checks initially
+report 572 passes and nine failures, all nine reproduced on the unchanged parent.
+Explicit Demucs and global-batch fixture inputs preserve the original assertions;
+the three affected files then pass all 93 cases. The distinct selected union is
+581 successful cases, not the sum of overlapping runs. These controller/mock
+checks supplement the actual Native probes. Final-source external Release
+Native/API verification passes with the existing 22 library warnings; the einops
+warning and pin are unchanged. Format, lint and specification checks accompany
+the final diff.
+
+No model inference, App/device session, installed Human Portable update, total
+latency gain, whole-GIL/CPU isolation or resolved system commit pressure is claimed.
 
 ## STEP12 approximate BPM implementation
 
@@ -105,7 +183,7 @@ Run the corresponding Python controller/transport/loader/restore/copy/UI tests
 through the same configured adapter. Saved source evidence requires no new model
 inference. No App/device/listening or whole-musical-quality acceptance is claimed.
 The separate stem resource-pressure report remains open in loading/resource
-steps; BPM fallback does not fix it. Steps 13–18 retain their complete scope.
+steps; BPM fallback does not fix it. Steps 13–19 retain their complete scope.
 
 On 2026-10-31 the Human clarified that 30 ms was a suggestion, not a mandatory
 acceptance threshold. Seek the shortest practical latency with complete quality

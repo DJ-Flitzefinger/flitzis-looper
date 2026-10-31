@@ -222,6 +222,7 @@ def test_returned_capacity_admits_exact_original_request_and_remaining_direct_ow
 def test_pending_settings_aba_expires_before_source_admission_when_capacity_returns(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
+    controller.settings.set_stem_separator("demucs:htdemucs")
     with _held_pool() as held:
         held.fill(32)
         _production_pool(controller, audio_engine_mock, tmp_path, held.pool)

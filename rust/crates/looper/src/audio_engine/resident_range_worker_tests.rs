@@ -34,6 +34,30 @@ fn range_voice_mut(mixer: &mut RtMixer) -> &mut crate::audio_engine::voice_slot:
         .unwrap()
 }
 
+fn install_independent_range_launch(reference: &mut RtMixer) {
+    // The declared birth is T=0 at the default 48 kHz transport. Construct both
+    // geometry and launch coordinates independently before Native preparation.
+    let timeline = crate::audio_engine::transport::TransportTimeline::new(RATE);
+    let index = reference
+        .voices
+        .iter()
+        .position(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    let domain = reference
+        .capture_pitch_voice_snapshot(index)
+        .unwrap()
+        .plan
+        .domain();
+    let playback = &mut reference.voices[index].source_playback;
+    assert_eq!(playback.position().frame, domain.region.start);
+    assert_eq!(playback.position().fraction.to_bits(), 0.0_f64.to_bits());
+    assert!(playback.configure_domain(domain));
+    playback.install_launch_reference(
+        crate::audio_engine::loop_phase_reference::LoopPhaseReference::capture(Some(timeline), 0),
+    );
+    assert!(playback.phase_reference_current(&timeline));
+}
+
 fn launch_range_off_then_on(h: &mut Harness, ticket: &ResidentWindowTicket) {
     // OrdinaryStartWork captures the actual stereo callback format.
     h.engine.test_output_format = Some((RATE, 2));
@@ -93,7 +117,10 @@ fn paired_range_render(
     assert!(
         range_voice(&h.callback.mixer)
             .source_playback
-            .matches_exact(&range_voice(reference).source_playback)
+            .matches_exact(&range_voice(reference).source_playback),
+        "actual={:?} reference={:?}",
+        range_voice(&h.callback.mixer).source_playback,
+        range_voice(reference).source_playback,
     );
     assert_eq!(
         range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
@@ -317,6 +344,7 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     reference.set_speed(0.73);
     reference.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    install_independent_range_launch(&mut reference);
     // The requested stopped ON first emits one warm block from the dry baseline.
     reference.set_pad_key_lock(0, true);
     let mut frame = 0;
@@ -740,6 +768,7 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
     reference.set_pad_loop_region(0, 1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)));
     reference.set_speed(0.73);
     assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    install_independent_range_launch(&mut reference);
     reference.set_pad_key_lock(0, true);
     let render = |mixer: &mut RtMixer, frame: u64, frames: usize| {
         let mut output = vec![0.0; frames * 2];
@@ -821,7 +850,10 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
         assert!(
             actual
                 .source_playback
-                .matches_exact(&control.source_playback)
+                .matches_exact(&control.source_playback),
+            "actual={:?} reference={:?}",
+            actual.source_playback,
+            control.source_playback,
         );
         if frame > 4096 {
             audible |= output.iter().any(|value| value.abs() > 0.001);

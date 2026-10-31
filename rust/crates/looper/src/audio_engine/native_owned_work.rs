@@ -55,6 +55,7 @@ impl CompleteSampleWork {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkPoint {
+    CommittedStemAdmission,
     TimingPcm,
     SavedTimingSource,
     SavedTimingEncode,

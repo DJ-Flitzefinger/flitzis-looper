@@ -257,7 +257,7 @@ those DLLs next to the built native extension instead of requiring `PATH`.
 The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
 [performance change](../openspec/changes/improve-performance-isolation/proposal.md),
 with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [eighteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+and [nineteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -286,9 +286,15 @@ the current DSP: Medium's principal attack is later in every matched pair, while
 nominal-delay cropping loses genuine response energy. The separate 511-frame
 adapter packing opportunity needs a new physical-birth actual-feed/control/
 retirement proof; it is not a measured or adopted speedup. See the design's STEP11
-result for independent source references and limits. The newly requested
-approximate BPM fallback with a visible inaccuracy warning is next in step 12;
-stem work continues in step 13. This fallback is planned, not yet implemented.
+result for independent source references and limits. STEP12 implements the required
+scalar-only approximate BPM fallback with a persisted inaccuracy warning; failed
+precise evidence remains failed. STEP13 separates committed component reads from
+owners and detaches owned post-preflight request admission without retaining a
+Python Engine borrow. A worker-only gate preserves sharing and cross-worker peaks.
+Source/window I/O and borrowed preflight can still hold or wait for owners;
+mandatory STEP14 addresses that distinct history/placement/copy problem. Conversion,
+resource policy, providers, native inference/Torch parity and final checks remain
+steps 15–19. Controlled progress is not whole-GIL isolation or crackle acceptance.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and
