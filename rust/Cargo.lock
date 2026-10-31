@@ -485,6 +485,7 @@ dependencies = [
  "cute-dsp",
  "env_logger",
  "flitzis-looper-analysis",
+ "flitzis-stem-conversion",
  "log",
  "midir",
  "numpy",
@@ -514,6 +515,10 @@ dependencies = [
  "sha2",
  "symphonia",
 ]
+
+[[package]]
+name = "flitzis-stem-conversion"
+version = "0.1.0"
 
 [[package]]
 name = "foreign-types"

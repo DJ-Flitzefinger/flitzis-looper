@@ -41,6 +41,130 @@ impl Drop for SourceHold {
     }
 }
 
+#[test]
+fn conversion_cancel_keeps_real_worker_source_and_processing_until_native_return() {
+    use crate::audio_engine::stem_conversion::StemConversionReservation;
+    use pyo3::types::{PyCFunction, PyModule};
+    use std::ffi::CString;
+    let f = Productive::new(false, 1.0);
+    let source =
+        f.h.engine
+            .capture_offline_stem_source(0, f.h.version.clone())
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let hold = SourceHold::new(WorkPoint::StemConversion);
+    let observer = Arc::new(std::sync::Mutex::new(
+        native_owned_work::take_preparation_observer(),
+    ));
+    let baseline = crate::audio_engine::resident_host_memory::pending_bytes().unwrap();
+    let probe = Python::attach(|py| {
+        let install = PyCFunction::new_closure(py, None, None, move |_, _| -> PyResult<()> {
+            native_owned_work::set_preparation_observer(observer.lock().unwrap().take());
+            Ok(())
+        })
+        .unwrap();
+        let probe = PyModule::from_code(
+            py,
+            &CString::new(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../src/tests/flitzis_looper/controller/stem_conversion_cancel_probe.py"
+            )))
+            .unwrap(),
+            &CString::new("stem_conversion_cancel_probe.py").unwrap(),
+            &CString::new("stem_conversion_cancel_probe").unwrap(),
+        )
+        .unwrap();
+        let session = probe
+            .call_method1(
+                "start",
+                (
+                    Py::new(py, source).unwrap(),
+                    directory.path().to_string_lossy().as_ref(),
+                    py.get_type::<StemConversionReservation>(),
+                    install,
+                ),
+            )
+            .unwrap();
+        session.unbind()
+    });
+    hold.wait();
+    assert!(crate::audio_engine::resident_host_memory::pending_bytes().unwrap() > baseline);
+    Python::attach(|py| {
+        probe
+            .call_method0(py, "cancel_while_inside_native")
+            .unwrap()
+    });
+    hold.release();
+    Python::attach(|py| probe.call_method0(py, "finish").unwrap());
+    assert_eq!(
+        crate::audio_engine::resident_host_memory::pending_bytes().unwrap(),
+        baseline
+    );
+}
+
+#[test]
+fn detached_conversion_allows_public_mutable_controls_actual_start_pcm_and_stop() {
+    use crate::audio_engine::stem_conversion::StemConversionReservation;
+    use pyo3::types::PyBytes;
+    let mut f = Productive::new(false, 1.0);
+    f.h.engine.test_output_format = Some((RATE, 2));
+    let dry = f.h.callback.mixer.bank_for_measurement()[215]
+        .as_ref()
+        .unwrap()
+        .clone();
+    let mut reference = RtMixer::new(2, RATE as f32);
+    reference.load_sample(215, dry);
+    assert!(reference.play_sample_at_output_frame(215, 1.0, 0));
+    let hold = SourceHold::new(WorkPoint::StemConversion);
+    let observer = native_owned_work::take_preparation_observer();
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _observed = native_owned_work::PreparationObservationScope::install(observer);
+        let result = Python::attach(|py| {
+            let raw: Vec<u8> = (0..8194).flat_map(|_| 1234_i16.to_le_bytes()).collect();
+            let pcm = PyBytes::new(py, &raw);
+            let sources = std::array::from_fn::<_, 4, _>(|_| {
+                (48000_u32, 2_u16, 4097_u64, 0_u64, pcm.clone())
+            });
+            let reservation = py
+                .get_type::<StemConversionReservation>()
+                .call1((1024 * 1024, 1024 * 1024))?;
+            let payloads =
+                reservation.call_method1("convert", (sources, (48000, 2, 4096), 0, 4096))?;
+            let output: Vec<Vec<u8>> = payloads.extract()?;
+            assert_eq!(output.len(), 5);
+            let expected: Vec<u8> = (0..8192).flat_map(|_| 1234_i16.to_le_bytes()).collect();
+            assert_eq!(output[0], expected);
+            assert_eq!(
+                output[4],
+                (0..8192)
+                    .flat_map(|_| 3702_i16.to_le_bytes())
+                    .collect::<Vec<_>>()
+            );
+            Ok::<_, PyErr>(())
+        })
+        .map_err(|error| error.to_string());
+        tx.send(result).unwrap();
+    });
+    hold.wait();
+    let engine = Python::attach(|py| Py::new(py, f.h.engine).unwrap());
+    Python::attach(|py| engine.call_method1(py, "stop_sample", (0,)).unwrap());
+    f.h.callback.drain(&mut f.h.consumer);
+    public_controls(
+        &engine,
+        &mut f.h.callback,
+        &mut f.h.consumer,
+        Some(&mut reference),
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "conversion must still be inside detached core"
+    );
+    hold.release();
+    rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    worker.join().unwrap();
+}
+
 fn fresh_window(h: &Harness) -> crate::audio_engine::resident_relocation::ResidentWindowTicket {
     prepare_window_with_producer(
         &h.engine,
@@ -63,7 +187,10 @@ fn public_controls(
     engine: &Py<crate::audio_engine::AudioEngine>,
     callback: &mut Callback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
+    reference: Option<&mut RtMixer>,
 ) {
+    let progress_started = Instant::now();
+    let report_progress = reference.is_some();
     let control_engine = Python::attach(|py| engine.clone_ref(py));
     let (tx, rx) = mpsc::channel();
     let control = std::thread::spawn(move || {
@@ -124,6 +251,28 @@ fn public_controls(
             .iter()
             .any(|voice| voice.is_playing_sample(215))
     );
+    if let Some(reference) = reference {
+        let mut output = [0.0; 128];
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            callback.transport.output_frame(),
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        assert!(output.iter().any(|sample| sample.abs() > 0.000001));
+        let mut expected = [0.0; 128];
+        reference.render_rt(
+            &mut expected,
+            &mut [0.0; NUM_SAMPLES],
+            &mut callback.retirement,
+        );
+        assert_eq!(output.map(f32::to_bits), expected.map(f32::to_bits));
+    }
     Python::attach(|py| engine.call_method1(py, "stop_sample", (215,)).unwrap());
     callback.drain(consumer);
     assert!(
@@ -133,6 +282,12 @@ fn public_controls(
             .iter()
             .any(|voice| voice.is_playing_sample(215))
     );
+    if report_progress {
+        eprintln!(
+            "stem-conversion held-core public START/64-frame bitexact PCM/STOP roundtrip_us={}",
+            progress_started.elapsed().as_micros()
+        );
+    }
 }
 
 #[test]
@@ -170,7 +325,7 @@ fn window_real_source_and_component_reads_release_owners_and_public_controls() {
             );
         }
         let engine = Python::attach(|py| Py::new(py, f.h.engine).unwrap());
-        public_controls(&engine, &mut f.h.callback, &mut f.h.consumer);
+        public_controls(&engine, &mut f.h.callback, &mut f.h.consumer, None);
         assert_eq!(ticket.publication_status(), "preparing");
         if let Some(hold) = &source_hold {
             hold.release();
@@ -273,7 +428,7 @@ fn public_preflight_binding_and_both_registrations_release_engine_borrow() {
             done_tx.send(result).unwrap();
         });
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        public_controls(&engine, &mut f.h.callback, &mut f.h.consumer);
+        public_controls(&engine, &mut f.h.callback, &mut f.h.consumer, None);
         release_tx.send(()).unwrap();
         let receipt = done_rx
             .recv_timeout(Duration::from_secs(10))

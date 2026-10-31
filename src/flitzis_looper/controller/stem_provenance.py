@@ -3,19 +3,23 @@
 import hashlib
 import json
 import platform
+import re
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
 from pathlib import Path
+from types import BuiltinFunctionType
 from typing import TYPE_CHECKING
 
-from flitzis_looper.controller import bs_roformer_generation
+import flitzis_looper_audio as native
+from flitzis_looper.controller import bs_roformer_generation, stem_artifacts
 from flitzis_looper.controller.bs_roformer_assets import CHECKPOINT_FILENAME, CONFIG_FILENAME
 from flitzis_looper.controller.processing_code import loaded_code_identity
 from flitzis_looper.controller.stem_generation import (
     DEMUCS_REQUIRED_CHECKPOINTS,
     resolved_demucs_encoder,
 )
+from flitzis_looper.controller.stem_identity import TRANSFORM_POLICY
 from flitzis_looper.encoder_provenance import supported_encoder_images
 from flitzis_looper_audio import SealedProcessingFiles
 
@@ -138,15 +142,42 @@ def capture_processing_files(
     guard = SealedProcessingFiles([str(path) for path in paths])
     parent_paths = _parent_processing_paths(request, paths)
     execution = loaded_code_identity(parent_paths)
-    if libraries is None or execution is None or not processing_source_roots(request, guard):
+    conversion = native_conversion_identity()
+    if (
+        libraries is None
+        or execution is None
+        or conversion is None
+        or not processing_source_roots(request, guard)
+    ):
         # Exact known files still have execution custody through publication;
         # incomplete implementation lineage grants no completed-set reuse claim.
         return guard, None
     # The ordered role, complete bytes and size bind the exact implementation;
     # absolute model storage locations are not a portable producer identity.
     witnesses = [(index, digest, size) for index, (_, digest, size) in enumerate(guard.witnesses())]
-    encoded = json.dumps((witnesses, libraries, execution), separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        (witnesses, libraries, execution, conversion), separators=(",", ":")
+    ).encode("utf-8")
     return guard, hashlib.sha256(encoded).hexdigest()
+
+
+def native_conversion_identity() -> tuple[str, str] | None:
+    """Bind the loaded converter's compiled-source policy, without claiming image attestation."""
+    identity = native.stem_conversion_identity
+    converter = getattr(stem_artifacts, "StemConversionReservation", None)
+    if (
+        converter is not native.StemConversionReservation
+        or not isinstance(identity, BuiltinFunctionType)
+        or identity.__module__ != native.StemConversionReservation.__module__
+    ):
+        return None
+    try:
+        policy, digest = identity(converter)
+    except TypeError, ValueError:
+        return None
+    if policy != TRANSFORM_POLICY or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        return None
+    return policy, digest
 
 
 def _parent_processing_paths(

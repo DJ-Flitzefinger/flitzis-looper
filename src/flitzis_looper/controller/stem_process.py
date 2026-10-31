@@ -73,6 +73,14 @@ def stem_command_checkpoint() -> None:
         raise StemCommandCancelledError(msg)
 
 
+def stem_conversion_checkpoint() -> None:
+    """Recheck the existing job's cancellation and entry/recovery memory policy."""
+    stem_command_checkpoint()
+    scope = _COMMAND_SCOPE.get()
+    if scope is not None and scope.resources is not None:
+        scope.resources.entry()
+
+
 def _own_inference(args: list[str]) -> bool:
     return (
         len(args) >= 3

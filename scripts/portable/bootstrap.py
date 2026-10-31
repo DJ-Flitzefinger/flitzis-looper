@@ -121,6 +121,24 @@ def check_resident_api(engine_type: type) -> None:
     ), "Native residency API missing independent preload interest"
 
 
+def check_stem_conversion_api(native_module: object) -> None:
+    """Reject an older Native before the Python worker uses numeric conversion."""
+    converter = getattr(native_module, "StemConversionReservation", None)
+    identity = getattr(native_module, "stem_conversion_identity", None)
+    assert converter is not None, "Native bounded stem conversion type missing"
+    assert all(callable(getattr(converter, method, None)) for method in ("convert", "close")), (
+        "Native bounded stem conversion API missing; rebuild the Release extension"
+    )
+    assert callable(identity), "Native stem conversion implementation identity missing"
+    policy, digest = identity()
+    assert policy == "source-bound-aligned-pcm16-native-v3", (
+        "Native stem conversion policy incompatible"
+    )
+    assert isinstance(digest, str), "Native stem conversion digest missing"
+    assert len(digest) == 64, "Native stem conversion digest incomplete"
+    assert all(c in "0123456789abcdef" for c in digest), "Native stem conversion digest invalid"
+
+
 def check_pad_copy_api(engine_type: type) -> None:
     """Reject stale Copy interfaces before activating the matching Python controls."""
     for method in (
@@ -720,6 +738,7 @@ def check_runtime(
             native_module.AudioEngine, root / "analysis-runtime" / "beat-this"
         )
     check_ordinary_transport_api(native_module)
+    check_stem_conversion_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")
     assert customization.__file__ is not None, "Portable sitecustomize has no file origin"

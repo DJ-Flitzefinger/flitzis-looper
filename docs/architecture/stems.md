@@ -64,8 +64,26 @@ PCM16 reads and exclusive writes; large output uses ds64 counts.
 [stem_artifacts.py](../../src/flitzis_looper/controller/stem_artifacts.py) streams model-output
 resampling/instrumental summation with the established small-file rounding oracle.
 
-Inference already uses owned subprocesses, but this conversion still runs
-per-sample Python loops in App worker threads. Committed component preparation
+Inference uses owned subprocesses. Numeric conversion now uses the independent
+`flitzis-stem-conversion` Rust core through a thin synchronous detached binding.
+Python retains positioned RIFF/RF64 readers, exclusive private writers, full
+digest/identity verification and private-generation replacement. The core keeps
+global binary64 positions, compensated mono averaging, ties-even PCM16 rounding
+and ordered instrumental clipping before requantization. A single-use host
+promise precedes even source EOF probes and covers raw spans, native/Python
+payload overlap and writer/scratch space. Cancellation is checked around each
+bounded block and before writes; native work returns before worker custody ends.
+The validated native component identity binds the loaded converter's embedded
+numeric/bridge/Cargo sources, lock and platform/profile. A supported complete v3
+producer proof additionally composes this component with every guarded Python
+role. Currently both complete inference-host manifests remain fail-closed UNKNOWN
+at the unchanged unsupported Pydantic execution validator, also reproduced on
+the parent; this port does not promote component proof to full producer proof.
+Narrow validator/schema/dependency attestation remains a final regression gate.
+This is compiled-source identity, not loaded-image or full compiler attestation.
+Conversion does not remove Torch or prove model quality.
+
+Committed component preparation
 uses a cancellable worker-only gate, preserving serialized sharing and memory
 peaks without retaining owners or the control producer during reads, allocations,
 ledger commits or file-pin retention. Short owners sections revalidate the exact
@@ -90,7 +108,7 @@ The worker revalidates the original content/lifetime, bank/window, proposal and
 intent after I/O/registration, then releases its preparation gate before the
 unchanged publication CAS and operation-specific ACK.
 
-Python numeric conversion and coordinated child CPU policy remain separate work.
+Coordinated child CPU/process/commit policy remains separate work.
 Controlled source/component/registration progress does not establish whole-GIL
 isolation, device latency or the cause of callback glitches. The focused
 [performance plan](../development.md#performance-audit-and-upgrade-plan) separates

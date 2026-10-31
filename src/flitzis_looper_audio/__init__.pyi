@@ -9,6 +9,24 @@ def resolve_project_asset_details(
     samples_root: str, path: str
 ) -> tuple[str, str, str | None, str, str | None]: ...
 def native_build_profile() -> Literal["debug", "release"]: ...
+def stem_conversion_identity(converter: type | None = None) -> tuple[str, str]: ...
+
+class StemConversionReservation:
+    def __init__(self, pcm_bytes: int, limit: int) -> None: ...
+    def close(self) -> None: ...
+    def convert(
+        self,
+        sources: tuple[
+            tuple[int, int, int, int, bytes],
+            tuple[int, int, int, int, bytes],
+            tuple[int, int, int, int, bytes],
+            tuple[int, int, int, int, bytes],
+        ],
+        target: tuple[int, int, int],
+        start: int,
+        frames: int,
+    ) -> tuple[bytes, bytes, bytes, bytes, bytes]: ...
+
 def inspect_mix_capture_spool(path: str) -> dict[str, object]: ...
 def summarize_selected_bpm_json(
     beat_seconds: Sequence[float],

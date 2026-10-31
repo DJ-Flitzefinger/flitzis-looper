@@ -41,6 +41,15 @@ conversion. Native numeric work SHALL release Python execution while running.
 Short admission/publication sections SHALL revalidate current source, content,
 placement, intent, memory reservations and operation-specific acknowledgement.
 
+#### Scenario: A bounded numeric stem block is converted
+- **GIVEN** four retained immutable PCM16 source spans and complete prospective raw/payload/copy/scratch promises
+- **WHEN** the Python-independent native core converts a bounded block outside interpreter execution
+- **THEN** global binary64 interpolation, compensated mono averaging, ties-even PCM16 endpoints and ordered instrumental clipping match the independent byte oracle
+- **AND** unrelated mutable public controls, their own trigger/audio and STOP can progress
+- **AND** cancellation during native work is observed before any subsequent output write, while worker/source custody lasts through actual return
+- **AND** exclusive RIFF/RF64 writers, complete output verification and private generation commit remain authoritative
+- **AND** the actual compiled numeric/bridge implementation participates in the processing identity; unsupported binding evidence remains UNKNOWN
+
 #### Scenario: Components load while another PAD is played
 - **GIVEN** one PAD is preparing components under a controlled slow reader
 - **WHEN** another loaded PAD receives trigger or STOP

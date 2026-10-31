@@ -25,6 +25,15 @@ Ordinary locked Portable builds do not enable it, compile its C++ shim or add a
 Signalsmith runtime DLL. Its pinned MIT headers ship as tracked source; existing
 MSVC/SDK selection and the productive RubberBand dependency remain unchanged.
 
+The bounded stem converter adds a dependency-free Rust workspace crate inside
+the same Native extension. It changes no Python ABI, installer path, external
+DLL or inference dependency. Runtime preflight checks its numeric API and v3
+compiled-source processing identity before activating the matching Python code.
+The arithmetic core has no OS/Python dependency; Windows host promises use the
+existing memory adapter. Other OSes retain the hard PCM cap with explicitly
+unsupported host monitoring until a platform adapter is supplied. Windows tests
+alone do not certify Linux/macOS builds or distribution.
+
 Start the installed app with `Flitzis-Looper/START-LOOPER.bat`. The `start.bat` and
 `start-release.bat` aliases select the same private Release runtime. Ordinary
 starts perform no build, dependency installation, update or model preflight.

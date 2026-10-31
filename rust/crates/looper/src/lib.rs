@@ -31,6 +31,10 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::resolve_project_asset_details;
     #[pymodule_export]
+    use super::audio_engine::stem_conversion::StemConversionReservation;
+    #[pymodule_export]
+    use super::audio_engine::stem_conversion::stem_conversion_identity;
+    #[pymodule_export]
     use super::native_build_profile;
     #[pymodule_export]
     use super::selected_bpm::summarize_selected_bpm_json;

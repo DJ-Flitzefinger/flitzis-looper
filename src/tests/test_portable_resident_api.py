@@ -989,6 +989,13 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     vars(complete_native).update(
         vars(ordinary_transport_native_module(complete_native.AudioEngine))
     )
+    complete_native.StemConversionReservation = type(
+        "CompatibleConverter", (), {"convert": lambda *_: None, "close": lambda *_: None}
+    )
+    complete_native.stem_conversion_identity = lambda: (
+        "source-bound-aligned-pcm16-native-v3",
+        "a" * 64,
+    )
     native = SimpleNamespace(
         flitzis_looper_audio=SimpleNamespace(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")

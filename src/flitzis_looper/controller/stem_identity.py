@@ -10,7 +10,7 @@ from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 if TYPE_CHECKING:
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
 
-TRANSFORM_POLICY = "source-bound-aligned-pcm16-streaming-v2"
+TRANSFORM_POLICY = "source-bound-aligned-pcm16-native-v3"
 
 
 def source_digest(source_version: str) -> str | None:

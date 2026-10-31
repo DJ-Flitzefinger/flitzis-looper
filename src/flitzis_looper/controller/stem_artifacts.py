@@ -9,9 +9,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from flitzis_looper.controller.stem_process import stem_command_checkpoint
+from flitzis_looper.controller.stem_process import (
+    stem_command_checkpoint,
+    stem_conversion_checkpoint,
+)
 from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
+from flitzis_looper_audio import StemConversionReservation
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -68,14 +72,19 @@ def _source(reader: PcmWavReader, path: Path) -> _Source:
     return _Source(reader, path, rate, channels, frames)
 
 
-def _read_span(source: _Source, first: int, count: int) -> array[float]:
+def _raw_span(source: _Source, first: int, count: int) -> bytes:
     if count == 0:
-        return array("d")
+        return b""
     source.reader.setpos(first)
     raw = source.reader.readframes(count)
     if len(raw) != count * source.channels * 2:
         msg = f"{source.path.name} has incomplete PCM data"
         raise StemArtifactError(msg)
+    return raw
+
+
+def _read_span(source: _Source, first: int, count: int) -> array[float]:
+    raw = _raw_span(source, first, count)
     samples = array("d", [0.0]) * (count * source.channels)
     for index, (value,) in enumerate(struct.iter_unpack("<h", raw)):
         samples[index] = -1.0 if value == -32768 else value / 32767.0
@@ -115,9 +124,10 @@ def _span(source: _Source, start: int, frames: int, target_rate: int) -> tuple[i
 def _block_pcm_bytes(
     sources: dict[str, _Source], target: AudioShape, start: int, frames: int
 ) -> int:
-    # Four retained binary64 component blocks plus one PCM16 payload and its
-    # conservative write copy. Source raw+decoded spans are counted together,
-    # although productive conversion reads only one source span at a time.
+    # Retain the legacy conservative PCM envelope. Native actually retains four
+    # raw spans and five native/Python payload pairs plus one writer copy (22
+    # bytes/target sample), without decoded binary64 arrays. Fixed bridge/stack
+    # metadata additionally receives a separate prospective host allowance.
     output = frames * target.channels * 36
     source_spans = sum(
         _span(source, start, frames, target.sample_rate_hz)[1] * source.channels * 10
@@ -141,66 +151,6 @@ def _block_size(
         msg = "aligned stem block exceeds the transient PCM limit"
         raise StemArtifactError(msg)
     return low
-
-
-def _sample(
-    samples: array[float], source: _Source, first: int, frame: int, channel: int, channels: int
-) -> float:
-    if frame < 0 or frame >= source.frames:
-        return 0.0
-    offset = (frame - first) * source.channels
-    if source.channels == channels:
-        return samples[offset + channel]
-    if source.channels == 1:
-        return samples[offset]
-    if channels == 1:
-        return sum(samples[offset : offset + source.channels]) / source.channels
-    if channel < source.channels:
-        return samples[offset + channel]
-    return 0.0
-
-
-def _align_block(source: _Source, target: AudioShape, start: int, frames: int) -> array[float]:
-    first, count = _span(source, start, frames, target.sample_rate_hz)
-    samples = _read_span(source, first, count)
-    output = array("d", [0.0]) * (frames * target.channels)
-    ratio = source.sample_rate_hz / target.sample_rate_hz
-    for local in range(frames):
-        position = (start + local) * ratio
-        frame = math.floor(position)
-        fraction = position - frame
-        for channel in range(target.channels):
-            before = _sample(samples, source, first, frame, channel, target.channels)
-            after = _sample(samples, source, first, frame + 1, channel, target.channels)
-            output[local * target.channels + channel] = before + (after - before) * fraction
-    return output
-
-
-def _pcm16(value: float) -> int:
-    value = value if math.isfinite(value) else 0.0
-    value = max(-1.0, min(1.0, value))
-    if value >= 1.0:
-        return 32767
-    if value <= -1.0:
-        return -32768
-    return round(value * 32767.0)
-
-
-def _payload(samples: array[float]) -> bytearray:
-    payload = bytearray(len(samples) * 2)
-    for index, value in enumerate(samples):
-        struct.pack_into("<h", payload, index * 2, _pcm16(value))
-    return payload
-
-
-def _instrumental_payload(aligned: dict[str, array[float]]) -> bytearray:
-    payload = bytearray(len(aligned["drums"]) * 2)
-    for index in range(len(aligned["drums"])):
-        value = 0.0
-        for name in ("drums", "bass", "melody"):
-            value = max(-1.0, min(1.0, value + aligned[name][index]))
-        struct.pack_into("<h", payload, index * 2, _pcm16(value))
-    return payload
 
 
 def _validate_target(target: AudioShape, block_frames: int) -> None:
@@ -236,15 +186,49 @@ def _write_block(
     start: int,
     frames: int,
 ) -> None:
-    aligned = {}
-    for name, source in sources.items():
+    stem_conversion_checkpoint()
+    promised = _block_pcm_bytes(sources, target, start, frames)
+    reservation = StemConversionReservation(promised, MAX_TRANSIENT_PCM_BYTES)
+    try:
+        _convert_block(sources, writers, target, start, frames, reservation)
+    finally:
+        # Synchronous native work and every prospective write have ended. A
+        # retained exception traceback must not retain a prospective promise.
+        reservation.close()
+
+
+def _convert_block(
+    sources: dict[str, _Source],
+    writers: dict[str, Pcm16WavWriter],
+    target: AudioShape,
+    start: int,
+    frames: int,
+    reservation: StemConversionReservation,
+) -> None:
+    spans = []
+    for source in sources.values():
         stem_command_checkpoint()
-        aligned[name] = _align_block(source, target, start, frames)
-    for name, samples in aligned.items():
-        stem_command_checkpoint()
-        writers[name].writeframesraw(_payload(samples))
+        first, count = _span(source, start, frames, target.sample_rate_hz)
+        spans.append((
+            source.sample_rate_hz,
+            source.channels,
+            source.frames,
+            first,
+            _raw_span(source, first, count),
+        ))
+    payloads = reservation.convert(
+        (spans[0], spans[1], spans[2], spans[3]),
+        (target.sample_rate_hz, target.channels, target.frame_count),
+        start,
+        frames,
+    )
+    # No write or completion can follow a cancellation during detached work.
+    # The existing worker still owns its source/generation and host promise.
     stem_command_checkpoint()
-    writers["instrumental"].writeframesraw(_instrumental_payload(aligned))
+    for name, payload in zip((*sources, "instrumental"), payloads, strict=True):
+        stem_command_checkpoint()
+        writers[name].writeframesraw(payload)
+    # Block locals leave together before the next block's reservation/read.
 
 
 def _write_blocks(
@@ -286,7 +270,11 @@ def _open_sources(
         if source.channels * 10 > max_transient_pcm_bytes:
             msg = "source PCM frame exceeds the transient PCM limit"
             raise StemArtifactError(msg)
-        _read_span(source, source.frames - 1, 1)
+        probe = StemConversionReservation(source.channels * 10, max_transient_pcm_bytes)
+        try:
+            _raw_span(source, source.frames - 1, 1)
+        finally:
+            probe.close()
         sources[name] = source
     return sources
 
@@ -337,7 +325,7 @@ def write_project_cache_artifacts(
     """
     _validate_limit(max_transient_pcm_bytes)
     _validate_target(target_shape, block_frames)
-    stem_command_checkpoint()
+    stem_conversion_checkpoint()
     cache_dir.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex
     temporary: dict[str, Path] = {

@@ -23,7 +23,6 @@ from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
 if TYPE_CHECKING:
-    from array import array
     from pathlib import Path
 
 
@@ -131,10 +130,12 @@ def _outputs(root: Path, *, rate: int = 48_000, channels: int = 2, frames: int =
 
 
 @pytest.mark.parametrize(
-    ("source_rate", "target_rate"), [(48_000, 44_100), (22_050, 48_000), (11, 7)]
+    ("source_rate", "target_rate"),
+    [(48_000, 44_100), (22_050, 48_000), (11, 7), (96_000, 44_100), (44_100, 96_000)],
 )
 @pytest.mark.parametrize(
-    ("source_channels", "target_channels"), [(1, 2), (2, 1), (2, 2), (2, 3), (3, 2)]
+    ("source_channels", "target_channels"),
+    [(1, 2), (2, 1), (2, 2), (2, 3), (3, 2), (3, 1), (4, 1)],
 )
 @pytest.mark.parametrize("frames", [49, 4117])
 def test_streaming_set_is_byteexact_legacy_across_rate_channel_and_block_boundaries(
@@ -539,20 +540,27 @@ def test_mid_conversion_payload_allocation_failure_preserves_prior_generation(
     cache.mkdir()
     for name in STEM_KINDS:
         (cache / f"{name}.wav").write_bytes(b"previous-generation")
-    original = stem_artifacts._payload
+    original = stem_artifacts.StemConversionReservation
     calls = 0
 
-    def fail(samples: array[float]) -> bytearray:
-        nonlocal calls
-        calls += 1
-        if calls == 7:
-            # Precise allocation error injection before constructing this
-            # bounded PCM16 payload, after prior blocks performed actual I/O.
-            msg = "injected bounded payload allocation failure"
-            raise MemoryError(msg)
-        return original(samples)
+    class FailingReservation:
+        def __init__(self, size: int, limit: int) -> None:
+            self.owned = original(size, limit)
 
-    monkeypatch.setattr(stem_artifacts, "_payload", fail)
+        def close(self) -> None:
+            self.owned.close()
+
+        def convert(self, *args: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 7:
+                # Inject before native payload allocation, after six actual
+                # bounded conversions and their real output writes.
+                msg = "injected bounded payload allocation failure"
+                raise MemoryError(msg)
+            return self.owned.convert(*args)
+
+    monkeypatch.setattr(stem_artifacts, "StemConversionReservation", FailingReservation)
     with pytest.raises(MemoryError, match="bounded payload allocation"):
         write_project_cache_artifacts(
             output_root=output,

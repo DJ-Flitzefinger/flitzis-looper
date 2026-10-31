@@ -307,7 +307,9 @@ The first priorities are the 8192-frame prepared-start scheduling lead, selected
 endpoint reserve misses and audible onset; then stem component-loading control
 locks, GIL-bound sample conversion and background CPU budgets. Finite/shared PCM,
 existing offline CUDA and CPU fallback are foundations to measure and preserve.
-Rust conversion is justified for sample arithmetic; wholesale controller/model
+STEP15 now runs bounded sample arithmetic in an independent Rust core through
+thin detached bindings, with the established Python WAV/commit chain and exact
+byte oracles. CPU/process budgets remain the next isolation task. Wholesale controller/model
 ports and callback CUDA have no demonstrated benefit at this point.
 New Rust processing/domain code should remain independent of thin Python/PyO3
 bindings. The plan also audits PyTorch replacement and dependency footprint for

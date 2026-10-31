@@ -152,11 +152,16 @@ evidence. This scoped completion does not mark the overall regression matrix gre
 
 ## 15. Native bounded stem conversion
 
-- [ ] Measure Python conversion and control responsiveness against existing oracles.
-- [ ] Port the justified conversion path to detached Rust with exact rounding,
+- [x] Measure Python conversion and control responsiveness against existing oracles.
+- [x] Port the justified conversion path to detached Rust with exact rounding,
       bounded memory, RIFF/RF64, cancellation and coherent processing identity.
-- [ ] Check cross-rate/channel/block byte parity, corruption and injected failures;
+- [x] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
+
+Complete inference-host attestation remains UNKNOWN at the existing unsupported
+Pydantic execution validator, reproduced on the unchanged parent. The converter's
+positive component/subset evidence does not close that mandatory FINAL19 gate or
+the previously retained 32 Rust failures, watchdog and registry uncertainty.
 
 ## 16. Background CPU and process resource policy
 

@@ -19,6 +19,105 @@ inaccuracy warning when the precise method fails. STEP12 implements that separat
 scalar-only contract, followed by every existing stem/resource/provider/inference/
 final duty in steps 13–19. STEP11 itself introduced no such runtime change.
 
+## STEP15 bounded numeric conversion
+
+The implementation retains the established Python file/commit/controller chain
+and replaces only block arithmetic with the dependency-free portable
+`flitzis-stem-conversion` core and thin PyO3 bridge. No engine/control borrow,
+file access, Python callback or new scheduler enters the core. Raw immutable
+spans cross synchronous detach; global binary64 positions, CPython 3.14-style
+compensated channel averaging, ties-even endpoints/nonfinite policy and ordered
+pre-quantization instrumental clipping preserve the byte contract. Maximum block
+size remains 4096, with the existing conservative 1-GiB PCM cap and adaptation.
+
+Before source EOF probes or block reads, a single-use opaque reservation promises
+raw input and all overlapping native/Python output/write buffers plus 64-KiB host
+metadata/scratch on the existing shared host ledger. Windows retains the existing
+2-GiB commit/512-MiB physical stem entry floors plus the prospective delta; resource
+recovery/critical thresholds are unchanged. Terminal close occurs after synchronous
+work/writes end, including retained exceptions; repeat/concurrent use cannot
+multiply an allowance. Other OS host monitoring is explicitly unsupported, while
+the platform-independent core's hard extent cap remains. No OS settings change.
+
+Cancellation checks surround blocks and precede writes. Native code finishes its
+bounded current block; the real worker/job keeps source, processing and generation
+custody until return. Existing exclusive writers, RIFF/RF64 geometry, full hash/EOF
+verification, private replacements, descriptor-last commit and later own adoption
+ACK remain separate authorities. A supported complete version3 producer proof
+additionally binds the loaded converter's embedded complete core/bridge/Cargo
+sources, lock and platform/profile, rather than current source-path bytes. The
+native component identity is positively checked, separately from all other roles.
+This is compiled-source lineage, not full binary/toolchain attestation.
+
+The extra complete-host positive probe exposed an unchanged parent limitation:
+both manifests fail closed at `StemExecution._coherent_fallback`'s Pydantic
+`@model_validator`, which the existing decorator policy cannot attest. The exact
+parent and current probes both reject that role after the preceding roles pass.
+Every production manifest role and guard remains; full producer/fingerprint stays
+UNKNOWN. New positive artifact/PCM/process-role checks are subset evidence only;
+two explicit full-host tests retain the unsupported result. Narrow actual
+validator/schema/Pydantic dependency attestation is a mandatory FINAL19 gate.
+
+### STEP15 verification and measurement limits
+
+Five independent pure-core regular tests pass. Thirteen focused Native tests pass
+with no failures or ignores on the original stack configuration, including the
+new actual worker/cancellation and public-control cases plus retained window
+guards. The held-core observer stops after real allocation and one converted
+frame. Unrelated PAD215 preserves its original T and real START, all 64 stereo
+PCM frame bits against an independent dry renderer, and public STOP; the whole
+headless fixture roundtrip was 1363 us (n=1), not event-loop/device latency.
+The cancellation case retains actual Native source/processing readers, rejects
+new capacity while all 34 slots are occupied, writes no new output after cancel,
+joins its executor and reclaims every permit before reporting worker retirement.
+The asset-retirement recorder in that probe is not a physical deletion proof.
+
+The initial 17-file Python selection has 601 passes, 7 failures and 1 skip. All
+seven failed leaf IDs and exact original assertion/value classes reproduce on
+unchanged parent `a5992b0d` (7 failures, 1 model control pass). Five explicit public
+Demucs Settings inputs restore those tests' declared Demucs-to-BS-to-Demucs or
+producer setup before capture; defaults, shared fixtures and every assertion stay.
+The final nine-file affected selection passes 443 cases with 10 existing skips;
+it overlaps the initial successes. It includes 96k/44.1k channel/block byte parity,
+WAV/RF64/failure cleanup, both backend seams, intent, cancellation and Portable API.
+Nine final native binding/lineage/preflight cases and six static checks pass in
+a separate overlapping run. Positive seven-role artifact/PCM/process evidence is
+separate from the two explicit full-host UNKNOWN cases. The original speculative
+full-host-positive pair failed on both parent and current at the same unsupported
+validator; those receipts remain, without removing any production role or guard.
+Ten existing skips remain, including the opt-in greater-than-4-GiB LONG case;
+no device opt-in was enabled. Owned child cancellation tests use explicitly
+non-neural fixture models. No production separator inference or App/device session
+was run here.
+
+The same five-second synthetic 48k stereo inputs, block4096, complete five-file
+writer/verification/private replacement path were measured before and after:
+
+| Target rate | Before wall / process CPU | Native wall / process CPU | Complete file identity |
+| --- | --- | --- | --- |
+| 48 kHz | 1.147695 s / 1.125000 s | 0.043664 s / 0.031250 s | All five SHA256 values identical |
+| 44.1 kHz | 1.100147 s / 1.093750 s | 0.040544 s / 0.031250 s | All five SHA256 values identical |
+
+This is one sample per rate, about 26–27x faster for this conversion fixture,
+including unchanged file work. CPU observations have coarse timer granularity.
+It is not cold-disk, competing-inference, callback-tail or universal throughput
+evidence. Reproduce with the existing `_outputs` fixture (48k,2ch,240000 frames),
+`AudioShape(rate,2,rate*5)`, default block/cap, wall/process timers surrounding
+`write_project_cache_artifacts`, then SHA256 of every output. The independent
+legacy oracle, not timing, decides byte correctness. Rust focused recipes select
+only `window_control_isolation_tests::` and `stem_conversion::tests::`; the pure
+core runs separately, excluding other workspace test crates. The Windows wrapper
+always adds `--workspace`, so `-p` alone does not isolate a crate. The initial
+overbroad compile was cancelled before any tests and contributes no pass receipt.
+Final format/lint, strict mypy for the four changed Python modules, strict
+OpenSpec, local Markdown targets and whitespace pass;
+anchors were not separately rescored. External Release Native/API retains the
+22 known library warnings and existing einops pin/warning.
+
+This port alone removes no Torch and establishes no inference, CUDA, musical/device
+or entire GIL-isolation acceptance. STEP16 budgets,17 PCM/providers,18 practical
+native inference/Torch removal with mandatory CUDA,19 combined gates remain.
+
 ## STEP14 source/window and Python isolation result
 
 Window preparation now reserves the complete source/component byte, owner,
@@ -419,7 +518,7 @@ the implemented subset and supersedes its corresponding reserve-miss observation
 | Prepared does not mean attack-compensated | `retained_native_start.rs`: physical-birth silent priming; `key_lock_physical_onset_tests.rs`; existing latency example | Warmed handles do not prove principal-attack alignment. Separate first sound, significant onset and principal attack from nominal Native delay. Existing onset/quality failures remain open. |
 | Serial preparation and serial render | `pitch_actions/preparation.rs`: worker loop; `key_lock_preparation.rs`: worker lanes; `mixer.rs`: `render_rt_chunk` | Independent worker work is partly serial, and voices render serially in the callback. Measure worker queue tails and callback cost before adding concurrency; a blocking general threadpool inside the callback is unsuitable. |
 | Stem I/O holds global owners | `committed_stem_residency.rs`: `current_owners`, `prepare`, `request_committed_stem_residency_with_interest_and_producer`; public wrappers in `audio_engine/mod.rs` | Preparation retains the global owners guard across component reads/allocation. A request can acquire the shared producer then wait for owners under the GIL. Test slow component reads while another PAD triggers/stops; reduce lock scope without weakening admission. This is a control stall risk, not evidence of a callback mutex. |
-| Python postprocessing | `controller/stem_artifacts.py`: `_read_span`, `_align_block`, `_payload`, `_instrumental_payload`; both generation backends | Bounded 4096-frame blocks still perform per-sample Python work in App worker threads. Port the arithmetic/streaming path under a detached Rust boundary; measure GUI/control progress as well as throughput. |
+| Stem postprocessing | `controller/stem_artifacts.py`, `flitzis-stem-conversion`; both generation backends | STEP15 replaces productive per-sample Python arithmetic with a detached bounded core. Python retains file verification/private commit; scoped byte, control and throughput evidence does not certify inference or full producer attestation. |
 | Inference separation lacks CPU budgeting | `stem_workers.py`, `stem_generation.py`: `demucs_cache_environment`; `stem_process.py`; `analysis/process.py`: `_environment`, `run_owned_command` | Two stem workers can run broad child/native thread pools. Beat-worker BLAS caps do not apply to the generic stem route. Process-tree custody is already implemented; it is not a CPU reservation. Measure inference, conversion and loading separately. |
 | Finite/shared PCM already implemented | `stem_pair.rs`: component view preparation; `resident_accounting.rs`; `cold_jobs.rs`; `committed_stem_residency.rs` | Direct Arc allocation, immutable reuse, scoped unique accounting, pending promises, host headroom and bounded cold workers already exist. Profile process RSS/private commit/paging and last-reader plateaus rather than rebuild these foundations. |
 | CUDA and fallback already exist | `bs_roformer_generation.py`, `stem_generation.py`, offline worker code | Preserve actual device/fallback receipts. Additional offline acceleration needs transfer-inclusive evidence; no measured case currently supports moving small callback blocks to CUDA. |

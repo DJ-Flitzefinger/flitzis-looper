@@ -1,0 +1,7 @@
+[package]
+name = "flitzis-stem-conversion"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "flitzis_stem_conversion"

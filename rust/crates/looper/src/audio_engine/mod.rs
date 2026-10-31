@@ -167,6 +167,7 @@ mod resident_host_memory;
 mod resident_proposal;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
+pub(crate) mod stem_conversion;
 pub use prepared_source::PreparedSourceTicket;
 mod material_migration;
 mod material_migration_control;

@@ -830,6 +830,7 @@ def test_equal_readable_roots_resolve_before_one_inference_and_keep_own_authorit
 def test_equal_model_bytes_relocate_with_independent_candidate_and_selected_seals(
     queued: _QueuedScenario,
 ) -> None:
+    queued.controller.settings.set_stem_separator("demucs:htdemucs")
     stems = queued.controller.stems
     first_model, relocated_model = queued.models
     for leaf in ("checkpoint.bin", "config.yaml", "definition.py"):
@@ -884,6 +885,7 @@ def test_equal_model_bytes_relocate_with_independent_candidate_and_selected_seal
 def test_settings_aba_rejects_blocked_resolution_before_any_inference(
     queued: _QueuedScenario,
 ) -> None:
+    queued.controller.settings.set_stem_separator("demucs:htdemucs")
     stems = queued.controller.stems
     assert stems.generate_stems_async(0)
     old = stems._generation_intents[0]
@@ -990,6 +992,7 @@ def test_settings_aba_running_reader_keeps_custody_and_stale_events_cannot_selec
     monkeypatch: pytest.MonkeyPatch,
     old_outcome: Literal["progress", "error", "success"],
 ) -> None:
+    queued.controller.settings.set_stem_separator("demucs:htdemucs")
     stems = queued.controller.stems
     assert stems.generate_stems_async(0)
     queued.step()  # identity resolution admits a still-unstarted inference
@@ -1037,6 +1040,7 @@ def test_settings_aba_running_reader_keeps_custody_and_stale_events_cannot_selec
 def test_settings_aba_discards_returned_old_preparation_without_selection(
     queued: _QueuedScenario,
 ) -> None:
+    queued.controller.settings.set_stem_separator("demucs:htdemucs")
     stems = queued.controller.stems
     assert stems.generate_stems_async(0)
     queued.step()
@@ -1063,6 +1067,7 @@ def test_different_resolved_producer_or_model_serializes_until_actual_reader_ret
     monkeypatch: pytest.MonkeyPatch,
     replacement: str,
 ) -> None:
+    queued.controller.settings.set_stem_separator("demucs:htdemucs")
     stems = queued.controller.stems
     assert stems.generate_stems_async(0)
     queued.step()
