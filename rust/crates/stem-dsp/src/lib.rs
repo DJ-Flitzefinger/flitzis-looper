@@ -2,12 +2,15 @@
 //!
 //! Matches the pinned vendored model's stereo STFT, feature ordering, complex
 //! masking and length-preserving ISTFT. It does not implement the learned network,
-//! CUDA AMP, track chunking, overlap-add, file custody or productive dispatch.
+//! CUDA AMP, file custody or productive dispatch. The separate track module
+//! supplies bounded reflection/chunk batching and rolling overlap-add.
 //! Callers retain immutable readers and admit the complete transient envelope
 //! BEFORE allocating inputs/masks or calling this core, through actual return.
 
 use rustfft::{FftPlanner, num_complex::Complex32};
 use std::{fmt, sync::Arc};
+
+pub mod track;
 
 pub const RATE: u32 = 44_100;
 pub const FFT: usize = 2048;
@@ -30,6 +33,9 @@ pub enum Error {
     Allocation,
     Cancelled,
     Envelope,
+    Source,
+    Prediction,
+    Output,
 }
 
 impl fmt::Display for Error {
@@ -40,6 +46,9 @@ impl fmt::Display for Error {
             Self::Allocation => "bounded BS spectral allocation failed",
             Self::Cancelled => "BS spectral work cancelled",
             Self::Envelope => "invalid BS inverse overlap envelope",
+            Self::Source => "incomplete BS track source read",
+            Self::Prediction => "incomplete BS track prediction batch",
+            Self::Output => "BS track output failed",
         })
     }
 }

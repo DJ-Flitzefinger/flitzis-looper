@@ -1,5 +1,153 @@
 # Performance audit and implementation design
 
+## STEP26 impact: independent BS wholetrack orchestration
+
+The independent `stem-dsp::track` core implements the actual vendored
+`audio.read_virtual_chunk`, `_read_batch`, `_chunk_window`, `_OverlapAdd` and
+`_infer_batches` arithmetic outside Python. It borrows synchronous source,
+predictor and private-sink callbacks; it never allocates a complete track or
+creates a second product pipeline. No productive route, dependency/pin, installer,
+App/PyO3/ORT/provider, source publication or retirement behavior changes.
+
+Release chunk485100, step242550, batch2, four planar stereo sources and float32
+arithmetic remain. A strict `source_frames > 485100` creates border242550;
+virtual left/right reflection excludes repeated edges. The final chunk reflects
+only when its physical virtual length is strictly greater than242551; otherwise
+it zero-pads. Tiny tracks, including one frame, reach a predictor as full release
+chunks. Batch order and shape are preserved, with a final single chunk as needed.
+Independent per-chunk inclusive linear fades have48510 samples; first/last windows
+follow their original virtual positions. A727650-frame ring accumulates sequential
+predictions and positive window counters, flushes only after a complete batch,
+and crops exactly `[border,border+source_frames]` to consecutive private blocks.
+
+Checked geometry precedes callbacks/payload allocation and rejects source byte or
+final-position overflow. Large vectors use fallible reservations. Source short
+reads, malformed/nonfinite complete predictions, finite accumulation overflow,
+uncovered normalization, sink failure and cancellation are terminal. Checkpoints
+bracket callbacks and bound source copy/padding/validation/accumulation/normalizing
+loops; callbacks must cooperate during their own work. A later failure invalidates
+ALL previously emitted private blocks. Actual return is not artifact publication:
+the caller retains immutable source/model/output readers, verifies complete outputs
+and preserves original resource promises through tree AND reader end.
+
+The unchanged conservative original PCM allowance is183367800 bytes; it excludes
+weights, learned and spectral activations, decoder internals and process RSS/Job
+commit. The fixed core buffers and one complete prediction batch total86347800
+bytes, inside that PCM allowance. Calling the spectral core or a learned predictor
+requires the full
+additional simultaneous envelope under original batch/overlap/1GiB and host guards.
+This module performs no resource admission on behalf of the App.
+
+The original Torch arithmetic oracle uses the unchanged vendored reader/batching/
+window/OLA/PCM16 writer with a deterministic arithmetic predictor varying by chunk,
+stem, stereo and local frame. It loads no model/weights and initializes no CUDA.
+Before measurement, complete float comparison bounds are fixed at
+`atol=1e-7,rtol=1e-6`; bit-identical fades/output are not assumed. Cases1/1025/
+242550/242551/242552/485100/485101/485102/485103/1455307 cover tiny sources, strict
+border/tail thresholds, odd tails, both batch sizes and multiple ring shifts.
+All samples and original PCM16 outputs must be checked, with any differing codes
+reported honestly. Controls cover source/prediction/sink failures and cancellation.
+Compatible STEP25 FFT/complex-mask evidence and earlier NN/cancel/failedCUDA
+receipts are reused; another NN or unchanged CUDA attempt is not justified.
+
+This coherent streaming split grows the plan to28: NEXT27 retains EVERY former
+nativeREST26 duty and FINAL28 the ENTIRE former FINAL27. Learned BS axial attention,
+masks/weights/export/CUDA AMP, complete Demucs spectral-time/normalization/shifts/
+overlap/conv/recurrent/attention/resampling, complete native supportedCUDA and real
+tight SAME-model fault -> tree AND reader end -> freshCPU/CPUfallback/CPUonly,
+all Source/Frontend/Graph/Weights/Exporter/RuntimeBootstrap/Manifest/Provider/
+NativeDependencies/Compiler/Binary/FullProducer/MappedImages/OSarch roles,
+WindowsEXE AND actual Linux/macOS, complete CPU/CUDA RELEASE/CRT/licenses/LGPLsource+
+3patches/NVIDIA notices/installer/recovery/full footprint, quality/functions/
+interactions/resources/cancel remain mandatory BEFORE cutover. Installed saving
+is ZERO. Original validator/schema/Pydantic/all32keys/allold-newroles/fullhostUNKNOWN,
+exact32 parent Rust failures/duplicate216 different async snapshot/distinct216
+watchdogUNCOMPARED/registryUNKNOWN/pressureUNKNOWN/original2GiB-3GiB-512MiB,
+CPU/CUDAoverlapOPEN and every old/new quality/device/listening/distribution/
+combined2-4-6<=10/regression/architecture/docs gate remain unshortened.
+
+### STEP26 verification and reconstruction
+
+The routed build/control harness passes in37.41s: five new track controls and all
+five existing spectral controls, strict all-target Clippy, Release `bs_track`,
+Rustfmt, Ruff/format and strict reference typing against actual local source
+packages. Initial checks correctly rejected import order, untyped installed-package
+lookup and an implicit re-export; the import and source-search invocation were
+fixed without suppression. No Rust test/precision/guard was weakened. External
+Release Native/API setup passes with the existing22 library warnings and einops
+pin. No productive dependency or installer change is involved.
+
+Original Torch2.12.0+cu130 CPU arithmetic and the Release native diagnostic compare
+all32995136 finite output samples across ten complete cases within the predeclared
+`atol=1e-7,rtol=1e-6`, never relaxed. These are arithmetic predictions, not learned
+model separation. Native floats are independently converted using original
+float32 clamp/multiply32767/ties-even/negative-fullscale policy and compared with
+every code from the original vendored PCM16 writer. They are NOT bit identical:
+
+| Source frames | Float max absolute error | Changed PCM16 codes, drums/bass/other/vocals |
+| ---: | ---: | --- |
+| 1 | 0 | 0/0/0/0 |
+| 1025 | 0 | 0/0/0/0 |
+| 242550 | 0 | 0/0/0/0 |
+| 242551 | 0 | 0/0/0/0 |
+| 242552 | 0 | 0/0/0/0 |
+| 485100 | 5.960464477539063e-8 | 4/2/2/6 |
+| 485101 | 5.960464477539063e-8 | 4/5/14/16 |
+| 485102 | 5.960464477539063e-8 | 4/5/14/16 |
+| 485103 | 5.960464477539063e-8 | 4/5/14/16 |
+| 1455307 | 5.960464477539063e-8 | 15/15/40/49 |
+
+All250 differing codes differ by exactly one. The longest case has9 full padded
+chunks in batches2/2/2/2/1,11642456 float samples, RMS2.312132549817128e-9,
+source SHA256 `dd73cbf153b913b859d8a81514cc7cf1a32a68b32dedb6da08eb978c7b877476`,
+native output `08893a5cf40d129645eed06fc5830a9eca8804012490bcb68c6fb0bd9e087dd5`,
+original output `7e0cf25d2ac5c75845c61694ffffc910fb3f6e555e18d5b5fd3c5fc315018754`.
+Neither these small differences nor synthetic successful comparisons certify
+whole-model/audio/listening quality. No performance comparison is claimed.
+
+Five CLI negatives reject overflow/zero geometry, truncated source, nonfinite
+source and an existing output with exit1 and empty stdout. The first three
+create no output; nonfinite input leaves only an empty exclusive diagnostic file;
+the protected existing file is byte unchanged. Diagnostic sink files may remain
+partial on later failures and are NEVER product-ready artifacts. The core's
+short-read/incomplete/nonfinite/overflow prediction, late sink failure and
+cancellation cases all return terminal errors, including normalization and after
+a real sink callback. Caller private-attempt invalidation remains mandatory.
+Original observer-before-one-joined-executor proves16/16 scope closes,
+pending/inflight0/errors[] across reference+ten positives+five negatives. The
+numeric harness passes in16.08s; supervisor `worker_crashed` on explicit negatives
+is not device failure/fallback. No CUDA or learned model is executed.
+
+Reconstruct via outer development entry with the actual native checkout: locked
+`cargo test -p flitzis-stem-dsp -- --test-threads=1`, all-target strict Clippy and
+Release `--example bs_track`. Under the existing admitted owned command scope,
+run `scripts/bs_track_trial_reference.py NEW_CACHE_DIRECTORY`, then
+`bs_track CASE.pcm.f32 SOURCE_FRAMES NEW_PRIVATE_OUTPUT.f32` for every recorded
+case. Sources are interleaved stereo float32; diagnostic outputs are frame-major
+`[physical_frame,stem,stereo]`. Compare every float with the declared bounds and
+every PCM16 code as above. The tracked reference defines deterministic source and
+ordinal/stem/channel/local arithmetic. Observe before creating the single joined
+executor; retain the original resource guard and actual tree/reader close.
+Generated `performance-step26-*` logs and `step26-track-v1` fixtures/binary are
+reconstructible cache only, not authoritative sources.
+
+Final five static/control checks pass in18.78s: Rustfmt/Ruff/strict typing,
+strict OpenSpec/local Markdown targets/whitespace, unchanged productive sources/
+locks/pins and isolated dependency trees, actual current receipts, compatible
+STEP25 spectral/older CPU-numerical/CPUcancel/failedCUDA settlements and both
+original complete-host manifests still UNKNOWN with ALL roles retained. Reused
+observations are not new model executions or a new overall green matrix.
+Actual Windows11/build10.0.26200/AMD64/64bit uses Rust1.95.0/LLVM22.1.2/Cargo1.95.0.
+The Release diagnostic component is169984 bytes/SHA256
+`7165c495fa5c031c8ea5fac6ab87c64a7a3a306d341012aa5a9b2ab38657b6bb`.
+This file/toolchain metadata is NOT full compiler/binary/producer/mapped-image,
+complete bundle or Linux/macOS evidence. Systems PRE/frozenPOST and Methods PRE
+are scoped CLEAR. Final index/docs checks pass2/2 in5.46s: all12 LF-only staged
+files equal native D source,125 local Markdown targets are valid, and exact five
+local BAT bridges/private pointer/CommonExclusion/hidden flags remain protected.
+The single independent final actual-diff review is scoped publication CLEAR with
+no P1/P2; all review readers ended. This does not establish whole-path acceptance.
+
 ## STEP25 impact: independent BS spectral frontend and reconstruction
 
 The independent `flitzis-stem-dsp` Rust crate implements the missing complex

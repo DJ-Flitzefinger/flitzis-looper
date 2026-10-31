@@ -984,8 +984,15 @@ See the [STEP25 design](../openspec/changes/improve-performance-isolation/design
 for complete geometry, payload promises, cancellation, numerical tolerances and
 reconstruction. This standalone crate is not linked into the App; its workspace
 lock entry only uses the existing `rustfft` dependency. Productive installation/
-repair, Python/model locks and workers remain unchanged. STEP26 retains ALL native
-parity requirements and FINAL27 the ENTIRE former FINAL26 regression scope.
+repair, Python/model locks and workers remain unchanged. STEP26 adds bounded
+native [wholetrack orchestration](../rust/crates/stem-dsp/src/track.rs): release
+reflection, tail padding, batch2, per-chunk fades and rolling overlap-add. Its
+[original arithmetic oracle](../scripts/bs_track_trial_reference.py) uses the
+unchanged vendored source/OLA/PCM16 path with distinct arithmetic predictions;
+it loads no learned weights and initializes no CUDA. See the
+[STEP26 design](../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration).
+STEP27 retains ALL native parity requirements and FINAL28 the ENTIRE former
+FINAL27 regression scope, including every earlier unproved gate.
 
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly

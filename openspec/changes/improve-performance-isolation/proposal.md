@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Twenty-seven coherent steps are recorded in [tasks](tasks.md). STEP18's real native
+Twenty-eight coherent steps are recorded in [tasks](tasks.md). STEP18's real native
 BeatThis chunk experiment is followed by STEP19's complete-source CPU prototype.
 STEP20 adds original input-envelope parity, narrow failure diagnostics and bounded
 actual CPU termination. Unsuccessful CUDA initialization remains explicit with
@@ -64,8 +64,10 @@ standalone host-buffer lifetimes. STEP23 adds custody of explicitly declared ORT
 package files. STEP24 adds opt-in Windows standalone loader policy and actual
 observed backing-file identity without a closure or CUDA claim. STEP25 implements
 an independent BS complex spectral frontend and reconstruction without model
-inference. STEP26 retains every native CUDA/freshCPU/quality/producer/platform/
-distribution gate before cutover; FINAL27 retains ALL former FINAL26 requirements.
+inference. STEP26 implements the independent wholetrack reflection, tail padding,
+batching, fades and rolling overlap-add around a synchronous predictor boundary.
+STEP27 retains every native CUDA/freshCPU/quality/producer/platform/distribution
+gate before cutover; FINAL28 retains ALL former FINAL27 requirements.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

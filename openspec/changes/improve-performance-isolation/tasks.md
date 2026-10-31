@@ -344,7 +344,21 @@ This coherent spectral implementation adds a27th step. STEP26 retains ALL former
 nativeSTEP25 requirements, and FINAL27 retains the ENTIRE former FINAL26 scope.
 No productive closure or installer dependency is removed by this trial.
 
-## 26. Remaining native parity before cutover
+## 26. Independent BS wholetrack orchestration
+
+- [x] Implement release reflection/tail-padding/batch2/per-chunk fades and fixed
+      rolling overlap-add with exact physical crop and bounded source/sink callbacks.
+- [x] Compare complete original non-neural Torch arithmetic at border/tail/batch
+      thresholds, with chunk/stem/channel-dependent predictions and all samples.
+- [x] Verify short reads, malformed/nonfinite/overflow predictions, cancellation
+      and late sink failure without successful partial output or runtime cutover.
+
+This coherent streaming implementation adds a28th step. STEP27 retains ALL native
+REST26 obligations and FINAL28 the ENTIRE former FINAL27. Learned BS attention,
+weights/export/AMP, complete Demucs, CUDA/freshCPU, all provenance roles and full
+distribution/quality/functions/resources remain mandatory before Torch removal.
+
+## 27. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -361,10 +375,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP27, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP28, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 27. Combined regression and final architecture review
+## 28. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

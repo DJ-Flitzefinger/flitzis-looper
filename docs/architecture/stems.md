@@ -257,6 +257,17 @@ parity; productive separators and dependency closures stay available. The
 [STEP25 design](../../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
 records its caller-owned resource/reader envelope and exact evidence limits.
 
+The [native track module](../../rust/crates/stem-dsp/src/track.rs) adds release
+reflection, strict final-tail padding, batch2, independent fades and bounded
+rolling overlap-add around synchronous source/predictor/private-output callbacks.
+It handles tiny physical sources by padding full release chunks before a predictor
+can call the spectral core. Partial blocks remain private if a later failure or
+cancellation invalidates the attempt. The
+[STEP26 design](../../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration)
+separates complete track arithmetic from the still-missing learned network and
+whole-model/provider/quality/artifact/distribution requirements. It changes no
+productive generation, selection, live adoption or retirement path.
+
 The [canonical E-STEM/E-PCM/E-CUDA index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
 retains exact full reports, UNKNOWN producer/device lineage, queue/refusal/stale/
 deadline/retirement failures, supported domain histories and remaining installed

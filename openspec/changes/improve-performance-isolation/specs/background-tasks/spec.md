@@ -229,12 +229,21 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** learned network, CUDA AMP, whole-track chunk overlap, quality, producer and distribution parity remain required before productive runtime removal
 
 #### Scenario: An isolated native trial selects a dynamic runtime
+
 - **GIVEN** a fresh standalone trial requests dynamic ORT initialization
 - **WHEN** it admits a caller-owned package manifest
 - **THEN** exact manifest and runtime bytes, size, version and process OS/architecture are checked before ORT environment or model initialization
 - **AND** missing, malformed, changed, foreign or ineffective configuration fails terminally without a device-fallback receipt
 - **AND** CPU-only dynamic initialization does not require CUDA support, while a static build rejects dynamic configuration
 - **AND** file/runtime initialization evidence does not certify mapped images, dependent providers, model execution, complete producer or portable distribution
+
+#### Scenario: An isolated BS track core streams complete arithmetic
+- **GIVEN** an admitted immutable stereo source and a synchronous complete four-source predictor
+- **WHEN** the independent offline track core processes the release chunk485100, batch2 and overlap2
+- **THEN** original virtual reflection, strict tail-padding thresholds, independent linear fades, float32 rolling accumulation and physical crop preserve every source frame in order
+- **AND** tiny sources are padded to full model chunks, source and sink spans stay bounded, and source/model/output readers retain custody through actual completion
+- **AND** short reads, invalid predictions, nonfinite/overflow values, sink failure or cancellation invalidate the entire private attempt, including earlier written blocks
+- **AND** arithmetic-only predictions do not attest learned BS attention/weights/export/CUDA AMP, complete Demucs, quality, provenance, distribution or productive Torch removal
 
 #### Scenario: A standalone trial declares ORT package components
 - **GIVEN** an explicit runtime request and a separate SHA-authenticated package manifest
