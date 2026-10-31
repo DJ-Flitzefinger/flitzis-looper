@@ -91,11 +91,15 @@ fn execute(
     let rate: u32 = a[offset + 3].parse().map_err(|_| "invalid sample rate")?;
     // Complete geometry is admitted before any PCM allocation or native load.
     let (signal, source_digest) = pcm(Path::new(&a[offset + 2]), rate)?;
+    let source_frames = signal.len();
+    let source_duration = source_frames as f64 / rate as f64;
     let soxr = Soxr::load(Path::new(&a[offset]), &a[offset + 1])?;
     let prepared = soxr.resample(&signal, rate, &|| false)?;
+    // Resampling has finished and owns its complete output, including the tail.
+    drop(signal);
     let spect = beat_audio::log_mel(&prepared, &|| false)?;
     let mut metadata = serde_json::json!({"trial_only":true,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
-        "source_sha256":source_digest,"source_frames":signal.len(),"rate":rate,
+        "source_sha256":source_digest,"source_frames":source_frames,"rate":rate,
         "resampled_frames":prepared.len(),"spectrogram_frames":spect.len()/128,
         "chunk_starts":beat_audio::chunk_starts(spect.len()/128)?,"soxr_sha256":a[offset+1]});
     let mut admitted = None;
@@ -112,6 +116,8 @@ fn execute(
         validate_graph(&graph, &a[2])?;
         admitted = configure(a, evidence, arena)?;
         let mut model = BeatModel::load_on(&graph, &a[2], Path::new(&a[8]), provider, &|| false)?;
+        // The copying session owns its model; no run/profile/output reads graph.
+        drop(graph);
         let mut marked = false;
         let cancel_ms = std::env::var("FLITZIS_TRIAL_CANCEL_MS")
             .ok()
@@ -170,8 +176,7 @@ fn execute(
                 return Err(error);
             }
         };
-        let (beats, downbeats) =
-            beat_audio::postprocess(&logits, signal.len() as f64 / rate as f64)?;
+        let (beats, downbeats) = beat_audio::postprocess(&logits, source_duration)?;
         metadata["beat_seconds"] = serde_json::json!(beats);
         metadata["downbeat_seconds"] = serde_json::json!(downbeats);
         metadata["profile"] = serde_json::json!(profile);

@@ -1,5 +1,120 @@
 # Performance audit and implementation design
 
+## STEP22 impact: end unused standalone host-buffer lifetimes
+
+Both standalone CLIs now drop the serialized graph immediately after successful
+`BeatModel::load`/`load_on`, before prediction. The complete-source CLI saves the
+source frame count and the identical binary64 duration expression before resampling,
+then drops the original PCM only after the synchronous full HQ resample returns.
+The complete prepared waveform and spectrogram remain owned through exclusive
+success output. Source hashing, full tail/geometry bounds, true chunk lengths,
+postprocessing, cancellation, provider options and runtime file pins are unchanged.
+
+This uses the exact locked ort2.0.0-rc.12 copying `commit_from_memory` route, which
+returns an owned Session. Its distinct `commit_from_memory_directly<'m>` sets both
+zero-copy options and returns `InMemorySession<'m>`; that route is not used.
+The [wrapper source](https://github.com/pykeio/ort/blob/v2.0.0-rc.12/src/session/builder/impl_commit.rs)
+calls `CreateSessionFromArray`. In ORT1.24.4/API24 the
+[C API](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/session/onnxruntime_c_api.cc#L730)
+finishes loading and initialization before returning. The
+[session implementation](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/session/inference_session.cc#L1003)
+parses ONNX bytes into an owned ModelProto and moves it into the Model; its separate
+ORT-format path copies by default. No direct-byte/initializer option is enabled.
+The wrapper's finalization retains session resources, not a caller-graph borrow.
+The static rc.12 download recipe selects1.24.2, whose
+[session path](https://github.com/microsoft/onnxruntime/blob/v1.24.2/onnxruntime/core/session/inference_session.cc#L980)
+and [C API](https://github.com/microsoft/onnxruntime/blob/v1.24.2/onnxruntime/core/session/onnxruntime_c_api.cc#L730)
+have the same ownership semantics. That is recipe/source evidence, not an exact
+loaded-static-runtime or full binary-producer attestation. The measured dynamic
+manifests remain bound to1.24.4/API24; no runtime version or dependency changes.
+`Soxr::resample` owns even its same-rate copy and deletes its native handle before
+returning. These source/API facts support the earlier last-use boundaries; they
+do not attest the complete runtime producer or mapped dependency closure.
+
+The82,104,250-byte measured graph and original PCM no longer remain live during
+prediction. Rust deallocation does not establish return to the OS, a lower process
+peak or a CUDA fix. No precision, memory-pattern option, allocator policy or original
+admission floor changes. Existing CPU numerical/cancellation evidence is reused;
+no CPU NN is run merely for a new binary hash or buffer lifetime.
+
+The plan grows to24 steps to publish this coherent lifetime change independently.
+STEP23 retains the ENTIRE former STEP22 native CUDA/FreshCPU/CPU-only/full-quality,
+all producer roles, Windows/Linux/macOS, distribution/recovery/footprint and full
+Demucs/BS parity requirements before cutover. STEP24 retains the ENTIRE former
+FINAL23 combined regression, original validator/schema/Pydantic and all roles,
+32 parent failures/distinct216 watchdog/registry UNKNOWN, pressure-cause/overlap,
+quality/architecture/docs/distribution gates. Productive Torch closures remain.
+
+### STEP22 verification and unsuccessful changed CUDA attempt
+
+Three locked feature builds (`native-inference-trial`, `native-inference-dynamic`,
+`native-inference-cuda`) each build both standalone CLIs and pass the existing
+seven audio-example Rust controls. The original twelve selected core tests pass.
+These two trial checks pass72.07s, after separate writer environment/Native setup;
+external Release Native/API retains22 known warnings and the analysis lib tests
+retain two known CQT warnings. No suppression or assertion weakening is added.
+
+Eight complete frontend cases, including the same-rate copies, full1601-frame
+track and384001/768000-Hz cases, produce resampled and spectrogram bytes identical
+to the saved STEP20 results. Their original numerical/reference limits remain;
+no model/reference inference is repeated. The original observer precedes the
+single joined executor:8/8 frontend scopes close, pending/inflight0/errors[].
+Ten original early-negative commands also pass with10/10 scopes closed and no
+pending/inflight/sampling errors. Existing output, byte/prediction/rate/finite
+shape, graph/libsoxr digest, explicit CPU-only and diagnostic guards remain.
+Together with16 unchanged strict fault-protocol tests, three format/OpenSpec/
+dependency/saved-evidence checks and one fresh original-headroom query,22 checks
+pass11.88s. Four locked normal dependency trees remain free of PyO3/Torch/LibTorch;
+dynamic CPU does not acquire CUDA. All productive pins/installers/worker closures
+and frontend/provider/runtime/fault implementations are unchanged.
+
+Exactly one source-changed CUDA attempt follows a fresh original preflight:
+available commit4705738752 bytes, prospective child limit1279127552, above the
+previous observed initialization peak1254162432. Actual launch available commit
+is4708270080; original actual Job budget1280395264. The current CUDA executable
+returns3221226505 (`0xC0000409`) after17.2323321s with empty stdout and a generic
+`fatal: Memory allocation failure`. Runtime file/API/environment phases and a
+pre-invocation1500-frame marker appear, but the only profile is zero bytes.
+No actual model-run/kernel/provider or CUDA-success evidence follows from that
+marker. No success metadata/logits/resampled/spectrogram output is created.
+The original observer closes1/1 scope with pending/inflight0/errors[]. Main-child
+lifetime peak commit1289854976 bytes and peak working set1076211712 are bounded
+observations, not a measured improvement or proof of the refusal's cause.
+Exact cause remains **UNKNOWN**; proximity to the Job limit is not causation.
+The strict independent verifier rejects this actual crash; no limit1 attempt,
+exit70 or freshCPU fallback runs. No unchanged retry or guard/OS/process change.
+Earlier CUDA1/2/3 failures and their original limits remain distinct and unchanged.
+
+Measured Windows x86_64 Debug binaries (component identity, not full producer):
+
+| Feature | Audio CLI bytes / SHA256 | One-chunk CLI bytes / SHA256 |
+| --- | --- | --- |
+| static CPU | 36561408 / `68b727f89e4ff2266f97acc211b216e1c93f4c2afcdc97cffd74fcd484fa319a` | 24500736 / `3023a7b9880c93a8912c8b9da1cda72f0110b258987d2126c35dc03bb703af4c` |
+| dynamic CPU | 13389312 / `bd69cbe34d3389ba07bd6767ff974499f3de5a11d4289769894f468fde078cc9` | 1381376 / `79a72ba869a31515b72dc70cdbf31d595d41da7d3615767c74439d5ce11dc42b` |
+| CUDA | 13416448 / `8c387f2ec0c90fc0db8b358d37c39940b7e29a180d246d2b915454bee4bedc9c` | 1404928 / `6f4c57ed7fb4fdaab7797c0c33e141ad6282aab82219fd73e585f9dd6b490048` |
+
+Reconstruct with the contributor's configured entry/output route and `--locked`:
+build both examples for each feature, run `--example beat_this_audio` controls,
+then the analysis `--lib` `beat_` selection. Use STEP19/20's exact source/graph/
+libsoxr recipes and STEP21's measured dynamic manifests; frontend-only commands
+need no ORT initialization. Compare whole resampled/spectrogram files bytewise,
+retaining exact source frames/hash and physical-duration policy. Any model attempt
+must reuse the original owned runner/observer-before-executor, fresh original
+resource admission and full tree/reader settlement. Only independently verified
+real narrow device failure permits a later fresh SameModel CPU process.
+Logs `performance-step22-{build,controls-static,execution}.log` retain these distinct
+passing checks and failed CUDA attempt; generated probes are not durable authority.
+Final saved-crash/verifier/settlement and documentation/dependency checks pass2
+checks in2.59s (`performance-step22-final.log`), without model execution.
+Saved STEP19/21 CPU numerics, STEP20 CPU termination and STEP21 runtime controls/
+fullhost UNKNOWN remain compatible reused evidence, not a new green full matrix.
+All complete producer/compiler/binary/native dependency roles, licensing/LGPL source
+and patches/NVIDIA notices/CRT, release bundles/recovery/Linux/macOS, full footprint
+and complete Demucs/BS/source/model/audio acceptance remain open. Installed saving
+is zero. Continue independent provenance/packaging/native implementation when fresh
+resource conditions do not justify a new CUDA attempt; do not repeat unchanged
+failed conditions or lower admission/memory-pattern/precision/quality guards.
+
 ## STEP21 impact: explicit standalone runtime admission
 
 The next coherent trial change binds dynamic ORT initialization to an explicitly

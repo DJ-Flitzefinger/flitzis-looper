@@ -22,6 +22,14 @@ resampling or STFT, without truncating source or tail to satisfy the bound.
 - **AND** border6/keep_first, minimal peak rules and physical-duration exclusion remain original
 - **AND** a successful bounded synthetic comparison does not certify whole audio quality
 
+#### Scenario: A standalone trial finishes reading temporary host buffers
+- **GIVEN** the original full source has been admitted and a copying model session is used
+- **WHEN** synchronous full resampling or model loading succeeds
+- **THEN** original PCM and serialized graph buffers may end after their respective last reader
+- **AND** original source frames and physical duration, full resample tail, prepared waveform, spectrogram, profile and exclusive success output remain intact
+- **AND** direct/zero-copy graph loading requires its own graph lifetime and is not substituted
+- **AND** Rust deallocation alone proves no OS memory release, process peak improvement or CUDA success
+
 #### Scenario: A device trial cannot be admitted
 - **GIVEN** the unchanged host ledger or owned child limit refuses the attempt
 - **WHEN** native CUDA or cancellation verification is attempted

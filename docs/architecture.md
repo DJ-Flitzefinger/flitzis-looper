@@ -167,7 +167,11 @@ This process-local bootstrap is deliberately outside the App/core session API.
 It does not attest provider/CRT/driver images or a complete producer, and a
 runtime-only probe does not establish model/device execution. CPU-only dynamic
 loading is a separate opt-in feature. Remaining native parity and combined final
-gates continue as STEP22 and STEP23 respectively.
+gates continue as STEP23 and STEP24 respectively. STEP22 ends the standalone
+serialized-graph lifetime after the copying session loads and the original PCM
+lifetime after full synchronous resampling. Saved source frames/duration and all
+prepared/output/runtime pins remain; deallocation alone is not a memory-peak or
+CUDA-success measurement.
 
 ## Limits and evidence
 

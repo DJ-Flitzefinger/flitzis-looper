@@ -52,6 +52,9 @@ impl BeatModel {
     }
 
     /// A failed CUDA request is never silently reinterpreted as successful CPU.
+    /// Successful loading owns the model independently of `graph`. Keep the
+    /// copying `commit_from_memory` route: direct/zero-copy loading would require
+    /// the caller's graph bytes to outlive the session.
     pub fn load_on(
         graph: &[u8],
         expected_sha256: &str,

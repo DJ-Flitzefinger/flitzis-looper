@@ -958,7 +958,11 @@ the dynamic trial's authority. Static CPU trials reject dynamic configuration.
 The manifest schema and reconstruction recipe are in the
 [STEP21 design](../openspec/changes/improve-performance-isolation/design.md#step21-impact-explicit-standalone-runtime-admission).
 Checked files do not establish a complete loaded-image/dependency closure or an
-installable bundle. STEP22 retains all native parity requirements and STEP23 all
+installable bundle. STEP22 releases serialized graphs only after the copying
+session loads and original PCM only after full resampling, with the original
+source length/duration retained. It does not establish OS memory release, a lower
+peak or CUDA success; no CPU NN is repeated for lifetime or binary hashes.
+STEP23 retains all native parity requirements and STEP24 all
 former final regression gates. Productive installation/repair, locks and workers
 are unchanged.
 

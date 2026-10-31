@@ -278,7 +278,7 @@ The design records exact passing checks and unsuccessful attempts. Logical
 component bytes are not full installations; no productive Torch removal or
 installation saving is claimed. The unsuccessful CUDA attempts establish no
 native device execution, narrow real fault or freshCPU fallback. Every former
-STEP20 parity requirement remains mandatory in STEP22 below.
+STEP20 parity requirement remains mandatory in STEP23 below.
 
 ## 21. Explicit standalone native runtime admission
 
@@ -289,7 +289,24 @@ STEP20 parity requirement remains mandatory in STEP22 below.
 - [x] Verify the isolated loading boundary, preserve productive dependencies and
       report file/component evidence separately from full producer/distribution.
 
-## 22. Remaining native parity before cutover
+## 22. Standalone host-buffer lifetimes
+
+- [x] Verify exact copying session/API ownership before releasing serialized
+      graphs after successful load in both standalone CLIs.
+- [x] Bind original source frames/physical duration before resampling and release
+      PCM after its last synchronous reader; retain full prepared/spect output.
+- [x] Verify builds, unchanged frontend bytes and early/diagnostic guards; attempt
+      source-changed CUDA only under fresh original admission, without CPU NN
+      merely for buffer lifetime or hashes and without memory/CUDA-fix claims.
+
+This coherent lifetime step adds a24th step. All native requirements below remain
+mandatory; successful deallocation alone is not CUDA/quality/install acceptance.
+The one changed CUDA attempt crashes with0xC0000409/generic memory failure, an
+empty profile and no success artifacts; cause UNKNOWN. Original1/1 scope closes
+with pending/inflight0/errors[]. No real narrow fault or freshCPU fallback runs.
+The design preserves the exact distinct passing checks, failed attempt and limits.
+
+## 23. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -306,10 +323,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP23, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP24, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 23. Combined regression and final architecture review
+## 24. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

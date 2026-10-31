@@ -64,6 +64,8 @@ fn main() -> Result<(), String> {
         runtime::configure(requested.as_ref().map(|(p, d)| (p.as_path(), d.as_str())))?;
     runtime::commit(environment)?;
     let mut model = BeatModel::load(&graph, digest, Path::new(&args[4]), &|| false)?;
+    // The copying session owns its model; no run/profile/output reads graph.
+    drop(graph);
     let logits = model.run(&spect, &|| false)?;
     let profile = model.finish_profile()?;
     // Exclusive creation prevents overwriting an earlier result or an input.
