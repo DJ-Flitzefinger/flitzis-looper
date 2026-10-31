@@ -1,6 +1,6 @@
 //! Offline complete-source diagnostic CLI, never an application execution receipt.
 use flitzis_looper_analysis::{
-    beat_audio::{self, MAX_AUDIO_BYTES, Soxr},
+    beat_audio::{self, MAX_AUDIO_BYTES, Soxr, validate_audio_shape},
     beat_inference::{BeatModel, MAX_GRAPH_BYTES, Provider},
 };
 use ort::session::RunOptions;
@@ -9,7 +9,11 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
+    process::ExitCode,
+    sync::{Arc, Mutex},
 };
+#[path = "beat_this_audio/fault.rs"]
+mod fault;
 
 fn bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
@@ -23,6 +27,32 @@ fn bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     }
     Ok(raw)
 }
+fn pcm(path: &Path, rate: u32) -> Result<(Vec<f32>, String), String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let bytes = file.metadata().map_err(|e| e.to_string())?.len();
+    if bytes == 0 || bytes > MAX_AUDIO_BYTES as u64 || bytes % 4 != 0 {
+        return Err("invalid complete float32 PCM byte extent".into());
+    }
+    validate_audio_shape(bytes as usize / 4, rate)?;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(bytes as usize + 1)
+        .map_err(|e| e.to_string())?;
+    file.take(bytes + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() as u64 != bytes {
+        return Err("complete PCM changed during read".into());
+    }
+    let digest = format!("{:x}", Sha256::digest(&raw));
+    let signal: Vec<_> = raw
+        .chunks_exact(4)
+        .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
+        .collect();
+    if !signal.iter().all(|x| x.is_finite()) {
+        return Err("nonfinite complete mono PCM".into());
+    }
+    Ok((signal, digest))
+}
 fn float_file(path: &Path, values: &[f32]) -> Result<(), String> {
     let mut file = File::create_new(path).map_err(|e| e.to_string())?;
     for v in values {
@@ -35,20 +65,10 @@ fn side(path: &str, suffix: &str) -> PathBuf {
     PathBuf::from(format!("{path}.{suffix}"))
 }
 
-fn execute() -> Result<(), String> {
-    let a: Vec<_> = std::env::args().skip(1).collect();
+fn execute(a: &[String]) -> Result<(), String> {
     let infer = a.first().is_some_and(|s| s == "infer");
     if (!infer && (a.len() != 6 || a[0] != "frontend")) || (infer && a.len() != 11) {
         return Err("usage: beat_this_audio frontend SOXR SHA PCM RATE NEW_JSON | infer GRAPH SHA SOXR SHA PCM RATE NEW_JSON PROFILE cpu|cuda GPU_MEMORY_LIMIT".into());
-    }
-    if infer && std::env::var_os("FLITZIS_TRIAL_ORT_LOG").is_some() {
-        // Standalone diagnostic process only: never mutate the shared core's
-        // process environment. These logs do not themselves authorize fallback.
-        ort::init().with_logger(std::sync::Arc::new(|level,category,id,location,message| {
-            if message.contains("BFCArena") || level >= ort::logging::LogLevel::Error {
-                eprintln!("ORT_TRIAL_LOG {}",serde_json::json!({"thread":format!("{:?}",std::thread::current().id()),"level":format!("{level:?}"),"category":category,"id":id,"location":location,"message":message}));
-            }
-        })).commit();
     }
     let offset = if infer { 3 } else { 1 };
     let dest = &a[offset + 4];
@@ -62,20 +82,14 @@ fn execute() -> Result<(), String> {
             return Err("trial output already exists".into());
         }
     }
-    let raw = bounded(Path::new(&a[offset + 2]), MAX_AUDIO_BYTES)?;
-    if raw.len() % 4 != 0 {
-        return Err("partial float32 PCM".into());
-    }
-    let signal: Vec<_> = raw
-        .chunks_exact(4)
-        .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
-        .collect();
     let rate: u32 = a[offset + 3].parse().map_err(|_| "invalid sample rate")?;
+    // Complete geometry is admitted before any PCM allocation or native load.
+    let (signal, source_digest) = pcm(Path::new(&a[offset + 2]), rate)?;
     let soxr = Soxr::load(Path::new(&a[offset]), &a[offset + 1])?;
     let prepared = soxr.resample(&signal, rate, &|| false)?;
     let spect = beat_audio::log_mel(&prepared, &|| false)?;
     let mut metadata = serde_json::json!({"trial_only":true,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
-        "source_sha256":format!("{:x}",Sha256::digest(&raw)),"source_frames":signal.len(),"rate":rate,
+        "source_sha256":source_digest,"source_frames":signal.len(),"rate":rate,
         "resampled_frames":prepared.len(),"spectrogram_frames":spect.len()/128,
         "chunk_starts":beat_audio::chunk_starts(spect.len()/128)?,"soxr_sha256":a[offset+1]});
     if infer {
@@ -166,6 +180,54 @@ fn execute() -> Result<(), String> {
     println!("{metadata}");
     Ok(())
 }
-fn main() -> Result<(), String> {
-    execute()
+fn main() -> ExitCode {
+    let a: Vec<_> = std::env::args().skip(1).collect();
+    let diagnostic = std::env::var_os("FLITZIS_TRIAL_CUDA_ARENA_DIAGNOSTIC");
+    let arena_diagnostic = diagnostic.as_deref() == Some(std::ffi::OsStr::new("1"))
+        && a.len() == 11
+        && a[0] == "infer"
+        && a[9] == "cuda"
+        && a[10] == "1"
+        && std::env::var_os("FLITZIS_TRIAL_CANCEL_MS").is_none();
+    if diagnostic.is_some() && !arena_diagnostic {
+        eprintln!("invalid explicit CUDA arena diagnostic request");
+        return ExitCode::FAILURE;
+    }
+    let evidence = Arc::new(Mutex::new(fault::Evidence::default()));
+    if arena_diagnostic || std::env::var_os("FLITZIS_TRIAL_ORT_LOG").is_some() {
+        // Process-local standalone diagnostics; never used by the App/core.
+        let observed = Arc::clone(&evidence);
+        ort::init().with_logger(Arc::new(move |level,category,id,location,message| {
+            if message.contains("BFCArena") || level >= ort::logging::LogLevel::Error {
+                let thread = format!("{:?}",std::thread::current().id());
+                if let Ok(mut log) = observed.lock() {
+                    log.observe(&thread,location,message);
+                }
+                eprintln!("ORT_TRIAL_LOG {}",serde_json::json!({"thread":thread,"level":format!("{level:?}"),"category":category,"id":id,"location":location,"message":message}));
+            }
+        })).commit();
+    }
+    match execute(&a) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let thread = format!("{:?}", std::thread::current().id());
+            let rounded = arena_diagnostic
+                .then(|| evidence.lock().ok()?.fault(&thread, &error))
+                .flatten();
+            if let Some(rounded) = rounded {
+                // The parent independently checks actual ORT stderr and waits for
+                // tree AND reader settlement before any same-model CPU process.
+                println!(
+                    "{}",
+                    serde_json::json!({"trial_only":true,"trial_cuda_arena_fault":true,
+                    "graph_sha256":a[2],"gpu_memory_limit":1,"thread":thread,
+                    "rounded_bytes":rounded,"error":error})
+                );
+                ExitCode::from(70)
+            } else {
+                eprintln!("Error: {error}");
+                ExitCode::FAILURE
+            }
+        }
+    }
 }

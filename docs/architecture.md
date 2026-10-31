@@ -151,6 +151,14 @@ native decoders/converters and Rubber Band support media/rendering. Offline
 model environments are prepared separately from the callback. Runtime/model
 availability checks do not establish successful inference or audio.
 
+The opt-in standalone native BeatThis trial is separate from these productive
+workers. Its original complete-source admission, pure Rust frontend and local
+ORT sessions preserve the shared clock/source/OwnACK boundaries. A bounded real
+CPU termination is evidenced; native CUDA/freshCPU, whole quality, complete
+producer and cross-platform distribution remain open. Diagnostic exit receipts
+cannot replace the original owned supervisor, actual reader settlement or
+productive provenance. No Torch closure or installed runtime is removed.
+
 ## Limits and evidence
 
 The productive optimization target is 2/4/6 simultaneous PADs. Synthetic

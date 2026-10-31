@@ -16,7 +16,26 @@ pub const RATE: u32 = 22050;
 pub const HOP: usize = 441;
 pub const FFT: usize = 1024;
 pub const BORDER: usize = 6;
-pub const MAX_AUDIO_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_AUDIO_BYTES: usize = 512 * 1024 * 1024;
+pub const MAX_SAMPLE_RATE: u32 = 768000;
+pub const MAX_PREDICTIONS: usize = 250000;
+const MAX_RESAMPLED_FRAMES: usize = MAX_PREDICTIONS * HOP - 1;
+
+/// Original worker's complete-source admission, before resampling or STFT.
+/// The ceiling is conservative; it never truncates the actual source or output.
+pub fn validate_audio_shape(frames: usize, rate: u32) -> Result<usize, String> {
+    if frames == 0 || frames > MAX_AUDIO_BYTES / 4 || rate == 0 || rate > MAX_SAMPLE_RATE {
+        return Err("invalid complete mono PCM shape or byte bound".into());
+    }
+    let scaled = (frames as u64)
+        .checked_mul(RATE as u64)
+        .ok_or("resampled frame extent overflow")?;
+    let upper = scaled.div_ceil(rate as u64);
+    if upper > MAX_RESAMPLED_FRAMES as u64 {
+        return Err("complete source exceeds prediction limit".into());
+    }
+    Ok(upper as usize)
+}
 
 type Create = unsafe extern "C" fn(
     f64,
@@ -104,15 +123,14 @@ impl Soxr {
         rate: u32,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<f32>, String> {
-        validate_signal(signal, rate)?;
+        let upper = validate_signal(signal, rate)?;
         checkpoint(cancelled)?;
         if rate == RATE {
             return Ok(signal.to_vec());
         }
-        let capacity = ((signal.len() as u64 * RATE as u64) / rate as u64 + 1) as usize;
-        if capacity > MAX_AUDIO_BYTES / 4 {
-            return Err("resampled audio exceeds trial bound".into());
-        }
+        // One spare element also covers exact integer ratios. The actual tail
+        // must still satisfy the original conservative prediction envelope.
+        let capacity = upper.checked_add(1).ok_or("resampled capacity overflow")?;
         let mut output = vec![0.0; capacity];
         // SAFETY: libsoxr's documented ABI; mono f32 slices remain allocated,
         // counters bound every pointer and the handle is deleted on every result.
@@ -187,6 +205,9 @@ impl Soxr {
                     return Err("invalid libsoxr tail".into());
                 }
                 written += done;
+                if written > upper {
+                    return Err("libsoxr output exceeds admitted prediction envelope".into());
+                }
                 output.truncate(written);
                 checkpoint(cancelled)?;
                 Ok(output)
@@ -207,16 +228,12 @@ fn soxr_error(error: *const c_char) -> String {
     }
 }
 
-fn validate_signal(signal: &[f32], rate: u32) -> Result<(), String> {
-    if rate == 0
-        || rate > 384000
-        || signal.is_empty()
-        || signal.len() > MAX_AUDIO_BYTES / 4
-        || !signal.iter().all(|x| x.is_finite())
-    {
+fn validate_signal(signal: &[f32], rate: u32) -> Result<usize, String> {
+    let upper = validate_audio_shape(signal.len(), rate)?;
+    if !signal.iter().all(|x| x.is_finite()) {
         return Err("invalid complete mono PCM or trial byte bound".into());
     }
-    Ok(())
+    Ok(upper)
 }
 
 fn linspace(start: f32, end: f32, count: usize, i: usize) -> f32 {
@@ -305,7 +322,7 @@ pub fn log_mel(signal: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>,
 
 /// Exact upstream start positions, including the shifted and duplicated tail.
 pub fn chunk_starts(frames: usize) -> Result<Vec<isize>, String> {
-    if frames == 0 || frames > MAX_AUDIO_BYTES / 4 / HOP + 1 {
+    if frames == 0 || frames > MAX_PREDICTIONS {
         return Err("invalid spectrogram length".into());
     }
     let mut starts: Vec<_> = (0..frames)
@@ -434,6 +451,38 @@ pub fn postprocess(logits: &Logits, duration: f64) -> Result<(Vec<f64>, Vec<f64>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn complete_source_limits_precede_allocations_and_preserve_original_envelope() {
+        assert_eq!(
+            validate_audio_shape(MAX_AUDIO_BYTES / 4, 768000).unwrap(),
+            3853517
+        );
+        let last = MAX_PREDICTIONS * HOP - 1;
+        assert_eq!(validate_audio_shape(last, RATE).unwrap(), last);
+        assert!(
+            validate_audio_shape(last + 1, RATE)
+                .unwrap_err()
+                .contains("prediction")
+        );
+        // A fractional 3/2 resample rounds upward without float arithmetic.
+        assert_eq!(validate_audio_shape(last * 2 / 3, 14700).unwrap(), last);
+        assert!(validate_audio_shape(last * 2 / 3 + 1, 14700).is_err());
+        for (frames, rate) in [
+            (0, RATE),
+            (1, 0),
+            (1, MAX_SAMPLE_RATE + 1),
+            (MAX_AUDIO_BYTES / 4 + 1, MAX_SAMPLE_RATE),
+            (usize::MAX, 1),
+            (MAX_AUDIO_BYTES / 4, 1),
+        ] {
+            assert!(
+                validate_audio_shape(frames, rate).is_err(),
+                "{frames}/{rate}"
+            );
+        }
+        assert!(chunk_starts(MAX_PREDICTIONS).is_ok());
+        assert!(chunk_starts(MAX_PREDICTIONS + 1).is_err());
+    }
     #[test]
     fn original_chunk_boundaries_and_short_attention_extent() {
         for (t, expected) in [

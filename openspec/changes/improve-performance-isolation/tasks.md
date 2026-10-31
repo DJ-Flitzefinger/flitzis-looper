@@ -259,7 +259,28 @@ was refused by original host-memory admission before launch. An attempted
 mid-ORT diagnostic instead failed at load under the real Job cap; no cancellation
 or CUDA success is inferred. Productive locks/weights/installer/recovery remain.
 
-## 20. Remaining native parity before cutover
+## 20. Native admission and fail-closed fault diagnostics
+
+- [x] Match the original512MiB/768kHz/250000-prediction source envelope before
+      payload allocation, preserving full source/tail and original arithmetic.
+- [x] Verify the original six native resampled/spectrogram pairs remain byte-identical;
+      compare two added high-rate frontends without model inference.
+- [x] Implement an explicitly isolated narrow arena-limit diagnostic plus
+      independent log/receipt verifier; keep generic/host/cancel errors terminal.
+- [x] Prove one bounded real CPU mid-ORT termination with164 same-run kernels,
+      no success artifacts and actual original tree/reader settlement.
+- [x] Attempt the source-motivated CUDA host-allocator alignment under unchanged
+      original guards; retain its failed initialization/crash and UNKNOWN cause.
+- [x] Measure actual candidate components/locked wheel consistency and preserve
+      all incomplete producer/installation/platform requirements explicitly.
+
+The design records exact passing checks and unsuccessful attempts. Logical
+component bytes are not full installations; no productive Torch removal or
+installation saving is claimed. The unsuccessful CUDA attempts establish no
+native device execution, narrow real fault or freshCPU fallback. Every former
+STEP20 parity requirement remains mandatory in STEP21 below.
+
+## 21. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -272,12 +293,13 @@ or CUDA success is inferred. Productive locks/weights/installer/recovery remain.
       until complete-source/operator/provider/quality parity is proved. Retain
       concrete barriers and assess practical migration without LibTorch relabeling.
 
-This split separates an implemented complete-source trial from unproved runtime,
-device, lifecycle and distribution parity. The real concurrent host-pressure
-refusal is retained, never bypassed by reducing floors/caps or changing unrelated
-processes. ALL former final STEP20 work follows as STEP21, without omissions.
+This split separates implemented admission/control diagnostics and one bounded
+CPU termination from unproved CUDA, whole-quality, full producer and distribution
+parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
+floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
+follows as STEP22, without omissions.
 
-## 21. Combined regression and final architecture review
+## 22. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

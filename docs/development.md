@@ -296,7 +296,7 @@ reconciliation/binding, both registrations and admission; original successful-or
 watermarks and final source/intent/CAS/own-ACK fences remain authoritative. The
 worker-only gate ends before publication. Legacy full conversion has a separate
 host promise alongside its unchanged cap. Conversion, resource policy, providers,
-native inference/Torch parity and final checks remain steps 15–21. Controlled
+native inference/Torch parity and final checks remain steps 15–22. Controlled
 progress is not whole-GIL isolation, device latency or crackle acceptance.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
@@ -937,6 +937,15 @@ remaining CUDA/cancellation/quality/distribution gates. It has no PyO3 or
 LibTorch dependency. This is a developer experiment; productive Torch workers,
 CPU fallback, normal installation and recovery remain required. A Windows x64
 Debug EXE is not a self-contained portable bundle or Linux/macOS acceptance.
+
+The trial's complete-source admission now matches512MiB/768kHz and the original
+250000-prediction ceiling. Six native resampled/spectrogram pairs remain byte equal;
+two high-rate original comparisons and ten early refusals pass without new model
+references. A real CPU termination has164 same-run kernel events and actual
+tree/reader settlement. CUDA initialization attempts remain unsuccessful with
+cause UNKNOWN. The optional arena-limit receipt/verifier is isolated diagnostics,
+not productive fallback policy. STEP21 retains every native parity/producer/
+platform/distribution gate, and STEP22 retains the entire former final regression.
 
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly

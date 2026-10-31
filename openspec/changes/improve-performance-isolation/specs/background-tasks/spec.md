@@ -10,6 +10,11 @@ when the input batch is exactly one and every actual finite output has shape
 CUDA/fresh-CPU fallback, CPU-only, cancellation, resource, provenance and
 distribution parity. Host-memory refusal SHALL remain terminal.
 
+Complete-source admission SHALL preserve the original512MiB mono float32 byte
+bound, rates1–768000Hz and conservative250000-prediction ceiling. The native
+frontend SHALL validate checked complete geometry before payload allocation,
+resampling or STFT, without truncating source or tail to satisfy the bound.
+
 #### Scenario: A short BeatThis piece uses global attention
 - **GIVEN** a centered original spectrogram has at most1488 frames
 - **WHEN** the native trial forms its original six-frame edges
@@ -22,6 +27,20 @@ distribution parity. Host-memory refusal SHALL remain terminal.
 - **WHEN** native CUDA or cancellation verification is attempted
 - **THEN** no CUDA success, device-failure-to-CPU or mid-ORT-cancellation claim is made
 - **AND** existing productive workers and original resource floors remain available
+
+#### Scenario: A standalone diagnostic reports a controlled CUDA arena refusal
+- **GIVEN** an explicitly requested isolated CUDA limit1 diagnostic without cancellation
+- **WHEN** actual ORT logs independently bind a unique Cuda/limit1 arena, its last same-thread extension and exactly matching positive rounded BFCArena refusal
+- **THEN** a dedicated receipt and exit70 may identify controlled device-arena refusal, without claiming physical VRAM exhaustion
+- **AND** Cpu/CudaPinned, unknown/missing/ambiguous diagnostics, generic host failures and crashes remain terminal
+- **AND** any next same-model CPU process waits for actual original tree and reader settlement
+- **AND** control fixtures alone do not establish actual CUDA execution or fallback
+
+#### Scenario: A native inference is interrupted after kernel execution
+- **GIVEN** a uniquely profiled original owned invocation with an explicit diagnostic RunOptions timer
+- **WHEN** a termination-specific error is accompanied by actual kernel events inside that same failed model run
+- **THEN** bounded mid-ORT termination may be reported after complete tree and reader end without success artifacts
+- **AND** a pre-invocation marker, model-load failure or unrelated profile cannot establish this result
 
 ### Requirement: Heavy Background Work Shares Resource Admission
 Existing offline owners SHALL coordinate heavy stem generation and analysis child

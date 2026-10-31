@@ -61,19 +61,29 @@ impl BeatModel {
     ) -> Result<Self, String> {
         checkpoint(cancelled)?;
         validate_graph(graph, expected_sha256)?;
-        let ep = match provider {
-            Provider::Cpu => ep::CPU::default().build().error_on_failure(),
+        let providers = match provider {
+            Provider::Cpu => vec![ep::CPU::default().build().error_on_failure()],
             #[cfg(feature = "native-inference-cuda")]
-            Provider::Cuda { memory_limit } => ep::CUDA::default()
-                .with_tf32(false)
-                .with_memory_limit(memory_limit)
-                .build()
-                .error_on_failure(),
+            Provider::Cuda { memory_limit } => vec![
+                ep::CUDA::default()
+                    .with_tf32(false)
+                    .with_memory_limit(memory_limit)
+                    .build()
+                    .error_on_failure(),
+                // ORT otherwise inserts its default CPU provider with a host
+                // arena. Keep its shape/operator support, using the same host
+                // allocator policy as our explicit CPU route. This is not a
+                // retry on CPU when required CUDA registration fails.
+                ep::CPU::default()
+                    .with_arena_allocator(false)
+                    .build()
+                    .error_on_failure(),
+            ],
         };
         let session = Session::builder()
             .map_err(|e| e.to_string())?
             .with_auto_device(AutoDevicePolicy::Default)
-            .and_then(|s| s.with_execution_providers([ep]))
+            .and_then(|s| s.with_execution_providers(providers))
             .and_then(|s| s.with_intra_threads(1))
             .and_then(|s| s.with_inter_threads(1))
             .and_then(|s| s.with_parallel_execution(false))

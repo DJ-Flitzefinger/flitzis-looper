@@ -1,5 +1,181 @@
 # Performance audit and implementation design
 
+## STEP20 impact: original input envelope and fail-closed native diagnostics
+
+The isolated complete-source trial now admits the original worker's mono PCM
+envelope:512MiB, rates1–768000Hz and at most250000 prediction frames. Checked
+integer ceiling conversion precedes resampling/STFT allocation. Source bytes,
+resampled capacity and prediction count have distinct bounds; an oversized
+actual libsoxr tail fails rather than being truncated. The CLI stats and reads
+the same opened PCM file, rejects size changes/partial/nonfinite data, bulk-hashes
+the actual raw bytes and releases that raw buffer before resampling. No model,
+frontend arithmetic, chunking, precision or productive dispatch is replaced.
+
+### Source and control verification
+
+Twelve selected Rust tests and the standalone diagnostic test pass. Fifteen initial
+Python protocol tests require the exact dedicated receipt, graph hash, exit70
+and independently captured ORT allocator logs; generic host/unknown errors,
+Cpu/CudaPinned, different threads, changed rounding and missing/corrupt/truncated
+evidence remain terminal. These are control tests, not CUDA execution evidence.
+Final review adds a sixteenth regression: exactly65536 stderr bytes can be the
+original reader's truncated tail and are rejected even when valid-looking logs
+remain at the end. No original reader limit is enlarged.
+
+Final standalone CPU/CUDA builds pass. Ten real early-negative commands pass:
+existing output preservation, invalid rate, changed libsoxr/graph SHA, source
+over512MiB, prediction overflow, partial/nonfinite PCM, CUDA requested from the
+CPU build and invalid explicit arena diagnosis. The two large file cases are
+rejected from metadata before payload allocation/native loading. Their success
+does not measure processing a maximum-size source.
+
+All six prior complete native resampled/spectrogram pairs are byte-identical to
+STEP19. Their original-worker numerical differences
+therefore remain unchanged. Two additional original frontend references use the
+unmodified separately locked Python3.12.13/Torch2.8.0+cpu worker, with **no model
+load/inference**. Neither productive Python/Torch closure is modified:
+
+| Rate / source frames | Original spectrogram frames | HQ resample | Maximum LogMel difference | RMS |
+| --- | ---: | --- | ---: | ---: |
+| 384001 / 384014 | 51 | bit equal | 0.00012800640251953155 | 0.000010358720334093284 |
+| 768000 / 768101 | 51 | bit equal | 0.00008262949995696545 | 0.000009640202272107286 |
+
+New source SHA256 values are respectively
+`333aeb620ee81072d130926b213c3c36b3cfac09c8990bc401b0b6c7b44e275d`
+and `25ed4c1f1e221c295de11afa64e1071b125a55dea755d0635cc19ba20ddd6897`.
+These bounded comparisons establish no general audio/model tolerance. Original
+STEP19 full-model references are reused without another numerical NN round.
+The original supervisor observes9/9 frontend scopes and10/10 negative scopes
+closed, pending/inflight0 and no sampling errors, using one joined executor per
+check. CPU setup/frontends/negatives pass3 checks in263.01s, including download;
+the separate final-build check passed before these. Counts overlap, not a matrix.
+
+### Actual cancellation and unsuccessful CUDA attempts
+
+One real native CPU1500-frame inference is terminated through the explicit
+joined50ms RunOptions timer. Its unique profile has exactly one `model_run`
+(timestamp762902us/duration50184us); all164 CPU-provider kernel events fall
+inside that failed run, including real MatMul. The error is termination-specific,
+and no success metadata, logits, resampled or spectrogram output is produced.
+The original supervisor closes both attempted-CUDA and CPU-cancel scopes2/2,
+pending/inflight0/errors[]. CPU main-child lifetime peak commit308736000 bytes,
+peak working set323379200. This is bounded CPU termination/settlement evidence,
+not general memory, playback deadline, CUDA, overlap or whole-model quality proof.
+
+The same check's native CUDA attempt fails during initialization with a generic
+BFCArena4194304-byte refusal. Before-launch available commit4528058368 bytes;
+main-child peak commit1254162432. No CUDA kernels or eligible device receipt are
+proved. Cause remains **UNKNOWN**; proximity to a resource ceiling is not cause.
+
+Source inspection then found that the CUDA-only dispatch lets ORT add its default
+CPU host arena, whereas the explicit CPU route already disables that arena. The
+candidate now applies explicit CPU `with_arena_allocator(false)` **after required
+CUDA**, preserving CPU shape/operator support, both error-on-failure settings,
+TF32off and all original thread/resource options. This is a source-motivated
+allocator-policy attempt, not a proved memory fix. See the
+[wrapper implementation](https://github.com/pykeio/ort/blob/v2.0.0-rc.12/src/ep/cpu.rs)
+and [ORT CPU insertion](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/session/inference_session.cc#L1945).
+Memory-pattern options, graph, weights, precision and resource floors stay intact.
+
+One changed-implementation CUDA attempt is made under fresh original admission:
+available commit3851194368, observed actual Job budget853358592 bytes. It exits
+`0xC0000005` without diagnostic output/profile/run evidence; main-child peak
+commit860307456. Original scope1/1 closes, pending/inflight0/errors[]. Cause is
+**UNKNOWN**, with no claimed allocator improvement, CUDA success or fallback.
+An earlier script quoting error was rejected at collection before this process;
+it is retained separately. Do not repeat these unchanged failed conditions or
+lower guards/change unrelated processes to obtain a positive result.
+
+The standalone opt-in `FLITZIS_TRIAL_CUDA_ARENA_DIAGNOSTIC=1` accepts only an
+explicit CUDA limit1 request without cancellation. Typed exit70 additionally
+requires one actual Cuda/limit1 constructor, the **last same-thread** Cuda Extend,
+positive exact256-byte rounding and the matching BFCArena exception. A later
+Cpu/CudaPinned/unknown extension invalidates the match. The separate
+[verifier](../../../scripts/beat_this_trial_fault.py) independently checks stdout
+and captured stderr after original tree **and** readers return. This denotes
+controlled device-arena refusal before cudaMalloc, not physical VRAM exhaustion;
+[ORT's allocator source](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/framework/bfc_arena.cc#L89)
+explains that distinction. No actual matching exit70/freshCPU is obtained here;
+the mechanism remains an isolated trial, not productive fallback policy.
+
+### Component inventory, reconstruction and remaining program
+
+Measured platform: Windows AMD64/build10.0.26200, rustc1.95.0/59807616e,
+LLVM22.1.2 and Cargo1.95.0. Final Debug CPU EXE36518400 bytes/SHA256
+`42c5b84713e275dc05b3ddc0937c28ffbadf591bf358d81692ef52cf2f1ad024`;
+CUDA EXE13146624/SHA256
+`364bb4c3f604a3c88f6e86155e6d7421b717de5f8077ebf4d897afe35fe883b8`.
+The cancellation and failed CUDA observations precede final bulk-SHA extraction;
+the CPU inference path remains source-compatible on review, not rerun for hashes.
+Final binaries have the fresh frontend/early-negative evidence above.
+
+The owned CUDA scratch copies21 CUDA/cuDNN DLLs from the separate BeatThiscu128
+wheel and the three pinned ORT DLLs:24 files/3492501392 logical bytes, no Torch
+DLLs. Every copied file matches its authenticated wheel's RECORD hash and size.
+Torch wheel3461384651 bytes/SHA256
+`0ad925202387f4e7314302a1b4f8860fa824357f9b1466d7992bf276370ebcff`
+matches the unchanged CUDA worker lock. ORT wheel provenance remains STEP19's
+`da5c1e327d8e119a831be2790e69f93cf6daab9145ed0aca7577f412a620f709`.
+The separate CPU-worker environment has15391 files/3243748526 logical bytes;
+its shared base interpreter is outside that count. These are component file
+measurements, **not physical deduplication or full installation totals**.
+
+Original observer polls additionally sample candidate Windows module paths,
+including ORT/CUDA/cuDNN/CRT/driver files; five loader-race299 errors occur in
+the first check. That PID union is not full identity-attested loaded closure.
+The next attempt keys paths by creation identity, but still lacks CUDA execution.
+Neither file hashes, RECORD consistency nor compiler version alone attests the
+complete binary/producer or mapped images. Release/CRT/license bundles, LGPL
+source/patch obligations, NVIDIA notices, complete CPU-only/CUDA installation,
+recovery and Linux/macOS build/run remain open. Actual installed saving is **zero**.
+
+Reconstruct only in owned cache through the outer contributor entry and ACTUAL
+native checkout. Use unchanged `workers/beat_this/uv.lock` with isolated
+`UV_PROJECT_ENVIRONMENT`, `uv sync --locked --no-dev --no-install-project
+--python 3.12.13`. Run the existing
+reference generator's `generate` with `checkpoint=None` and CASES replaced only
+in a disposable helper by the two rate/frame tuples above. Its unchanged
+`synthetic_signal` defines every source sample. Use STEP19's retained graph and
+fixture recipes; do not overwrite reference evidence. Rebuild the two features
+with the commands below. Copy only DLL names beginning
+`cud,cublas,cufft,curand,cusolver,cusparse,nv` from the pinned CUDA wheel, plus
+the three ORT DLLs; verify archive SHA and RECORD, keep the owned paths immutable.
+Execute every neural command through the original admitted supervisor in one
+joined executor, observing complete settlement before any next same-model CPU.
+
+Positive AND failed logs are retained as `performance-step20-{headroom,format,
+format-final,build,runtime,allocator-build,runtime2,runtime2-actual,controls,
+controls-cpu,inventory,inventory-final}.log` in cache. Initial reference logging
+lost a non-UTF8 diagnostic before any reference folder existed; underlying cause
+is UNKNOWN. The corrected logger preserves raw bytes. The locked CPU worker then
+produces the new references without model inference. The first inventory used a
+wrong assumed wheel directory; its corrected check passes7.62s. Generated scripts
+and raw logs are reconstructible; this source/recipe/history is durable authority.
+
+Final22 static/control checks pass14.63s:16 protocol cases (including the reviewed
+saturated-tail fix), Ruff/format on both Python files, four Rust format checks,
+strict OpenSpec,85 Markdown targets/whitespace, all productive pins/locks/host
+paths unchanged, three independent normal-dependency feature trees, saved actual
+same-run cancellation/failure settlement and final component/frontends/negative
+evidence. Both fullhost probes retain the original StemExecution validator
+UNKNOWN with all productive resource/provider roles present. Default external
+Release Native/API remains usable with22 known warnings and unchanged einops.
+Systems PRE/POST/affected, Methods and one independent actual-diff review chain
+cover isolated publication, not cutover. `performance-step20-{static,static-final,
+index}.log` record the final checks; earlier counts overlap and are not additive.
+
+The justified plan is now22 steps. **STEP21 retains ALL native CUDA/real device
+fault→freshCPU, CPU-only, full quality/functions, resources/last-reader, every
+producer role, OS/architecture, dependency/installer/recovery and practical
+Demucs/BS full-path parity gates before any cutover.** Existing closures remain.
+**STEP22 retains the ENTIRE former FINAL21**: original fullhost validator/schema/
+Pydantic/all roles, exact32 Rust parent failures/watchdog/registry, pressure
+UNKNOWN, CPU/CUDA overlap and combined quality/regression/architecture/docs/
+distribution. The successful CPU termination above closes none of those broader
+gates. Working Demucs/BS whole-track normalization/shifts/overlap, complex
+STFT/ISTFT/masks, attention/recurrent and AMP paths still need implemented,
+measured complete parity; an isolated mask graph is not their replacement.
+
 ## STEP19 impact: complete-source native CPU prototype
 
 The opt-in standalone `beat_this_audio` extends the independent Rust/ORT trial
@@ -191,7 +367,7 @@ Release Native/API passes with22 known library warnings and the existing einops
 pin. Systems PRE/frozen POST/affected, Methods and the single independent final
 actual-diff review chain are clear for isolated candidate publication only.
 
-The split is now21 steps: STEP19 delivers the complete-source CPU prototype;
+The STEP19 split reached21 steps: it delivers the complete-source CPU prototype;
 **STEP20 retains every native CUDA/fresh-CPU/cancel/memory/last-reader/quality/
 provenance/OS/distribution/recovery gate before cutover**, including practical
 Demucs/BS migration barriers from STEP18. First obtain fresh real guarded
