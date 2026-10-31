@@ -212,6 +212,14 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **THEN** the working productive path remains available and the barrier is reported
 - **AND** no successful-load or synthetic-only result is presented as full no-regression acceptance
 
+#### Scenario: An isolated native trial selects a dynamic runtime
+- **GIVEN** a fresh standalone trial requests dynamic ORT initialization
+- **WHEN** it admits a caller-owned package manifest
+- **THEN** exact manifest and runtime bytes, size, version and process OS/architecture are checked before ORT environment or model initialization
+- **AND** missing, malformed, changed, foreign or ineffective configuration fails terminally without a device-fallback receipt
+- **AND** CPU-only dynamic initialization does not require CUDA support, while a static build rejects dynamic configuration
+- **AND** file/runtime initialization evidence does not certify mapped images, dependent providers, model execution, complete producer or portable distribution
+
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
 GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model

@@ -1,7 +1,7 @@
 //! Offline complete-source diagnostic CLI, never an application execution receipt.
 use flitzis_looper_analysis::{
     beat_audio::{self, MAX_AUDIO_BYTES, Soxr, validate_audio_shape},
-    beat_inference::{BeatModel, MAX_GRAPH_BYTES, Provider},
+    beat_inference::{BeatModel, MAX_GRAPH_BYTES, Provider, validate_graph},
 };
 use ort::session::RunOptions;
 use sha2::{Digest, Sha256};
@@ -14,6 +14,8 @@ use std::{
 };
 #[path = "beat_this_audio/fault.rs"]
 mod fault;
+#[path = "beat_this_audio/runtime.rs"]
+mod runtime;
 
 fn bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
@@ -65,7 +67,11 @@ fn side(path: &str, suffix: &str) -> PathBuf {
     PathBuf::from(format!("{path}.{suffix}"))
 }
 
-fn execute(a: &[String]) -> Result<(), String> {
+fn execute(
+    a: &[String],
+    evidence: &Arc<Mutex<fault::Evidence>>,
+    arena: bool,
+) -> Result<(), String> {
     let infer = a.first().is_some_and(|s| s == "infer");
     if (!infer && (a.len() != 6 || a[0] != "frontend")) || (infer && a.len() != 11) {
         return Err("usage: beat_this_audio frontend SOXR SHA PCM RATE NEW_JSON | infer GRAPH SHA SOXR SHA PCM RATE NEW_JSON PROFILE cpu|cuda GPU_MEMORY_LIMIT".into());
@@ -92,6 +98,7 @@ fn execute(a: &[String]) -> Result<(), String> {
         "source_sha256":source_digest,"source_frames":signal.len(),"rate":rate,
         "resampled_frames":prepared.len(),"spectrogram_frames":spect.len()/128,
         "chunk_starts":beat_audio::chunk_starts(spect.len()/128)?,"soxr_sha256":a[offset+1]});
+    let mut admitted = None;
     if infer {
         let provider = match a[9].as_str() {
             "cpu" => Provider::Cpu,
@@ -102,6 +109,8 @@ fn execute(a: &[String]) -> Result<(), String> {
             _ => return Err("unsupported explicit provider".into()),
         };
         let graph = bounded(Path::new(&a[1]), MAX_GRAPH_BYTES)?;
+        validate_graph(&graph, &a[2])?;
+        admitted = configure(a, evidence, arena)?;
         let mut model = BeatModel::load_on(&graph, &a[2], Path::new(&a[8]), provider, &|| false)?;
         let mut marked = false;
         let cancel_ms = std::env::var("FLITZIS_TRIAL_CANCEL_MS")
@@ -171,6 +180,9 @@ fn execute(a: &[String]) -> Result<(), String> {
         let values: Vec<_> = logits.beat.into_iter().chain(logits.downbeat).collect();
         float_file(&side(dest, "logits.f32"), &values)?;
     }
+    if let Some(runtime) = &admitted {
+        metadata["runtime_admission"] = runtime.receipt();
+    }
     float_file(&side(dest, "resampled.f32"), &prepared)?;
     float_file(&side(dest, "spect.f32"), &spect)?;
     // Metadata is exclusive and last; failed partial scratch never proves success.
@@ -193,21 +205,31 @@ fn main() -> ExitCode {
         eprintln!("invalid explicit CUDA arena diagnostic request");
         return ExitCode::FAILURE;
     }
-    let evidence = Arc::new(Mutex::new(fault::Evidence::default()));
-    if arena_diagnostic || std::env::var_os("FLITZIS_TRIAL_ORT_LOG").is_some() {
-        // Process-local standalone diagnostics; never used by the App/core.
-        let observed = Arc::clone(&evidence);
-        ort::init().with_logger(Arc::new(move |level,category,id,location,message| {
-            if message.contains("BFCArena") || level >= ort::logging::LogLevel::Error {
-                let thread = format!("{:?}",std::thread::current().id());
-                if let Ok(mut log) = observed.lock() {
-                    log.observe(&thread,location,message);
-                }
-                eprintln!("ORT_TRIAL_LOG {}",serde_json::json!({"thread":thread,"level":format!("{level:?}"),"category":category,"id":id,"location":location,"message":message}));
-            }
-        })).commit();
+    if !a.first().is_some_and(|s| s == "infer" || s == "runtime")
+        && (std::env::var_os(runtime::MANIFEST_ENV).is_some()
+            || std::env::var_os(runtime::DIGEST_ENV).is_some())
+    {
+        eprintln!("runtime configuration requires an inference or runtime probe command");
+        return ExitCode::FAILURE;
     }
-    match execute(&a) {
+    let evidence = Arc::new(Mutex::new(fault::Evidence::default()));
+    if a.first().is_some_and(|s| s == "runtime") {
+        let admitted = match configure(&a, &evidence, arena_diagnostic) {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        println!(
+            "{}",
+            serde_json::json!({"trial_only":true,"trial_runtime_probe":true,
+            "runtime_admission":admitted.as_ref().map(runtime::Admission::receipt),
+            "ort_build":ort::info()})
+        );
+        return ExitCode::SUCCESS;
+    }
+    match execute(&a, &evidence, arena_diagnostic) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let thread = format!("{:?}", std::thread::current().id());
@@ -230,4 +252,54 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+fn configure(
+    a: &[String],
+    evidence: &Arc<Mutex<fault::Evidence>>,
+    arena: bool,
+) -> Result<Option<runtime::Admission>, String> {
+    let probe = a.first().is_some_and(|s| s == "runtime");
+    let manifest = std::env::var_os(runtime::MANIFEST_ENV);
+    let digest = std::env::var(runtime::DIGEST_ENV).map_err(|e| e.to_string());
+    let requested = if probe {
+        if a.len() != 3 || manifest.is_some() || std::env::var_os(runtime::DIGEST_ENV).is_some() {
+            return Err("usage: beat_this_audio runtime MANIFEST SHA256 (without runtime environment overrides)".into());
+        }
+        Some((PathBuf::from(&a[1]), a[2].clone()))
+    } else if manifest.is_some() || std::env::var_os(runtime::DIGEST_ENV).is_some() {
+        Some((
+            PathBuf::from(manifest.ok_or("missing runtime manifest path")?),
+            digest?,
+        ))
+    } else {
+        None
+    };
+    if !probe && !(a.len() == 11 && a[0] == "infer") {
+        if requested.is_some() {
+            return Err(
+                "runtime configuration requires a valid inference or runtime probe command".into(),
+            );
+        }
+        return Ok(None);
+    }
+    // This is the first ORT access in this standalone process. Retain the checked
+    // files until every session/run/profile operation in execute has returned.
+    let (admitted, mut environment) =
+        runtime::configure(requested.as_ref().map(|(p, d)| (p.as_path(), d.as_str())))?;
+    if arena || std::env::var_os("FLITZIS_TRIAL_ORT_LOG").is_some() {
+        // Process-local standalone diagnostics; never used by the App/core.
+        let observed = Arc::clone(&evidence);
+        environment = environment.with_logger(Arc::new(move |level,category,id,location,message| {
+            if message.contains("BFCArena") || level >= ort::logging::LogLevel::Error {
+                let thread = format!("{:?}",std::thread::current().id());
+                if let Ok(mut log) = observed.lock() {
+                    log.observe(&thread,location,message);
+                }
+                eprintln!("ORT_TRIAL_LOG {}",serde_json::json!({"thread":thread,"level":format!("{level:?}"),"category":category,"id":id,"location":location,"message":message}));
+            }
+        }));
+    }
+    runtime::commit(environment)?;
+    Ok(admitted)
 }

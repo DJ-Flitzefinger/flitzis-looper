@@ -944,8 +944,23 @@ two high-rate original comparisons and ten early refusals pass without new model
 references. A real CPU termination has164 same-run kernel events and actual
 tree/reader settlement. CUDA initialization attempts remain unsuccessful with
 cause UNKNOWN. The optional arena-limit receipt/verifier is isolated diagnostics,
-not productive fallback policy. STEP21 retains every native parity/producer/
-platform/distribution gate, and STEP22 retains the entire former final regression.
+not productive fallback policy. Every unproved native parity/producer/platform/
+distribution gate continues below; no productive cutover is established.
+
+Standalone dynamic trials now require an explicit runtime manifest before ORT
+initialization. Build `native-inference-dynamic` for CPU-only dynamic loading or
+`native-inference-cuda` for the CUDA candidate; both remain opt-in. The independent
+`runtime MANIFEST SHA256` command checks runtime files/version/API and commits
+environment options without loading a model. For `infer`, set
+`FLITZIS_TRIAL_ORT_MANIFEST` and `FLITZIS_TRIAL_ORT_MANIFEST_SHA256` to that same
+owned manifest and its exact lowercase SHA256. Ambient `ORT_DYLIB_PATH` is not
+the dynamic trial's authority. Static CPU trials reject dynamic configuration.
+The manifest schema and reconstruction recipe are in the
+[STEP21 design](../openspec/changes/improve-performance-isolation/design.md#step21-impact-explicit-standalone-runtime-admission).
+Checked files do not establish a complete loaded-image/dependency closure or an
+installable bundle. STEP22 retains all native parity requirements and STEP23 all
+former final regression gates. Productive installation/repair, locks and workers
+are unchanged.
 
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly

@@ -1,10 +1,14 @@
 //! Developer-only one-chunk CLI; output is diagnostic logits, never an App receipt.
-use flitzis_looper_analysis::beat_inference::{BINS, BeatModel, FRAMES, MAX_GRAPH_BYTES};
+use flitzis_looper_analysis::beat_inference::{
+    BINS, BeatModel, FRAMES, MAX_GRAPH_BYTES, validate_graph,
+};
 use std::{
     fs::File,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
+#[path = "beat_this_audio/runtime.rs"]
+mod runtime;
 
 fn bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, String> {
     let mut data = Vec::new();
@@ -45,6 +49,20 @@ fn main() -> Result<(), String> {
         return Err("nonfinite trial spectrogram".into());
     }
     let digest = args[1].to_str().ok_or("invalid digest encoding")?;
+    validate_graph(&graph, digest)?;
+    let path = std::env::var_os(runtime::MANIFEST_ENV);
+    let sha = std::env::var(runtime::DIGEST_ENV);
+    let requested = if path.is_some() || std::env::var_os(runtime::DIGEST_ENV).is_some() {
+        Some((
+            PathBuf::from(path.ok_or("missing runtime manifest path")?),
+            sha.map_err(|e| e.to_string())?,
+        ))
+    } else {
+        None
+    };
+    let (admitted, environment) =
+        runtime::configure(requested.as_ref().map(|(p, d)| (p.as_path(), d.as_str())))?;
+    runtime::commit(environment)?;
     let mut model = BeatModel::load(&graph, digest, Path::new(&args[4]), &|| false)?;
     let logits = model.run(&spect, &|| false)?;
     let profile = model.finish_profile()?;
@@ -59,7 +77,8 @@ fn main() -> Result<(), String> {
     println!(
         "{}",
         serde_json::json!({"trial_only":true,"os":std::env::consts::OS,
-        "arch":std::env::consts::ARCH,"frames":FRAMES,"profile":profile})
+        "arch":std::env::consts::ARCH,"frames":FRAMES,"profile":profile,
+        "runtime_admission":admitted.as_ref().map(runtime::Admission::receipt)})
     );
     Ok(())
 }

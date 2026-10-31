@@ -348,9 +348,16 @@ existing suspended Job Object adapter; Linux/macOS process-tree and host-monitor
 evidence remains a separate distribution gate. No running installation is updated
 by development verification.
 
-The opt-in native BeatThis fixed-chunk experiment is not part of installation or
+The opt-in native BeatThis complete-source experiment is not part of installation or
 model repair. Its ONNX graph and standalone developer EXE have no productive
 cutover or complete CUDA/CPU-only/quality/DLL-closure acceptance. Keep the original
 App and separate BeatThis locks/models/workers; their runtime removal requires
 the complete parity and recovery gates in the
 [performance design](../openspec/changes/improve-performance-isolation/design.md).
+
+Its separate `native-inference-dynamic` CPU-only and CUDA trial builds now require
+explicit digest-checked runtime manifests. That standalone loading contract does
+not alter Portable runtime versions, bootstrap pins, licenses, model repair or
+recovery. Extracted trial DLLs and a developer Debug EXE are not an installable
+bundle; CRT/provider/driver closures, redistribution obligations and clean-system
+acceptance remain mandatory before any productive runtime replacement.

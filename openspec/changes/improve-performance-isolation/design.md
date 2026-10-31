@@ -1,5 +1,172 @@
 # Performance audit and implementation design
 
+## STEP21 impact: explicit standalone runtime admission
+
+The next coherent trial change binds dynamic ORT initialization to an explicitly
+supplied, digest-checked package manifest before any ORT API or logger setup.
+The manifest identifies its exact runtime file size/hash/version and the current
+process OS/architecture. A separate dynamic CPU-only feature permits that same
+loading boundary without compiling CUDA support. Static CPU trials reject dynamic
+configuration rather than silently ignoring it. An initialization-only command
+requires no model or audio processing.
+
+This belongs solely to fresh standalone diagnostics. The application, BeatModel
+session arithmetic, graph/weights, frontend, provider policy and original process
+admission/retirement authority remain unchanged. The implementation must retain
+the checked file handles through all CLI work, reject malformed/changed/foreign
+manifests before native loading and fail when environment configuration did not
+take effect. A checked file is not a mapped-image or complete-producer proof.
+Provider/CUDA/cuDNN/CRT/driver dependencies, compiler/binary provenance, licensing,
+installation/recovery and actual Linux/macOS evidence remain separate required
+roles. No runtime-only probe certifies device execution or model quality.
+
+The plan grows to23 steps to publish this bounded loading improvement separately.
+STEP22 retains the ENTIRE former STEP21 native parity/quality/producer/package/
+Demucs/BS requirement set before cutover. STEP23 retains the ENTIRE former FINAL22
+regression, original validator/schema/Pydantic attestation, all32 parent failures,
+distinct216 watchdog/registry UNKNOWN, pressure-cause/overlap and distribution
+gates. Existing working Torch closures remain until full parity is established.
+
+### Runtime contract and reconstruction
+
+The shared standalone bootstrap checks the exact bytes of a maximum4096-byte
+manifest, rejects duplicate/unknown/missing fields, and verifies a package-local
+regular runtime file with exact size/SHA256 (maximum512MiB). The target identifies
+the current process, not an independently attested cross-platform binary. Windows
+opens both checked files with read sharing only, denying write/delete; the handles
+outlive all CLI model/profile/output work. Other systems require an immutable
+caller-owned directory. Canonical path containment rejects a library symlink
+escaping that directory. A caller-supplied digest is explicit trial authorization,
+not productive weight/runtime provenance.
+
+The runtime's own `OrtGetApiBase`, exact version string and API24 are checked,
+then explicit `ort::init_from` supplies the same builder used for optional logging.
+Ineffective/repeated environment configuration fails. This API is used exactly
+once before all other ORT access in a fresh CLI: ort caches its first library and
+`init_from` itself does not prove that a prior different library was absent.
+No general App/reload or mapped-image-attestation API is introduced. Dependency
+search remains the platform loader's responsibility; provider/CRT/driver closure
+still requires separate verification. The initialization-only `runtime` command
+does not construct a model session or prove CUDA execution.
+
+Example measured CPU manifest (UTF-8 JSON; hash these exact serialized bytes):
+
+```json
+{
+  "schema_version": 1,
+  "os": "windows",
+  "arch": "x86_64",
+  "library": "onnxruntime.dll",
+  "bytes": 16119840,
+  "sha256": "87da0279ab54add397fd518f7022efe8b9a89fd968669d0adff9f9f242344b6c",
+  "version": "1.24.4"
+}
+```
+
+Build the analysis examples with `--locked` and `native-inference-trial` (static
+CPU), `native-inference-dynamic` (dynamic CPU) or `native-inference-cuda`. All
+are default-off. Serde is an existing-version **development-only** direct edge;
+normal analysis dependencies and all productive pins/worker/installer inputs are
+unchanged. Use the contributor's configured execution entry and generated-output
+route. Run `beat_this_audio runtime ABSOLUTE_MANIFEST LOWERCASE_SHA256` without
+runtime environment overrides. For normal `infer`, provide
+`FLITZIS_TRIAL_ORT_MANIFEST` and `FLITZIS_TRIAL_ORT_MANIFEST_SHA256`; keep its original
+eleven arguments. Both audio and one-chunk CLIs use this boundary. Static builds
+reject dynamic configuration. Original output/PCM/shape/provider and graph-SHA
+refusals precede ORT loading; frontend-only work never initializes ORT.
+
+CPU runtime bytes come from separately downloaded
+[onnxruntime1.24.4 cp312 WindowsAMD64 wheel](https://files.pythonhosted.org/packages/8b/f4/6b89e297b93704345f0f3f8c62229bee323ef25682a3f9b4f89a39324950/onnxruntime-1.24.4-cp312-cp312-win_amd64.whl),
+12596856 bytes/SHA256
+`535b29475ca42b593c45fbb2152fbf1cdf3f287315bf650e6a724a0a1d065cdb`.
+Verify the complete archive against that digest and each extracted DLL against
+its RECORD. Extract only `onnxruntime.dll` above and
+`onnxruntime_providers_shared.dll`,22048 bytes/SHA256
+`838048bae6e1d040e41e4d428a831ac9c5bc91da24abced383d42cb24f2b1376`.
+These two files total16141888 logical bytes, not a complete installation or CRT
+bundle. The CPU and existing GPU runtime both self-report1.24.4/API24/build Git
+`2d924974ef`; that report is not complete build/compiler provenance. The GPU
+runtime remains15431712 bytes/SHA256
+`c63af7de44303e401b283457fdb510caa65756afa1e8c4f43f90195358c4294b`,
+from STEP19/20's independently verified GPU wheel and dependency recipe.
+No wheel is installed into a productive environment.
+
+### Verification and actual execution limits
+
+Each of the three feature builds passes seven Rust example controls (six runtime
+tests plus the existing fault classifier). They cover strict parsing, target/
+size/hash/name/API bounds, relative paths, actual same-file extent/hash checks,
+Windows write/delete denial and ineffective repeated environment configuration.
+Both standalone examples build for every feature. Initial four unused-import
+warnings in static examples are fixed with exact cfg imports, without suppression;
+final builds/controls pass2 checks in10.60s. Initial builds passed70.50s. These
+overlap, not a combined acceptance matrix.
+
+Twenty real supervised CLI controls pass13.08s: two runtime/API probes, including
+a poisoned ambient `ORT_DYLIB_PATH`, and eighteen negative admission/configuration
+cases. Original observer scope20/20 closes, pending/inflight0/errors[]. The CPU
+wheel preparation passes separately. An initial harness used case-sensitive
+`SystemRoot` access on a copied environment dictionary and failed before any child
+started; corrected diagnostics retain raw stdout/stderr and the failed log.
+
+One necessary new dynamic CPU-only complete-track execution verifies the new
+runtime/package boundary against the **saved** STEP19 reference, with no new
+reference inference/export. Original source1536101 frames at48kHz becomes1601
+spectrogram frames and two true1500 chunks at starts[-6,107]. All beat/downbeat
+times equal; max logit difference0.000049591064453125/RMS0.000005484156854968183;
+all3934 profiled nodes use CPUExecutionProvider. Original scope1/1 closes with
+pending/inflight0/errors[]. Actual Job limit1428799488 bytes; main-child lifetime
+peak commit917692416/working set930390016. This is bounded numerical/execution
+evidence, not a quality tolerance, speedup, complete dependency closure or overlap
+acceptance. The successful EXE SHA was
+`5cac307d620fccbf6a0db1ffa81d08cc55c3a0c86f6f842ae9f03a56836c5b5f`.
+
+One changed-bootstrap CUDA attempt follows fresh original admission: available
+commit4934782976 bytes, actual Job budget1393649664, above the earlier observed
+initialization peak. Its only model_run has ts1058922us/duration7622054us and twelve
+provider-profile entries inside it: five CUDA (including the **failed Conv**) and
+seven CPU. Provider entries do not prove five successful physical CUDA kernels.
+The Conv fails at `cudnnAddTensor` with CUDNN4003,
+`CUDNN_STATUS_INTERNAL_ERROR_HOST_ALLOCATION_FAILED`; exit1, no success metadata,
+logits/resampled/spectrogram artifacts. Main-child peak commit1392754688/working
+set689483776; scope1/1 closes, pending/inflight0/errors[]. The precise allocation
+refusal cause remains **UNKNOWN**; proximity to the Job limit is not causal proof.
+The independent fault verifier rejects it. No limit1 fault, exit70 or freshCPU
+fallback runs. Do not repeat unchanged conditions or lower original guards.
+The attempted CUDA EXE SHA was
+`bcee8da18ba54c51b9068022d1d1be2a46ecc5854882d3996d648593710489b9`.
+
+Final Windows x86_64 Debug binaries after import/format-only cleanup:
+
+| Feature | Bytes | SHA256 |
+| --- | ---: | --- |
+| static CPU | 36561408 | `82bf8fea1f95bfc113c0c22e9c37f8c05cc6f8a74b3b31915e462c22b5a438b9` |
+| dynamic CPU | 13389312 | `1a11cf78dd8ce2663f96af22f38d33ccdf92832e8ba37e9269a37bb0d43e074b` |
+| CUDA | 13415936 | `50d141dc9e772c446f7be5257fd92f14c7a2af99b12bee8219a0abd081deb315` |
+
+Compiler reports rustc1.95.0/59807616e, LLVM22.1.2, Cargo1.95.0; no full compiler/
+binary/producer attestation follows. Current source is execution-compatible on
+review; NN is not repeated merely for final EXE hashes. Final22 static/control
+checks pass23.48s:16 unchanged strict fault protocol cases, four Rustfmt checks,
+strict OpenSpec/local Markdown targets, locked normal dependencies across four
+feature trees, twelve original Rust core checks, saved real settlement/failure
+evidence and two original fullhost UNKNOWN probes with all productive roles.
+Default external Release Native/API retains22 known warnings/einops pin; the
+analysis test target retains its two unchanged CQT-test warnings. Logs are
+`performance-step21-{headroom,build,build-final,controls,controls-fixed,execution,
+static}.log`; generated probes/logs are reconstructible, not durable authority.
+
+All graph/weight/exporter/frontend/source/runtime/provider/native-dependency/
+compiler/binary/OS/architecture roles still require full attestation before
+cutover. CRT/license/LGPL source+patch/NVIDIA notices, release CPU-only/CUDA bundles,
+recovery, Linux/macOS execution, complete install footprint and full Demucs/BS
+paths remain open; installed saving is **zero**. A source-motivated next step may
+release graph/PCM buffers after their final use, after checking ORT's copied-memory
+session semantics, without changing math, memory patterns, guards or claiming a
+proved CUDA fix. Actual CUDA completion and independently confirmed narrow device
+fault followed by fresh SameModel CPU remain mandatory in STEP22. STEP23 retains
+every original combined regression/quality/architecture/distribution gate above.
+
 ## STEP20 impact: original input envelope and fail-closed native diagnostics
 
 The isolated complete-source trial now admits the original worker's mono PCM

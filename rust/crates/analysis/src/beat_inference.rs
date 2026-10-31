@@ -184,7 +184,9 @@ pub(crate) fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     }
 }
 
-fn validate_graph(graph: &[u8], expected: &str) -> Result<(), String> {
+/// Admit immutable graph bytes before a standalone caller loads native code.
+/// Session construction repeats this check for callers without that bootstrap.
+pub fn validate_graph(graph: &[u8], expected: &str) -> Result<(), String> {
     if graph.is_empty() || graph.len() > MAX_GRAPH_BYTES {
         return Err("BeatThis graph exceeds trial bound".into());
     }

@@ -278,9 +278,18 @@ The design records exact passing checks and unsuccessful attempts. Logical
 component bytes are not full installations; no productive Torch removal or
 installation saving is claimed. The unsuccessful CUDA attempts establish no
 native device execution, narrow real fault or freshCPU fallback. Every former
-STEP20 parity requirement remains mandatory in STEP21 below.
+STEP20 parity requirement remains mandatory in STEP22 below.
 
-## 21. Remaining native parity before cutover
+## 21. Explicit standalone native runtime admission
+
+- [x] Bind dynamic ORT initialization to an explicit manifest and exact runtime
+      bytes/version/OS/architecture before any ORT API or diagnostic logger.
+- [x] Provide a dynamic CPU-only build and initialization-only probe; reject
+      missing/changed/foreign configuration without model inference.
+- [x] Verify the isolated loading boundary, preserve productive dependencies and
+      report file/component evidence separately from full producer/distribution.
+
+## 22. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -297,9 +306,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP22, without omissions.
+follows as STEP23, without omissions. STEP21 only adds explicit runtime loading;
+every unproved native parity requirement continues here unchanged.
 
-## 22. Combined regression and final architecture review
+## 23. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

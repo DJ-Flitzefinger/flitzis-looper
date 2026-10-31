@@ -159,6 +159,16 @@ producer and cross-platform distribution remain open. Diagnostic exit receipts
 cannot replace the original owned supervisor, actual reader settlement or
 productive provenance. No Torch closure or installed runtime is removed.
 
+The standalone dynamic experiment now admits explicit manifest/runtime files,
+exact version/API and process OS/architecture before configuring ORT. Its checked
+file handles outlive all CLI sessions/output work; Windows pins deny writes and
+deletes, while other platforms still require an immutable owned directory.
+This process-local bootstrap is deliberately outside the App/core session API.
+It does not attest provider/CRT/driver images or a complete producer, and a
+runtime-only probe does not establish model/device execution. CPU-only dynamic
+loading is a separate opt-in feature. Remaining native parity and combined final
+gates continue as STEP22 and STEP23 respectively.
+
 ## Limits and evidence
 
 The productive optimization target is 2/4/6 simultaneous PADs. Synthetic

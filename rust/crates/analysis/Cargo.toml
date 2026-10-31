@@ -8,7 +8,8 @@ name = "flitzis_looper_analysis"
 
 [features]
 native-inference-trial = ["dep:libloading"]
-native-inference-cuda = ["native-inference-trial", "ort/cuda", "ort/load-dynamic"]
+native-inference-dynamic = ["native-inference-trial", "ort/load-dynamic"]
+native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
 
 [[example]]
 name = "beat_this_native"
@@ -29,5 +30,6 @@ rustfft = "6.2"
 sha2 = "0.10"
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 symphonia = { version = "0.5", features = ["all", "opt-simd", "default"] }
