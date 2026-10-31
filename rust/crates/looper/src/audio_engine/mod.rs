@@ -126,6 +126,7 @@ mod pitch_api;
 pub(crate) mod pitch_intent;
 pub(crate) mod pitch_publication;
 pub(crate) mod pitch_runtime;
+mod resident_control_context;
 pub use pad_start::CapturedPadStart;
 #[cfg(test)]
 mod audio_quality_metrics;
@@ -1124,7 +1125,7 @@ pub struct AudioEngine {
     timing_intents: Arc<Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>>,
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
     loop_acceptance: Arc<loop_acceptance::SharedLoopAcceptance>,
-    current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
+    current_constant_timing: Arc<Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>>,
     input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
     pitch_work_capacity: pitch_publication::PitchWorkCapacity,
     global_timing_revision: Arc<AtomicU64>,
@@ -1662,29 +1663,51 @@ impl AudioEngine {
     const ORDINARY_TRANSPORT_API_VERSION: u32 = 3;
 
     /// Seal an already committed immutable disk selection independently of component residency.
-    pub fn register_committed_stem_pair(
-        &self,
+    #[pyo3(name = "register_committed_stem_pair")]
+    pub fn register_committed_stem_pair_py(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
         prepared: &PreparedStemPair,
         source_ticket: &PreparedSourceTicket,
     ) -> PyResult<CommittedStemSetTicket> {
-        self.register_committed_stem_pair_with_producer(
-            prepared,
-            source_ticket,
-            self.control_producer()?,
-        )
+        let (context, producer, order) = {
+            let engine = slf.try_borrow()?;
+            let context = resident_control_context::CommittedControlContext::capture(&engine);
+            let order = context.capture_committed_registration_order(source_ticket)?;
+            (context, engine.control_producer()?.clone(), order)
+        };
+        py.detach(move || {
+            context.register_committed_stem_pair_with_producer(
+                prepared,
+                source_ticket,
+                &producer,
+                order,
+            )
+        })
     }
 
     /// Seal a future complete set without revoking the actual predecessor selection.
-    pub fn register_pending_committed_stem_pair(
-        &self,
+    #[pyo3(name = "register_pending_committed_stem_pair")]
+    pub fn register_pending_committed_stem_pair_py(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
         prepared: &PreparedStemPair,
         source_ticket: &PreparedSourceTicket,
     ) -> PyResult<CommittedStemSetTicket> {
-        self.register_pending_committed_stem_pair_with_producer(
-            prepared,
-            source_ticket,
-            self.control_producer()?,
-        )
+        let (context, producer, order) = {
+            let engine = slf.try_borrow()?;
+            let context = resident_control_context::CommittedControlContext::capture(&engine);
+            let order = context.capture_committed_registration_order(source_ticket)?;
+            (context, engine.control_producer()?.clone(), order)
+        };
+        py.detach(move || {
+            context.register_pending_committed_stem_pair_with_producer(
+                prepared,
+                source_ticket,
+                &producer,
+                order,
+            )
+        })
     }
 
     #[pyo3(name = "request_committed_stem_residency", signature = (selection_ticket, *, mode="all_stems", enabled_mask=15, interest="explicit"))]
@@ -1696,17 +1719,24 @@ impl AudioEngine {
         enabled_mask: u8,
         interest: &str,
     ) -> PyResult<ResidentStemTicket> {
-        let admission = {
+        let (context, producer, order) = {
             let engine = slf.try_borrow()?;
-            engine.capture_committed_stem_residency(
-                selection_ticket,
-                mode,
-                enabled_mask,
-                interest,
-                engine.control_producer()?,
-            )?
+            let context = resident_control_context::CommittedControlContext::capture(&engine);
+            let order = context.capture_committed_order(selection_ticket, mode, interest)?;
+            (context, engine.control_producer()?.clone(), order)
         };
-        py.detach(move || admission.admit())
+        py.detach(move || {
+            context
+                .capture_committed_stem_residency(
+                    selection_ticket,
+                    mode,
+                    enabled_mask,
+                    interest,
+                    &producer,
+                    order,
+                )?
+                .admit()
+        })
     }
 
     /// Configure automatic host admission or an additional manual limit, without eviction.
@@ -1774,7 +1804,11 @@ impl AudioEngine {
     pub fn new() -> PyResult<Self> {
         let (loader_tx, loader_rx) = std::sync::mpsc::channel();
         let project_assets = project_assets::ProjectAssets::shared();
-        let cold_pcm_history = Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()));
+        let cold_pcm_history = Arc::new(Mutex::new(
+            (0..NUM_SAMPLES)
+                .map(|_| project_assets::PcmHistoryRow::default())
+                .collect(),
+        ));
         project_assets
             .watch_history(Arc::downgrade(&cold_pcm_history))
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
@@ -1814,7 +1848,9 @@ impl AudioEngine {
             ])),
             current_timing_acknowledgements: Arc::default(),
             loop_acceptance: Arc::default(),
-            current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
+            current_constant_timing: Arc::new(Mutex::new(
+                (0..NUM_SAMPLES).map(|_| Vec::new()).collect(),
+            )),
             input_runtime_ownership,
             pitch_work_capacity: pitch_publication::PitchWorkCapacity::default(),
             global_timing_revision,
@@ -2399,14 +2435,20 @@ impl AudioEngine {
     }
 
     /// Capture actual loaded source and current acknowledged timing for MIDI admission.
-    pub fn current_input_runtime_pad_binding(
-        &self,
+    #[pyo3(name = "current_input_runtime_pad_binding")]
+    pub fn current_input_runtime_pad_binding_py(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
         sample_id: usize,
     ) -> PyResult<Option<InputRuntimePadBinding>> {
         if sample_id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("sample id out of range"));
         }
-        input_runtime_binding::capture(self, sample_id)
+        let context = {
+            let engine = slf.try_borrow()?;
+            resident_control_context::ResidentControlContext::capture(&engine)
+        };
+        py.detach(move || input_runtime_binding::capture_context(&context, sample_id))
     }
 
     /// Retry MIDI through the same current guarded transaction, retaining input time.
@@ -5671,5 +5713,42 @@ impl Drop for AudioEngine {
         // retirement owner before control's capture join owner can disappear.
         self.input_runtime = None;
         let _ = self.close_audio_stream_checked();
+    }
+}
+
+impl AudioEngine {
+    #[cfg(test)]
+    pub fn register_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<CommittedStemSetTicket> {
+        self.register_committed_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            self.control_producer()?,
+        )
+    }
+    #[cfg(test)]
+    pub fn register_pending_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<CommittedStemSetTicket> {
+        self.register_pending_committed_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            self.control_producer()?,
+        )
+    }
+    #[cfg(test)]
+    pub fn current_input_runtime_pad_binding(
+        &self,
+        sample_id: usize,
+    ) -> PyResult<Option<InputRuntimePadBinding>> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("sample id out of range"));
+        }
+        input_runtime_binding::capture(self, sample_id)
     }
 }

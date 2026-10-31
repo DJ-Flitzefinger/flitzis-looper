@@ -638,3 +638,6 @@ fn controlled_component_read_public_python_progress() {
     });
     drop(ticket);
 }
+
+#[path = "window_control_isolation_tests.rs"]
+mod window_control_isolation_tests;

@@ -60,6 +60,17 @@ impl<T, F> Drop for OwnedDelivery<T, F> {
 }
 
 impl ColdJobsHandle {
+    pub(super) fn ensure_open(&self) -> Result<(), String> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| "cold admission lock poisoned")?;
+        if state.stopped {
+            return Err("cold source lane stopped".into());
+        }
+        Ok(())
+    }
     pub(super) fn reserve(&self) -> Result<Reservation, String> {
         reserve_shared(&self.shared)
     }

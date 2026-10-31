@@ -56,6 +56,11 @@ impl CompleteSampleWork {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkPoint {
     CommittedStemAdmission,
+    CommittedStemPreflight,
+    CommittedStemRegistration,
+    BindingPreflight,
+    WindowSourceRead,
+    WindowSourceChunk,
     TimingPcm,
     SavedTimingSource,
     SavedTimingEncode,

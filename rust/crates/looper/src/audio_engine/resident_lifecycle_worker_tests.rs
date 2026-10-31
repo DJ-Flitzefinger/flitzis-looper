@@ -72,7 +72,7 @@ fn drain_at_output_frame(loaded: &mut Loaded, frame: u64) -> usize {
     )
 }
 
-fn complete_mixer(mono: &[f32], start: usize, end: usize) -> RtMixer {
+fn complete_mixer(mono: &[f32], start: usize, end: usize) -> Box<RtMixer> {
     // Complete PCM is built from original WAV integers, never from a resident view/reader.
     let source = SampleBuffer {
         residency: None,
@@ -84,7 +84,8 @@ fn complete_mixer(mono: &[f32], start: usize, end: usize) -> RtMixer {
             .into(),
     }
     .with_complete_source(48_000);
-    let mut mixer = RtMixer::new(2, 48_000.0);
+    // The oracle retains its own Native state without copying the large mixer on stack.
+    let mut mixer = RtMixer::try_new(2, 48_000.0, None).unwrap();
     let ownership =
         Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
     ownership.publish_test_source(0, &source, 48_000, 1);

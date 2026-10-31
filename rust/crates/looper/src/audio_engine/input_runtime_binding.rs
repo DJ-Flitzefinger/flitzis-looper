@@ -2734,10 +2734,31 @@ pub(super) fn capture_under_request_lock(
     engine: &AudioEngine,
     id: usize,
 ) -> PyResult<Option<InputRuntimePadBinding>> {
+    capture_context_under_request_lock(
+        &super::resident_control_context::ResidentControlContext::capture(engine),
+        id,
+    )
+}
+pub(super) fn capture_context(
+    engine: &super::resident_control_context::ResidentControlContext,
+    id: usize,
+) -> PyResult<Option<InputRuntimePadBinding>> {
+    #[cfg(test)]
+    super::native_owned_work::observe(super::native_owned_work::WorkPoint::BindingPreflight);
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    capture_context_under_request_lock(engine, id)
+}
+fn capture_context_under_request_lock(
+    engine: &super::resident_control_context::ResidentControlContext,
+    id: usize,
+) -> PyResult<Option<InputRuntimePadBinding>> {
     engine
         .input_runtime_ownership
         .ensure_no_copy_reservation(id)?;
-    super::resident_relocation::reconcile_under_request_lock(engine)?;
+    super::resident_relocation::reconcile_context_under_request_lock(engine)?;
     let intents = engine
         .timing_intents
         .lock()
@@ -2776,12 +2797,12 @@ pub(super) fn capture_under_request_lock(
         return Ok(None);
     };
     let records = &mut all_records[id];
-    constant_timing::retire_old_current_records(engine, records);
+    constant_timing::retire_old_current_records_context(engine, records);
     let acknowledged = engine
         .current_timing_acknowledgements
         .current_for_slot(&engine.input_runtime_ownership, id);
     let accepted = if intents[id] == TimingIntent::Automatic {
-        constant_timing::current_record_for_source(
+        constant_timing::current_record_for_source_context(
             engine,
             id,
             source,

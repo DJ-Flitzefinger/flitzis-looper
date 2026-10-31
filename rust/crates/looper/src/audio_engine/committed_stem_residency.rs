@@ -53,6 +53,7 @@ impl AudioEngine {
     /// Bracket only preflight observation, including existing idempotent cache
     /// maintenance. Never wrap proposal mutation, admission or queue publication:
     /// an already admitted operation must return its own original receipt.
+    #[cfg(test)]
     pub(super) fn stable_committed_placement_read<T>(
         &self,
         read: impl FnOnce() -> PyResult<T>,
@@ -880,270 +881,30 @@ pub(crate) enum CommittedStemRtWork {
 }
 
 impl AudioEngine {
+    #[cfg(test)]
     pub(super) fn register_committed_stem_pair_with_producer(
         &self,
         prepared: &PreparedStemPair,
         ticket: &PreparedSourceTicket,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<CommittedStemSetTicket> {
-        super::resident_relocation::reconcile(self)?;
-        let id = match ticket
-            .publication
-            .control_placement(self)
-            .map_err(PyValueError::new_err)?
-        {
-            PlacementObservation::Current(current) => current.slot(),
-            PlacementObservation::Pending => {
-                return Err(PyRuntimeError::new_err(
-                    "committed source control placement is pending",
-                ));
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "committed source content owner is stale",
-                ));
-            }
-        };
-        let binding = ticket.admission.clone();
-        if !binding.available() || !binding.admitted_current() {
-            return Err(PyValueError::new_err(
-                "stale or foreign prepared source ticket",
-            ));
-        }
-        let requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if self.input_runtime_ownership.copy_reservation(id) != 0 {
-            return Err(PyRuntimeError::new_err("pad content copy is pending"));
-        }
-        let source_epoch = self
-            .prepared_source_epoch(id)
-            .map_err(PyRuntimeError::new_err)?;
-        let cache = self
-            .sample_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("source cache lock poisoned"))?;
-        let sample = cache
-            .get(id)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-        validate_prepared_ticket(
-            ticket,
-            id,
-            &prepared.source_version,
-            requests[id],
-            source_epoch,
-            sample,
-        )
-        .map_err(PyValueError::new_err)?;
-        if !sample.same_window(&prepared.reference) || prepared.discarded.load(Ordering::Acquire) {
-            return Err(PyValueError::new_err(
-                "committed pair source/window is stale",
-            ));
-        }
-        let mut producer = producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
-        let mut owners = self
-            .resident_stem_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
-        let state = &mut owners[id].committed;
-        if let Some(previous) = &state.accepted
-            && previous.current()
-            && previous.source_generation == binding.source_generation
-            && *previous.identity == *prepared._identity
-            && previous.source_version == prepared.source_version
-            && previous.generation_path == prepared.wav_path
-            && previous.pair.root == prepared.root
-            && previous.pair.descriptor_reference == prepared.descriptor_reference
-        {
-            return Ok(CommittedStemSetTicket {
-                owner: previous.clone(),
-                publication: PreparedSourcePermit::accepted_fixed(),
-                candidate: None,
-            });
-        }
-        if producer.is_full() {
-            return Err(PyRuntimeError::new_err(
-                "committed registration queue is full",
-            ));
-        }
-        let expected = next_epoch(&state.registration_epoch).map_err(PyRuntimeError::new_err)?;
-        let source_expected = source_epoch.load(Ordering::Acquire);
-        let owner = Arc::new(SelectionOwner {
-            id: id,
-            binding: binding.binding,
-            source_generation: binding.source_generation,
-            source_version: prepared.source_version.clone(),
-            identity: prepared._identity.clone(),
-            pair: StemPairOwner {
-                root: prepared.root.clone(),
-                descriptor_reference: prepared.descriptor_reference.clone(),
-                source_lease: prepared.source_lease.clone(),
-                reader: prepared.pair_reader.clone(),
-            },
-            generation_path: prepared.wav_path.clone(),
-            epoch: state.selection_epoch.clone(),
-            expected,
-            revoked: Arc::new(AtomicBool::new(false)),
-            source_epoch: source_epoch.clone(),
-            ownership: self.input_runtime_ownership.clone(),
-        });
-        let publication = PreparedSourcePermit::new(state.registration_epoch.clone(), expected)
-            .with_source_epoch(owner.source_epoch.clone(), source_expected);
-        publication
-            .mark_pending()
-            .map_err(PyRuntimeError::new_err)?;
-        state.registration_epoch.store(expected, Ordering::Release);
-        producer
-            .push(ControlMessage::CommittedStemWork(Box::new(
-                CommittedStemRtWork::Register {
-                    id: id,
-                    binding: binding.binding,
-                    selection: owner.rt_permit(),
-                    publication: publication.clone(),
-                },
-            )))
-            .map_err(|_| PyRuntimeError::new_err("reserved registration capacity lost"))?;
-        state.registration = Some(PendingRegistration {
-            owner: owner.clone(),
-            publication: publication.clone(),
-        });
-        Ok(CommittedStemSetTicket {
-            owner,
-            publication,
-            candidate: None,
-        })
+        let context = super::resident_control_context::CommittedControlContext::capture(self);
+        let order = context.capture_committed_registration_order(ticket)?;
+        context.register_committed_stem_pair_with_producer(prepared, ticket, producer, order)
     }
 
     /// Seal a future complete set without changing the installed selection or intent.
+    #[cfg(test)]
     pub(super) fn register_pending_committed_stem_pair_with_producer(
         &self,
         prepared: &PreparedStemPair,
         ticket: &PreparedSourceTicket,
-        _producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<CommittedStemSetTicket> {
-        super::resident_relocation::reconcile(self)?;
-        let id = match ticket
-            .publication
-            .control_placement(self)
-            .map_err(PyValueError::new_err)?
-        {
-            PlacementObservation::Current(current) => current.slot(),
-            PlacementObservation::Pending => {
-                return Err(PyRuntimeError::new_err(
-                    "committed source control placement is pending",
-                ));
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "committed source content owner is stale",
-                ));
-            }
-        };
-        let binding = ticket.admission.clone();
-        if !binding.available() || !binding.admitted_current() {
-            return Err(PyValueError::new_err(
-                "stale or foreign prepared source ticket",
-            ));
-        }
-        let requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        if self.input_runtime_ownership.copy_reservation(id) != 0 {
-            return Err(PyRuntimeError::new_err("pad content copy is pending"));
-        }
-        let source_epoch = self
-            .prepared_source_epoch(id)
-            .map_err(PyRuntimeError::new_err)?;
-        let cache = self
-            .sample_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("source cache lock poisoned"))?;
-        let sample = cache
-            .get(id)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-        validate_prepared_ticket(
-            ticket,
-            id,
-            &prepared.source_version,
-            requests[id],
-            source_epoch,
-            sample,
-        )
-        .map_err(PyValueError::new_err)?;
-        if !sample.same_window(&prepared.reference) || prepared.discarded.load(Ordering::Acquire) {
-            return Err(PyValueError::new_err(
-                "committed candidate source/window is stale",
-            ));
-        }
-        let mut owners = self
-            .resident_stem_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
-        let resident = &mut owners[id];
-        if resident.ordinary_publication_pending()
-            || resident.committed.handover_pending()
-            || resident
-                .committed
-                .registration
-                .as_ref()
-                .is_some_and(|registration| {
-                    matches!(
-                        registration.publication.status(),
-                        "captured" | "pending" | "adopting"
-                    )
-                })
-        {
-            return Err(PyRuntimeError::new_err("resident handover is in progress"));
-        }
-        let state = &mut resident.committed;
-        let expected = next_epoch(&state.registration_epoch).map_err(PyRuntimeError::new_err)?;
-        let candidate_expected =
-            next_epoch(&state.candidate_epoch).map_err(PyRuntimeError::new_err)?;
-        let owner = Arc::new(SelectionOwner {
-            id: id,
-            binding: binding.binding,
-            source_generation: binding.source_generation,
-            source_version: prepared.source_version.clone(),
-            identity: prepared._identity.clone(),
-            pair: StemPairOwner {
-                root: prepared.root.clone(),
-                descriptor_reference: prepared.descriptor_reference.clone(),
-                source_lease: prepared.source_lease.clone(),
-                reader: prepared.pair_reader.clone(),
-            },
-            generation_path: prepared.wav_path.clone(),
-            epoch: state.selection_epoch.clone(),
-            expected,
-            revoked: Arc::new(AtomicBool::new(false)),
-            source_epoch: source_epoch.clone(),
-            ownership: self.input_runtime_ownership.clone(),
-        });
-        let candidate = Arc::new(CandidateAuthority {
-            epoch: state.candidate_epoch.clone(),
-            expected: candidate_expected,
-            predecessor_intent: resident.intent_epoch.clone(),
-            predecessor_intent_expected: resident.intent_epoch.load(Ordering::Acquire),
-            predecessor_selection: state.selection_epoch.clone(),
-            predecessor_selection_expected: state.selection_epoch.load(Ordering::Acquire),
-            adopted: AtomicBool::new(false),
-        });
-        // registration_epoch is only a unique selection-token allocator here. Its
-        // change cannot revoke V1's selection_epoch or any resident/native permit.
-        state.registration_epoch.store(expected, Ordering::Release);
-        state
-            .candidate_epoch
-            .store(candidate_expected, Ordering::Release);
-        Ok(CommittedStemSetTicket {
-            owner,
-            publication: PreparedSourcePermit::accepted_fixed(),
-            candidate: Some(candidate),
-        })
+        let context = super::resident_control_context::CommittedControlContext::capture(self);
+        let order = context.capture_committed_registration_order(ticket)?;
+        context
+            .register_pending_committed_stem_pair_with_producer(prepared, ticket, producer, order)
     }
 
     #[cfg(test)]
@@ -1193,6 +954,7 @@ impl AudioEngine {
             .admit()
     }
 
+    #[cfg(test)]
     pub(super) fn capture_committed_stem_residency(
         &self,
         selection: &CommittedStemSetTicket,
@@ -1201,135 +963,20 @@ impl AudioEngine {
         interest: &str,
         producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ) -> PyResult<CommittedStemResidencyAdmission> {
-        let policy_only = match interest {
-            "explicit" => false,
-            "preload" | "withdraw_preload" if mode == "full_mix" => true,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "invalid committed resident interest or policy mode",
-                ));
-            }
-        };
-        let preload = interest == "preload";
-        let target = match mode {
-            "full_mix" if preload => StemMixMode::AllStems,
-            "full_mix" => StemMixMode::FullMix,
-            "all_stems" => StemMixMode::AllStems,
-            _ => return Err(PyValueError::new_err("invalid committed stem mode")),
-        };
-        if enabled_mask & !STEM_COMPONENT_MASK != 0 {
-            return Err(PyValueError::new_err("invalid committed stem mask"));
-        }
-        if selection.publication.status() != "accepted" || !selection.is_current() {
-            return Err(PyValueError::new_err(
-                "committed disk set lacks its current registration ACK",
-            ));
-        }
-        let candidate = selection
-            .candidate
-            .as_ref()
-            .filter(|candidate| !candidate.adopted())
-            .cloned();
-        if policy_only && candidate.is_some() {
-            return Err(PyValueError::new_err(
-                "unadopted candidate requires explicit all_stems intent",
-            ));
-        }
-        if candidate.is_some() && target != StemMixMode::AllStems {
-            return Err(PyValueError::new_err(
-                "unadopted candidate requires all_stems intent",
-            ));
-        }
-        super::resident_relocation::reconcile(self)?;
-        let original_key = selection
-            .owner
-            .binding
-            .placement
-            .and_then(|placement| placement.content_key())
-            .ok_or_else(|| {
-                PyValueError::new_err("committed selection lacks its original content key")
-            })?;
-        let id = match self
-            .input_runtime_ownership
-            .observe_control_key(original_key)
-        {
-            PlacementObservation::Current(resolved) => resolved.slot(),
-            PlacementObservation::Pending => {
-                return Err(placement_admission_error(PlacementError::Pending));
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "committed selection content owner changed",
-                ));
-            }
-        };
-        let binding = self.stable_committed_placement_read(|| {
-            input_runtime_binding::capture(self, id)?
-                .filter(|binding| binding.current() && binding.available())
-                .ok_or_else(|| PyValueError::new_err("current source/timing unavailable"))
-        })?;
-        if binding.source_generation != selection.owner.source_generation
-            || binding
-                .binding
-                .placement
-                .and_then(|placement| placement.content_key())
-                != Some(original_key)
-        {
-            return Err(PyValueError::new_err("committed source generation changed"));
-        }
-        let source_epoch = self.stable_committed_placement_read(|| {
-            self.prepared_source_epoch(id)
-                .cloned()
-                .map_err(PyRuntimeError::new_err)
-        })?;
-        // Capture order must serialize with admission's last validation. It is
-        // separate from live proposal epochs: a failed newer admission leaves
-        // an already admitted predecessor and its actual readers untouched.
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let admission_order = self.stable_committed_placement_read(|| {
-            if !binding.admitted_current() || !selection.is_current() {
-                return Err(PyValueError::new_err(
-                    "committed source changed during preflight",
-                ));
-            }
-            self.input_runtime_ownership
-                .ensure_no_copy_reservation(id)?;
-            self.resident_proposals
-                .capture_stem_admission_order(original_key.cell(), policy_only)
-                .map_err(PyRuntimeError::new_err)
-        })?;
-        Ok(CommittedStemResidencyAdmission {
-            id,
-            binding,
-            selection: selection.clone(),
-            target,
+        let context = super::resident_control_context::CommittedControlContext::capture(self);
+        let order = context.capture_committed_order(selection, mode, interest)?;
+        context.capture_committed_stem_residency(
+            selection,
+            mode,
             enabled_mask,
-            policy_only,
-            preload,
-            candidate,
-            source_expected: source_epoch.load(Ordering::Acquire),
-            source_epoch,
-            admission_order,
-            pad_request_ids: self.pad_request_ids.clone(),
-            input_runtime_ownership: self.input_runtime_ownership.clone(),
-            resident_stem_cache: self.resident_stem_cache.clone(),
-            preparation_gate: self.resident_preparation_gate.clone(),
-            resident_proposals: self.resident_proposals.clone(),
-            global_timing_revision: self.global_timing_revision.clone(),
-            project_assets: self.project_assets.clone(),
-            resident_account: self.resident_account.clone(),
-            cold_cancelled: self.cold_cancelled.clone(),
-            cold_jobs: self.cold_jobs.handle(),
-            producer: producer.clone(),
-        })
+            interest,
+            producer,
+            order,
+        )
     }
 }
 
-/// Owned post-preflight admission: no Python Engine borrow survives a native lock wait.
-/// Source/window reconciliation and binding capture remain the separate short preflight.
+/// Owned admission following detached reconciliation and source/binding preflight.
 pub(super) struct CommittedStemResidencyAdmission {
     id: usize,
     binding: InputRuntimePadBinding,
@@ -2222,3 +1869,552 @@ impl ResidencyWork {
 #[cfg(test)]
 #[path = "committed_control_publication_tests.rs"]
 mod control_publication_tests;
+
+impl super::resident_control_context::CommittedControlContext {
+    pub(super) fn stable_committed_placement_read<T>(
+        &self,
+        read: impl FnOnce() -> PyResult<T>,
+    ) -> PyResult<T> {
+        let before = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        let result = read();
+        let after = self
+            .input_runtime_ownership
+            .placement_read_token_result()
+            .map_err(placement_admission_error)?;
+        if after != before {
+            return Err(placement_admission_error(PlacementError::Pending));
+        }
+        result
+    }
+    pub(super) fn capture_committed_registration_order(
+        &self,
+        ticket: &PreparedSourceTicket,
+    ) -> PyResult<super::resident_proposal::ResidentAdmissionOrder> {
+        let key = ticket
+            .publication
+            .content_key()
+            .ok_or_else(|| PyValueError::new_err("committed source lacks content key"))?;
+        self.resident_proposals
+            .capture_registration_order(key.cell())
+            .map_err(PyRuntimeError::new_err)
+    }
+    pub(super) fn capture_committed_order(
+        &self,
+        selection: &CommittedStemSetTicket,
+        mode: &str,
+        interest: &str,
+    ) -> PyResult<super::resident_proposal::ResidentAdmissionOrder> {
+        let policy = match interest {
+            "explicit" => false,
+            "preload" | "withdraw_preload" if mode == "full_mix" => true,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "invalid committed resident interest or policy mode",
+                ));
+            }
+        };
+        let key = selection
+            .owner
+            .binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .ok_or_else(|| {
+                PyValueError::new_err("committed selection lacks its original content key")
+            })?;
+        self.resident_proposals
+            .capture_stem_admission_order(key.cell(), policy)
+            .map_err(PyRuntimeError::new_err)
+    }
+    pub(super) fn register_committed_stem_pair_with_producer(
+        &self,
+        prepared: &PreparedStemPair,
+        ticket: &PreparedSourceTicket,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        order: super::resident_proposal::ResidentAdmissionOrder,
+    ) -> PyResult<CommittedStemSetTicket> {
+        #[cfg(test)]
+        super::native_owned_work::observe(
+            super::native_owned_work::WorkPoint::CommittedStemRegistration,
+        );
+        super::resident_relocation::reconcile_context(self)?;
+        let id = match ticket
+            .publication
+            .control_placement_with_ownership(&self.input_runtime_ownership)
+            .map_err(PyValueError::new_err)?
+        {
+            PlacementObservation::Current(current) => current.slot(),
+            PlacementObservation::Pending => {
+                return Err(PyRuntimeError::new_err(
+                    "committed source control placement is pending",
+                ));
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "committed source content owner is stale",
+                ));
+            }
+        };
+        let binding = ticket.admission.clone();
+        if !binding.available() || !binding.admitted_current() {
+            return Err(PyValueError::new_err(
+                "stale or foreign prepared source ticket",
+            ));
+        }
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if !order.current()
+            || !matches!(ticket.publication.control_placement_with_ownership(&self.input_runtime_ownership)
+            .map_err(PyValueError::new_err)?, PlacementObservation::Current(current) if current.slot() == id)
+        {
+            return Err(PyValueError::new_err(
+                "committed registration superseded or moved during preflight",
+            ));
+        }
+        if self.input_runtime_ownership.copy_reservation(id) != 0 {
+            return Err(PyRuntimeError::new_err("pad content copy is pending"));
+        }
+        let source_epoch = self
+            .prepared_source_epoch(id)
+            .map_err(PyRuntimeError::new_err)?;
+        let cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source cache lock poisoned"))?;
+        let sample = cache
+            .get(id)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        validate_prepared_ticket(
+            ticket,
+            id,
+            &prepared.source_version,
+            requests[id],
+            source_epoch,
+            sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        if !sample.same_window(&prepared.reference) || prepared.discarded.load(Ordering::Acquire) {
+            return Err(PyValueError::new_err(
+                "committed pair source/window is stale",
+            ));
+        }
+        let mut producer = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+        let mut owners = self
+            .resident_stem_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+        if self.cold_cancelled.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "committed registration engine is closed",
+            ));
+        }
+        self.cold_jobs
+            .ensure_open()
+            .map_err(PyRuntimeError::new_err)?;
+        if !order.current()
+            || prepared.discarded.load(Ordering::Acquire)
+            || !binding.available()
+            || !binding.admitted_current()
+            || !sample.same_window(&prepared.reference)
+            || !matches!(ticket.publication.control_placement_with_ownership(&self.input_runtime_ownership).map_err(PyValueError::new_err)?, PlacementObservation::Current(current) if current.slot() == id)
+        {
+            return Err(PyValueError::new_err(
+                "committed registration changed while awaiting publication",
+            ));
+        }
+        validate_prepared_ticket(
+            ticket,
+            id,
+            &prepared.source_version,
+            requests[id],
+            source_epoch,
+            sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        let state = &mut owners[id].committed;
+        if let Some(previous) = &state.accepted
+            && previous.current()
+            && previous.source_generation == binding.source_generation
+            && *previous.identity == *prepared._identity
+            && previous.source_version == prepared.source_version
+            && previous.generation_path == prepared.wav_path
+            && previous.pair.root == prepared.root
+            && previous.pair.descriptor_reference == prepared.descriptor_reference
+        {
+            order.mark_admitted();
+            return Ok(CommittedStemSetTicket {
+                owner: previous.clone(),
+                publication: PreparedSourcePermit::accepted_fixed(),
+                candidate: None,
+            });
+        }
+        if producer.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "committed registration queue is full",
+            ));
+        }
+        let expected = next_epoch(&state.registration_epoch).map_err(PyRuntimeError::new_err)?;
+        let source_expected = source_epoch.load(Ordering::Acquire);
+        let owner = Arc::new(SelectionOwner {
+            id: id,
+            binding: binding.binding,
+            source_generation: binding.source_generation,
+            source_version: prepared.source_version.clone(),
+            identity: prepared._identity.clone(),
+            pair: StemPairOwner {
+                root: prepared.root.clone(),
+                descriptor_reference: prepared.descriptor_reference.clone(),
+                source_lease: prepared.source_lease.clone(),
+                reader: prepared.pair_reader.clone(),
+            },
+            generation_path: prepared.wav_path.clone(),
+            epoch: state.selection_epoch.clone(),
+            expected,
+            revoked: Arc::new(AtomicBool::new(false)),
+            source_epoch: source_epoch.clone(),
+            ownership: self.input_runtime_ownership.clone(),
+        });
+        let publication = PreparedSourcePermit::new(state.registration_epoch.clone(), expected)
+            .with_source_epoch(owner.source_epoch.clone(), source_expected);
+        publication
+            .mark_pending()
+            .map_err(PyRuntimeError::new_err)?;
+        state.registration_epoch.store(expected, Ordering::Release);
+        producer
+            .push(ControlMessage::CommittedStemWork(Box::new(
+                CommittedStemRtWork::Register {
+                    id: id,
+                    binding: binding.binding,
+                    selection: owner.rt_permit(),
+                    publication: publication.clone(),
+                },
+            )))
+            .map_err(|_| PyRuntimeError::new_err("reserved registration capacity lost"))?;
+        state.registration = Some(PendingRegistration {
+            owner: owner.clone(),
+            publication: publication.clone(),
+        });
+        order.mark_admitted();
+        Ok(CommittedStemSetTicket {
+            owner,
+            publication,
+            candidate: None,
+        })
+    }
+    pub(super) fn register_pending_committed_stem_pair_with_producer(
+        &self,
+        prepared: &PreparedStemPair,
+        ticket: &PreparedSourceTicket,
+        _producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        order: super::resident_proposal::ResidentAdmissionOrder,
+    ) -> PyResult<CommittedStemSetTicket> {
+        #[cfg(test)]
+        super::native_owned_work::observe(
+            super::native_owned_work::WorkPoint::CommittedStemRegistration,
+        );
+        super::resident_relocation::reconcile_context(self)?;
+        let id = match ticket
+            .publication
+            .control_placement_with_ownership(&self.input_runtime_ownership)
+            .map_err(PyValueError::new_err)?
+        {
+            PlacementObservation::Current(current) => current.slot(),
+            PlacementObservation::Pending => {
+                return Err(PyRuntimeError::new_err(
+                    "committed source control placement is pending",
+                ));
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "committed source content owner is stale",
+                ));
+            }
+        };
+        let binding = ticket.admission.clone();
+        if !binding.available() || !binding.admitted_current() {
+            return Err(PyValueError::new_err(
+                "stale or foreign prepared source ticket",
+            ));
+        }
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if !order.current()
+            || !matches!(ticket.publication.control_placement_with_ownership(&self.input_runtime_ownership)
+            .map_err(PyValueError::new_err)?, PlacementObservation::Current(current) if current.slot() == id)
+        {
+            return Err(PyValueError::new_err(
+                "committed registration superseded or moved during preflight",
+            ));
+        }
+        if self.input_runtime_ownership.copy_reservation(id) != 0 {
+            return Err(PyRuntimeError::new_err("pad content copy is pending"));
+        }
+        let source_epoch = self
+            .prepared_source_epoch(id)
+            .map_err(PyRuntimeError::new_err)?;
+        let cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source cache lock poisoned"))?;
+        let sample = cache
+            .get(id)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        validate_prepared_ticket(
+            ticket,
+            id,
+            &prepared.source_version,
+            requests[id],
+            source_epoch,
+            sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        if !sample.same_window(&prepared.reference) || prepared.discarded.load(Ordering::Acquire) {
+            return Err(PyValueError::new_err(
+                "committed candidate source/window is stale",
+            ));
+        }
+        let mut owners = self
+            .resident_stem_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+        if self.cold_cancelled.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "committed registration engine is closed",
+            ));
+        }
+        self.cold_jobs
+            .ensure_open()
+            .map_err(PyRuntimeError::new_err)?;
+        if !order.current()
+            || prepared.discarded.load(Ordering::Acquire)
+            || !binding.available()
+            || !binding.admitted_current()
+            || !sample.same_window(&prepared.reference)
+            || !matches!(ticket.publication.control_placement_with_ownership(&self.input_runtime_ownership).map_err(PyValueError::new_err)?, PlacementObservation::Current(current) if current.slot() == id)
+        {
+            return Err(PyValueError::new_err(
+                "committed registration changed while awaiting publication",
+            ));
+        }
+        validate_prepared_ticket(
+            ticket,
+            id,
+            &prepared.source_version,
+            requests[id],
+            source_epoch,
+            sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        let resident = &mut owners[id];
+        if resident.ordinary_publication_pending()
+            || resident.committed.handover_pending()
+            || resident
+                .committed
+                .registration
+                .as_ref()
+                .is_some_and(|registration| {
+                    matches!(
+                        registration.publication.status(),
+                        "captured" | "pending" | "adopting"
+                    )
+                })
+        {
+            return Err(PyRuntimeError::new_err("resident handover is in progress"));
+        }
+        let state = &mut resident.committed;
+        let expected = next_epoch(&state.registration_epoch).map_err(PyRuntimeError::new_err)?;
+        let candidate_expected =
+            next_epoch(&state.candidate_epoch).map_err(PyRuntimeError::new_err)?;
+        let owner = Arc::new(SelectionOwner {
+            id: id,
+            binding: binding.binding,
+            source_generation: binding.source_generation,
+            source_version: prepared.source_version.clone(),
+            identity: prepared._identity.clone(),
+            pair: StemPairOwner {
+                root: prepared.root.clone(),
+                descriptor_reference: prepared.descriptor_reference.clone(),
+                source_lease: prepared.source_lease.clone(),
+                reader: prepared.pair_reader.clone(),
+            },
+            generation_path: prepared.wav_path.clone(),
+            epoch: state.selection_epoch.clone(),
+            expected,
+            revoked: Arc::new(AtomicBool::new(false)),
+            source_epoch: source_epoch.clone(),
+            ownership: self.input_runtime_ownership.clone(),
+        });
+        let candidate = Arc::new(CandidateAuthority {
+            epoch: state.candidate_epoch.clone(),
+            expected: candidate_expected,
+            predecessor_intent: resident.intent_epoch.clone(),
+            predecessor_intent_expected: resident.intent_epoch.load(Ordering::Acquire),
+            predecessor_selection: state.selection_epoch.clone(),
+            predecessor_selection_expected: state.selection_epoch.load(Ordering::Acquire),
+            adopted: AtomicBool::new(false),
+        });
+        // registration_epoch is only a unique selection-token allocator here. Its
+        // change cannot revoke V1's selection_epoch or any resident/native permit.
+        state.registration_epoch.store(expected, Ordering::Release);
+        state
+            .candidate_epoch
+            .store(candidate_expected, Ordering::Release);
+        order.mark_admitted();
+        Ok(CommittedStemSetTicket {
+            owner,
+            publication: PreparedSourcePermit::accepted_fixed(),
+            candidate: Some(candidate),
+        })
+    }
+    pub(super) fn capture_committed_stem_residency(
+        &self,
+        selection: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+        interest: &str,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+        admission_order: super::resident_proposal::ResidentAdmissionOrder,
+    ) -> PyResult<CommittedStemResidencyAdmission> {
+        let policy_only = match interest {
+            "explicit" => false,
+            "preload" | "withdraw_preload" if mode == "full_mix" => true,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "invalid committed resident interest or policy mode",
+                ));
+            }
+        };
+        let preload = interest == "preload";
+        let target = match mode {
+            "full_mix" if preload => StemMixMode::AllStems,
+            "full_mix" => StemMixMode::FullMix,
+            "all_stems" => StemMixMode::AllStems,
+            _ => return Err(PyValueError::new_err("invalid committed stem mode")),
+        };
+        if enabled_mask & !STEM_COMPONENT_MASK != 0 {
+            return Err(PyValueError::new_err("invalid committed stem mask"));
+        }
+        if selection.publication.status() != "accepted" || !selection.is_current() {
+            return Err(PyValueError::new_err(
+                "committed disk set lacks its current registration ACK",
+            ));
+        }
+        let candidate = selection
+            .candidate
+            .as_ref()
+            .filter(|candidate| !candidate.adopted())
+            .cloned();
+        if policy_only && candidate.is_some() {
+            return Err(PyValueError::new_err(
+                "unadopted candidate requires explicit all_stems intent",
+            ));
+        }
+        if candidate.is_some() && target != StemMixMode::AllStems {
+            return Err(PyValueError::new_err(
+                "unadopted candidate requires all_stems intent",
+            ));
+        }
+        #[cfg(test)]
+        super::native_owned_work::observe(
+            super::native_owned_work::WorkPoint::CommittedStemPreflight,
+        );
+        super::resident_relocation::reconcile_context(self)?;
+        let original_key = selection
+            .owner
+            .binding
+            .placement
+            .and_then(|placement| placement.content_key())
+            .ok_or_else(|| {
+                PyValueError::new_err("committed selection lacks its original content key")
+            })?;
+        let id = match self
+            .input_runtime_ownership
+            .observe_control_key(original_key)
+        {
+            PlacementObservation::Current(resolved) => resolved.slot(),
+            PlacementObservation::Pending => {
+                return Err(placement_admission_error(PlacementError::Pending));
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "committed selection content owner changed",
+                ));
+            }
+        };
+        let binding = self.stable_committed_placement_read(|| {
+            input_runtime_binding::capture_context(self, id)?
+                .filter(|binding| binding.current() && binding.available())
+                .ok_or_else(|| PyValueError::new_err("current source/timing unavailable"))
+        })?;
+        if binding.source_generation != selection.owner.source_generation
+            || binding
+                .binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                != Some(original_key)
+        {
+            return Err(PyValueError::new_err("committed source generation changed"));
+        }
+        let source_epoch = self.stable_committed_placement_read(|| {
+            self.prepared_source_epoch(id)
+                .cloned()
+                .map_err(PyRuntimeError::new_err)
+        })?;
+        // Capture order must serialize with admission's last validation. It is
+        // separate from live proposal epochs: a failed newer admission leaves
+        // an already admitted predecessor and its actual readers untouched.
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        self.stable_committed_placement_read(|| {
+            if !binding.admitted_current() || !selection.is_current() {
+                return Err(PyValueError::new_err(
+                    "committed source changed during preflight",
+                ));
+            }
+            self.input_runtime_ownership
+                .ensure_no_copy_reservation(id)?;
+            if !admission_order.current() {
+                return Err(PyValueError::new_err(
+                    "committed request superseded during preflight",
+                ));
+            }
+            Ok(())
+        })?;
+        Ok(CommittedStemResidencyAdmission {
+            id,
+            binding,
+            selection: selection.clone(),
+            target,
+            enabled_mask,
+            policy_only,
+            preload,
+            candidate,
+            source_expected: source_epoch.load(Ordering::Acquire),
+            source_epoch,
+            admission_order,
+            pad_request_ids: self.pad_request_ids.clone(),
+            input_runtime_ownership: self.input_runtime_ownership.clone(),
+            resident_stem_cache: self.resident_stem_cache.clone(),
+            preparation_gate: self.resident_preparation_gate.clone(),
+            resident_proposals: self.resident_proposals.clone(),
+            global_timing_revision: self.global_timing_revision.clone(),
+            project_assets: self.project_assets.clone(),
+            resident_account: self.resident_account.clone(),
+            cold_cancelled: self.cold_cancelled.clone(),
+            cold_jobs: self.cold_jobs.clone(),
+            producer: producer.clone(),
+        })
+    }
+}

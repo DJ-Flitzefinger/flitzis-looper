@@ -132,21 +132,23 @@ failed precision checks retain their outcome and do not become precise acceptanc
       reservations, placement/source ABA, cancel/failure and last-reader safety.
 
 The design records overlapping affected checks, unchanged-parent fixture failures
-and their corrected reruns. Source/window and remaining borrowed Python paths are
-still mandatory STEP14; this result does not claim complete global isolation.
+and their corrected reruns. Source/window and remaining borrowed Python paths were
+assigned to STEP14 below; neither result claims complete global isolation.
 
 ## 14. Remaining source/window control-lock and GIL isolation
 
-- [ ] Replace WindowWork's owners-held source/component I/O with complete
+- [x] Replace WindowWork's owners-held source/component I/O with complete
       same-PAD peak/history/reader reservations and placement/copy/ABA revalidation.
-- [ ] Remove remaining long waits from borrowed reconciliation/binding preflight
+- [x] Remove remaining long waits from borrowed reconciliation/binding preflight
       and affected public registration/control paths without losing performer intent.
-- [ ] Verify source/window and committed work together, actual Python mutable
+- [x] Verify source/window and committed work together, actual Python mutable
       controls, sharing, capacity, cancellation/failure and final-reader custody.
 
-This separate step preserves the original cross-worker history/peak guarantees;
-STEP13's worker-only gate is acquired before WindowWork's existing owners guard.
-Do not describe committed-component isolation as complete global/GIL isolation.
+This step preserves the original cross-worker history/peak guarantees with complete
+pre-I/O promises and stable moved-history custody. The worker gate precedes short
+owners sections and ends before publication. The design records 13 new passing
+checks, the distinct 475-case Rust success union, 283 Python passes and all negative
+evidence. This scoped completion does not mark the overall regression matrix green.
 
 ## 15. Native bounded stem conversion
 
@@ -202,6 +204,12 @@ Do not describe committed-component isolation as complete global/GIL isolation.
       record the concrete barrier and preserve the working path.
 
 ## 19. Combined regression and final architecture review
+
+STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
+216 has the same assertion with different async snapshots), an UNCOMPARED distinct
+216 complete-phase watchdog and an unexplained initial registry exception despite
+isolated PASS. Preserve and resolve these real gates; do not infer a clean overall
+matrix from the distinct successful-case union or weaken their original assertions.
 
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,

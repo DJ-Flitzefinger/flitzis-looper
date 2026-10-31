@@ -289,12 +289,15 @@ retirement proof; it is not a measured or adopted speedup. See the design's STEP
 result for independent source references and limits. STEP12 implements the required
 scalar-only approximate BPM fallback with a persisted inaccuracy warning; failed
 precise evidence remains failed. STEP13 separates committed component reads from
-owners and detaches owned post-preflight request admission without retaining a
-Python Engine borrow. A worker-only gate preserves sharing and cross-worker peaks.
-Source/window I/O and borrowed preflight can still hold or wait for owners;
-mandatory STEP14 addresses that distinct history/placement/copy problem. Conversion,
-resource policy, providers, native inference/Torch parity and final checks remain
-steps 15–19. Controlled progress is not whole-GIL isolation or crackle acceptance.
+owners. STEP14 extends this to source/window preparation with complete pre-I/O
+byte/owner/reader/history promises, moved history custody and explicit historical
+PCM accounting. Owned shared contexts release the Python Engine borrow before
+reconciliation/binding, both registrations and admission; original successful-order
+watermarks and final source/intent/CAS/own-ACK fences remain authoritative. The
+worker-only gate ends before publication. Legacy full conversion has a separate
+host promise alongside its unchanged cap. Conversion, resource policy, providers,
+native inference/Torch parity and final checks remain steps 15–19. Controlled
+progress is not whole-GIL isolation, device latency or crackle acceptance.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and

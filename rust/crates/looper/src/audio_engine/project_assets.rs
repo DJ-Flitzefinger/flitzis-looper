@@ -44,7 +44,33 @@ const STEM_PCM_FILES: [&str; 6] = [
     "manifest.json",
 ];
 
-pub(super) type PcmHistory = Mutex<Vec<Vec<Weak<[f32]>>>>;
+/// Accounting custody moves with the physical history during a pair mirror.
+/// The identity never authorizes audio publication or a different content lifetime.
+#[derive(Default)]
+pub(super) struct PcmHistoryRow {
+    pub(super) pcm: Vec<Weak<[f32]>>,
+    pub(super) identity: Arc<()>,
+}
+impl From<Vec<Weak<[f32]>>> for PcmHistoryRow {
+    fn from(pcm: Vec<Weak<[f32]>>) -> Self {
+        Self {
+            pcm,
+            identity: Arc::new(()),
+        }
+    }
+}
+impl std::ops::Deref for PcmHistoryRow {
+    type Target = Vec<Weak<[f32]>>;
+    fn deref(&self) -> &Self::Target {
+        &self.pcm
+    }
+}
+impl std::ops::DerefMut for PcmHistoryRow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pcm
+    }
+}
+pub(super) type PcmHistory = Mutex<Vec<PcmHistoryRow>>;
 
 fn backing_contains(backing: &[Arc<[f32]>], pcm: &Weak<[f32]>) -> bool {
     backing.iter().any(|held| pcm.ptr_eq(&Arc::downgrade(held)))
@@ -142,12 +168,12 @@ impl ProjectAssetLease {
     }
 }
 
-struct Reader {
+pub(super) struct Reader {
     path: PathBuf,
-    pcm: Vec<Weak<[f32]>>,
+    pub(super) pcm: Vec<Weak<[f32]>>,
     /// Actual FullMix backing of a component reader; accounting only, never native authority.
     source_pcm: Option<Weak<[f32]>>,
-    cold: Option<CommittedColdLease>,
+    pub(super) cold: Option<CommittedColdLease>,
     pending_assignment: bool,
     saved_claim: bool,
     engine: Weak<()>,
@@ -216,7 +242,7 @@ pub(super) struct VerifiedFile {
 #[derive(Default)]
 pub(super) struct State {
     owners: Vec<Weak<PathOwner>>,
-    readers: Vec<Reader>,
+    pub(super) readers: Vec<Reader>,
     retiring: HashMap<PathBuf, Retirement>,
     deleted: u64,
     errors: Vec<String>,
@@ -629,6 +655,9 @@ impl ProjectAssets {
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let pending = state
+            .residency
+            .reserved_cold_reader_slots(lease.assignment_id());
         let reader = state
             .readers
             .iter_mut()
@@ -647,10 +676,52 @@ impl ProjectAssets {
         {
             return Ok(());
         }
-        if reader.pcm.len() >= 128 {
+        if reader
+            .pcm
+            .len()
+            .checked_add(pending)
+            .is_none_or(|count| count >= 128)
+        {
             return Err(io::Error::other("assignment live reader bound exceeded"));
         }
         reader.pcm.push(Arc::downgrade(&sample.samples));
+        Ok(())
+    }
+
+    /// Consume the promised locator in the existing assignment, with no new assignment/record.
+    pub(super) fn retain_cold_window_reserved(
+        &self,
+        lease: &CommittedColdLease,
+        sample: &SampleBuffer,
+        reservation: &mut super::resident_accounting::ResidentReservation,
+    ) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let index = state
+            .readers
+            .iter()
+            .position(|reader| {
+                reader
+                    .cold
+                    .as_ref()
+                    .is_some_and(|owned| owned.assignment_id() == lease.assignment_id())
+            })
+            .ok_or_else(|| io::Error::other("complete reader has no native assignment owner"))?;
+        let pcm = Arc::downgrade(&sample.samples);
+        let reader = &mut state.readers[index];
+        reader.pcm.retain(|pcm| pcm.strong_count() > 0);
+        let append = !reader.pcm.iter().any(|held| held.ptr_eq(&pcm));
+        if append && reader.pcm.len() >= 128 {
+            return Err(io::Error::other("assignment live reader bound exceeded"));
+        }
+        reservation
+            .consume_cold_reader_slot(self, &mut state.residency, lease.assignment_id(), append)
+            .map_err(super::resident_accounting::ResidentAdmissionError::into_io_error)?;
+        if append {
+            state.readers[index].pcm.push(pcm);
+        }
         Ok(())
     }
 
@@ -2277,10 +2348,9 @@ mod tests {
         let assets = service();
         let historical: Arc<[f32]> = Arc::from([1.0_f32; 128]);
         let current: Arc<[f32]> = Arc::from([2.0_f32; 128]);
-        let history = Arc::new(Mutex::new(vec![vec![
-            Arc::downgrade(&historical),
-            Arc::downgrade(&current),
-        ]]));
+        let history = Arc::new(Mutex::new(vec![
+            vec![Arc::downgrade(&historical), Arc::downgrade(&current)].into(),
+        ]));
         assets.watch_history(Arc::downgrade(&history)).unwrap();
         assert_eq!(Arc::weak_count(&current), 1);
         assets.collect();

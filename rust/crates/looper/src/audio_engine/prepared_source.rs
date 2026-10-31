@@ -292,11 +292,17 @@ impl PreparedSourcePermit {
         &self,
         engine: &AudioEngine,
     ) -> Result<PlacementObservation<SlotSnapshot>, String> {
+        self.control_placement_with_ownership(&engine.input_runtime_ownership)
+    }
+    pub(super) fn control_placement_with_ownership(
+        &self,
+        ownership: &Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    ) -> Result<PlacementObservation<SlotSnapshot>, String> {
         let timing = self
             .timing
             .as_ref()
             .ok_or("prepared Native source owner unavailable")?;
-        if !Arc::ptr_eq(&timing.ownership, &engine.input_runtime_ownership) {
+        if !Arc::ptr_eq(&timing.ownership, ownership) {
             return Err("foreign prepared Native source owner".into());
         }
         Ok(timing.ownership.observe_control_key(

@@ -49,6 +49,15 @@ impl ResidentAccount {
         super::resident_host_memory::host_headroom()
     }
 
+    /// Complete legacy conversion scratch is separate from selected resident ownership.
+    pub(super) fn reserve_transient(
+        &self,
+        bytes: usize,
+    ) -> Result<HostReservation, ResidentAdmissionError> {
+        HostReservation::reserve_with(bytes, || self.host_headroom())
+            .map_err(ResidentAdmissionError::from)
+    }
+
     #[cfg(test)]
     pub(super) fn set_host_memory_for_test(&self, image: Result<HostHeadroom, String>) {
         *self.host_image.lock().unwrap() = Some(image);
@@ -104,12 +113,14 @@ struct PendingReservation {
     owner_slots: usize,
     reader_slots: usize,
     history: Option<HistoryReservation>,
+    cold_reader: Option<(u64, usize)>,
+    pinned_backings: Vec<Arc<[f32]>>,
     host: HostReservation,
 }
 
 struct HistoryReservation {
     history: Weak<PcmHistory>,
-    id: usize,
+    row: Arc<()>,
     slots: usize,
 }
 
@@ -146,6 +157,17 @@ impl ResidentScope {
                     .ok_or(ResidentAdmissionError::Invalid("held byte overflow"))?;
             }
         }
+        for pcm in self
+            .pending
+            .iter()
+            .flat_map(|record| &record.pinned_backings)
+        {
+            if seen.insert(pcm.as_ptr() as usize) {
+                held = held
+                    .checked_add(pcm_bytes(pcm)?)
+                    .ok_or(ResidentAdmissionError::Invalid("pinned held byte overflow"))?;
+            }
+        }
         let pending = self.pending.iter().try_fold(0usize, |sum, record| {
             sum.checked_add(record.bytes)
                 .ok_or(ResidentAdmissionError::Invalid("pending byte overflow"))
@@ -169,12 +191,20 @@ impl ResidentScope {
     }
 
     fn live_addresses(&self) -> HashSet<usize> {
-        self.owners
+        let mut seen: HashSet<_> = self
+            .owners
             .iter()
             .filter(|owner| owner.view.strong_count() > 0)
             .filter_map(|owner| owner.pcm.upgrade())
             .map(|pcm| pcm.as_ptr() as usize)
-            .collect()
+            .collect();
+        seen.extend(
+            self.pending
+                .iter()
+                .flat_map(|record| &record.pinned_backings)
+                .map(|pcm| pcm.as_ptr() as usize),
+        );
+        seen
     }
 }
 
@@ -221,6 +251,15 @@ impl ResidentLedger {
         Ok(self.scopes.len() - 1)
     }
 
+    pub(super) fn reserved_cold_reader_slots(&self, assignment: u64) -> usize {
+        self.scopes
+            .iter()
+            .flat_map(|scope| &scope.pending)
+            .filter_map(|record| record.cold_reader)
+            .filter(|(id, _)| *id == assignment)
+            .map(|(_, slots)| slots)
+            .sum()
+    }
     pub(super) fn reserved_reader_slots(&self) -> usize {
         self.scopes
             .iter()
@@ -304,6 +343,57 @@ impl ProjectAssets {
         Self::prune_pcm_locators(&mut state);
         let index = state.residency.scope_index(account)?;
         state.residency.scopes[index].snapshot()
+    }
+
+    /// Worker snapshot custody is charged even if its original resident view ends.
+    /// These pins grant accounting ownership only, never source/publication authority.
+    pub(super) fn pin_resident_backings(
+        self: &Arc<Self>,
+        account: &Arc<ResidentAccount>,
+        backings: &[Arc<[f32]>],
+    ) -> Result<ResidentReservation, ResidentAdmissionError> {
+        let token = self.reserve_resident(account, 0, &[], backings.len())?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ResidentAdmissionError::Poisoned)?;
+        let index = state.residency.scope_index(account)?;
+        let scope = &mut state.residency.scopes[index];
+        let (snapshot, mut seen) = scope.snapshot_with_addresses()?;
+        let mut added = 0usize;
+        let mut pins = Vec::new();
+        for pcm in backings {
+            if !pins.iter().any(|pin| Arc::ptr_eq(pin, pcm)) {
+                pins.push(pcm.clone());
+            }
+            if seen.insert(pcm.as_ptr() as usize) {
+                added = added
+                    .checked_add(pcm_bytes(pcm)?)
+                    .ok_or(ResidentAdmissionError::Invalid("pinned byte overflow"))?;
+            }
+        }
+        if scope.budget_bytes != 0
+            && added > 0
+            && snapshot
+                .admitted_total_bytes
+                .checked_add(added)
+                .is_none_or(|total| total > scope.budget_bytes)
+        {
+            return Err(ResidentAdmissionError::BudgetExceeded {
+                requested_bytes: added,
+                held_bytes: snapshot.held_unique_pcm_bytes,
+                pending_bytes: snapshot.pending_resident_bytes,
+                budget_bytes: scope.budget_bytes,
+            });
+        }
+        scope
+            .pending
+            .iter_mut()
+            .find(|record| record.id == token.id)
+            .ok_or(ResidentAdmissionError::Invalid("pin reservation ended"))?
+            .pinned_backings = pins;
+        drop(state);
+        Ok(token)
     }
 
     /// Reserve prospective account ownership, not total disk extent or scratch.
@@ -412,6 +502,8 @@ impl ProjectAssets {
             owner_slots: pending_owner_slots,
             reader_slots: 0,
             history: None,
+            cold_reader: None,
+            pinned_backings: Vec::new(),
             host,
         });
         Ok(ResidentReservation {
@@ -472,7 +564,9 @@ impl ResidentReservation {
             .iter()
             .flat_map(|scope| &scope.pending)
             .filter_map(|record| record.history.as_ref())
-            .filter(|record| record.id == id && record.history.ptr_eq(&weak_history))
+            .filter(|record| {
+                Arc::ptr_eq(&record.row, &pad.identity) && record.history.ptr_eq(&weak_history)
+            })
             .try_fold(0usize, |sum, record| {
                 sum.checked_add(record.slots)
                     .ok_or(ResidentAdmissionError::Invalid("history slot overflow"))
@@ -500,7 +594,7 @@ impl ResidentReservation {
         }
         record.history = Some(HistoryReservation {
             history: weak_history,
-            id,
+            row: pad.identity.clone(),
             slots,
         });
         Ok(())
@@ -531,14 +625,17 @@ impl ResidentReservation {
             .history
             .upgrade()
             .ok_or(ResidentAdmissionError::Invalid("history owner ended"))?;
-        let id = reserved.id;
+        let row = reserved.row.clone();
         let slots = reserved.slots;
         let mut pads = history
             .lock()
             .map_err(|_| ResidentAdmissionError::Invalid("history gate poisoned"))?;
         let pad = pads
-            .get_mut(id)
-            .ok_or(ResidentAdmissionError::Invalid("history pad missing"))?;
+            .iter_mut()
+            .find(|pad| Arc::ptr_eq(&pad.identity, &row))
+            .ok_or(ResidentAdmissionError::Invalid(
+                "reserved history custody ended",
+            ))?;
         pad.retain(|pcm| pcm.strong_count() > 0);
         let pcm = Arc::downgrade(&sample.samples);
         let append = !pad.iter().any(|held| held.ptr_eq(&pcm));
@@ -556,6 +653,90 @@ impl ResidentReservation {
             .as_mut()
             .unwrap()
             .slots = 0;
+        Ok(())
+    }
+
+    /// Promise one of the existing assignment's 128 PCM locators, not another assignment.
+    pub(super) fn reserve_cold_reader_slot(
+        &mut self,
+        lease: &super::cold_store::CommittedColdLease,
+        reused: Option<&SampleBuffer>,
+    ) -> Result<(), ResidentAdmissionError> {
+        let mut state = self
+            .assets
+            .state
+            .lock()
+            .map_err(|_| ResidentAdmissionError::Poisoned)?;
+        let assignment = lease.assignment_id();
+        let reader = state
+            .readers
+            .iter_mut()
+            .find(|reader| {
+                reader
+                    .cold
+                    .as_ref()
+                    .is_some_and(|owned| owned.assignment_id() == assignment)
+            })
+            .ok_or(ResidentAdmissionError::Invalid(
+                "cold reader assignment missing",
+            ))?;
+        reader.pcm.retain(|pcm| pcm.strong_count() > 0);
+        let slots = usize::from(!reused.is_some_and(|sample| {
+            reader
+                .pcm
+                .iter()
+                .any(|pcm| pcm.ptr_eq(&Arc::downgrade(&sample.samples)))
+        }));
+        let held = reader.pcm.len();
+        let pending = state.residency.reserved_cold_reader_slots(assignment);
+        if held
+            .checked_add(pending)
+            .and_then(|n| n.checked_add(slots))
+            .is_none_or(|n| n > 128)
+        {
+            return Err(ResidentAdmissionError::Capacity(
+                "assignment live readers (128)",
+            ));
+        }
+        let scope = state.residency.scope_index(&self.account)?;
+        let record = state.residency.scopes[scope]
+            .pending
+            .iter_mut()
+            .find(|record| record.id == self.id)
+            .ok_or(ResidentAdmissionError::Invalid("reservation ended"))?;
+        if record.cold_reader.is_some() {
+            return Err(ResidentAdmissionError::Invalid(
+                "cold reader already reserved",
+            ));
+        }
+        record.cold_reader = Some((assignment, slots));
+        Ok(())
+    }
+    pub(super) fn consume_cold_reader_slot(
+        &mut self,
+        assets: &ProjectAssets,
+        ledger: &mut ResidentLedger,
+        assignment: u64,
+        append: bool,
+    ) -> Result<(), ResidentAdmissionError> {
+        if !std::ptr::eq(assets, self.assets.as_ref()) {
+            return Err(ResidentAdmissionError::Invalid("different asset registry"));
+        }
+        let scope = ledger.scope_index(&self.account)?;
+        let record = ledger.scopes[scope]
+            .pending
+            .iter_mut()
+            .find(|record| record.id == self.id)
+            .ok_or(ResidentAdmissionError::Invalid("reservation ended"))?;
+        let (id, slots) = record
+            .cold_reader
+            .ok_or(ResidentAdmissionError::Invalid("cold reader not reserved"))?;
+        if id != assignment || (append && slots == 0) {
+            return Err(ResidentAdmissionError::Invalid(
+                "cold reader exceeds promise",
+            ));
+        }
+        record.cold_reader = Some((assignment, 0));
         Ok(())
     }
 
@@ -777,6 +958,127 @@ mod tests {
     fn admit(assets: &Arc<ProjectAssets>, account: &Arc<ResidentAccount>, sample: &SampleBuffer) {
         let mut reservation = assets.reserve_resident(account, 0, &[sample], 1).unwrap();
         reservation.commit(&[sample]).unwrap();
+    }
+
+    #[test]
+    fn worker_backing_pin_keeps_ended_views_charged_without_foreign_scope_resurrection() {
+        let assets = ProjectAssets::isolated();
+        let account = ResidentAccount::new();
+        let foreign_account = ResidentAccount::new();
+        assets.set_resident_budget_mib(&account, 128).unwrap();
+        let old = sample(0.5);
+        admit(&assets, &account, &old);
+        let pins = assets
+            .pin_resident_backings(&account, &[old.samples.clone()])
+            .unwrap();
+        let mut foreign = sample(0.75);
+        foreign.samples = old.samples.clone();
+        admit(&assets, &foreign_account, &foreign);
+        drop(old);
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            128
+        );
+        let boundary = assets
+            .reserve_resident(&account, 128 * MIB - 128, &[], 0)
+            .unwrap();
+        assert!(matches!(
+            assets.reserve_resident(&account, 1, &[], 0),
+            Err(ResidentAdmissionError::BudgetExceeded { .. })
+        ));
+        drop(pins);
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            0
+        );
+        assert_eq!(
+            assets
+                .resident_budget_status(&foreign_account)
+                .unwrap()
+                .held_unique_pcm_bytes,
+            128
+        );
+        drop(assets.reserve_resident(&account, 128, &[], 0).unwrap());
+        drop(boundary);
+    }
+
+    #[test]
+    fn reserved_history_follows_moved_row_and_refuses_retired_custody() {
+        for retire in [false, true] {
+            let assets = ProjectAssets::isolated();
+            let account = ResidentAccount::new();
+            let old = sample(0.5);
+            admit(&assets, &account, &old);
+            let history = Arc::new(std::sync::Mutex::new(vec![
+                vec![Arc::downgrade(&old.samples)].into(),
+                super::super::project_assets::PcmHistoryRow::default(),
+            ]));
+            let mut token = assets.reserve_resident(&account, 128, &[], 1).unwrap();
+            token.reserve_history_slot(&history, 0, None).unwrap();
+            history.lock().unwrap().swap(0, 1);
+            if retire {
+                history.lock().unwrap()[1] = super::super::project_assets::PcmHistoryRow::default();
+            }
+            let next = sample(0.75);
+            let result = token.commit_source_history(&next);
+            if retire {
+                assert!(result.unwrap_err().to_string().contains("custody ended"));
+                assert!(history.lock().unwrap()[1].is_empty());
+            } else {
+                result.unwrap();
+                assert!(history.lock().unwrap()[0].is_empty());
+                assert!(
+                    history.lock().unwrap()[1]
+                        .iter()
+                        .any(|pcm| pcm.ptr_eq(&Arc::downgrade(&next.samples)))
+                );
+            }
+            drop(token);
+            assert_eq!(
+                assets
+                    .resident_budget_status(&account)
+                    .unwrap()
+                    .pending_reservation_count,
+                0
+            );
+        }
+    }
+    #[test]
+    fn moved_history_pending_promises_keep_the_original_128_reader_bound() {
+        let assets = ProjectAssets::isolated();
+        let account = ResidentAccount::new();
+        let held: Vec<_> = (0..127).map(|_| sample(0.5)).collect();
+        let history = Arc::new(std::sync::Mutex::new(vec![
+            held.iter()
+                .map(|sample| Arc::downgrade(&sample.samples))
+                .collect::<Vec<_>>()
+                .into(),
+            super::super::project_assets::PcmHistoryRow::default(),
+        ]));
+        let mut first = assets.reserve_resident(&account, 128, &[], 1).unwrap();
+        first.reserve_history_slot(&history, 0, None).unwrap();
+        history.lock().unwrap().swap(0, 1);
+        let mut second = assets.reserve_resident(&account, 128, &[], 1).unwrap();
+        assert!(matches!(
+            second.reserve_history_slot(&history, 1, None),
+            Err(ResidentAdmissionError::Capacity(_))
+        ));
+        second.reserve_history_slot(&history, 0, None).unwrap();
+        drop(first);
+        drop(second);
+        assert_eq!(
+            assets
+                .resident_budget_status(&account)
+                .unwrap()
+                .pending_reservation_count,
+            0
+        );
     }
 
     #[test]

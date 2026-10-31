@@ -19,6 +19,89 @@ inaccuracy warning when the precise method fails. STEP12 implements that separat
 scalar-only contract, followed by every existing stem/resource/provider/inference/
 final duty in steps 13–19. STEP11 itself introduced no such runtime change.
 
+## STEP14 source/window and Python isolation result
+
+Window preparation now reserves the complete source/component byte, owner,
+assignment-reader and source-history bundle before source I/O. History promises
+follow an immutable accounting row identity through Move; removed rows refuse
+commit, and Copy retains independent target history. Explicit worker pins keep
+historical PCM charged once to its own scope after its original views end; a
+foreign PCM reference alone cannot revive an ended owner. The raw snapshot is
+released immediately after transferring custody to its accounting token.
+Complete legacy conversion also promises its full transient host envelope before
+source I/O and retains that promise until its actual complete/converter/crop
+buffers end. The existing 1-GiB legacy cap and host-headroom guards remain.
+
+Owners is released across source/component I/O and registration. Short sections
+revalidate the original content/lifetime, source/window, bank placement, exact
+proposal and intent before and after preparation, including Pending mirrors.
+Immutable source, pair and reader custody stays with the worker. The shared
+worker-only preparation gate precedes owners and ends before publication; the
+existing final CAS and each operation's own effective ACK remain authoritative.
+
+Owned shared control contexts release the Python Engine borrow before native
+reconciliation, binding preflight, both registrations and admission waits. Public
+names and parameters remain unchanged. The original gesture/T and capture order
+are retained across detach. Successful explicit, policy and registration admission
+have separate watermarks; a failed newer capture does not revoke older viable
+work. Registration rechecks source/window, placement, discard, order and the
+original lane's lifecycle after its final lock waits, including shutdown/restart.
+No whole Engine, stream or loader is cloned.
+
+### STEP14 verification and remaining gates
+
+All ten new integration cases and three new accounting cases pass. Actual held
+source chunks and component reads allow mutable public Python controls and an
+independent captured START/STOP to progress, preserving the captured original T and
+final PCM. Tests cover both registration paths, binding/request preflight, newer
+successful versus failed admission, Move before/after the Pending mirror, Copy,
+pre-I/O byte/owner/reader/history and legacy-host refusal, cancellation through
+actual worker end, scoped historical pins and retired-row refusal. Compatible
+source/window, ABA, sharing, own-ACK, last-reader and production 2-MiB constructor/
+callback regressions also pass. The selected Python controller/residency/Copy/
+transport files pass all 283 cases against final-source external Release Native.
+Native/API verification passes with the existing 22 library warnings; the einops
+pin and warning are unchanged. Changed-source Rust format, strict OpenSpec
+validation, local Markdown targets and diff whitespace checks pass.
+
+The initial 440-case Rust selection aborts after 164 passes, two ignored cases and
+one registry failure, followed by a default-stack overflow in the next lifecycle
+test. The unchanged parent reproduces the same overflow. Three narrow test carriers now use the existing direct boxed
+mixer constructor; original PCM/Native/ACK/history assertions and the explicit
+production 2-MiB guard remain unchanged. The separate rest selection, with no stack override, completes
+with 310 passes, 33 failures and 15 ignored cases. The isolated registry replay
+passes, but its initial failure body was lost at process abort: cause UNKNOWN.
+Do not infer a leak, capacity fix or successful combined registry rerun.
+
+A name-based audit of these three logs yields 475 distinct successful Rust cases
+and 17 distinct ignored cases; initial and rest successful sets do not overlap.
+This is source-compatible evidence across selections, not one clean matrix run.
+Of the 33 remaining failures, 32 are compared with the unchanged parent: all 32
+also fail there, with 31 matching normalized leaf bodies. The duplicate-216 case
+fails the same `one material inferred twice` assertion but has different async
+PAD/counter/fingerprint snapshots; it is not an identical-state comparison.
+Normalization changes only generated sample-root prefixes and received timestamp
+keys, not PCM, counters, identities or assertions. The comparison uses a process-
+only larger parent test stack to get past its separately reproduced stack abort.
+
+The remaining distinct-216 batch is UNCOMPARED and incomplete: its existing
+600-second complete-phase test-host watchdog expires while progressing, reporting
+177 declared nonneural generations, 145 saved and zero failed. This is synthetic
+output/stopped-bank orchestration, not 216 voices, model inference or a throughput
+acceptance. Its semantic stall guard, all-216 completion assertions and production
+resource guards remain unchanged. The 32 parent failures include ready-E/silence
+expectations, missing test InputRuntime, Copy-journal custody failures in Bank/UI/
+recovery/last-reader composition, old Hold/Piano/overwrite scheduling expectations
+and duplicate-batch provenance. None is declared fixed or waived by STEP14.
+
+Systems and the same independent actual-diff review chain find the changed STEP14
+invariants covered. The 32 failure classes, unmatched watchdog and unexplained
+initial registry exception remain explicit final STEP19 regression gates. This
+scoped lock/borrow result does not establish complete musical/device quality,
+whole-GIL/CPU isolation, total latency, crackle cause or resolved commit pressure.
+Conversion, budgets, providers, native inference/Torch parity and portable
+Windows/Linux/macOS distribution remain mandatory steps 15–19.
+
 ## STEP13 committed component isolation
 
 The controlled positioned-read baseline holds the real first component chunk.
@@ -47,12 +130,12 @@ intent; a failed/Pending newer admission leaves both older viable contexts and
 already admitted proposals/readers intact. Capture order is not a live proposal
 epoch and grants no audio acknowledgement.
 
-WindowWork still holds owners across source/window/component I/O. Its lock also
-protects physical-slot PCM history and peak/copy accounting. It now acquires the
-same worker-only gate BEFORE owners, preserving cross-worker serialization.
+At the STEP13 boundary, WindowWork still held owners across source/window/
+component I/O to protect physical-slot PCM history and peak/copy accounting. It
+acquired the same worker-only gate BEFORE owners, preserving cross-worker serialization.
 Removing that owners span needs a separate complete reservation/history/placement
-proof. Borrowed reconciliation and binding-capture preflight can still wait there;
-registration wrappers also remain borrowed. Mandatory STEP14 owns those residual
+proof. Borrowed reconciliation and binding-capture preflight could still wait there;
+registration wrappers also remained borrowed. STEP14 above resolves those residual
 control/GIL stalls. The full plan grows to nineteen steps: conversion15,
 budgets16, PCM/providers17, native inference/Torch18 and combined regression19.
 All original functionality, CUDA/CPU fallback, quality and portability duties remain.

@@ -748,6 +748,10 @@ pub(super) fn read_playback_range(
         check_cancelled(cancelled)?;
         let length = left.min(CHUNK_BYTES);
         reader.read_exact(&mut bytes[..length])?;
+        #[cfg(test)]
+        super::super::native_owned_work::observe_preparation(
+            super::super::native_owned_work::WorkPoint::WindowSourceChunk,
+        );
         metrics.playback_read_bytes = metrics.playback_read_bytes.saturating_add(length as u64);
         #[cfg(test)]
         WINDOW_READ_OBSERVATION.with(|observation| {

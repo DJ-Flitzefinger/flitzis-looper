@@ -270,7 +270,10 @@ impl CurrentConstantTimingRecord {
         }
     }
 
-    fn acknowledged_epoch(&self, engine: &AudioEngine) -> u64 {
+    fn acknowledged_epoch(
+        &self,
+        engine: &super::resident_control_context::ResidentControlContext,
+    ) -> u64 {
         if !Arc::ptr_eq(&self.ownership, &engine.input_runtime_ownership) {
             return 0;
         }
@@ -281,7 +284,11 @@ impl CurrentConstantTimingRecord {
         })
     }
 
-    fn occupies_slot(&self, engine: &AudioEngine, id: usize) -> bool {
+    fn occupies_slot(
+        &self,
+        engine: &super::resident_control_context::ResidentControlContext,
+        id: usize,
+    ) -> bool {
         Arc::ptr_eq(&self.ownership, &engine.input_runtime_ownership)
             && self.content_key.is_some_and(|key| {
                 engine
@@ -327,6 +334,15 @@ impl CurrentConstantTimingRecord {
 /// cannot become current later. Pending records survive this off-RT retirement.
 pub(super) fn retire_old_current_records(
     engine: &AudioEngine,
+    records: &mut Vec<CurrentConstantTimingRecord>,
+) {
+    retire_old_current_records_context(
+        &super::resident_control_context::ResidentControlContext::capture(engine),
+        records,
+    );
+}
+pub(super) fn retire_old_current_records_context(
+    engine: &super::resident_control_context::ResidentControlContext,
     records: &mut Vec<CurrentConstantTimingRecord>,
 ) {
     records.retain(|record| {
@@ -407,6 +423,23 @@ pub(super) fn current_metadata(
 /// Shared authoritative current source/acknowledgement predicate for control consumers.
 pub(super) fn current_record_for_source<'a>(
     engine: &AudioEngine,
+    id: usize,
+    source: &SampleBuffer,
+    generation_and_rate: (u64, u32),
+    digest: Option<&str>,
+    records: &'a [CurrentConstantTimingRecord],
+) -> Option<&'a CurrentConstantTimingRecord> {
+    current_record_for_source_context(
+        &super::resident_control_context::ResidentControlContext::capture(engine),
+        id,
+        source,
+        generation_and_rate,
+        digest,
+        records,
+    )
+}
+pub(super) fn current_record_for_source_context<'a>(
+    engine: &super::resident_control_context::ResidentControlContext,
     id: usize,
     source: &SampleBuffer,
     generation_and_rate: (u64, u32),

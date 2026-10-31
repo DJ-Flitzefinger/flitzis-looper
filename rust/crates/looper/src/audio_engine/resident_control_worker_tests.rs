@@ -1535,7 +1535,7 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
             .into(),
     }
     .with_complete_source(48_000);
-    let mut complete = Box::new(RtMixer::new(2, 48_000.0));
+    let mut complete = RtMixer::try_new(2, 48_000.0, None).unwrap();
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
     ownership.publish_test_source(0, &full, 48_000, 1);
     let reference_key = ownership
@@ -1587,7 +1587,7 @@ fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fi
         },
         &mut loaded.callback.retirement
     ));
-    for mixer in [&mut loaded.callback.mixer, complete.as_mut()] {
+    for mixer in [loaded.callback.mixer.as_mut(), complete.as_mut()] {
         mixer.set_speed(0.73);
         mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
         assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));

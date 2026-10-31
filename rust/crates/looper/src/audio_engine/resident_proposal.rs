@@ -33,7 +33,7 @@ pub(super) fn lock_preparation(
 
 pub(super) struct ResidentProposals {
     epochs: Vec<[Arc<AtomicU64>; 4]>,
-    stem_admission_orders: Vec<[Arc<ResidentAdmissionClock>; 2]>,
+    stem_admission_orders: Vec<[Arc<ResidentAdmissionClock>; 3]>,
     sources: Vec<Mutex<Option<SourceEventFence>>>,
 }
 struct SourceEventFence {
@@ -108,6 +108,26 @@ impl ResidentProposals {
                 value.checked_add(1)
             })
             .map_err(|_| "resident admission order exhausted")?
+            + 1;
+        Ok(ResidentAdmissionOrder {
+            clock: clock.clone(),
+            expected,
+        })
+    }
+    pub(super) fn capture_registration_order(
+        &self,
+        cell: ContentCell,
+    ) -> Result<ResidentAdmissionOrder, String> {
+        let clock = &self
+            .stem_admission_orders
+            .get(cell.index())
+            .ok_or("registration cell out of range")?[2];
+        let expected = clock
+            .next
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| "registration order exhausted")?
             + 1;
         Ok(ResidentAdmissionOrder {
             clock: clock.clone(),

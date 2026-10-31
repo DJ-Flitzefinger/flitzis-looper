@@ -1343,8 +1343,9 @@ mod paired_owner_tests {
                 Arc::downgrade(&finite.samples),
                 Arc::downgrade(&finite.samples),
                 Arc::downgrade(&current.material.sample.samples),
-            ],
-            vec![Arc::downgrade(&unrelated.material.sample.samples)],
+            ]
+            .into(),
+            vec![Arc::downgrade(&unrelated.material.sample.samples)].into(),
         ]);
         let held = assets
             .held_same_pad_reader_backings(&history, 0, &current.material.lease)
@@ -1429,8 +1430,8 @@ mod paired_owner_tests {
             ));
         }
         let history = Mutex::new(vec![
-            vec![Arc::downgrade(&current.material.sample.samples)],
-            vec![Arc::downgrade(&other.material.sample.samples)],
+            vec![Arc::downgrade(&current.material.sample.samples)].into(),
+            vec![Arc::downgrade(&other.material.sample.samples)].into(),
         ]);
         let held = assets
             .held_same_pad_reader_backings(&history, 0, &current.material.lease)

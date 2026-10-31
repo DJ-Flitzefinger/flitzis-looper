@@ -71,16 +71,28 @@ peaks without retaining owners or the control producer during reads, allocations
 ledger commits or file-pin retention. Short owners sections revalidate the exact
 proposal, source, content placement and intent before and after preparation;
 the existing guarded publication and own effective ACK remain necessary.
-The public request captures owned admission state, releases its Engine borrow
-and detaches Python for the native admission phase, revalidating before mutation.
+The public request captures its original per-content admission order before
+releasing its Engine borrow. Owned shared control contexts detach reconciliation,
+binding capture, both registration paths and admission. Only successful admission
+advances the independent explicit/policy watermark; registration has its own
+successful-order watermark. Failed newer work preserves an earlier viable request.
+Final registration rechecks source/window, placement, discard and the captured
+lane's lifecycle after lock waits.
 
-Source/window preparation still holds owners across I/O for physical-slot
-history/peak/copy custody. It acquires the same worker-only gate before owners
-to preserve cross-worker serialization. Borrowed preflight reconciliation and
-binding capture can still wait on that path: complete global/GIL isolation is
-mandatory follow-up work, not an achieved claim. Process-tree ownership alone
-does not budget child CPU threads. Controlled-read progress does not establish
-the cause of callback glitches. The focused
+Source/window preparation uses the same worker-only gate before short owners
+sections. Source and component bytes, owner witnesses, assignment reader locators
+and source history are promised before source I/O. History reservations follow an
+immutable accounting row identity through Move; Copy keeps independent target
+history, and an ended row cannot authorize its new occupant. Worker-held historical
+PCM remains charged even after its original view ends. Complete legacy conversion
+has a separate prospective host reservation and retains its existing 1-GiB cap.
+The worker revalidates the original content/lifetime, bank/window, proposal and
+intent after I/O/registration, then releases its preparation gate before the
+unchanged publication CAS and operation-specific ACK.
+
+Python numeric conversion and coordinated child CPU policy remain separate work.
+Controlled source/component/registration progress does not establish whole-GIL
+isolation, device latency or the cause of callback glitches. The focused
 [performance plan](../development.md#performance-audit-and-upgrade-plan) separates
 control-lock isolation, detached Rust conversion and background resource policy.
 

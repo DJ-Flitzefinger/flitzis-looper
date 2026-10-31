@@ -99,7 +99,7 @@ impl AudioBufferRetirement for RetirementGate {
 }
 
 struct Callback {
-    mixer: RtMixer,
+    mixer: Box<RtMixer>,
     scheduler: FixedCapacityScheduler<8>,
     transport: TransportTimeline,
     quantization: TriggerQuantization,
@@ -113,7 +113,8 @@ impl Callback {
     fn new(engine: &AudioEngine, rate: u32) -> Self {
         let (actual, worker) = create_audio_buffer_retirement();
         let (feedback, feedback_rx) = rtrb::RingBuffer::new(1);
-        let mut mixer = RtMixer::new(2, rate as f32);
+        // Match production's direct heap construction; avoid large Debug stack moves.
+        let mut mixer = RtMixer::try_new(2, rate as f32, None).unwrap();
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
         mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
         mixer.set_prepared_source_epochs(engine.prepared_source_epochs.clone());

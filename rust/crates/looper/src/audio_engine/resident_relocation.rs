@@ -111,6 +111,7 @@ impl StemOwner {
         rate: u32,
         resident: &super::resident_proposal::ResidentReadContext,
         cancelled: &impl Fn() -> bool,
+        preallocated: Option<super::resident_accounting::ResidentReservation>,
     ) -> Result<PreparedStemSet, String> {
         let assets = &resident.assets;
         if let Some(owner) = &self.pair {
@@ -150,12 +151,17 @@ impl StemOwner {
                     .checked_mul(16)
                     .ok_or("resident component window byte overflow")?
             };
-            let mut reservation = resident
-                .reserve(bytes, &reused, 5)
-                .map_err(|error| error.to_string())?;
-            reservation
-                .reserve_reader_slots(1)
-                .map_err(|error| error.to_string())?;
+            let mut reservation = if let Some(token) = preallocated {
+                token
+            } else {
+                let mut token = resident
+                    .reserve(bytes, &reused, 5)
+                    .map_err(|error| error.to_string())?;
+                token
+                    .reserve_reader_slots(1)
+                    .map_err(|error| error.to_string())?;
+                token
+            };
             let stems = if same_range {
                 self.set
                     .stems
@@ -215,12 +221,17 @@ impl StemOwner {
             .len()
             .checked_mul(16)
             .ok_or("resident legacy component window byte overflow")?;
-        let mut reservation = resident
-            .reserve(bytes, &[window], 5)
-            .map_err(|error| error.to_string())?;
-        reservation
-            .reserve_reader_slots(1)
-            .map_err(|error| error.to_string())?;
+        let mut reservation = if let Some(token) = preallocated {
+            token
+        } else {
+            let mut token = resident
+                .reserve(bytes, &[window], 5)
+                .map_err(|error| error.to_string())?;
+            token
+                .reserve_reader_slots(1)
+                .map_err(|error| error.to_string())?;
+            token
+        };
         let mut set = super::stem_cache::prepare_stem_buffers_from_cache(
             &self.source_version,
             complete,
@@ -1398,7 +1409,9 @@ pub(super) fn reconcile(engine: &AudioEngine) -> PyResult<()> {
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    reconcile_under_request_lock(engine)
+    reconcile_context_under_request_lock(
+        &super::resident_control_context::ResidentControlContext::capture(engine),
+    )
 }
 
 #[cfg(test)]
@@ -1449,7 +1462,7 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
 /// The original key and every adopted source/timing field remain the authority;
 /// no fresh ticket, slot occupant or PCM equality can authorize this catch-up.
 fn catch_up_pair_window_custody(
-    engine: &AudioEngine,
+    engine: &super::resident_control_context::ResidentControlContext,
     id: usize,
     pending: &PendingWindow,
     cache: &mut Option<SampleBuffer>,
@@ -1564,7 +1577,7 @@ fn catch_up_pair_window_custody(
 /// independent: the rejected ticket remains rejected and cannot authorize any launch.
 /// False means a publication/mirror marker is temporarily unavailable; retain all owners.
 fn reconcile_claimed_resident_storage(
-    engine: &AudioEngine,
+    engine: &super::resident_control_context::ResidentControlContext,
     id: usize,
     pending: &PendingWindow,
     cache: &mut Option<SampleBuffer>,
@@ -1667,7 +1680,18 @@ fn reconcile_claimed_resident_storage(
     }
 }
 
-pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()> {
+pub(super) fn reconcile_context(
+    engine: &super::resident_control_context::ResidentControlContext,
+) -> PyResult<()> {
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    reconcile_context_under_request_lock(engine)
+}
+pub(super) fn reconcile_context_under_request_lock(
+    engine: &super::resident_control_context::ResidentControlContext,
+) -> PyResult<()> {
     let mut cache = engine
         .sample_cache
         .lock()
@@ -2174,6 +2198,18 @@ impl WindowWork {
                 .map_err(|_| "resident ownership lock poisoned")?;
             match self.observe_control() {
                 PlacementObservation::Current(resolved) => {
+                    let proposed = owners[resolved.slot()]
+                        .proposal
+                        .as_ref()
+                        .filter(|proposal| {
+                            Arc::ptr_eq(&proposal.token, &self.token)
+                                && Arc::ptr_eq(&proposal.state, &self.state)
+                                && proposal.expected_revision == self.bank.window_revision()
+                        })
+                        .ok_or("resident proposal/source/window ownership changed")?;
+                    if !self.current() || proposed.publication.status() == "rejected" {
+                        return Err("resident source/window was superseded".into());
+                    }
                     self.state
                         .preparation_clock
                         .observe_at(false, Instant::now())?;
@@ -2317,18 +2353,12 @@ impl WindowWork {
         // Always acquire the worker-only gate BEFORE owners; controls never acquire it.
         let gate = self.preparation_gate.clone();
         let preparation = super::resident_proposal::lock_preparation(&gate, || self.current())?;
-        // Public admission already holds this existing ownership gate. Hold the same gate from
-        // the worker's peak snapshot until every source/component allocation is registered, so
-        // another queued WindowWork cannot overlook partial or cancelled pair preparation.
-        // This serializes window preparation off-thread; the callback never enters this gate.
+        // Pin the original custody row and all promises before the first allocation.
         let (preparation_owners, preparation_slot) = self.current_owners()?;
         let resident = self
             .resident
             .clone()
             .with_history(self.pcm_history.clone(), preparation_slot.slot());
-        if !self.current() {
-            return Err("resident source/window was superseded before allocation".into());
-        }
         let held_readers = self
             .assets
             .held_same_pad_reader_backings(
@@ -2344,54 +2374,118 @@ impl WindowWork {
             self.stem_owner.as_ref(),
             &held_readers,
         )?;
+        let reader_pins = self
+            .assets
+            .pin_resident_backings(&self.resident.account, &held_readers)
+            .map_err(|error| error.to_string())?;
+        // Only the accounting token retains this historical snapshot from here on.
+        drop(held_readers);
+        let window_bytes = (self.end - self.start)
+            .checked_mul(self.old.channels)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("resident window byte overflow")?;
+        let source_reused =
+            self.start == self.old.resident_start() && self.end == self.old.resident_end();
+        // Register the immutable original witness first; final views get their own slots.
+        let original = self
+            .resident
+            .reserve(0, &[&self.old], 1)
+            .map_err(|error| error.to_string())?;
+        let mut source_reservation = resident
+            .reserve(
+                if source_reused { 0 } else { window_bytes },
+                &if source_reused {
+                    vec![&self.old]
+                } else {
+                    Vec::new()
+                },
+                if source_reused { 2 } else { 1 },
+            )
+            .map_err(|error| error.to_string())?;
+        source_reservation
+            .reserve_cold_reader_slot(&self.source_lease, source_reused.then_some(&self.old))
+            .map_err(|error| error.to_string())?;
+        let component_reservation = self
+            .stem_owner
+            .as_ref()
+            .map(|owner| {
+                let same = owner.pair.is_some()
+                    && owner.set.stems.iter().all(|stem| {
+                        stem.same_source(&self.old)
+                            && stem.resident_start() == self.start
+                            && stem.resident_end() == self.end
+                    });
+                let reused: Vec<_> = if same {
+                    owner.set.stems.iter().collect()
+                } else {
+                    Vec::new()
+                };
+                let bytes = if same {
+                    0
+                } else {
+                    window_bytes
+                        .checked_mul(4)
+                        .ok_or("resident component byte overflow")?
+                };
+                // Components do not allocate a source history entry. Its source token already owns it.
+                let mut token = self
+                    .resident
+                    .reserve(bytes, &reused, 9)
+                    .map_err(|error| error.to_string())?;
+                token
+                    .reserve_reader_slots(1)
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(token)
+            })
+            .transpose()?;
+        // Legacy conversion additionally owns a complete reference and complete
+        // converter/alignment buffers before cropping. Promise that whole envelope
+        // before even the selected source read; the existing legacy cap stays above.
+        let transient = self
+            .stem_owner
+            .as_ref()
+            .filter(|owner| owner.pair.is_none())
+            .map(|_| {
+                self.resident
+                    .account
+                    .reserve_transient(super::stem_cache::admitted_stem_pcm_bytes(
+                        self.old.frame_count(),
+                        self.old.channels,
+                    )?)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+        if !self.current() {
+            return Err("resident source/window superseded before allocation".into());
+        }
+        drop(preparation_owners);
         #[cfg(test)]
         {
             super::cold_store::reset_window_read_observation_for_test();
             super::stem_pair::reset_range_observation_for_test();
-        }
-        {
-            // Reserve this existing history slot before source allocation, with no concurrent
-            // same-pad append. Range I/O is worker-only; release the lock before the asset gate.
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            let pad = history
-                .get_mut(preparation_slot.slot())
-                .ok_or("same-pad PCM history missing")?;
-            ensure_window_history_capacity(pad, &self.old, self.start, self.end)?;
+            super::native_owned_work::observe_preparation(
+                super::native_owned_work::WorkPoint::WindowSourceRead,
+            );
         }
         let sample = self
             .source_lease
-            .read_window_reserved(
+            .read_window_preallocated(
                 &self.old,
                 self.start,
                 self.end,
                 self.revision,
                 self.context,
+                0,
                 &|| !self.current(),
-                &resident,
+                Some(&resident),
+                Some(&mut source_reservation),
             )
             .map_err(|error| error.to_string())?;
-        {
-            let mut history = self
-                .pcm_history
-                .lock()
-                .map_err(|_| "PCM history lock poisoned")?;
-            let pad = history
-                .get_mut(preparation_slot.slot())
-                .ok_or("same-pad PCM history missing")?;
-            let reader = Arc::downgrade(&sample.samples);
-            if !pad.iter().any(|held| held.ptr_eq(&reader)) {
-                pad.push(reader);
-            }
-        }
-        if !self.current() {
-            return Err("resident preparation cancelled after range read".into());
-        }
+        drop(self.current_owners()?);
         self.assets
-            .retain_cold_reader(&self.source_lease, &sample)
+            .retain_cold_window_reserved(&self.source_lease, &sample, &mut source_reservation)
             .map_err(|error| error.to_string())?;
+        drop(self.current_owners()?);
         let stems = self
             .stem_owner
             .as_ref()
@@ -2417,6 +2511,7 @@ impl WindowWork {
                     self.binding.binding.sample_rate_hz,
                     &resident,
                     &|| !self.current(),
+                    component_reservation,
                 )?;
                 set.complete_set_identity = owner.set.complete_set_identity.clone();
                 set.accepted_timing = self
@@ -2439,7 +2534,11 @@ impl WindowWork {
         }
         #[cfg(not(test))]
         let _ = peak;
-        drop(preparation_owners);
+        drop(self.current_owners()?);
+        drop(transient);
+        drop(source_reservation);
+        drop(original);
+        drop(reader_pins);
         drop(preparation);
         self.publish_prepared(sample, stems)
     }
@@ -3354,8 +3453,7 @@ fn prepare_window_with_producer_and_trigger(
         resident: super::resident_proposal::ResidentReadContext::reader(
             engine.project_assets.clone(),
             engine.resident_account.clone(),
-        )
-        .with_history(engine.cold_pcm_history.clone(), id),
+        ),
     };
     drop(owners);
     drop(cache);
@@ -3383,22 +3481,29 @@ fn prepare_window_with_producer_and_trigger(
         ownership: engine.input_runtime_ownership.clone(),
         enqueued: false,
     };
+    #[cfg(test)]
+    let observer = super::native_owned_work::take_preparation_observer();
     engine
         .cold_jobs
         .submit(
             reservation.expect("new storage reserved cold capacity"),
-            move || match work.prepare() {
-                Ok(()) => guard.mark_enqueued(),
-                Err(error) => {
-                    let cancelled = !work.current();
-                    work.publication.cancel_unclaimed();
-                    work.state.fail(
-                        &work.binding.ownership,
-                        work.id,
-                        work.publication.expected,
-                        error,
-                        cancelled,
-                    );
+            move || {
+                #[cfg(test)]
+                let _observation =
+                    super::native_owned_work::PreparationObservationScope::install(observer);
+                match work.prepare() {
+                    Ok(()) => guard.mark_enqueued(),
+                    Err(error) => {
+                        let cancelled = !work.current();
+                        work.publication.cancel_unclaimed();
+                        work.state.fail(
+                            &work.binding.ownership,
+                            work.id,
+                            work.publication.expected,
+                            error,
+                            cancelled,
+                        );
+                    }
                 }
             },
         )

@@ -61,6 +61,27 @@ placement, intent, memory reservations and operation-specific acknowledgement.
 - **THEN** its obsolete result cannot publish or borrow another PAD's acknowledgement
 - **AND** actual readers and pending promises retire only after their real use ends
 
+#### Scenario: A source window moves while a real read is held
+- **GIVEN** the original content has promised its complete source/component bytes, owner witnesses, reader locators and source history before I/O
+- **WHEN** its physical placement moves through a pending control mirror during the read
+- **THEN** its immutable history promise follows the moved custody row
+- **AND** Copy retains independent target history, while a retired row or equal-PCM replacement cannot inherit the original promise
+- **AND** final publication still validates the original content lifetime, source/window, proposal and intent
+
+#### Scenario: Historical views end during source preparation
+- **GIVEN** a worker explicitly pins historical PCM for its preparation snapshot
+- **WHEN** the original resident views retire while that worker still holds the PCM
+- **THEN** those actual bytes remain charged once to its own resident scope until its accounting pin ends
+- **AND** a foreign scope's PCM reference alone does not revive an ended local owner
+- **AND** complete legacy conversion promises its separate transient host envelope before any source read
+
+#### Scenario: Registration or binding preflight waits outside Python
+- **GIVEN** a public registration, residency request or current-binding lookup has captured owned shared state
+- **WHEN** native reconciliation or registration preflight waits
+- **THEN** it retains no Python Engine borrow or interpreter execution
+- **AND** registration revalidates current source/window, placement, discard and the original lane lifecycle after its final lock waits
+- **AND** only successful registration advances its order watermark, so failed newer work leaves an earlier viable registration intact
+
 ### Requirement: Background Throughput Preserves Playback Headroom
 Offline jobs SHALL use a coordinated bounded resource policy for concurrent
 child/native CPU work. CPU-only systems SHALL retain a usable same-model path;

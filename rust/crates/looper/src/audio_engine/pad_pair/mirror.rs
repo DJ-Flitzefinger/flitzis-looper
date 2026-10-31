@@ -148,7 +148,7 @@ pub(crate) fn reconcile(engine: &AudioEngine, ticket: &PadPairTicket) -> PyResul
         Err(error) => return Err(PyRuntimeError::new_err(error.to_string())),
     };
     let mut retired_records = Vec::new();
-    let mut retired_history = Vec::new();
+    let mut retired_history = crate::audio_engine::project_assets::PcmHistoryRow::default();
     let runtime_bindings = runtime
         .as_ref()
         .map(|runtime| runtime.publication_bindings());

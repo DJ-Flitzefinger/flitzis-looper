@@ -123,6 +123,24 @@ impl CommittedColdLease {
         cancelled: &dyn Fn() -> bool,
         resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
     ) -> io::Result<SampleBuffer> {
+        self.read_window_preallocated(
+            reference, start, end, revision, context, maximum, cancelled, resident, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::audio_engine) fn read_window_preallocated(
+        &self,
+        reference: &SampleBuffer,
+        start: usize,
+        end: usize,
+        revision: u64,
+        context: ResidentContext,
+        maximum: usize,
+        cancelled: &dyn Fn() -> bool,
+        resident: Option<&crate::audio_engine::resident_proposal::ResidentReadContext>,
+        preallocated: Option<&mut crate::audio_engine::resident_accounting::ResidentReservation>,
+    ) -> io::Result<SampleBuffer> {
         if cancelled() {
             return Err(invalid("resident source read cancelled"));
         }
@@ -186,7 +204,9 @@ impl CommittedColdLease {
             samples: reference.samples.clone(),
             residency: Some(residency.clone()),
         });
-        let mut reservation = if let Some(resident) = resident {
+        let mut reservation = if preallocated.is_none()
+            && let Some(resident) = resident
+        {
             let mut token = resident
                 .reserve(
                     if same_range { 0 } else { length },
@@ -201,9 +221,10 @@ impl CommittedColdLease {
         } else {
             None
         };
+        let mut token = preallocated.or(reservation.as_mut());
         // Live final PCM was admitted by the resident/host reservation above.
         // The old whole-job cap remains for callers without live ownership.
-        let read_maximum = if let Some(token) = reservation.as_ref() {
+        let read_maximum = if let Some(token) = token.as_ref() {
             token
                 .remaining_bytes()
                 .map_err(crate::audio_engine::resident_proposal::admission_io)?
@@ -243,7 +264,7 @@ impl CommittedColdLease {
             samples,
             residency: Some(residency),
         };
-        if let Some(token) = reservation.as_mut() {
+        if let Some(token) = token.as_mut() {
             resident
                 .expect("resident token has context")
                 .commit_sample(token, &sample)
