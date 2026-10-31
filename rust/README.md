@@ -18,6 +18,16 @@ The Python package wrapper lives in:
 src/flitzis_looper_audio/
 ```
 
+The workspace also has independent offline cores. `stem-conversion` supplies
+bounded PCM arithmetic through a separate binding. The standalone `stem-dsp`
+trial implements BS-RoFormer's complete-chunk complex spectral frontend and
+reconstruction using `rustfft`; it has no Python/tensor/device/engine dependency
+and is not linked into the application. Its caller owns original admission and
+immutable readers through actual return. See the
+[STEP25 design](../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
+for original Torch numerical comparisons and all remaining network/CUDA/whole-
+track/quality/distribution requirements. Neither crate is a full separator.
+
 `maturin develop` builds the platform extension into that wrapper package.
 
 The explicit corrected-QM diagnostic reuses `audio_engine/analysis_jobs.rs`

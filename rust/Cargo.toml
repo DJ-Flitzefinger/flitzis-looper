@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/analysis", "crates/looper", "crates/stem-conversion"]
+members = ["crates/analysis", "crates/looper", "crates/stem-conversion", "crates/stem-dsp"]
 resolver = "2"

@@ -48,22 +48,24 @@ These are concrete risks, not measured proof of every reported symptom.
 No restoration of retired SYNC/phase-following features, plugin hosting, new FX,
 automatic private-data migration or deletion. No mandatory NVIDIA hardware,
 callback GPU synchronization or unsupported universal device-latency guarantee.
-Broad Rust migration and larger engine redesign are authorized when useful;
-neither a full port nor final native packages are required for this performance delivery.
-Preserve the single transport and source authority.
+Broad Rust migration and larger engine redesign are authorized when useful.
+Complete native parity, CPU/CUDA release packages and honest Windows/Linux/macOS
+evidence remain required before productive runtime cutover; partial trial steps
+do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Twenty-six coherent steps are recorded in [tasks](tasks.md). STEP18's real native
+Twenty-seven coherent steps are recorded in [tasks](tasks.md). STEP18's real native
 BeatThis chunk experiment is followed by STEP19's complete-source CPU prototype.
 STEP20 adds original input-envelope parity, narrow failure diagnostics and bounded
 actual CPU termination. Unsuccessful CUDA initialization remains explicit with
 cause UNKNOWN. STEP21 adds explicit runtime admission and STEP22 ends unused
 standalone host-buffer lifetimes. STEP23 adds custody of explicitly declared ORT
 package files. STEP24 adds opt-in Windows standalone loader policy and actual
-observed backing-file identity without a closure or CUDA claim. STEP25 retains
-every native CUDA/freshCPU/quality/producer/platform/distribution gate before
-cutover; STEP26 retains ALL former FINAL25 requirements.
+observed backing-file identity without a closure or CUDA claim. STEP25 implements
+an independent BS complex spectral frontend and reconstruction without model
+inference. STEP26 retains every native CUDA/freshCPU/quality/producer/platform/
+distribution gate before cutover; FINAL27 retains ALL former FINAL26 requirements.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

@@ -248,6 +248,15 @@ was source/unit-only. Later CPU model-load readiness is not a BS separation rece
 
 ## Evidence and limits
 
+The isolated [BS spectral Rust trial](../../rust/crates/stem-dsp/src/lib.rs)
+implements pinned STFT2048/hop441, frequency-leading stereo features, four complex
+masks and ISTFT with the original complete chunk length. It is not an application
+route or full network replacement. Original Torch FFT-only comparisons do not
+establish learned-mask, CUDA AMP, whole-track overlap, quality or distribution
+parity; productive separators and dependency closures stay available. The
+[STEP25 design](../../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
+records its caller-owned resource/reader envelope and exact evidence limits.
+
 The [canonical E-STEM/E-PCM/E-CUDA index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
 retains exact full reports, UNKNOWN producer/device lineage, queue/refusal/stale/
 deadline/retirement failures, supported domain histories and remaining installed

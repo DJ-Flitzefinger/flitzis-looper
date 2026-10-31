@@ -331,7 +331,20 @@ native parity continues below, followed by the complete former FINAL24 scope.
 This coherent loader boundary adds a26th step. Every former nativeSTEP24 duty
 continues below as STEP25 and the ENTIRE former FINAL25 continues as STEP26.
 
-## 25. Remaining native parity before cutover
+## 25. Independent BS spectral frontend and reconstruction
+
+- [x] Implement the pinned stereo STFT/features/complex mask/ISTFT path in an
+      independent Rust core with complete extents, finite and cancellation gates.
+- [x] Verify original CPU Torch arithmetic with asymmetric stereo, four distinct
+      complex masks, reflected boundaries, odd tails and the full release chunk.
+- [x] Review independent dependency/resource/reader boundaries and keep learned
+      network, CUDA AMP, complete track and distribution parity explicitly open.
+
+This coherent spectral implementation adds a27th step. STEP26 retains ALL former
+nativeSTEP25 requirements, and FINAL27 retains the ENTIRE former FINAL26 scope.
+No productive closure or installer dependency is removed by this trial.
+
+## 26. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -348,10 +361,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP26, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP27, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 26. Combined regression and final architecture review
+## 27. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

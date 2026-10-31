@@ -976,9 +976,16 @@ against full file identities/SHA. Pins and module references remain until proces
 exit; no CUDA provider is eagerly loaded. Legacy custody-only requests retain
 their behavior. See the [STEP24 design](../openspec/changes/improve-performance-isolation/design.md#step24-impact-opt-in-standalone-windows-loader-and-observed-images)
 for the exact policy, terminal failures and still-unknown closure/producer limits.
-STEP25 retains all native parity requirements and STEP26 all
-former final regression gates. Productive installation/repair, locks and workers
-are unchanged.
+STEP25 adds an independent `flitzis-stem-dsp` crate for the pinned BS-RoFormer
+STFT/features/complex masks/ISTFT, with the original complete chunk length.
+Its [CPU Torch arithmetic oracle](../scripts/bs_spectral_trial_reference.py) uses
+synthetic PCM and four distinct complex masks without model/weight/CUDA work.
+See the [STEP25 design](../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
+for complete geometry, payload promises, cancellation, numerical tolerances and
+reconstruction. This standalone crate is not linked into the App; its workspace
+lock entry only uses the existing `rustfft` dependency. Productive installation/
+repair, Python/model locks and workers remain unchanged. STEP26 retains ALL native
+parity requirements and FINAL27 the ENTIRE former FINAL26 regression scope.
 
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly

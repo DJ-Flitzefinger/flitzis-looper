@@ -220,6 +220,14 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **THEN** the working productive path remains available and the barrier is reported
 - **AND** no successful-load or synthetic-only result is presented as full no-regression acceptance
 
+#### Scenario: An isolated BS spectral core reconstructs a complete chunk
+- **GIVEN** a complete admitted 44.1kHz stereo chunk and four finite complex masks
+- **WHEN** the independent offline Rust trial processes the pinned model's spectral path
+- **THEN** periodic Hann2048, centered reflection, hop441, frequency-leading stereo features, complex mask multiplication and inverse window-envelope normalization preserve the original complete PCM length
+- **AND** shape, finite, allocation and cancellation failures return no partial result; immutable source/mask custody lasts through actual return
+- **AND** original Torch arithmetic comparisons include nonidentity complex masks and edge/tail lengths without neural inference
+- **AND** learned network, CUDA AMP, whole-track chunk overlap, quality, producer and distribution parity remain required before productive runtime removal
+
 #### Scenario: An isolated native trial selects a dynamic runtime
 - **GIVEN** a fresh standalone trial requests dynamic ORT initialization
 - **WHEN** it admits a caller-owned package manifest

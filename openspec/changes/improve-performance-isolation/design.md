@@ -1,5 +1,133 @@
 # Performance audit and implementation design
 
+## STEP25 impact: independent BS spectral frontend and reconstruction
+
+The independent `flitzis-stem-dsp` Rust crate implements the missing complex
+STFT/features/masking/ISTFT portion of the pinned BS-RoFormer path. It uses the
+release configuration in `vendor/bs_roformer/src/flitzis_bs_roformer/model.py`
+and forward path in `network/bs_roformer.py`, not its different hop512 default:
+44.1kHz stereo, periodic Hann2048, FFT2048, hop441, centered reflect padding,
+one-sided unnormalized spectrum, frequency-leading stereo/complex features,
+four complex masks, inverse window-square overlap normalization and explicit
+original PCM length. No file, Python, tensor runtime, engine or device dependency
+enters the core; its only dependency is the already locked `rustfft`.
+
+This trial admits one complete chunk of1025..485100 frames before allocation;
+shorter inputs cannot satisfy the original reflect1024 requirement. Features
+are `[time,frequency,stereo,real/imag]`, masks add the leading four-source axis,
+and output is planar `[stem,stereo,original_frame]`. The original release batch2,
+overlap2 and1GiB ceiling are not changed. A caller must separately promise the
+sum of all simultaneous chunks/batches and retain source/mask/reader custody
+through actual return. Geometry reports the simultaneous caller PCM, features,
+all four masks, four-source output, inverse accumulation/envelope, bounded FFT
+scratch and a conservative1MiB fixed-plan allowance. This is a payload envelope,
+not total process commitment or a replacement for original resource admission.
+Fixed-size FFT planning has ordinary allocator behavior; large payload vectors
+use fallible reservation. No failure/cancel returns partial output.
+
+Original Torch arithmetic, not model inference, will verify asymmetric stereo,
+reflected edges, odd/non-hop tails and complex masks. Tolerances fixed before
+comparison are spectrum `atol=2e-4,rtol=2e-5` and PCM `atol=2e-5,rtol=2e-5` for
+the bounded reference signals/masks. Different FFT/vector-cosine implementations
+may differ in final bits; neither bit equality nor whole-model/audio acceptance
+is assumed. Both imaginary signs, DC/Nyquist real-inverse behavior, source order,
+all original tail samples, finite/shape/overflow and cancellation need checks.
+
+This coherent spectral split grows the plan to27: STEP26 retains EVERY former
+nativeSTEP25 duty and FINAL27 retains the ENTIRE former FINAL26. The learned BS
+network/weights/export/CUDA AMP, complete track reflection/chunks/rolling overlap,
+Demucs complete hybrid path, successful nativeCUDA and actual same-model narrow
+device failure -> complete tree AND reader end -> freshCPU, all source/producer/
+image/OSarch roles, quality/functions/resources/cancel, CPU-only/CUDA release
+bundles/CRT/licenses/LGPLsource+3patches/NVIDIA notices/installer/recovery/full
+footprint and WindowsEXE AND Linux/macOS evidence remain mandatory before cutover.
+All former final original-validator/schema/Pydantic, exact32Rust-parent failures,
+distinct watchdog/registry/resource-pressure UNKNOWN, CPU/CUDA overlap and complete
+quality/device/listening/2-4-6/<=10/architecture/docs/distribution gates remain.
+Productive paths, dependency closures, pins and installer remain; installed
+saving is ZERO. The crate is not linked into the App or its normal packages.
+
+### STEP25 verification and reconstruction evidence
+
+Initial routed checks pass: five native unit controls, strict Clippy for every
+new crate target, Release standalone build, Rustfmt and Python Ruff/format. The
+external Release Native/API setup passes with the existing22 library warnings;
+the productive einops pin remains. The new crate's normal dependency tree has
+only existing `rustfft6.4.1` and its numerical dependencies, no PyO3/ORT/Torch/
+LibTorch. Workspace/lock changes add only this independent package; they do not
+change the App's dependency graph or its Portable installer/runtime closure.
+
+The original CPU Torch2.12.0+cu130 arithmetic oracle and Release CLI pass all five
+complete cases below under fresh original admission, without model inference.
+Masks vary with stem/time/frequency/channel and include imaginary DC/Nyquist
+terms. PCM has asymmetric tones, right-channel Nyquist content and both edge
+impulses. Every feature and all four stereo outputs, including every tail sample,
+are finite and within the predeclared tolerances; they are not generally bit equal.
+
+| Case | PCM frames | STFT frames | Spectrum max absolute error | PCM max absolute error |
+| --- | ---: | ---: | ---: | ---: |
+| Minimum reflection | 1025 | 3 | 7.62939453125e-6 | 4.470348358154297e-8 |
+| Silence / hop boundary | 1323 | 4 | 0 | 0 |
+| FFT boundary | 2048 | 5 | 7.62939453125e-6 | 5.960464477539063e-8 |
+| Odd tail | 4099 | 10 | 1.52587890625e-5 | 4.470348358154297e-8 |
+| Release chunk | 485100 | 1101 | 1.52587890625e-5 | 7.450580596923828e-8 |
+
+Release-chunk spectrum RMS is5.028630278359165e-7; PCM RMS is
+7.420437580691347e-9. Its complete native output has3880800 samples and SHA256
+`51cf8a8e454045ddbf858a3f042af84ca6d1206328ffad512fb6a930b62c9464`;
+the original output SHA is
+`53dc63901e9fcb977cad48a6633e67ec6db78f00e00fdd5c99edee863b1543d8`.
+The reported single-chunk payload envelope is114721872 bytes, not total process
+memory, a Job receipt or the complete release batch/track promise.
+
+Seven actual CLI negatives reject oversized geometry, truncated PCM/masks,
+nonfinite PCM/masks, overflowing finite masks and existing output; stdout stays
+empty, new success files remain absent and the existing output hash is unchanged.
+The original supervisor labels these explicit exit1 failures `worker_crashed`;
+they are terminal diagnostic rejections, not device failures/fallback receipts.
+One joined executor was observed from before the first scope through all13/13
+actual original scope closes; pending/inflight0 and sampling errors empty. Native
+unit controls additionally prove identity/zero/distinct-source scaling, reflected
+odd tails, rate/extent limits, finite failures and cancellation before/during
+forward and inverse work. No partial core result can escape an error.
+
+Reconstruct through the normal routed development entry: run the new crate's
+locked tests and all-target Clippy, then build Release `--example bs_spectral`.
+Under the existing admitted offline command owner, run
+`scripts/bs_spectral_trial_reference.py NEW_CACHE_DIRECTORY` with the unchanged
+main Python/Torch environment (CPU pools1), then for each recorded case run
+`bs_spectral PCM_F32 MASK_F32 FRAMES NEW_FEATURES_F32 NEW_PCM_F32`. Compare every
+float with the script's declared tolerances and assert exact lengths/finiteness.
+The reference explicitly creates CPU tensors and never loads a model. The CLI
+keeps exclusive diagnostic outputs; it supplies no application provenance,
+atomic product-generation transaction or built-in resource admission/cancellation
+interface. Its caller retains the original tree/reader/resource owner. The core
+itself checks its cancellation callback at bounded validation/FFT/overlap/output
+blocks and final return. The fixed CPU spectral arithmetic is no nativeCUDA,
+learned-network, CUDA-AMP, full-quality or whole-source migration acceptance.
+
+Generated `performance-step25-*` logs and `step25-spectral-v1` fixtures/binary stay
+reconstructible cache, not source authority. All previous CPU/failedCUDA and
+fullhost-UNKNOWN evidence remains separate and source-compatible, with no new NN.
+
+Final six routed static checks pass in42.40s: all five strengthened native controls,
+all-target warning-as-error Clippy, Rustfmt, Ruff/format and strict isolated oracle
+typing, strict OpenSpec/local Markdown targets/whitespace, exact unchanged
+productive sources/locks plus independent dependency tree, original numerical/
+CPU-cancel/failedCUDA scope evidence reuse, and both original full-host validators
+still UNKNOWN with all roles retained. Initial build/control harness passes22.20s;
+the five numerical/seven terminal controls pass in11.14s. These are separate
+scoped checks, not a whole-product matrix or latency benchmark.
+
+Actual component platform: Windows11/10.0.26200 AMD64,64bit, Rust1.95.0
+(`59807616e1fa2540724bfbac14d7976d7e4a3860`), LLVM22.1.2 and Cargo1.95.0.
+Release `bs_spectral.exe` has1051136 bytes/SHA256
+`0e5948b9554010ac13043954d09936fef0bf437a3577d78aa245ba33f72d3b33`.
+This is an actual Windows component file, not complete Compiler/Binary/FullProducer/
+MappedImages attestation or Linux/macOS execution. Systems PRE/frozen POST,
+Methods and exactly one independent final actual-diff chain are scoped-publication
+CLEAR with no P1/P2 findings; all review readers end before branch release.
+
 ## STEP24 impact: opt-in standalone Windows loader and observed images
 
 The new explicit `FLITZIS_TRIAL_ORT_LOAD_POLICY=package-system32` mode requires
