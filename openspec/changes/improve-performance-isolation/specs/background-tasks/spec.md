@@ -187,3 +187,16 @@ mandatory on CPU-only systems.
 - **WHEN** model support, available memory or measured total performance favors CPU
 - **THEN** automatic selection may choose CPU without treating GPU presence as a speed guarantee
 - **AND** GPU initialization/execution failure retains the same model's guarded CPU fallback
+
+#### Scenario: Passive calibration selects an existing separator route
+- **GIVEN** completed verified observations share the exact source, shape, model/configuration, complete producer and runtime/driver/device identity
+- **WHEN** complete transfer-inclusive CPU cost is meaningfully lower, or measured CUDA allocation exceeds current free device headroom
+- **THEN** automatic selection may choose CPU for that workload without starting additional calibration inference
+- **AND** expired, unknown, failed, cancelled, partial or fallback observations cannot establish a performance preference
+- **AND** explicit CPU intent, shared host admission and playback gates retain authority
+
+#### Scenario: A CUDA attempt fails outside its device operation
+- **GIVEN** the original child encounters a source, checkpoint, decode, PCM or encoder failure
+- **WHEN** that error has no dedicated device-operation failure receipt and exit status
+- **THEN** the attempt fails without repeating the model on CPU
+- **AND** only a recognized placement, transfer or inference CUDA fault can request the same-model CPU fallback

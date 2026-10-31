@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from flitzis_looper.bs_input_provenance import BS_INPUT_CONTRACT_ENV, verified_input_output
@@ -24,9 +25,16 @@ from flitzis_looper.controller.stem_generation import (
     _validate_request,
     _write_project_cache_artifacts,
     demucs_cache_environment,
-    detect_torch_cuda_available,
+    detect_torch_cuda_capability,
     run_command,
 )
+from flitzis_looper.controller.stem_provider import (
+    CudaCapability,
+    ProviderCalibration,
+    ProviderPlan,
+    StemProviderSelector,
+)
+from flitzis_looper.inference_provider import is_cuda_failure
 from flitzis_looper.stem_execution import completed_execution, report_execution
 
 __all__ = ["BsRoformerStemGenerationBackend", "verify_model_assets"]
@@ -39,10 +47,11 @@ class BsRoformerStemGenerationBackend:
         self,
         *,
         command_runner: CommandRunner = run_command,
-        cuda_detector: CudaDetector = detect_torch_cuda_available,
+        cuda_detector: CudaDetector = detect_torch_cuda_capability,
     ) -> None:
         self._command_runner = command_runner
         self._cuda_detector = cuda_detector
+        self._provider_selector = StemProviderSelector()
 
     def generate(
         self, request: StemGenerationRequest, progress: StemProgressCallback
@@ -58,7 +67,9 @@ class BsRoformerStemGenerationBackend:
         if request.encoder_contract is not None:
             env[BS_INPUT_CONTRACT_ENV] = request.encoder_contract
         _require_demucs_audio_tools(env, self._command_runner)
-        devices = self._devices(request, env)
+        plan = self._provider_plan(request, env)
+        devices = plan.devices
+        started = time.monotonic()
         cuda_error = None
         request.cache_dir.mkdir(parents=True, exist_ok=True)
         for device in devices:
@@ -86,7 +97,11 @@ class BsRoformerStemGenerationBackend:
                     result = self._command_runner(args, cwd=Path.cwd(), env=child_env)
                 if result.returncode != 0:
                     diagnostic = _command_diagnostic(result)
-                    if device == "cuda" and "cpu" in devices:
+                    if (
+                        device == "cuda"
+                        and "cpu" in devices
+                        and is_cuda_failure(result.returncode, result.stdout)
+                    ):
                         cuda_error = diagnostic
                         progress(0.05, "CUDA failed; retrying same BS-RoFormer model on CPU")
                         continue
@@ -120,17 +135,40 @@ class BsRoformerStemGenerationBackend:
                 diagnostic=diagnostic[:1000],
                 decoder_verified=decoder_verified,
                 execution=execution,
+                provider_calibration=ProviderCalibration(
+                    plan,
+                    time.monotonic() - started,
+                    verified=decoder_verified,
+                    observed_at=time.monotonic(),
+                ),
             )
         msg = "BS-RoFormer did not run"
         raise StemGenerationError(msg)
 
+    def accept_calibration(
+        self, _request: StemGenerationRequest, result: StemGenerationResult
+    ) -> None:
+        """Promote diagnostics only after the original controller's final guards."""
+        if result.provider_calibration is not None:
+            self._provider_selector.accept(result.provider_calibration, result.execution)
+
     def _devices(
         self, request: StemGenerationRequest, env: dict[str, str]
     ) -> tuple[StemDevice, ...]:
+        return self._provider_plan(request, env).devices
+
+    def _provider_plan(self, request: StemGenerationRequest, env: dict[str, str]) -> ProviderPlan:
         if request.device_policy == "cpu":
-            return ("cpu",)
+            return self._provider_selector.cpu_plan(request, MODEL_NAME)
         try:
-            available = self._cuda_detector(env, self._command_runner)
+            with (
+                tempfile.TemporaryDirectory(prefix="flitzis-provider-") as name,
+                fresh_python_source_environment(
+                    env, Path(name), source_roots=request.python_source_roots
+                ) as child_env,
+            ):
+                observed = self._cuda_detector(child_env, self._command_runner)
         except OSError:
-            available = False
-        return ("cuda", "cpu") if available else ("cpu",)
+            observed = False
+        capability = observed if isinstance(observed, CudaCapability) else CudaCapability(observed)
+        return self._provider_selector.plan(request, MODEL_NAME, capability)

@@ -17,6 +17,11 @@ from flitzis_looper.bs_input_provenance import (
     finish_input_attempt,
     input_completion_line,
 )
+from flitzis_looper.inference_provider import (
+    CUDA_FAILURE_EXIT,
+    CudaProviderError,
+    emit_cuda_failure,
+)
 from flitzis_looper.offline_runtime import configure_child
 from flitzis_looper.stem_cancellation import (
     CANCEL_EXIT_CODE,
@@ -86,7 +91,11 @@ def main() -> None:
     })
     sys.stdout.write(
         completed_execution_line(
-            "bs-roformer", "BS-RoFormer MUSDB18HQ", args.device, threads=threads
+            "bs-roformer",
+            "BS-RoFormer MUSDB18HQ",
+            args.device,
+            threads=threads,
+            cuda_peak_bytes=torch.cuda.max_memory_reserved() if args.device == "cuda" else None,
         )
         + "\n"
     )
@@ -105,6 +114,9 @@ if __name__ == "__main__":
     except StemInferenceCancelledError as error:
         emit_cancellation_ack(error)
         sys.exit(CANCEL_EXIT_CODE)
+    except CudaProviderError as error:
+        emit_cuda_failure(error)
+        sys.exit(CUDA_FAILURE_EXIT)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         sys.stderr.write(str(error) + "\n")
         sys.stderr.flush()

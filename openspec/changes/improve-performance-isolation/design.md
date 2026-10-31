@@ -1476,6 +1476,175 @@ for each coherent change and the combined matrix at the final boundary; reuse
 unchanged compatible evidence. Protect running Apps, held Native and private
 audio/settings. Headless checks do not establish listening/device acceptance.
 
+## STEP17: bounded provider selection and measured retirement
+
+Reuse immutable scoped PCM backing/reader accounting, the existing bounded pools,
+STEP16 shared heavy admission, half-allowance child promise and original host floors.
+Measure actual private commit, working set, page faults and process/reader tails
+separately from unique PCM; neither independent peaks nor free physical RAM explain
+the reported commit-pressure cause. No callback parallelism or new pool is planned.
+
+Both separator adapters share bounded passive CPU/CUDA cost policy: at most 32
+exact source/model/configuration/complete-producer/runtime/driver/device keys,
+ten-minute expiry, verified complete model-attempt-through-artifact costs, and a 15% CPU
+advantage before changing the cold CUDA preference. Actual observed CUDA allocator
+peak plus 256 MiB device margin may veto CUDA using fresh queried VRAM. This is
+not total VRAM enforcement or a second host ledger; existing host/playback guards
+remain authoritative. No extra calibration inference/thread or persistent cache.
+Unknown source/producer/driver/UUID stays uncalibrated. In particular the existing
+full-host validator UNKNOWN still disables producer-bound learning; it is not
+bypassed to advertise automatic optimization. New roles remain in full attestation.
+Explicit CPU never queries/initializes CUDA; a recent queried identity may label
+its passive observation, while every later Auto plan freshly queries identity and
+headroom. First CPU without a recent identity remains uncalibrated. The common
+decision/preflight cost is excluded consistently from both route totals; model
+launch/import/load, inference, transfers, outputs and actual tree/reader/artifact
+settlement are included. This is passive calibration, not paired quality evidence.
+Candidate data remains serializable and owns no selector, reader or lock. Only
+the original controller's final positive source/producer verification, successful
+`finish_read`/resource closure and uncancelled non-playback outcome promote it to
+the captured backend. A normally demoted UNKNOWN result cannot train preferences.
+Repeated promotion retains its original timestamp and cannot renew the TTL.
+
+The disposable query binds Torch/toolkit, OS/architecture, actual device UUID,
+CUDA API capability and the installed graphics-driver release. The latter comes
+from [NVML's driver query](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlSystemQueries.html);
+`cuDriverGetVersion` alone would only identify supported CUDA API capability.
+Missing driver/UUID information leaves calibration unknown, while a tentative
+available CUDA route can still execute. No NVML Python package is added.
+
+Only a narrow recognized CUDA placement/transfer/inference fault emits the dedicated
+failure exit/marker. Model, source, decoding, PCM, encoding, cancellation and host/
+playback failures remain terminal. Completed execution receipts still require real
+successful model execution; query availability and policy plans grant no OwnACK.
+Its marker uses the existing independently bounded stdout-receipt channel and
+dedicated exit 70; readable stderr compaction cannot erase it. Duplicate or
+oversized receipts remain invalid, including when diagnostics exceed the tail.
+
+### Scoped verification and complete-process observations
+
+The selected nine Python/vendor files passed 187 tests. A final overlapping
+31-test selection passed: 27 provider/controller checks plus four static/full-host
+checks, including strict mypy on 11 product files, Ruff/format on 17 Python files,
+strict OpenSpec and then-current Markdown links/whitespace.
+The final documentation-only check passed on five Markdown files and 46 local
+targets, with whitespace clean; anchors were not separately rescored.
+Both complete manifests remain UNKNOWN at the ORIGINAL
+`StemExecution._coherent_fallback` validator; new
+provider/resource roles are retained and need honest final attestation. Earlier
+unsupported scalar-expression/default-factory declarations were represented with
+equivalent literals and explicit timestamps, without changing the verifier.
+The first combined vendor collection collided on `tests`; importlib collection
+fixed the invocation. Initial lint/format failures are retained in the logs.
+
+Five existing small Native tests passed across two fresh-process selections,
+with original stack settings and 602 byte-equal Rust/Cargo/embedded-Python/probe
+inputs. The reused test executable SHA256 is
+`5cc2f0b0ec906676c34aba481b7b123d63c5da7ea661331088ecf0b23161c8ad`.
+This is compatible component/test-source evidence, not compiler/image or whole
+producer attestation. One embedded-Python attempt initially lacked the private
+environment's site-packages; matching the existing Rust wrapper fixed that setup.
+
+| Exact Native leaf | Wall s, n=1 | Samples | Owned-tree private peak bytes | Concurrent observer + tree private peak bytes | Concurrent working-set peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `concurrent_components_share_backings_and_keep_independent_own_ack_and_reservations` | 0.8277832 | 28 | 304304128 | 397705216 | 425795584 |
+| `cancelled_component_gate_waiter_retires_before_slow_reader_returns` | 0.7923033 | 27 | 304148480 | 397549568 | 425226240 |
+| `cancelled_real_source_reader_releases_promises_only_after_worker_return` | 1.0416305 | 35 | 592613376 | 686014464 | 697692160 |
+| `conversion_cancel_keeps_real_worker_source_and_processing_until_native_return` | 2.9191317 | 95 | 656220160 | 751235072 | 769093632 |
+| `rejected_created_material_retires_only_after_last_native_and_actual_marker_reader_return` | 0.4389963 | 15 | 8122368 | 103137280 | 136110080 |
+
+The first three use real component/source holds, independent OwnACKs and four
+shared immutable Arc backings at two PADs; no additional mutable voice sharing.
+Cancellation preserves actual worker/reader promises until return. The fourth
+joins the actual Python pool and reclaims all 34 admission permits; the fifth
+checks physical deletion only after the real Native/marker reader ends. All five
+owned scopes/trees/readers retired with zero pending scopes and no sampling errors.
+Observer private bytes returned to their exact per-process baseline in these
+short attempts; this does not establish a production memory plateau or leak bound.
+Root test-process cumulative faults were respectively 76736, 76614, 143768, 163543
+and 5420; these combine soft and hard faults, not measured pagefile traffic.
+Host caller/system counters are sequential observer-context samples. Concurrent
+sampled sums are distinct from individual lifetime peaks; no independent peaks
+were added. Existing PCM/pool/callback architecture is retained: these observations
+do not justify another cache, pool, callback parallelism or broad port by themselves.
+
+### Actual CUDA and same-model failure-to-CPU
+
+A generated one-second 44100-Hz stereo PCM16 source, SHA256
+`2fb0179c14bb7b968c700b2c3adad9991f1071f517107f2e064562436a76a06d`, ran through
+the real Demucs htdemucs adapter on the RTX 5090 Laptop with Torch 2.12.0+cu130.
+The actual driver/UUID query produced a complete identity, with 24275582976 free
+device bytes. Successful CUDA inference reported numerical pools 1/1 and a
+968884224-byte Torch reserved-allocation peak. This is not total device memory.
+
+A separate disposable CUDA child applied Torch's local allocator fraction 0.001
+before the same model placement/inference: actual 2-MiB allocation failed with
+24.44 MiB allowed on the 23.86-GiB device. The original marker/exit traversed the
+owned command and actual adapter, then a fresh child completed the SAME model,
+source and quality configuration on CPU with a true fallback receipt and pools
+1/1. No fake exception or OS/driver/pagefile setting change was used. Five complete
+output WAVs on each route had the required geometry and passed full verification.
+
+| Scenario, n=1 | Complete backend wall s | Observed owned private peak bytes | Concurrent observer + tree private peak bytes | Concurrent working-set peak bytes | Closed scopes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Successful CUDA | 33.8149413 | 3467931648 | 3543519232 | 1756336128 | 5/5 |
+| Actual CUDA failure followed by CPU | 26.1269543 | 2214486016 | 2290876416 | 1743724544 | 6/6 |
+
+These wall spans include preflight/query and complete artifacts; the fallback
+span also includes its failed CUDA attempt. They are NOT comparable CPU/CUDA
+speed samples, inference-kernel timings or calibration training. Minimum observed
+system commit headroom was 10483814400/11836661760 bytes. All tree/reader scopes
+closed; observer private bytes rose 864256/839680 bytes in the two attempts, which
+neither proves a leak nor attributes the historical pressure cause. Uncontrolled
+Demucs random shifts confound the five output differences (maximum PCM16 code
+differences 53/495/67/1606/1124 in vocals/drums/bass/melody/instrumental order).
+No device numerical equivalence, musical/audio-quality acceptance or improvement
+is inferred. No extra NN run is needed merely to improve these numbers.
+
+### Additional-provider decision and remaining gates
+
+The observed AMD 610M is hardware presence, without AMD inference evidence.
+[DirectML](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html)
+is a practical Windows DX12 Intel/AMD route, requiring matching ONNX operators,
+sequential execution, disabled memory patterns and one Run per session; new Windows
+deployment development favors [WinML](https://onnxruntime.ai/docs/get-started/with-windows.html).
+[OpenVINO AUTO](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/auto-device-selection.html)
+can choose Intel devices and CPU startup, but its precision/batching policy does
+not supply this product's source/quality/cost/headroom proof. BS currently uses
+STFT/ISTFT, complex tensors and attention, with no ready ONNX model artifact.
+Adding these providers now would require exported-model/operator/precision parity,
+pinned native closures, installer/recovery and actual hardware validation before
+the STEP18 inference boundary. That cost is disproportionate for this delivery;
+no measured iGPU slowdown or universal incompatibility is claimed.
+
+The [released ROCm matrix](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
+does not list this 610M/9955HX3D configuration. Development
+[TheRock targets](https://github.com/ROCm/TheRock/blob/main/SUPPORTED_GPUS.md)
+are not release/driver/model acceptance. No Intel hardware execution is available
+in this result. UMA/shared RAM remains the existing host commit/physical domain,
+never an additional free GPU allowance. Extra AMD/Intel providers are therefore
+deferred with these concrete export/package/parity costs; CPU fallback stays.
+NVIDIA CUDA is mandatory and is not included in that discretion.
+
+KeyNet keeps its existing model/runtime and local thread limits. Its ORT rc12
+[builder defaults](https://raw.githubusercontent.com/pykeio/ort/v2.0.0-rc.12/src/session/builder/mod.rs)
+include an efficiency policy; lack of GPU Cargo features alone is not attested
+effective CPU-provider execution. No new effective KeyNet EP claim is made.
+STEP18 retains practical independent native inference/Torch removal with full
+parity and no LibTorch relabel. FINAL19 retains full-host attestation, all exact
+32 parent failures/watchdog/registry unknowns, quality, BS/BeatThis CUDA and real
+fallback, post-replacement CUDA, CPU-only installation, platform distribution and
+combined 2/4/6-PAD/<=10 stress/overlap gates. Playback gating is not overlap proof.
+
+Reconstruction uses the existing routed test entry with the actual writer,
+the exact five Native leaves above (resolve their full names from `--list`), the
+existing `stem_batch_neural_native_probe._OwnedProcessObservation` and original
+Windows DLL/embedded-Python environment. Hardware runs use the stock captured
+Demucs CLI options and same source; only the failure child gets its local Torch
+allocator quota. Logs `performance-step17-{python-second,static-final,static-memory,
+static-memory-final,cuda,format-final,docs-final}.log` preserve the precise successes and setup
+failures. The scoped runs overlap; they are not a new clean whole-product matrix.
+
 ## STEP16: coordinated background resource admission
 
 The existing stem pool, six admission lanes and single analysis owner remain

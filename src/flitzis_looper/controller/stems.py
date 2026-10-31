@@ -4824,6 +4824,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 request = replace(
                     request,
                     encoder_contract=self._processing_contract(request, processing[1]),
+                    producer_identity=processing[1],
                     python_source_roots=(
                         processing_source_roots(request, processing[0])
                         if processing[1] is not None
@@ -4976,6 +4977,22 @@ class StemController(BaseController):  # noqa: PLR0904
                     self._settled_job_event(job, error="Stem inference worker failed unexpectedly")
                 )
         if event is not None:
+            calibration = event.result.provider_calibration if event.result is not None else None
+            proven_cost = (
+                job.generation_fingerprint is not None
+                and request.producer_identity is not None
+                and job.producer_identity == request.producer_identity
+            )
+            if (
+                event.event_type == "success"
+                and calibration is not None
+                and proven_cost
+                and not job.cancel_event.is_set()
+                and not self._stem_playback_active.is_set()
+            ):
+                receiver = getattr(self._stem_backend, "accept_calibration", None)
+                if callable(receiver):
+                    receiver(request, event.result)
             self._put_generation_event(event)
 
     @staticmethod

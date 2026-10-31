@@ -50,3 +50,12 @@ class SelectedStemGenerationBackend:
             msg = f"Unsupported stem separator: {request.separator}"
             raise StemGenerationError(msg)
         return backend.generate(request, progress)
+
+    def accept_calibration(
+        self, request: StemGenerationRequest, result: StemGenerationResult
+    ) -> None:
+        """Send final verified cost data to the original captured backend only."""
+        backend = self._backends.get(request.separator)
+        receiver = getattr(backend, "accept_calibration", None)
+        if callable(receiver):
+            receiver(request, result)

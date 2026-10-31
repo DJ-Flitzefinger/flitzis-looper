@@ -26,6 +26,12 @@ from flitzis_looper.encoder_provenance import (
     inspect_encoder,
     record_encoder,
 )
+from flitzis_looper.inference_provider import (
+    CUDA_FAILURE_EXIT,
+    CudaProviderError,
+    cuda_operation,
+    emit_cuda_failure,
+)
 from flitzis_looper.offline_runtime import configure_child, ffmpeg_command
 from flitzis_looper.pcm16_wav import PcmWavReader, discard_owned_file
 from flitzis_looper.stem_cancellation import (
@@ -372,10 +378,11 @@ def _cancellable_cli(cancellation: StemCancellation) -> Iterator[_ExecutionObser
 
     def apply_model(*args: object, **kwargs: object) -> Tensor:
         cancellation.checkpoint("before_model_batch")
-        prediction = original_apply(*args, **kwargs)
+        device = str(kwargs.get("device", "unknown")).split(":", 1)[0]
+        with cuda_operation(device):
+            prediction = original_apply(*args, **kwargs)
         # Stock Demucs moves computation to this explicit device, and may return
         # the completed PCM on CPU. Failed calls never confirm an execution.
-        device = str(kwargs.get("device", "unknown")).split(":", 1)[0]
         execution.devices.add(device)
         cancellation.checkpoint("after_model_batch")
         return prediction
@@ -415,9 +422,14 @@ def main() -> None:
         and execution.devices <= {"cpu", "cuda"}
         and execution.model_name
     ):
+        device = next(iter(execution.devices))
         sys.stdout.write(
             completed_execution_line(
-                "demucs", execution.model_name, next(iter(execution.devices)), threads=threads
+                "demucs",
+                execution.model_name,
+                device,
+                threads=threads,
+                cuda_peak_bytes=torch.cuda.max_memory_reserved() if device == "cuda" else None,
             )
             + "\n"
         )
@@ -431,3 +443,6 @@ if __name__ == "__main__":
     except StemInferenceCancelledError as error:
         emit_cancellation_ack(error)
         sys.exit(CANCEL_EXIT_CODE)
+    except CudaProviderError as error:
+        emit_cuda_failure(error)
+        sys.exit(CUDA_FAILURE_EXIT)

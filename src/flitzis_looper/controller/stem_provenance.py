@@ -85,6 +85,10 @@ def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         package / "offline_runtime.py",
         package / "system_resources.py",
         package / "controller" / "stem_resources.py",
+        package / "inference_provider.py",
+        package / "controller" / "stem_provider.py",
+        package / "controller" / "stem_identity.py",
+        package / "controller" / "stem_separators.py",
         package / "__init__.py",
     )
 
@@ -104,6 +108,7 @@ def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
             request.model_cache_dir / CHECKPOINT_FILENAME,
             request.model_cache_dir / CONFIG_FILENAME,
             *(package / name for name in BS_PRODUCER_FILES),
+            project_package / "provider_probe.py",
             *_host_processing_paths(request),
             encoder,
             *supported_encoder_images(encoder)[1:],
@@ -124,6 +129,7 @@ def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         *(request.model_cache_dir / name for name in DEMUCS_REQUIRED_CHECKPOINTS["htdemucs"]),
         *(package / name for name in DEMUCS_PRODUCER_FILES),
         project_package / "demucs_streaming.py",
+        project_package / "provider_probe.py",
         *_host_processing_paths(request),
         encoder,
         *supported_encoder_images(encoder)[1:],

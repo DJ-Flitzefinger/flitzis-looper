@@ -183,24 +183,36 @@ same-model fallback and combined live acceptance continue through STEP17-19.
 
 ## 17. PCM, multicore and offline GPU refinements
 
-- [ ] Measure PCM sharing/retirement, total process memory, paging and worker tails.
-- [ ] Implement justified remaining bottleneck fixes; record measured no-change
+- [x] Measure PCM sharing/retirement, total process memory, paging and worker tails.
+- [x] Implement justified remaining bottleneck fixes; record measured no-change
       decisions when broad porting, callback parallelism or additional CUDA
       offloads add no benefit, preserving mandatory CUDA inference support.
-- [ ] Preserve CPU-only operation, one scheduler/time authority and bounded memory;
+- [x] Preserve CPU-only operation, one scheduler/time authority and bounded memory;
       verify transfer-inclusive CUDA gains only where an actual route changes.
 - [ ] Retain and validate NVIDIA CUDA as a mandatory supported path, including
       native model replacements; optional-provider tradeoffs cannot remove CUDA.
-- [ ] Investigate AMD-capable provider alternatives and implement a practical
+- [x] Investigate AMD-capable provider alternatives and implement a practical
       equivalent path where supported; retain CPU fallback and distinguish real
       AMD hardware evidence from capability/mocked tests.
 - [ ] Include Intel/AMD integrated GPUs; implement hardware/provider-aware
       automatic per-workload selection using actual support, total measured cost
       and playback/memory headroom, with bounded off-path calibration, truthful
       effective device receipts and reliable CPU fallback.
-- [ ] Weigh each additional non-CUDA provider's measured benefit against implementation/testing,
+- [x] Weigh each additional non-CUDA provider's measured benefit against implementation/testing,
       packaging, drivers and maintenance; reject disproportionate or marginal
       paths and record that decision rather than guarantee every GPU.
+
+STEP17 delivers shared bounded passive CPU/CUDA policy and narrow device fallback,
+plus actual Demucs CUDA execution and a real allocator failure followed by the
+same model on CPU. Five small Native sharing/retirement tests and observed process
+memory/fault counts retain their exact limits; hard paging, leak cause, general
+plateau and deadlines are not established. AMD/Intel additions are explicitly
+deferred for current model-export/package/parity costs, with no measured iGPU
+speed claim. The automatic-selection checkbox remains open because complete
+producer UNKNOWN currently disables cost learning; its original validator gate
+and all new roles require final attestation. The CUDA checkbox remains open for
+BS/BeatThis and native replacements, quality, CPU-only/distribution and combined
+acceptance. These are retained FINAL19 gates, not a failure to preserve CUDA.
 
 ## 18. Native inference and practical PyTorch removal
 

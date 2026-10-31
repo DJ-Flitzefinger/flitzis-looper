@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,11 +32,19 @@ from flitzis_looper.controller.stem_artifacts import (
     write_project_cache_artifacts as _write_project_cache_artifacts,
 )
 from flitzis_looper.controller.stem_process import run_stem_command
+from flitzis_looper.controller.stem_provider import (
+    CudaCapability,
+    ProviderCalibration,
+    ProviderPlan,
+    StemProviderSelector,
+    parse_cuda_capability,
+)
 from flitzis_looper.encoder_provenance import (
     ENCODER_CONTRACT_ENV,
     ENCODER_RESULT,
     verified_encoder_output,
 )
+from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
 from flitzis_looper.models import STEM_KINDS, StemSeparator
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_execution import (
@@ -98,6 +107,7 @@ class StemGenerationRequest:
     encoder_contract: str | None = None
     python_source_roots: tuple[Path, ...] = ()
     original_bytes: int | None = None
+    producer_identity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +123,7 @@ class StemGenerationResult:
     encoder_verified: bool = False
     decoder_verified: bool = False
     execution: StemExecution | None = None
+    provider_calibration: ProviderCalibration | None = None
 
 
 class CommandRunner(Protocol):
@@ -130,7 +141,9 @@ class CommandRunner(Protocol):
 class CudaDetector(Protocol):
     """Detect CUDA availability outside startup and outside the audio callback."""
 
-    def __call__(self, env: dict[str, str], command_runner: CommandRunner) -> bool: ...
+    def __call__(
+        self, env: dict[str, str], command_runner: CommandRunner
+    ) -> bool | CudaCapability: ...
 
 
 class StemGenerationBackend(Protocol):
@@ -171,6 +184,22 @@ def detect_torch_cuda_available(env: dict[str, str], command_runner: CommandRunn
         env=env,
     )
     return result.returncode == 0
+
+
+def detect_torch_cuda_capability(
+    env: dict[str, str], command_runner: CommandRunner
+) -> CudaCapability:
+    """Query actual identity/headroom without claiming any completed model execution."""
+    result = command_runner(
+        [
+            sys.executable,
+            "-c",
+            "import runpy; runpy.run_module('flitzis_looper.provider_probe', run_name='__main__')",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+    )
+    return parse_cuda_capability(result.returncode, result.stdout)
 
 
 def default_demucs_model_cache_dir(
@@ -221,11 +250,12 @@ class DemucsStemGenerationBackend:
         *,
         model_name: str = "htdemucs",
         command_runner: CommandRunner = run_command,
-        cuda_detector: CudaDetector = detect_torch_cuda_available,
+        cuda_detector: CudaDetector = detect_torch_cuda_capability,
     ) -> None:
         self._model_name = model_name
         self._command_runner = command_runner
         self._cuda_detector = cuda_detector
+        self._provider_selector = StemProviderSelector()
 
     def generate(
         self,
@@ -247,7 +277,9 @@ class DemucsStemGenerationBackend:
         _require_demucs_audio_tools(env, self._command_runner)
         _require_torchcodec(env, self._command_runner)
 
-        devices = self._devices_for_request(request, env)
+        plan = self._provider_plan(request, env)
+        devices = plan.devices
+        started = time.monotonic()
         cuda_error: str | None = None
 
         for device in devices:
@@ -260,7 +292,11 @@ class DemucsStemGenerationBackend:
                     result = self._run_demucs(request, temp_dir, child_env, device)
                 if result.returncode != 0:
                     failure_diagnostic = _command_diagnostic(result)
-                    if device == "cuda" and "cpu" in devices:
+                    if (
+                        device == "cuda"
+                        and "cpu" in devices
+                        and is_cuda_failure(result.returncode, result.stdout)
+                    ):
                         cuda_error = failure_diagnostic
                         continue
                     raise StemGenerationError(failure_diagnostic)
@@ -299,27 +335,46 @@ class DemucsStemGenerationBackend:
                 diagnostic=_bounded_text(diagnostic) if diagnostic is not None else None,
                 encoder_verified=encoder_verified,
                 execution=execution,
+                provider_calibration=ProviderCalibration(
+                    plan,
+                    time.monotonic() - started,
+                    verified=encoder_verified,
+                    observed_at=time.monotonic(),
+                ),
             )
 
         msg = "Demucs did not run"
         raise StemGenerationError(msg)
+
+    def accept_calibration(
+        self, _request: StemGenerationRequest, result: StemGenerationResult
+    ) -> None:
+        """Promote diagnostics only after the original controller's final guards."""
+        if result.provider_calibration is not None:
+            self._provider_selector.accept(result.provider_calibration, result.execution)
 
     def _devices_for_request(
         self,
         request: StemGenerationRequest,
         env: dict[str, str],
     ) -> tuple[StemDevice, ...]:
+        return self._provider_plan(request, env).devices
+
+    def _provider_plan(self, request: StemGenerationRequest, env: dict[str, str]) -> ProviderPlan:
         if request.device_policy == "cpu":
-            return ("cpu",)
-
+            return self._provider_selector.cpu_plan(request, self._model_name)
         try:
-            cuda_available = self._cuda_detector(env, self._command_runner)
+            with (
+                tempfile.TemporaryDirectory(prefix="flitzis-provider-") as name,
+                fresh_python_source_environment(
+                    env, Path(name), source_roots=request.python_source_roots
+                ) as child_env,
+            ):
+                observed = self._cuda_detector(child_env, self._command_runner)
         except OSError:
-            cuda_available = False
-
-        if cuda_available:
-            return ("cuda", "cpu")
-        return ("cpu",)
+            observed = False
+        capability = observed if isinstance(observed, CudaCapability) else CudaCapability(observed)
+        return self._provider_selector.plan(request, self._model_name, capability)
 
     def _run_demucs(
         self,
@@ -593,7 +648,7 @@ def _bounded_text(text: str | None, *, limit: int = 1000) -> str:
 def _command_stdout(text: str | None) -> str:
     if text is None:
         return ""
-    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT, STEM_EXECUTION_RESULT)
+    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT, STEM_EXECUTION_RESULT, CUDA_FAILURE_RECEIPT)
     diagnostic = _bounded_text(
         "\n".join(line for line in text.splitlines() if not line.startswith(prefixes))
     )

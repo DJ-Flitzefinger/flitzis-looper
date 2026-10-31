@@ -21,6 +21,7 @@ from flitzis_bs_roformer.model import (
     SAMPLE_RATE,
     SOURCES,
 )
+from flitzis_looper.inference_provider import cuda_operation
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 from flitzis_looper.stem_cancellation import check_cancelled
 
@@ -170,7 +171,8 @@ class _OverlapAdd:
         if tuple(prediction.shape) != expected_shape:
             msg = "BS-RoFormer returned an incomplete four-source batch"
             raise ValueError(msg)
-        prediction_cpu = prediction.to(device="cpu", dtype=torch.float32)
+        with cuda_operation(prediction.device.type):
+            prediction_cpu = prediction.to(device="cpu", dtype=torch.float32)
         if not bool(torch.isfinite(prediction_cpu).all()):
             msg = "BS-RoFormer produced non-finite PCM"
             raise ValueError(msg)
@@ -218,7 +220,8 @@ def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, devi
                 writer.plan,
                 writer.checkpoint,
             )
-            prediction = model(batch.to(device))
+            with cuda_operation(device):
+                prediction = model(batch.to(device))
             check_cancelled(writer.checkpoint, "after_model_batch")
             writer.add(prediction, locations)
             del prediction, batch

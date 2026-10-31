@@ -347,7 +347,11 @@ def test_demucs_backend_retries_cpu_after_cuda_failure(tmp_path: Path) -> None:
         device = args[args.index("-d") + 1]
         devices.append(device)
         if device == "cuda":
-            return CommandResult(returncode=1, stdout="", stderr="CUDA out of memory")
+            return CommandResult(
+                returncode=70,
+                stdout="FLITZIS_CUDA_FAILURE_V1:placement_or_inference",
+                stderr="CUDA out of memory",
+            )
 
         output_dir = _arg_path(args, "-o")
         demucs_dir = output_dir / "htdemucs" / "source"

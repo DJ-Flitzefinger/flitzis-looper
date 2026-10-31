@@ -154,8 +154,9 @@ uv --no-cache run --no-sync python -c "from pathlib import Path; import subproce
 
 ## CUDA
 
-CPU stem generation works and is the same-model fallback. CUDA is used
-automatically only when PyTorch reports CUDA availability:
+CPU stem generation works and is the same-model fallback. Automatic selection
+considers CUDA only when its runtime reports availability; that query alone is
+not evidence of completed model execution or better performance:
 
 ```powershell
 uv --no-cache run --no-sync python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
@@ -184,8 +185,11 @@ separator admission; the native cold/preparation limits remain separate.
 The unchanged Demucs CLI retains whole-track neural input/output PCM; the bounded
 shared artifact writer does not establish a total Demucs inference-memory bound.
 
-CUDA failure retries the same selected model once on CPU and reports the reason;
-it never switches BS-RoFormer to Demucs automatically. CUDA wheels themselves can
+Recognized CUDA placement, transfer or inference failure retries the same selected
+model once on CPU and reports the reason. Source/model integrity, decoding,
+encoding, cancellation and host/playback resource failures retain their own errors;
+they do not repeat neural inference as a device fallback.
+The fallback never switches BS-RoFormer to Demucs automatically. CUDA wheels themselves can
 execute CPU operations. For a broken install, rerun `uv sync --locked`, then
 `uv run --no-sync maturin develop`; verify both model/tool prerequisites. Returning
 to Demucs is a model choice, not a dependency removal or cache reset. This selector
@@ -234,3 +238,13 @@ actual child/reader cleanup; retry after playback stops. Active PADs are retaine
 Saved-stem loading/adoption and source custody keep their independent guards.
 See [resource admission](architecture/stems.md) for child thread limits, Windows
 commit enforcement, cancellation tails and platform evidence limits.
+
+Automatic CPU/CUDA selection keeps a small, expiring in-memory history of complete
+verified costs for exactly matching source, model/options, producer and actual
+runtime/driver/device identity. It starts no extra calibration inference. Explicit
+CPU does not initialize the GPU; unknown evidence keeps the existing tentative
+CUDA preference with CPU fallback. Complete producer attestation currently remains
+UNKNOWN, so cost learning stays disabled until that separate gate is resolved.
+Additional AMD/Intel providers are not advertised as supported by GPU presence;
+the [performance design](../openspec/changes/improve-performance-isolation/design.md#step17-bounded-provider-selection-and-measured-retirement)
+records the concrete model/export/packaging tradeoffs and actual scoped evidence.

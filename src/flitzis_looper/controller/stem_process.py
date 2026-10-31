@@ -20,6 +20,7 @@ from flitzis_looper.analysis.process import (
 )
 from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.encoder_provenance import ENCODER_RESULT
+from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 from flitzis_looper.stem_execution import STEM_EXECUTION_RESULT
@@ -43,6 +44,7 @@ _COMMAND_SCOPE: ContextVar[_StemCommandScope | None] = ContextVar(
     "stem-command-scope", default=None
 )
 _RECEIPT_PREFIXES = (
+    CUDA_FAILURE_RECEIPT.encode("ascii"),
     ENCODER_RESULT.encode("ascii"),
     BS_INPUT_RESULT.encode("ascii"),
     STEM_EXECUTION_RESULT.encode("ascii"),

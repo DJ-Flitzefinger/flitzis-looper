@@ -146,7 +146,8 @@ The worker revalidates the original content/lifetime, bank/window, proposal and
 intent after I/O/registration, then releases its preparation gate before the
 unchanged publication CAS and operation-specific ACK.
 
-Coordinated child CPU/process/commit policy remains separate work.
+Coordinated child CPU/process/commit admission is delivered by STEP16. Remaining
+provider selection and whole-process memory evidence are recorded in STEP17.
 Controlled source/component/registration progress does not establish whole-GIL
 isolation, device latency or the cause of callback glitches. The focused
 [performance plan](../development.md#performance-audit-and-upgrade-plan) separates

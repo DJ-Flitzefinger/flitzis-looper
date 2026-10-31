@@ -118,7 +118,9 @@ def test_cuda_failure_retries_identical_model_on_cpu_without_download(
             return CommandResult(0, "ok", "")
         commands.append(args)
         if args[args.index("--device") + 1] == "cuda":
-            return CommandResult(1, "", "CUDA out of memory")
+            return CommandResult(
+                70, "FLITZIS_CUDA_FAILURE_V1:placement_or_inference", "CUDA out of memory"
+            )
         output = Path(args[args.index("--output") + 1])
         for name in ("drums", "bass", "other", "vocals"):
             write_mono_pcm16_wav(output / f"{name}.wav", 44_100)

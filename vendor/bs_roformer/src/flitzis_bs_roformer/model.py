@@ -11,6 +11,7 @@ import torch
 from torch import Tensor, nn
 
 from flitzis_bs_roformer.network import attend
+from flitzis_looper.inference_provider import cuda_operation
 from flitzis_looper.stem_cancellation import check_cancelled
 
 if TYPE_CHECKING:
@@ -127,7 +128,8 @@ def load_model(
     verify_file(config, CONFIG_BYTES, CONFIG_SHA256, cancellation)
     if device == "cuda" and not torch.cuda.is_available():
         msg = "CUDA unavailable for BS-RoFormer"
-        raise RuntimeError(msg)
+        with cuda_operation(device):
+            raise RuntimeError(msg)
     weights = _load_weights(checkpoint, cancellation)
     network = _network_module()
     check_cancelled(cancellation, "before_network_init")
@@ -166,6 +168,7 @@ def load_model(
     model.load_state_dict(weights, strict=True)
     check_cancelled(cancellation, "after_state_dict_load")
     del weights
-    result = model.eval().to(device)
+    with cuda_operation(device):
+        result = model.eval().to(device)
     check_cancelled(cancellation, "after_model_load")
     return result
