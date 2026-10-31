@@ -17,6 +17,7 @@ from flitzis_looper.bs_input_provenance import (
     finish_input_attempt,
     input_completion_line,
 )
+from flitzis_looper.offline_runtime import configure_child
 from flitzis_looper.stem_cancellation import (
     CANCEL_EXIT_CODE,
     StemCancellation,
@@ -28,6 +29,12 @@ from flitzis_looper.stem_execution import completed_execution_line
 
 def main() -> None:
     """Validate explicit artifact paths and write the release's four sources."""
+    threads = configure_child(
+        torch.set_num_threads,
+        torch.set_num_interop_threads,
+        torch.get_num_threads,
+        torch.get_num_interop_threads,
+    )
     parser = argparse.ArgumentParser(description="BS-RoFormer MUSDB18HQ offline separator")
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -78,7 +85,10 @@ def main() -> None:
         "transient_pcm_bytes_bound": plan.transient_pcm_bytes,
     })
     sys.stdout.write(
-        completed_execution_line("bs-roformer", "BS-RoFormer MUSDB18HQ", args.device) + "\n"
+        completed_execution_line(
+            "bs-roformer", "BS-RoFormer MUSDB18HQ", args.device, threads=threads
+        )
+        + "\n"
     )
     sys.stdout.write(input_completion_line() + "\n")
     sys.stdout.flush()

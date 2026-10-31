@@ -132,13 +132,7 @@ fn load_session() -> Result<(), KeyError> {
         ))
     })?;
 
-    let session = Session::builder()
-        .map_err(|e| KeyError::ModelError(format!("failed to create session builder: {e}")))?
-        .commit_from_file(path)
-        .map_err(|e| KeyError::ModelError(format!("failed to load model: {e}")))?;
-
-    // Validate model signature before caching.
-    validate_session(&session)?;
+    let session = build_session(&path)?;
 
     // Get or initialize the mutex, then set the session.
     SESSION.get_or_init(Default::default);
@@ -150,6 +144,22 @@ fn load_session() -> Result<(), KeyError> {
     *guard = Some(session);
 
     Ok(())
+}
+
+/// Build only this offline session's pools; never change process-global options.
+fn build_session(path: &std::path::Path) -> Result<Session, KeyError> {
+    let session = Session::builder()
+        .map_err(|e| KeyError::ModelError(format!("failed to create session builder: {e}")))?
+        .with_intra_threads(1)
+        .and_then(|builder| builder.with_inter_threads(1))
+        .map_err(|e| KeyError::ModelError(format!("failed to bound KeyNet threads: {e}")))?
+        .commit_from_file(path)
+        .map_err(|e| KeyError::ModelError(format!("failed to load model: {e}")))?;
+
+    // Validate model signature before caching.
+    validate_session(&session)?;
+
+    Ok(session)
 }
 
 /// Get a mutable reference to the cached session, loading it if needed.
@@ -358,10 +368,8 @@ mod tests {
             return;
         }
 
-        let mut session = Session::builder()
-            .expect("create bundled KeyNet session")
-            .commit_from_file(&path)
-            .expect("a present bundled KeyNet must load successfully");
+        let mut session =
+            build_session(&path).expect("a present bundled KeyNet must load successfully");
         validate_session(&session)
             .expect("bundled KeyNet signature must accept 104 frequency rows");
 
@@ -380,6 +388,22 @@ mod tests {
         assert_eq!(logits.len(), 24);
         assert!(logits.iter().all(|value| value.is_finite()));
         assert!(crate::key_detection::camelot_index_to_key(predicted_class).is_some());
+
+        let mut baseline = Session::builder()
+            .expect("create independent default-thread KeyNet reference")
+            .commit_from_file(&path)
+            .expect("load the same bundled KeyNet reference");
+        let (baseline_class, baseline_logits) =
+            run_inference_with_session(&mut baseline, &cqt, n_time_frames).unwrap();
+        assert_eq!(predicted_class, baseline_class);
+        let max_difference = logits
+            .iter()
+            .zip(&baseline_logits)
+            .map(|(current, reference)| (current - reference).abs())
+            .fold(0.0_f32, f32::max);
+        eprintln!(
+            "KEYNET_THREAD_COMPARISON class={predicted_class} max_logit_difference={max_difference}"
+        );
     }
 
     #[test]

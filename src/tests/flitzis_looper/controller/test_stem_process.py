@@ -82,18 +82,22 @@ def test_two_worker_scopes_cancel_only_their_own_running_command(tmp_path: Path)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(run, cancel_first, first_ready)
+        _wait_file(first_ready)
         second = executor.submit(run, cancel_second, second_ready)
         try:
-            _wait_file(first_ready)
-            _wait_file(second_ready)
-            cancel_first.set()
+            # The second owner keeps its own cancellation while waiting for the
+            # shared heavy phase; it cannot start a competing numerical child.
+            assert not second_ready.exists()
+            cancel_second.set()
             with pytest.raises(StemCommandCancelledError):
-                first.result(10)
-            assert not second.done()
+                second.result(10)
+            assert not first.done()
+            assert not second_ready.exists()
+            release.touch()
+            assert first.result(10) == CommandResult(0, "survived", "")
         finally:
             release.touch()
             cancel_first.set()
-        assert second.result(10) == CommandResult(0, "survived", "")
 
 
 def test_parent_checkpoint_observes_sticky_event_and_resets_nested_scope() -> None:

@@ -309,6 +309,37 @@ def test_cancelled_request_does_not_hash_or_start_worker(
     assert processes == []
 
 
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+def test_stem_contention_waits_without_degrading_a_valid_analysis(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cancel_waiter: bool,
+) -> None:
+    configuration, request = prepared
+    processes = _record_processes(monkeypatch)
+    adapter = BeatWorkerAdapter(configuration)
+    cancel = Event()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with process.offline_work_scope(Event()):
+            pending = executor.submit(adapter.run, request, cancel)
+            deadline = time.monotonic() + 10
+            while adapter.retired.is_set():
+                assert time.monotonic() < deadline
+                Event().wait(0.005)
+            assert not pending.done()
+            assert processes == []
+            if cancel_waiter:
+                cancel.set()
+                result = pending.result(5)
+                assert result.status == "cancelled"
+                assert not process._PROCESS_SLOT.acquire(blocking=False)
+        result = pending.result(10)
+    assert result.status == ("cancelled" if cancel_waiter else "ready")
+    assert adapter.retired.is_set()
+    assert len(processes) == (0 if cancel_waiter else 1)
+
+
 def test_invalid_scratch_releases_global_slot(
     prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
 ) -> None:

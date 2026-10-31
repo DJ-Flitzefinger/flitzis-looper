@@ -57,6 +57,7 @@ class _StockEntry:
     variant: str
     output: Path | None = None
     returned: Event = field(default_factory=Event)
+    result: process.OwnedCommandResult | None = field(default=None, init=False)
 
     def generate(
         self, request: StemGenerationRequest, _progress: StemProgressCallback
@@ -70,7 +71,9 @@ class _StockEntry:
             # inputs also stay inside the actual job's held directory.
             source_index = -1 if self.variant == "demucs" else arguments.index("--source") + 1
             arguments[source_index] = str(request.source_path)
-            stem_process.run_stem_command(arguments, cwd=request.cache_dir, env=environment)
+            self.result = stem_process.run_stem_command(
+                arguments, cwd=request.cache_dir, env=environment
+            )
             pytest.fail("the gated stock entrypoint returned without cancellation")
         finally:
             self.returned.set()
@@ -228,7 +231,11 @@ def _running_batch_child(
             assert sum(item is not None for item in intent.inventory.items) == 2
             warning.accept(intent)
             _drive_until(controller, lambda: entry.ready() or entry.returned.is_set())
-            assert entry.ready(), "the actual stock child failed before its output checkpoint"
+            assert entry.ready(), (
+                "the actual stock child failed before its output checkpoint",
+                entry.result,
+                controller.stems.stem_generation_error(0),
+            )
             assert len(launches) == len(controller.stems._jobs) == 1
             job = next(iter(controller.stems._jobs.values()))
             assert {row.sample_id for row in job.subscribers()} == {0, 215}

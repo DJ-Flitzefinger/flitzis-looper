@@ -20,21 +20,30 @@ class StemExecution(BaseModel):
     model_name: Annotated[str, Field(min_length=1, max_length=256)]
     device: Literal["cpu", "cuda"]
     cpu_fallback: bool = False
+    intra_op_threads: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
+    inter_op_threads: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
 
     @model_validator(mode="after")
     def _coherent_fallback(self) -> Self:
+        if (self.intra_op_threads is None) != (self.inter_op_threads is None):
+            message = "Thread observations must contain both effective pools"
+            raise ValueError(message)
         if self.cpu_fallback and self.device != "cpu":
             message = "CPU fallback requires completed CPU inference"
             raise ValueError(message)
         return self
 
 
-def completed_execution_line(backend: str, model_name: str, device: str) -> str:
+def completed_execution_line(
+    backend: str, model_name: str, device: str, *, threads: tuple[int, int] | None = None
+) -> str:
     """Encode only after the owned child's successful inference has completed."""
     receipt = StemExecution.model_validate({
         "backend": backend,
         "model_name": model_name,
         "device": device,
+        "intra_op_threads": None if threads is None else threads[0],
+        "inter_op_threads": None if threads is None else threads[1],
     })
     return STEM_EXECUTION_RESULT + receipt.model_dump_json()
 

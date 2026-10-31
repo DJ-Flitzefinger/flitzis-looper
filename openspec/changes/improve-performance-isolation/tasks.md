@@ -165,12 +165,21 @@ the previously retained 32 Rust failures, watchdog and registry uncertainty.
 
 ## 16. Background CPU and process resource policy
 
-- [ ] Implement and verify a coordinated child/native thread budget and audio
+- [x] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
 - [ ] Measure CPU-only and available CUDA overlap separately from conversion and
       loading; defer/gate generation if concurrent deadlines remain unreliable.
-- [ ] Cover effective settings, concurrent jobs, fallback, cancellation and
+- [x] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
+
+STEP16 delivers the permitted playback gate instead of claiming reliable live
+inference overlap. Heavy generation waits while PADs play, and playback beginning
+during generation requests owned-tree retirement with a visible retry outcome.
+Serial CPU model observations, effective numerical pools, kernel commit limits,
+shared Native accounting and cold control correctness are recorded in the design.
+The unchecked CPU/CUDA overlap measurement remains explicit: CUDA availability
+alone is no execution, failure-to-CPU or deadline evidence. Mandatory actual CUDA,
+same-model fallback and combined live acceptance continue through STEP17-19.
 
 ## 17. PCM, multicore and offline GPU refinements
 

@@ -11,6 +11,52 @@ use sha2::{Digest, Sha256};
 #[cfg(windows)]
 const HOST_SCRATCH: usize = 64 * 1024;
 
+/// A Windows job commit ceiling promised on the existing native host ledger.
+/// The caller must install the ceiling before child activation and close only
+/// after the entire owned tree and its pipe readers have returned.
+#[pyclass(immutable_type, module = "flitzis_looper_audio.flitzis_looper_audio")]
+pub struct OfflineChildMemoryReservation {
+    bytes: usize,
+    host: Option<HostReservation>,
+}
+
+#[pymethods]
+impl OfflineChildMemoryReservation {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<Self> {
+        #[cfg(windows)]
+        {
+            let (host, bytes) = py
+                .detach(|| HostReservation::reserve_child_ceiling(usize::MAX))
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok(Self {
+                bytes,
+                host: Some(host),
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = py;
+            Err(PyRuntimeError::new_err(
+                "Windows child commit enforcement is unsupported on this platform",
+            ))
+        }
+    }
+
+    #[getter]
+    fn limit_bytes(&self) -> PyResult<usize> {
+        if self.host.is_none() {
+            return Err(PyValueError::new_err("child memory reservation is closed"));
+        }
+        Ok(self.bytes)
+    }
+
+    fn close(&mut self, py: Python<'_>) {
+        let host = self.host.take();
+        py.detach(move || drop(host));
+    }
+}
+
 /// Prospective raw/payload/copy memory on the existing shared host ledger.
 /// It is born before Python reads the raw spans and retained through writes.
 #[pyclass(immutable_type, module = "flitzis_looper_audio.flitzis_looper_audio")]
@@ -171,14 +217,21 @@ mod tests {
 /// Every authored executed numeric/bridge declaration is embedded by the build;
 /// current .rs pathname bytes cannot impersonate an older loaded converter.
 #[pyfunction]
-#[pyo3(signature = (converter=None))]
+#[pyo3(signature = (converter=None, memory_budget=None))]
 pub fn stem_conversion_identity(
     py: Python<'_>,
     converter: Option<Bound<'_, PyType>>,
+    memory_budget: Option<Bound<'_, PyType>>,
 ) -> PyResult<(String, String)> {
     if converter.is_some_and(|value| !value.is(py.get_type::<StemConversionReservation>())) {
         return Err(PyValueError::new_err(
             "unsupported actual stem converter binding",
+        ));
+    }
+    if memory_budget.is_some_and(|value| !value.is(py.get_type::<OfflineChildMemoryReservation>()))
+    {
+        return Err(PyValueError::new_err(
+            "unsupported actual child memory budget binding",
         ));
     }
     let mut digest = Sha256::new();
@@ -186,6 +239,7 @@ pub fn stem_conversion_identity(
         include_bytes!("../../../stem-conversion/src/lib.rs").as_slice(),
         include_bytes!("../../../stem-conversion/Cargo.toml").as_slice(),
         include_bytes!("stem_conversion.rs").as_slice(),
+        include_bytes!("resident_host_memory.rs").as_slice(),
         include_bytes!("../../Cargo.toml").as_slice(),
         include_bytes!("../../../../Cargo.lock").as_slice(),
     ] {

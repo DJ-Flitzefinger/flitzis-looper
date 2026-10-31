@@ -59,8 +59,16 @@ def _record_processes(monkeypatch: pytest.MonkeyPatch) -> list[process._OwnedTre
         cwd: Path,
         env: dict[str, str],
         capture_stderr: bool = False,
+        commit_limit_bytes: int | None = None,
     ) -> None:
-        original(child, arguments, cwd=cwd, env=env, capture_stderr=capture_stderr)
+        original(
+            child,
+            arguments,
+            cwd=cwd,
+            env=env,
+            capture_stderr=capture_stderr,
+            commit_limit_bytes=commit_limit_bytes,
+        )
         launches.append(child)
 
     monkeypatch.setattr(process._OwnedTreeProcess, "__init__", create)

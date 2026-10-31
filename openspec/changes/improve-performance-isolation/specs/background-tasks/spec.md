@@ -1,5 +1,34 @@
 ## ADDED Requirements
 
+### Requirement: Heavy Background Work Shares Resource Admission
+Existing offline owners SHALL coordinate heavy stem generation and analysis child
+execution without a second scheduler, job queue or audio clock. Already-admitted
+analysis SHALL wait cancellably for heavy capacity; resource contention SHALL NOT
+become numerical failure or select a lower-precision BPM path. Effective child
+numerical pools SHALL be bounded before model work, with child environment applied
+before imports and no mutation of App-global numerical settings.
+
+Windows child commit ceilings SHALL deduct shared Native prospective promises,
+retain existing memory floors, be installed before suspended activation and remain
+owned through actual tree and pipe-reader retirement. A ceiling SHALL NOT claim a
+model-memory estimate, physical working-set bound or whole-system guarantee.
+
+#### Scenario: Generation competes with playback or analysis
+- **GIVEN** an original source-owned generation remains current
+- **WHEN** playback is active before inference admission
+- **THEN** inference waits visibly without stopping any PAD or changing its original request
+- **AND** saved-set lookup and component preparation retain independent admission
+- **WHEN** playback becomes active during an admitted generation
+- **THEN** that attempt reports a distinct playback-headroom failure and retains custody until actual cleanup
+- **AND** a waiting precise analysis retains its original quality and cancellation authority
+
+#### Scenario: A child has less available commit than physical memory
+- **GIVEN** caller/system commit and physical headroom are measured separately
+- **WHEN** the shared Native ledger grants a child ceiling after existing promises and original floors
+- **THEN** the Windows job enforces that ceiling before child activation
+- **AND** cancellation, allocation failure and launcher exit do not release its promise before actual tree/reader end
+- **AND** unsupported platform enforcement and unmeasured device deadlines remain explicit
+
 ### Requirement: Failed Precise BPM Has a Usable Approximate Fallback
 When precise automatic BPM estimation fails, the system SHALL attempt a simpler
 bounded source-derived scalar estimate outside realtime. A validated usable

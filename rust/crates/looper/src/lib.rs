@@ -31,9 +31,11 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::resolve_project_asset_details;
     #[pymodule_export]
-    use super::audio_engine::stem_conversion::StemConversionReservation;
-    #[pymodule_export]
     use super::audio_engine::stem_conversion::stem_conversion_identity;
+    #[pymodule_export]
+    use super::audio_engine::stem_conversion::{
+        OfflineChildMemoryReservation, StemConversionReservation,
+    };
     #[pymodule_export]
     use super::native_build_profile;
     #[pymodule_export]

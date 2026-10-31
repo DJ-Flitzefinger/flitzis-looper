@@ -607,6 +607,180 @@ fn productive_finite_startup_preserves_absolute_metadata_and_matches_original_pc
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn allocated_child_budget_retains_real_cold_load_public_start_pcm_and_stop_headroom() {
+    use pyo3::prelude::*;
+    use pyo3::types::PyModule;
+    use std::ffi::CString;
+    struct Child(Option<Py<PyAny>>);
+    impl Child {
+        fn finish(&mut self) {
+            let session = self.0.take().unwrap();
+            Python::attach(|py| session.call_method0(py, "finish").unwrap());
+        }
+    }
+    impl Drop for Child {
+        fn drop(&mut self) {
+            if let Some(session) = self.0.take() {
+                Python::attach(|py| {
+                    if let Err(error) = session.call_method0(py, "finish") {
+                        eprintln!("allocated-child cleanup failed: {error}");
+                    }
+                });
+            }
+        }
+    }
+    Python::initialize();
+    let directory = tempfile::tempdir().unwrap();
+    let baseline = super::resident_host_memory::pending_bytes().unwrap();
+    let mut child = Child(Some(Python::attach(|py| {
+        PyModule::from_code(
+            py,
+            &CString::new(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../src/tests/flitzis_looper/controller/stem_budget_control_probe.py"
+            )))
+            .unwrap(),
+            c"stem_budget_control_probe.py",
+            c"stem_budget_control_probe",
+        )
+        .unwrap()
+        .call_method1(
+            "start",
+            (
+                py.get_type::<super::stem_conversion::OfflineChildMemoryReservation>(),
+                directory.path().to_string_lossy().as_ref(),
+            ),
+        )
+        .unwrap()
+        .unbind()
+    })));
+    let charged = super::resident_host_memory::pending_bytes().unwrap();
+    assert!(charged > baseline + 2048 * 1024 * 1024);
+    let source = directory.path().join("cold.wav");
+    let mono = wav(&source, 48_000);
+    let mut engine = AudioEngine::new().unwrap();
+    engine.test_output_format = Some((48_000, 2));
+    let mut callback = Box::new(Callback::new(&engine, 48_000));
+    let (request, mut load_consumer) = selected_load_with_hint(
+        &engine,
+        &source,
+        &directory.path().join("samples"),
+        48_000,
+        None,
+    );
+    wait_until(Duration::from_secs(10), || {
+        callback.drain(&mut load_consumer);
+        engine.cold_loading[0].load(Ordering::Acquire) == 0
+    });
+    assert!(matches!(
+        terminal(&engine, request),
+        LoaderEvent::Success { .. }
+    ));
+    let sample = assert_residency(
+        &engine,
+        256,
+        0,
+        256,
+        48_000,
+        &mono,
+        ResidentContext::FullTrack,
+    );
+    let mut reference = RtMixer::try_new(2, 48_000.0, None).unwrap();
+    reference.load_sample(0, sample);
+    assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    let (producer, mut consumer) = rtrb::RingBuffer::new(64);
+    let (feedback, feedback_rx) = rtrb::RingBuffer::new(64);
+    callback.feedback = feedback;
+    engine.test_control_channels = Some((
+        Arc::new(Mutex::new(producer)),
+        Arc::new(Mutex::new(feedback_rx)),
+    ));
+    let engine = Python::attach(|py| Py::new(py, engine).unwrap());
+    let captured = Python::attach(|py| {
+        let start = engine
+            .call_method1(py, "capture_pad_start", (0, 0.0, py.None(), 1.0))
+            .unwrap();
+        let captured = start
+            .extract::<PyRef<super::pad_start::CapturedPadStart>>(py)
+            .unwrap()
+            .clone();
+        assert!(
+            engine
+                .call_method1(py, "publish_pad_start", (start,))
+                .unwrap()
+                .extract::<bool>(py)
+                .unwrap()
+        );
+        captured
+    });
+    callback.drain(&mut consumer);
+    let original = captured.original_frame();
+    assert!(original.is_some());
+    wait_until(Duration::from_secs(10), || {
+        callback.mixer.pitch_runtime.as_mut().unwrap().poll();
+        assert_ne!(captured.state(), "rejected", "{:?}", captured.reason());
+        captured.state() == "applied"
+            || callback
+                .mixer
+                .pitch_runtime
+                .as_ref()
+                .unwrap()
+                .has_ready_action(captured.sequence())
+    });
+    for mut output in [Vec::new(), vec![0.0; 128]] {
+        super::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            callback.transport.output_frame(),
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        assert_eq!(captured.state(), "applied");
+        assert_eq!(captured.original_frame(), original);
+        if !output.is_empty() {
+            let mut expected = [0.0; 128];
+            reference.render_rt(
+                &mut expected,
+                &mut [0.0; NUM_SAMPLES],
+                &mut callback.retirement,
+            );
+            assert_eq!(
+                output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected.map(f32::to_bits)
+            );
+            assert!(output.iter().any(|value| value.abs() > 0.000001));
+        }
+    }
+    Python::attach(|py| {
+        child
+            .0
+            .as_ref()
+            .unwrap()
+            .call_method0(py, "assert_running")
+            .unwrap();
+        engine.call_method1(py, "stop_sample", (0,)).unwrap();
+    });
+    callback.drain(&mut consumer);
+    assert!(
+        !callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    assert!(super::resident_host_memory::pending_bytes().unwrap() >= charged);
+    child.finish();
+    wait_until(Duration::from_secs(10), || {
+        super::resident_host_memory::pending_bytes().unwrap() == baseline
+    });
+}
+
 #[test]
 fn productive_saved_key_lock_uses_explicit_complete_context() {
     for key_lock in [false, true] {

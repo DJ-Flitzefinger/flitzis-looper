@@ -33,9 +33,47 @@ interest; it cannot erase another subscriber's job or active source readers.
 [offline_stem_source.rs](../../rust/crates/looper/src/audio_engine/offline_stem_source.rs)
 captures an `OfflineStemSourceLease` for the actual immutable complete source,
 cache marker/generation and target geometry. Generation may run while playing or
-paused. This lease grants no assignment, accepted timing, resident-window or live
+paused, but new heavy inference waits for playback to stop under the resource
+policy below. This lease grants no assignment, accepted timing, resident-window or live
 publication authority. Worker completion and borrowed reader retirement are both
 required before cleanup, including cancelled/obsolete results.
+
+Heavy stem generation and analysis children share one resource permit on their
+existing offline supervisors. The two-worker/32-queue stem pool and original
+single-analysis admission remain job authorities. An admitted analysis waits
+cancellably for heavy capacity; contention cannot count as a numerical failure
+or select approximate BPM. Native KeyNet's local ORT session uses one intra-op
+and one inter-op thread; its existing parallel analysis branch remains separate.
+Child environments bound numerical pools before imports, separator children
+verify effective Torch counts before model work, and FFmpeg decoder/encoder/filter
+pools are explicitly bounded. App-global numerical settings are unchanged.
+
+New inference displays **Waiting for playback to stop** while the existing active
+PAD projection is nonempty. Saved-set lookup and component preparation retain
+their separate lanes. If playback becomes active during generation, the existing
+control poll requests an explicit playback-headroom failure; the user can retry
+after playback stops. This never stops an active PAD. Observation and cooperative
+abort/forced tree retirement have a finite tail: this is not zero-overlap or
+device-deadline proof. A second admitted worker reports **Waiting for background
+resources** rather than a completed execution device.
+
+On Windows, before child activation an enforced Job commit ceiling is promised
+on the shared Native host ledger. It deducts all outstanding Native promises and
+retains the original 2 GiB commit / 512 MiB physical admission floors. The ceiling
+uses half of current post-floor, post-promise headroom, with no new whole-track
+size ceiling. The other half covers the deliberate actual/prospective double
+charge, so a fully allocated child still leaves the original floor margin for
+new resident/control work. It is a
+resource budget, not a model-memory estimate or a reservation against unrelated
+processes. Actual child commitment is conservatively double charged until the
+tree and both output readers finish; conversion receives its own existing bounded
+promise afterward. The original 3 GiB recovery and 512 MiB critical commit guards
+remain. Recording finalization keeps its independent existing owner and does not
+wait behind separator inference.
+
+Windows enforcement does not establish Linux/macOS host monitoring or complete
+POSIX descendant retirement. Those existing platform limits remain explicit final
+distribution gates; child-only numerical limits and the portable core still apply.
 
 ## Complete artifacts and durable selection
 

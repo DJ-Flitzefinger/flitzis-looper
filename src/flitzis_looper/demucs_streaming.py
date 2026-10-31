@@ -26,6 +26,7 @@ from flitzis_looper.encoder_provenance import (
     inspect_encoder,
     record_encoder,
 )
+from flitzis_looper.offline_runtime import configure_child, ffmpeg_command
 from flitzis_looper.pcm16_wav import PcmWavReader, discard_owned_file
 from flitzis_looper.stem_cancellation import (
     CANCEL_EXIT_CODE,
@@ -80,6 +81,8 @@ class _DemucsCLI(Protocol):
 
 
 def _input_command(args: list[str]) -> list[str]:
+    if Path(args[0]).stem.lower() == "ffmpeg":
+        args = ffmpeg_command(args)
     executable = os.environ.get("FLITZIS_DEMUCS_ENCODER")
     if executable is not None and args[0] in {"ffmpeg", "ffprobe"}:
         tool = (
@@ -176,7 +179,7 @@ def _write_input(
 
 
 def _encoder_command(path: Path, rate: int, channels: int, *, force_rf64: bool) -> list[str]:
-    return [
+    return ffmpeg_command([
         os.environ.get("FLITZIS_DEMUCS_ENCODER", "ffmpeg"),
         "-nostdin",
         "-hide_banner",
@@ -200,7 +203,7 @@ def _encoder_command(path: Path, rate: int, channels: int, *, force_rf64: bool) 
         "-f",
         "wav",
         str(path),
-    ]
+    ])
 
 
 def _verify_output(
@@ -396,6 +399,12 @@ def _cancellable_cli(cancellation: StemCancellation) -> Iterator[_ExecutionObser
 
 def main() -> None:
     """Execute Demucs' original CLI/model after installing the scoped output adapter."""
+    threads = configure_child(
+        torch.set_num_threads,
+        torch.set_num_interop_threads,
+        torch.get_num_threads,
+        torch.get_num_interop_threads,
+    )
     cancellation = StemCancellation.from_environment()
     cancellation.checkpoint("before_model_stage")
     with _cancellable_cli(cancellation) as execution:
@@ -407,7 +416,9 @@ def main() -> None:
         and execution.model_name
     ):
         sys.stdout.write(
-            completed_execution_line("demucs", execution.model_name, next(iter(execution.devices)))
+            completed_execution_line(
+                "demucs", execution.model_name, next(iter(execution.devices)), threads=threads
+            )
             + "\n"
         )
     sys.stdout.write(encoder_completion_line() + "\n")

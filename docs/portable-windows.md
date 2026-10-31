@@ -333,3 +333,10 @@ profile before startup. The Portable bootstrap explicitly rejects the removed
 `SourceBeatmap` API; an obsolete map-enabled engine is not a valid current runtime.
 Update through the ordinary installation workflow. API checks establish neither
 model quality nor audio/device/Human acceptance.
+
+The matching Native must also expose `OfflineChildMemoryReservation.limit_bytes`
+and `close`; preactivation rejects an older extension before offline imports use
+the shared commit budget. This adds no dependency or OS setting. Windows uses the
+existing suspended Job Object adapter; Linux/macOS process-tree and host-monitoring
+evidence remains a separate distribution gate. No running installation is updated
+by development verification.

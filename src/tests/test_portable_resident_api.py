@@ -992,6 +992,9 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
     complete_native.StemConversionReservation = type(
         "CompatibleConverter", (), {"convert": lambda *_: None, "close": lambda *_: None}
     )
+    complete_native.OfflineChildMemoryReservation = type(
+        "CompatibleChildBudget", (), {"limit_bytes": property(lambda _: 1), "close": lambda _: None}
+    )
     complete_native.stem_conversion_identity = lambda: (
         "source-bound-aligned-pcm16-native-v3",
         "a" * 64,

@@ -4,21 +4,70 @@ import os
 import subprocess
 import tempfile
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event, Semaphore, Thread
+from threading import Event, Semaphore, Thread, get_ident
 from typing import IO, TYPE_CHECKING
 
 from flitzis_looper.analysis.contracts import WorkerLimits
 from flitzis_looper.analysis.windows_job import CREATE_SUSPENDED, WindowsJob
+from flitzis_looper.offline_runtime import child_environment
+from flitzis_looper_audio import OfflineChildMemoryReservation
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 _PROCESS_SLOT = Semaphore(1)
+_ANALYSIS_ADMISSION = Semaphore(1)
 _POLL_SECONDS = 0.02
 _READ_CHUNK_BYTES = 16384
+
+
+class OfflineWorkCancelledError(RuntimeError):
+    """A waiting offline owner was cancelled before acquiring heavy capacity."""
+
+
+@dataclass(slots=True)
+class _WorkOwner:
+    thread: int
+    active: bool = True
+
+
+_WORK_OWNER: ContextVar[_WorkOwner | None] = ContextVar("offline-work-owner", default=None)
+
+
+@contextmanager
+def offline_work_scope(cancel: Event, on_wait: Callable[[], None] | None = None) -> Iterator[None]:
+    """Reuse the process slot for one heavy phase, with no queue or new executor.
+
+    Only same-thread nested calls reuse ownership. Waiting is off realtime and
+    cancellation does not release a different worker's permit.
+    """
+    owner = _WORK_OWNER.get()
+    if owner is not None and owner.active and owner.thread == get_ident():
+        yield
+        return
+    reported = False
+    while not _PROCESS_SLOT.acquire(blocking=False):
+        if not reported and on_wait is not None:
+            on_wait()
+            reported = True
+        if cancel.wait(_POLL_SECONDS):
+            message = "Offline work cancelled before resource admission"
+            raise OfflineWorkCancelledError(message)
+    owner = _WorkOwner(get_ident())
+    token = _WORK_OWNER.set(owner)
+    try:
+        if cancel.is_set():
+            message = "Offline work cancelled before resource admission"
+            raise OfflineWorkCancelledError(message)
+        yield
+    finally:
+        owner.active = False
+        _WORK_OWNER.reset(token)
+        _PROCESS_SLOT.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,8 +116,19 @@ class _OwnedTreeProcess(subprocess.Popen[bytes]):
         cwd: Path,
         env: dict[str, str],
         capture_stderr: bool = False,
+        commit_limit_bytes: int | None = None,
     ) -> None:
-        self._job = WindowsJob() if os.name == "nt" else None
+        self._job = (
+            WindowsJob(
+                **(
+                    {"commit_limit_bytes": commit_limit_bytes}
+                    if commit_limit_bytes is not None
+                    else {}
+                )
+            )
+            if os.name == "nt"
+            else None
+        )
         started = False
         try:
             super().__init__(
@@ -123,7 +183,27 @@ class _WorkerProcess(_OwnedTreeProcess):
     """Beat-worker launch adapter; analysis retains its independent global admission."""
 
     def __init__(self, arguments: list[str], command: WorkerCommand) -> None:
-        super().__init__(arguments, cwd=command.scratch_dir, env=_environment())
+        self._memory_budget = OfflineChildMemoryReservation() if os.name == "nt" else None
+        try:
+            if self._memory_budget is None:
+                super().__init__(arguments, cwd=command.scratch_dir, env=_environment())
+            else:
+                super().__init__(
+                    arguments,
+                    cwd=command.scratch_dir,
+                    env=_environment(),
+                    commit_limit_bytes=self._memory_budget.limit_bytes,
+                )
+        except OSError, RuntimeError, ValueError:
+            if self._memory_budget is not None:
+                self._memory_budget.close()
+            raise
+
+    def close_tree(self) -> None:
+        """Release prospective commit only after all real tree/pipe readers end."""
+        super().close_tree()
+        if self._memory_budget is not None:
+            self._memory_budget.close()
 
 
 class _ResponseReader:
@@ -301,14 +381,7 @@ class _OwnedProcess:
 
 
 def _environment() -> dict[str, str]:
-    env = dict(os.environ)
-    for name in (
-        "OMP_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-    ):
-        env[name] = "1"
+    env = child_environment(dict(os.environ))
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
     return env
@@ -336,7 +409,7 @@ def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str |
         reason = stop_reason()
     except OSError, RuntimeError, ValueError:
         return "resource_unavailable"
-    if reason is None or reason in {"resource_pressure", "resource_unavailable"}:
+    if reason is None or reason in {"resource_pressure", "resource_unavailable", "audio_headroom"}:
         return reason
     return "resource_unavailable"
 
@@ -504,7 +577,7 @@ def _supervise_command(
     reason = _monitor(
         owned, cancel, limits, stop_reason, observe_before_exit=on_process_started is not None
     )
-    if reason in {"cancelled", "resource_pressure", "resource_unavailable"} and (
+    if reason in {"cancelled", "resource_pressure", "resource_unavailable", "audio_headroom"} and (
         request_abort is not None
     ):
         request_abort()
@@ -527,6 +600,7 @@ def run_owned_command(  # noqa: PLR0913
     abort_grace_seconds: float = 0.2,
     stop_reason: Callable[[], str | None] | None = None,
     on_process_started: Callable[[int], None] | None = None,
+    commit_limit_bytes: int | None = None,
 ) -> OwnedCommandResult:
     """Run under caller admission, retaining the worker through actual read end.
 
@@ -543,6 +617,14 @@ def run_owned_command(  # noqa: PLR0913
         reap_timeout_seconds=0.5,
         max_response_bytes=65536,
     )
+    if commit_limit_bytes is not None and (
+        os.name != "nt"
+        or type(commit_limit_bytes) is not int
+        or not 0 < commit_limit_bytes <= 2**63 - 1
+    ):
+        retired.set()
+        message = "Invalid or unsupported owned job commit limit"
+        raise ValueError(message)
     if not 0 <= abort_grace_seconds <= limits.reap_timeout_seconds:
         msg = "abort grace must fit within the finite reap timeout"
         raise ValueError(msg)
@@ -551,7 +633,15 @@ def run_owned_command(  # noqa: PLR0913
         retired.set()
         return OwnedCommandResult("cancelled", -1, b"", b"")
     try:
-        process = _OwnedTreeProcess(arguments, cwd=cwd, env=env, capture_stderr=True)
+        process = _OwnedTreeProcess(
+            arguments,
+            cwd=cwd,
+            env=child_environment(env),
+            capture_stderr=True,
+            **(
+                {"commit_limit_bytes": commit_limit_bytes} if commit_limit_bytes is not None else {}
+            ),
+        )
     except OSError:
         retired.set()
         raise
@@ -602,6 +692,7 @@ def _release_temporary(temporary: tempfile.TemporaryDirectory[str], retired: Eve
         return False
     retired.set()
     _PROCESS_SLOT.release()
+    _ANALYSIS_ADMISSION.release()
     return True
 
 
@@ -635,20 +726,31 @@ def run_process(
     until ``retired`` is set. No queue is maintained and no extra process is launched
     while a previous process is active or retiring.
     """
-    if not _PROCESS_SLOT.acquire(blocking=False):
+    if not _ANALYSIS_ADMISSION.acquire(blocking=False):
         return ProcessResult("worker_busy")
     retired.clear()
+    while not _PROCESS_SLOT.acquire(blocking=False):
+        if cancel.wait(_POLL_SECONDS):
+            retired.set()
+            _ANALYSIS_ADMISSION.release()
+            return ProcessResult("cancelled")
+    if cancel.is_set():
+        retired.set()
+        _PROCESS_SLOT.release()
+        _ANALYSIS_ADMISSION.release()
+        return ProcessResult("cancelled")
     try:
         temporary = tempfile.TemporaryDirectory(prefix="beat-request-", dir=command.scratch_dir)
     except OSError:
         retired.set()
         _PROCESS_SLOT.release()
+        _ANALYSIS_ADMISSION.release()
         return ProcessResult("worker_scratch_unavailable")
     try:
         request_path = Path(temporary.name) / "request.json"
         request_path.write_bytes(request)
         process = _start(command, request_path)
-    except OSError:
+    except OSError, RuntimeError:
         return _start_failed(temporary, retired)
     if process.stdout is None:
         msg = "worker stdout pipe was not created"

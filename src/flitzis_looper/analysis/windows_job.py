@@ -17,6 +17,7 @@ _SNAP_THREADS = 0x00000004
 _INVALID_HANDLE = ctypes.c_void_p(-1).value
 _NO_MORE_FILES = 18
 _ACTIVE_PROCESS_LIMIT = 0x00000008
+_JOB_MEMORY_LIMIT = 0x00000200
 _MAX_JOB_PROCESSES = 64
 _SYNCHRONIZE_QUERY = 0x00101000
 _JOB_PROCESS_IDS = 3
@@ -136,7 +137,13 @@ def _kernel() -> ctypes.WinDLL:
 class WindowsJob:
     """Retain one unnamed process-tree job until all members have actually exited."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, commit_limit_bytes: int | None = None) -> None:
+        if commit_limit_bytes is not None and (
+            type(commit_limit_bytes) is not int or not 0 < commit_limit_bytes <= 2**63 - 1
+        ):
+            message = "Invalid owned job commit limit"
+            raise ValueError(message)
+        self._commit_limit_bytes = commit_limit_bytes
         self._kernel = _kernel()
         handle = self._kernel.CreateJobObjectW(None, None)
         if not handle:
@@ -154,6 +161,9 @@ class WindowsJob:
         limits = _ExtendedLimits()
         limits.basic.flags = _KILL_ON_JOB_CLOSE | _ACTIVE_PROCESS_LIMIT
         limits.basic.active_process_limit = count
+        if self._commit_limit_bytes is not None:
+            limits.basic.flags |= _JOB_MEMORY_LIMIT
+            limits.job_memory_limit = self._commit_limit_bytes
         if not self._kernel.SetInformationJobObject(
             self._handle, _JOB_EXTENDED_LIMITS, ctypes.byref(limits), ctypes.sizeof(limits)
         ):

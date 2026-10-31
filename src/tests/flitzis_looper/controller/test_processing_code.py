@@ -13,7 +13,7 @@ from types import ModuleType
 
 import pytest
 
-from flitzis_looper import stem_cancellation
+from flitzis_looper import offline_runtime, stem_cancellation
 from flitzis_looper.analysis import contracts as analysis_contracts
 from flitzis_looper.analysis import process as analysis_process
 from flitzis_looper.analysis import windows_job
@@ -89,6 +89,7 @@ def _owned_process_roles(
     paths = []
     modules = {}
     for source in (
+        offline_runtime,
         analysis_contracts,
         windows_job,
         stem_cancellation,
@@ -163,7 +164,9 @@ def test_changed_actual_process_helper_source_rejects_loaded_code_until_own_relo
     assert after != before
 
 
-@pytest.mark.parametrize("binding", ["command", "job", "context", "layout"])
+@pytest.mark.parametrize(
+    "binding", ["command", "job", "context", "work_context", "aliased_slots", "layout"]
+)
 def test_changed_actual_process_helper_binding_cannot_claim_known_loaded_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding: str
 ) -> None:
@@ -177,6 +180,10 @@ def test_changed_actual_process_helper_binding_cannot_claim_known_loaded_code(
         modules["stem_process.py"].__dict__["_COMMAND_SCOPE"] = ContextVar(
             "different-channel", default=None
         )
+    elif binding == "work_context":
+        modules["process.py"].__dict__["_WORK_OWNER"] = ContextVar("foreign-work", default=None)
+    elif binding == "aliased_slots":
+        modules["process.py"].__dict__["_ANALYSIS_ADMISSION"] = modules["process.py"]._PROCESS_SLOT
     else:
         modules["windows_job.py"]._BasicLimits.flags = 0
     assert _guarded_identity(paths) is None

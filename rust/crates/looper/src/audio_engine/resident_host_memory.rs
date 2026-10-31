@@ -88,6 +88,44 @@ pub(super) struct HostReservation {
 }
 
 impl HostReservation {
+    /// Reserve an enforced child ceiling, including all existing native promises.
+    /// Actual child bytes remain conservatively double charged until tree retirement.
+    pub(super) fn reserve_child_ceiling(
+        maximum: usize,
+    ) -> Result<(Self, usize), HostAdmissionError> {
+        Self::child_ceiling_on(promises().clone(), maximum, host_headroom)
+    }
+
+    fn child_ceiling_on(
+        gate: Arc<Mutex<Promises>>,
+        maximum: usize,
+        query: impl FnOnce() -> Result<HostHeadroom, String>,
+    ) -> Result<(Self, usize), HostAdmissionError> {
+        let mut state = gate
+            .lock()
+            .map_err(|_| HostAdmissionError::Unavailable("resident host gate poisoned".into()))?;
+        let mut image = query().map_err(HostAdmissionError::Unavailable)?;
+        // The ledger's original 256/128 MiB plus these deltas retain the
+        // unchanged stem admission floors: 2 GiB commit / 512 MiB physical.
+        image.caller_available_commit = image.caller_available_commit.saturating_sub(1792 * MIB);
+        image.system_available_commit = image.system_available_commit.saturating_sub(1792 * MIB);
+        image.available_physical = image.available_physical.saturating_sub(384 * MIB);
+        // Keep both the complete prospective ceiling AND its maximum actual
+        // allocation charged. Even at that maximum, new resident/control work
+        // still has the original stem-to-resident floor margin available.
+        let bytes = (image.allowance().saturating_sub(state.bytes) / 2).min(maximum as u64);
+        if bytes < 128 * MIB {
+            return Err(HostAdmissionError::Pressure {
+                requested_bytes: 128 * MIB,
+                pending_bytes: state.bytes,
+                available_bytes: image.allowance(),
+            });
+        }
+        state.admit(bytes, image)?;
+        drop(state);
+        Ok((Self { gate, bytes }, bytes as usize))
+    }
+
     pub(super) fn reserve_with(
         bytes: usize,
         query: impl FnOnce() -> Result<HostHeadroom, String>,
@@ -299,5 +337,81 @@ mod tests {
             HostReservation::reserve_on(gate.clone(), 1, || Err("query failed".into())).is_err()
         );
         assert_eq!(gate.lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn child_commit_ceiling_deducts_native_promises_and_retains_original_floors() {
+        let gate = Arc::new(Mutex::new(Promises::default()));
+        let old = HostReservation::reserve_on(gate.clone(), (1024 * MIB) as usize, || {
+            Ok(headroom(10 * 1024 * MIB))
+        })
+        .unwrap();
+        let query = || {
+            Ok(HostHeadroom {
+                available_physical: 5 * 1024 * MIB,
+                caller_available_commit: 7 * 1024 * MIB,
+                system_available_commit: 6 * 1024 * MIB,
+            })
+        };
+        let (child, bytes) =
+            HostReservation::child_ceiling_on(gate.clone(), (8 * 1024 * MIB) as usize, query)
+                .unwrap();
+        assert_eq!(bytes as u64, 1536 * MIB);
+        assert_eq!(gate.lock().unwrap().bytes, 2560 * MIB);
+        let (second, second_bytes) =
+            HostReservation::child_ceiling_on(gate.clone(), (8 * 1024 * MIB) as usize, query)
+                .unwrap();
+        assert_eq!(second_bytes as u64, 768 * MIB);
+        drop(second);
+        drop(child);
+        assert_eq!(gate.lock().unwrap().bytes, 1024 * MIB);
+        drop(old);
+        assert_eq!(gate.lock().unwrap().bytes, 0);
+        assert!(HostReservation::child_ceiling_on(gate.clone(), 1, query).is_err());
+        assert_eq!(gate.lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn fully_allocated_child_ceiling_keeps_new_native_control_promises_admissible() {
+        for image in [
+            HostHeadroom {
+                available_physical: 5 * 1024 * MIB,
+                caller_available_commit: 10 * 1024 * MIB,
+                system_available_commit: 10 * 1024 * MIB,
+            },
+            HostHeadroom {
+                available_physical: 10 * 1024 * MIB,
+                caller_available_commit: 6 * 1024 * MIB,
+                system_available_commit: 7 * 1024 * MIB,
+            },
+            HostHeadroom {
+                available_physical: 10 * 1024 * MIB,
+                caller_available_commit: 7 * 1024 * MIB,
+                system_available_commit: 6 * 1024 * MIB,
+            },
+        ] {
+            let gate = Arc::new(Mutex::new(Promises::default()));
+            let old =
+                HostReservation::reserve_on(gate.clone(), (1024 * MIB) as usize, || Ok(image))
+                    .unwrap();
+            let (child, bytes) =
+                HostReservation::child_ceiling_on(gate.clone(), usize::MAX, || Ok(image)).unwrap();
+            let actual = bytes as u64;
+            let allocated_image = HostHeadroom {
+                available_physical: image.available_physical - actual,
+                caller_available_commit: image.caller_available_commit - actual,
+                system_available_commit: image.system_available_commit - actual,
+            };
+            // The child remains fully promised while ALL of its ceiling is also
+            // actual OS-accounted memory. Original resident floors still apply.
+            let control = HostReservation::reserve_on(gate.clone(), (256 * MIB) as usize, || {
+                Ok(allocated_image)
+            })
+            .unwrap();
+            drop(control);
+            drop(child);
+            drop(old);
+            assert_eq!(gate.lock().unwrap().bytes, 0);
+        }
     }
 }

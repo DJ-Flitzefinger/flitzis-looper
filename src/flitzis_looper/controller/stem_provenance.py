@@ -12,7 +12,8 @@ from types import BuiltinFunctionType
 from typing import TYPE_CHECKING
 
 import flitzis_looper_audio as native
-from flitzis_looper.controller import bs_roformer_generation, stem_artifacts
+from flitzis_looper.analysis import process as analysis_process
+from flitzis_looper.controller import bs_roformer_generation, stem_artifacts, stem_process
 from flitzis_looper.controller.bs_roformer_assets import CHECKPOINT_FILENAME, CONFIG_FILENAME
 from flitzis_looper.controller.processing_code import loaded_code_identity
 from flitzis_looper.controller.stem_generation import (
@@ -81,6 +82,9 @@ def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         package / "analysis" / "contracts.py",
         package / "stem_cancellation.py",
         package / "stem_execution.py",
+        package / "offline_runtime.py",
+        package / "system_resources.py",
+        package / "controller" / "stem_resources.py",
         package / "__init__.py",
     )
 
@@ -165,14 +169,17 @@ def native_conversion_identity() -> tuple[str, str] | None:
     """Bind the loaded converter's compiled-source policy, without claiming image attestation."""
     identity = native.stem_conversion_identity
     converter = getattr(stem_artifacts, "StemConversionReservation", None)
+    budget = getattr(stem_process, "OfflineChildMemoryReservation", None)
     if (
         converter is not native.StemConversionReservation
+        or budget is not native.OfflineChildMemoryReservation
+        or budget is not getattr(analysis_process, "OfflineChildMemoryReservation", None)
         or not isinstance(identity, BuiltinFunctionType)
         or identity.__module__ != native.StemConversionReservation.__module__
     ):
         return None
     try:
-        policy, digest = identity(converter)
+        policy, digest = identity(converter, budget)
     except TypeError, ValueError:
         return None
     if policy != TRANSFORM_POLICY or re.fullmatch(r"[0-9a-f]{64}", digest) is None:

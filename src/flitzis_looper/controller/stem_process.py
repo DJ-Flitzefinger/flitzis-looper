@@ -13,13 +13,17 @@ from typing import TYPE_CHECKING
 
 from flitzis_looper.analysis.process import (
     IndependentReceipts,
+    OfflineWorkCancelledError,
     OwnedCommandResult,
+    offline_work_scope,
     run_owned_command,
 )
 from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.encoder_provenance import ENCODER_RESULT
+from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 from flitzis_looper.stem_execution import STEM_EXECUTION_RESULT
+from flitzis_looper_audio import OfflineChildMemoryReservation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -32,6 +36,7 @@ class _StemCommandScope:
     cancel: Event
     directory: Path | None
     resources: StemResourceGuard | None
+    playback: Event | None
 
 
 _COMMAND_SCOPE: ContextVar[_StemCommandScope | None] = ContextVar(
@@ -51,14 +56,18 @@ class StemCommandCancelledError(RuntimeError):
 
 @contextmanager
 def stem_command_scope(
-    cancel: Event, *, directory: Path | None = None, resources: StemResourceGuard | None = None
+    cancel: Event,
+    *,
+    directory: Path | None = None,
+    resources: StemResourceGuard | None = None,
+    playback: Event | None = None,
 ) -> Iterator[None]:
     """Bind one job's cancellation and resource guard on its existing worker.
 
     Context tokens are reset even on backend failure. Separately admitted workers
     and injected fake command runners keep their independent state/signatures.
     """
-    token = _COMMAND_SCOPE.set(_StemCommandScope(cancel, directory, resources))
+    token = _COMMAND_SCOPE.set(_StemCommandScope(cancel, directory, resources, playback))
     try:
         yield
     finally:
@@ -71,6 +80,9 @@ def stem_command_checkpoint() -> None:
     if scope is not None and scope.cancel.is_set():
         msg = "Stem command cancelled"
         raise StemCommandCancelledError(msg)
+    if scope is not None and scope.playback is not None and scope.playback.is_set():
+        message = "Stem generation stopped for playback headroom; retry after playback stops"
+        raise RuntimeError(message)
 
 
 def stem_conversion_checkpoint() -> None:
@@ -104,17 +116,47 @@ def _run_owned(
     request_abort: Callable[[], None] | None = None,
     stop_reason: Callable[[], str | None] | None = None,
 ) -> OwnedCommandResult:
-    return run_owned_command(
-        args,
-        cwd=cwd,
-        env=env,
-        cancel=cancel,
-        retired=Event(),
-        receipt_prefixes=IndependentReceipts(_RECEIPT_PREFIXES),
-        request_abort=request_abort,
-        abort_grace_seconds=0.4,
-        stop_reason=stop_reason,
-    )
+    try:
+        with offline_work_scope(cancel):
+            return _run_admitted(args, cwd, env, cancel, request_abort, stop_reason)
+    except OfflineWorkCancelledError as error:
+        raise StemCommandCancelledError(str(error)) from None
+
+
+def _run_admitted(
+    args: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    cancel: Event,
+    request_abort: Callable[[], None] | None,
+    stop_reason: Callable[[], str | None] | None,
+) -> OwnedCommandResult:
+    scope = _COMMAND_SCOPE.get()
+    budget = None
+    with offline_work_scope(cancel):
+        try:
+            stem_command_checkpoint()
+            # No unsupported platform is labelled as enforced. On Windows the
+            # promise includes existing Native deltas BEFORE suspended launch.
+            if os.name == "nt" and scope is not None and scope.resources is not None:
+                scope.resources.entry()
+                budget = OfflineChildMemoryReservation()
+            return run_owned_command(
+                args,
+                cwd=cwd,
+                env=env,
+                cancel=cancel,
+                retired=Event(),
+                receipt_prefixes=IndependentReceipts(_RECEIPT_PREFIXES),
+                request_abort=request_abort,
+                abort_grace_seconds=0.4,
+                stop_reason=stop_reason,
+                commit_limit_bytes=budget.limit_bytes if budget is not None else None,
+            )
+        finally:
+            # run_owned_command cannot return before tree AND pipe readers end.
+            if budget is not None:
+                budget.close()
 
 
 def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> OwnedCommandResult:
@@ -125,8 +167,18 @@ def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> Owne
     if resources is not None:
         resources.entry()
     cancel = scope.cancel if scope is not None else Event()
-    stop_reason = resources.command_stop_reason if resources is not None else None
-    child_env = dict(env)
+
+    def stop() -> str | None:
+        if scope is not None and scope.playback is not None and scope.playback.is_set():
+            return "audio_headroom"
+        return resources.command_stop_reason() if resources is not None else None
+
+    stop_reason = (
+        stop
+        if resources is not None or (scope is not None and scope.playback is not None)
+        else None
+    )
+    child_env = child_environment(env)
     child_env.pop(CANCEL_PATH_ENV, None)
     if scope is not None and scope.directory is not None and _own_inference(args):
         scope.directory.mkdir(parents=True, exist_ok=True)
@@ -141,6 +193,9 @@ def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> Owne
     if result.reason == "cancelled":
         msg = "Stem command cancelled"
         raise StemCommandCancelledError(msg)
+    if result.reason == "audio_headroom":
+        message = "Stem generation stopped for playback headroom; retry after playback stops"
+        raise RuntimeError(message)
     if resources is not None and result.reason in {"resource_pressure", "resource_unavailable"}:
         raise resources.failure(result.reason)
     if result.reason not in {"ok", "worker_crashed"}:

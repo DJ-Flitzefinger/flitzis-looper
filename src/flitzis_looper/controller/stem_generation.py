@@ -37,6 +37,7 @@ from flitzis_looper.encoder_provenance import (
     verified_encoder_output,
 )
 from flitzis_looper.models import STEM_KINDS, StemSeparator
+from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_execution import (
     STEM_EXECUTION_RESULT,
     StemExecution,
@@ -194,7 +195,7 @@ def demucs_cache_environment(
     base_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Keep both separator children on their shared Torch checkpoint root."""
-    env = dict(os.environ if base_env is None else base_env)
+    env = child_environment(dict(os.environ if base_env is None else base_env))
     cache_dir = model_cache_dir.resolve(strict=False)
     if cache_dir.parent.name == "checkpoints" and cache_dir.parent.parent.name == "hub":
         cache_dir = cache_dir.parent

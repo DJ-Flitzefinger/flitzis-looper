@@ -36,7 +36,7 @@ from flitzis_looper.analysis.metrical_prior_setup import (
     write_json_new,
 )
 from flitzis_looper.analysis.neural_worker import _NativeCancellationEvent
-from flitzis_looper.analysis.process import run_owned_command
+from flitzis_looper.analysis.process import offline_work_scope, run_owned_command
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.process import OwnedCommandResult
@@ -147,6 +147,13 @@ def _environment() -> dict[str, str]:
 
 
 def _command(
+    arguments: list[str], directory: Path, request: _Request, cancel: Event
+) -> tuple[OwnedCommandResult, int]:
+    with offline_work_scope(cancel):
+        return _command_admitted(arguments, directory, request, cancel)
+
+
+def _command_admitted(
     arguments: list[str], directory: Path, request: _Request, cancel: Event
 ) -> tuple[OwnedCommandResult, int]:
     observer = PriorMemoryObserver(request.native_live_bytes, request.aggregate_limit_bytes)

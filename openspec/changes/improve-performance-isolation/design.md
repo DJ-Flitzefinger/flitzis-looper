@@ -1475,3 +1475,157 @@ actual-diff review. Root serializes writes/Git/build/install. Run focused checks
 for each coherent change and the combined matrix at the final boundary; reuse
 unchanged compatible evidence. Protect running Apps, held Native and private
 audio/settings. Headless checks do not establish listening/device acceptance.
+
+## STEP16: coordinated background resource admission
+
+The existing stem pool, six admission lanes and single analysis owner remain
+authoritative. One shared heavy resource permit spans a stem backend through
+actual source/processing `finish_read`, including child trees, output readers and
+conversion. A separate original analysis admission retains duplicate refusal;
+its admitted supervisor waits cancellably for heavy capacity. Ordinary resource
+contention cannot select approximate BPM. Same-thread, still-active nested scopes
+reuse the permit; copied or expired contexts cannot borrow another owner's slot.
+The optional prior uses the same permit. Recording finalization keeps its existing
+independent owner so a take does not wait behind separator inference.
+
+Child-only environments bound numerical pools before imports. Separator children
+set and verify Torch intra/inter-op counts of one before model work, recording
+the observed counts only in completed execution receipts. FFmpeg decoder, encoder
+and filter pools are bounded explicitly. The particular KeyNet ORT session uses
+one intra/inter-op thread without changing global ORT or App numerical settings.
+KeyNet's existing parallel analysis branch remains separate; this is no physical
+core-isolation or total-process-thread-count claim.
+
+On Windows, the shared Native host ledger grants a dynamic child commit ceiling
+before suspended Job activation. Let `A` be the minimum caller/system-commit and
+physical allowance after the original stem floors, and `P` all existing Native
+prospective promises. The ceiling is `(A - P) / 2`, with checked/saturating extents
+and refusal below the minimum useful admission. The full ceiling remains promised
+until the tree and both pipe readers finish, while actual child memory is also
+visible to the OS. Halving preserves room for new resident/control work even when
+the child reaches its entire ceiling; promising all of `A - P` incorrectly starved
+new cold loads under this deliberate double charge. Original 2 GiB admission,
+3 GiB recovery, 512 MiB critical commit and physical floors remain unchanged.
+This is an enforced resource budget, not a model-memory estimate or protection
+against unrelated processes consuming later headroom.
+
+New inference displays **Waiting for playback to stop** while the existing active
+PAD projection is nonempty. Saved-set lookup and component preparation keep their
+own lanes. Playback observed during generation ends that attempt with a distinct
+playback-headroom error after actual teardown; it never stops a PAD. Polling and
+abort/retirement have a tail. No reliable live inference overlap or device deadline
+is certified, so heavy generation is conservatively gated. A resource waiter
+reports **Waiting for background resources**, without an effective execution claim.
+
+Portable preactivation now requires the matching Native child-budget API. The
+canonical budget type, conversion type and compiled bridge/host-ledger sources
+participate in component identity. This does not establish full binary/compiler
+attestation. The unchanged full-host validator policy still refuses complete
+producer identity at `StemExecution._coherent_fallback`; all producer roles,
+including the new resource helpers, must pass the FINAL19 attestation gate.
+Windows Job enforcement is not Linux/macOS host-monitoring or POSIX whole-tree
+retirement evidence. No dependency, lock, model, ABI version or OS setting changed.
+
+### Bounded CPU-model observations
+
+Exactly one serial CPU configuration pair per pinned separator used a deterministic
+one-second, 44.1 kHz stereo source, seeds 1234 and unchanged model/default chunk
+options. All four input byte hashes were
+`c0b59a584e817b9c36375e236c3db4b1066e544734e1b5d585028238bb1f2cb6`.
+Torch getters verified configurations 16 then one. **Both inherited the current
+`OMP_THREAD_LIMIT=1` and one-thread MKL/BLAS environment.** These are not actual
+16-way parallel execution, an unrestricted parent baseline or a general speedup.
+
+| Phase | Demucs configured 16 -> 1, wall / CPU seconds | BS-RoFormer configured 16 -> 1, wall / CPU seconds |
+|---|---|---|
+| Import | 3.234161 / 2.968750 -> 3.151916 / 2.703125 | 3.195252 / 2.718750 -> 3.169446 / 2.750000 |
+| Model load | 0.642269 / 0.562500 -> 0.631187 / 0.578125 | 1.445437 / 1.312500 -> 1.369220 / 1.359375 |
+| Inference | 4.219265 / 4.171875 -> 3.516783 / 3.500000 | 55.291579 / 55.140625 -> 55.420762 / 55.265625 |
+| Raw output copy | 0.003812 / 0.015625 -> 0.003902 / 0 | Included in the preceding phase |
+
+BS inference includes its existing PCM16 output. The unchanged STEP15 Rust
+conversion observations remain separate. Process peak-pagefile counters were
+2,695,356,416 -> 2,221,436,928 bytes for Demucs and 3,626,786,816 -> 3,620,900,864
+for BS. Peak working sets were 1,551,056,896 -> 1,634,082,816 bytes for Demucs
+(an increase) and 2,951,340,032 -> 2,945,544,192 for BS. These high-water counters
+are cumulative within one child, not phase allocations or peaks to add across
+models. The diagnostic's `native_live_bytes=0` is not App Native accounting.
+
+Demucs raw float hashes differ: maximum absolute sample difference
+`1.1920928955078125e-7`, largest component RMS `2.0159592071840294e-8`.
+Demucs PCM16 identity was not measured. All four BS WAV hashes match, with zero
+changed PCM16 codes among 88,200 samples per component. No tolerance was chosen
+after observing these results. CUDA availability was queried only; these CPU
+observations establish no CUDA execution/fallback, listening, general quality,
+live-overlap, source-second throughput or historical Portable-pressure cause.
+System commitment returned near preceding observations, but unrelated activity
+prevents leak or causal attribution.
+
+These model observations preceded the final half-allowance correction. Reuse
+their numerical/phase evidence only. Final admission proof is provided separately
+by full-ceiling accounting cases and the allocated-child cold-control regression.
+
+Reconstruction: create 44,100 float64 time points divided by 44,100; left is
+`0.2*sin(2*pi*220*t) + 0.1*sin(2*pi*431*t)`, converted to float32, right is reversed
+left times 0.7. Set Python/Torch seeds to 1234. In isolated diagnostic children,
+set/verify Torch counts 16 or one before loading the existing checkpoint. Demucs
+uses its standard mono-reference mean/std normalization, default shifts/overlap,
+split mode and zero extra workers; restore mean/std and retain four raw float
+components. BS uses its pinned configuration and default `ChunkPlan` through
+`separate_pcm`, retaining four complete PCM16 WAVs. Run serially through the
+existing command scope/guard, sample per-phase CPU/wall and the retained child's
+Windows counters plus timestamped caller/system/physical observations, and compare
+complete output hashes, maximum/RMS differences and source geometry. Do not rerun
+inference merely to improve a number.
+
+### Verification boundary
+
+The cold-control regression holds an owned, committed and touched 2 GiB child
+under the same test binary's real budget ledger. It then performs a fresh Native
+full-source cold load, public captured START, actual admission/original T, applied
+callback state, all 64 stereo frame bits against an independent dry reference,
+public STOP and actual child/reader/ledger retirement. This is headless manual
+callback correctness, not full-ceiling physical allocation or CPAL latency.
+Deterministic physical/caller/system-limiting cases separately cover allocation
+of the full ceiling plus a fresh 256 MiB Native promise.
+
+Initial probe failures retained their real failed outcomes: the embedded Rust
+test executable was mistaken for Python, original T was observed before callback
+admission, and the initial finite-window fixture mismatched the public full-source
+request. The final fixture uses the configured interpreter and actual matching
+source/admission boundaries. No production source/window/timing guard or assertion
+was relaxed. The original 32 Rust failures, distinct watchdog and registry unknown,
+full-producer UNKNOWN and mandatory CPU/CUDA/distribution/combined FINAL19 gates
+remain open. STEP17-19 scope is retained in full.
+
+Affected validation is deliberately scoped. The initial 15 Python files had
+448 passes and two new fixture/resume failures, corrected with 82 passes across
+five affected files. A later selection had 371 passes and five failures: strict
+Torch module typing and four stock-batch fixtures whose process recorder rejected
+the new commit-limit keyword before launch. The recorder now forwards the real
+limit without weakening any custody assertion; its two affected files passed all
+25 cases. Both numerical entry points pass the four exact typed Torch functions,
+retaining the same set/set/get/get checks. The final selected run had 72 passes,
+including actual stock entrypoints, batch cancellation, budget and processing
+identity cases, and one Ruff type-only import error; that import was moved into
+the existing supported type-checking convention. These overlapping runs are not
+additive or a clean whole-program matrix.
+
+The final ten static/runtime checks passed in 18.70 seconds after that correction:
+Rustfmt/Ruff/format, strict typing of eight affected product files, strict OpenSpec,
+seven Markdown files with 88 local targets, canonical Native/budget and Portable
+gates, the original full-host UNKNOWN boundary, source-equal model receipts and
+effective numerical runtime observations. No broader repeat was justified after
+these directly affected checks passed.
+
+Native evidence comprises five final ledger cases, thirteen KeyNet cases and the
+one allocated-child cold-control case, with `RUST_MIN_STACK` absent.
+The ledger was freshly executed from the existing Debug test artifact only after
+byte-comparing all 594 tracked Rust/Cargo/lock and included Python probe inputs
+against its compiled source stage. Its executable SHA256 was
+`5cc2f0b0ec906676c34aba481b7b123d63c5da7ea661331088ecf0b23161c8ad`.
+This is source-compatible test reuse, not full compiler/image attestation. The
+KeyNet local single-thread session selected class 7 against an independently built
+default-pool session; maximum logit difference was `1.1920928955078125e-7`.
+Current child observations also report ATen intra/inter-op, OpenMP and MKL pools
+all at one. No App-global pool was changed and no additional model run is inferred.

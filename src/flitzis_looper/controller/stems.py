@@ -3,12 +3,14 @@ import re
 import threading
 import wave
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
+from flitzis_looper.analysis.process import offline_work_scope
 from flitzis_looper.bs_input_provenance import bs_input_contract
 from flitzis_looper.controller.asset_lifecycle import (
     AssetRetirementReservation,
@@ -314,6 +316,7 @@ class StemController(BaseController):  # noqa: PLR0904
             stem_backend if stem_backend is not None else SelectedStemGenerationBackend()
         )
         self._stem_resources = stem_resources if stem_resources is not None else StemResourceGuard()
+        self._stem_playback_active = threading.Event()
         self._stem_worker_pool: StemWorkerPool | None = None
         if stem_task_runner is None:
             self._stem_worker_pool = StemWorkerPool()
@@ -1637,6 +1640,10 @@ class StemController(BaseController):  # noqa: PLR0904
         return "direct" if owner is None or DIRECT_STEM_INTEREST in owner.current else "batch"
 
     def _inference_admissible(self, job: StemGenerationJob) -> bool:
+        # Generation has no proved whole-model live deadline bound. Cache lookup
+        # and committed-stem preparation keep their existing independent lanes.
+        if self._session.active_sample_ids:
+            return False
         deferred = getattr(self, "_pair_deferred_sample_ids", ())
         if not any(
             row.sample_id not in deferred
@@ -1716,8 +1723,15 @@ class StemController(BaseController):  # noqa: PLR0904
         return tuple(candidates)
 
     def _poll_stem_admissions(self) -> None:
+        if self._session.active_sample_ids:
+            self._stem_playback_active.set()
+        else:
+            self._stem_playback_active.clear()
         pool = self._stem_worker_pool
-        if pool is None or self._shutting_down:
+        if self._shutting_down:
+            return
+        if pool is None:
+            self._start_waiting_generations()
             return
         self._expire_requested_generations()
         deferred = getattr(self, "_pair_deferred_sample_ids", ())
@@ -2866,6 +2880,12 @@ class StemController(BaseController):  # noqa: PLR0904
     def stem_generation_stage(self, sample_id: int) -> str | None:
         """Return the last reported stem generation stage for a pad."""
         validate_sample_id(sample_id)
+        if self._session.active_sample_ids and any(
+            (job := self._jobs.get(path)) is not None
+            and any(row.sample_id == sample_id for row in job.subscribers())
+            for path in self._waiting_jobs
+        ):
+            return "Waiting for playback to stop"
         if sample_id in self._requested_generations:
             resources = self._stem_resources.current
             return resources.message if not resources.allowed and resources.message else "Queued"
@@ -4902,12 +4922,22 @@ class StemController(BaseController):  # noqa: PLR0904
             if job.processing_files is not None
             else None
         )
+        resources = ExitStack()
         try:
+            resources.enter_context(
+                offline_work_scope(
+                    job.cancel_event,
+                    lambda: report_progress(None, "Waiting for background resources", None),
+                )
+            )
             self._stem_resources.entry()
             if processing is not None:
                 processing[0].verify()
             with stem_command_scope(
-                job.cancel_event, directory=request.cache_dir, resources=self._stem_resources
+                job.cancel_event,
+                directory=request.cache_dir,
+                resources=self._stem_resources,
+                playback=self._stem_playback_active,
             ):
                 result = self._stem_backend.generate(
                     request, StemExecutionProgress(report_progress)
@@ -4935,7 +4965,10 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         finally:
             processing = None
-            job.finish_read()
+            try:
+                job.finish_read()
+            finally:
+                resources.close()
             if event is None:
                 # An unexpected exception still settles actual reads and private
                 # cleanup capacity before it propagates to the worker boundary.

@@ -206,7 +206,12 @@ def _runtime_constant(
 ) -> tuple[object, ...] | None:
     """Check exact declared carriers without measuring mutable cancellation/admission state."""
     role = Path(str(namespace["__file__"])).name, name
-    if role not in {("process.py", "_PROCESS_SLOT"), ("stem_process.py", "_COMMAND_SCOPE")}:
+    if role not in {
+        ("process.py", "_PROCESS_SLOT"),
+        ("process.py", "_ANALYSIS_ADMISSION"),
+        ("process.py", "_WORK_OWNER"),
+        ("stem_process.py", "_COMMAND_SCOPE"),
+    }:
         return None
     if not isinstance(expression, ast.Call) or not isinstance(expression.func, ast.Name):
         msg = "runtime carrier differs from its supported constructor declaration"
@@ -214,7 +219,10 @@ def _runtime_constant(
     actual = namespace[name]
     arguments = tuple(_expression(item, namespace) for item in expression.args)
     keywords = {item.arg: _expression(item.value, namespace) for item in expression.keywords}
-    if role == ("process.py", "_PROCESS_SLOT"):
+    if role in {("process.py", "_PROCESS_SLOT"), ("process.py", "_ANALYSIS_ADMISSION")}:
+        if namespace.get("_PROCESS_SLOT") is namespace.get("_ANALYSIS_ADMISSION"):
+            msg = "analysis admission and heavy resource carriers must be distinct"
+            raise ValueError(msg)
         if (
             expression.func.id != "Semaphore"
             or namespace.get("Semaphore") is not Semaphore
@@ -234,7 +242,12 @@ def _runtime_constant(
     if (
         expression.func.id != "ContextVar"
         or namespace.get("ContextVar") is not ContextVar
-        or arguments != ("stem-command-scope",)
+        or arguments
+        != (
+            ("offline-work-owner",)
+            if role == ("process.py", "_WORK_OWNER")
+            else ("stem-command-scope",)
+        )
         or keywords != {"default": None}
         or type(actual) is not ContextVar
     ):

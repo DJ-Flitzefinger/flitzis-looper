@@ -139,7 +139,7 @@ override current source or activate old programs:
   timing limits. Global inheritance preserves explicit per-PAD overrides.
 - [Stems](architecture/stems.md) and [model setup](stem-generation-setup.md):
   offline generation, saved selection, residency and effective Native adoption
-  are separate states. Leased offline generation can run during playback;
+  are separate states. Heavy generation now waits while playback is active;
   adoption has its own state-specific permits.
 - [Development](development.md), [Rust guide](../rust/README.md) and
   [Portable Windows](portable-windows.md): toolchains, workers/models and

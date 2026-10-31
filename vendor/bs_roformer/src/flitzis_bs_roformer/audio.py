@@ -9,6 +9,7 @@ from torch import Tensor
 
 from flitzis_bs_roformer.model import SAMPLE_RATE
 from flitzis_looper.bs_input_provenance import run_input_tool
+from flitzis_looper.offline_runtime import ffmpeg_command
 from flitzis_looper.stem_cancellation import check_cancelled
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ def decode_source(
         raise ValueError(msg)
     channel_conversion = ["-af", "pan=stereo|c0=c0|c1=c0"] if channels == 1 else []
     run_input_tool(
-        [
+        ffmpeg_command([
             "ffmpeg",
             "-nostdin",
             "-v",
@@ -80,7 +81,7 @@ def decode_source(
             "-f",
             "f32le",
             str(destination),
-        ],
+        ]),
         checkpoint=checkpoint,
     )
     check_cancelled(checkpoint, "after_source_decode")

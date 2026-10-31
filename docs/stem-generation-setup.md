@@ -215,7 +215,7 @@ The [E11 plan](../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-reside
 
 The bounded [L1 identity delivery](../openspec/changes/archive/2026-10-30-extend-shared-stem-generation/evidence/prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11) resolves complete actual producer provenance before control-owned duplicate admission. Equal known fingerprints join one physical inference or reuse a verified completed pair; current verified selection disables duplicate generation without render-time hashing. Optional durable v3 provenance preserves historical UNKNOWN and model-free restore. Settings/material ABA fences and independent source/ticket interests prevent obsolete jobs from selecting newer content.
 
-X11-LIVE-STEMS implements source-leased offline generation during playback, joint
+X11-LIVE-STEMS implements source-leased offline generation, joint
 disk/config commit and separately guarded new-set adoption in the supported
 residency domains. Each candidate needs its own current source, window, voice,
 history and Native acknowledgement; older assignments/readers retain immutable
@@ -226,3 +226,11 @@ acceptance limits; these are not a combined installed-inference/device/hearing
 acceptance claim. X11-BULK's all216 loaded slots/all banks, bounded fair2-worker/
 32-queue feeding and own-interest cooperative cancellation remain separate
 requirements. Existing model installation and model-free validated restore remain unchanged.
+
+The current conservative resource policy defers new heavy inference while any PAD
+is reported active, displaying **Waiting for playback to stop**. Starting playback
+during generation ends that attempt with an explicit playback-headroom error after
+actual child/reader cleanup; retry after playback stops. Active PADs are retained.
+Saved-stem loading/adoption and source custody keep their independent guards.
+See [resource admission](architecture/stems.md) for child thread limits, Windows
+commit enforcement, cancellation tails and platform evidence limits.

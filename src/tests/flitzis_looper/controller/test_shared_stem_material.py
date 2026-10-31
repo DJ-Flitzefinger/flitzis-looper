@@ -1,6 +1,7 @@
 """Real controller admission/fanout, with only native devices/separation substituted."""
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -8,6 +9,7 @@ import pytest
 
 from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
+from flitzis_looper.controller.stem_process import stem_conversion_checkpoint
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.stem_execution import StemExecution
 from tests.conftest import write_mono_pcm16_wav
@@ -91,6 +93,68 @@ def _resolve_candidates(
     job = next(iter(controller.stems._jobs.values()))
     assert job.resolved_request is not None
     assert job.generation_fingerprint is not None
+
+
+def test_playback_defers_only_inference_and_preserves_original_pending_request(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    stem_backend: FakeStemGenerationBackend,
+) -> None:
+    tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
+    controller.session.active_sample_ids.add(215)
+    assert controller.stems.generate_stems_async(0)
+    tasks.pop(0)()  # Existing source/identity resolution remains independent.
+    controller.stems.on_frame_render()
+    assert not tasks
+    assert controller.stems.stem_generation_stage(0) == "Waiting for playback to stop"
+    assert controller.session.active_sample_ids == {215}
+    assert not stem_backend.requests
+    original = next(iter(controller.stems._waiting_jobs))
+    controller.session.active_sample_ids.clear()
+    controller.stems.on_frame_render()
+    assert len(tasks) == 1
+    tasks.pop(0)()
+    assert len(stem_backend.requests) == 1
+    assert stem_backend.requests[0].cache_dir == original
+
+
+def test_actual_controller_poll_stops_generation_writes_when_playback_begins(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    stem_backend: FakeStemGenerationBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
+    assert controller.stems.generate_stems_async(0)
+    _resolve_candidates(controller, tasks)
+    entered, release = threading.Event(), threading.Event()
+    original = stem_backend.generate
+
+    def held(
+        request: StemGenerationRequest, progress: StemProgressCallback
+    ) -> StemGenerationResult:
+        entered.set()
+        assert release.wait(10)
+        stem_conversion_checkpoint()
+        return original(request, progress)
+
+    monkeypatch.setattr(stem_backend, "generate", held)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        running = executor.submit(tasks.pop(0))
+        try:
+            assert entered.wait(5)
+            controller.session.active_sample_ids.add(215)
+            controller.stems.on_frame_render()
+            assert controller.stems._stem_playback_active.is_set()
+        finally:
+            release.set()
+        running.result(10)
+    controller.stems.on_frame_render()
+    assert controller.session.active_sample_ids == {215}
+    assert not stem_backend.requests
+    assert "playback headroom" in (controller.stems.stem_generation_error(0) or "")
 
 
 def test_coalesced_alignment_retains_device_for_current_shared_subscribers(
