@@ -1,5 +1,205 @@
 # Performance audit and implementation design
 
+## STEP19 impact: complete-source native CPU prototype
+
+The opt-in standalone `beat_this_audio` extends the independent Rust/ORT trial
+from mono float32 PCM through libsoxr HQ, centered LogMel, original chunk planning,
+aggregation and minimal postprocessing. It does not decode a second source,
+truncate audio, change App dispatch or publish an application receipt. Productive
+BeatThis CPU/CUDA, Demucs/BS, provider probes, weights, locks, installer and recovery
+remain unchanged. Actual installed saving remains **zero**. The shared core has
+no Python, PyO3 or LibTorch; native libraries are separate dependencies.
+
+### Original math and dynamic graph
+
+libsoxr0.1.3 uses FLOAT32/HQ/default one-thread runtime, original wrapper block
+size `max(1000,48000*in_rate/22050)` and a real final flush. The DLL is explicitly
+supplied, bounded and digest checked. Its owned path must remain immutable;
+file hashing does not attest an OS-loaded image or the complete producer.
+
+LogMel uses periodic Hann1024, centered reflect512, hop441, magnitude divided by
+sqrt1024,128 Slaney-frequency bins30–11000 Hz with **norm=None**, then
+`log1p(1000*x)`. No Slaney area normalization. Starts are `arange(-6,T-6,1488)`;
+when T>1488 the last start becomes T-1494. T<=1488 therefore really runs T+12
+model frames; T1489 has starts[-6,-5]. Six logits are removed at each edge and
+earliest chunks win overlap. Chunks are processed sequentially with one retained
+output, rather than retaining all prediction chunks. Minimal postprocessing
+uses positive equal maxima in +/-3 frames, adjacent deduplication against the
+running mean, first nearest-beat ties and unique sorted downbeats. Physical
+duration exclusion follows snapping; all complete logits are retained.
+
+The original strict final0 loader and STEP18 tooling are reused. For the dynamic
+export only, the one shared original RotaryEmbedding has caching disabled;
+cached and uncached1500 logits must be **bit identical** before export. Weights
+and productive packages are untouched. Legacy opset18/dynamoFalse export creates
+one82,104,250-byte inline graph,138 initializers/5354 standard-domain nodes,
+SHA256 `46bfb2c1a1f1e5c1d8786d0d9462f285971ff7fa8a592ac5f4ab609698bd44ca`.
+This is the **measured artifact's** byte identity. Its measured exporter source
+SHA256 is `d4e5a5ca65a7142cfa224824dcb9ab4f8a2444ce20f8a5cc943f34a146a7730f`,
+retained in three equal pre-refactor source snapshots. Final helper extraction,
+early existing-output guards and formatting preserve arithmetic on inspection;
+the final exporter is not rerun solely for those changes. Tracing source metadata
+may change serialized graph bytes, so the final script has not reproduced that
+exact graph hash. Complete exporter/graph producer attestation remains open.
+Original1500 reference SHA remains STEP18's `79e7039f37f91d9f2351e97a6e2cdeac14172d24fc58f724ad2c5218a505702a`.
+Fixed batch1, three-way QKV/two-way heads and feature-dimension tracer warnings
+remain recorded. Output batch metadata is inferred/unknown; input batch stays
+exactly1, and every actual output must be finite float32[1,actualT]. The first
+attempt rejected this metadata **before inference**; handling unknown metadata
+retains the exact actual-output guard. No padding or graph-metadata rewrite.
+
+### Bounded actual numerical comparisons
+
+`scripts/beat_this_trial_reference.py` reconstructs all synthetic sources using
+the unchanged pinned worker. Two short22050-Hz cases have513/22949 PCM frames;
+44.1/48/96-kHz cases have10001/48013/96017 frames; the48000-Hz track has1536101
+frames (32 seconds plus101 samples). The tracked generator defines every sample,
+including first/last impulses and a500ms decaying70-Hz transient. No private audio
+or listening evidence is used. All six complete resampled arrays are bit equal.
+
+| Case | Spectrogram frames | Maximum LogMel difference | RMS difference |
+| --- | ---: | ---: | ---: |
+| short14 | 2 | 0.000003814697265625 | 0.0000005289518692597156 |
+| short65 | 53 | 0.00011985934543190524 | 0.000009198060005695107 |
+| 44100 | 12 | 0.00008272804552689195 | 0.000008660001856043758 |
+| 48000 | 51 | 0.00010343178291805089 | 0.000009397934508143894 |
+| 96000 | 51 | 0.0001018625043798238 | 0.000009754261191765678 |
+| complete track | 1601 | 0.0001449843548471108 | 0.000009849352930371131 |
+
+Three full original-model references are generated once and reused. Actual native
+CPU runs use14,65 and two1500-frame chunks (track starts[-6,107]), including the
+native frontend rather than original spectrogram input:
+
+| Case | Maximum logit difference | RMS | Executed CPU nodes | Beat/downbeat counts |
+| --- | ---: | ---: | ---: | ---: |
+| short14 | 0.0000064373016357421875 | 0.000004848902878621278 | 1967 | 1/0 |
+| short65 | 0.00001049041748046875 | 0.000003957750487866306 | 1967 | 2/1 |
+| complete track | 0.00005078315734863281 | 0.000005471285692518955 | 3934 | 65/65 |
+
+All detected times match the original worker exactly in these cases. These are
+finite numerical comparisons, **not general model/audio quality tolerances**.
+Wall spans2.4131447/2.0741781/8.1958463 seconds include the owned command/output;
+there is no paired speedup claim. The CPU harness incorrectly created the original
+thread-profile observer while calling commands on the current thread: it recorded
+**zero scopes**, so its memory/retirement report supplies no child evidence.
+Do not rerun these models merely to improve measurement. The original synchronous
+supervisor remains used; separately observed failure settlement follows below.
+
+### Actual resource refusal and remaining native gates
+
+The explicit CUDA candidate builds with TF32 disabled and local1/1 sequential,
+nonspinning sessions. Developer-only dynamic ORT loading is opt-in; default App
+features do not select CUDA or libsoxr. Actual hardware execution is **unproved**.
+The attempted real mid-ORT timer diagnostic instead failed during model load:
+`Exception during loading: bad allocation`, before any run marker/kernel. Actual
+host available commit was2,612,334,592 bytes; the original half-remaining allowance
+after the2GiB floor allowed only about230MiB. Child lifetime private peak was
+225,112,064 bytes, sampled concurrent owned private226,291,712/WS223,981,568.
+One scope starts/closes, pending/inflight0/errors[],85 main-child samples/90 total
+observer polls; the original tree
+and readers settle. This is a **terminal host/Job-limit failure**, not cancellation
+or a CUDA failure. A subsequent CUDA attempt was refused **before process launch**
+by original `OfflineChildMemoryReservation`:134,217,728 requested with140,152,832
+host bytes available after reserve. No GPU result or fallback is invented.
+
+The standalone CLI has a joined, explicitly requested RunOptions timer diagnostic;
+actual termination-specific error plus executed same-run kernels and true final
+tree/reader end are still required. Its once-only marker precedes invocation and
+is not proof of mid-ORT execution. Optional allocator logging is confined to the
+standalone diagnostic process. A generic BFCArena/host error never authorizes
+CUDA fallback. Even `gpu_mem_limit=1` requires independent Cuda-allocator identity
+and the exact rounded allocation refusal before any diagnostic exit70 receipt;
+it is not physical VRAM exhaustion. The working productive fallback remains.
+
+No resource floor/cap, unrelated process, OS/pagefile setting or quality option
+was changed. A concurrent large unrelated process is only a current observation,
+not the cause of the earlier Human pressure case. KeyNet's effective EP, fullhost
+original-validator UNKNOWN, CPU/CUDA overlap and all historical negatives remain.
+
+### Native dependencies, reproduction and split
+
+The trial Windowsx64 Release libsoxr DLL is228352 bytes, SHA256
+`b2e3a0ff4806540250fa45e9522c3a3549663888397fce4708249369b25db37e`.
+Reconstruct using vcpkg020c8202737f's `soxr:x64-windows`0.1.3#8 (default noOpenMP),
+SourceForge archive SHA512
+`f4883ed298d5650399283238aac3dbe78d605b988246bea51fa343d4a8ce5ce97c6e143f6c3f50a3ff81795d9c19e7a07217c586d4020f6ced102aceac46aaa8`,
+with its named001_initialize-resampler/002_disable_warning/003_detect_arm patches.
+Dynamic LGPL dependency/source/license distribution remains a bundle obligation.
+Do not replace it with Rubato or a Python extension.
+
+The separate CUDA scratch comes from official PyPI
+`onnxruntime_gpu-1.24.4-cp312-cp312-win_amd64.whl`,207,197,978 bytes, SHA256
+`da5c1e327d8e119a831be2790e69f93cf6daab9145ed0aca7577f412a620f709`.
+Only native DLLs are extracted; no wheel is installed into productive environments.
+ORT DLL15,431,712 bytes/SHA256
+`c63af7de44303e401b283457fdb510caa65756afa1e8c4f43f90195358c4294b`,
+CUDA EP312,608,800/SHA256
+`110929d2552bc775828e7a5c18c5ef9ab90898fc57a57868623fe2fe8c82d494`,
+shared22,048/SHA256
+`f7ec022e2b5a5126f606db4b46da795cacc6cbae4788ed5188b046bbefc13717`.
+Final Windowsx64 Debug CPU EXE36,456,448 bytes/SHA256
+`96bc32667cb1e2187c91d9a5b9b001cba2509ea90e39a703d5686918ae9f852e`;
+dynamic-runtime CUDA EXE13,085,184/SHA256
+`2ea70135c309b9592e672ce9124434f231e3e60f2ec10eee72460a15eb62c4c6`.
+These are logical artifact sizes, not full installations or physical deduplication.
+Final binaries are built and six real early-negative cases pass: existing output
+retains bytes; partial/nonfinite PCM, changed libsoxr/graph SHA and CUDA request
+to the CPU-only build fail before neural execution. Neural numbers above precede
+the final conditional diagnostic logger/comment cleanup; normal inference
+arithmetic is unchanged on review, not newly rerun for those changes.
+Extracted TensorRT847,384 bytes is unused. An initial assumed1.24.2 PyPI endpoint
+returned404, before download/build; verified1.24.4/API24 scratch then built.
+The attempted CUDA child PATH would use the existing separate BeatThis cu128
+CUDA/cuDNN DLL directory, not App cu130 or LibTorch inference. It was never
+launched, so no loaded closure/provider identity follows. Complete CUDA/CPU-only
+closure, CRT, optimized release bundle and Linux/macOS build/run remain unmeasured.
+The trial currently bounds PCM256MiB/rates<=384kHz/resampled256MiB; these explicit
+refusals are trial restrictions, not full productive512MiB/768kHz parity.
+
+Use the configured outer contributor entry with the actual native checkout:
+
+```text
+cargo build --locked --manifest-path rust/Cargo.toml -p flitzis-looper-analysis --example beat_this_audio --features native-inference-trial
+beat_this_audio frontend SOXR_ABSOLUTE SOXR_SHA PCM_F32 RATE NEW_JSON
+beat_this_audio infer GRAPH GRAPH_SHA SOXR_ABSOLUTE SOXR_SHA PCM_F32 RATE NEW_JSON PROFILE cpu MAX_GPU_BYTES
+```
+
+Generate frontend references first with `scripts/beat_this_trial_reference.py
+--worker workers/beat_this/worker.py --output NEW_CACHE_DIRECTORY`; add
+`--checkpoint ABSOLUTE_FINAL0` in a fresh process for the three model references.
+Use `scripts/export_beat_this_trial.py --dynamic` with STEP18's exact1500 frontend
+and the same tooling lock. CUDA build adds `native-inference-cuda`, a separate
+target directory and explicit `ORT_DYLIB_PATH`. All commands require the original
+owned resource supervisor. Keep reconstructed assets/logs only in the project
+cache; source/recipes remain durable. Positive and failed logs:
+`performance-step19-{build,frontend,model,model-second,cuda-setup,cuda,gpu-attempt}.log`.
+The source generator, exact arithmetic and graph recipe allow reconstruction
+after cache loss; existing C scripts are not durable authority.
+
+Final five static/control checks pass29.32s: Ruff/format on both tools, five Rust
+format checks,11 selected Rust tests (five native-trial plus six compatible
+analysis tests), three normal-dependency feature trees without PyO3/Torch/LibTorch,
+all six original fixture hashes, exclusive-output refusal before source/model
+access, strict OpenSpec,43 Markdown targets/whitespace, unchanged productive pins
+and Cargo's sole optional libloading0.9.0 addition. Both complete-host probes keep
+the original `StemExecution` unsupported-validator UNKNOWN with every old/new
+productive resource/provider role retained. Separate final binary/negative gate
+passes11.57s. Runs overlap and are not an additive whole-system matrix. Initial
+Ruff complexity/locals and module-order formatting failures are fixed by helper
+extraction/formatting without suppression; their failed logs remain. Default
+Release Native/API passes with22 known library warnings and the existing einops
+pin. Systems PRE/frozen POST/affected, Methods and the single independent final
+actual-diff review chain are clear for isolated candidate publication only.
+
+The split is now21 steps: STEP19 delivers the complete-source CPU prototype;
+**STEP20 retains every native CUDA/fresh-CPU/cancel/memory/last-reader/quality/
+provenance/OS/distribution/recovery gate before cutover**, including practical
+Demucs/BS migration barriers from STEP18. First obtain fresh real guarded
+headroom, rather than repeat unchanged admission failures. **STEP21 retains ALL
+former FINAL20 gates** (original fullhost validator/Pydantic/all roles, exact32
+Rust failures/watchdog/registry, pressure UNKNOWN, overlap and combined regression/
+architecture/docs/distribution). Productive Torch removal is not yet justified.
+
 ## STEP18 impact: candidate native BeatThis inference
 
 The opt-in `native-inference-trial` analysis feature and developer exporter evaluate

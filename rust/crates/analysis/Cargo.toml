@@ -7,14 +7,20 @@ edition = "2024"
 name = "flitzis_looper_analysis"
 
 [features]
-native-inference-trial = []
+native-inference-trial = ["dep:libloading"]
+native-inference-cuda = ["native-inference-trial", "ort/cuda", "ort/load-dynamic"]
 
 [[example]]
 name = "beat_this_native"
 required-features = ["native-inference-trial"]
 
+[[example]]
+name = "beat_this_audio"
+required-features = ["native-inference-trial"]
+
 [dependencies]
 matrixmultiply = "0.3"
+libloading = { version = "0.9", optional = true }
 num-complex = "0.4"
 ort = "2.0.0-rc.12"
 realfft = "3.4"

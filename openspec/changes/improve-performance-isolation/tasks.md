@@ -238,7 +238,7 @@ claimed. The unchecked cutover/OS requirements above continue in STEP19 below.
 
 ## 19. Complete native pipeline and remaining practical Torch removal
 
-- [ ] Attempt the original complete BeatThis frontend, variable true chunk lengths,
+- [x] Attempt the original complete BeatThis frontend, variable true chunk lengths,
       border6/keep_first aggregation and minimal postprocessor with exact full-source
       geometry, model/weight/operator/quality parity; never pad short attention inputs
       merely to fit the fixed1500 experiment.
@@ -251,7 +251,33 @@ claimed. The unchecked cutover/OS requirements above continue in STEP19 below.
       barriers remain; keep every function/interaction and report OS/architecture
       build/run evidence honestly. Split further only where coherent work requires it.
 
-## 20. Combined regression and final architecture review
+STEP19 delivers the isolated full-source CPU trial, not productive replacement.
+Six synthetic frontend cases retain all resampling bytes; three complete model
+cases execute true14/65/1500 model lengths and match original detections, with
+measured nonzero float differences. The CUDA build passes, but actual execution
+was refused by original host-memory admission before launch. An attempted
+mid-ORT diagnostic instead failed at load under the real Job cap; no cancellation
+or CUDA success is inferred. Productive locks/weights/installer/recovery remain.
+
+## 20. Remaining native parity before cutover
+
+- [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
+      real mid-ORT/process cancellation and memory/reader settlement under fresh
+      original resource admission. Reuse STEP19 numerical references; do not repeat
+      NN work merely for better timings or unchanged resource-pressure failures.
+- [ ] Bind every actual exporter/frontend/graph/weight/runtime/provider/native
+      dependency/OS/architecture role and complete CPU-only/CUDA distribution and
+      recovery evidence; no whole-producer claim from component hashes.
+- [ ] Preserve full quality/functions and existing Demucs/BS/BeatThis closures
+      until complete-source/operator/provider/quality parity is proved. Retain
+      concrete barriers and assess practical migration without LibTorch relabeling.
+
+This split separates an implemented complete-source trial from unproved runtime,
+device, lifecycle and distribution parity. The real concurrent host-pressure
+refusal is retained, never bypassed by reducing floors/caps or changing unrelated
+processes. ALL former final STEP20 work follows as STEP21, without omissions.
+
+## 21. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

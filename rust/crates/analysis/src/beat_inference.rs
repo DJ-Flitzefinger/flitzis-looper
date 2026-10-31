@@ -1,12 +1,12 @@
-//! Opt-in fixed-chunk BeatThis experiment, never selected by the application.
+//! Opt-in BeatThis experiment, never selected by the application.
 //!
-//! This core has no Python, PyO3 or LibTorch dependency. It deliberately does not
-//! implement the audio frontend, short chunks, aggregation or postprocessing.
+//! This core has no Python, PyO3 or LibTorch dependency.
+//! The separate beat_audio core implements the complete waveform math.
 //! The caller must admit a disposable offline process before loading/running it.
 
 use ort::{
     ep,
-    session::{Session, builder::AutoDevicePolicy},
+    session::{RunOptions, Session, builder::AutoDevicePolicy},
     value::{TensorElementType, TensorRef, ValueType},
 };
 use sha2::{Digest, Sha256};
@@ -25,6 +25,17 @@ pub struct Logits {
 /// Single-owner, session-local, bounded-thread candidate inference.
 pub struct BeatModel {
     session: Session,
+    fixed_frames: Option<usize>,
+}
+
+/// Requested trial policy. Effective execution is proved separately by profiling.
+#[derive(Clone, Copy)]
+pub enum Provider {
+    Cpu,
+    #[cfg(feature = "native-inference-cuda")]
+    Cuda {
+        memory_limit: usize,
+    },
 }
 
 impl BeatModel {
@@ -37,14 +48,32 @@ impl BeatModel {
         profile: &Path,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::load_on(graph, expected_sha256, profile, Provider::Cpu, cancelled)
+    }
+
+    /// A failed CUDA request is never silently reinterpreted as successful CPU.
+    pub fn load_on(
+        graph: &[u8],
+        expected_sha256: &str,
+        profile: &Path,
+        provider: Provider,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, String> {
         checkpoint(cancelled)?;
         validate_graph(graph, expected_sha256)?;
+        let ep = match provider {
+            Provider::Cpu => ep::CPU::default().build().error_on_failure(),
+            #[cfg(feature = "native-inference-cuda")]
+            Provider::Cuda { memory_limit } => ep::CUDA::default()
+                .with_tf32(false)
+                .with_memory_limit(memory_limit)
+                .build()
+                .error_on_failure(),
+        };
         let session = Session::builder()
             .map_err(|e| e.to_string())?
             .with_auto_device(AutoDevicePolicy::Default)
-            .and_then(|s| {
-                s.with_execution_providers([ep::CPU::default().build().error_on_failure()])
-            })
+            .and_then(|s| s.with_execution_providers([ep]))
             .and_then(|s| s.with_intra_threads(1))
             .and_then(|s| s.with_inter_threads(1))
             .and_then(|s| s.with_parallel_execution(false))
@@ -59,7 +88,7 @@ impl BeatModel {
         if inputs.len() != 1 || inputs[0].name() != "spectrogram" {
             return Err("unexpected BeatThis input names".into());
         }
-        signature(inputs[0].dtype(), &[1, FRAMES as i64, BINS as i64])?;
+        let fixed_frames = input_signature(inputs[0].dtype())?;
         let outputs = session.outputs();
         if outputs.len() != 2 {
             return Err("expected exactly two BeatThis outputs".into());
@@ -69,9 +98,12 @@ impl BeatModel {
                 .iter()
                 .find(|o| o.name() == name)
                 .ok_or_else(|| format!("missing BeatThis {name} output"))?;
-            signature(output.dtype(), &[1, FRAMES as i64])?;
+            signature(output.dtype(), &[1, fixed_frames.map_or(-1, |n| n as i64)])?;
         }
-        Ok(Self { session })
+        Ok(Self {
+            session,
+            fixed_frames,
+        })
     }
 
     /// Execute one exact chunk. Cancellation surrounds synchronous ORT work;
@@ -81,15 +113,35 @@ impl BeatModel {
         spectrogram: &[f32],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Logits, String> {
+        self.run_with_options(
+            spectrogram,
+            &RunOptions::new().map_err(|e| e.to_string())?,
+            cancelled,
+        )
+    }
+
+    /// A shared RunOptions can request real mid-ORT termination. The caller must
+    /// still join the run and retire the entire owned process and its readers.
+    pub fn run_with_options(
+        &mut self,
+        spectrogram: &[f32],
+        options: &RunOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Logits, String> {
         checkpoint(cancelled)?;
-        if spectrogram.len() != FRAMES * BINS || !spectrogram.iter().all(|x| x.is_finite()) {
-            return Err("expected finite 1500 by 128 spectrogram".into());
+        let frames = spectrogram.len() / BINS;
+        if spectrogram.len() % BINS != 0
+            || !(14..=FRAMES).contains(&frames)
+            || self.fixed_frames.is_some_and(|n| n != frames)
+            || !spectrogram.iter().all(|x| x.is_finite())
+        {
+            return Err("expected finite supported BeatThis chunk by 128 spectrogram".into());
         }
-        let input = TensorRef::from_array_view(([1, FRAMES, BINS], spectrogram))
+        let input = TensorRef::from_array_view(([1, frames, BINS], spectrogram))
             .map_err(|e| e.to_string())?;
         let outputs = self
             .session
-            .run(ort::inputs!["spectrogram" => input])
+            .run_with_options(ort::inputs!["spectrogram" => input], options)
             .map_err(|e| e.to_string())?;
         checkpoint(cancelled)?;
         let read = |name| -> Result<Vec<f32>, String> {
@@ -97,7 +149,7 @@ impl BeatModel {
             let (shape, data) = output
                 .try_extract_tensor::<f32>()
                 .map_err(|e| e.to_string())?;
-            if shape.as_ref() != [1, FRAMES as i64] || !data.iter().all(|x| x.is_finite()) {
+            if shape.as_ref() != [1, frames as i64] || !data.iter().all(|x| x.is_finite()) {
                 return Err(format!("invalid {name} logits"));
             }
             Ok(data.to_vec())
@@ -114,7 +166,7 @@ impl BeatModel {
     }
 }
 
-fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+pub(crate) fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     if cancelled() {
         Err("native BeatThis trial cancelled".into())
     } else {
@@ -132,14 +184,43 @@ fn validate_graph(graph: &[u8], expected: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn input_signature(value: &ValueType) -> Result<Option<usize>, String> {
+    if let ValueType::Tensor {
+        ty: TensorElementType::Float32,
+        shape,
+        ..
+    } = value
+    {
+        let dims = shape.as_ref();
+        if dims.len() == 3 && dims[0] == 1 && dims[2] == BINS as i64 {
+            return match dims[1] {
+                -1 => Ok(None),
+                n if n == FRAMES as i64 => Ok(Some(FRAMES)),
+                _ => Err("unsupported BeatThis time extent".into()),
+            };
+        }
+    }
+    Err("unexpected BeatThis input signature".into())
+}
+
 fn signature(value: &ValueType, expected: &[i64]) -> Result<(), String> {
     match value {
         ValueType::Tensor {
             ty: TensorElementType::Float32,
             shape,
             ..
-        } if shape.as_ref() == expected => Ok(()),
-        _ => Err("unexpected fixed-chunk BeatThis tensor signature".into()),
+        } if shape.as_ref() == expected
+            || (expected.len() == 2
+                && shape.len() == 2
+                && shape[0] == -1
+                && expected[0] == 1
+                && shape[1] == expected[1]) =>
+        {
+            Ok(())
+        }
+        // Dynamic export may leave the output batch inferred/unknown. Input
+        // batch remains exactly one; every actual output still must be [1,T].
+        _ => Err(format!("unexpected BeatThis tensor signature: {value:?}")),
     }
 }
 

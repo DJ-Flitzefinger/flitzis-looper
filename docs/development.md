@@ -296,7 +296,7 @@ reconciliation/binding, both registrations and admission; original successful-or
 watermarks and final source/intent/CAS/own-ACK fences remain authoritative. The
 worker-only gate ends before publication. Legacy full conversion has a separate
 host promise alongside its unchanged cap. Conversion, resource policy, providers,
-native inference/Torch parity and final checks remain steps 15–19. Controlled
+native inference/Torch parity and final checks remain steps 15–21. Controlled
 progress is not whole-GIL isolation, device latency or crackle acceptance.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
@@ -927,10 +927,13 @@ runtime files.
 ## Latest performance workload decision — 2026-10-24
 
 The opt-in `native-inference-trial` analysis feature now provides a standalone
-BeatThis fixed1500 ONNX experiment, separate from the application. The
+BeatThis complete-source mono PCM trial, separate from the application. Its native
+HQ resampler, LogMel, true variable attention lengths, border6/keep_first and
+minimal postprocessor have bounded original-worker comparisons; the original
+fixed1500 evidence remains separately recorded. The
 [performance design](../openspec/changes/improve-performance-isolation/design.md)
 records its exporter/tooling lock, exact native-logit/provider evidence and
-remaining complete-source/CUDA/quality/distribution gates. It has no PyO3 or
+remaining CUDA/cancellation/quality/distribution gates. It has no PyO3 or
 LibTorch dependency. This is a developer experiment; productive Torch workers,
 CPU fallback, normal installation and recovery remain required. A Windows x64
 Debug EXE is not a self-contained portable bundle or Linux/macOS acceptance.

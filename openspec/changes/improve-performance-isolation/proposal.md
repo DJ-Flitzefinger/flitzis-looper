@@ -54,9 +54,11 @@ Preserve the single transport and source authority.
 
 ## Delivery
 
-Twenty coherent steps are recorded in [tasks](tasks.md). STEP18's real native
-BeatThis chunk experiment is separated from complete-pipeline parity in STEP19;
-all former final STEP19 gates remain required in STEP20. Each important step runs
+Twenty-one coherent steps are recorded in [tasks](tasks.md). STEP18's real native
+BeatThis chunk experiment is followed by STEP19's complete-source CPU prototype.
+Actual host-memory refusal leaves mandatory native device/cancellation/distribution
+parity in STEP20; ALL former final STEP20 gates remain required in STEP21.
+Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
 This assignment does not merge or push these changes to `main`.

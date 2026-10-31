@@ -1,5 +1,28 @@
 ## ADDED Requirements
 
+### Requirement: Native Inference Preserves the Whole Source Pipeline
+A native replacement SHALL retain the original complete source, resampling,
+frontend, true model chunk lengths, aggregation and postprocessing before
+productive cutover. Symbolic graph metadata SHALL NOT substitute for actual
+varied-length execution. Unknown output batch metadata MAY be accepted only
+when the input batch is exactly one and every actual finite output has shape
+`[1, actual_time]`. Productive runtime removal SHALL require complete quality,
+CUDA/fresh-CPU fallback, CPU-only, cancellation, resource, provenance and
+distribution parity. Host-memory refusal SHALL remain terminal.
+
+#### Scenario: A short BeatThis piece uses global attention
+- **GIVEN** a centered original spectrogram has at most1488 frames
+- **WHEN** the native trial forms its original six-frame edges
+- **THEN** model attention runs on exactly `T+12` frames without padding to1500
+- **AND** border6/keep_first, minimal peak rules and physical-duration exclusion remain original
+- **AND** a successful bounded synthetic comparison does not certify whole audio quality
+
+#### Scenario: A device trial cannot be admitted
+- **GIVEN** the unchanged host ledger or owned child limit refuses the attempt
+- **WHEN** native CUDA or cancellation verification is attempted
+- **THEN** no CUDA success, device-failure-to-CPU or mid-ORT-cancellation claim is made
+- **AND** existing productive workers and original resource floors remain available
+
 ### Requirement: Heavy Background Work Shares Resource Admission
 Existing offline owners SHALL coordinate heavy stem generation and analysis child
 execution without a second scheduler, job queue or audio clock. Already-admitted

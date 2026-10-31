@@ -7,6 +7,8 @@
 //! → Camelot key string.
 
 #[cfg(feature = "native-inference-trial")]
+pub mod beat_audio;
+#[cfg(feature = "native-inference-trial")]
 pub mod beat_inference;
 mod bpm_pipeline;
 mod canonical_digest;

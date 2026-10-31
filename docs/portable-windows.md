@@ -10,6 +10,13 @@ The BAT is independent of a development workspace or Codex installation. It
 fetches one exact current remote `main` revision, including its portable recipes.
 Use the updated installer BAT when updating an older installation.
 
+The optional native BeatThis developer trial is separate from this installer.
+Its full-source CPU prototype and optional CUDA build do not replace the pinned
+productive workers, locks or model recovery. A Debug EXE, a separately built
+libsoxr and extracted ORT DLLs are not a supported Portable bundle. Native CUDA,
+CPU fallback/CPU-only, all dependency/provenance and Linux/macOS acceptance remain
+open as detailed in the [performance design](../openspec/changes/improve-performance-isolation/design.md).
+
 ## Install, start and update
 
 The installer pins and verifies its private Git, uv, CPython 3.14.2, Rust 1.95.0,
