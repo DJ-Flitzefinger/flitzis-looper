@@ -82,6 +82,27 @@ local coverage/residual/outlier checks and at least 30 seconds each. Elapsed-tim
 weighting yields the middle-60% mean. Insufficient or unfinished work yields no mean.
 The learned nominal TempoCNN prior is test-only, excluded from fresh production.
 
+After unsuccessful precise attempts, [app_analysis_approximate.rs](../../rust/crates/looper/src/audio_engine/app_analysis_approximate.rs)
+and [app_tempo_approximate.py](../../src/flitzis_looper/analysis/app_tempo_approximate.py)
+implement the separate version-11
+`source-approximate-tempo-v11` policy, which returns a scalar-only fallback. It first
+reuses a usable retained neural period (`60 / period_seconds`), then supported
+median beat intervals. If neither is available, including unavailable inference,
+it computes source-energy novelty in at most three fixed windows of up to 20
+seconds, using approximately 100 bins per second and 30–300 BPM autocorrelation.
+Smoothed, centered novelty requires repeated rhythm support; silence, constant
+signals, corrupt or too-short input and cancellation cannot supply a default BPM.
+All work remains on the admitted analysis worker, outside the audio callback.
+
+The strict Rust/Python contract replays the coarse scalar separately from its
+unchanged original precise refusal. It retains source/mono hashes, geometry,
+model configuration, actual execution when available and the captured range.
+Source-energy evidence retains bounded window coordinates and novelty vectors;
+it does not invent a neural execution receipt. Selection precedes range filtering,
+with no clamping, rounding or range-driven harmonic preference. A failed saved
+v4/v9 estimate can be replayed after Native verifies the current original digest,
+without repeating model inference. A valid same-source precise tuple wins.
+
 The method JSON and scalar are selected together. A failed optional attempt keeps
 the exact base method record. [app_analysis_range.rs](../../rust/crates/looper/src/audio_engine/app_analysis_range.rs)
 validates an optional finite 30–300 BPM range with min less than max. An already
@@ -102,6 +123,13 @@ An approximate mean exposes **Possible BPM drift** and **Mean estimate · middle
 Confidence/support, reproducibility and extra decimals do not prove correct
 musical counts, acoustic phase, constant recording speed or device alignment.
 Detector disagreement does not identify its physical cause.
+
+The general fallback displays **Approximate BPM** on the PAD and **may be
+inaccurate** in details. Save, restore and copy retain its evidence and warning.
+It supplies no beat grid or accepted timing; diagnostic observations remain only
+in provenance. A defensive timing-anchor guard prevents those observations from
+becoming a source phase. Manual/Tap, half/double and explicit Grid Offset remain
+performer choices. This fallback does not establish musical ground truth.
 
 Python [transport/bpm.py](../../src/flitzis_looper/controller/transport/bpm.py)
 and [loader.py](../../src/flitzis_looper/controller/loader.py) preserve manual/Tap

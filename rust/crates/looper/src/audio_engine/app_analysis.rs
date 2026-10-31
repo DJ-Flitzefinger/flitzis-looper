@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "app_analysis_approximate.rs"]
+mod approximate;
 #[path = "app_analysis_range.rs"]
 mod bpm_range;
 #[path = "app_analysis_qm.rs"]
@@ -427,10 +429,26 @@ pub(super) fn analyze_with_range(
         let KeyOutcome { key, status: key_status, error: key_error } = key_outcome;
         let (raw, _) = match beat {
             Ok(raw) => raw,
-            Err(error) if tempo_only => return Err(error),
-            Err(error) => return Ok(LoadedAnalysis { bpm: 0.0, key, key_status, key_error,
-                beat_grid: flitzis_looper_analysis::BeatGrid { beats: vec![], downbeats: vec![], bars: vec![] },
-                bpm_method_json: None, beat_error: Some(error) }),
+            Err(error) => {
+                let original = json!({"schema_version":4,"backend":"beat_this","policy":"neural-unavailable",
+                    "status":"insufficient","bpm":null,"selected":null,"regions":[],
+                    "model_sha256":pinned_model()["sha256"],"frontend_id":pinned_model()["frontend_id"],
+                    "source_sha256":source_digest,"mono_sha256":mono_sha256,"sample_rate_hz":rate,
+                    "frame_count":frames,"raw_beats":[],"raw_downbeats":[]}).to_string();
+                let choice = approximate::attempt(sample,rate,automatic_range,&original,&error,
+                    held.saturating_add(wire),&cancelled);
+                if cancelled() { return Err("neural analysis request superseded".into()); }
+                return match choice {
+                    Ok(choice) => Ok(LoadedAnalysis { bpm:choice.bpm,key,key_status,key_error,
+                        beat_grid:flitzis_looper_analysis::BeatGrid { beats:vec![],downbeats:vec![],bars:vec![] },
+                        bpm_method_json:Some(choice.method_json),beat_error:None }),
+                    Err(qm_corroboration::Failure::Cancelled) => Err("neural analysis request superseded".into()),
+                    Err(_) if tempo_only => Err(error),
+                    Err(_) => Ok(LoadedAnalysis { bpm:0.0,key,key_status,key_error,
+                        beat_grid:flitzis_looper_analysis::BeatGrid { beats:vec![],downbeats:vec![],bars:vec![] },
+                        bpm_method_json:None,beat_error:Some(error) }),
+                };
+            },
         };
         let descriptor_bytes = super::neural_analysis::budget::value_tree(&context.descriptor)?;
         let source_live = super::neural_analysis::budget::sum(&[held, descriptor_bytes,
@@ -528,6 +546,16 @@ pub(super) fn analyze_with_range(
                 },
             }
         } else { base_method_json };
+        // A separate scalar-only fallback never relabels a failed precision gate.
+        let mut scalar_only = false;
+        let method_json = if selected_bpm.is_none() {
+            match approximate::attempt(sample,rate,automatic_range,&method_json,
+                beat_error.as_deref().unwrap_or("Precise automatic tempo unavailable"),core,&cancelled) {
+                Ok(choice) => { selected_bpm=Some(choice.bpm);beat_error=None;scalar_only=true;choice.method_json },
+                Err(qm_corroboration::Failure::Cancelled) => return Err("neural analysis request superseded".into()),
+                Err(_) => method_json,
+            }
+        } else {method_json};
         // Accurate primary period is independent of musical half/double choice.
         // Fresh publication never probes or executes the optional nominal model.
         let method_json = if let Some((range, primary_bpm)) = automatic_range.zip(selected_bpm)
@@ -560,8 +588,8 @@ pub(super) fn analyze_with_range(
             }
         }
         drop(method);
-        let beats = predictions.beat_seconds.iter().map(|&v| v as f32).collect();
-        let downbeats: Vec<_> = predictions.downbeat_seconds.iter().map(|&v| v as f32).collect();
+        let beats = if scalar_only {vec![]} else {predictions.beat_seconds.iter().map(|&v| v as f32).collect()};
+        let downbeats: Vec<_> = if scalar_only {vec![]} else {predictions.downbeat_seconds.iter().map(|&v| v as f32).collect()};
         if cancelled() { return Err("neural analysis request superseded".into()); }
         Ok(LoadedAnalysis { bpm: selected_bpm.unwrap_or(0.0), key, key_status, key_error,
             beat_grid: flitzis_looper_analysis::BeatGrid { beats, bars: downbeats.clone(), downbeats },

@@ -19,6 +19,14 @@ quality criteria; a short resident loop does not shorten an available full song.
 
 ## Mean estimates and possible drift
 
+When precise automatic detection fails, the simpler fallback can provide
+**Approximate BPM**. Its details warn that the value **may be inaccurate**.
+Verify it by listening and using /2, x2 or Tap BPM. The value can drive ordinary
+BPM Lock and fixed-length loops, but it establishes no beat or downbeat phase.
+Grid Offset remains separate. The warning survives save/load and copying a PAD;
+a later manual or Tap value takes precedence. Unusable or cancelled sources
+still return no automatic number, and valid precise results remain protected.
+
 Successful precise estimates take priority. When the existing precise methods
 finish without a supported value because sections conflict, the final fallback
 can use an elapsed-time weighted mean of three sections between 20% and 80% of

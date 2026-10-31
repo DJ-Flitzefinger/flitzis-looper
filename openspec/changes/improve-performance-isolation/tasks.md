@@ -111,17 +111,17 @@ and final combined acceptance remain in steps 13–18. See the design's STEP11 r
 
 Direct Human request on 2026-10-31: when the complex precise detector fails,
 determine an approximate BPM through a simpler fallback and warn the performer
-that it may be inaccurate. This is a new required behavior, not an implemented
-cutover or permission to report approximate timing as precisely accepted.
+that it may be inaccurate. This is implemented as a separate scalar-only fallback;
+failed precision checks retain their outcome and do not become precise acceptance.
 
-- [ ] Reuse current source-derived neural/QM/period evidence or a simpler bounded
+- [x] Reuse current source-derived neural/QM/period evidence or a simpler bounded
       estimator to return an approximate BPM when precise estimation is insufficient.
-- [ ] Carry explicit approximate status and a visible inaccuracy warning through
+- [x] Carry explicit approximate status and a visible inaccuracy warning through
       relevant UI/controller/native consumers and persistence/restore, preserving
       the single timing authority, current source/content/OwnACK and cancellation.
-- [ ] Verify the reported failed PAD analysis and precise/approximate/failure paths;
+- [x] Verify the reported failed PAD analysis and precise/approximate/failure paths;
       malformed/unavailable input or cancellation must not invent a BPM.
-- [ ] Preserve the separately reported stem resource-pressure investigation in
+- [x] Preserve the separately reported stem resource-pressure investigation in
       loading/resource work; do not assume the two failures share one cause.
 
 ## 13. Stem component-loading/control isolation

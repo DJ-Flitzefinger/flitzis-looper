@@ -3,11 +3,13 @@ import math
 from dataclasses import dataclass, field, replace
 from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from flitzis_looper.analysis.app_tempo_approximate import from_saved
+from flitzis_looper.analysis.app_tempo_fallback import FallbackRangeConstraint
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.constants import PAD_LOOP_BARS_DEFAULT
 from flitzis_looper.controller.accepted_restore import AcceptedTimingRestore
@@ -43,6 +45,16 @@ if TYPE_CHECKING:
 
 
 _PadValue = TypeVar("_PadValue")
+
+
+class _BpmChangeCallback(Protocol):
+    def __call__(
+        self,
+        sample_id: int,
+        *,
+        publish_bpm: bool = True,
+        expected_source_generation: int | None = None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +154,30 @@ def _require_fresh_tempo_provenance(analysis: object, parsed: SampleAnalysis | N
     if method.bpm is None and normalize_bpm(parsed.bpm) is not None:
         message = "Unavailable fresh BPM provenance cannot publish a positive scalar"
         raise ValueError(message)
+
+
+def _validated_incoming_analysis(event: dict[str, object], *, active: bool) -> dict[str, object]:
+    """Complete adopted source bookkeeping even when its optional tempo proof fails."""
+    if not active:
+        return event
+    raw = event.get("analysis")
+    parsed = _parse_sample_analysis(raw)
+    try:
+        _require_fresh_tempo_provenance(raw, parsed)
+    except ValueError as error:
+        sanitized = dict(raw) if isinstance(raw, dict) else {}
+        sanitized.update(
+            bpm=0.0,
+            bpm_method=None,
+            accepted_timing=None,
+            beat_grid={"beats": [], "downbeats": [], "bars": []},
+        )
+        return event | {
+            "analysis": sanitized if parsed is not None else None,
+            "analysis_error": str(error),
+            "_invalid_tempo_provenance": True,
+        }
+    return event
 
 
 def _key_component_result(analysis: object) -> tuple[bool, str | None]:
@@ -480,7 +516,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         project: ProjectState,
         session: SessionState,
         audio: AudioEngine,
-        on_pad_bpm_changed: Callable[[int], None],
+        on_pad_bpm_changed: _BpmChangeCallback,
         on_project_changed: Callable[[], None] | None = None,
         on_stem_generation_started: Callable[[int], None] | None = None,
         on_stem_generation_progress: Callable[[int, float | None, str | None], None] | None = None,
@@ -1104,6 +1140,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
         incoming = self._incoming_loads.get(sample_id)
 
+        event = _validated_incoming_analysis(event, active=incoming is not None)
+
         pending = self._session.pending_sample_paths.get(sample_id)
         cached_path = event.get("cached_path")
         target_path = cached_path if isinstance(cached_path, str) else pending
@@ -1267,6 +1305,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         # Only explicitly incoming edits newer than the receipt need post-ACK work.
         return preserve_override or later_mode, (later_loop and not preserve_loop) or (
             later_timing and not preserve_timing
+        ) or (
+            event.get("_invalid_tempo_provenance") is True
+            and not preserve_timing
+            and not intent.timing_override
         )
 
     def _set_incoming_grid_projection(self, sample_id: int, origin: float) -> None:
@@ -1461,6 +1503,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             return None
         if analysis is not None:
             parsed = _parse_sample_analysis(analysis)
+            _require_fresh_tempo_provenance(analysis, parsed)
             key_ready, _ = _key_component_result(analysis)
             key_completed = False
             key_error: str | None = None
@@ -1473,10 +1516,15 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 self._valid_analysis_request_id(key_request_id) and not key_completed
             ):
                 analysis = self._analysis_preserving_key(sample_id, analysis)
-            self._store_sample_analysis(sample_id, analysis)
+            if parsed is None or not self._retain_precise_before_mean(sample_id, parsed.bpm_method):
+                self._store_sample_analysis(sample_id, analysis)
+            else:
+                self._merge_completed_analysis_key(sample_id, parsed, key_completed=key_completed)
             if key_completed:
                 self._mark_project_changed()
             return key_error
+        if self._restore_saved_approximate(sample_id):
+            return None
         if (
             self._project.sample_analysis[sample_id] is not None
             or self._project.manual_bpm[sample_id] is not None
@@ -1486,6 +1534,106 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         ):
             self._on_pad_bpm_changed(sample_id)
         return None
+
+    def _restore_saved_approximate(self, sample_id: int) -> bool:
+        """Reuse a failed saved estimate only after current Native source verification."""
+        previous = self._project.sample_analysis[sample_id]
+        method = previous.bpm_method if previous is not None else None
+        if previous is None or method is None:
+            return False
+        persisted = method.schema_version == 11
+        if not persisted and normalize_bpm(previous.bpm) is not None:
+            return False
+        if self._project.manual_bpm[sample_id] is not None or self._project.pad_timing_intent[
+            sample_id
+        ] in {"manual", "tap"}:
+            return False
+        if (
+            self._project.pad_timing_intent[sample_id] != "legacy"
+            or self._audio.pad_timing_intent(sample_id) != "legacy"
+        ):
+            return True
+        digest = self._audio.loaded_source_digest(sample_id)
+        if digest != method.source_sha256:
+            if persisted and digest is not None:
+                self._project.sample_analysis[sample_id] = previous.model_copy(
+                    update={
+                        "bpm": 0.0,
+                        "bpm_method": None,
+                        "beat_grid": BeatGrid(beats=[], downbeats=[], bars=[]),
+                        "accepted_timing": None,
+                    }
+                )
+                self._session.sample_analysis_errors[sample_id] = (
+                    "Saved approximate BPM does not match the loaded source"
+                )
+                self._mark_project_changed()
+            return persisted
+        return self._publish_saved_approximate(sample_id, previous, method, persisted=persisted)
+
+    def _publish_saved_approximate(
+        self, sample_id: int, previous: SampleAnalysis, method: AppTempoMethod, *, persisted: bool
+    ) -> bool:
+        """Bind cached scalar reuse and every derived publication to one source generation."""
+        binding = self._audio.current_input_runtime_pad_binding(sample_id)
+        generation = binding.metadata().get("source_generation") if binding is not None else None
+        if (
+            binding is None
+            or binding.is_current() is not True
+            or type(generation) is not int
+            or generation <= 0
+        ):
+            return True
+        options = self._project.automatic_bpm_range
+        bounds = (
+            FallbackRangeConstraint(
+                minimum_bpm=options.minimum_bpm, maximum_bpm=options.maximum_bpm
+            )
+            if options.enabled
+            else None
+        )
+        approximate = method if persisted else from_saved(method, bounds)
+        intent_current = (
+            self._project.sample_analysis[sample_id] is previous
+            and self._project.manual_bpm[sample_id] is None
+            and self._project.pad_timing_intent[sample_id] == "legacy"
+        )
+        source_current = (
+            intent_current
+            and binding.is_current() is True
+            and self._audio.loaded_source_digest(sample_id) == method.source_sha256
+            and self._audio.pad_timing_intent(sample_id) == "legacy"
+        )
+        if not source_current or approximate is None:
+            return not source_current
+        proposed = previous.model_copy(
+            update={
+                "bpm": approximate.bpm,
+                "bpm_method": approximate,
+                "beat_grid": BeatGrid(beats=[], downbeats=[], bars=[]),
+                "accepted_timing": None,
+            }
+        )
+        try:
+            self._audio.set_pad_bpm(
+                sample_id, approximate.bpm, expected_source_generation=generation
+            )
+        except (RuntimeError, ValueError) as error:
+            self._session.sample_analysis_errors[sample_id] = (
+                f"Saved approximate BPM was not admitted: {error}"
+            )
+            return True
+        self._project.sample_analysis[sample_id] = proposed
+        self._mark_project_changed()
+        try:
+            self._on_pad_bpm_changed(
+                sample_id, publish_bpm=False, expected_source_generation=generation
+            )
+        except (RuntimeError, ValueError) as error:
+            self._session.sample_analysis_errors[sample_id] = (
+                f"Approximate BPM applied; derived control refresh failed: {error}"
+            )
+        return True
 
     def _apply_tempo_only_analysis(self, sample_id: int, analysis: object) -> None:
         """Merge an optional current estimate without changing key or manual intent."""
@@ -1508,7 +1656,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         except ValueError, TypeError:
             return
         if (
-            method.status not in {"estimated", "single_region_estimate", "mean_estimate"}
+            method.status
+            not in {"estimated", "single_region_estimate", "mean_estimate", "approximate_estimate"}
             or method.bpm is None
         ):
             if method.schema_version >= 3 and normalize_bpm(previous.bpm) is None:
@@ -1524,12 +1673,15 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._project.sample_analysis[sample_id] = previous.model_copy(
             update={
                 "bpm": method.bpm,
-                "beat_grid": BeatGrid(
+                "beat_grid": BeatGrid(beats=[], downbeats=[], bars=[])
+                if method.schema_version == 11
+                else BeatGrid(
                     beats=method.raw_beats,
                     downbeats=method.raw_downbeats,
                     bars=method.raw_downbeats,
                 ),
                 "bpm_method": method,
+                "accepted_timing": None,
             }
         )
         self._mark_project_changed()
@@ -1788,11 +1940,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
 
     def _retain_precise_before_mean(self, sample_id: int, candidate: AppTempoMethod | None) -> bool:
         """Keep one validated same-source scalar/grid/method before any Native write."""
-        if (
-            candidate is None
-            or candidate.schema_version != 10
-            or candidate.status != "mean_estimate"
-        ):
+        if candidate is None or candidate.status not in {"mean_estimate", "approximate_estimate"}:
             return False
         previous = self._project.sample_analysis[sample_id]
         old = previous.bpm_method if previous is not None else None

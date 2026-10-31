@@ -80,6 +80,14 @@ def _saved_period_origin(
         if period is None or period <= 0.0 or origin is None:
             return None
         return period, origin
+    if (
+        manual is None
+        and analysis is not None
+        and analysis.bpm_method is not None
+        and analysis.bpm_method.schema_version == 11
+    ):
+        # The post-load owner verifies the actual source before deriving a scalar loop.
+        return None
     period = beat_duration_s(manual if manual is not None else analysis.bpm if analysis else None)
     if period is None:
         return None

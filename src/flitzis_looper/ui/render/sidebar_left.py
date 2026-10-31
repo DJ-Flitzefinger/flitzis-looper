@@ -458,7 +458,7 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
     """Explain finite automatic evidence without presenting it as musical certainty."""
     if method is None:
         return None
-    if method.tempo_fallback is not None:
+    if method.tempo_fallback is not None or method.approximate_tempo is not None:
         return _fallback_bpm_guidance(method)
     if method.nominal_selection is not None:
         return _prior_bpm_guidance(method)
@@ -470,6 +470,12 @@ def bpm_estimate_guidance(method: AppTempoMethod | None) -> str | None:
 
 
 def _fallback_bpm_guidance(method: AppTempoMethod) -> str:
+    if method.approximate_tempo is not None:
+        return (
+            "Approximate BPM · may be inaccurate. Precise automatic detection failed. "
+            "This value does not establish beat or downbeat phase; fixed loops may drift. "
+            "Verify with /2, x2 or Tap BPM."
+        )
     evidence = method.tempo_fallback
     if evidence is None:
         message = "Fallback guidance requires recorded analysis evidence"

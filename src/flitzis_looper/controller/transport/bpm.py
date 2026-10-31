@@ -95,10 +95,9 @@ class BpmController:
         """Clear a pad's manual BPM override."""
         validate_sample_id(sample_id)
         generation = self._transport.capture_current_pad_edit_generation(sample_id)
-        analysis = self._project.sample_analysis[sample_id]
         self._audio.set_pad_bpm(
             sample_id,
-            normalize_bpm(analysis.bpm if analysis else None),
+            self._analysis_bpm(sample_id),
             **self._transport.source_generation_options(generation),
         )
         self._project.manual_bpm[sample_id] = None
@@ -172,8 +171,30 @@ class BpmController:
         manual = self._project.manual_bpm[sample_id]
         if manual is not None:
             return float(manual)
+        return self._analysis_bpm(sample_id)
+
+    def _analysis_bpm(self, sample_id: int) -> float | None:
+        """Cached approximate metadata cannot supply timing before its source is loaded."""
         analysis = self._project.sample_analysis[sample_id]
+        method = analysis.bpm_method if analysis is not None else None
+        if (
+            method is not None
+            and method.schema_version == 11
+            and self._audio.loaded_source_digest(sample_id) != method.source_sha256
+        ):
+            return None
         return normalize_bpm(analysis.bpm) if analysis is not None else None
+
+    def _approximate_source_generation(self, sample_id: int) -> int | None:
+        binding = self._audio.current_input_runtime_pad_binding(sample_id)
+        if (
+            binding is None
+            or binding.is_current() is not True
+            or self._analysis_bpm(sample_id) is None
+        ):
+            return None
+        generation = binding.metadata().get("source_generation")
+        return generation if type(generation) is int and generation > 0 else None
 
     def current_timing(self, sample_id: int) -> CurrentPadTiming | None:
         """Resolve one current period/origin/identity snapshot without caching history."""
@@ -185,10 +206,7 @@ class BpmController:
                 return current_accepted_timing(metadata, sample_id=sample_id)
             if self.awaiting_automatic_timing(sample_id):
                 return None
-        analysis = self._project.sample_analysis[sample_id]
-        period = beat_duration_s(
-            manual if manual is not None else analysis.bpm if analysis else None
-        )
+        period = beat_duration_s(self._legacy_bpm(sample_id))
         if period is None:
             return None
         return CurrentPadTiming(
@@ -258,6 +276,21 @@ class BpmController:
             and self.awaiting_automatic_timing(sample_id)
         ):
             return
+        analysis = self._project.sample_analysis[sample_id]
+        method = analysis.bpm_method if analysis is not None else None
+        if (
+            publish_bpm
+            and self._project.manual_bpm[sample_id] is None
+            and method is not None
+            and method.schema_version == 11
+        ):
+            captured_generation = self._approximate_source_generation(sample_id)
+            if captured_generation is None or (
+                expected_source_generation is not None
+                and expected_source_generation != captured_generation
+            ):
+                return
+            expected_source_generation = captured_generation
         bpm = normalize_bpm(
             timing.bpm
             if timing is not None and timing.accepted_revision is not None

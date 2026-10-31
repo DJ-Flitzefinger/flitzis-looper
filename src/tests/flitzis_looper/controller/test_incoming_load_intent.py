@@ -1047,6 +1047,7 @@ def test_midi_snapshot_withholds_pending_own_source_and_preserves_other_ready_pa
 def test_global_start_rejects_whole_batch_before_pending_own_project_loop_read(
     controller: AppController, audio_engine_mock: Mock, *, deferred: bool
 ) -> None:
+    controller.project.multi_loop = True
     controller.project.sample_paths[0] = "samples/old.wav"
     controller.project.sample_paths[215] = "samples/peer.wav"
     controller.project.pad_loop_auto[0] = False

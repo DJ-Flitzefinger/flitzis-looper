@@ -327,6 +327,13 @@ followed by a successful fresh CPU attempt. **Device unknown** means no confirme
 device receipt is available. Choosing CUDA or installing a CUDA package does not
 prove the source was processed on the GPU.
 
+If precise automatic BPM fails, a simpler source-derived fallback can supply
+**Approximate BPM**. Details warn that it **may be inaccurate**. Check /2, x2
+or Tap BPM and adjust Grid Offset separately: a coarse tempo does not identify
+beat/downbeat phase. Save/load and PAD copy retain this warning. Existing precise
+values and performer overrides take precedence; unusable or cancelled analysis
+cannot supply an invented default BPM.
+
 Some difficult material can yield **Possible BPM drift** and **Mean estimate ·
 middle 60%**. This is an approximate scalar from supported interior sections.
 It is useful for ordinary constant loops but is not live tempo following or proof

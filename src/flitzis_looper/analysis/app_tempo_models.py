@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from flitzis_looper.analysis.app_tempo_approximate import ApproximateTempo, validate_approximate
 from flitzis_looper.analysis.app_tempo_corroboration import QmCorroboration, validate_corroboration
 from flitzis_looper.analysis.app_tempo_fallback import TempoFallback, validate_tempo_fallback
 from flitzis_looper.analysis.app_tempo_inferred import OrdinalFit, validate_ordinal_fit
@@ -37,9 +38,13 @@ class AppTempoMethod(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    schema_version: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     backend: Literal[
-        "beat_this", "beat_this_qm_dsp", "beat_this_bpm_range", "beat_this_qm_tempocnn"
+        "beat_this",
+        "beat_this_qm_dsp",
+        "beat_this_bpm_range",
+        "beat_this_qm_tempocnn",
+        "source_approximate",
     ]
     policy: Literal[
         "neural-stable-regions-v1",
@@ -52,6 +57,7 @@ class AppTempoMethod(BaseModel):
         "neural-qm-nominal-prior-v8",
         "neural-inferred-periods-v9",
         "neural-qm-tempo-fallback-v10",
+        "source-approximate-tempo-v11",
     ]
     status: Literal[
         "estimated",
@@ -60,6 +66,7 @@ class AppTempoMethod(BaseModel):
         "invalid",
         "uncorroborated",
         "mean_estimate",
+        "approximate_estimate",
     ]
     bpm: Annotated[float | None, Field(allow_inf_nan=False, ge=30, le=300)]
     selected: TempoRegion | None
@@ -89,6 +96,9 @@ class AppTempoMethod(BaseModel):
     tempo_fallback: TempoFallback | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    approximate_tempo: ApproximateTempo | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -102,7 +112,7 @@ class AppTempoMethod(BaseModel):
             raise ValueError(message)
         if (
             isinstance(value, dict)
-            and value.get("schema_version") in {6, 7, 8, 9, 10}
+            and value.get("schema_version") in {6, 7, 8, 9, 10, 11}
             and any(
                 type(value.get(key)) is not int
                 for key in ("schema_version", "sample_rate_hz", "frame_count")
@@ -152,6 +162,11 @@ class AppTempoMethod(BaseModel):
     def _fallback_field_presence(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
+        if value.get("schema_version") != 11 and (
+            "approximate_tempo" in value or value.get("status") == "approximate_estimate"
+        ):
+            message = "Approximate fields require explicit version eleven evidence"
+            raise ValueError(message)
         if value.get("schema_version") != 10 and "tempo_fallback" in value:
             message = "Last-fallback fields require version ten"
             raise ValueError(message)
@@ -174,12 +189,14 @@ class AppTempoMethod(BaseModel):
 
     def _validate_estimate(self) -> None:
         if self.execution is not None:
-            if self.schema_version not in {4, 5, 6, 7, 8, 9, 10}:
-                message = "Execution receipts require tempo metadata version four through ten"
+            if self.schema_version not in {4, 5, 6, 7, 8, 9, 10, 11}:
+                message = "Execution receipts require tempo metadata version four through eleven"
                 raise ValueError(message)
             validate_execution(self.execution)
         self._validate_policy_version()
-        if self.schema_version == 10:
+        if self.schema_version == 11:
+            validate_approximate(self, validate_original_method)
+        elif self.schema_version == 10:
             validate_tempo_fallback(self, validate_math_estimate)
         elif self.schema_version == 8:
             validate_nominal_selection(self, validate_math_estimate, validate_original_method)
@@ -195,6 +212,14 @@ class AppTempoMethod(BaseModel):
             validate_math_estimate(self)
 
     def _validate_policy_version(self) -> None:
+        if self.schema_version == 11:
+            if (
+                self.backend != "source_approximate"
+                or self.policy != "source-approximate-tempo-v11"
+            ):
+                message = "Version eleven requires its scalar-only approximate policy"
+                raise ValueError(message)
+            return
         if self.schema_version == 10:
             self._validate_fallback_policy()
             return

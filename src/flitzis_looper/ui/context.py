@@ -233,9 +233,14 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return bpm_device_label(None)
         analysis = self._project.sample_analysis[pad_id]
         method = analysis.bpm_method if analysis is not None else None
-        if method is not None and method.schema_version in {6, 7, 8, 9, 10}:
+        if method is not None and method.schema_version in {6, 7, 8, 9, 10, 11}:
             if not self.bpm_evidence_is_current_auto(pad_id):
                 return bpm_device_label(None)
+            if (
+                method.approximate_tempo is not None
+                and method.approximate_tempo.kind == "source_energy"
+            ):
+                return "Coarse CPU"
             if method.nominal_selection is not None:
                 return f"NN {bpm_device_label(method.execution)}; QM CPU; prior CPU"
             has_qm = (
@@ -256,6 +261,8 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return None
         analysis = self.analysis(pad_id)
         method = analysis.bpm_method if analysis is not None else None
+        if method is not None and method.schema_version == 11:
+            return "Approximate BPM"
         return (
             "Possible BPM drift"
             if method is not None

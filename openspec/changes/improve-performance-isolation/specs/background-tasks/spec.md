@@ -1,5 +1,39 @@
 ## ADDED Requirements
 
+### Requirement: Failed Precise BPM Has a Usable Approximate Fallback
+When precise automatic BPM estimation fails, the system SHALL attempt a simpler
+bounded source-derived scalar estimate outside realtime. A validated usable
+saved neural period SHALL be reused without repeating inference. Otherwise a
+bounded interval or source-energy estimate MAY provide an approximate BPM.
+Unusable, corrupt, unavailable, cancelled or stale source evidence SHALL NOT
+invent a BPM. Existing precise checks SHALL retain their actual failed outcome.
+
+The selected scalar SHALL carry a separate approximate status, source/model and
+actual execution provenance, original precise refusal and captured request range.
+It SHALL remain within that range without clamping or rounding into acceptance.
+Valid same-source precise values and manual/Tap/half-double choices SHALL retain
+precedence. Existing source/content/current-request, OwnACK and retirement guards
+SHALL remain authoritative.
+
+Approximate evidence SHALL display **Approximate BPM** and an explicit warning
+that the value may be inaccurate, including after save, restore and copy. It
+SHALL NOT certify beat/downbeat/phase, synthesize accepted timing or establish a
+second clock. Explicit performer grid intent SHALL retain its separate authority.
+
+#### Scenario: A usable period fails the precise phase check
+- **GIVEN** current source-bound neural evidence retains a usable period
+- **AND** precise estimation and independent corroboration have failed
+- **WHEN** the approximate fallback completes for the current request
+- **THEN** its scalar BPM is usable with a visible inaccuracy warning
+- **AND** the original failed precision diagnostics remain unchanged
+- **AND** diagnostic raw observations do not become an accepted playback phase
+
+#### Scenario: No neural candidate is available
+- **GIVEN** complete verified source PCM is admitted and the request is current
+- **WHEN** bounded source-energy rhythm evidence supports a coarse period
+- **THEN** the fallback returns an explicitly approximate scalar without claiming neural execution
+- **AND** silence, corruption, cancellation or insufficient rhythm returns no invented BPM
+
 ### Requirement: Slow Stem Work Does Not Own Unrelated Live Controls
 Stem disk preparation and numeric conversion SHALL run outside realtime and
 SHALL NOT retain shared control-publication locks across slow file reads or

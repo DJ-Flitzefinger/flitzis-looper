@@ -199,6 +199,10 @@ class SampleAnalysis(BaseModel):
             and method.bpm != self.bpm
         ):
             self.bpm_method = None
+        elif method is not None and method.schema_version == 11:
+            # Diagnostic source observations cannot become beat/phase authority.
+            self.beat_grid = BeatGrid(beats=[], downbeats=[], bars=[])
+            self.accepted_timing = None
         return self
 
     @field_validator("accepted_timing", mode="before")

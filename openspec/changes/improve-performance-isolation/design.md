@@ -15,9 +15,97 @@ runtime without a new cutover. Its bounded profile measurements and separate
 source-prefeed tradeoff are recorded below; no DSP speedup or optimality is claimed.
 
 The Human subsequently required an approximate BPM fallback with a visible
-inaccuracy warning when the precise method fails. That new behavior is NEXT as
-step 12, followed by every existing stem/resource/provider/inference/final duty
-in steps 13–18. It is planned here, not implemented by the STEP11 assessment.
+inaccuracy warning when the precise method fails. STEP12 implements that separate
+scalar-only contract, followed by every existing stem/resource/provider/inference/
+final duty in steps 13–18. STEP11 itself introduced no such runtime change.
+
+## STEP12 approximate BPM implementation
+
+Version 11 retains the failed precise v4/v9 header and its original mathematics,
+source/model/actual execution identities and optional captured range. A usable
+nonlimited v9 period is selected directly; supported median raw intervals are
+the simpler alternative. Neither changes any failed precision diagnostic. When
+no usable neural candidate exists, bounded source-energy novelty supplies a
+coarse estimate on the same admitted off-RT worker, including inference failure.
+Three deduplicated fixed windows use at most 2000 approximately 100-Hz bins each;
+positive mean-absolute multichannel energy changes avoid stereo cancellation.
+Nine-bin triangular smoothing and mean-centered normalized autocorrelation over
+20–200 bins require score >=0.35. The shortest local peak within 95% of the
+strongest peak is eligible; the strongest eligible window wins. Smoothed novelty
+must reach 10% of the window mean level to reject small stationary-carrier
+fluctuations. Python matches Rust's sequential binary64 accumulation, including
+near ties between different-tempo windows. Selection is independent of request
+range. Sources shorter than eight seconds, silence,
+constant/invalid PCM and unsupported rhythm return no coarse source estimate.
+Neural interval support needs eight intervals and 60% support within 15% of their
+median. These are approximate engineering heuristics, not musical ground truth.
+
+Python strictly replays the retained evidence, scalar and range. Saved failed
+source evidence can be reused only after the current Native original digest
+matches, preserving current source/request and performer timing intent. No model
+rerun is needed for such evidence. Valid same-source precise results win before
+Native scalar mutation. Manual/Tap/half-double and explicit grid intent remain
+authoritative. The approximate result publishes an empty beat grid, no accepted
+timing, and a defensive anchor guard; raw neural observations remain diagnostic.
+PAD/details show Approximate BPM / may be inaccurate from persisted provenance,
+also after restore/copy. Existing v10 mean/precise-QM requirements stay unchanged.
+
+Startup, loop/master resolution and manual-clear fallback also exclude saved
+approximate scalars until their actual loaded source matches. Automatic cached
+publication captures and binds the Native source generation. An unavailable
+digest holds valid saved evidence without publishing it; a proven changed source
+invalidates its stale automatic scalar. Explicit performer choices stay separate.
+Scalar admission precedes project mutation. A later derived grid/loop refresh
+failure retains the admitted scalar and reports the error, rather than silently
+restoring an inconsistent old project value. Saved-residency planning waits for
+source verification before deriving an approximate automatic loop.
+
+### STEP12 verification and limits
+
+The reported saved version-9 `insufficient` packet replays to approximately
+90.004297279 BPM without another inference. Its failed precision diagnostics and
+original execution receipt remain unchanged. This does not establish the true
+musical tempo. Six Native fallback tests pass, including 44.1/48/96 kHz opposite-
+polarity stereo at approximately 90/120 BPM, quiet intro and nearly tied 100/120
+sections, stationary tones/noise, silence/DC/nonfinite/short input, cancellation,
+budget refusal and the explicit saved-period/interval wrapper replay. All six
+energy packets, the mixed-window packet and both wrapper packets validate under
+the strict Python contract. The wrapper replay is scalar/provenance evidence;
+actual source admission and current-generation publication remain separate guards.
+
+The regular analysis closure passes 41 cases; five overlap the six above, yielding
+42 distinct successful Rust cases. Three older optional cached-QM/mean diagnostics
+remain unrun; the new replay test was explicitly executed. The focused integrated
+Python/check closure has 809 distinct successful cases and two existing skips:
+806 compatible integrated successes, two corrected legacy fixture cases and one
+new accepted-Native precedence test. The final 177-case controls/schema/metadata
+run overlaps that count. The two old Global START fixtures failed identically on
+the unchanged baseline: they expected a two-PAD batch without enabling MultiLoop.
+Explicitly enabling that tested mode preserves every source/receipt/deferred and
+publication assertion. No runtime guard was weakened.
+
+Changed-file Ruff, five-file strict mypy, Rust/Python formatting, strict OpenSpec,
+local documentation links and whitespace checks pass. External Release Native/API
+verification passes with the existing 22 library warnings; the einops warning and
+pin are unchanged. Systems PRE/frozen POST, Methods and one independent final-diff
+review chain are clear. Initial fractional-bin aliasing, a test mock setup, style
+and type errors were corrected rather than accepted or hidden. Python bounded
+evidence replay runs during load/save/copy, never render; this is not a measured
+background-isolation or latency improvement.
+
+Reproduce through the configured adapter's `rust-test` action with
+`-p flitzis-looper --lib app_analysis:: --release -- --test-threads=1`.
+The source is [app_analysis_approximate_tests.rs](../../../rust/crates/looper/src/audio_engine/app_analysis_approximate_tests.rs).
+For explicit wrapper replay, set `FLITZIS_APPROXIMATE_EVIDENCE_DIR` to an owned
+absolute generated-output directory containing validated `period-input.json`
+and `interval-input.json`, then run the `app_analysis::approximate` filter with
+`--include-ignored`. Feed exported JSON through `AppTempoMethod.model_validate_json`
+with `strict=True`; do not substitute that replay for actual source/ACK proof.
+Run the corresponding Python controller/transport/loader/restore/copy/UI tests
+through the same configured adapter. Saved source evidence requires no new model
+inference. No App/device/listening or whole-musical-quality acceptance is claimed.
+The separate stem resource-pressure report remains open in loading/resource
+steps; BPM fallback does not fix it. Steps 13–18 retain their complete scope.
 
 On 2026-10-31 the Human clarified that 30 ms was a suggestion, not a mandatory
 acceptance threshold. Seek the shortest practical latency with complete quality
