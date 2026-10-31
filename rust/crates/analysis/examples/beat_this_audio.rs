@@ -102,8 +102,7 @@ fn execute(
         "source_sha256":source_digest,"source_frames":source_frames,"rate":rate,
         "resampled_frames":prepared.len(),"spectrogram_frames":spect.len()/128,
         "chunk_starts":beat_audio::chunk_starts(spect.len()/128)?,"soxr_sha256":a[offset+1]});
-    let mut admitted = None;
-    if infer {
+    let _admitted = if infer {
         let provider = match a[9].as_str() {
             "cpu" => Provider::Cpu,
             #[cfg(feature = "native-inference-cuda")]
@@ -114,7 +113,7 @@ fn execute(
         };
         let graph = bounded(Path::new(&a[1]), MAX_GRAPH_BYTES)?;
         validate_graph(&graph, &a[2])?;
-        admitted = configure(a, evidence, arena)?;
+        let admitted = configure(a, evidence, arena)?;
         let mut model = BeatModel::load_on(&graph, &a[2], Path::new(&a[8]), provider, &|| false)?;
         // The copying session owns its model; no run/profile/output reads graph.
         drop(graph);
@@ -164,6 +163,7 @@ fn execute(
             &|| false,
         );
         let profile = model.finish_profile()?;
+        drop(model);
         let logits = match result {
             Ok(logits) => logits,
             Err(error) => {
@@ -182,12 +182,15 @@ fn execute(
         metadata["profile"] = serde_json::json!(profile);
         metadata["requested_provider"] = serde_json::json!(a[9]);
         metadata["graph_sha256"] = serde_json::json!(a[2]);
+        if let Some(runtime) = &admitted {
+            metadata["runtime_admission"] = runtime.receipt()?;
+        }
         let values: Vec<_> = logits.beat.into_iter().chain(logits.downbeat).collect();
         float_file(&side(dest, "logits.f32"), &values)?;
-    }
-    if let Some(runtime) = &admitted {
-        metadata["runtime_admission"] = runtime.receipt();
-    }
+        admitted
+    } else {
+        None
+    };
     float_file(&side(dest, "resampled.f32"), &prepared)?;
     float_file(&side(dest, "spect.f32"), &spect)?;
     // Metadata is exclusive and last; failed partial scratch never proves success.
@@ -227,11 +230,23 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let build = ort::info();
+        let receipt = match admitted
+            .as_ref()
+            .map(runtime::Admission::receipt)
+            .transpose()
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
         println!(
             "{}",
             serde_json::json!({"trial_only":true,"trial_runtime_probe":true,
-            "runtime_admission":admitted.as_ref().map(runtime::Admission::receipt),
-            "ort_build":ort::info()})
+            "runtime_admission":receipt,
+            "ort_build":build})
         );
         return ExitCode::SUCCESS;
     }

@@ -968,7 +968,15 @@ file is size/SHA/role/identity checked and pinned through all CLI readers. The
 strict schema, bounds and reconstruction recipe are in the
 [STEP23 design](../openspec/changes/improve-performance-isolation/design.md#step23-impact-declared-ort-package-file-custody).
 Listed-file custody does not attest loader resolution or complete dependencies.
-STEP24 retains all native parity requirements and STEP25 all
+STEP24 adds optional `FLITZIS_TRIAL_ORT_LOAD_POLICY=package-system32` for a fresh
+Windows dynamic standalone process with both manifests. It irreversibly changes
+that child's default DLL search policy, restricts the initial runtime load, and
+checks actual returned/export-owner modules and observed declared backing files
+against full file identities/SHA. Pins and module references remain until process
+exit; no CUDA provider is eagerly loaded. Legacy custody-only requests retain
+their behavior. See the [STEP24 design](../openspec/changes/improve-performance-isolation/design.md#step24-impact-opt-in-standalone-windows-loader-and-observed-images)
+for the exact policy, terminal failures and still-unknown closure/producer limits.
+STEP25 retains all native parity requirements and STEP26 all
 former final regression gates. Productive installation/repair, locks and workers
 are unchanged.
 

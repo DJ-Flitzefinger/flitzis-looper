@@ -1,4 +1,7 @@
 //! Fresh standalone process bootstrap only. Never configure the application's ORT.
+#[cfg(all(windows, feature = "native-inference-dynamic"))]
+#[path = "loader.rs"]
+mod loader;
 #[cfg(any(feature = "native-inference-dynamic", test))]
 #[path = "package.rs"]
 mod package;
@@ -20,9 +23,12 @@ pub const MANIFEST_ENV: &str = "FLITZIS_TRIAL_ORT_MANIFEST";
 pub const DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_MANIFEST_SHA256";
 pub const PACKAGE_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE";
 pub const PACKAGE_DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE_SHA256";
+pub const LOAD_POLICY_ENV: &str = "FLITZIS_TRIAL_ORT_LOAD_POLICY";
 
 pub fn package_requested() -> bool {
-    std::env::var_os(PACKAGE_ENV).is_some() || std::env::var_os(PACKAGE_DIGEST_ENV).is_some()
+    std::env::var_os(PACKAGE_ENV).is_some()
+        || std::env::var_os(PACKAGE_DIGEST_ENV).is_some()
+        || std::env::var_os(LOAD_POLICY_ENV).is_some()
 }
 
 #[derive(Deserialize)]
@@ -152,6 +158,8 @@ impl CheckedFile {
 /// On other OSes the caller must keep the owned directory immutable. Even on
 /// Windows these file checks do not attest OS-mapped images or dependent DLLs.
 pub struct Admission {
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    loaded: Option<std::sync::Arc<std::sync::Mutex<loader::Admission>>>,
     manifest: CheckedFile,
     runtime: CheckedFile,
     spec: Spec,
@@ -180,6 +188,8 @@ impl Admission {
             return Err("runtime library escapes its owned package directory".into());
         }
         Ok(Self {
+            #[cfg(all(windows, feature = "native-inference-dynamic"))]
+            loaded: None,
             manifest,
             runtime,
             spec,
@@ -188,7 +198,7 @@ impl Admission {
         })
     }
 
-    pub fn receipt(&self) -> serde_json::Value {
+    pub fn receipt(&self) -> Result<serde_json::Value, String> {
         let receipt = serde_json::json!({"schema_version":self.spec.schema_version,"library":self.spec.library,
             "manifest_sha256":self.manifest_sha256,
             "runtime_sha256":self.spec.sha256,"runtime_bytes":self.spec.bytes,
@@ -196,17 +206,27 @@ impl Admission {
             "manifest_path":self.manifest.path,"os":self.spec.os,"arch":self.spec.arch,
             "ort_api":ort::MINOR_VERSION,"evidence":"checked-files-not-mapped-image-or-full-producer"});
         #[cfg(any(feature = "native-inference-dynamic", test))]
+        let mut receipt = receipt;
+        #[cfg(any(feature = "native-inference-dynamic", test))]
         {
-            let mut receipt = receipt;
             receipt["declared_package"] = self
                 .package
                 .as_ref()
                 .map(package::Admission::receipt)
                 .into();
-            receipt
         }
-        #[cfg(not(any(feature = "native-inference-dynamic", test)))]
-        receipt
+        #[cfg(all(windows, feature = "native-inference-dynamic"))]
+        if let Some(loaded) = &self.loaded {
+            receipt["loaded_package"] = loaded
+                .lock()
+                .map_err(|_| "loaded image guard poisoned")?
+                .snapshot(
+                self.package
+                    .as_ref()
+                    .ok_or("loaded package admission missing")?,
+            )?;
+        }
+        Ok(receipt)
     }
 }
 
@@ -235,6 +255,15 @@ pub fn configure(
                 &admission,
             )?);
         }
+        let controlled = match std::env::var_os(LOAD_POLICY_ENV) {
+            None => false,
+            Some(value) if value == "package-system32" => true,
+            _ => return Err("unsupported explicit standalone runtime load policy".into()),
+        };
+        #[cfg(not(windows))]
+        if controlled {
+            return Err("package-system32 runtime loading requires Windows".into());
+        }
         if ATTEMPTED.swap(true, Ordering::SeqCst) {
             return Err("runtime bootstrap requires a fresh standalone process".into());
         }
@@ -242,12 +271,38 @@ pub fn configure(
         // SAFETY: explicit caller-authorized native bytes were verified above;
         // immutable package custody is required. This local handle remains alive
         // until init_from has retained its process-global reference to the DLL.
+        #[cfg(windows)]
+        let library = if controlled {
+            let package = admission
+                .package
+                .as_ref()
+                .ok_or("controlled loading requires declared package admission")?;
+            let (loaded, library) = loader::Admission::load(package, &admission)?;
+            admission.loaded = Some(std::sync::Arc::new(std::sync::Mutex::new(loaded)));
+            library
+        } else {
+            unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?
+        };
+        #[cfg(not(windows))]
         let library =
             unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?;
         let base = unsafe {
             let get = library
                 .get::<unsafe extern "C" fn() -> *const ort::sys::OrtApiBase>(b"OrtGetApiBase\0")
                 .map_err(|e| e.to_string())?;
+            #[cfg(windows)]
+            if let Some(loaded) = &admission.loaded {
+                loaded
+                    .lock()
+                    .map_err(|_| "loaded image guard poisoned")?
+                    .check_export(
+                        *get as usize,
+                        admission
+                            .package
+                            .as_ref()
+                            .ok_or("loaded package admission missing")?,
+                    )?;
+            }
             get().as_ref().ok_or("null runtime API base")?
         };
         let version = unsafe {
@@ -259,13 +314,28 @@ pub fn configure(
                 .to_str()
                 .map_err(|e| e.to_string())?
         };
-        if version != admission.spec.version
-            || unsafe { (base.GetApi)(ort::MINOR_VERSION) }.is_null()
-        {
+        let expected_api = unsafe { (base.GetApi)(ort::MINOR_VERSION) };
+        if version != admission.spec.version || expected_api.is_null() {
             return Err("runtime exact version/API mismatch".into());
         }
         eprintln!("native_ort_runtime_phase verified_version_api");
+        #[cfg(windows)]
+        if let Some(loaded) = &admission.loaded {
+            // ort caches its library/environment in globals without Rust Drop.
+            // Keep the matching module references, directory cookie and ALL same-
+            // file pins until this disposable process actually exits, on errors too.
+            static PROCESS_GUARD: std::sync::OnceLock<
+                std::sync::Arc<std::sync::Mutex<loader::Admission>>,
+            > = std::sync::OnceLock::new();
+            PROCESS_GUARD
+                .set(std::sync::Arc::clone(loaded))
+                .map_err(|_| "loaded runtime guard already configured")?;
+        }
         let environment = ort::init_from(&admission.runtime.path).map_err(|e| e.to_string())?;
+        if !std::ptr::eq(ort::api(), expected_api) {
+            return Err("cached ORT API differs from admitted runtime API".into());
+        }
+        admission.receipt()?;
         Ok((Some(admission), environment))
     }
     #[cfg(not(feature = "native-inference-dynamic"))]

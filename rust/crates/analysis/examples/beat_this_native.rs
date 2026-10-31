@@ -68,6 +68,11 @@ fn main() -> Result<(), String> {
     drop(graph);
     let logits = model.run(&spect, &|| false)?;
     let profile = model.finish_profile()?;
+    drop(model);
+    let receipt = admitted
+        .as_ref()
+        .map(runtime::Admission::receipt)
+        .transpose()?;
     // Exclusive creation prevents overwriting an earlier result or an input.
     let mut output = File::create_new(&args[3]).map_err(|e| e.to_string())?;
     for value in logits.beat.iter().chain(&logits.downbeat) {
@@ -80,7 +85,7 @@ fn main() -> Result<(), String> {
         "{}",
         serde_json::json!({"trial_only":true,"os":std::env::consts::OS,
         "arch":std::env::consts::ARCH,"frames":FRAMES,"profile":profile,
-        "runtime_admission":admitted.as_ref().map(runtime::Admission::receipt)})
+        "runtime_admission":receipt})
     );
     Ok(())
 }

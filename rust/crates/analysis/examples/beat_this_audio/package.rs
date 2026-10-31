@@ -92,7 +92,7 @@ impl Spec {
 
 // Identity comes from the SAME opened handle, not a second pathname query.
 #[cfg(windows)]
-fn identity(file: &File) -> Result<(u64, [u8; 16]), String> {
+pub(super) fn identity(file: &File) -> Result<(u64, [u8; 16]), String> {
     use std::os::windows::io::AsRawHandle;
     #[repr(C)]
     struct Information {
@@ -147,6 +147,62 @@ pub(super) struct Admission {
 }
 
 impl Admission {
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    pub(super) fn directory(&self) -> &Path {
+        self.manifest
+            .path
+            .parent()
+            .expect("verified package parent")
+    }
+
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    pub(super) fn declares(&self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|name| {
+                self.spec
+                    .components
+                    .iter()
+                    .any(|c| c.name.eq_ignore_ascii_case(name))
+            })
+    }
+
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    pub(super) fn clone_pins(&self, runtime: &super::Admission) -> Result<Vec<File>, String> {
+        [&runtime.manifest, &runtime.runtime, &self.manifest]
+            .into_iter()
+            .chain(self.files.iter())
+            .map(|f| f._file.try_clone().map_err(|e| e.to_string()))
+            .collect()
+    }
+
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    pub(super) fn check_image(
+        &self,
+        path: &Path,
+    ) -> Result<(CheckedFile, serde_json::Value), String> {
+        let (item, pin) = self
+            .spec
+            .components
+            .iter()
+            .zip(&self.files)
+            .find(|(item, _)| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| item.name.eq_ignore_ascii_case(name))
+            })
+            .ok_or("loaded package image is not declared")?;
+        let file = CheckedFile::open(path, &item.sha256, MAX_COMPONENT, Some(item.bytes))?;
+        let actual = identity(&file._file)?;
+        if file.path.parent() != Some(self.directory()) || actual != identity(&pin._file)? {
+            return Err("loaded image differs from admitted package file identity".into());
+        }
+        let receipt = serde_json::json!({"name":item.name,"path":file.path,"bytes":item.bytes,
+            "sha256":item.sha256,"volume_id":format!("{:016x}",actual.0),
+            "file_id":actual.1.iter().map(|b| format!("{b:02x}")).collect::<String>()});
+        Ok((file, receipt))
+    }
+
     pub(super) fn verify(
         path: &Path,
         digest: &str,

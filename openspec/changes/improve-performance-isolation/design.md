@@ -1,5 +1,185 @@
 # Performance audit and implementation design
 
+## STEP24 impact: opt-in standalone Windows loader and observed images
+
+The new explicit `FLITZIS_TRIAL_ORT_LOAD_POLICY=package-system32` mode requires
+the existing verified runtime and declared-package manifests. It is supported
+only by dynamic Windows standalone CLIs. Legacy custody-only/runtime requests
+retain their loading behavior; static/frontend requests reject loader settings.
+All manifest/source/graph/output gates still precede ORT. The audio frontend can
+already have loaded libsoxr, which this ORT boundary does not attest.
+
+After complete file admission and the fresh-process latch, enumerate at most4096
+current modules, acquiring real references by address. Reject pre-existing
+declared basenames or images within the package directory, including matching
+bytes at an alternate file identity. Reset the previous `SetDllDirectory` path,
+check `SetDefaultDllDirectories(SYSTEM32|USER_DIRS)`, and retain one package
+`AddDllDirectory` cookie. This is an irreversible policy of this disposable child,
+never application bootstrap or a reversible App setting. Unknown pre-existing
+AddDllDirectory cookies are not enumerable; fresh controlled CLI source is the
+boundary, not a claim to clear arbitrary injected loader state.
+
+Load the absolute runtime with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|SYSTEM32`.
+These documented per-call flags constrain this load's directory search; later
+explicit loader overrides, already-loaded modules, API sets, SxS and KnownDLLs
+remain distinct. No provider/CUDA DLL is eagerly loaded. Verify the returned
+module and the actual `OrtGetApiBase` symbol owner, using full untruncated UTF-16
+module paths, reopened deny-Write/Delete files, complete SHA and the admitted
+full128-bit FileIdInfo+volume. Compare the wrapper's actual API pointer with the
+exact API24 pointer from that library, so its cached runtime cannot silently differ.
+
+Snapshots after loading/bootstrap and before success output verify every observed
+declared image against its original file pin. An undeclared image inside the
+package directory, foreign backing file, query failure or bound/truncation failure
+is terminal; no typed CUDA70 or fallback is inferred. Metadata/logits are written
+only after the final image check. References and cloned pins of ALL admitted files
+are retained until actual standalone process exit once ORT can cache a library;
+its global library/environment have no ordinary Rust Drop. Before that point,
+module references end before file pins. Session/profile/cancellation/output readers
+retain their existing order. Receipts identify observed declared backing files,
+not relocated memory contents or a complete dependency closure/full producer.
+
+Source basis: exact libloading0.9.0 Windows `Library::new` delegates to flags0;
+ort2.0.0-rc.12 `load_dylib_from_path` caches its first library and `init_from`
+discards its effective-load boolean. The API-pointer and environment-commit checks
+therefore both matter. ORT1.24.4 obtains the provider directory from its actual
+runtime image and later loads providers with `LOAD_WITH_ALTERED_SEARCH_PATH`:
+[Windows environment](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/platform/windows/env.cc),
+[provider bridge](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/session/provider_bridge_ort.cc).
+The documented search/reset/reference/path semantics are
+[LoadLibraryExW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw),
+[SetDefaultDllDirectories](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-setdefaultdlldirectories),
+[AddDllDirectory](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-adddlldirectory),
+[SetDllDirectoryW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setdlldirectoryw),
+[GetModuleHandleExW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw),
+[GetModuleFileNameW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulefilenamew).
+Package-directory rejection uses checked Windows ordinal case comparison on
+canonical path ancestors, not a case-sensitive textual prefix:
+[CompareStringOrdinal](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-comparestringordinal).
+Module enumeration is a bounded observation, with disappearing/query-failed
+modules terminal; it cannot certify absence of every transient or data-file mapping:
+[EnumProcessModules](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-enumprocessmodules).
+Imported DLL initializers execute before a post-load mismatch can be rejected;
+this diagnostic boundary is not a native-code sandbox.
+
+Verification targets real fixture imports, late basename and exact ORT-style
+altered-path loads with poisoned CWD/PATH/previous SetDllDirectory, missing
+package dependencies, preloaded foreign images, backing-file identity and pins.
+Runtime/API-only controls use existing authenticated CPU files and the original
+owned runner/observer, without a model session or new NN. Reuse compatible original
+CPU numerics/cancellation and all distinct failed CUDA settlements. No unchanged
+CUDA attempt, precision/memory-pattern/resource-floor change or installer change.
+
+The plan grows to26 for this independently reviewable loader boundary. STEP25
+retains the ENTIRE former nativeSTEP24: full successful nativeCUDA, real tight
+SameModel device fault -> complete tree AND reader end -> freshCPU, CPU-only/
+fallback, complete source/frontend/chunk/postprocess/model/audio quality/functions,
+ALL Source/Frontend/Graph/Weights/Exporter/RuntimeBootstrap/Manifest/Provider/
+NativeDependencies/Compiler/Binary/FullProducer/MappedImages/OSarch roles, portable
+WindowsEXE AND actual Linux/macOS evidence, independent Rust cores/thinPyO3,
+complete CPU/CUDA release/CRT/licenses/LGPL source+three patches/NVIDIA notices/
+installer/recovery/full footprint and practical full Demucs/BS parity before cutover.
+Mask-network export alone is insufficient; productive closures remain. Installed
+saving is zero. STEP26 retains the ENTIRE former FINAL25: original StemExecution
+validator/schema/Pydantic dependency and all32keys/allold-newroles/fullhost UNKNOWN,
+exact32 parent Rust failures/duplicate216 different async snapshot/distinct216
+watchdog UNCOMPARED/registry UNKNOWN, unexplained Human pressure/original2GiB-
+3GiB-512MiB guards/CPU-CUDA overlap OPEN and all quality/device/listening/combined
+2/4/6<=10 regression/architecture/docs/distribution gates. No omitted roles or
+blanket decorator clearance; all four CUDA failures remain distinct/cause UNKNOWN.
+
+### STEP24 verification and reconstruction evidence
+
+All three locked features build both standalone CLIs and each passes the ten
+existing audio-example Rust controls. The dynamic/CUDA test binaries additionally
+contain one explicitly ignored fixture test, executed separately below. Initial
+two build checks pass48.17s; a test-only function-pointer cast warning is corrected
+without suppression. Final feature/control builds also pass after the actual
+review correction. These overlapping runs are not an additive overall matrix.
+External Release Native/API retains22 known warnings and the unchanged einops pin.
+
+Nine real Windows DLL fixture invocations pass: initial imported dependency,
+late bare-name load, late absolute `LOAD_WITH_ALTERED_SEARCH_PATH`, missing import
+at each of those three boundaries despite poison availability, preloaded foreign
+same-basename image, undeclared initial package import, and undeclared late image
+loaded through an uppercase package path. Every missing/undeclared case first has
+a valid manifest for the files actually declared/present, so it exercises real
+loading rather than failing file admission. Matching root bytes copied to a
+different file identity fail the identity check; a foreign export owner fails;
+live module/file pins deny Write/Delete, with write access restored after complete
+non-ORT fixture guard retirement. Both later-load forms return package values,
+not poison values. This tests uppercase path spelling, not every filesystem/alias.
+
+Reconstruct four fixture DLLs in isolated cache directories with MSVC
+`cl /nologo /LD /O2`, explicit object/DLL/import-library outputs and linked import
+libraries. `dependency.dll` exports `int FixtureDependency(void){return 42;}`;
+`root.dll` imports it and exports `FixtureRoot()` returning that value.
+`latedep.dll` exports `FixtureLateDependency()` returning73; `late.dll` imports it
+and exports `FixtureLate()` returning it. All exports/imports use the matching
+`__declspec(dllexport/dllimport)`. The poison directory contains byte-identical
+copies of root/late but separately compiled dependency values13/17. Keep poison
+in actual CWD/PATH and set its path with SetDllDirectory before the tested policy.
+Each case copies only its intended files and creates valid existing schema1
+runtime/package manifests with actual hashes. Omit missing imports and deliberately
+undeclared existing imports from the component list. Run the dynamic test binary
+in a separate original owned child with
+`runtime::loader::tests::actual_windows_loader_policy_and_image_identity --exact
+--ignored --test-threads=1 --nocapture` and `FLITZIS_LOADER_FIXTURE`,
+`FLITZIS_LOADER_POISON`, `FLITZIS_LOADER_CASE` selecting the directories/case.
+These are test-only inputs, not productive loader controls.
+
+Nine original owned runtime invocations also pass their expected outcomes: two
+controlled CPU-runtime/API-only positives (dynamic and CUDA-enabled binaries,
+both using the authenticated CPU1.24.4 package), legacy runtime-only and legacy
+declared-custody positives, plus invalid/empty policy, missing package, static
+and frontend early rejections. Both controlled positives observe exactly the
+admitted `onnxruntime.dll` with full128-bit FileId+volume and matching size/SHA;
+the shared provider is declared but not observed. No CUDA provider is eagerly
+loaded, no model session runs and no inference/quality/provider-activation claim
+follows. The five negatives have empty stdout and no ORT phase. Poison ambient
+`ORT_DYLIB_PATH`, CWD and PATH do not become authority.
+
+The original observer precedes each single joined executor; both groups finish
+9/9 scopes closed, pending/inflight0/errors[]. Fixture preparation and these two
+control harnesses pass3 checks in11.80s. Earlier setup failures are retained:
+cmd-list quoting rejected the vcvars path, then bare `cl.exe` could not be resolved
+from a passed child environment. An owned cache BAT wrapper, case-insensitive
+environment-key merging and absolute compiler path correct those harness issues.
+The first failed setup also caused two dependent missing-file/invalid-CWD test
+failures before actual loader execution; none are inference evidence.
+
+Final six static checks pass11.12s: actual Windows11/build10.0.26200/AMD64/64-bit,
+rustc1.95.0/LLVM22.1.2/Cargo1.95.0 and six complete binary hashes; six Rustfmt
+targets/strict OpenSpec/88 Markdown targets/whitespace; productive sources/locks/
+installer unchanged; four locked normal feature trees without PyO3/Torch/LibTorch
+and dynamic CPU without CUDA;18 settled scopes; compatible original CPU numerics,
+actual CPU cancellation and failed CUDA settlements reused without NN; both
+original fullhost probes remain UNKNOWN at the actual StemExecution validator
+with all productive roles retained. Linux/macOS and other Windows architectures
+are not executed. Actual CUDA model execution and freshCPU fault fallback remain open.
+
+Measured Windows x86_64 Debug component files (not release/full-producer evidence):
+
+| Feature | Audio CLI bytes / SHA256 | One-chunk CLI bytes / SHA256 |
+| --- | --- | --- |
+| static CPU | 36563968 / `955a18745abbc90815db0e430e614d0fba4515d9bbc672ec90487ddf7ac8c5a8` | 24502784 / `f351178d8b3f301efe8da6fa5124e4220a623f5be3dd37d43e39c3fc0f5d0579` |
+| dynamic CPU | 13615616 / `3b3dd5dca4e1fe9737a96f9e88f2086a6323f28a5b37d374309462015390fdf0` | 1649152 / `c0b9c22707c40195025f6ac171f8b66ef4e03809fbbdbb4c357cd9696ed67276` |
+| CUDA | 13642240 / `ff6c2db188e10756e32c6ded8ea57ca06ac4cf7a871de2337d3557825d5bea0d` | 1674240 / `23406cbdcb5de9608e58b75a9f9d3480bf6f35fb3f09ae5a3e61eb6d2465f4fd` |
+
+Systems PRE/frozen POST/targeted recheck and Methods are CLEAR. The same one
+independent final-diff chain finds and resolves a real P2: legacy file Admission
+must remain owned outside the inference block until ALL resampled/spectrogram/
+metadata/stdout output finishes. Controlled global retention alone does not protect
+legacy mode. The outer `_admitted` owner restores that lifetime while the fallible
+snapshot still precedes logits/success writes. No assertion or resource/quality
+guard is weakened. The same independent chain is publication CLEAR with no
+remaining P1/P2. Final index/docs checks pass2 checks in2.32s: all11 LF-only staged
+files equal the authoritative source; strict OpenSpec,88 local Markdown targets,
+hidden flags and the private five bridges/pointer/common exclusion remain valid.
+All review readers end. These are scoped results, not full native acceptance.
+Generated `performance-step24-*` logs, fixture DLLs and probes stay reconstructible
+cache output, not durable authority. Every native25/final26 requirement above remains.
+
 ## STEP23 impact: declared ORT package file custody
 
 The optional standalone package boundary now checks every declared ORT/provider/

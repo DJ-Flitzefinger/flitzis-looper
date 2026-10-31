@@ -236,6 +236,14 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** all file pins remain through the last session, profile and output reader
 - **AND** absent optional package configuration retains only runtime-file evidence; checked declared files do not establish loader resolution, complete dependencies, mapped images, full producer or distribution
 
+#### Scenario: An explicit standalone Windows trial controls native loading
+- **GIVEN** a fresh dynamic standalone trial explicitly requests its verified package loader policy
+- **WHEN** it loads the runtime and observes declared native images
+- **THEN** the initial load restricts directory search to its package and System32, checks the actual returned module and API export owner, and verifies observed backing-file identity against retained pins
+- **AND** preloaded package images, foreign or undeclared package images and incomplete module queries fail terminally before success output
+- **AND** loader policy and all admitted file pins remain process-local through actual runtime readers and process exit, without eagerly loading CUDA for CPU probes
+- **AND** legacy requests retain their behavior, unsupported platforms reject this policy, and observed declared backing files do not certify all loader overrides, relocated image bytes, full dependency closure, producer, CUDA execution or quality
+
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
 GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model

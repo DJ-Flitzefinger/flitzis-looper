@@ -278,7 +278,7 @@ The design records exact passing checks and unsuccessful attempts. Logical
 component bytes are not full installations; no productive Torch removal or
 installation saving is claimed. The unsuccessful CUDA attempts establish no
 native device execution, narrow real fault or freshCPU fallback. Every former
-STEP20 parity requirement remains mandatory in STEP24 below.
+STEP20 parity requirement remains mandatory in STEP25 below.
 
 ## 21. Explicit standalone native runtime admission
 
@@ -319,7 +319,19 @@ This coherent package-file boundary adds a25th step. It is not loader-closure,
 CUDA execution, quality, full producer or installation acceptance. All remaining
 native parity continues below, followed by the complete former FINAL24 scope.
 
-## 24. Remaining native parity before cutover
+## 24. Optional standalone Windows loader and observed images
+
+- [x] Implement explicit package/System32 loading, terminal preloaded-image and
+      actual backing-file identity checks, without eagerly loading CUDA providers.
+- [x] Verify real initial/late/altered-path DLL resolution and poisoned/missing/
+      foreign cases, process-lifetime pins and fallible pre-output snapshots.
+- [x] Check both CLIs/features and original runtime-only compatibility without
+      new NN; keep closure/full-producer/platform/distribution limits explicit.
+
+This coherent loader boundary adds a26th step. Every former nativeSTEP24 duty
+continues below as STEP25 and the ENTIRE former FINAL25 continues as STEP26.
+
+## 25. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -336,10 +348,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP25, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP26, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 25. Combined regression and final architecture review
+## 26. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

@@ -54,14 +54,16 @@ Preserve the single transport and source authority.
 
 ## Delivery
 
-Twenty-five coherent steps are recorded in [tasks](tasks.md). STEP18's real native
+Twenty-six coherent steps are recorded in [tasks](tasks.md). STEP18's real native
 BeatThis chunk experiment is followed by STEP19's complete-source CPU prototype.
 STEP20 adds original input-envelope parity, narrow failure diagnostics and bounded
 actual CPU termination. Unsuccessful CUDA initialization remains explicit with
 cause UNKNOWN. STEP21 adds explicit runtime admission and STEP22 ends unused
 standalone host-buffer lifetimes. STEP23 adds custody of explicitly declared ORT
-package files. STEP24 retains every native CUDA/freshCPU/quality/producer/platform/
-distribution gate before cutover; STEP25 retains ALL former FINAL24 requirements.
+package files. STEP24 adds opt-in Windows standalone loader policy and actual
+observed backing-file identity without a closure or CUDA claim. STEP25 retains
+every native CUDA/freshCPU/quality/producer/platform/distribution gate before
+cutover; STEP26 retains ALL former FINAL25 requirements.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

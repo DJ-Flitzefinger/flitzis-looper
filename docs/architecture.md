@@ -167,9 +167,13 @@ This process-local bootstrap is deliberately outside the App/core session API.
 It does not attest provider/CRT/driver images or a complete producer, and a
 runtime-only probe does not establish model/device execution. CPU-only dynamic
 loading is a separate opt-in feature. Remaining native parity and combined final
-gates continue as STEP24 and STEP25 respectively. STEP23 adds an optional separate
+gates continue as STEP25 and STEP26 respectively. STEP23 adds an optional separate
 SHA-authenticated declared ORT component list and retains every checked file handle
 through the same last-reader boundary; loader/dependency closure remains UNKNOWN.
+STEP24 adds an explicit Windows standalone loader policy and observed declared
+backing-file identity checks. It retains matching modules and all file pins until
+process exit without eager CUDA loads. Snapshots do not certify relocated image
+bytes, all loader overrides, complete dependency closure or full producer.
 STEP22 ends the standalone
 serialized-graph lifetime after the copying session loads and the original PCM
 lifetime after full synchronous resampling. Saved source frames/duration and all
