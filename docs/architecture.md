@@ -167,7 +167,10 @@ This process-local bootstrap is deliberately outside the App/core session API.
 It does not attest provider/CRT/driver images or a complete producer, and a
 runtime-only probe does not establish model/device execution. CPU-only dynamic
 loading is a separate opt-in feature. Remaining native parity and combined final
-gates continue as STEP23 and STEP24 respectively. STEP22 ends the standalone
+gates continue as STEP24 and STEP25 respectively. STEP23 adds an optional separate
+SHA-authenticated declared ORT component list and retains every checked file handle
+through the same last-reader boundary; loader/dependency closure remains UNKNOWN.
+STEP22 ends the standalone
 serialized-graph lifetime after the copying session loads and the original PCM
 lifetime after full synchronous resampling. Saved source frames/duration and all
 prepared/output/runtime pins remain; deallocation alone is not a memory-peak or

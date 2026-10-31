@@ -212,7 +212,8 @@ fn main() -> ExitCode {
     }
     if !a.first().is_some_and(|s| s == "infer" || s == "runtime")
         && (std::env::var_os(runtime::MANIFEST_ENV).is_some()
-            || std::env::var_os(runtime::DIGEST_ENV).is_some())
+            || std::env::var_os(runtime::DIGEST_ENV).is_some()
+            || runtime::package_requested())
     {
         eprintln!("runtime configuration requires an inference or runtime probe command");
         return ExitCode::FAILURE;

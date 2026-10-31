@@ -228,6 +228,14 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** CPU-only dynamic initialization does not require CUDA support, while a static build rejects dynamic configuration
 - **AND** file/runtime initialization evidence does not certify mapped images, dependent providers, model execution, complete producer or portable distribution
 
+#### Scenario: A standalone trial declares ORT package components
+- **GIVEN** an explicit runtime request and a separate SHA-authenticated package manifest
+- **WHEN** the standalone trial checks the declared package before ORT initialization
+- **THEN** every declared component is size/digest/role/target checked from retained same-file handles in the same canonical package directory
+- **AND** duplicate names or opened file identities, path escapes, unknown or malformed fields and a mismatched runtime entry fail terminally
+- **AND** all file pins remain through the last session, profile and output reader
+- **AND** absent optional package configuration retains only runtime-file evidence; checked declared files do not establish loader resolution, complete dependencies, mapped images, full producer or distribution
+
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
 GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model

@@ -962,7 +962,13 @@ installable bundle. STEP22 releases serialized graphs only after the copying
 session loads and original PCM only after full resampling, with the original
 source length/duration retained. It does not establish OS memory release, a lower
 peak or CUDA success; no CPU NN is repeated for lifetime or binary hashes.
-STEP23 retains all native parity requirements and STEP24 all
+STEP23 optionally admits a separate declared ORT package component manifest with
+`FLITZIS_TRIAL_ORT_PACKAGE` and `FLITZIS_TRIAL_ORT_PACKAGE_SHA256`. Every listed
+file is size/SHA/role/identity checked and pinned through all CLI readers. The
+strict schema, bounds and reconstruction recipe are in the
+[STEP23 design](../openspec/changes/improve-performance-isolation/design.md#step23-impact-declared-ort-package-file-custody).
+Listed-file custody does not attest loader resolution or complete dependencies.
+STEP24 retains all native parity requirements and STEP25 all
 former final regression gates. Productive installation/repair, locks and workers
 are unchanged.
 

@@ -1,5 +1,133 @@
 # Performance audit and implementation design
 
+## STEP23 impact: declared ORT package file custody
+
+The optional standalone package boundary now checks every declared ORT/provider/
+CUDA/cuDNN component before the first ORT API or logger. It retains each verified
+SAME-file handle inside the existing runtime Admission through all model, profile
+and output readers. The original4096-byte runtime schema1 and512MiB main-library
+limit remain unchanged. Productive bootstrap, dependencies, loader behavior,
+frontend/model arithmetic, quality, memory patterns and resource guards do not change.
+The audio CLI can load libsoxr before this ORT boundary; this is not admission
+before every native load. No extra model inference is justified by file custody.
+
+Set both `FLITZIS_TRIAL_ORT_PACKAGE` (absolute path) and
+`FLITZIS_TRIAL_ORT_PACKAGE_SHA256` (exact lowercase digest) alongside the existing
+runtime request. The initialization-only `runtime MANIFEST SHA256` command accepts
+this pair too. Partial pairs fail; static builds reject the request and frontend
+commands reject package configuration without initializing ORT. Absent package
+configuration preserves the original runtime-only admission, with no package claim.
+
+The separate UTF-8 JSON manifest is at most16384 bytes and has exactly
+`schema_version:1`, `os`, `arch`, and `components`. Each component has exactly
+`name`, `role`, `bytes`, and `sha256`. Roles are `ort-runtime`,
+`ort-provider-shared`, `ort-provider-cuda`, `cuda` and `cudnn`. The list contains
+1..64 files, each1..2GiB, with checked sum at most8GiB; these are admission bounds,
+not allocations or measured footprint. This accommodates the existing24-file
+CUDA scratch without weakening the original main-runtime limit. Exactly one
+`ort-runtime` entry must match the admitted runtime name/bytes/SHA and file identity.
+Only portable ASCII basenames up to128 bytes are admitted; case aliases, separators,
+ADS, trailing dots/spaces, duplicate/unknown/missing fields, unknown roles, invalid
+sizes/digests, foreign OS/architecture and duplicate opened file identities fail
+closed. Both manifests and all canonical component parents must be the same
+owned package directory. Windows uses the full128-bit file ID and volume from
+the actual open handle via [GetFileInformationByHandleEx/FileIdInfo](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex)
+and the official [FILE_ID_INFO layout](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info),
+without a weaker64-bit fallback; Unix uses device/inode. Other platforms fail closed for this boundary.
+Windows pins deny Write/Delete; Unix still requires caller-owned immutable custody.
+
+For the saved CPU runtime, construct the component list from STEP21's two exact
+RECORD-verified DLL entries, with roles `ort-runtime`/`ort-provider-shared`, and
+hash the exact serialized manifest. For the CUDA scratch, use STEP19/20's24
+authenticated entries: three ORT roles, NVIDIA CUDA files as `cuda`, and cuDNN
+files as `cudnn`. Hash from the actual complete files; never infer identity from
+basenames. The receipt enumerates declared paths/roles/sizes/SHA/count/total and
+explicitly keeps loader closure, mapped images and full producer **UNKNOWN**.
+An incomplete list remains an incomplete declared list; no runtime/provider/CRT/
+driver discovery, complete dependency or redistribution claim follows. Package
+file custody does not change how the OS resolves DLLs, or authorize productive
+Torch removal. Installer saving remains zero; licenses/LGPL source+three patches/
+NVIDIA notices, CRT, release/recovery and full footprint remain required.
+
+The plan grows to25 steps for this independently verifiable package admission.
+STEP24 retains ALL former nativeSTEP23 requirements: full successful nativeCUDA,
+real tight SameModel device failure -> complete tree AND reader end -> freshCPU,
+CPU-only/fallback, full source/model/audio quality and functions, every source/
+frontend/exporter/graph/weights/bootstrap/manifest/provider/native-dependency/
+compiler/binary/mapped-image/OS/architecture/full-producer role, WindowsEXE AND
+Linux/macOS, complete CPU/CUDA release/CRT/legal/installer/recovery/footprint,
+and practical complete Demucs/BS parity before cutover. STEP25 retains ALL former
+FINAL24 requirements, including original StemExecution validator/schema/Pydantic
+and all roles/fullhost UNKNOWN, exact32 Rust parent failures/duplicate216 different
+async snapshot/distinct216 watchdog UNCOMPARED/registry UNKNOWN, unexplained
+Human pressure/original2GiB-3GiB-512MiB guards/CPU-CUDA overlap OPEN and all quality,
+device/listening/combined-regression/architecture/documentation/distribution gates.
+All four earlier CUDA failures stay distinct and cause UNKNOWN. This package-file
+change alone does not justify repeating the same failed CUDA inference conditions.
+
+### STEP23 verification and reconstruction evidence
+
+Three locked feature builds pass for both CLIs, and each feature passes ten Rust
+audio-example controls: the seven prior controls plus strict component parsing,
+target/count/total and actual package-custody controls. The latter checks all file
+pins, post-drop access, changed size/hash/bytes, missing files, directory containment,
+oversize manifest and a real hardlink alias. The two build/format harness checks
+pass62.87s. External Release Native/API retains22 known warnings and the unchanged
+einops pin. Initial setup used a wrong collection path, collecting zero tests;
+its failed log is retained and the subsequent fault tests use the actual path.
+
+The actual CPU declared package (two DLLs/16141888 logical bytes) and CUDA declared
+package (24 DLLs/3492501392 logical bytes) both pass file verification and runtime
+version/API-only initialization. Existing independently authenticated wheel/RECORD
+receipts are reused, and every current complete component hash is rechecked.
+No model session, reference export, CPU NN or CUDA inference is run. The CUDA
+probe attests no provider kernels or device success. A runtime-only legacy probe
+also passes with null declared-package evidence, including poisoned ambient
+`ORT_DYLIB_PATH`. Thirty early-negative requests fail with no ORT phase or success
+output, including static/frontend requests and either missing package environment
+half. Original observer starts before the single joined executor; all33 scopes
+close with pending/inflight0/errors[]. Preparation, these controls and sixteen
+unchanged fault-protocol tests pass18 harness checks in91.45s. This is a scoped
+file/API result, not a speedup or full acceptance matrix.
+
+Exact package manifests use Python `json.dumps(value, indent=2).encode()` without
+a trailing newline, root-key order `schema_version,os,arch,components`, component
+key order `name,role,bytes,sha256`, and the saved component order: CPU runtime then
+shared; CUDA entries in case-insensitive basename order. Reconstruct file entries
+from STEP21's CPU wheel and STEP19/20's exact CUDA/ORT wheels and RECORD recipes;
+do not reconstruct hashes from version labels. Measured package-manifest SHA256:
+CPU `7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319`,
+CUDA `d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b`.
+Full compiler/binary/producer and loaded-image closure remain UNKNOWN.
+
+Measured Windows x86_64 Debug component binaries:
+
+| Feature | Audio CLI bytes / SHA256 | One-chunk CLI bytes / SHA256 |
+| --- | --- | --- |
+| static CPU | 36562432 / `9cda16a2ae95816fd5918535e13c38abf52866199e7800f2134c703a9e8917e5` | 24501760 / `ef2871c18a30c08229230996d7ad8066a1a42f5ca4684f9524f0d0a453a8340c` |
+| dynamic CPU | 13488128 / `8ff234d97288f6fb3ed001efa69a71705b14c83881903578c993410064f47b0e` | 1508864 / `796a5a71731f2602e5b7c75e71760d39cc9ba0b033fa1e8f15fa203c7b8da731` |
+| CUDA | 13514240 / `8986915c48e33075852927c0caad34a77ddcca7bbb59021b7595cf7f81ec9a56` | 1532416 / `0bb0ad9764f74327eb20dbf00fd47f7d701dbfebc5df8169e0a0971b273ff415` |
+
+Reconstruct with the configured contributor output route and `--locked`, build
+both examples for all three existing features and run the audio-example controls.
+API-only probes use `runtime MANIFEST SHA256` plus the package environment pair.
+Unchanged frontend, graph, model, provider, abort and fault implementations retain
+their original bounded STEP19–22 evidence; no NN rerun is justified by new hashes.
+Generated logs `performance-step23-{setup,build,controls}.log` and C probes retain
+diagnostics but are not durable authority. Every native and final gate above
+remains mandatory; productive locks, installer/repair and installed saving stay
+unchanged, with saving zero.
+
+Final five static checks pass11.12s: five Rustfmt targets, strict OpenSpec,
+89 local Markdown targets/whitespace, unchanged productive sources/locks/installer,
+four locked normal feature trees without PyO3/Torch/LibTorch and dynamic CPU
+without CUDA. Saved original CPU numerics, actual CPU termination and failed CUDA
+settlements are checked without new inference; both original fullhost probes
+remain UNKNOWN at the actual StemExecution validator with all productive roles.
+Systems PRE/frozen POST, Methods and one independent final actual-diff review
+chain are CLEAR. All review readers end; these results preserve the still-open
+whole-quality, nativeCUDA/freshCPU, producer, platform and distribution gates.
+
 ## STEP22 impact: end unused standalone host-buffer lifetimes
 
 Both standalone CLIs now drop the serialized graph immediately after successful

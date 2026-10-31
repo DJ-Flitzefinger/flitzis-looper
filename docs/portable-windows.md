@@ -358,6 +358,10 @@ the complete parity and recovery gates in the
 Its separate `native-inference-dynamic` CPU-only and CUDA trial builds now require
 explicit digest-checked runtime manifests. That standalone loading contract does
 not alter Portable runtime versions, bootstrap pins, licenses, model repair or
-recovery. Extracted trial DLLs and a developer Debug EXE are not an installable
+recovery. Optional separately authenticated declared ORT component manifests pin
+the listed files through all standalone CLI work; they do not attest actual loader
+resolution, mapped dependencies or full producer/CRT closure. The runtime-only
+contract and productive Portable bootstrap remain unchanged. Extracted trial DLLs
+and a developer Debug EXE are not an installable
 bundle; CRT/provider/driver closures, redistribution obligations and clean-system
 acceptance remain mandatory before any productive runtime replacement.

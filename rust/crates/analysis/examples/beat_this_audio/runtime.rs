@@ -1,4 +1,7 @@
 //! Fresh standalone process bootstrap only. Never configure the application's ORT.
+#[cfg(any(feature = "native-inference-dynamic", test))]
+#[path = "package.rs"]
+mod package;
 use serde::Deserialize;
 #[cfg(any(feature = "native-inference-dynamic", test))]
 use sha2::{Digest, Sha256};
@@ -15,6 +18,12 @@ const MAX_MANIFEST: u64 = 4096;
 const MAX_RUNTIME: u64 = 512 * 1024 * 1024;
 pub const MANIFEST_ENV: &str = "FLITZIS_TRIAL_ORT_MANIFEST";
 pub const DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_MANIFEST_SHA256";
+pub const PACKAGE_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE";
+pub const PACKAGE_DIGEST_ENV: &str = "FLITZIS_TRIAL_ORT_PACKAGE_SHA256";
+
+pub fn package_requested() -> bool {
+    std::env::var_os(PACKAGE_ENV).is_some() || std::env::var_os(PACKAGE_DIGEST_ENV).is_some()
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,6 +130,22 @@ impl CheckedFile {
         }
         Ok(Self { path, _file: file })
     }
+
+    fn read_json(&mut self, digest: &str, limit: u64) -> Result<Vec<u8>, String> {
+        use std::io::{Seek, SeekFrom};
+        self._file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| e.to_string())?;
+        let mut raw = Vec::new();
+        (&mut self._file)
+            .take(limit + 1)
+            .read_to_end(&mut raw)
+            .map_err(|e| e.to_string())?;
+        if raw.len() as u64 > limit || format!("{:x}", Sha256::digest(&raw)) != digest {
+            return Err("runtime manifest changed before parsing".into());
+        }
+        Ok(raw)
+    }
 }
 
 /// Retained files pin the exact checked bytes through all CLI sessions/work.
@@ -131,26 +156,15 @@ pub struct Admission {
     runtime: CheckedFile,
     spec: Spec,
     manifest_sha256: String,
+    #[cfg(any(feature = "native-inference-dynamic", test))]
+    package: Option<package::Admission>,
 }
 
 impl Admission {
     #[cfg(any(feature = "native-inference-dynamic", test))]
     fn verify(path: &Path, digest: &str) -> Result<Self, String> {
-        use std::io::{Seek, SeekFrom};
         let mut manifest = CheckedFile::open(path, digest, MAX_MANIFEST, None)?;
-        manifest
-            ._file
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| e.to_string())?;
-        let mut raw = Vec::new();
-        (&mut manifest._file)
-            .take(MAX_MANIFEST + 1)
-            .read_to_end(&mut raw)
-            .map_err(|e| e.to_string())?;
-        // Recheck the exact bytes parsed, including on systems without deny-write.
-        if raw.len() as u64 > MAX_MANIFEST || format!("{:x}", Sha256::digest(&raw)) != digest {
-            return Err("runtime manifest changed before parsing".into());
-        }
+        let raw = manifest.read_json(digest, MAX_MANIFEST)?;
         let spec = Spec::parse(&raw)?;
         let directory = manifest
             .path
@@ -170,16 +184,29 @@ impl Admission {
             runtime,
             spec,
             manifest_sha256: digest.into(),
+            package: None,
         })
     }
 
     pub fn receipt(&self) -> serde_json::Value {
-        serde_json::json!({"schema_version":self.spec.schema_version,"library":self.spec.library,
+        let receipt = serde_json::json!({"schema_version":self.spec.schema_version,"library":self.spec.library,
             "manifest_sha256":self.manifest_sha256,
             "runtime_sha256":self.spec.sha256,"runtime_bytes":self.spec.bytes,
             "runtime_version":self.spec.version,"runtime_path":self.runtime.path,
             "manifest_path":self.manifest.path,"os":self.spec.os,"arch":self.spec.arch,
-            "ort_api":ort::MINOR_VERSION,"evidence":"checked-files-not-mapped-image-or-full-producer"})
+            "ort_api":ort::MINOR_VERSION,"evidence":"checked-files-not-mapped-image-or-full-producer"});
+        #[cfg(any(feature = "native-inference-dynamic", test))]
+        {
+            let mut receipt = receipt;
+            receipt["declared_package"] = self
+                .package
+                .as_ref()
+                .map(package::Admission::receipt)
+                .into();
+            receipt
+        }
+        #[cfg(not(any(feature = "native-inference-dynamic", test)))]
+        receipt
     }
 }
 
@@ -198,7 +225,16 @@ pub fn configure(
         static ATTEMPTED: AtomicBool = AtomicBool::new(false);
         let (path, digest) =
             request.ok_or("dynamic trial requires an explicit runtime manifest and SHA256")?;
-        let admission = Admission::verify(path, digest)?;
+        let mut admission = Admission::verify(path, digest)?;
+        if package_requested() {
+            let path = std::env::var_os(PACKAGE_ENV).ok_or("missing ORT package manifest path")?;
+            let digest = std::env::var(PACKAGE_DIGEST_ENV).map_err(|e| e.to_string())?;
+            admission.package = Some(package::Admission::verify(
+                Path::new(&path),
+                &digest,
+                &admission,
+            )?);
+        }
         if ATTEMPTED.swap(true, Ordering::SeqCst) {
             return Err("runtime bootstrap requires a fresh standalone process".into());
         }
@@ -234,7 +270,7 @@ pub fn configure(
     }
     #[cfg(not(feature = "native-inference-dynamic"))]
     {
-        if request.is_some() {
+        if request.is_some() || package_requested() {
             return Err("static CPU trial does not accept dynamic runtime configuration".into());
         }
         Ok((None, ort::init()))
