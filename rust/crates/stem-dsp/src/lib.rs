@@ -325,7 +325,42 @@ impl Spectrum {
             return Err(Error::Shape);
         }
         finite(masks, cancelled)?;
-        let mut transform = Transform::new(true, cancelled)?;
+        let mut inverse = self.reconstruction(cancelled)?;
+        let mut output = zeros(STEMS * CHANNELS * g.frames, "inverse.output")?;
+        for (mask, target) in masks
+            .chunks_exact(g.features)
+            .zip(output.chunks_exact_mut(CHANNELS * g.frames))
+        {
+            inverse.write_stem(mask, target, cancelled)?;
+        }
+        checkpoint(cancelled)?;
+        Ok(output)
+    }
+
+    /// Borrow the spectrum and prepare ONE reusable inverse context. All output
+    /// slices must remain private: any later error invalidates the ENTIRE attempt.
+    /// The caller admits the context, model/track buffers and complete process.
+    pub fn reconstruction(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Reconstruction<'_>, Error> {
+        Reconstruction::new(self, cancelled)
+    }
+}
+
+/// One spectrum's reusable FFT plan, envelope and accumulation, shared by stems.
+/// No application publication or resource-admission authority is supplied here.
+pub struct Reconstruction<'a> {
+    spectrum: &'a Spectrum,
+    transform: Transform,
+    envelope: Vec<f32>,
+    accumulation: Vec<f32>,
+}
+
+impl<'a> Reconstruction<'a> {
+    fn new(spectrum: &'a Spectrum, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        let g = spectrum.geometry;
+        let transform = Transform::new(true, cancelled)?;
         let mut envelope: Vec<f32> = zeros(g.inverse_frames, "inverse.envelope")?;
         for time in 0..g.steps {
             checkpoint(cancelled)?;
@@ -337,52 +372,73 @@ impl Spectrum {
         if trimmed.iter().any(|x| !x.is_finite() || *x <= 1e-11) {
             return Err(Error::Envelope);
         }
-        let mut output = zeros(STEMS * CHANNELS * g.frames, "inverse.output")?;
-        let mut accumulation: Vec<f32> = zeros(g.inverse_frames, "inverse.accumulation")?;
-        for stem in 0..STEMS {
-            for channel in 0..CHANNELS {
-                accumulation.fill(0.0);
-                for time in 0..g.steps {
-                    checkpoint(cancelled)?;
-                    for bin in 0..BINS {
-                        let index = ((time * BINS + bin) * CHANNELS + channel) * 2;
-                        let mask = stem * g.features + index;
-                        let source = Complex32::new(self.features[index], self.features[index + 1]);
-                        let mask = Complex32::new(masks[mask], masks[mask + 1]);
-                        let value = source * mask;
-                        if !value.re.is_finite() || !value.im.is_finite() {
-                            return Err(Error::NonFinite);
-                        }
-                        // Real irfft ignores imaginary DC and Nyquist parts.
-                        transform.buffer[bin] = if bin == 0 || bin == FFT / 2 {
-                            Complex32::new(value.re, 0.0)
-                        } else {
-                            value
-                        };
+        Ok(Self {
+            spectrum,
+            transform,
+            envelope,
+            accumulation: zeros(g.inverse_frames, "inverse.accumulation")?,
+        })
+    }
+
+    /// Reconstruct one complete complex mask into exact planar stereo storage.
+    /// Shape/nonfinite masks reject before mutation. Cancellation/arithmetic error
+    /// may leave partial private storage; the caller MUST invalidate all results.
+    pub fn write_stem(
+        &mut self,
+        masks: &[f32],
+        output: &mut [f32],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        let g = self.spectrum.geometry;
+        if masks.len() != g.features || output.len() != CHANNELS * g.frames {
+            return Err(Error::Shape);
+        }
+        finite(masks, cancelled)?;
+        let trimmed = &self.envelope[FFT / 2..FFT / 2 + g.frames];
+        for channel in 0..CHANNELS {
+            self.accumulation.fill(0.0);
+            for time in 0..g.steps {
+                checkpoint(cancelled)?;
+                for bin in 0..BINS {
+                    let index = ((time * BINS + bin) * CHANNELS + channel) * 2;
+                    let mask = index;
+                    let source = Complex32::new(
+                        self.spectrum.features[index],
+                        self.spectrum.features[index + 1],
+                    );
+                    let mask = Complex32::new(masks[mask], masks[mask + 1]);
+                    let value = source * mask;
+                    if !value.re.is_finite() || !value.im.is_finite() {
+                        return Err(Error::NonFinite);
                     }
-                    for bin in 1..FFT / 2 {
-                        transform.buffer[FFT - bin] = transform.buffer[bin].conj();
-                    }
-                    transform.run();
-                    for i in 0..FFT {
-                        accumulation[time * HOP + i] +=
-                            transform.buffer[i].re / FFT as f32 * transform.window[i];
-                    }
+                    // Real irfft ignores imaginary DC and Nyquist parts.
+                    self.transform.buffer[bin] = if bin == 0 || bin == FFT / 2 {
+                        Complex32::new(value.re, 0.0)
+                    } else {
+                        value
+                    };
                 }
-                let offset = (stem * CHANNELS + channel) * g.frames;
-                for start in (0..g.frames).step_by(BLOCK) {
-                    checkpoint(cancelled)?;
-                    for i in start..(start + BLOCK).min(g.frames) {
-                        let value = accumulation[FFT / 2 + i] / trimmed[i];
-                        if !value.is_finite() {
-                            return Err(Error::NonFinite);
-                        }
-                        output[offset + i] = value;
+                for bin in 1..FFT / 2 {
+                    self.transform.buffer[FFT - bin] = self.transform.buffer[bin].conj();
+                }
+                self.transform.run();
+                for i in 0..FFT {
+                    self.accumulation[time * HOP + i] +=
+                        self.transform.buffer[i].re / FFT as f32 * self.transform.window[i];
+                }
+            }
+            let offset = channel * g.frames;
+            for start in (0..g.frames).step_by(BLOCK) {
+                checkpoint(cancelled)?;
+                for i in start..(start + BLOCK).min(g.frames) {
+                    let value = self.accumulation[FFT / 2 + i] / trimmed[i];
+                    if !value.is_finite() {
+                        return Err(Error::NonFinite);
                     }
+                    output[offset + i] = value;
                 }
             }
         }
-        checkpoint(cancelled)?;
-        Ok(output)
+        checkpoint(cancelled)
     }
 }

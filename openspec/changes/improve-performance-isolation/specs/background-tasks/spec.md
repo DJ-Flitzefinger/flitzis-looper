@@ -254,6 +254,9 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** bad weights/digest/tail, shape, finite, allocation or cancellation errors invalidate the whole private attempt
 - **AND** fallible native vector allocation failures report the owning phase and checked logical requested bytes without claiming a process peak or host/device failure cause
 - **AND** synchronous readers finish before their private input buffers are released; a diagnostic second forward does not retain completed first-forward payloads, and any later failure invalidates all private output
+- **AND** complete chunk/batch reconstruction may project independent stem masks serially into private caller-owned PCM, with one reusable inverse context and unchanged per-result arithmetic/geometry
+- **AND** axial state remains live through the inverse; the complete batch destination, spectrum, single mask and inverse scratch remain included in simultaneous admission
+- **AND** any later stem, arithmetic or cancellation failure invalidates the ENTIRE private destination and all prior output
 - **AND** another real model attempt requires fresh original complete admission; conservative vector estimates do not attest total process/allocator memory
 - **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
 

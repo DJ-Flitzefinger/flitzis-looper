@@ -1,5 +1,144 @@
 # Performance audit and implementation design
 
+## STEP29 impact: stem-wise learned reconstruction ownership
+
+The experimental CPU chunk/track path now retains one complex stem mask instead
+of all four simultaneously. The unchanged complete latent forward is factored
+from projection. Each independent head uses the same SGEMM dimensions/reductions,
+Tanh and GLU operations; only independent stem iteration moves outside the band
+loop. Public `masks` still supplies the complete original four-mask diagnostic.
+`chunk_into` reconstructs each mask into the caller's exact planar stem slice and
+reuses its single mask buffer only after the last synchronous inverse reader.
+`track_batch` initializes
+the complete batch result and fills its sample slices directly, removing the
+separate returned sample Vec and append. Release485100/1101, batch2, float32,
+full noncausal attention and all quality/resource policies remain unchanged.
+
+One `Reconstruction` borrows the spectrum and owns one FFT plan/window, inverse
+envelope and accumulation across all stems. The existing allocating inverse uses
+the same per-channel arithmetic. Exact destination extents and nonfinite masks
+reject before writes. Cancellation/overflow may leave private partial slices;
+ANY later error invalidates the ENTIRE batch/attempt and previously written files.
+Mask projection recopies the selected band per independent stem; no runtime gain
+is claimed. No publication, fallback, source/OwnACK/FinalCAS/last-reader or realtime
+authority
+is added. Axial state deliberately remains live throughout inverse work.
+
+### Full simultaneous source scope and remaining process barrier
+
+At the original geometry, persistent weight float payload526818448B + fixed track
+vectors55301400B + maximum complete batch destination31046400B =613166248B.
+Borrowed sample PCM is already inside track input; earlier sample output is already
+inside batch capacity. Do not count them again. The spectrum adds18056400B and
+axial state104850432B, for736073080B before active stage scratch. Exact vector
+requests exclude allocator capacity rounding/metadata and retained freed pages.
+
+| Additional simultaneously live vectors | Payload bytes |
+| --- | ---: |
+| Widest band selection + normalization |4544928|
+| Time attention selected/QKV/gates/attended/Q/K/V/scores/tile |11665888|
+| Time feedforward selected + expansion + contraction |10146816|
+| One stem mask |18056400|
+| Widest mask selection + hidden + projected contract |9618336|
+| Inverse envelope + accumulation |3897184|
+| Inverse window + FFT buffer + maximum admitted scratch |90112|
+
+The later mask-projection phase includes the already-live inverse context:
+736073080 +18056400 +9618336 +3987296 =767735112B listed logical payload.
+The corresponding STEP28 listed phase was817917016B without inverse scratch.
+The three avoided masks remove54169200B; keeping3987296B inverse vectors overlaps
+projection now, so the listed phase difference is50181904B. FFT plan/metadata are
+still separate. The avoided returned sample15523200B belongs to another phase;
+it MUST NOT be subtracted a second time from this projection comparison. The
+inverse phase retains axial state, spectrum, single mask, batch and inverse work;
+it does not allocate another sample output. Public all-mask diagnostics retain
+their larger original envelope; no global allowance is silently reduced.
+
+Existing conservative vector allowances1239700128B and conditional SGEMM packing
+payload1081344B remain unchanged, total1240781472B BEFORE unproved process overhead.
+The std-only/nonthreading matrixmultiply0.3.10 packing bound still requires actual
+compile settings, including absent MATMUL_SGEMM tuning overrides. Rust's Windows
+System allocator uses GetProcessHeap/HeapAlloc/HeapFree; source-live Vec bytes do
+not bound retained heap segments/fragmentation. RustFFT plans/caches, metadata,
+packing alignment, stack, CRT/loader/private image pages and I/O/runtime allocations
+also need a complete allowance. The prior1MiB FFT-plan allowance is conservative
+caller bookkeeping, not a proved complete process bound. No arbitrary smaller
+estimate or extra MiB margin can close this gap or explain older failed runs.
+
+A genuine preallocated/reused execution workspace, including supported SGEMM
+packing ownership and all FFT/track/model work, is a possible next source strategy.
+It would need to establish actual before-NN process state under the original Job
+and bound every later allocation. This is remaining implementation/proof, not an
+accepted loader probe, full learned execution or guaranteed next result. Until
+complete allowance and genuinely sufficient fresh ORIGINAL admission are proved,
+no constrained unchanged model/oracle/CUDA retry is justified. CPU lifetime work
+alone never changes the failed CUDA model/operator/runtime condition.
+
+### Verification and delivery boundary
+
+Fresh focused Rust controls PASS22:10 unit (including a small synthetic projection
+operator/layout fixture, NOT release learned execution),7 spectral and5 track.
+The new layout control covers all62 offsets/four distinct heads/33-row tile tail
+against the original band-outer projection arithmetic, exact bits. Split inverse
+controls cover asymmetric complex stereo masks, odd tails1025/2501/4099, arbitrary
+stem order and destination sentinels. Invalid extents/NaN and cancellation after
+one channel has changed retain terminal failure and private partial output.
+Existing independent identity/scaling arithmetic controls remain. Strict all-target
+Clippy and Release examples PASS. After the early public-chunk finite/cancel gate
+and single mask-buffer reuse, the10 affected unit controls, strict all-target
+Clippy and Release examples PASS again; the7 spectral/5 track results are
+source-compatible reuse, not a new22-case final run.
+
+This necessary ownership split grows the plan to31. NEXT30 retains ENTIRE former
+nativeREST29; FINAL31 retains ENTIRE former FINAL30. Complete learned execution/
+original masks+PCM, batch2/fulltrack/AMP, mandatory native NVIDIA CUDA and real
+same-model devicefault -> actual Tree AND Reader END -> fresh CPU, COMPLETE
+practical Demucs, all source/frontend/graph/weight/export/runtime/provider/native/
+compiler/binary/fullproducer/mapped-image/OSarch roles, CPU/CUDA release bundles/
+CRT/licenses/LGPL source+patches/NVIDIA notices/installer/recovery/full footprint,
+quality/functions/resources/cancel and all original final gates remain REQUIRED.
+Productive Torch/pins/closures/installer are unchanged; installed savings ZERO.
+Original fullhost UNKNOWN,32 parent Rust failures/distinct watchdog/registry
+UNKNOWN, pressure cause UNKNOWN and overlap/device/listening/distribution gates
+remain open with their original evidence limits. No complete learned acceptance,
+measured RSS/peak/speed gain or old failure cause is claimed by this step.
+
+### Final actual receipts
+
+The final outer-entry run PASS4/4 in28.90s: affected Rust/Clippy/Release delta,
+static/spec/dependency isolation, original Job reconciliation and one joined
+executor covering8 spectral arithmetic processes plus6 pre-load learned negatives.
+Prior/current Release binaries produce exact feature AND PCM bytes for1025/2501/
+4099/485100 frames (3/6/10/1101 steps) on the same asymmetric stereo/complex-mask
+inputs. This proves preserved spectral arithmetic, NOT learned prediction.
+Full485100 output SHA256 is
+`f180af0c2fafba1a05915d0994dfe6860deb055da212267059714ab50893c0d6`;
+feature SHA256 is
+`d28a7f55356334f279f2c1eea899bf347a6e9e274decba6ec7e65161f44d8523`.
+All6 pre-load negatives exit1/stdout empty, fresh target absent/existing0B unchanged.
+Original observer started BEFORE the one joined executor:14/14 scope closes,
+pending0/inflight0/errors[]. These are arithmetic/pre-load controls, no model NN.
+
+One actual ORIGINAL reservation opened/query/closed without child:740837376B.
+Adjacent host available commit3629158400B and physical7957479424B are separate,
+non-atomic observations. The original ceiling is below even the new listed
+767735112B payload, before unknown process overhead, and below the unchanged
+1240781472B conservative vector+packing allowance. COMPLETE admission is NOT
+established; NO learned/oracle/CUDA was launched. No inference about older causes,
+actual minimum required memory or safe smaller floor/cap/budget follows.
+
+Actual Windows x64 learned Release component1204224B SHA256
+`e25cf88edad4e408b33c4a9db7951a15908c9d1edf9d40cef07c1353a4eaa62f`;
+spectral component1058816B SHA256
+`376e030b58fede1c36d47d2a267d40daa9cbe13275cbd2adebc26c4069ed2d31`.
+These are component receipts, not Compiler/FullProducer/MappedImages/nonWindows/
+whole-model/quality/distribution proof. External Native/API check PASS with22 known
+library warnings and the unchanged pinned einops warning; held App Native is not
+updated. Systems PRE/frozen POST and Methods review cover this change; the single
+independent FinalActualDiff chain covers actual final source and receipt delta.
+Generated build/final/index logs and arithmetic payloads remain reconstructible
+cache; this design, tracked source, fixed pins and recipes retain durable facts.
+
 ## STEP28 impact: allocation attribution and learned buffer lifetimes
 
 Every fallible spectral, track and learned vector reservation now retains its

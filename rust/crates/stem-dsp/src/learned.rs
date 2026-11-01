@@ -481,6 +481,15 @@ struct Mask {
     expand: Linear,
     contract: Linear,
 }
+impl Mask {
+    fn project(&self, selected: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
+        let mut hidden = self.expand.apply(selected, cancelled, "mask.expand")?;
+        activate(&mut hidden, 2 * DIM, f32::tanh, cancelled)?;
+        let projected = self.contract.apply(&hidden, cancelled, "mask.contract")?;
+        drop(hidden);
+        Ok(projected)
+    }
+}
 
 /// Complete fixed release learned CPU network, with immutable owned weights.
 pub struct Model {
@@ -552,6 +561,18 @@ impl Model {
         steps: usize,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<f32>, Error> {
+        let x = self.latent(features, steps, cancelled)?;
+        let mut result = zeros(STEMS * steps * FEATURES, "learned.masks")?;
+        self.project_masks(&x, steps, 0, STEMS, &mut result, cancelled)?;
+        Ok(result)
+    }
+
+    fn latent(
+        &self,
+        features: &[f32],
+        steps: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<f32>, Error> {
         validate_steps(steps)?;
         if features.len() != steps * FEATURES {
             return Err(Error::Shape);
@@ -601,7 +622,27 @@ impl Model {
         // All synchronous transformer readers have returned. This private owned
         // buffer has no residual/external reader; avoid a second full axial Vec.
         self.norm.apply_in_place(&mut x, cancelled)?;
-        let mut result = zeros(STEMS * steps * FEATURES, "learned.masks")?;
+        Ok(x)
+    }
+
+    fn project_masks(
+        &self,
+        x: &[f32],
+        steps: usize,
+        first_stem: usize,
+        count: usize,
+        result: &mut [f32],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        validate_steps(steps)?;
+        if count == 0
+            || first_stem >= STEMS
+            || count > STEMS - first_stem
+            || x.len() != steps * BANDS * DIM
+            || result.len() != count * steps * FEATURES
+        {
+            return Err(Error::Shape);
+        }
         let mut offset = 0;
         for band in 0..BANDS {
             let width = band_width(band);
@@ -610,12 +651,9 @@ impl Model {
                 selected[t * DIM..(t + 1) * DIM]
                     .copy_from_slice(&x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM]);
             }
-            for stem in 0..STEMS {
-                let mask = &self.masks[stem][band];
-                let mut hidden = mask.expand.apply(&selected, cancelled, "mask.expand")?;
-                activate(&mut hidden, 2 * DIM, f32::tanh, cancelled)?;
-                let projected = mask.contract.apply(&hidden, cancelled, "mask.contract")?;
-                drop(hidden);
+            for stem in 0..count {
+                let mask = &self.masks[first_stem + stem][band];
+                let projected = mask.project(&selected, cancelled)?;
                 for t in 0..steps {
                     checkpoint(cancelled)?;
                     for i in 0..width {
@@ -627,16 +665,56 @@ impl Model {
             }
             offset += width;
         }
-        finite(&result, cancelled)?;
+        finite(result, cancelled)?;
         checkpoint(cancelled)?;
-        Ok(result)
+        Ok(())
     }
 
     /// Entire native STFT -> learned eight-block network -> complex mask/ISTFT.
     pub fn chunk(&self, pcm: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
+        if !pcm.len().is_multiple_of(crate::CHANNELS) {
+            return Err(Error::Shape);
+        }
+        let g = Geometry::new(pcm.len() / crate::CHANNELS, RATE)?;
+        // Retain the original analyze-before-output cancellation/finite gate.
+        finite(pcm, cancelled)?;
+        let mut output = zeros(STEMS * crate::CHANNELS * g.frames(), "learned.chunk-output")?;
+        self.chunk_into(pcm, &mut output, cancelled)?;
+        Ok(output)
+    }
+
+    /// Complete chunk into private exact planar [stem, stereo, PCM] storage.
+    /// One mask buffer is reused only after each inverse reader returns. Axial state
+    /// and ONE inverse context remain live throughout; include both in admission.
+    /// Any error/cancellation invalidates the ENTIRE destination, even earlier stems.
+    pub fn chunk_into(
+        &self,
+        pcm: &[f32],
+        output: &mut [f32],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        if !pcm.len().is_multiple_of(crate::CHANNELS) {
+            return Err(Error::Shape);
+        }
+        let g = Geometry::new(pcm.len() / crate::CHANNELS, RATE)?;
+        if output.len() != STEMS * crate::CHANNELS * g.frames() {
+            return Err(Error::Shape);
+        }
         let spectrum = Spectrum::analyze(pcm, RATE, cancelled)?;
-        let masks = self.masks(spectrum.features(), spectrum.geometry().steps(), cancelled)?;
-        spectrum.reconstruct(&masks, cancelled)
+        let x = self.latent(spectrum.features(), g.steps(), cancelled)?;
+        let mut inverse = spectrum.reconstruction(cancelled)?;
+        let mut masks = zeros(g.feature_len(), "learned.stem-mask")?;
+        for (stem, target) in output
+            .chunks_exact_mut(crate::CHANNELS * g.frames())
+            .enumerate()
+        {
+            checkpoint(cancelled)?;
+            self.project_masks(&x, g.steps(), stem, 1, &mut masks, cancelled)?;
+            inverse.write_stem(&masks, target, cancelled)?;
+            // The final synchronous reader returned before the next overwrite.
+        }
+        finite(output, cancelled)?;
+        checkpoint(cancelled)
     }
 
     /// Synchronous release batch2 predictor for the existing track core. Each
@@ -654,10 +732,13 @@ impl Model {
         }
         Geometry::new(frames, RATE)?;
         finite(pcm, cancelled)?;
-        let mut output = reserved(batch * STEMS * 2 * frames, "learned.batch-output")?;
-        for sample in pcm.chunks(2 * frames) {
+        let mut output = zeros(batch * STEMS * 2 * frames, "learned.batch-output")?;
+        for (sample, target) in pcm
+            .chunks_exact(2 * frames)
+            .zip(output.chunks_exact_mut(STEMS * 2 * frames))
+        {
             checkpoint(cancelled)?;
-            output.extend(self.chunk(sample, cancelled)?);
+            self.chunk_into(sample, target, cancelled)?;
         }
         finite(&output, cancelled)?;
         checkpoint(cancelled)?;
@@ -669,6 +750,134 @@ impl Model {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn independent_stem_projection_matches_original_band_outer_layout_bits() {
+        // Deliberately small synthetic operator weights, NOT a release network
+        // execution. Cover all62 band offsets, four distinct heads and tile tail.
+        let steps = 33;
+        let masks = (0..STEMS)
+            .map(|stem| {
+                (0..BANDS)
+                    .map(|band| {
+                        let width = band_width(band);
+                        Mask {
+                            expand: Linear {
+                                input: DIM,
+                                output: 2,
+                                weights: (0..2 * DIM)
+                                    .map(|i| ((i + stem + band) % 11) as f32 * 0.001 - 0.005)
+                                    .collect(),
+                                bias: Some(vec![0.1 * stem as f32, -0.02 * band as f32]),
+                            },
+                            contract: Linear {
+                                input: 2,
+                                output: 2 * width,
+                                weights: (0..4 * width)
+                                    .map(|i| ((i + 3 * stem + band) % 7) as f32 * 0.01 - 0.03)
+                                    .collect(),
+                                bias: Some(
+                                    (0..2 * width)
+                                        .map(|i| (i % 13) as f32 * 0.01 - 0.06)
+                                        .collect(),
+                                ),
+                            },
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let model = Model {
+            bands: vec![],
+            blocks: vec![],
+            norm: Norm(vec![]),
+            masks,
+        };
+        let x: Vec<_> = (0..steps * BANDS * DIM)
+            .map(|i| (i % 43) as f32 * 0.013 - 0.27)
+            .collect();
+        // Original pre-factoring band-outer/stem-inner algorithm, including
+        // independent expand/activation/contract calls and complete GLU copy.
+        let mut expected = vec![0.; STEMS * steps * FEATURES];
+        let mut offset = 0;
+        for band in 0..BANDS {
+            let width = band_width(band);
+            let mut selected = vec![0.; steps * DIM];
+            for t in 0..steps {
+                selected[t * DIM..(t + 1) * DIM]
+                    .copy_from_slice(&x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM]);
+            }
+            for stem in 0..STEMS {
+                let mask = &model.masks[stem][band];
+                let mut hidden = mask
+                    .expand
+                    .apply(&selected, &|| false, "test.legacy-expand")
+                    .unwrap();
+                activate(&mut hidden, 2 * DIM, f32::tanh, &|| false).unwrap();
+                let projected = mask
+                    .contract
+                    .apply(&hidden, &|| false, "test.legacy-contract")
+                    .unwrap();
+                for t in 0..steps {
+                    for i in 0..width {
+                        expected[(stem * steps + t) * FEATURES + offset + i] = projected
+                            [t * 2 * width + i]
+                            * sigmoid(projected[t * 2 * width + width + i]);
+                    }
+                }
+            }
+            offset += width;
+        }
+        for (first, count) in [(0, STEMS), (3, 1), (1, 1), (0, 1), (2, 1)] {
+            let mut actual = vec![123.; count * steps * FEATURES];
+            model
+                .project_masks(&x, steps, first, count, &mut actual, &|| false)
+                .unwrap();
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected[first * steps * FEATURES..(first + count) * steps * FEATURES])
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+        }
+        let mut private = vec![123.; steps * FEATURES];
+        assert_eq!(
+            model.project_masks(&x, steps, STEMS, 1, &mut private, &|| false),
+            Err(Error::Shape)
+        );
+        assert_eq!(
+            model.project_masks(&x, steps, 0, 0, &mut private, &|| false),
+            Err(Error::Shape)
+        );
+        assert_eq!(
+            model.project_masks(&x, steps, 0, 1, &mut private[..1], &|| false),
+            Err(Error::Shape)
+        );
+        assert_eq!(
+            model.project_masks(&x, steps, 0, 1, &mut private, &|| true),
+            Err(Error::Cancelled)
+        );
+        assert!(private.iter().all(|x| *x == 123.));
+        // Malformed destination/PCM reject before touching this partial test model.
+        assert_eq!(
+            model.chunk_into(&[0.; 2051], &mut private, &|| false),
+            Err(Error::Shape)
+        );
+        assert_eq!(
+            model.chunk_into(&[0.; 2050], &mut private[..1], &|| false),
+            Err(Error::Shape)
+        );
+        let mut pcm = vec![0.; 2050];
+        pcm[0] = f32::NAN;
+        assert_eq!(model.chunk(&pcm, &|| false), Err(Error::NonFinite));
+        assert_eq!(model.chunk(&[0.; 2050], &|| true), Err(Error::Cancelled));
+        let mut destination = vec![123.; STEMS * 2050];
+        assert_eq!(
+            model.chunk_into(&pcm, &mut destination, &|| false),
+            Err(Error::NonFinite)
+        );
+        assert!(destination.iter().all(|x| *x == 123.));
+    }
 
     #[test]
     fn matrix_transpose_and_natural_layout_preserve_distinct_rows() {

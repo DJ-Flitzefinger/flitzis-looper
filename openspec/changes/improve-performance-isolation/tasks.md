@@ -394,7 +394,24 @@ retains ALL former nativeREST28; FINAL30 retains the ENTIRE former FINAL29.
 Diagnostics and shorter lifetimes do not complete learned execution/numerics,
 CUDA, complete Demucs, provenance, distribution or quality acceptance.
 
-## 29. Remaining native parity before cutover
+## 29. Stem-wise learned reconstruction ownership
+
+- [x] Retain complete learned geometry/arithmetic while projecting one stem mask
+      at a time using one reused mask/inverse context and caller-owned PCM destination.
+- [x] Remove the temporary returned sample while filling the complete batch result;
+      preserve whole-attempt failure/cancellation and immutable reader ownership.
+- [x] Verify original band-outer projection layout, complex inverse slice layout,
+      malformed/nonfinite inputs and late cancellation with focused controls.
+- [ ] Establish a complete process/allocator allowance and sufficient fresh
+      ORIGINAL admission before the next genuine full learned/original comparison.
+
+This necessary ownership implementation grows the plan to31. STEP30 retains the
+ENTIRE former nativeREST29; FINAL31 retains the ENTIRE former FINAL30. A smaller
+logical payload is not a hard process bound, measured peak or learned acceptance.
+No constrained unchanged NN retry, floor/cap/budget/geometry/precision change or
+CUDA retry justified solely by CPU buffer work is authorized.
+
+## 30. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -411,10 +428,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP30, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP31, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 30. Combined regression and final architecture review
+## 31. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
