@@ -177,18 +177,56 @@ fn recycled_zeroes_and_realloc_preserve_data_and_old_storage_on_failure() {
 }
 
 #[test]
-fn preseal_system_pointers_migrate_on_realloc_and_exhaustion_never_falls_back() {
+fn preseal_backing_realloc_migrates_and_exhaustion_never_falls_back() {
     let allocator = WorkspaceAllocator::new();
     let layout = Layout::from_size_align(64, 32).unwrap();
-    let old = unsafe { allocator.alloc(layout) };
+    let old = unsafe { allocator.alloc_zeroed(layout) };
     assert!(!old.is_null());
+    assert!(
+        unsafe { std::slice::from_raw_parts(old, 64) }
+            .iter()
+            .all(|&x| x == 0)
+    );
     unsafe { old.write_bytes(0x19, 64) };
+    let grown = unsafe { allocator.realloc(old, layout, 256) };
+    assert!(!grown.is_null());
+    assert!(
+        unsafe { std::slice::from_raw_parts(grown, 64) }
+            .iter()
+            .all(|&x| x == 0x19)
+    );
+    let grown_layout = Layout::from_size_align(256, 32).unwrap();
+    let old = unsafe { allocator.realloc(grown, grown_layout, 64) };
+    assert!(!old.is_null());
+    assert!(
+        unsafe { std::slice::from_raw_parts(old, 64) }
+            .iter()
+            .all(|&x| x == 0x19)
+    );
+    #[cfg(windows)]
+    {
+        let before = allocator.bootstrap_stats();
+        assert!(unsafe { allocator.realloc(old, layout, isize::MAX as usize - 31) }.is_null());
+        assert_eq!(allocator.bootstrap_stats(), before);
+        assert_eq!(before.unwrap().live_regions, 1);
+        assert_eq!(before.unwrap().payload_bytes, 64);
+    }
     allocator.seal(1024).unwrap();
     let arena = Local(allocator);
     assert!(arena.0.seal(1024).is_err());
+    let before_migration = arena.0.bootstrap_stats();
+    assert!(unsafe { arena.0.realloc(old, layout, 2048) }.is_null());
+    assert_eq!(arena.0.bootstrap_stats(), before_migration);
+    assert!(
+        unsafe { std::slice::from_raw_parts(old, 64) }
+            .iter()
+            .all(|&x| x == 0x19)
+    );
     let migrated = unsafe { arena.0.realloc(old, layout, 128) };
     assert!(!migrated.is_null());
     assert!(unsafe { (*arena.0.pool.get()).contains(migrated) });
+    #[cfg(windows)]
+    assert_eq!(arena.0.bootstrap_stats(), Some(bootstrap::Stats::default()));
     assert!(
         unsafe { std::slice::from_raw_parts(migrated, 64) }
             .iter()

@@ -1,5 +1,116 @@
 # Performance audit and implementation design
 
+## STEP38 impact: owned Windows bootstrap allocations
+
+The actual standalone learned CLI's global allocator now uses a dedicated
+VirtualAlloc mapping for EACH pre-seal Rust allocation, instead of System's
+opaque Windows heap. This includes argument strings, prepared I/O storage and
+the unchanged selected RustFFT Arc/twiddle/window/cache owners when they allocate
+through this global allocator. Native allocations made internally by Windows,
+CRT, TLS or the loader are NOT intercepted or bounded by this adapter.
+
+The new bootstrap adapter checks payload+header+alignment slack before the SAME
+actual-page-rounded backing call. It aligns the payload within that region,
+including alignments above page/allocation granularity, and stores the ORIGINAL
+mapping base and extent immediately before it. Each original Rust owner releases
+its mapping only after its final reader, even if this happens after seal. No
+arena mapping is released in production. GlobalAlloc's existing default realloc
+allocates, copies and then releases; a refused new allocation preserves the old
+owner and bytes. After seal, every new allocation still uses ONLY the unchanged
+logical pool; a migrated bootstrap pointer never opens an exhaustion fallback.
+
+Bootstrap counters describe current live Rust payload, region count and mapped
+bytes, including headers/slack/page padding, under the SAME allocator lock.
+They are observations of owned backing, NOT a finite startup recipe or successful
+prospective process allowance. A failed native release does not decrement these
+counters; the global allocator aborts without formatting/unwinding because
+deallocation has no error channel. This is terminal HOST failure, never successful
+settlement or a CUDA fault. Non-Windows retains System with extent UNKNOWN.
+Per-allocation pages and API calls may INCREASE cost; no memory/runtime/RSS saving
+is claimed. Bootstrap and arena mappings are already inside PrivateUsage and
+must never be added twice. API overhead remains UNKNOWN.
+
+The Pool/Header/first-fit/logical capacity and complete original sealed schedule
+are unchanged. STEP36's BOTH-residue768857616B/5183960-request arena-only proof is
+source-compatible REUSED without replay; at4096 pages its768860160B mapping is
+still derived, NOT an actual full-model allocation. No selected FFT/kernel/math,
+geometry, precision, dependency, productive path, installer or original guard
+changes. Complete retained PRENN/native process backing, original2MiB stack,
+images/COW, CRT/native TLS/loader and every later native I/O/close/stdio/exit/error/
+panic state remain unproved. No original NN admission query, model, oracle or
+unchanged constrained CUDA retry follows this correction.
+
+This necessary bootstrap-ownership split grows the plan to40. NEXT39 retains
+ENTIRE former nativeREST38 and FINAL40 ENTIRE former FINAL39, including all
+negative/UNKNOWN evidence and ALL original learned/full485100/1101/B1/B2/fulltrack,
+mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4 acceptance, mandatory actual native
+NVIDIA CUDA under meaningful changed model/operator/runtime AND fresh complete
+ORIGINAL admission, real same-model device fault -> actual Tree AND Reader END
+-> fresh CPU/fallback/CPU-only, COMPLETE practical Demucs, all roles/platforms/
+CPU-CUDA releases/licenses/installer/recovery/footprint/quality/functions/cancel/
+AMP and final combined gates documented below. Separate App/Beat closures and
+trial-only provenance stay unchanged; installed savings remain zero. This is
+ownership progress, not completed PRENN/native closure or learned parity.
+
+The existing STEP37 Microsoft API links also apply here; VirtualFree requires
+the original reserve base, size0 and MEM_RELEASE. The production arena still
+survives through process exit. Isolated tests release it only after all readers
+end and live arena bytes reach zero.
+
+### STEP38 verification receipt
+
+Fresh Windows x64 Release example controls PASS20/0 failed/0 ignored, with ONE
+unchanged complete-original arena recipe deliberately filtered. Three new tests
+cover checked prefix overflow/refused acquisition without owner publication,
+controlled release refusal with unchanged ownership/payload followed by real
+release, and eight actual alignment classes1/2/8/16/32/4096/131072/262144 with
+odd payloads, initial zero bytes, nonaliasing sentinels and actual VirtualQuery
+original-base/extent/private/committed/read-write checks. Successful VirtualFree
+and settled local counters prove scoped release; a post-free snapshot cannot
+require MEM_FREE because another thread may reuse that address.
+
+The expanded original migration test covers pre-seal zero/grow/shrink, oversized
+realloc refusal preserving the old owner/bytes, refused cross-seal growth and
+successful migration into the SAME arena with bootstrap settlement. Existing
+arena alignment/fragmentation/zero/realloc/concurrency/failed-backing and typed/
+nonflushing I/O controls pass again. Test-only System access for the unchanged
+sparse proof stays explicit; production Windows bootstrap uses no System heap.
+Controlled injected refusal is NOT an actual host VirtualAlloc/VirtualFree
+failure. The production release-failure abort branch remains source-backed,
+not an induced OS failure or whole-process panic-free acceptance. Existing
+caught fixture panics remain intentional disposal controls.
+
+Strict all-target Clippy, focused Rustfmt and Release learned example PASS;
+outer build harness PASS1 in13.76s. Final outer verification PASS2 in5.06s includes
+strict OpenSpec, four Markdown files/11 local targets, unchanged productive
+closures/pins/locks, default/optional/App dependency isolation, actual nonthreaded
+packing and byte-compatible Pool/proof/kernel source. No complete5M recipe or
+unchanged numerical suite was rerun. The earlier13 learned+10 spectral+5 track
+results remain compatible reused evidence, not a new whole-suite run.
+
+FOUR actual scoped CLI controls pass: SGEMM64/FFT8 retains logical/mapped1048576B,
+259 requests/peak368208B/live0/fail0; five-cycle retained spectral retains logical
+1065040B/mapped1069056B,6 working requests/113672 payload bytes,15 later requests,
+peak1065008B/live0/fail0. Its bootstrap owners before -> after workspace disposal
+are12 ->4 regions,83508 ->33972 payload bytes,122880 ->49152 mapped bytes. These
+are SMALL FIXTURE ownership observations, not complete original retained PRENN
+or process bounds; remaining argument/PCM/runtime owners still exist. Actual
+inverse.accumulation refusal remains24068 requested bytes/live0/fail1. Retained
+I/O writes all four exact float32 files[.25,-.5,1,-0] and keeps actual Windows
+read-only-handle error5. ONE observer precedes ONE joined executor:4/4 original
+scope closes, pending0/inflight0/sampling_errors[]. No learned NN ran.
+
+Actual Windows x64 Release learned EXE1236480B SHA256
+d603ef021e3f5e4a1301f3dd8f6824fb4c2fdec83f21304ed882cd018d4c2488 is COMPONENT
+evidence only, not Compiler/FullProducer/MappedImages/other OSes/learned/quality/
+distribution acceptance. External Native/API PASS with unchanged22 warnings and
+einops0.6.1 warning/pin. Source/pins/tests and these recipes retain the durable
+facts; generated logs/build/control output are reconstructible. Systems PRE/
+frozen POST, Methods BEFORE and ONE independent final actual-diff chain apply;
+all jobs/readers end before checked normal branch publication. Native API costs,
+CRT/TLS/loader/I/O/exit and COMPLETE process/original admission remain UNKNOWN.
+ALL inherited NEXT39/FINAL40 gates remain required without omissions.
+
 ## STEP37 impact: dedicated Windows arena backing
 
 The diagnostic allocator previously obtained its entire arena with

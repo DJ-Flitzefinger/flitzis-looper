@@ -2,13 +2,19 @@
 //!
 //! After sealing, EVERY Rust allocation uses this fixed backing, including the
 //! pinned SGEMM packing and FFT planner allocations. No exhausted request falls
-//! back to System. Pre-seal pointers retain their original System ownership.
+//! back to System. Windows pre-seal Rust pointers own individual mappings;
+//! other platforms retain their original System ownership.
 //! The backing deliberately survives until process exit, after all readers.
 #[path = "backing.rs"]
 mod backing;
+#[path = "bootstrap.rs"]
+mod bootstrap;
+
+#[cfg(test)]
+use std::alloc::System;
 
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
+    alloc::{GlobalAlloc, Layout},
     cell::UnsafeCell,
     ptr,
     sync::atomic::{AtomicBool, Ordering},
@@ -201,12 +207,13 @@ pub struct WorkspaceAllocator {
     locked: AtomicBool,
     pool: UnsafeCell<Pool>,
     mapped_bytes: UnsafeCell<Option<usize>>,
+    bootstrap: UnsafeCell<bootstrap::Bootstrap>,
 }
 
 // SAFETY: all access to Pool (including initialization) holds the allocation-free
-// atomic lock, also protecting mapped_bytes. No pointer/reference to Pool
-// escapes it. Native backing calls occur before sealing; System disposal is
-// only for pre-seal pointers. Neither reenters this allocator.
+// atomic lock, also protecting mapped_bytes/bootstrap. No state reference
+// escapes it. Native acquisition occurs before sealing, while pre-seal owner
+// disposal can follow sealing. Neither backing adapter reenters this allocator.
 unsafe impl Sync for WorkspaceAllocator {}
 
 struct Guard<'a>(&'a WorkspaceAllocator);
@@ -222,6 +229,7 @@ impl WorkspaceAllocator {
             locked: AtomicBool::new(false),
             pool: UnsafeCell::new(Pool::empty()),
             mapped_bytes: UnsafeCell::new(None),
+            bootstrap: UnsafeCell::new(bootstrap::Bootstrap::new()),
         }
     }
 
@@ -298,6 +306,14 @@ impl WorkspaceAllocator {
         // SAFETY: the same lock protects publication and this copy.
         unsafe { *self.mapped_bytes.get() }
     }
+
+    /// Current individually owned Windows pre-seal Rust regions ONLY. This
+    /// excludes native API/runtime/stack/images and is already in PrivateUsage.
+    /// None on other platforms; not a prospective complete process allowance.
+    pub fn bootstrap_stats(&self) -> Option<bootstrap::Stats> {
+        let _guard = self.lock();
+        unsafe { (*self.bootstrap.get()).stats() }
+    }
 }
 
 // SAFETY: Pool validates layout arithmetic and maintains disjoint aligned live
@@ -308,7 +324,7 @@ unsafe impl GlobalAlloc for WorkspaceAllocator {
         let _guard = self.lock();
         let pool = unsafe { &mut *self.pool.get() };
         if pool.base.is_null() {
-            unsafe { System.alloc(layout) }
+            unsafe { (*self.bootstrap.get()).allocate(layout) }
         } else {
             unsafe { pool.allocate(layout) }
         }
@@ -319,8 +335,10 @@ unsafe impl GlobalAlloc for WorkspaceAllocator {
         let pool = unsafe { &mut *self.pool.get() };
         if pool.contains(address) {
             unsafe { pool.release(address) };
-        } else {
-            unsafe { System.dealloc(address, layout) };
+        } else if !unsafe { (*self.bootstrap.get()).release(address, layout) } {
+            // GlobalAlloc has no deallocation error channel. A failed
+            // native release is terminal HOST failure, not settled success.
+            std::process::abort();
         }
     }
     // GlobalAlloc defaults implement alloc_zeroed via alloc+write_bytes and

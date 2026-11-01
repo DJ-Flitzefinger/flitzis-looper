@@ -120,7 +120,7 @@ fn execute(status: &mut impl Write) -> Result<()> {
     // A later failure invalidates ALL new empty/partial private files. Nothing
     // in the sealed phase opens/reopens an output or formats platform error text.
     let mut outputs = Outputs::prepare(Path::new(&args[5]), mode == "chunk", args.len() == 7)?;
-    // Retain selected plans/windows before seal; their System/native backing
+    // Retain selected plans/windows before seal; their bootstrap/native backing
     // still needs a complete process allowance. Working vectors use the arena.
     let spectral_plan = SpectralPlan::new(
         if mode == "chunk" {
@@ -345,6 +345,7 @@ fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
     let pcm: Vec<_> = (0..2 * 4099)
         .map(|i| (i % 17) as f32 * 0.001 - 0.008)
         .collect();
+    let bootstrap_before = WORKSPACE.bootstrap_stats();
     WORKSPACE.seal(capacity)?;
     let prefix = WORKSPACE.stats();
     let mut workspace = SpectralWorkspace::from_plan(plan, &|| false)?;
@@ -381,10 +382,11 @@ fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
         return Err("spectral working vectors did not retire".into());
     }
     writeln!(status,
-        "BS retained spectral control: cycles=5 payload_requests=15 working_requests={requests} working_bytes={} capacity={} peak={} live={} failures={} mapped_bytes={:?}",
+        "BS retained spectral control: cycles=5 payload_requests=15 working_requests={requests} working_bytes={} capacity={} peak={} live={} failures={} mapped_bytes={:?} bootstrap_before={:?} bootstrap_after={:?}",
         layouts.iter().map(|layout| layout.size()).sum::<usize>(),
         closed.capacity, closed.peak, closed.live, closed.failures,
         WORKSPACE.mapped_bytes(),
+        bootstrap_before, WORKSPACE.bootstrap_stats(),
     ).at("status.write")?;
     Ok(())
 }

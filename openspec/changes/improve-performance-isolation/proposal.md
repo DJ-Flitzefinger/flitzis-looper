@@ -82,9 +82,13 @@ new arena recipe and original exact-bit spectral controls. Selected plans/window
 and complete native/process backing remain open. STEP37 replaces the Windows
 arena's opaque System-heap backing with one dedicated page-rounded virtual-memory
 region, preserving logical capacity and the compatible STEP36 arena proof.
-Remaining native/process costs stay unknown. STEP38 retains ALL former native
+STEP38 replaces pre-seal Windows Rust System owners with individually aligned,
+page-rounded mappings and original-base release after final readers; the sealed
+arena recipe stays unchanged. This can increase page/API cost and does not bound
+other native startup/runtime memory. Remaining native/process costs stay unknown.
+STEP39 retains ALL former native
 parity duties, including mandatory CUDA/freshCPU, complete Demucs, provenance,
-platforms, quality and distribution; FINAL39 retains the ENTIRE former FINAL38,
+platforms, quality and distribution; FINAL40 retains the ENTIRE former FINAL39,
 without omissions.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then

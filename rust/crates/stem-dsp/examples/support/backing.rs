@@ -1,4 +1,4 @@
-//! Backing for the diagnostic arena, not a complete native process allowance.
+//! Backing for diagnostic Rust owners, not a complete native process allowance.
 use std::alloc::Layout;
 
 pub(super) struct Allocation {
@@ -44,7 +44,6 @@ mod windows {
         fn GetSystemInfo(info: *mut SystemInfo);
         fn VirtualAlloc(address: *mut c_void, bytes: usize, kind: u32, protect: u32)
         -> *mut c_void;
-        #[cfg(test)]
         fn VirtualFree(address: *mut c_void, bytes: usize, kind: u32) -> i32;
     }
 
@@ -63,24 +62,29 @@ mod windows {
             return Err("workspace backing allocation failed");
         }
         // Windows page/allocation alignment satisfies the arena's 16B Layout.
-        // Production deliberately retains the mapping until process exit.
+        // The arena caller retains its mapping until process exit; individual
+        // bootstrap owners instead release theirs after their final reader.
         Ok(Allocation {
             base,
             mapped_bytes: Some(bytes),
         })
     }
 
-    #[cfg(test)]
-    pub(in super::super) unsafe fn release(base: *mut u8, _layout: Layout) {
-        // SAFETY: test caller owns the original base and has ended ALL readers.
-        assert_ne!(unsafe { VirtualFree(base.cast(), 0, 0x8000) }, 0);
+    pub(in super::super) unsafe fn try_release(base: *mut u8) -> bool {
+        // SAFETY: caller owns the ORIGINAL mapping base and has ended ALL readers.
+        unsafe { VirtualFree(base.cast(), 0, 0x8000) != 0 }
     }
 }
 
 #[cfg(windows)]
 pub(super) use windows::allocate;
+#[cfg(windows)]
+pub(super) use windows::try_release;
+
 #[cfg(all(windows, test))]
-pub(super) use windows::release;
+pub(super) unsafe fn release(base: *mut u8, _layout: Layout) {
+    assert!(unsafe { try_release(base) });
+}
 
 #[cfg(not(windows))]
 pub(super) fn allocate(layout: Layout) -> Result<Allocation, &'static str> {
