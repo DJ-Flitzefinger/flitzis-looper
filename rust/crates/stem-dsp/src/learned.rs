@@ -324,7 +324,9 @@ fn rotate(qkv: &mut [f32], frequencies: &[f32], cancelled: &dyn Fn() -> bool) ->
         for head in 0..HEADS {
             for (pair, frequency) in frequencies.iter().enumerate() {
                 let angle = position as f32 * frequency;
-                let (sin, cos) = angle.sin_cos();
+                // Use the pinned Rust kernel after the caller's preparation;
+                // no late CRT transcendental call or lazy CRT state here.
+                let (sin, cos) = libm::sincosf(angle);
                 for offset in [0, INNER] {
                     let index = offset + head * HEAD + 2 * pair;
                     let (even, odd) = (row[index], row[index + 1]);
@@ -389,7 +391,7 @@ fn attend_heads(
                 let maximum = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                 let mut total = 0.0f32;
                 for value in &mut *row {
-                    *value = (*value - maximum).exp();
+                    *value = libm::expf(*value - maximum);
                     total += *value;
                 }
                 if !total.is_finite() || total <= 0.0 {
@@ -414,7 +416,7 @@ fn attend_heads(
 }
 
 fn sigmoid(value: f32) -> f32 {
-    1.0 / (1.0 + (-value).exp())
+    1.0 / (1.0 + libm::expf(-value))
 }
 
 fn activate(
@@ -487,7 +489,7 @@ struct Mask {
 impl Mask {
     fn project(&self, selected: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
         let mut hidden = self.expand.apply(selected, cancelled, "mask.expand")?;
-        activate(&mut hidden, 2 * DIM, f32::tanh, cancelled)?;
+        activate(&mut hidden, 2 * DIM, libm::tanhf, cancelled)?;
         let projected = self.contract.apply(&hidden, cancelled, "mask.contract")?;
         drop(hidden);
         Ok(projected)
@@ -814,6 +816,10 @@ impl Model {
 }
 
 #[cfg(test)]
+#[path = "learned_math_tests.rs"]
+mod math_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
@@ -865,35 +871,44 @@ mod tests {
             .collect();
         // Original pre-factoring band-outer/stem-inner algorithm, including
         // independent expand/activation/contract calls and complete GLU copy.
-        let mut expected = vec![0.; STEMS * steps * FEATURES];
-        let mut offset = 0;
-        for band in 0..BANDS {
-            let width = band_width(band);
-            let mut selected = vec![0.; steps * DIM];
-            for t in 0..steps {
-                selected[t * DIM..(t + 1) * DIM]
-                    .copy_from_slice(&x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM]);
-            }
-            for stem in 0..STEMS {
-                let mask = &model.masks[stem][band];
-                let mut hidden = mask
-                    .expand
-                    .apply(&selected, &|| false, "test.legacy-expand")
-                    .unwrap();
-                activate(&mut hidden, 2 * DIM, f32::tanh, &|| false).unwrap();
-                let projected = mask
-                    .contract
-                    .apply(&hidden, &|| false, "test.legacy-contract")
-                    .unwrap();
+        let reference = |activation: fn(f32) -> f32, gate: fn(f32) -> f32| {
+            let mut expected = vec![0.; STEMS * steps * FEATURES];
+            let mut offset = 0;
+            for band in 0..BANDS {
+                let width = band_width(band);
+                let mut selected = vec![0.; steps * DIM];
                 for t in 0..steps {
-                    for i in 0..width {
-                        expected[(stem * steps + t) * FEATURES + offset + i] = projected
-                            [t * 2 * width + i]
-                            * sigmoid(projected[t * 2 * width + width + i]);
+                    selected[t * DIM..(t + 1) * DIM].copy_from_slice(
+                        &x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM],
+                    );
+                }
+                for stem in 0..STEMS {
+                    let mask = &model.masks[stem][band];
+                    let mut hidden = mask
+                        .expand
+                        .apply(&selected, &|| false, "test.legacy-expand")
+                        .unwrap();
+                    activate(&mut hidden, 2 * DIM, activation, &|| false).unwrap();
+                    let projected = mask
+                        .contract
+                        .apply(&hidden, &|| false, "test.legacy-contract")
+                        .unwrap();
+                    for t in 0..steps {
+                        for i in 0..width {
+                            expected[(stem * steps + t) * FEATURES + offset + i] = projected
+                                [t * 2 * width + i]
+                                * gate(projected[t * 2 * width + width + i]);
+                        }
                     }
                 }
+                offset += width;
             }
-            offset += width;
+            expected
+        };
+        let expected = reference(libm::tanhf, sigmoid);
+        let previous = reference(f32::tanh, |x| 1. / (1. + (-x).exp()));
+        for (actual, old) in expected.iter().zip(&previous) {
+            assert!((actual - old).abs() <= 3e-4 + 3e-4 * old.abs());
         }
         for (first, count) in [(0, STEMS), (3, 1), (1, 1), (0, 1), (2, 1)] {
             let mut actual = vec![123.; count * steps * FEATURES];
@@ -1143,7 +1158,7 @@ mod tests {
             calls.get() > 34
         };
         assert_eq!(attend_heads(&qkv, &gates, &cancel), Err(Error::Cancelled));
-        for (width, function) in [(4 * DIM, gelu as fn(f32) -> f32), (2 * DIM, f32::tanh)] {
+        for (width, function) in [(4 * DIM, gelu as fn(f32) -> f32), (2 * DIM, libm::tanhf)] {
             let calls = Cell::new(0);
             let cancel = || {
                 calls.set(calls.get() + 1);

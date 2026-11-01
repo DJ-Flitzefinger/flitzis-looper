@@ -476,7 +476,21 @@ This necessary allocator proof split grows the plan to35: STEP34 retains ENTIRE
 former nativeREST33 and FINAL35 retains ENTIRE former FINAL34. An arena-only proof
 does not finish process admission, original learned parity or any final gate.
 
-## 34. Remaining native parity before cutover
+## 34. Source-owned learned transcendental math
+
+- [x] Remove the concrete late learned CRT sin/cos/exp/tanh paths using the
+      existing pinned Rust libm, with unchanged allocation/lifetime recipe.
+- [x] Verify finite/exceptional/boundary scalar behavior, full original-position
+      synthetic rotary, independent dense attention and all62/four-head synthetic
+      projection comparisons, retaining the distinct exact-bit layout controls.
+- [x] Verify the actual selected Release source/cfg closure and preserve ALL
+      complete process/admission/original learned/CUDA/quality/final prerequisites.
+
+This necessary native-math split grows the plan to36: STEP35 retains ENTIRE
+former nativeREST34 and FINAL36 ENTIRE former FINAL35. CPU math alone authorizes
+no new model promise, NN/oracle or CUDA retry and claims no whole-process bound.
+
+## 35. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -493,10 +507,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP35, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP36, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 35. Combined regression and final architecture review
+## 36. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

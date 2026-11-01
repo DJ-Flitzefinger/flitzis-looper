@@ -1,5 +1,104 @@
 # Performance audit and implementation design
 
+## STEP34 impact: source-owned learned transcendental math
+
+The independent learned CPU core now uses the EXISTING optional pinned
+libm0.2.16 for adjacent rotary sin/cos, softmax and sigmoid exp, and mask tanh.
+The f32 expressions, evaluation order, geometry, checkpoint frequencies, gates,
+cancellation and private-output invalidation remain unchanged. This removes
+specific late CRT transcendental paths rather than warming their lazy state.
+It adds no dependency, heap owner or lifetime, so the complete STEP33 ARENA-ONLY
+allocation recipe remains source-compatible and is reused without replay.
+
+Pinned source closure includes sincosf -> k_sinf/k_cosf/rem_pio2f ->
+rem_pio2_large -> scalbn/floor; expf -> scalbnf; tanhf -> expm1f. Existing exact
+GELU uses erff -> erfc1/erfc2 -> fabsf/expf. Large finite loaded frequencies
+remain supported: argument reduction cannot be assumed absent from ordinary
+position samples. The large-angle reduction uses fixed stack arrays, including
+four20-element scratch arrays; these are NOT heap owners or a full stack bound.
+The selected x64 default arch path must be verified with the actual Release cfg;
+no_std alone is not evidence of a complete loaded native/process closure.
+
+Verification compares the previous std kernels and new Rust kernels over finite
+and exceptional float classes, neighboring algorithm boundaries, original1101
+rotary positions with synthetic small/large signed frequencies, nonuniform dense
+versus tiled attention with both query-tile tails, and all62/four-head synthetic
+mask projections. Same-kernel exact-bit layout checks remain separate from
+old-kernel numerical checks. These are operator controls, without release weights
+or a learned model execution; a kernel change does NOT certify original complete
+LearnedMasks/PCM. Original mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4 remain.
+
+Actual retained FFT/System heaps, original2MiB stack, full images/COW, native TLS,
+Loader and all native I/O/stdio/close/error/panic/CRT/DLL shutdown paths remain
+OPEN. A snapshot, no observed growth, a fixed private heap, import list or the
+original Job cap is not a sufficient successful process allowance. Arena memory
+already inside PrivateUsage must never be added again. No new model promise,
+NN/oracle or CUDA retry is justified by CPU math alone.
+
+This necessary native-math split grows the plan to36: STEP35 retains the ENTIRE
+former nativeREST34 and FINAL36 the ENTIRE former FINAL35. FIRST complete actual
+retained PRENN/native/process closure AND sufficient fresh ACTUAL ORIGINAL
+admission, THEN original full learned masks/PCM/full485100/1101/B1/B2/fulltrack
+under unchanged tolerances; meaningful changed model/operator/runtime AND fresh
+complete admission before mandatory ACTUAL native NVIDIA CUDA; real same-model
+device fault -> actual Tree AND Reader END -> fresh CPU/fallback/CPU-only;
+COMPLETE practical Demucs; ALL Source/Frontend/Graph/Weights/Exporter/RuntimeBootstrap/
+Manifest/Provider/NativeDependencies/Compiler/Binary/FullProducer/MappedImages/OSarch
+roles; Windows EXE AND honest actual Linux/macOS; complete CPU/CUDA releases/CRT/
+licenses/LGPL source+three patches/NVIDIA notices/installer/recovery/full footprint;
+ALL quality/functions/interactions/resources/cancel/AMP/final gates. Fullhost and
+validator/32keys/32 parent failures/distinct216 watchdog/registry/pressure UNKNOWN,
+Overlap OPEN and combined2/4/6<=10 gates remain. Productive Torch/installer/pins,
+resource floors/caps/Job budgets/precision/geometry and installed savings unchanged.
+
+### STEP34 verification receipt
+
+Fresh Windows x64 Release library controls PASS13/0 failed/0 ignored, including
+three new math tests and all ten existing learned controls. The scalar comparison
+covers100151 deterministic float samples including explicit exceptional values
+and signed neighbors at14 pinned algorithm boundaries; it is not exhaustive over
+all f32 bit patterns. Rotary covers all1101 original positions with32 synthetic
+small/large/signed frequencies and all8 heads, unchanged V bits, cancellation and
+overflow rejection. Independent old-std dense attention uses17/31 positions with
+query-tail widths1/15, all8 heads and full noncausal rows. These comparisons use
+absolute2e-7/relative2e-6; exp uses absolute two minimum-subnormal units instead.
+The all62/all4/33-position synthetic mask control preserves new-kernel exact-bit
+layout checks and separately compares previous std tanh/sigmoid at original mask
+atol/rtol3e-4. No release learned weights or full-model numerical pass is implied.
+
+Rustfmt, strict all-target Clippy and Release examples PASS; the outer build
+harness PASS1 in38.62s. Actual emitted Release library assembly calls the Rust
+libm sincosf/expf/tanhf symbols at the learned sites; BOTH Norm functions lower
+their square roots to hardware sqrtss. Actual libm cfg is arch/default, opt3,
+target x64 SSE/SSE2/SSE3, rustflags empty, no unstable intrinsic or x87 selection.
+This is an actual selected-build source/call-chain result, NOT an attestation of
+all loaded images, a complete stack/process bound or another platform/compiler.
+
+Final outer static/component verification PASS2 in4.09s: strict OpenSpec, three
+Markdown files/10 local targets, unchanged productive source/closures/pins/locks,
+default optional-feature isolation and actual nonthreaded matrixmultiply/libm cfg.
+Release learned EXE1229312B SHA256
+ddfd945ea20e57f7ec319336f41bcc97d8f006c93173316816ba699536eea9a2 is a Windows x64
+COMPONENT ONLY, not Compiler/FullProducer/MappedImages/nonWindows/distribution or
+whole learned/quality proof. Generated assembly, fingerprints, logs and component
+report are reconstructible; source, pins, tests and this receipt retain the facts.
+
+The Human explicitly paused for reboot and later resumed. The interrupted own
+preparation build is not a PASS. The first resumed outer check built/verified
+Native/API but then correctly rejected a source snapshot changed by the root
+during copying. No guard was weakened. Subsequent source-frozen serial checks
+passed, with the same22 known Native library warnings and unchanged einops pin.
+No App/held Native/private data or foreign process/OS/pagefile change occurred.
+
+STEP33's exact ARENA-ONLY proof and unchanged STEP25/26/32 spectral/track arithmetic
+are reused within their limits, together with compatible older CPU/cancellation
+and failed CUDA evidence. There was NO full-model promise query, NN/oracle/CUDA
+execution or repeat of the unchanged complete arena proof or whole regression
+matrix for nicer numbers. Systems PRE/frozen
+POST, Methods and ONE independent final actual-diff chain cover this scoped step.
+Complete process closure and sufficient fresh ACTUAL ORIGINAL admission remain
+required FIRST; installed savings remain ZERO and no speed/RSS gain is claimed.
+
 ## STEP33 impact: complete prepared-route allocator proof
 
 The diagnostic allocator now separates header storage from its COMPLETE original

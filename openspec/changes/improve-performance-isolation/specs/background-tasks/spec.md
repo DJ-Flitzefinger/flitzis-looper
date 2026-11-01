@@ -275,6 +275,8 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** the learned CLI retains both directional FFT plans, buffers, scratch, windows and bounded inverse storage before allocator activation, reusing the SAME exclusive workspace across all-four diagnostics and serial complete track samples
 - **AND** each reconstruction rebuilds its exact current geometry envelope and clears accumulation per channel; a maximum-envelope prefix, stale partial state or a previous successful stem cannot certify a later attempt
 - **AND** prepared spectral backing remains included in the preNN process allowance, and spectral/control reuse does not establish complete arena capacity, native process bounds, learned parity or a changed CUDA condition
+- **AND** learned rotary, softmax/sigmoid and mask transcendental kernels use the pinned source-owned Rust math without late CRT transcendental calls, while preserving f32 expressions and original full-model numerical acceptance tolerances
+- **AND** kernel/operator comparisons, including large finite arguments and exceptional classes, do not close retained FFT/stack/images/native I/O/TLS/Loader/exit/panic process backing or authorize a new learned/CUDA attempt
 - **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
 
 #### Scenario: A standalone trial declares ORT package components
