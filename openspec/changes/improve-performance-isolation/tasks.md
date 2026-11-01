@@ -462,7 +462,21 @@ This necessary ownership split grows the plan to34. STEP33 retains the ENTIRE
 former nativeREST32 and FINAL34 the ENTIRE former FINAL33. Prepared spectral
 controls do not complete allocator/process admission, learned parity or CUDA.
 
-## 33. Remaining native parity before cutover
+## 33. Complete prepared-route allocator proof
+
+- [x] Run the entire ordered original recipe against the SAME production
+      allocator with sparse headers and actual target metadata Layouts.
+- [x] Validate the derived concrete extent for BOTH16-aligned base residues,
+      exact SGEMM/free-list restoration, full B1/B2/sample/track repetition and
+      native/sparse alignment/tiny-tail/coalescing parity.
+- [x] Retain complete process/native closure and sufficient fresh ORIGINAL
+      admission as prerequisites to any new learned/oracle/CUDA execution.
+
+This necessary allocator proof split grows the plan to35: STEP34 retains ENTIRE
+former nativeREST33 and FINAL35 retains ENTIRE former FINAL34. An arena-only proof
+does not finish process admission, original learned parity or any final gate.
+
+## 34. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -479,10 +493,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP34, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP35, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 34. Combined regression and final architecture review
+## 35. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

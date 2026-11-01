@@ -245,6 +245,14 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** short reads, invalid predictions, nonfinite/overflow values, sink failure or cancellation invalidate the entire private attempt, including earlier written blocks
 - **AND** arithmetic-only predictions do not attest learned BS attention/weights/export/CUDA AMP, complete Demucs, quality, provenance, distribution or productive Torch removal
 
+#### Scenario: A prospective prepared BS arena recipe uses production allocation rules
+- **GIVEN** the original complete prepared diagnostic and track allocation schedule, actual target metadata Layouts and pinned nonthreaded packing behavior
+- **WHEN** sparse header storage executes the SAME complete production first-fit allocation/free algorithm without learned payloads
+- **THEN** the derived concrete extent is explicitly replayed for both16-aligned base residues0/16mod32, including headers, absolute alignment, tiny tails and fragmentation
+- **AND** exact reachable free-list/live-state restoration is checked at packing, band, transformer, sample and complete B1/B2 batch boundaries before repetition is inferred
+- **AND** all-four masks, optional original-feature forwarding, full485100/1101 geometry and persistent whole-track owners remain in the recipe
+- **AND** arena-only success does not authorize model execution without complete native/process closure and sufficient fresh ORIGINAL admission, or certify learned/CUDA/quality/producer/distribution parity
+
 #### Scenario: An isolated native BS predictor evaluates learned release weights
 - **GIVEN** a complete admitted CPU attempt retains the original pinned configuration/checkpoint and a strict authenticated fixed-schema trial export
 - **WHEN** the independent learned core evaluates all62 bands, eight time/frequency blocks and four mask heads

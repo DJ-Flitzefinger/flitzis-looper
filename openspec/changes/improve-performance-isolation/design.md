@@ -1,5 +1,124 @@
 # Performance audit and implementation design
 
+## STEP33 impact: complete prepared-route allocator proof
+
+The diagnostic allocator now separates header storage from its COMPLETE original
+first-fit algorithm. Production uses native headers; the prospective verifier uses
+sparse offset headers. Both execute the SAME absolute-address alignment, fit,
+split, tiny-tail absorption, sorted insertion and adjacent coalescing bodies.
+No second simulator, weight data, neural evaluation, trace-derived prediction or
+host-headroom estimate supplies this proof. Metadata Layouts come directly from
+the actual target's private Band/Transformer-pair/Vec-of-Mask/Mask types.
+
+The source recipe below is now executable as the example's Release tests. It
+replays all1355 tensor and7 metadata requests in load order, all8 time/frequency
+blocks at original485100/1101, all-four diagnostic masks/PCM, the optional original
+feature forward, six persistent track vectors, complete B1/B2 destinations and
+serial full samples. Earlier samples already occupy the destination. Every band,
+transformer, selection, sample and B1/B2 batch compares its exact reachable sorted
+free list AND charged live bytes with its caller. Repetition therefore restores
+the identical allocator state for arbitrary track length, without allocating a
+whole-track vector. Smaller diagnostic geometries remain separate schedules.
+
+At each synchronous SGEMM state the verifier checks all actual selected-kernel
+packing sizes/alignments (AVX/FMA32, SSE16, fallback4), including full/tail tiles,
+AND the conservative1081344B/alignment32 pulse. Every allocation/free must restore
+the exact preceding list. Identical repeated calls can consequently be collapsed;
+there is no intervening Rust allocation in the pinned nonthreaded packing loop.
+Checking actual layouts avoids inferring first-fit placement merely from a larger
+payload. Native-versus-sparse storage controls cover absolute alignment, holes,
+coalescing and16B tiny-tail absorption; existing actual realloc controls retain
+old+new simultaneous backing and failure preservation.
+
+The concrete extent is derived from the highest charged END ADDRESS of the full
+recipe in a Layout-valid virtual tail for both16-aligned base residues0/16mod32.
+The algorithm's minimum splittable tail, HEADER+ALIGN=32B, is retained explicitly.
+The resulting exact extent is then independently replayed for BOTH residues;
+capacity monotonicity and max-live-payload capacity are never assumed. This is
+ARENA ONLY, without allocating the large payload or claiming actual NN execution.
+Source error/cancel branches create no new owner after the failure and unwind
+their existing disjoint extents through that same coalescer. They invalidate all
+private output; allocator restoration does not certify native panic/exit closure.
+
+The separate Windows investigation confirms pinned Rust1.95 synchronous File
+read/write reaches NtReadFile/NtWriteFile, optional wait and NT-status conversion;
+seek/sync/close reach SetFilePointerEx/FlushFileBuffers/CloseHandle. Locked stdio
+still reaches native handle/console APIs. Learned math, original2MiB stack, actual
+retained FFT/System heaps, full image COW, CRT/native TLS/loader and cleanup/exit/
+panic paths remain OPEN. Rust wrappers and observed import symbols do not provide
+a finite native allocation contract. No-growth snapshots, fixed private heaps or
+the original Job cap prove sufficient successful admission; arena backing inside
+PrivateUsage must never be counted twice. No fresh model promise, NN, oracle or
+CUDA retry is authorized by the arena-only result.
+
+This necessary complete allocator proof split grows the plan to35. STEP34 retains
+the ENTIRE former nativeREST33 and FINAL35 retains the ENTIRE former FINAL34:
+complete process/native closure AND sufficient fresh ACTUAL ORIGINAL admission
+before original full learned masks/PCM,485100/1101,batch2/fulltrack at unchanged
+mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4; meaningful changed model/operator/runtime
+before mandatory ACTUAL native NVIDIA CUDA; actual same-model device fault -> Tree
+AND Reader END -> fresh CPU/fallback/CPU-only; COMPLETE practical Demucs; ALL source/
+frontend/graph/weights/export/runtime/provider/native-dependency/compiler/binary/
+FullProducer/MappedImages/OSarch roles; Windows EXE AND actual Linux/macOS; complete
+CPU/CUDA releases/CRT/licenses/LGPLsource+three patches/NVIDIA notices/installer/
+recovery/full footprint; ALL quality/functions/interactions/resources/cancel/final
+gates. Fullhost/validator/32keys/32 parent failures/distinct216 watchdog/registry/
+pressure UNKNOWN and Overlap OPEN remain. No productive dependency, installer,
+audio/kernel/geometry/precision/floor/cap/Jobbudget or installed-saving change.
+
+### STEP33 verification receipt
+
+Actual Windows x64 Release derivation yields764894800B, explicitly validated for
+BOTH base residues. Charged address high water/peak is764894752B at residue0 and
+764894768B at residue16; their equality here does not turn max-live arithmetic
+into a general capacity proof. Each exact replay executes5183954 verifier requests
+(including alternate-kernel/max pulses), NOT a measured production NN allocation
+count. Actual metadata Layouts are5456/6272/96/7936B, each alignment8; the fourth
+is requested four times. Total model metadata43568B and numeric526818448B bind
+the actual target. No stable ABI, different geometry/feature/compiler/OS or
+arbitrary larger capacity is certified by these two concrete replays.
+
+Release controls PASS34/no ignored:10 core/learned,9 spectral,5 track and10
+allocator/typed-I/O/example tests, including the three new proof controls. Strict
+all-target Clippy and Release examples PASS. Twenty-six representative attention
+prefix refusal/cleanup cases run across both residues; they preserve old owners
+and restore the model's exact list. These are allocator/source controls, not
+exhaustive cancellation injection or learned arithmetic. Existing prepared versus
+allocating spectral/kernel numerics and older original/failed NN/CUDA evidence are
+reused only where source-compatible; no new NN/oracle/full-model promise query.
+External isolated Release Native/API PASS with the same22 known warnings and
+unchanged einops warning/pin. Human App/held Native/private data are unaffected.
+
+Final outer verification PASS2 in4.38s: Rustfmt, strict OpenSpec, four Markdown
+files/11 local targets, default/optional/application dependency isolation and
+unchanged productive closures/pins/locks, plus TWO actual original-owned CLI
+fixture processes. The unprepared SGEMM64/FFT8 control makes259 requests with
+peak368208B; the prepared five-cycle spectral control makes15 later payload
+requests with peak951216B. Both use1MiB FIXTURE backing, live0/failures0. This is
+NOT the full-model extent, process allowance or measured learned RSS. One observer
+precedes one joined executor:2/2 scopes close through tree AND readers, pending0,
+inflight0, sampling errors[]. An initial cache-harness assertion wrongly expected
+adjacent `live=0 failures=0` fields although the first successful control includes
+`allocations=259` between them. Its1/1 scope closed; the parser now checks exact
+individual counter values. No product assertion or resource guard was weakened.
+That failed harness receipt remains distinct; the final two-case run is fresh.
+
+Reconstruction uses the example's full Release tests and existing
+`bs_learned --workspace-control`/`--spectral-workspace-control` under the original
+admitted owner. Generated logs/reports remain reconstructible cache; source,
+pins, executable recipe and this receipt retain the facts. Systems PRE/frozen
+POST, Methods and ONE independent final actual-diff chain cover this scoped step;
+all readers/jobs must end before its normal branch publication.
+
+The pinned native call-chain distinction is source-based:
+[Handle](https://raw.githubusercontent.com/rust-lang/rust/1.95.0/library/std/src/sys/pal/windows/handle.rs),
+[filesystem](https://raw.githubusercontent.com/rust-lang/rust/1.95.0/library/std/src/sys/fs/windows.rs),
+[stdio](https://raw.githubusercontent.com/rust-lang/rust/1.95.0/library/std/src/sys/stdio/windows.rs)
+and [runtime cleanup](https://raw.githubusercontent.com/rust-lang/rust/1.95.0/library/std/src/rt.rs).
+These sources expose remaining calls; they do NOT attest loaded images or bound
+native memory growth. Complete process closure and fresh sufficient ORIGINAL
+admission remain required before genuine original learned comparison.
+
 ## STEP32 impact: retained spectral execution workspace
 
 The actual learned CLI now prepares ONE `SpectralWorkspace` before sealing its

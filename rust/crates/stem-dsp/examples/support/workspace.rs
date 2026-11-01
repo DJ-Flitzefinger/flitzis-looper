@@ -17,7 +17,7 @@ const END: usize = usize::MAX;
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
-struct Header {
+pub(super) struct Header {
     // Free: extent + next free offset. Used: extent + original block offset.
     len: usize,
     link: usize,
@@ -32,10 +32,28 @@ pub struct Stats {
     pub failures: usize,
 }
 
-struct Pool {
+// Storage alone varies in the prospective proof. Fit/split/free/coalescing and
+// absolute-address arithmetic below are the SAME production implementation.
+pub(super) trait HeaderStore {
+    unsafe fn read(&self, base: *mut u8, offset: usize) -> Header;
+    unsafe fn write(&mut self, base: *mut u8, offset: usize, header: Header);
+}
+
+struct NativeHeaders;
+impl HeaderStore for NativeHeaders {
+    unsafe fn read(&self, base: *mut u8, offset: usize) -> Header {
+        unsafe { base.add(offset).cast::<Header>().read() }
+    }
+    unsafe fn write(&mut self, base: *mut u8, offset: usize, header: Header) {
+        unsafe { base.add(offset).cast::<Header>().write(header) };
+    }
+}
+
+struct Pool<S = NativeHeaders> {
     base: *mut u8,
     first: usize,
     stats: Stats,
+    headers: S,
 }
 
 impl Pool {
@@ -50,9 +68,12 @@ impl Pool {
                 allocations: 0,
                 failures: 0,
             },
+            headers: NativeHeaders,
         }
     }
+}
 
+impl<S: HeaderStore> Pool<S> {
     fn contains(&self, address: *mut u8) -> bool {
         !self.base.is_null()
             && (address as usize).wrapping_sub(self.base as usize) < self.stats.capacity
@@ -61,11 +82,11 @@ impl Pool {
     // SAFETY for header helpers: offsets identify aligned, initialized headers
     // inside the exclusively locked backing. Payload is never read as a header.
     unsafe fn read(&self, offset: usize) -> Header {
-        unsafe { self.base.add(offset).cast::<Header>().read() }
+        unsafe { self.headers.read(self.base, offset) }
     }
 
     unsafe fn write(&mut self, offset: usize, header: Header) {
-        unsafe { self.base.add(offset).cast::<Header>().write(header) };
+        unsafe { self.headers.write(self.base, offset, header) };
     }
 
     unsafe fn allocate(&mut self, layout: Layout) -> *mut u8 {
@@ -132,7 +153,7 @@ impl Pool {
     }
 
     unsafe fn release(&mut self, address: *mut u8) {
-        let used = unsafe { address.sub(HEADER).cast::<Header>().read() };
+        let used = unsafe { self.read(address as usize - self.base as usize - HEADER) };
         let offset = used.link;
         self.stats.live -= used.len;
         let mut previous = END;
@@ -288,3 +309,7 @@ unsafe impl GlobalAlloc for WorkspaceAllocator {
 #[cfg(test)]
 #[path = "workspace_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "allocation_proof.rs"]
+mod allocation_proof;

@@ -503,6 +503,21 @@ pub struct Model {
 }
 
 impl Model {
+    /// Actual target metadata layouts for the prospective diagnostic allocator
+    /// proof. These are implementation details, never a stable Rust ABI or a
+    /// process/admission allowance. Order: bands, block pairs, stem Vecs, masks.
+    #[doc(hidden)]
+    pub fn allocation_metadata_layouts() -> [std::alloc::Layout; 4] {
+        use std::alloc::Layout;
+        [
+            Layout::array::<Band>(BANDS).expect("fixed band metadata extent"),
+            Layout::array::<(Transformer, Transformer)>(DEPTH)
+                .expect("fixed block metadata extent"),
+            Layout::array::<Vec<Mask>>(STEMS).expect("fixed stem metadata extent"),
+            Layout::array::<Mask>(BANDS).expect("fixed mask metadata extent"),
+        ]
+    }
+
     /// Load exact fixed-shape little-endian float32 export, authenticate ALL bytes
     /// from this borrowed reader, reject finite/shape/hash/short/trailing failures.
     /// The externally supplied digest binds the trial export, not full provenance.
