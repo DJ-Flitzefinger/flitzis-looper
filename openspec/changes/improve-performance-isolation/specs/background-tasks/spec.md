@@ -412,3 +412,18 @@ SHALL NOT establish complete host, validator or other generated-method evidence.
 - **WHEN** positional or keyword defaults change their value or exact builtin type, or a frozen constructor captures a different object binding
 - **THEN** the component is UNKNOWN even when its code or field metadata is unchanged
 - **AND** existing complete-host UNKNOWN gates and actual reader-retirement authority remain intact
+
+### Requirement: Host Default Value Evidence Preserves Exact Builtin Types
+Guarded source-declared functions and methods SHALL compare supported default and
+constant values recursively without equating distinct builtin types. Unsupported
+builtin subclasses, positional-default containers, keyword-default containers or
+keyword names SHALL remain UNKNOWN before their custom comparison or encoding
+hooks run. Source-backed callable defaults and existing mutable runtime-carrier
+policies SHALL retain their separate evidence rules.
+
+#### Scenario: An equal-valued default changes runtime behavior
+- **GIVEN** held source declares an integer default and its loaded function matches
+- **WHEN** the actual positional or keyword default becomes boolean True, including inside a supported nested collection
+- **THEN** the component is UNKNOWN even when Python equality considers the values equal
+- **AND** source-declared constructors and retained callable defaults apply the same type-preserving value policy
+- **AND** neither complete-host identity nor model, device or quality acceptance is inferred

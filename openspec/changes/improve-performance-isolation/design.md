@@ -4836,3 +4836,56 @@ This justified split grows the plan to44. NativeREST43 retains ENTIRE former
 nativeREST42 and FINAL44 retains ENTIRE former FINAL43, including every original
 process/numerical/CUDA/Demucs/platform/distribution/negative/UNKNOWN gate. No new
 neural execution or unchanged failed CUDA retry is authorized by this policy fix.
+
+## STEP43 impact: preserve exact builtin types in host value evidence
+
+Ordinary source-declared functions and methods previously compared default
+evidence using Python equality. An unchanged `classify(value=1)` returning
+`value is True` therefore stayed known after its live default became `True`,
+although its result changed. The same gap affected nested collections, keyword
+defaults, source constructors, constants and retained callable defaults. The old
+predicate reproduced all35 initial regressions in7.44s with held source and
+function bodies unchanged.
+
+The shared value encoder now tags exact string, boolean and integer types,
+retains float hexadecimal values and recursively measures exact builtin bytes,
+slice and collection values. Subclasses cannot run equality, iteration or hex
+hooks during this encoding. Positional/keyword default containers and keyword
+names are checked before truthiness, length, key comparison or lookup. Guarded
+callable defaults still use their own source/declaration/body/default proof;
+supported mutable builtin defaults and the separate state-independent runtime
+carrier policy remain available. Existing generated-constructor controls share
+the stricter primitive encoding without broadening their field policy.
+
+This is a type/value evidence correction, not a complete behavioral equivalence
+claim: dictionary insertion order, alias topology, other generated methods,
+metaclasses and external compiled execution retain their separate limits. Both
+complete original host manifests remain UNKNOWN at the original Pydantic
+validator; actual compiled validator/serializer and dependency lineage remain
+open. All eight component roles remain required. No model, inference, admission,
+source/content/OwnACK, last-reader, realtime, dependency or installer path changes.
+Productive Python/Torch paths stay active; no new neural or CUDA run is justified.
+
+This justified split grows the plan to45. NativeREST44 retains ENTIRE former
+nativeREST43; FINAL45 retains ENTIRE former FINAL44, including all original
+process/numerical/CUDA/Demucs/platform/distribution and negative/UNKNOWN gates.
+
+The initial integrated run passed113 product regressions and3 static checks
+in75.99s. Independent final review then found that type-set membership could
+invoke a custom metaclass's hash/equality and let a builtin subclass impersonate
+an exact builtin. All4 narrow function/generated-constructor regressions reproduced
+that false-known result in1.02s. Both value encoders now select builtin types by
+identity comparisons only, before any subclass or metaclass comparison hook.
+Final affected regressions and checks follow this correction; the initial passing
+run alone does not certify the corrected final source.
+
+The corrected frozen source passed81 affected product regressions and3 static
+checks in26.98s: all41 new cases,31 constructor controls and9 native conversion
+controls, including all eight positive roles and both original fullhost UNKNOWNs.
+The42 unchanged ordinary/origin cases from the initial run remain compatible.
+This is a123-product scoped passing union, not one123-test run or a complete
+system matrix. Ruff/format, strict Mypy and strict OpenSpec passed; final staged
+byte/whitespace/protected-bridge checks and the same independent review chain
+complete the publication boundary. The isolated Release/API retained22 known
+Rust warnings and the unchanged einops0.6.1 warning. No neural, device, hearing,
+whole-quality, performance or installed-footprint acceptance is claimed.

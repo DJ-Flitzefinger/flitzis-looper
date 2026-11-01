@@ -130,6 +130,14 @@ from held declarations, including required post-init calls. Checking this eviden
 does not execute host constructors or hooks. Other generated methods, metaclasses,
 `__new__` and complete Pydantic compiled-plan evidence retain their separate limits;
 constructor evidence does not promote either complete host manifest to known.
+Ordinary function and method defaults, keyword defaults and measured constants
+retain exact builtin types recursively, including dictionary keys and slice
+members. Equal values such as `True` and `1` cannot substitute for one another;
+builtin subclasses and custom default containers remain unsupported without
+calling their equality, iteration or encoding hooks. Guarded callable defaults
+retain their separate source proof, and mutable admission/cancellation carriers
+retain their existing state-independent policy. This value evidence does not
+certify dictionary insertion order or alias topology.
 This is compiled-source identity, not loaded-image or full compiler attestation.
 Conversion does not remove Torch or prove model quality.
 

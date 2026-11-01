@@ -655,7 +655,7 @@ def _generated_constructor(
         _constructor_value(expected.__defaults__),
         _constructor_value(expected.__kwdefaults__),
     )
-    # JSON preserves bool/int distinctions that ordinary Python equality erases.
+    # Compare inert evidence after recursively checking the exact builtin defaults.
     if json.dumps(defaults, sort_keys=True) != json.dumps(reference_defaults, sort_keys=True):
         msg = "loaded host dataclass constructor defaults differ from held source"
         raise ValueError(msg)
@@ -671,9 +671,13 @@ def _generated_constructor(
 
 def _constructor_value(value: object) -> object:
     """Keep constructor defaults within exact builtin values, including nested values."""
-    if value is None or value is Ellipsis or type(value) in {str, bool, int, float, bytes}:
+    if (
+        value is None
+        or value is Ellipsis
+        or any(type(value) is kind for kind in (str, bool, int, float, bytes))
+    ):
         return _value(value)
-    if type(value) in {tuple, list, set, frozenset} and isinstance(
+    if any(type(value) is kind for kind in (tuple, list, set, frozenset)) and isinstance(
         value, tuple | list | set | frozenset
     ):
         items = [_constructor_value(item) for item in value]
@@ -734,7 +738,8 @@ def _function_body(
         msg = "loaded host function origin differs from the declared source"
         raise ValueError(msg)
     defaults = tuple(_expression(item, namespace) for item in declaration.args.defaults)
-    if not _same_bindings(actual.__defaults__ or (), defaults, manifests, depth=depth):
+    positional = () if actual.__defaults__ is None else actual.__defaults__
+    if not _same_bindings(positional, defaults, manifests, depth=depth):
         msg = "loaded host function defaults differ from held source"
         raise ValueError(msg)
     expected_keywords = {
@@ -744,9 +749,8 @@ def _function_body(
         )
         if default is not None
     }
-    if not _same_keyword_bindings(
-        actual.__kwdefaults__ or {}, expected_keywords, manifests, depth=depth
-    ):
+    keywords = {} if actual.__kwdefaults__ is None else actual.__kwdefaults__
+    if not _same_keyword_bindings(keywords, expected_keywords, manifests, depth=depth):
         msg = "loaded host keyword defaults differ from held source"
         raise ValueError(msg)
     if actual.__closure__ and not (
@@ -824,9 +828,13 @@ def _same_bindings(
     *,
     depth: int = 0,
 ) -> bool:
-    return len(actual) == len(expected) and all(
-        _binding(first, manifests, depth=depth) == _binding(second, manifests, depth=depth)
-        for first, second in zip(actual, expected, strict=True)
+    return (
+        type(actual) is tuple
+        and len(actual) == len(expected)
+        and all(
+            _binding(first, manifests, depth=depth) == _binding(second, manifests, depth=depth)
+            for first, second in zip(actual, expected, strict=True)
+        )
     )
 
 
@@ -837,9 +845,15 @@ def _same_keyword_bindings(
     *,
     depth: int = 0,
 ) -> bool:
-    return actual.keys() == expected.keys() and all(
-        _binding(actual[name], manifests, depth=depth) == _binding(value, manifests, depth=depth)
-        for name, value in expected.items()
+    return (
+        type(actual) is dict
+        and all(type(name) is str for name in actual)
+        and actual.keys() == expected.keys()
+        and all(
+            _binding(actual[name], manifests, depth=depth)
+            == _binding(value, manifests, depth=depth)
+            for name, value in expected.items()
+        )
     )
 
 
@@ -1092,18 +1106,21 @@ def _literal_call(value: ast.Call, namespace: dict[str, object]) -> bytes:
 
 
 def _value(value: object) -> object:
-    if value is None or isinstance(value, str | bool | int):
-        return value
-    if isinstance(value, float):
+    """Encode supported values without erasing builtin types or invoking subclass hooks."""
+    if value is None or value is Ellipsis:
+        return value if value is None else ("ellipsis",)
+    if any(type(value) is kind for kind in (str, bool, int)):
+        return type(value).__name__, value
+    if type(value) is float and isinstance(value, float):
         return ("float", value.hex())
-    if isinstance(value, bytes):
+    if type(value) is bytes and isinstance(value, bytes):
         return ("bytes", value.hex())
-    if isinstance(value, slice):
+    if type(value) is slice and isinstance(value, slice):
         return ("slice", _value(value.start), _value(value.stop), _value(value.step))
-    if isinstance(value, tuple | list | set | frozenset | dict):
+    if any(type(value) is kind for kind in (tuple, list, set, frozenset, dict)) and isinstance(
+        value, tuple | list | set | frozenset | dict
+    ):
         return _collection_value(value)
-    if value is Ellipsis:
-        return ("ellipsis",)
     msg = "unsupported mutable or executable host binding"
     raise ValueError(msg)
 
