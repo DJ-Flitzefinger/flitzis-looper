@@ -76,8 +76,57 @@ pub fn core_io<T>(
     })
 }
 
+/// Only explicit writes/flushes may reach the sink. Abandoning private output,
+/// including unwinding after a failure, discards buffered bytes without retrying.
+pub struct ExplicitBuffer<W: Write> {
+    writer: Option<BufWriter<W>>,
+}
+
+impl<W: Write> ExplicitBuffer<W> {
+    fn new(writer: W) -> Self {
+        Self {
+            writer: Some(BufWriter::with_capacity(BUFFER_BYTES, writer)),
+        }
+    }
+
+    fn buffer(&mut self) -> &mut BufWriter<W> {
+        self.writer.as_mut().expect("buffer retained until drop")
+    }
+
+    fn get_ref(&self) -> &W {
+        self.writer
+            .as_ref()
+            .expect("buffer retained until drop")
+            .get_ref()
+    }
+}
+
+impl<W: Write> Write for ExplicitBuffer<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.buffer().write(bytes)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.buffer().write_all(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.buffer().flush()
+    }
+}
+
+impl<W: Write> Drop for ExplicitBuffer<W> {
+    fn drop(&mut self) {
+        if let Some(writer) = self.writer.take() {
+            // into_parts performs no flush, even after an inner writer panic.
+            // The sink still closes normally; this does not bound native close.
+            let (_sink, _pending) = writer.into_parts();
+        }
+    }
+}
+
 pub struct Output {
-    pub writer: BufWriter<File>,
+    pub writer: ExplicitBuffer<File>,
     phase: &'static str,
 }
 
@@ -85,7 +134,7 @@ impl Output {
     fn prepare(directory: &Path, name: &str, phase: &'static str) -> Result<Self> {
         let file = File::create_new(directory.join(name)).at(phase)?;
         Ok(Self {
-            writer: BufWriter::with_capacity(BUFFER_BYTES, file),
+            writer: ExplicitBuffer::new(file),
             phase,
         })
     }
@@ -156,7 +205,7 @@ pub fn control(
         return Err("invalid I/O control setup".into());
     };
     let read_only = File::open(directory.join("features.f32")).at("control.open")?;
-    let mut rejected = BufWriter::with_capacity(BUFFER_BYTES, read_only);
+    let mut rejected = ExplicitBuffer::new(read_only);
     workspace.seal(1 << 20)?;
     let before = workspace.stats();
     let values = [0.25f32, -0.5, 1.0, -0.0];
@@ -174,9 +223,8 @@ pub fn control(
         .at("control.read-only")
         .err()
         .ok_or("read-only output unexpectedly succeeded")?;
-    // Consume without BufWriter's best-effort Drop retry. This buffer and handle
-    // were prepared before seal and remain retained through the control report.
-    let (_file, _buffer) = rejected.into_parts();
+    // The same nonflushing owner as real outputs retains this prepared buffer
+    // and handle through the control report, then discards the rejected bytes.
     if !matches!(
         error,
         Failure::Io {

@@ -1,5 +1,91 @@
 # Performance audit and implementation design
 
+## STEP35 impact: explicit private-output disposal
+
+The standalone learned CLI now owns every prepared output buffer through a
+small nonflushing owner. Explicit writes and the existing successful
+flush-then-sync_all completion retain their order and error phases. Disposing
+of pending output on an early return, write/flush failure or unwind dismantles
+BufWriter with into_parts; it never retries buffered writes from Drop. The
+actual read-only-handle control uses this SAME owner rather than a separate
+manual disposal path. File ownership still ends normally after synchronous
+readers, and every failed attempt invalidates ALL private output files.
+
+This removes a real, previously permitted native write path. STEP31 explicitly
+allowed best-effort destructor flushing; this is a source-motivated
+simplification, not a newly discovered historical publication defect. The
+8192-byte I/O buffers and handles remain prepared before arena seal. No neural,
+spectral, track, model metadata or packing allocation episode changes, so the
+complete STEP33 arena-only proof and STEP34 math controls remain compatible.
+
+Focused fault writers verify pending abandonment, partial write failure, sink
+flush failure, explicit successful flush, caller unwind and inner writer panic.
+The actual retained-file fixture verifies exact successful bytes and a numeric
+read-only-handle error. These establish disposal behavior only. Native
+NtReadFile/NtWriteFile, optional WaitForSingleObject/RtlNtStatusToDosError,
+seek/flush/sync/CloseHandle, stdio, CRT/DLL exit, TLS/Loader, original2MiB stack,
+full images/COW and retained preNN FFT/System backing remain OPEN. Dropping the
+File is still native I/O. Neither snapshots/no-growth, a private heap nor Job
+failure enforcement supplies a sufficient successful prospective process bound.
+Arena backing already inside PrivateUsage must never be added twice.
+
+This necessary native-I/O ownership split grows the plan to37: STEP36 retains
+the ENTIRE former nativeREST35 and FINAL37 the ENTIRE former FINAL36. FIRST
+complete actual retained PRENN/native/process closure AND sufficient fresh
+ACTUAL ORIGINAL admission, THEN real original full LearnedMasks/PCM at
+full485100/1101/B1/B2/fulltrack under unchanged mask atol/rtol3e-4 and PCM
+atol3e-5/rtol3e-4. No independent promise query or NN/oracle runs for numbers.
+CPU math/allocator/I/O/FFT work alone is no meaningful changed CUDA condition.
+Mandatory ACTUAL supported native NVIDIA CUDA still requires meaningful changed
+model/operator/runtime AND fresh complete Original admission; real same-model
+device fault -> actual Tree AND Reader END -> fresh CPU/fallback/CPU-only;
+COMPLETE practical Demucs normalization/shifts/overlap/hybrid spectral-time/
+complex STFT-ISTFT/conv/recurrent/attention/resampling; ALL Source/Frontend/Graph/
+Weights/Exporter/RuntimeBootstrap/Manifest/Provider/NativeDependencies/Compiler/
+Binary/FullProducer/MappedImages/OSarch roles; portable Windows EXE AND honest
+actual Linux/macOS; complete CPU/CUDA releases/CRT/licenses/LGPL source+three
+patches/NVIDIA notices/installer/recovery/full footprint; ALL quality/functions/
+interactions/resources/cancel/AMP/final gates. Fullhost UNKNOWN, narrow validator/
+schema/Pydantic and32 keys,32 parent failures, distinct216 watchdog UNCOMPARED,
+registry/pressure UNKNOWN, Overlap OPEN and combined2/4/6<=10 remain. Separate
+App Python3.14/Torch2.12/cu130 and Beat3.12/Torch2.8/cu128-or-CPU closures,
+independent Rust cores/thin PyO3 and trial-only provenance are unchanged. No
+resource floor/cap/Job budget/geometry/precision/quality or installed-saving claim.
+
+### STEP35 verification receipt
+
+Fresh Windows x64 Release example tests PASS7/0 failed/0 ignored, with four new
+disposal controls and three existing typed-error controls; seven unrelated
+example tests were filtered, not rerun. Counter writers establish no additional
+write on pending abandonment/caller unwind/partial-error disposal, preserved
+partial bytes and numeric error5, explicit exact successful bytes, sink flush
+error6 and one close after an injected inner writer panic. The two caught fixture
+panics are intentional tests, not evidence of a panic-free process. Rustfmt,
+strict all-target Clippy and Release learned example build PASS. The outer build
+harness PASS1 in13.13s after external Release Native/API preparation, retaining
+the same22 known Native warnings and unchanged einops0.6.1 warning/pin.
+
+Final outer checks PASS2 in3.93s: strict OpenSpec/local Markdown targets,
+default/optional/app dependency isolation, actual nonthreaded packing config and
+unchanged productive sources/closures/pins/locks; ONE actual retained-file scope
+with four exact little-endian float32 files [.25,-.5,1,-0] and real Windows
+read-only-handle error5 using the SAME output owner. The original observer
+preceded one joined executor:1/1 scope closed, pending/inflight0, sampling
+errors[]. Its1MiB fixture and unchanged Rust-arena counters do not establish
+native no-growth, full-model capacity or prospective process admission.
+
+Actual learned Release EXE1230336 bytes, SHA256
+bd136a9768fe9ad3dad4dc5add62862d26407e72bac9c13d8e58ac81e79331d8,
+is Windows x64 component evidence ONLY, not Compiler/FullProducer/MappedImages,
+non-Windows, learned NN, quality or distribution acceptance. No learned model,
+oracle, standalone full-model admission query or CUDA attempt occurred.
+STEP25/26/28/29/30/31/32/33/34 compatible numerical/lifetime/arena/math and older
+NN/CPU-cancel/CUDA-negative/role evidence remain reused within original limits;
+no repeated full matrix/model/arena schedule. Productive Torch/installer remain
+unchanged, installed savings ZERO, and no runtime/RSS improvement is claimed.
+Source, pinned into_parts/Drop behavior, these controls and reconstruction recipe
+retain the durable facts; generated logs/reports are reconstructible cache.
+
 ## STEP34 impact: source-owned learned transcendental math
 
 The independent learned CPU core now uses the EXISTING optional pinned
