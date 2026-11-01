@@ -652,6 +652,9 @@ def _command_stdout(text: str | None) -> str:
     diagnostic = _bounded_text(
         "\n".join(line for line in text.splitlines() if not line.startswith(prefixes))
     )
+    if diagnostic.startswith(prefixes):
+        # Compaction must not turn a padded diagnostic into protocol evidence.
+        diagnostic = _bounded_text("Diagnostic: " + diagnostic)
     receipts = []
     for prefix in prefixes:
         matches = [line for line in text.splitlines() if line.startswith(prefix)]

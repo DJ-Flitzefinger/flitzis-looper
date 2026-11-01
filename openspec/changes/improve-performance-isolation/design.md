@@ -4761,3 +4761,28 @@ KeyNet local single-thread session selected class 7 against an independently bui
 default-pool session; maximum logit difference was `1.1920928955078125e-7`.
 Current child observations also report ATen intra/inter-op, OpenMP and MKL pools
 all at one. No App-global pool was changed and no additional model run is inferred.
+
+## STEP41 impact: preserve diagnostic and protocol separation
+
+The owned command reader recognizes exact protocol prefixes before handing its
+bounded output to the separator adapter. The adapter separately compacts diagnostic
+text. Previously that compaction removed leading whitespace from an indented
+marker and could manufacture a valid protocol line. A dedicated CUDA-failure exit
+could consequently trigger an unjustified CPU retry; execution, encoder and
+BS-input metadata had the same normalization gap.
+
+Only diagnostic text whose compacted form begins with a reserved prefix receives
+a stable `Diagnostic: ` label, within the existing 1000-character diagnostic bound.
+Original exact receipt extraction, duplicate/oversized rejection, genuine same-model
+CPU fallback and reader/tree settlement retain their existing paths. Ordinary
+diagnostics retain their existing formatting. No source, cache, provider-learning,
+resource admission, inference geometry, numerical quality or realtime policy changes.
+
+Regressions cover spaces, tabs, nonbreaking spaces, mixed exact and padded lines,
+all four receipt roles and the existing diagnostic length bound. Tiny actual owned
+children exercise both adapters' exit-70 decisions; exact markers still permit the
+existing fallback and duplicate or padded markers do not. These are protocol and
+adapter checks, with no actual model, CUDA-device or listening acceptance claim.
+Both complete host manifests remain UNKNOWN at the unsupported Pydantic validator;
+this correction does not certify generated schemas or compiled validator/serializer
+connections. STEP42 and FINAL43 retain the entire former native and final remainder.

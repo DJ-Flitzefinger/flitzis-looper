@@ -372,3 +372,23 @@ mandatory on CPU-only systems.
 - **WHEN** that error has no dedicated device-operation failure receipt and exit status
 - **THEN** the attempt fails without repeating the model on CPU
 - **AND** only a recognized placement, transfer or inference CUDA fault can request the same-model CPU fallback
+
+### Requirement: Separator Diagnostics Cannot Become Protocol Receipts
+The host SHALL preserve the distinction between diagnostic text and exact child
+protocol lines while compacting or truncating command output. Whitespace
+normalization SHALL NOT manufacture encoder, BS input, completed-execution or
+CUDA-failure evidence. Genuine independent receipts SHALL remain available, and
+duplicate or oversized receipts SHALL remain invalid.
+
+#### Scenario: An indented marker accompanies the CUDA-failure exit code
+- **GIVEN** an owned separator prints only an indented CUDA-failure marker as diagnostic text
+- **WHEN** it exits with the dedicated CUDA-failure exit code
+- **THEN** the compacted diagnostic remains distinct from an exact receipt
+- **AND** neither separator retries on CPU on the strength of that diagnostic
+
+#### Scenario: An indented execution diagnostic accompanies a genuine receipt
+- **GIVEN** a diagnostic contains an indented completed-execution marker
+- **AND** the child emits one separate exact completed-execution receipt
+- **WHEN** the host normalizes command output
+- **THEN** only the separate exact receipt is available to the execution parser
+- **AND** the diagnostic remains bounded and visibly distinct from protocol evidence

@@ -247,6 +247,10 @@ streaming or BS-RoFormer's PCM estimate.
 CUDA failure may retry the same chosen model once on CPU with an execution receipt
 and reason. It never silently changes BS-RoFormer to Demucs. Completed inference
 device stays visible through later alignment; old missing receipts show unknown.
+Command-output compaction labels diagnostics that would otherwise acquire a
+reserved receipt prefix after whitespace removal. Indented diagnostics cannot
+become CUDA-failure, execution, encoder or BS-input evidence. Independent exact
+receipts keep their original duplicate/size checks and the diagnostic stays bounded.
 Model loading, CUDA availability and source/unit propagation checks are distinct
 from actual separation. The historical E-CUDA delivery records actual paired
 Beat This and Demucs CPU/CUDA executions, while its BS-RoFormer device propagation

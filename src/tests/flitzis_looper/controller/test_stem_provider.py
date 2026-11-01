@@ -223,9 +223,13 @@ def test_both_cpu_routes_skip_probe_and_auto_probe_uses_fresh_guarded_sources(
 
 
 @pytest.mark.parametrize("backend_name", ["demucs", "bs"])
-@pytest.mark.parametrize("marker_count", [1, 2])
+@pytest.mark.parametrize(("marker_count", "marker_padding"), [(1, ""), (2, ""), (1, " \t")])
 def test_actual_owned_child_marker_survives_diagnostic_tail_and_controls_both_adapters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, marker_count: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+    marker_count: int,
+    marker_padding: str,
 ) -> None:
     attempts = []
 
@@ -244,6 +248,14 @@ def test_actual_owned_child_marker_survives_diagnostic_tail_and_controls_both_ad
                 "sys.stdout.write('x'*150000+'\\n'); sys.stdout.flush()\n"
                 "raise SystemExit(CUDA_FAILURE_EXIT)\n"
             )
+            if marker_padding:
+                body = (
+                    "import sys\nfrom flitzis_looper.inference_provider import ("
+                    "CUDA_FAILURE_EXIT, CUDA_FAILURE_RECEIPT)\n"
+                    f"sys.stdout.write({marker_padding!r}+CUDA_FAILURE_RECEIPT+'\\n')\n"
+                    "sys.stderr.write('CUDA out of memory\\n')\n"
+                    "raise SystemExit(CUDA_FAILURE_EXIT)\n"
+                )
             return run_command([sys.executable, "-c", body], cwd=cwd, env=env)
         if backend_name == "demucs":
             output = Path(args[args.index("-o") + 1]) / "htdemucs" / "source"
@@ -268,7 +280,7 @@ def test_actual_owned_child_marker_survives_diagnostic_tail_and_controls_both_ad
         backend = BsRoformerStemGenerationBackend(
             command_runner=runner, cuda_detector=lambda _env, _runner: True
         )
-    if marker_count == 1:
+    if marker_count == 1 and not marker_padding:
         result = backend.generate(request, lambda _percent, _stage: None)
         assert result.cpu_fallback
         assert attempts == ["cuda", "cpu"]
@@ -350,11 +362,16 @@ def test_calibration_promotion_requires_final_positive_provenance_and_actual_rea
             return result
 
         monkeypatch.setattr(rig.backend, "generate", cancelled)
-    rig.controller._run_stem_backend(job)
-    assert job.phase == "settled"
-    assert job.source is None
-    if outcome == "success":
-        accepted.assert_called_once()
-    else:
-        accepted.assert_not_called()
-        assert not selector._costs
+    assert job.heavy_work.try_acquire()
+    try:
+        rig.controller._run_stem_backend(job)
+        assert job.phase == "settled"
+        assert job.source is None
+        if outcome == "success":
+            accepted.assert_called_once()
+        else:
+            accepted.assert_not_called()
+            assert not selector._costs
+    finally:
+        job.dispose()
+    assert not job.heavy_work.registered

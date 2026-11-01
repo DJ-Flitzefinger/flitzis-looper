@@ -320,6 +320,27 @@ retry once on CPU if the CUDA run fails.
 - **THEN** the background worker retries the same source-version request on CPU
 - **AND** the failure and fallback are reported only through non-audio-thread status or diagnostics
 
+#### Scenario: Compacted diagnostics cannot authorize a CPU retry
+- **GIVEN** an owned separator exits with the CUDA-failure exit code
+- **AND** its output contains only an indented CUDA-failure marker as diagnostic text
+- **WHEN** the host compacts bounded diagnostics
+- **THEN** the diagnostic remains distinct from an exact protocol receipt
+- **AND** neither separator retries on CPU on the strength of that diagnostic
+
+### Requirement: Separator Diagnostics Cannot Become Protocol Receipts
+The host SHALL preserve the distinction between diagnostic text and exact child
+protocol lines while compacting or truncating command output. Whitespace
+normalization SHALL NOT manufacture encoder, BS input, completed-execution or
+CUDA-failure evidence. Genuine independent receipts SHALL remain available, and
+duplicate or oversized receipts SHALL remain invalid.
+
+#### Scenario: An indented execution diagnostic accompanies a genuine receipt
+- **GIVEN** a diagnostic contains an indented completed-execution marker
+- **AND** the child emits one separate exact completed-execution receipt
+- **WHEN** the host normalizes command output
+- **THEN** only the separate exact receipt is available to the execution parser
+- **AND** the diagnostic remains bounded and visibly distinct from protocol evidence
+
 
 <!-- From add-stem-performance-controls -->
 ### Requirement: Stem Control State Follows Current Source Version
