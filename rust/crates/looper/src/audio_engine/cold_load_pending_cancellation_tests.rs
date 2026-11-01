@@ -59,7 +59,7 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
     }
 }
 
-fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
+pub(super) fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
     let mut terminal = None;
     wait_until(|| {
         while let Ok(event) = engine
@@ -127,7 +127,10 @@ fn fixture(
     (directory, engine, consumer, request)
 }
 
-fn acknowledge(engine: &AudioEngine, consumer: &mut rtrb::Consumer<ControlMessage>) -> RtMixer {
+pub(super) fn acknowledge(
+    engine: &AudioEngine,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+) -> RtMixer {
     let mut mixer = RtMixer::new(2, 48_000.0);
     mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
     let mut scheduler = FixedCapacityScheduler::<8>::new();

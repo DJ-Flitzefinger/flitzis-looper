@@ -5370,3 +5370,82 @@ These separate successful selections are not a green whole-system matrix.
 Only task completion and this result paragraph change after functional checks;
 all five Rust inputs retain their tested bytes. No model/device/CUDA, physical
 pressure, latency, footprint or whole-quality acceptance is inferred.
+
+## STEP54 impact: retire cancelled queued asynchronous loads
+
+Actual ColdLoad admission retained initial-source PCM, loading state and its cold
+reservation after cancellation while waiting behind unrelated heavy work or two
+occupied ordinary workers. Six regressions failed against unchanged production
+in3.19s: request, epoch, actual Native placement replacement, resident cancellation,
+shutdown and ordinary shutdown. Every failure recorded the live blocker boundary
+before cleanup: PCM3/2 owners, loading8, adoption0, unsettled cancellation and no
+terminal error; the queued counts were0/1/1 or2/1/3. The never-opened source path
+ensures this is pre-preparation cancellation, not a decoder/model failure.
+
+The same bounded queue now carries lightweight unarmed authority predicates for
+ordinary and analysis-bearing loads. It retains original base request/epoch,
+proposal, definitive placement, resident and shutdown fences. Pending placement
+alone stays live. The predicate first takes the original request mutex to preserve
+the admission commit fence, even when shutdown is already visible. It clones no
+PCM, prepared material or artifact pin. Exact receipt removal and all existing
+claimed-work/strict-waiter visibility and admission borrowing remain unchanged.
+
+An optional queued-retirement envelope becomes executable only after queue
+acceptance. It owns the unclaimed original callable, waits for and releases that
+same request commit lock, destroys original captured owners and LoadingGuard, then
+uses existing cancellation cleanup and terminal Error/Progress delivery. Waiting
+before destruction also closes accepted queue shutdown racing metadata commit.
+Rejected submissions drop the unused envelope without invoking it under caller
+locks. Taking the original callable for actual worker execution disarms queued
+cleanup. All envelope and predicate captures end before the same original cold
+reservation and heavy capability. Terminal delivery is not a resource-END receipt.
+
+Systems and Methods PRE approved this focused approach. Verification covers the
+real PyO3 control pump/filter, replacement loading-token preservation, rejection
+under a held commit lock, accepted close/commit ordering, claimed payloads and a
+valid queued Pending source through its real own ACK, plus affected original cold
+and load controls. Source/policy/OwnACK, active cancellation, original numerical,
+resource, realtime and quality authority stay intact. This substantive split grows
+the plan to56: nativeREST55 and FINAL56 retain their ENTIRE former54/55 duties and
+all inherited negative/UNKNOWN gates. Other asynchronous classes remain separate;
+productive Torch and all process/fullhost/numerical/CUDA/platform/distribution
+acceptance limits remain unchanged. Frozen verification and review precede publication.
+
+Focused verification passed47 distinct Native cases:8 queued-load cases,21
+ColdJobs cases,14 analysis-owner cases,3 source-custody cases and1 actual shutdown.
+The eight load cases retain their tested production/test bytes; only the existing
+shutdown fixture then changed its obsolete no-error expectation to exactly one
+queued Error and no Started. All earlier source, voice, guard and artifact checks
+remain intact. The final shutdown and common controls passed;26 selected Python
+loader regressions passed in1.86s. Final Release/API verification passed with20
+library warnings;35 Looper test warnings and the einops0.6.1 warning remain.
+
+An unintentionally broad nested cold_load selection ran309 cases:287 passed,
+9 failed and13 remained ignored in1022.87s. It is not a green matrix and is not
+repeated. Besides the updated shutdown expectation, eight failures were checked
+individually with unchanged assertions against original production at dcea080f.
+An earlier comparison was invalidated when its shared Cargo target reused the
+current Rust runner. The corrected comparison freshly compiled the retained
+original source into an unused exclusive target, verified its2835-test inventory,
+old child Python source and an actual old Native mapped-image witness. This
+parent stage contains the six initial, unselected RED tests; its production and
+selected original fixtures match the retained commit.
+
+Six failed leaves/assertions occur in both versions: a missing
+configure_automatic_bpm_range hook on the ResumeAudio test double, the manual
+analysis supersession TaskError expectation, three public Generate/Piano waits
+and the discard queue's first-files retirement wait. Their differing asynchronous
+diagnostic snapshots remain explicit; matching assertions do not establish
+matching causes. Both216 registry cases pass in fresh processes while their
+broad-run registry failures remain unexplained. No timing or nondeterminism claim
+is drawn from the invalidated comparisons. An unchanged collector snapshot-owner
+lifetime is a source-only investigation candidate; no collector fix or controlled
+reproduction is included here.
+
+These additional negative observations remain open alongside every inherited
+quality and final gate. They do not replace the original32 parent failures,
+distinct watchdog, registry or other UNKNOWN records. Frozen Systems and Methods
+reviews cleared the scoped load-retirement change. Final format, strict OpenSpec,
+source/stage/index and protected-binding checks and the single independent final
+actual-diff review precede its publication. No whole-model, CUDA, device, listening,
+latency, footprint or whole-system acceptance follows from these selections.

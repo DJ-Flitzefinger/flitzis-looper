@@ -774,7 +774,23 @@ NativeREST54 retains ENTIRE former nativeREST53; FINAL55 retains ENTIRE former
 FINAL54 without omissions. Worker polling alone does not promise prompt retirement
 when both workers are occupied and the control pump is not serviced.
 
-## 54. Remaining native parity before cutover
+## 54. Retire cancelled queued asynchronous loads
+
+- [x] Reproduce actual queued load cancellation retaining captured PCM, loading
+      state and admission behind live heavy work and two occupied cold workers.
+- [x] Observe original unarmed authority without treating a pending placement as
+      cancellation or cloning the source/material/pin owners into predicates.
+- [x] Retire only accepted unclaimed jobs after their original admission commit;
+      preserve ordinary terminal error delivery and exact replacement loading tokens.
+- [x] Verify rejected submission, concurrent close/commit, claimed work, public
+      loader event filtering and a valid queued load through its original own ACK.
+
+This practical load-retirement correction grows the plan to56. NativeREST55
+retains ENTIRE former nativeREST54; FINAL56 retains ENTIRE former FINAL55 without
+omissions. Other asynchronous job classes and all native process, numerical,
+CUDA, fullhost, quality, platform and distribution gates retain their limits.
+
+## 55. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -791,10 +807,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP55, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP56, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 55. Combined regression and final architecture review
+## 56. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

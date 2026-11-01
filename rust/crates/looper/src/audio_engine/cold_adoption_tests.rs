@@ -768,6 +768,7 @@ fn shutdown_cancels_pending_and_queued_jobs_and_drains_owned_disk_artifacts() {
     assert!(fixture.engine.sample_cache.lock().unwrap()[1].is_none());
     assert!(fixture.engine.sample_cache.lock().unwrap()[2].is_none());
     let mut failures = Vec::new();
+    let mut queued_started = false;
     while let Ok(event) = fixture
         .engine
         .loader_rx
@@ -778,13 +779,21 @@ fn shutdown_cancels_pending_and_queued_jobs_and_drains_owned_disk_artifacts() {
     {
         match event {
             LoaderEvent::Error { id, request_id, .. } => failures.push((id, request_id)),
+            LoaderEvent::Started { id, request_id } if (id, request_id) == (2, queued) => {
+                queued_started = true;
+            }
             LoaderEvent::Success { .. } => panic!("shutdown published success"),
             _ => {}
         }
     }
     assert!(failures.contains(&(0, first)));
     assert!(failures.contains(&(1, second)));
-    assert!(!failures.contains(&(2, queued))); // Queued work never starts; its guard retires.
+    assert_eq!(
+        failures.iter().filter(|row| **row == (2, queued)).count(),
+        1,
+        "accepted queued cancellation settles exactly once"
+    );
+    assert!(!queued_started, "queued shutdown entered preparation");
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 2);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_orphan_files_eventually_retired();

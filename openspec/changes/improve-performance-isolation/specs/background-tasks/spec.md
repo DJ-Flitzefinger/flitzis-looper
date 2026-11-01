@@ -579,3 +579,36 @@ retain its original admission until actual terminal retirement.
 - **THEN** the observation cannot remove or certify the running payload as terminal
 - **AND** neither payload nor predicate captures can outlive the complete original admission
 - **AND** ordinary peers and existing strict terminal waiters retain queue visibility
+
+### Requirement: Queued Asynchronous Loads Retire Through Original Terminal Delivery
+Queued ordinary and analysis-bearing loads SHALL observe their original unarmed
+request, epoch, proposal, placement, resident cancellation and shutdown authority
+through existing workers and the serviced control pump. Pending placement alone
+SHALL NOT cancel a valid load. An accepted unclaimed load SHALL await its original
+admission commit before destroying captured source/material/pin and loading owners,
+then settle cancellation through existing cleanup and filtered terminal delivery.
+Predicates and terminal callbacks SHALL retain the same complete admission until
+their owners end and SHALL run outside the queue mutex. Terminal events alone
+SHALL NOT certify complete resource release. Claimed work SHALL retain its actual
+terminal reader obligations; rejection SHALL NOT run accepted-queue cleanup.
+
+#### Scenario: An invalidated load waits behind unrelated work
+- **GIVEN** an actual queued load retains an old source reader and its exact loading token
+- **WHEN** original request, epoch, placement, resident or shutdown authority cancels it before worker claim
+- **THEN** existing polling retires its captured owners without starting preparation or waiting for unrelated heavy work
+- **AND** a serviced control pump provides retirement when both ordinary cold workers remain occupied
+- **AND** existing cancellation cleanup and request-filtered error delivery settle that attempt once, without removing a replacement loading token
+
+#### Scenario: Queue shutdown races the original admission commit
+- **GIVEN** an accepted load is queued while its caller still owns the request commit lock
+- **WHEN** shutdown removes that unclaimed load
+- **THEN** queued retirement awaits and releases that lock before destroying its loading guard and captured owners
+- **AND** a rejected submission never invokes this accepted-job retirement callback under caller-owned locks
+- **AND** a raced actual worker claim disarms queued-only terminal cleanup
+
+#### Scenario: A queued source remains current during pending placement
+- **GIVEN** a valid unarmed load is queued while the content-placement mirror is pending
+- **WHEN** cancellation polling runs without another definitive invalidation
+- **THEN** the original job and loading admission remain alive
+- **AND** after the mirror settles the source can prepare, publish and reach its original own ACK
+- **AND** ordinary start-policy changes do not become source cancellation

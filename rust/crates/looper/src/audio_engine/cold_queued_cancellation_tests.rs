@@ -28,6 +28,129 @@ fn queued(lane: &ColdJobs) -> bool {
 }
 
 #[test]
+fn rejected_queue_never_invokes_retirement_under_callers_commit_lock() {
+    let mut lane = ColdJobs::new().unwrap();
+    let reservation = lane.reserve().unwrap();
+    lane.close_admission();
+    let commit = Arc::new(Mutex::new(()));
+    let _commit = commit.lock().unwrap();
+    let invoked = Arc::new(AtomicBool::new(false));
+    let flag = invoked.clone();
+    let callback_commit = commit.clone();
+    let owner = Arc::new(());
+    let capture = owner.clone();
+    assert!(
+        lane.handle()
+            .submit_retiring_classified(
+                reservation,
+                move || drop(capture),
+                None,
+                None,
+                Some(Box::new(move |job| {
+                    flag.store(true, Ordering::Release);
+                    // The real retirement callback needs this caller-owned lock.
+                    // Detect an erroneous call without hanging a failing fixture.
+                    drop(callback_commit.try_lock());
+                    drop(job);
+                })),
+            )
+            .is_err()
+    );
+    assert!(!invoked.load(Ordering::Acquire));
+    assert_eq!(Arc::strong_count(&owner), 1);
+    assert_eq!(lane.counts_for_test(), (0, 0, 0));
+    lane.shutdown();
+}
+
+#[test]
+fn accepted_queue_retirement_waits_commit_then_drops_capture_before_callback_and_admission() {
+    let mut lane = ColdJobs::new().unwrap();
+    let blocker = super::super::heavy_work::ticket().unwrap();
+    assert!(blocker.try_acquire().unwrap());
+    let commit = Arc::new(Mutex::new(()));
+    let committing = commit.lock().unwrap();
+    let callback_commit = commit.clone();
+    let owner = Arc::new(());
+    let capture = owner.clone();
+    let observed = owner.clone();
+    let handle = lane.handle();
+    let callback_handle = handle.clone();
+    let (entered, started) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    let ticket = super::super::heavy_work::ticket().unwrap();
+    handle
+        .submit_retiring_classified(
+            lane.reserve().unwrap(),
+            move || drop(capture),
+            Some(ticket),
+            None,
+            Some(Box::new(move |job| {
+                entered.send(()).unwrap();
+                drop(callback_commit.lock().unwrap());
+                drop(job);
+                done.send((
+                    Arc::strong_count(&observed),
+                    callback_handle.reserve().is_ok(),
+                ))
+                .unwrap();
+            })),
+        )
+        .unwrap();
+    let (held, before, premature, owners, queue_open) = thread::scope(|scope| {
+        let closer = scope.spawn(|| lane.close_admission());
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let held = Arc::strong_count(&owner);
+        let before = lane.counts_for_test();
+        let premature = finished.try_recv().is_ok();
+        drop(committing);
+        let (owners, queue_open) = finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        closer.join().unwrap();
+        (held, before, premature, owners, queue_open)
+    });
+    assert!(!premature);
+    assert_eq!(held, 3);
+    assert_eq!(before, (0, 0, 1));
+    assert_eq!(owners, 2);
+    assert!(!queue_open, "callback reentry did not observe closed lane");
+    assert_eq!(Arc::strong_count(&owner), 1);
+    assert_eq!(lane.counts_for_test(), (0, 0, 0));
+    assert!(blocker.is_active());
+    drop(blocker);
+    lane.shutdown();
+}
+
+#[test]
+fn claimed_payload_disarms_queued_retirement() {
+    let mut lane = ColdJobs::new().unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let invoked = Arc::new(AtomicBool::new(false));
+    let flag = invoked.clone();
+    lane.submit_analysis_cancellable(
+        lane.reserve().unwrap(),
+        false,
+        || false,
+        move |job| {
+            flag.store(true, Ordering::Release);
+            drop(job);
+        },
+        move || {
+            entered.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(5)).unwrap();
+        },
+    )
+    .unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    lane.close_admission();
+    assert!(!invoked.load(Ordering::Acquire));
+    assert_eq!(lane.counts_for_test(), (1, 0, 1));
+    release.send(()).unwrap();
+    lane.shutdown();
+    assert!(!invoked.load(Ordering::Acquire));
+    assert_eq!(lane.counts_for_test(), (0, 0, 0));
+}
+
+#[test]
 fn terminal_queued_heavy_cancellation_drops_before_predecessor_ends() {
     let mut lane = ColdJobs::new().unwrap();
     let blocker = super::super::heavy_work::ticket().unwrap();

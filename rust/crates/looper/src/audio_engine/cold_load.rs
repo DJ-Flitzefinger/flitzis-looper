@@ -739,7 +739,9 @@ fn admit_selected_material_incoming(
     refine_tempo_only: bool,
 ) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
-    let automatic_bpm_range = *engine.automatic_bpm_range.lock()
+    let automatic_bpm_range = *engine
+        .automatic_bpm_range
+        .lock()
         .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if refine_tempo_only && (source_intent != "restore" || restore_automatic || run_analysis) {
@@ -1011,6 +1013,9 @@ fn admit_selected_material_incoming(
         events: engine.loader_tx.clone(),
     };
     let panic_cleanup = work.publication_cleanup();
+    let queued_cancellation = work.queued_cancellation();
+    let queued_cleanup = panic_cleanup.clone();
+    let queued_events = work.events.clone();
     let guard = LoadingGuard {
         id,
         request_id,
@@ -1019,13 +1024,41 @@ fn admit_selected_material_incoming(
     };
     engine
         .cold_jobs
-        .submit_analysis(reservation, work.run_analysis || work.refine_tempo_only || work.restore_automatic, move || {
-            let _guard = guard;
-            let events = work.events.clone();
-            run_worker_catching_panic_captured(panic_cleanup, &events, id, request_id, || {
-                work.run(producer)
-            });
-        })
+        .submit_analysis_cancellable(
+            reservation,
+            work.run_analysis || work.refine_tempo_only || work.restore_automatic,
+            queued_cancellation,
+            move |job| {
+                // Even shutdown can remove this accepted job before admit commits.
+                // Wait for that exact commit before the LoadingGuard is destroyed.
+                drop(queued_cleanup.requests.lock());
+                drop(job);
+                let error = "cold load cancelled before preparation".to_owned();
+                let event = if queued_cleanup.cancel_unclaimed() {
+                    queued_cleanup.rollback_rejected_artifacts();
+                    LoaderEvent::Error {
+                        id,
+                        request_id,
+                        error,
+                    }
+                } else {
+                    LoaderEvent::Progress {
+                        id,
+                        request_id,
+                        percent: 0.0,
+                        stage: format!("{error}; native permission unresolved; artifacts retained"),
+                    }
+                };
+                let _ = queued_events.send(event);
+            },
+            move || {
+                let _guard = guard;
+                let events = work.events.clone();
+                run_worker_catching_panic_captured(panic_cleanup, &events, id, request_id, || {
+                    work.run(producer)
+                });
+            },
+        )
         .map_err(PyRuntimeError::new_err)?;
     // A worker's first current-request check takes this mutex. It cannot observe
     // the reservation before the request/loading commit has finished.
@@ -1206,6 +1239,45 @@ fn same_source(left: Option<&SampleBuffer>, right: Option<&SampleBuffer>) -> boo
 }
 
 impl ColdLoad {
+    /// Only scalar authority is copied, never PCM, material or artifact pins.
+    /// A queued proposal is unarmed; a raced worker claim cannot be removed by
+    /// this observation even if its later arming changes these original fences.
+    fn queued_cancellation(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+        let requests = self.requests.clone();
+        let id = self.id;
+        let base_request = self.base_request;
+        let base_epoch = self.base_epoch;
+        let epoch = self.epoch.clone();
+        let proposal = self.proposal.clone();
+        let adoption = self.adoption.clone();
+        let ownership = self.ownership.clone();
+        let placement = self.placement;
+        let cancelled = self.cancelled.clone();
+        let resident_cancelled = self
+            .resident_guard
+            .as_ref()
+            .map(|guard| guard.cancelled.clone());
+        move || {
+            // This lock comes first even for shutdown: admission still owns it
+            // until the exact loading/request metadata commit has completed.
+            let Ok(requests) = requests.lock() else {
+                return true;
+            };
+            cancelled.load(Ordering::Acquire)
+                || adoption.load(Ordering::Acquire) == 3
+                || matches!(
+                    ownership.observe_slot_snapshot(placement),
+                    PlacementObservation::Stale | PlacementObservation::Retired
+                )
+                || !proposal.current()
+                || resident_cancelled
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Acquire))
+                || epoch.load(Ordering::Acquire) != base_epoch
+                || requests.get(id).copied() != Some(base_request)
+        }
+    }
+
     fn publication_cleanup(&self) -> ColdPublicationCleanup {
         ColdPublicationCleanup {
             adoption: self.adoption.clone(),
@@ -1316,9 +1388,19 @@ impl ColdLoad {
             return Err("primary neural analysis is not configured".into());
         }
         match self.automatic_bpm_range {
-            Some(range) => super::app_analysis::analyze_with_range(sample, self.output_rate,
-                context, self.refine_tempo_only, Some(range)),
-            None => super::app_analysis::analyze(sample, self.output_rate, context, self.refine_tempo_only),
+            Some(range) => super::app_analysis::analyze_with_range(
+                sample,
+                self.output_rate,
+                context,
+                self.refine_tempo_only,
+                Some(range),
+            ),
+            None => super::app_analysis::analyze(
+                sample,
+                self.output_rate,
+                context,
+                self.refine_tempo_only,
+            ),
         }
     }
 
@@ -2241,6 +2323,10 @@ mod cancellation_publication_tests;
 #[cfg(all(test, windows))]
 #[path = "cold_load_pending_cancellation_tests.rs"]
 mod pending_cancellation_tests;
+
+#[cfg(all(test, windows))]
+#[path = "cold_load_queued_cancellation_tests.rs"]
+mod queued_cancellation_tests;
 
 #[cfg(all(test, windows))]
 #[path = "cold_restore_initialization_tests.rs"]

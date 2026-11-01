@@ -20,8 +20,10 @@ pub(super) const QUEUED_JOBS: usize = 32;
 pub(super) const PCM_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 type Job = Box<dyn FnOnce() + Send>;
 type Cancellation = Arc<dyn Fn() -> bool + Send + Sync>;
+type QueuedRetirement = Box<dyn FnOnce(Job) + Send>;
 struct AdmittedJob {
     job: Option<Job>,
+    queued_retirement: Option<QueuedRetirement>,
     cancelled: Option<Cancellation>,
     reservation: Option<Reservation>,
     heavy: Option<super::heavy_work::Ticket>,
@@ -31,7 +33,14 @@ impl Drop for AdmittedJob {
     fn drop(&mut self) {
         // Queued cancellation and worker unwind retire captured physical owners
         // before making either admission visible as free. Never under a lock.
-        drop(self.job.take());
+        if let Some(job) = self.job.take() {
+            if let Some(retire) = self.queued_retirement.take() {
+                retire(job);
+            } else {
+                drop(job);
+            }
+        }
+        drop(self.queued_retirement.take());
         drop(self.cancelled.take());
         drop(self.reservation.take());
         drop(self.heavy.take());
@@ -118,18 +127,6 @@ impl ColdJobsHandle {
         self.submit_classified(reservation, job, None, None)
     }
 
-    pub(super) fn submit_heavy(
-        &self,
-        reservation: Reservation,
-        job: impl FnOnce() + Send + 'static,
-    ) -> Result<(), String> {
-        let ticket = match super::heavy_work::current() {
-            Some(owner) => owner,
-            None => super::heavy_work::ticket()?,
-        };
-        self.submit_classified(reservation, job, Some(ticket), None)
-    }
-
     fn submit_classified(
         &self,
         reservation: Reservation,
@@ -137,8 +134,20 @@ impl ColdJobsHandle {
         heavy: Option<super::heavy_work::Ticket>,
         cancelled: Option<Cancellation>,
     ) -> Result<(), String> {
-        let admitted = AdmittedJob {
+        self.submit_retiring_classified(reservation, job, heavy, cancelled, None)
+    }
+
+    fn submit_retiring_classified(
+        &self,
+        reservation: Reservation,
+        job: impl FnOnce() + Send + 'static,
+        heavy: Option<super::heavy_work::Ticket>,
+        cancelled: Option<Cancellation>,
+        queued_retirement: Option<QueuedRetirement>,
+    ) -> Result<(), String> {
+        let mut admitted = AdmittedJob {
             job: Some(Box::new(job)),
+            queued_retirement: None,
             cancelled,
             reservation: Some(reservation),
             heavy,
@@ -152,6 +161,9 @@ impl ColdJobsHandle {
             drop(state);
             return Err("cold lane stopped".into());
         }
+        // Only an accepted queue owns terminal retirement. A rejected caller
+        // may still hold its request/metadata locks and performs its own cleanup.
+        admitted.queued_retirement = queued_retirement;
         state.jobs.push_back(admitted);
         self.shared.ready.notify_one();
         Ok(())
@@ -330,6 +342,7 @@ impl ColdJobsHandle {
                 sender: Some(sender),
             };
             state.jobs.push_back(AdmittedJob {
+                queued_retirement: None,
                 job: Some(Box::new(move || {
                     let mut delivery = delivery;
                     #[cfg(test)]
@@ -586,14 +599,6 @@ impl ColdJobs {
         self.handle().submit(reservation, job)
     }
 
-    pub(super) fn submit_heavy(
-        &self,
-        reservation: Reservation,
-        job: impl FnOnce() + Send + 'static,
-    ) -> Result<(), String> {
-        self.handle().submit_heavy(reservation, job)
-    }
-
     /// A queued Native analysis request has no receiving waiter. Existing
     /// workers and the control pump observe its original cancellation authority.
     pub(super) fn submit_heavy_cancellable(
@@ -610,17 +615,29 @@ impl ColdJobs {
             .submit_classified(reservation, job, Some(ticket), Some(Arc::new(cancelled)))
     }
 
-    pub(super) fn submit_analysis(
+    pub(super) fn submit_analysis_cancellable(
         &self,
         reservation: Reservation,
         analysis: bool,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        queued_retirement: impl FnOnce(Job) + Send + 'static,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
-        if analysis {
-            self.submit_heavy(reservation, job)
+        let heavy = if analysis {
+            Some(match super::heavy_work::current() {
+                Some(owner) => owner,
+                None => super::heavy_work::ticket()?,
+            })
         } else {
-            self.submit(reservation, job)
-        }
+            None
+        };
+        self.handle().submit_retiring_classified(
+            reservation,
+            job,
+            heavy,
+            Some(Arc::new(cancelled)),
+            Some(Box::new(queued_retirement)),
+        )
     }
 
     /// Close worker claims before releasing active jobs through cancellation.
