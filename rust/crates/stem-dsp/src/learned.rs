@@ -7,7 +7,7 @@
 //! CUDA/AMP, audio-quality, installation or platform acceptance.
 //! Derived from the pinned vendored BS-RoFormer (Phil Wang 2023, Roman Solovyev
 //! 2024); retain vendor/bs_roformer/LICENSE-LUCIDRAINS and LICENSE-ZFTURBO.
-use crate::{BINS, Error, Geometry, RATE, STEMS, Spectrum, checkpoint, finite, zeros};
+use crate::{BINS, Error, Geometry, RATE, STEMS, Spectrum, checkpoint, finite, reserved, zeros};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -95,7 +95,7 @@ impl<R: Read> Decoder<'_, R> {
     }
     fn values(&mut self, len: usize) -> Result<Vec<f32>, Error> {
         checkpoint(self.cancelled)?;
-        let mut result = zeros(len)?;
+        let mut result = zeros(len, "weights.tensor")?;
         let mut bytes = [0u8; 16_384];
         for chunk in result.chunks_mut(bytes.len() / 4) {
             checkpoint(self.cancelled)?;
@@ -170,7 +170,7 @@ impl Norm {
         if !input.len().is_multiple_of(self.0.len()) {
             return Err(Error::Shape);
         }
-        let mut output = zeros(input.len())?;
+        let mut output = zeros(input.len(), "learned.norm")?;
         let scale = (self.0.len() as f32).sqrt();
         for (source, target) in input
             .chunks(self.0.len())
@@ -198,12 +198,17 @@ struct Linear {
     bias: Option<Vec<f32>>,
 }
 impl Linear {
-    fn apply(&self, input: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
+    fn apply(
+        &self,
+        input: &[f32],
+        cancelled: &dyn Fn() -> bool,
+        phase: &'static str,
+    ) -> Result<Vec<f32>, Error> {
         if !input.len().is_multiple_of(self.input) {
             return Err(Error::Shape);
         }
         let rows = input.len() / self.input;
-        let mut result = zeros(rows * self.output)?;
+        let mut result = zeros(rows * self.output, phase)?;
         for start in (0..rows).step_by(LINEAR_TILE) {
             checkpoint(cancelled)?;
             let count = (rows - start).min(LINEAR_TILE);
@@ -291,12 +296,17 @@ struct Attention {
 impl Attention {
     fn apply(&self, input: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
         let normalized = self.norm.apply(input, cancelled)?;
-        let mut qkv = self.qkv.apply(&normalized, cancelled)?;
-        let gates = self.gates.apply(&normalized, cancelled)?;
+        let mut qkv = self.qkv.apply(&normalized, cancelled, "attention.qkv")?;
+        let gates = self
+            .gates
+            .apply(&normalized, cancelled, "attention.gates")?;
         drop(normalized);
         rotate(&mut qkv, &self.frequencies, cancelled)?;
         let attended = attend_heads(&qkv, &gates, cancelled)?;
-        self.output.apply(&attended, cancelled)
+        // All synchronous score/value readers have returned before projection.
+        drop(qkv);
+        drop(gates);
+        self.output.apply(&attended, cancelled, "attention.output")
     }
 }
 
@@ -339,12 +349,12 @@ fn attend_heads(
     }
     finite(qkv, cancelled)?;
     finite(gates, cancelled)?;
-    let mut attended = zeros(length * INNER)?;
-    let mut q = zeros(length * HEAD)?;
-    let mut k = zeros(length * HEAD)?;
-    let mut v = zeros(length * HEAD)?;
-    let mut scores = zeros(QUERY_TILE * length)?;
-    let mut tile_output = zeros(QUERY_TILE * HEAD)?;
+    let mut attended = zeros(length * INNER, "attention.attended")?;
+    let mut q = zeros(length * HEAD, "attention.query")?;
+    let mut k = zeros(length * HEAD, "attention.key")?;
+    let mut v = zeros(length * HEAD, "attention.value")?;
+    let mut scores = zeros(QUERY_TILE * length, "attention.scores")?;
+    let mut tile_output = zeros(QUERY_TILE * HEAD, "attention.tile-output")?;
     for head in 0..HEADS {
         checkpoint(cancelled)?;
         for position in 0..length {
@@ -436,10 +446,13 @@ impl Transformer {
         add(input, &attention, cancelled)?;
         drop(attention);
         let norm = self.norm.apply(input, cancelled)?;
-        let mut expanded = self.expand.apply(&norm, cancelled)?;
+        let mut expanded = self.expand.apply(&norm, cancelled, "feedforward.expand")?;
         drop(norm);
         activate(&mut expanded, 4 * DIM, gelu, cancelled)?;
-        let feedforward = self.contract.apply(&expanded, cancelled)?;
+        let feedforward = self
+            .contract
+            .apply(&expanded, cancelled, "feedforward.contract")?;
+        drop(expanded);
         add(input, &feedforward, cancelled)
     }
 }
@@ -498,21 +511,21 @@ impl Model {
             cancelled,
         };
         decoder.digest.update(magic);
-        let mut bands = Vec::with_capacity(BANDS);
+        let mut bands = reserved(BANDS, "weights.band-metadata")?;
         for b in 0..BANDS {
             bands.push(Band {
                 norm: decoder.norm(band_width(b))?,
                 projection: decoder.linear(band_width(b), DIM, true)?,
             });
         }
-        let mut blocks = Vec::with_capacity(DEPTH);
+        let mut blocks = reserved(DEPTH, "weights.block-metadata")?;
         for _ in 0..DEPTH {
             blocks.push((decoder.transformer()?, decoder.transformer()?));
         }
         let norm = decoder.norm(DIM)?;
-        let mut masks = Vec::with_capacity(STEMS);
+        let mut masks = reserved(STEMS, "weights.mask-metadata")?;
         for _ in 0..STEMS {
-            let mut stem = Vec::with_capacity(BANDS);
+            let mut stem = reserved(BANDS, "weights.mask-band-metadata")?;
             for b in 0..BANDS {
                 stem.push(Mask {
                     expand: decoder.linear(DIM, DIM * 2, true)?,
@@ -544,11 +557,11 @@ impl Model {
             return Err(Error::Shape);
         }
         finite(features, cancelled)?;
-        let mut x = zeros(steps * BANDS * DIM)?;
+        let mut x = zeros(steps * BANDS * DIM, "learned.axial")?;
         let mut offset = 0;
         for (b, band) in self.bands.iter().enumerate() {
             let width = band_width(b);
-            let mut selected = zeros(steps * width)?;
+            let mut selected = zeros(steps * width, "learned.band-input")?;
             for t in 0..steps {
                 checkpoint(cancelled)?;
                 selected[t * width..(t + 1) * width].copy_from_slice(
@@ -556,7 +569,11 @@ impl Model {
                 );
             }
             let normalized = band.norm.apply(&selected, cancelled)?;
-            let projected = band.projection.apply(&normalized, cancelled)?;
+            drop(selected);
+            let projected =
+                band.projection
+                    .apply(&normalized, cancelled, "learned.band-projection")?;
+            drop(normalized);
             for t in 0..steps {
                 x[(t * BANDS + b) * DIM..(t * BANDS + b + 1) * DIM]
                     .copy_from_slice(&projected[t * DIM..(t + 1) * DIM]);
@@ -565,7 +582,7 @@ impl Model {
         }
         for (time, frequency) in &self.blocks {
             for band in 0..BANDS {
-                let mut selected = zeros(steps * DIM)?;
+                let mut selected = zeros(steps * DIM, "learned.time-input")?;
                 for t in 0..steps {
                     selected[t * DIM..(t + 1) * DIM].copy_from_slice(
                         &x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM],
@@ -584,20 +601,21 @@ impl Model {
         // All synchronous transformer readers have returned. This private owned
         // buffer has no residual/external reader; avoid a second full axial Vec.
         self.norm.apply_in_place(&mut x, cancelled)?;
-        let mut result = zeros(STEMS * steps * FEATURES)?;
+        let mut result = zeros(STEMS * steps * FEATURES, "learned.masks")?;
         let mut offset = 0;
         for band in 0..BANDS {
             let width = band_width(band);
-            let mut selected = zeros(steps * DIM)?;
+            let mut selected = zeros(steps * DIM, "learned.mask-input")?;
             for t in 0..steps {
                 selected[t * DIM..(t + 1) * DIM]
                     .copy_from_slice(&x[(t * BANDS + band) * DIM..(t * BANDS + band + 1) * DIM]);
             }
             for stem in 0..STEMS {
                 let mask = &self.masks[stem][band];
-                let mut hidden = mask.expand.apply(&selected, cancelled)?;
+                let mut hidden = mask.expand.apply(&selected, cancelled, "mask.expand")?;
                 activate(&mut hidden, 2 * DIM, f32::tanh, cancelled)?;
-                let projected = mask.contract.apply(&hidden, cancelled)?;
+                let projected = mask.contract.apply(&hidden, cancelled, "mask.contract")?;
+                drop(hidden);
                 for t in 0..steps {
                     checkpoint(cancelled)?;
                     for i in 0..width {
@@ -636,10 +654,7 @@ impl Model {
         }
         Geometry::new(frames, RATE)?;
         finite(pcm, cancelled)?;
-        let mut output = Vec::new();
-        output
-            .try_reserve_exact(batch * STEMS * 2 * frames)
-            .map_err(|_| Error::Allocation)?;
+        let mut output = reserved(batch * STEMS * 2 * frames, "learned.batch-output")?;
         for sample in pcm.chunks(2 * frames) {
             checkpoint(cancelled)?;
             output.extend(self.chunk(sample, cancelled)?);
@@ -747,9 +762,12 @@ mod tests {
             calls.set(calls.get() + 1);
             calls.get() > 1
         };
-        assert_eq!(linear.apply(&[1.; 66], &cancelled), Err(Error::Cancelled));
         assert_eq!(
-            linear.apply(&[f32::MAX; 2], &|| false),
+            linear.apply(&[1.; 66], &cancelled, "test.linear"),
+            Err(Error::Cancelled)
+        );
+        assert_eq!(
+            linear.apply(&[f32::MAX; 2], &|| false, "test.linear"),
             Err(Error::NonFinite)
         );
     }

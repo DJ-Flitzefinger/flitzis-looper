@@ -87,12 +87,12 @@ struct Buffers {
 impl Buffers {
     fn new() -> Result<Self, Error> {
         Ok(Self {
-            input: zeros(BATCH * CHANNELS * CHUNK)?,
-            source: zeros(CHANNELS * CHUNK)?,
-            result: zeros(LANES * RING)?,
-            counter: zeros(RING)?,
-            output: zeros(LANES * CHUNK)?,
-            window: zeros(CHUNK)?,
+            input: zeros(BATCH * CHANNELS * CHUNK, "track.input")?,
+            source: zeros(CHANNELS * CHUNK, "track.source")?,
+            result: zeros(LANES * RING, "track.result")?,
+            counter: zeros(RING, "track.counter")?,
+            output: zeros(LANES * CHUNK, "track.output")?,
+            window: zeros(CHUNK, "track.window")?,
         })
     }
 

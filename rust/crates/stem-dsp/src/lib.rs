@@ -33,7 +33,11 @@ const PLAN_ALLOWANCE: usize = 1 << 20;
 pub enum Error {
     Shape,
     NonFinite,
-    Allocation,
+    /// Logical vector request, not allocator overhead or a memory-pressure cause.
+    Allocation {
+        phase: &'static str,
+        requested_bytes: usize,
+    },
     Cancelled,
     Envelope,
     Source,
@@ -43,10 +47,20 @@ pub enum Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Allocation {
+            phase,
+            requested_bytes,
+        } = self
+        {
+            return write!(
+                f,
+                "BS allocation failed: phase={phase} requested_bytes={requested_bytes}"
+            );
+        }
         f.write_str(match self {
             Self::Shape => "unsupported complete BS spectral chunk geometry",
             Self::NonFinite => "nonfinite BS spectral input or reconstruction",
-            Self::Allocation => "bounded BS spectral allocation failed",
+            Self::Allocation { .. } => unreachable!(),
             Self::Cancelled => "BS spectral work cancelled",
             Self::Envelope => "invalid BS inverse overlap envelope",
             Self::Source => "incomplete BS track source read",
@@ -132,13 +146,51 @@ fn finite(values: &[f32], cancelled: &dyn Fn() -> bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn zeros<T: Default + Clone>(len: usize) -> Result<Vec<T>, Error> {
+fn reserved<T>(len: usize, phase: &'static str) -> Result<Vec<T>, Error> {
+    let requested_bytes = len.checked_mul(size_of::<T>()).ok_or(Error::Shape)?;
     let mut values = Vec::new();
     values
         .try_reserve_exact(len)
-        .map_err(|_| Error::Allocation)?;
+        .map_err(|_| Error::Allocation {
+            phase,
+            requested_bytes,
+        })?;
+    Ok(values)
+}
+
+fn zeros<T: Default + Clone>(len: usize, phase: &'static str) -> Result<Vec<T>, Error> {
+    let mut values = reserved(len, phase)?;
     values.resize(len, T::default());
     Ok(values)
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_layout_keeps_phase_and_exact_bytes_without_payload_allocation() {
+        // Layout rejects >isize::MAX before asking the OS for memory. This is
+        // an actual reserve failure, NOT an induced host/VRAM OOM experiment.
+        let len = usize::MAX / size_of::<f32>();
+        let expected = Error::Allocation {
+            phase: "test.full-request",
+            requested_bytes: len * size_of::<f32>(),
+        };
+        assert_eq!(zeros::<f32>(len, "test.full-request"), Err(expected));
+        assert_eq!(
+            expected.to_string(),
+            format!(
+                "BS allocation failed: phase=test.full-request requested_bytes={}",
+                len * size_of::<f32>()
+            )
+        );
+        assert_eq!(
+            reserved::<f32>(usize::MAX, "test.overflow"),
+            Err(Error::Shape)
+        );
+        assert_eq!(zeros::<f32>(3, "test.initialized").unwrap(), [0.; 3]);
+    }
 }
 
 struct Transform {
@@ -161,7 +213,14 @@ impl Transform {
         if scratch_len > FFT_SCRATCH {
             return Err(Error::Shape);
         }
-        let mut window = zeros(FFT)?;
+        let mut window = zeros(
+            FFT,
+            if inverse {
+                "inverse.window"
+            } else {
+                "analyze.window"
+            },
+        )?;
         for (i, value) in window.iter_mut().enumerate() {
             // Periodic float32 Hann. FFT/vector cosine implementations may
             // differ in final bits; numerical parity requires an original oracle.
@@ -170,8 +229,22 @@ impl Transform {
         }
         Ok(Self {
             fft,
-            buffer: zeros(FFT)?,
-            scratch: zeros(scratch_len)?,
+            buffer: zeros(
+                FFT,
+                if inverse {
+                    "inverse.fft"
+                } else {
+                    "analyze.fft"
+                },
+            )?,
+            scratch: zeros(
+                scratch_len,
+                if inverse {
+                    "inverse.scratch"
+                } else {
+                    "analyze.scratch"
+                },
+            )?,
             window,
         })
     }
@@ -206,7 +279,7 @@ impl Spectrum {
         let geometry = Geometry::new(pcm.len() / CHANNELS, rate)?;
         finite(pcm, cancelled)?;
         let mut transform = Transform::new(false, cancelled)?;
-        let mut features = zeros(geometry.features)?;
+        let mut features = zeros(geometry.features, "analyze.features")?;
         for time in 0..geometry.steps {
             for channel in 0..CHANNELS {
                 checkpoint(cancelled)?;
@@ -253,7 +326,7 @@ impl Spectrum {
         }
         finite(masks, cancelled)?;
         let mut transform = Transform::new(true, cancelled)?;
-        let mut envelope: Vec<f32> = zeros(g.inverse_frames)?;
+        let mut envelope: Vec<f32> = zeros(g.inverse_frames, "inverse.envelope")?;
         for time in 0..g.steps {
             checkpoint(cancelled)?;
             for i in 0..FFT {
@@ -264,8 +337,8 @@ impl Spectrum {
         if trimmed.iter().any(|x| !x.is_finite() || *x <= 1e-11) {
             return Err(Error::Envelope);
         }
-        let mut output = zeros(STEMS * CHANNELS * g.frames)?;
-        let mut accumulation: Vec<f32> = zeros(g.inverse_frames)?;
+        let mut output = zeros(STEMS * CHANNELS * g.frames, "inverse.output")?;
+        let mut accumulation: Vec<f32> = zeros(g.inverse_frames, "inverse.accumulation")?;
         for stem in 0..STEMS {
             for channel in 0..CHANNELS {
                 accumulation.fill(0.0);

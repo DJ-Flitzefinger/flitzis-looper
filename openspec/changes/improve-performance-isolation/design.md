@@ -1,5 +1,117 @@
 # Performance audit and implementation design
 
+## STEP28 impact: allocation attribution and learned buffer lifetimes
+
+Every fallible spectral, track and learned vector reservation now retains its
+owning phase and checked logical requested bytes in the terminal allocation
+error. This includes fixed-schema weight metadata and diagnostic PCM/original-
+feature vectors. Byte multiplication overflow remains a shape rejection before
+allocation. The diagnostic does not identify allocator overhead, a total process
+peak, Job/host pressure, physical VRAM exhaustion or the cause of older failures.
+FFT planning, SGEMM internal packing and ordinary process/library allocations
+remain separate; their failures are not falsely relabelled as these vector errors.
+
+The final synchronous readers of QKV/gates return before attention output
+projection; those owned buffers now drop before that projection. Band selection
+drops after normalization, band normalization after projection, FF expansion
+after contraction, and mask hidden state after contraction. Residual inputs and
+all arithmetic/reduction order are preserved. The chunk diagnostic writes its
+first private features/masks/PCM, then drops their buffers before the independent
+original-feature forward. Any later failure invalidates ALL those private files;
+exit0 and complete output remain necessary. No application publication is added.
+These are source-backed shorter lifetimes, not measured RSS/peak/runtime gains.
+
+### Full geometry and original admission reconciliation
+
+For the original485100-frame/1101-position geometry, weights remain526818448
+float32 payload bytes (526818456 file bytes including the header). Whole-track
+fixed vectors occupy55301400B; maximum batch2 result capacity adds31046400B,
+even while one independent sample is computed serially. The active Spectrum
+owns18056400B. The axial state owns104850432B and all four returned masks own
+72225600B. These lifetimes overlap during mask generation; masks cannot be
+counted as a replacement for axial state or spectrum. At the widest mask band's
+contraction, selection/hidden/projected vectors additionally occupy1691136/
+3382272/4544928B. This phase's listed payload sum is817917016B, NOT a complete
+process upper bound. Earlier attention/FF and inverse phases, FFT plans, metadata,
+allocator retention/fragmentation, I/O buffers, stack/code/mapped images and
+process runtime still require allowance. A returned sample also overlaps the
+preallocated complete batch capacity while being appended.
+
+The existing deliberately conservative allowances remain unchanged:
+
+| Included source allowance | Bytes |
+| --- | ---: |
+| Fixed-schema weight file (header conservatively included) |526818456|
+| `activation_bytes(1101)` |414792000|
+| `Geometry::transient_bytes()` |114721872|
+| `TrackPlan::pcm_transient_bytes()` |183367800|
+| Conservative sum, with intentional overlap/double counting |1239700128|
+
+The pinned matrixmultiply0.3.10 std-only, nonthreading/default-configuration
+SGEMM packs one A and B buffer per synchronous call. Its source formula is
+`min(k,256) * (roundup(min(m,64),MR) + roundup(min(n,1024),NR)) * 4`;
+our calls have at most32 rows and x64 MR/NR at most8, giving at most1081344B.
+The internal allocator is infallible and separate from the new vector diagnostic.
+This bound requires the unchanged effective feature tree and absent compile-time
+MATMUL tuning overrides; it is not universal compiler/producer/OS attestation.
+Vector allowances plus that packing bound total1240781472B. Process/allocator
+overhead has NO proven complete hard bound; an invented safety margin would not
+turn this source inventory into a measured release maximum.
+
+The actual ORIGINAL `OfflineChildMemoryReservation` was opened ONCE, queried and
+closed without launching any child: limit929548288B. The adjacent host sample
+reported caller/system available commit4006580224B and physical7889739776B.
+They are distinct observations, not one atomic snapshot. Original admission keeps
+2GiB commit/512MiB physical floors and halves remaining allowance after existing
+Native promises, minimum128MiB, retaining the promise through actual Tree AND
+Reader END for any launched process. No cap, floor or Job budget changed.
+This fresh ceiling is below the conservative vector/packing approach even before
+process overhead: complete admission was NOT established, so NO new NN/oracle/
+CUDA process was launched. This does not prove that actual allocations require
+the conservatively double-counted sum, nor explain any STEP27 failure.
+
+All19 Rust controls PASS (new deterministic reserve-layout/byte-overflow control
+plus the18 existing learned/spectral/track controls); strict all-target Clippy and
+Release examples PASS. The new rejection control never asks the OS for a huge
+allocation and is not an induced OOM. The existing numerical/cancellation proofs
+remain compatible within their original limits. Productive dispatch, dependency
+locks, installer/CPU/CUDA closures and held application Native remain unchanged.
+
+Final static/pre-load checks PASS2/2 in6.31s: strict OpenSpec, three changed
+Markdown files/10 local targets, unchanged productive sources/locks, default/
+optional/app isolation and the effective nonthreading/default SGEMM features.
+All six real pre-load CLI negatives exit1 with empty stdout, no fresh output and
+unchanged existing0B output. The original observer surrounds one joined executor:
+6/6 scopes closed, pending0/inflight0/errors[]. These are pre-load failures with
+no model/NN, not learned execution. A frozen Systems review found the separate
+spectral diagnostic reader still lacked attribution; its PCM/mask reader now
+also checks byte overflow before I/O and reports phase/bytes. The focused final
+all-target strict Clippy/Release spectral-example delta PASS1.18s; source-compatible
+19 core controls and earlier learned/track example builds are reused.
+
+The actual Windows x64 Release learned component is1197056B, SHA256
+`3df161b6f221ace85ba932118c72ec83d6506e68ae3fb9041b74c56ceea59ead`.
+This is not complete compiler/full-producer/mapped-image or Linux/macOS evidence.
+External Native/API checks retain22 known library warnings and the pinned einops
+warning; no held application extension is replaced. Systems PRE/frozen POST,
+Methods and one independent actual-diff review chain cover this coherent change.
+Reconstruction uses the existing checkout-aware entry, focused stem crate tests,
+strict all-target Clippy, Release examples and original admitted pre-load runner.
+The disposable `performance-step28-{build,final,delta}` logs retain raw output;
+this design/source/pins retain the durable facts. All three STEP27 execution
+failures, their UNKNOWN phases/causes and unpassed original tolerances remain
+unchanged; this step adds no completed learned prediction or quality acceptance.
+
+This coherent resource-attribution/lifetime split grows the plan to30. NEXT29
+retains the ENTIRE former nativeREST28 and FINAL30 the ENTIRE former FINAL29.
+Practical complete learned execution/original masks and PCM, mandatory native
+NVIDIA CUDA/fresh CPU, complete Demucs and all role/platform/distribution/quality/
+functions/resources/cancel/final gates remain mandatory. The next real model
+attempt needs a source-backed complete lifetime allowance and genuinely sufficient
+fresh ORIGINAL admission; do not repeat a constrained unchanged attempt. Further
+CPU source work alone does not justify another failed CUDA retry. Installed
+savings remain zero and original fullhost provenance remains UNKNOWN.
+
 ## STEP27 impact: independent learned BS CPU network
 
 The opt-in `stem-dsp/learned-trial` candidate implements the complete release

@@ -21,6 +21,21 @@ fn write(path: &Path, values: &[f32]) -> Result<(), String> {
     file.get_ref().sync_all().map_err(|e| e.to_string())
 }
 
+fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>, String> {
+    let requested_bytes = len
+        .checked_mul(size_of::<f32>())
+        .ok_or("source extent overflow")?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(len).map_err(|_| {
+        Error::Allocation {
+            phase,
+            requested_bytes,
+        }
+        .to_string()
+    })?;
+    Ok(values)
+}
+
 fn execute() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if !(6..=7).contains(&args.len()) {
@@ -96,43 +111,46 @@ fn execute() -> Result<(), String> {
     std::fs::create_dir(output).map_err(|e| e.to_string())?;
     let model = Model::load(&mut weights, &expected, &|| false).map_err(|e| e.to_string())?;
     if mode == "chunk" {
-        let mut pcm = Vec::new();
-        pcm.try_reserve_exact(frames * 2)
-            .map_err(|e| e.to_string())?;
+        let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
         for _ in 0..frames * 2 {
             let mut value = [0; 4];
             source.read_exact(&mut value).map_err(|e| e.to_string())?;
             pcm.push(f32::from_le_bytes(value));
         }
         let spectral = Spectrum::analyze(&pcm, RATE, &|| false).map_err(|e| e.to_string())?;
+        drop(pcm);
+        let geometry = spectral.geometry();
         let masks = model
-            .masks(spectral.features(), spectral.geometry().steps(), &|| false)
+            .masks(spectral.features(), geometry.steps(), &|| false)
             .map_err(|e| e.to_string())?;
         let prediction = spectral
             .reconstruct(&masks, &|| false)
             .map_err(|e| e.to_string())?;
+        write(&output.join("features.f32"), spectral.features())?;
+        write(&output.join("masks.f32"), &masks)?;
+        write(&output.join("output.f32"), &prediction)?;
+        // These private diagnostic buffers have no readers after the writes.
+        // Do not retain the whole first forward during the independent oracle-
+        // feature forward. A later failure still invalidates ALL private files.
+        drop(prediction);
+        drop(masks);
+        drop(spectral);
         if let Some(reader) = &mut original_features {
-            let mut features = Vec::new();
-            features
-                .try_reserve_exact(spectral.geometry().feature_len())
-                .map_err(|e| e.to_string())?;
-            for _ in 0..spectral.geometry().feature_len() {
+            let mut features = reserved(geometry.feature_len(), "learned-trial.original-features")?;
+            for _ in 0..geometry.feature_len() {
                 let mut raw = [0; 4];
                 reader.read_exact(&mut raw).map_err(|e| e.to_string())?;
                 features.push(f32::from_le_bytes(raw));
             }
             let original_masks = model
-                .masks(&features, spectral.geometry().steps(), &|| false)
+                .masks(&features, geometry.steps(), &|| false)
                 .map_err(|e| e.to_string())?;
             write(&output.join("original_features_masks.f32"), &original_masks)?;
         }
-        write(&output.join("features.f32"), spectral.features())?;
-        write(&output.join("masks.f32"), &masks)?;
-        write(&output.join("output.f32"), &prediction)?;
         println!(
             "BS learned CPU chunk trial: frames={frames} weights={} learned_payload_allowance={}",
             weight_bytes(),
-            activation_bytes(spectral.geometry().steps()).map_err(|e| e.to_string())?
+            activation_bytes(geometry.steps()).map_err(|e| e.to_string())?
         );
     } else {
         let plan = TrackPlan::new(frames, RATE).map_err(|e| e.to_string())?;

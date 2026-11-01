@@ -1,5 +1,5 @@
 //! Complete-chunk arithmetic diagnostic, not an application execution receipt.
-use flitzis_stem_dsp::{CHANNELS, Geometry, RATE, Spectrum};
+use flitzis_stem_dsp::{CHANNELS, Error, Geometry, RATE, Spectrum};
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
@@ -7,13 +7,22 @@ use std::{
     process::ExitCode,
 };
 
-fn read(path: &Path, count: usize) -> Result<Vec<f32>, String> {
+fn read(path: &Path, count: usize, phase: &'static str) -> Result<Vec<f32>, String> {
+    let requested_bytes = count
+        .checked_mul(size_of::<f32>())
+        .ok_or("diagnostic extent overflow")?;
     let file = File::open(path).map_err(|e| e.to_string())?;
-    if file.metadata().map_err(|e| e.to_string())?.len() != (count * 4) as u64 {
+    if file.metadata().map_err(|e| e.to_string())?.len() != requested_bytes as u64 {
         return Err("incomplete diagnostic float32 payload".into());
     }
     let mut values = Vec::new();
-    values.try_reserve_exact(count).map_err(|e| e.to_string())?;
+    values.try_reserve_exact(count).map_err(|_| {
+        Error::Allocation {
+            phase,
+            requested_bytes,
+        }
+        .to_string()
+    })?;
     let mut reader = BufReader::new(file);
     let mut raw = [0u8; 4];
     for _ in 0..count {
@@ -54,8 +63,12 @@ fn execute() -> Result<(), String> {
             return Err("diagnostic output already exists".into());
         }
     }
-    let pcm = read(Path::new(&args[0]), CHANNELS * frames)?;
-    let masks = read(Path::new(&args[1]), geometry.mask_len())?;
+    let pcm = read(Path::new(&args[0]), CHANNELS * frames, "spectral-trial.pcm")?;
+    let masks = read(
+        Path::new(&args[1]),
+        geometry.mask_len(),
+        "spectral-trial.masks",
+    )?;
     let spectrum = Spectrum::analyze(&pcm, RATE, &|| false).map_err(|e| e.to_string())?;
     let output = spectrum
         .reconstruct(&masks, &|| false)

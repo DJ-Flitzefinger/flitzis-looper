@@ -252,6 +252,9 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** bounded query tiles avoid a complete quadratic score tensor without shortening the release1101 time positions or frequency extent
 - **AND** the existing spectral and track cores supply reconstruction and synchronous release-batch processing; weight/source/output readers and complete resource promises last through actual completion
 - **AND** bad weights/digest/tail, shape, finite, allocation or cancellation errors invalidate the whole private attempt
+- **AND** fallible native vector allocation failures report the owning phase and checked logical requested bytes without claiming a process peak or host/device failure cause
+- **AND** synchronous readers finish before their private input buffers are released; a diagnostic second forward does not retain completed first-forward payloads, and any later failure invalidates all private output
+- **AND** another real model attempt requires fresh original complete admission; conservative vector estimates do not attest total process/allocator memory
 - **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
 
 #### Scenario: A standalone trial declares ORT package components

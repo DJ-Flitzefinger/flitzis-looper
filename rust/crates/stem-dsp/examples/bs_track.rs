@@ -56,7 +56,10 @@ fn execute() -> Result<(), String> {
             let mut prediction = Vec::new();
             prediction
                 .try_reserve_exact(batch * 8 * CHUNK)
-                .map_err(|_| Error::Allocation)?;
+                .map_err(|_| Error::Allocation {
+                    phase: "track-trial.prediction",
+                    requested_bytes: batch * 8 * CHUNK * size_of::<f32>(),
+                })?;
             for b in 0..batch {
                 for stem in 0..4 {
                     for channel in 0..2 {
