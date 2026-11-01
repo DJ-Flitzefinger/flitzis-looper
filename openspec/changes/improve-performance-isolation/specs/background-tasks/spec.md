@@ -1,5 +1,29 @@
 ## ADDED Requirements
 
+### Requirement: Obsolete Queued Waveform Views Retire Before Worker Availability
+Asynchronous waveform projection SHALL register its original request cancellation,
+shutdown and source-incarnation authority with the existing cold lane. Existing
+off-realtime cancellation observations SHALL retire only still-queued obsolete
+views and their captured readers before returning their reservations. A queued
+observation SHALL NOT clone the source PCM reader. Claimed work SHALL retain its
+existing kernel cancellation, actual reader lifetime and exact result-publication
+fences. Current views, unrelated queued work and valid content movement SHALL remain
+eligible. Genuine queue exhaustion before cancellation is pumped SHALL retain its
+existing visible failure and explicit-retry behavior.
+
+#### Scenario: Zoom changes while both cold workers are occupied
+- **GIVEN** an independent queued operation and multiple superseded waveform views
+- **WHEN** the existing control pump observes their original cancellation flags
+- **THEN** obsolete unclaimed views return their reservations before either worker finishes
+- **AND** the latest view and independent operation retain their original ownership
+- **AND** later waveform output retains its original absolute coordinates and PCM projection
+
+#### Scenario: A queued view loses its original source
+- **GIVEN** an accepted waveform view still holds its original PCM reader
+- **WHEN** actual source replacement invalidates its captured source authority
+- **THEN** the existing pump retires that unclaimed reader without waiting for a worker
+- **AND** a normal Pair move preserving that original authority does not cancel its view
+
 ### Requirement: Native Inference Preserves the Whole Source Pipeline
 A native replacement SHALL retain the original complete source, resampling,
 frontend, true model chunk lengths, aggregation and postprocessing before

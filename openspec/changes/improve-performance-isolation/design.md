@@ -5548,3 +5548,71 @@ inputs keep their tested bytes. Final format, strict spec, source/stage/index an
 protected-binding checks and the one independent final staged-diff review remain
 required before publication. No model, CUDA, physical-pressure, device, listening,
 latency, footprint or whole-quality acceptance follows from this correction.
+
+## STEP57 impact: retire obsolete queued waveform views
+
+Four actual public asynchronous waveform regressions fail against unchanged
+production in0.64s. The existing source-publication fixture supplies5000frames,
+forcing the public greater-than4096-frame cold route. Both actual workers are
+held. An ordinary peer plus31 successive widths fill the32 queued positions;
+the original control pump leaves all32 queued instead of retaining only the peer
+and latest view. Explicit retry, actual source replacement and shutdown each
+leave their original queued reservation intact. Facts are captured before fixture
+teardown, and all actual jobs and workers end before the failing assertions.
+This is controlled queued projection behavior, not a measured UI latency or
+physical-memory improvement. Multiple requests share source backing, not copied
+whole PCM buffers.
+
+Waveform submission now registers its SAME existing stale predicate with a thin
+ordinary cancellable entry into ColdJobs. It takes no heavy capability and creates
+no queue, scheduler or observer service. Only original cancellation/shutdown flags
+and source authority are cloned for observation; captured CompleteSourceReader,
+PCM and sealed lease stay solely in the actual job. The existing off-lock pump
+uses unchanged AdmittedJob destruction and reservation lifetime. Claimed kernels
+keep their original reader, stale checks and exact request/slot publication fence.
+Retirement writes no current slot. Source-current authority survives valid Pair
+movement, and the existing own-ACK/moved-content test remains a control.
+
+Admission ordering,32queued/two-worker bounds, output geometry/precision, realtime
+boundaries and explicit retry/failure caching stay unchanged. A burst before any
+pump can still exhaust actual capacity. The meaningful checks cover capacity
+return with both workers occupied, an independent peer, exact latest NumPy output,
+explicit cancellation, actual source replacement with a non-promoting Weak PCM
+witness and shutdown; existing waveform geometry and ColdJobs lifetime controls
+cover neighboring behavior. Systems PRE and the frozen regression review clear
+the experiment; frozen implementation review, focused checks and ONE independent
+actual final-diff review remain required before publication.
+
+The separate original discard-saturation case passes unchanged on the current
+qualified compiled source in24.53s, with actual1024 queue saturation, SAME-pair
+retry and physical PCM/common retirement while WAV bytes remain intact. STEP55
+changed its relevant asset-sweep observation lifetime, justifying this one targeted
+run. This is no pristine parent comparison or proof of the historical failure
+cause. Earlier failed evidence, five other qualified failed leaves, two broad-only
+registry failures and every inherited negative/UNKNOWN remain explicit.
+
+This substantive split grows the plan to59: nativeREST58 retains ENTIRE former
+nativeREST57 and FINAL59 retains ENTIRE former FINAL58. Full successful PRENN/
+process allowance and fresh original admission, original NN numerics, actual
+native NVIDIA/same-model fresh CPU, complete Demucs/BS/Beat/fullhost provenance,
+platforms, quality, distribution and all original final gates stay open. Productive
+Python/Torch remains active; installer saving remains ZERO.
+
+Frozen verification passes all11 compiled waveform cases in0.79s and all23
+compiled ColdJobs lifetime/admission cases in0.38s. Both inventories were inspected
+before execution on the SAME actual generated source stage. The new four cases
+change from4FAIL to4PASS with their assertions and timeouts unchanged; source
+replacement ends the actual last old PCM reader before either held worker ends.
+The latest waveform retains every expected absolute bucket coordinate and min/max
+value, while the independent peer executes exactly once. The original Pair own-ACK
+control and all waveform geometry/precision controls pass. These34 successes plus
+the separate compatible original discard case are35 distinct scoped successes,
+not one whole green matrix or a historical-cause proof.
+
+The current Release/API build passes; release compilation takes44.19s with20
+library warnings,34 test warnings and the retained einops0.6.1 warning. Only this
+result and task completion change after functionals; all four Rust files retain
+their tested bytes. Final formatting, strict OpenSpec, exact source/stage/index,
+protected binding checks and ONE independent actual staged-diff review remain
+required before publication. No model/CUDA, physical-pressure, UI/device/hearing,
+latency, footprint or whole-quality acceptance is claimed.

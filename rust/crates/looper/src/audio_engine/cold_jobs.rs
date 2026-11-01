@@ -599,6 +599,18 @@ impl ColdJobs {
         self.handle().submit(reservation, job)
     }
 
+    /// Ordinary queued views share existing off-lock cancellation retirement,
+    /// without requesting an unrelated whole-heavy-job capability.
+    pub(super) fn submit_cancellable(
+        &self,
+        reservation: Reservation,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        self.handle()
+            .submit_classified(reservation, job, None, Some(Arc::new(cancelled)))
+    }
+
     /// A queued Native analysis request has no receiving waiter. Existing
     /// workers and the control pump observe its original cancellation authority.
     pub(super) fn submit_heavy_cancellable(

@@ -61,8 +61,18 @@ impl LaunchFixture {
     }
 
     pub(in crate::audio_engine) fn publish(&self, id: usize, value: f32, generation: u64) {
+        self.publish_frames(id, value, generation, 128);
+    }
+
+    pub(in crate::audio_engine) fn publish_frames(
+        &self,
+        id: usize,
+        value: f32,
+        generation: u64,
+        frames: usize,
+    ) {
         let sample = SampleBuffer {
-            samples: Arc::from([value; 128]),
+            samples: vec![value; frames].into(),
             channels: 1,
             residency: None,
         }

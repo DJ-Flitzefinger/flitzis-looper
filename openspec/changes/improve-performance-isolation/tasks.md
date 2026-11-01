@@ -819,7 +819,23 @@ Controlled mutex poison does not establish a historical failure cause or ordinar
 production panic. All native process, numerical, CUDA, fullhost, quality, platform
 and distribution gates remain open under their original requirements.
 
-## 57. Remaining native parity before cutover
+## 57. Retire obsolete queued waveform views
+
+- [x] Reproduce public asynchronous waveform requests retaining obsolete queue
+      reservations behind two occupied workers after supersession, explicit retry,
+      actual source replacement and shutdown.
+- [x] Register only their existing cancellation flags and source authority with
+      the existing ordinary cold lane, preserving claimed readers and result fences.
+- [x] Verify capacity return before worker release, independent queued work,
+      the latest exact waveform, actual old PCM reader end and original Pair own ACK.
+
+This substantive projection-retirement split grows the plan to59. NativeREST58
+retains ENTIRE former nativeREST57 and FINAL59 retains ENTIRE former FINAL58.
+An unpumped burst may still exhaust real queue capacity; original admission,
+failure caching and explicit retry remain unchanged. All native process, numerical,
+CUDA, fullhost, quality, platform and distribution gates retain their original scope.
+
+## 58. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -836,10 +852,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP58, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP59, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 58. Combined regression and final architecture review
+## 59. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

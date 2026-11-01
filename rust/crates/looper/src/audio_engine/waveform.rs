@@ -233,35 +233,40 @@ impl WaveformRequests {
         let cancelled_read = cancelled.clone();
         let job_request = request.clone();
         let job_state = state.clone();
-        let submitted = engine.cold_jobs.submit(reservation, move || {
-            let stale = || {
-                cancelled_read.load(Ordering::Acquire)
-                    || shutdown.load(Ordering::Acquire)
-                    || !source_guard.current()
-            };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_complete_region(
-                    &reader,
-                    job_request.first..job_request.end,
-                    job_request.width,
-                    job_request.rate,
-                    &stale,
-                )
-            }))
-            .unwrap_or_else(|_| Err("Waveform worker failed".into()));
-            if stale() {
-                return;
-            }
-            if let Ok(mut slot) = job_state.lock()
-                && slot.request.as_ref() == Some(&job_request)
-            {
-                slot.pending = false;
-                match result {
-                    Ok(data) => slot.data = data.map(Arc::new),
-                    Err(error) => slot.error = Some(error),
-                }
-            }
-        });
+        let stale = move || {
+            cancelled_read.load(Ordering::Acquire)
+                || shutdown.load(Ordering::Acquire)
+                || !source_guard.current()
+        };
+        // Only the original flags and source authority enter the queue probe;
+        // its off-lock observation never clones the captured PCM reader.
+        let submitted =
+            engine
+                .cold_jobs
+                .submit_cancellable(reservation, stale.clone(), move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        render_complete_region(
+                            &reader,
+                            job_request.first..job_request.end,
+                            job_request.width,
+                            job_request.rate,
+                            &stale,
+                        )
+                    }))
+                    .unwrap_or_else(|_| Err("Waveform worker failed".into()));
+                    if stale() {
+                        return;
+                    }
+                    if let Ok(mut slot) = job_state.lock()
+                        && slot.request.as_ref() == Some(&job_request)
+                    {
+                        slot.pending = false;
+                        match result {
+                            Ok(data) => slot.data = data.map(Arc::new),
+                            Err(error) => slot.error = Some(error),
+                        }
+                    }
+                });
         if let Err(error) = submitted {
             cancelled.store(true, Ordering::Release);
             let mut slot = state.lock().map_err(|_| "waveform state lock poisoned")?;
