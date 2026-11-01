@@ -1766,10 +1766,22 @@ class StemController(BaseController):  # noqa: PLR0904
         if self._diagnostics is not None:
             self._diagnostics.observe("stem_resources", resources.message)
         if not resources.allowed:
+            self._withdraw_resource_waiters()
             return
         self._stem_admission.run(
             self._stem_admission_candidates, pool.try_reserve, self._admit_stem_candidate
         )
+
+    def _withdraw_resource_waiters(self) -> None:
+        """Yield inactive FIFO positions without retiring the original waiting owners."""
+        for path in tuple(self._waiting_jobs):
+            if (job := self._jobs.get(path)) is not None:
+                job.heavy_work.withdraw_waiting()
+        for delivery in tuple(self._pair_held_generation_events.values()):
+            if delivery.event.event_type == "success" or delivery.admission_route == "reuse":
+                delivery.job.heavy_work.withdraw_waiting()
+        for requested in tuple(self._requested_preparations.values()):
+            requested.heavy_work.withdraw_waiting()
 
     def _refresh_stem_playback(self) -> None:
         if self._session.active_sample_ids:

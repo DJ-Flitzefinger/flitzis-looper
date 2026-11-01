@@ -79,6 +79,14 @@ model-memory estimate, physical working-set bound or whole-system guarantee.
 - **AND** cancellation, allocation failure and launcher exit do not release its promise before actual tree/reader end
 - **AND** unsupported platform enforcement and unmeasured device deadlines remain explicit
 
+#### Scenario: A queued stem becomes ineligible for memory admission
+- **GIVEN** a current inference, requested pair preparation or held reuse delivery owns an inactive common FIFO position
+- **WHEN** the existing stem resource guard reports pressure or unavailable monitoring
+- **THEN** the controller SHALL withdraw only that inactive position so an otherwise admitted background owner can progress
+- **AND** the original request, interests, source custody and held delivery remain pending without failure or cancellation
+- **AND** recovery rejoins the same owner behind existing FIFO waiters under the unchanged memory thresholds
+- **AND** active tickets and independent borrows remain owned until ordinary retirement, while failed deferred terminal deliveries retain their separate custody
+
 ### Requirement: Failed Precise BPM Has a Usable Approximate Fallback
 When precise automatic BPM estimation fails, the system SHALL attempt a simpler
 bounded source-derived scalar estimate outside realtime. A validated usable

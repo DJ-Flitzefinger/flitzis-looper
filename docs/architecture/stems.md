@@ -54,6 +54,12 @@ Beat child duplicate admission remains subordinate and never holds its guard whi
 waiting for a later heavy ticket. Contention cannot count as a numerical failure
 or select approximate BPM. KeyNet's job-owned ORT session uses one intra-op and
 one inter-op thread; the branches within one admitted analysis may still overlap.
+If stem memory admission becomes unavailable or pressured, the control poll
+withdraws its inactive inference and pair-preparation FIFO positions. Original
+requests, interests, source custody and held reuse deliveries remain pending;
+after the existing recovery threshold they rejoin behind current waiters. An
+active generation or preparation keeps every ticket borrow until ordinary
+retirement. Failed deferred terminal deliveries retain their separate custody.
 If Native heavy admission raises RuntimeError before stem inference starts, the
 control poll removes that waiting attempt and uses ordinary terminal delivery.
 Only current subscribers receive the failure; Pair-deferred subscribers retain

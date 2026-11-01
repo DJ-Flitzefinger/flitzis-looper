@@ -5170,3 +5170,40 @@ helper preserves those assertions. The OpenSpec requirement puts SHALL on its
 first content line for the validator. Final verification repeats the eight
 affected functional cases and six static checks; the other82 functional successes
 remain source-compatible. This is a successful-case union, not one green96 run.
+
+## STEP50 impact: yield resource-ineligible stem FIFO positions
+
+The normal controller poll could register a Native heavy ticket under clear
+headroom, then stop polling it when the existing resource guard became pressured
+or unavailable. That inactive position still preceded otherwise admitted analysis
+work after the active owner retired. Six corrected tests reproduced this actual
+FIFO starvation on unchanged product source in1.51s; two active-borrow controls
+passed. An earlier eight-failure fixture run is not this behavior proof: it
+constructed successors before the stem ticket and incorrectly expected a settled
+backend to retain its already finished source read. Corrected construction order
+and settled-state assertions preserve the real FIFO and custody contracts.
+
+Resource denial now uses existing `withdraw_waiting()` on waiting inference,
+requested preparation and successful/reuse delivery carriers. It releases only
+inactive FIFO positions, without changing request registries, source/interests,
+producer files, failure/cancel state or active ticket borrows. Failed deferred
+terminal deliveries retain their separate custody. Recovery uses the same owners
+and unchanged thresholds, joining behind existing waiters; no second queue,
+scheduler, resource estimate, Native policy or realtime work is introduced.
+
+Focused checks cover both denial states and all three carrier types, original
+metadata/custody, inclusive recovery hysteresis, real Native successor order and
+an active completed-generation borrow through ordinary shutdown. Existing shared
+pool handoff, pending/admission/retirement, playback, stale, cancellation and
+failed deferred delivery controls remain relevant. Matching Native is reused
+after the new isolated checkout's initial environment/Release/API setup. No
+numerical, model, CUDA, memory-floor, clock, OwnACK, dependency or installer change
+is made; all original fullhost/native/quality/distribution gates remain open.
+
+The frozen integrated run passed87 affected functional cases, including all nine
+new controls, and five static/source checks in24.52s (92PASS, one index check
+deselected until staging). Ruff format/lint on both Python files, strict production
+Mypy, strict OpenSpec and exact authoritative/staged source plus protected private
+bindings passed. Systems PRE/frozen POST and Methods PRE/failure assessment were
+clear. These are controlled policy/FIFO results, not observed OS allocation
+pressure, numerical/provider parity, installed savings or whole-system acceptance.
