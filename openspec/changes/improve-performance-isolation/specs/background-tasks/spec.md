@@ -612,3 +612,18 @@ terminal reader obligations; rejection SHALL NOT run accepted-queue cleanup.
 - **THEN** the original job and loading admission remain alive
 - **AND** after the mirror settles the source can prepare, publish and reach its original own ACK
 - **AND** ordinary start-policy changes do not become source cancellation
+
+### Requirement: Asset Sweep Observation Ends Under Its Admission Gate
+Temporary strong path-owner observations made by project asset collection SHALL
+end before releasing the shared owner-admission/deletion gate. An overlapping
+sweep SHALL NOT promote the previous sweep's observation after actual application
+ownership ends. Existing live assignment, source-job and Native PCM reader owners,
+immutable file identity, unknown-file preservation and bounded fair retirement
+SHALL remain authoritative. Observation END alone SHALL NOT certify reader END.
+
+#### Scenario: A second sweep follows actual application pin release
+- **GIVEN** a sweep observes a real application pin protecting a queued original or immutable stem generation
+- **WHEN** that sweep unlocks and the application releases its last actual pin before another sweep
+- **THEN** the previous observation cannot keep the exact retired path alive
+- **AND** an independent surviving application pin still preserves its bytes until its own release
+- **AND** unknown, replaced or actually read files retain their existing protection

@@ -5449,3 +5449,48 @@ reviews cleared the scoped load-retirement change. Final format, strict OpenSpec
 source/stage/index and protected-binding checks and the single independent final
 actual-diff review precede its publication. No whole-model, CUDA, device, listening,
 latency, footprint or whole-system acceptance follows from these selections.
+
+## STEP55 impact: end asset observation pins before unlocking
+
+Two deterministic original/stem regressions failed against unchanged collection
+logic in0.02s. The first actual sweep snapshots a live application pin and pauses
+immediately after its actual asset-gate unlock. After the application releases its
+real pin, a second sweep still sees the first observer's strong PathOwner: one
+pending retirement, zero deletions and the file still present before test teardown.
+The test-only thread-local gate owns synchronization only; its Weak probe never
+creates another owner. Both collectors end before captured facts are asserted.
+
+The existing collector now destroys its temporary owners Vec before unlocking the
+same admission/deletion gate. PathOwner contains paths, immutable file identity
+and an atomic saved-assignment flag; it has no custom destructor, resource close,
+callback or service reentry. The early no-retirement return already drops locals
+before the mutex guard. Reader destruction, saved claims, identity checks, eight
+I/O attempts, fairness, queue bounds and realtime behavior remain unchanged.
+
+Production has one shared background collector. Overlap is reachable with its
+existing manual test sweeps; this controlled defect does not establish ordinary
+production starvation or explain the historical discard-saturation timeout.
+The two new cases also retain real surviving-owner controls. Bounded existing
+asset/PCM-reader/identity/sharing and Python-to-Native lifetime checks cover the
+affected behavior. Systems PRE and Methods approved this focused experiment;
+frozen Systems review and the one final actual-diff review precede publication.
+
+This substantive lifetime split grows the plan to57: nativeREST56 retains ENTIRE
+former nativeREST55, and FINAL57 retains ENTIRE former FINAL56. All six qualified
+failed leaves, two broad-only registry failures and every inherited negative or
+UNKNOWN gate remain open. Native process allowance, fullhost/Pydantic compiled
+lineage, numerical/CUDA/fresh-CPU, quality, platform and distribution acceptance
+remain unchanged. Productive Python/Torch remains active; no footprint saving,
+model, device, listening or whole-system acceptance follows from this correction.
+
+Frozen verification passed38 Native asset cases in9.69s, including both new
+original/stem boundaries and their real surviving-owner controls. The existing
+isolated Windows C3 resource profile remains ignored; it is not a passed plateau
+or a closed historical216 gate. Nine Python-to-Native lifetime cases and four
+static checks passed together in5.81s. Static checks cover both Rust files,
+strict OpenSpec, exact LF source/stage bytes and the five protected local bridges,
+private discovery pointer, common exclusion and hidden flags. Final Release/API
+verification passed with20 existing library and35 test warnings; the einops0.6.1
+warning remains. Only this result and task completion change after functionals;
+both Rust inputs retain their tested bytes. Final index checks and the single
+independent actual-staged-diff review remain required before publication.

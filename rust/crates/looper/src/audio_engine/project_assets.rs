@@ -21,6 +21,10 @@ use std::thread;
 use std::time::Duration;
 use stem_readers::SharedStemReaders;
 
+#[cfg(test)]
+#[path = "project_asset_collection_tests.rs"]
+mod collection_tests;
+
 const MAX_RETIREMENTS: usize = 1024;
 const MAX_REPORTED_ERRORS: usize = 16;
 const RETIREMENTS_PER_POLL: usize = 8;
@@ -1407,7 +1411,12 @@ impl ProjectAssets {
                 }
             }
         }
+        // Observation pins must end under the admission gate. Otherwise an
+        // overlapping sweep can promote our snapshot after the real owner ends.
+        drop(owners);
         drop(state);
+        #[cfg(test)]
+        collection_tests::after_unlock();
     }
 }
 

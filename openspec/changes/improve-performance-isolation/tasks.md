@@ -790,7 +790,21 @@ retains ENTIRE former nativeREST54; FINAL56 retains ENTIRE former FINAL55 withou
 omissions. Other asynchronous job classes and all native process, numerical,
 CUDA, fullhost, quality, platform and distribution gates retain their limits.
 
-## 55. Remaining native parity before cutover
+## 55. End project asset observations before unlocking
+
+- [x] Reproduce overlapping actual sweeps retaining an observer's original/stem
+      pin after the real application pin ends, observing facts before teardown.
+- [x] End only temporary PathOwner observations under the existing asset gate
+      after confirming their destructor cannot reenter the service.
+- [x] Verify real surviving owners, Native PCM readers, immutable identity,
+      unknown-file preservation, fair bounded retirement and public lifetime APIs.
+
+This scoped lifetime split grows the plan to57. NativeREST56 retains ENTIRE former
+nativeREST55; FINAL57 retains ENTIRE former FINAL56 without omissions. Production
+has one shared collector; this overlap proof does not establish the cause of the
+historical discard timeout or close any of the inherited failed/UNKNOWN gates.
+
+## 56. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -807,10 +821,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP56, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP57, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 56. Combined regression and final architecture review
+## 57. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
