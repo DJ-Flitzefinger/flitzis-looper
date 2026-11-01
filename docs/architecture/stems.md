@@ -54,6 +54,11 @@ Beat child duplicate admission remains subordinate and never holds its guard whi
 waiting for a later heavy ticket. Contention cannot count as a numerical failure
 or select approximate BPM. KeyNet's job-owned ORT session uses one intra-op and
 one inter-op thread; the branches within one admitted analysis may still overlap.
+If Native heavy admission raises RuntimeError before stem inference starts, the
+control poll removes that waiting attempt and uses ordinary terminal delivery.
+Only current subscribers receive the failure; Pair-deferred subscribers retain
+their source, producer files and ticket until unfenced delivery and job disposal.
+The failure launches no backend and does not manufacture performer cancellation.
 Child environments bound numerical pools before imports, separator children
 verify effective Torch counts before model work, and FFmpeg decoder/encoder/filter
 pools are explicitly bounded. App-global numerical settings are unchanged.

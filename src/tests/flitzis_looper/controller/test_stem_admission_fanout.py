@@ -121,8 +121,7 @@ def _complete_job(
 ) -> None:
     """Complete real artifact production before exercising the Pair capacity boundary."""
     stems = controller.stems
-    stems._waiting_jobs.discard(job.request.cache_dir)
-    assert stems._schedule_stem_job(job)
+    assert stems._schedule_waiting_stem_job(job) == "submitted"
     assert len(tasks) == 1
     tasks.pop()()
     assert str(job.phase) == "settled"

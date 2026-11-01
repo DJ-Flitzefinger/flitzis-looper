@@ -697,7 +697,23 @@ ENTIRE former nativeREST48; FINAL50 retains ENTIRE former FINAL49 without omissi
 Controlled admission-error injection does not establish an observed OS allocation
 failure, arbitrary OOM closure, native process/model/CUDA parity or quality acceptance.
 
-## 49. Remaining native parity before cutover
+## 49. Settle rejected waiting stem admission
+
+- [x] Reproduce Native ticket constructor/acquisition RuntimeErrors escaping the
+      normal controller poll in both shared-pool and legacy continuations.
+- [x] Remove only the failed waiting attempt and reuse existing terminal event
+      delivery with current source/content/intent and deferred Pair fences.
+- [x] Verify original failure feedback, no backend launch, retained deferred
+      custody, eventual Native FIFO progress and unchanged worker capacity.
+- [x] Revalidate exact registry/waiting ownership across legacy delivery reentry
+      so a surviving waiting job is submitted once.
+
+This practical control correction grows the plan to51. NativeREST50 retains
+ENTIRE former nativeREST49; FINAL51 retains ENTIRE former FINAL50 without omission.
+Controlled API refusal is not an observed OS allocation failure, general OOM
+closure, native/model/CUDA parity or quality acceptance.
+
+## 50. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -714,10 +730,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP50, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP51, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 50. Combined regression and final architecture review
+## 51. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

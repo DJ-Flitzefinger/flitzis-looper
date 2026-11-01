@@ -493,3 +493,26 @@ it does not bound the executor's raw count of inert wrappers after rejection.
 - **THEN** ordinary submission failure closes those captured owners and returns the reserved capacity once
 - **AND** a later executor drain performs no Native preparation or result delivery for the rejected request
 - **AND** an existing worker that dequeues before submission fails cannot enter the rejected callable
+
+### Requirement: Failed Waiting Stem Admission Uses Fenced Terminal Delivery
+The control poll SHALL settle Native heavy ticket RuntimeErrors before inference
+through existing terminal job event delivery. Constructor or acquisition refusal
+terminates only that waiting attempt, without launching its backend or
+fabricating cancellation. Current subscriber, source, content and intent checks
+and deferred Pair delivery SHALL remain authoritative. Failed tickets and
+captured owners SHALL retire through ordinary job disposal after all required
+deliveries. Legacy delivery reentry SHALL NOT submit a surviving owner twice.
+
+#### Scenario: Native admission refuses an otherwise eligible waiting job
+- **GIVEN** identity resolution completed and the original job is waiting for heavy admission
+- **WHEN** Native ticket construction or acquisition raises RuntimeError
+- **THEN** the original current subscribers receive a terminal failure through ordinary delivery
+- **AND** the failed waiting attempt launches no inference and leaves unused worker capacity available
+
+#### Scenario: A shared subscriber is deferred during admission refusal
+- **GIVEN** a waiting job has current and Pair-deferred subscribers
+- **WHEN** Native heavy admission refuses the attempt
+- **THEN** available current subscribers receive the failure without changing deferred state
+- **AND** deferred custody remains until unfenced delivery and ordinary disposal
+- **AND** obsolete subscribers cannot apply the failure to replacement content
+- **AND** later waiting work retains exact registry and admission ownership across delivery reentry

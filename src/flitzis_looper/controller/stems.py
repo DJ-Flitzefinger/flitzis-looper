@@ -1823,20 +1823,7 @@ class StemController(BaseController):  # noqa: PLR0904
         if isinstance(owner, _RequestedStemPreparation):
             return self._admit_requested_preparation(owner, reservation)
         if isinstance(owner, StemGenerationJob):
-            if (
-                self._jobs.get(owner.request.cache_dir) is not owner
-                or owner.request.cache_dir not in self._waiting_jobs
-                or not self._inference_admissible(owner)
-            ):
-                return "deferred"
-            if not owner.heavy_work.try_acquire():
-                return "deferred"
-            self._waiting_jobs.discard(owner.request.cache_dir)
-            return (
-                "submitted"
-                if self._schedule_stem_job(owner, reservation=reservation)
-                else "settled"
-            )
+            return self._schedule_waiting_stem_job(owner, reservation=reservation)
         return self._admit_generation_preparation(owner, reservation)
 
     def _admit_requested_generation(
@@ -2220,6 +2207,28 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         offline_source = self._capture_offline_source(request.sample_id, request.source_version)
         return self._admit_stem_generation(request, offline_source, reuse_only=True)
+
+    def _schedule_waiting_stem_job(
+        self, job: StemGenerationJob, *, reservation: StemWorkerReservation | None = None
+    ) -> StemAdmissionResult:
+        path = job.request.cache_dir
+        # Terminal delivery can reenter the legacy waiting loop. Its outer
+        # snapshot must not submit an already scheduled or replaced owner again.
+        if self._jobs.get(path) is not job or path not in self._waiting_jobs:
+            return "settled"
+        if not self._inference_admissible(job):
+            return "deferred"
+        try:
+            if not job.heavy_work.try_acquire():
+                return "deferred"
+        except RuntimeError as error:
+            self._waiting_jobs.discard(path)
+            self._dispatch_job_event(
+                self._settled_job_event(job, error=f"Stem heavy admission failed: {error}"), job
+            )
+            return "settled"
+        self._waiting_jobs.discard(path)
+        return "submitted" if self._schedule_stem_job(job, reservation=reservation) else "settled"
 
     def _schedule_stem_job(
         self,
@@ -3597,10 +3606,7 @@ class StemController(BaseController):  # noqa: PLR0904
             if not job.subscribers():
                 self._discard_generation_artifacts(job.request.sample_id, path)
                 continue
-            if not self._inference_admissible(job) or not job.heavy_work.try_acquire():
-                continue
-            self._waiting_jobs.discard(path)
-            self._schedule_stem_job(job)
+            self._schedule_waiting_stem_job(job)
 
     def _remember_generation_candidate(
         self, subscriber: StemSubscriber, request: StemGenerationRequest, job: StemGenerationJob
