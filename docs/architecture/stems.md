@@ -139,7 +139,14 @@ retain their separate source proof, and mutable admission/cancellation carriers
 retain their existing state-independent policy. Dictionary entries retain actual
 insertion order recursively, including supported generated-constructor defaults;
 reordering equal dictionaries cannot preserve source evidence when iteration
-behavior changes. This value evidence does not certify alias topology.
+behavior changes. A bounded owner graph additionally preserves sharing of exact
+mutable list/dict/set owners across each function's positional and keyword
+defaults, supported generated-constructor defaults, and within each measured
+constant. Exact tuple/list/dict/slice paths use deterministic evidence without
+persisting object IDs; cycles and excessive graph depth/size remain UNKNOWN.
+Equivalent replacement graphs retain identity. Immutable object identity and
+relationships across separate constants, functions or global/default roots
+retain their separate limits; this is not arbitrary alias completeness.
 This is compiled-source identity, not loaded-image or full compiler attestation.
 Conversion does not remove Torch or prove model quality.
 

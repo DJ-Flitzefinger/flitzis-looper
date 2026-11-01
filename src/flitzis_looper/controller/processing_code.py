@@ -194,10 +194,11 @@ def _check_constants(body: list[ast.stmt], namespace: dict[str, object]) -> dict
                 continue
             expected = _expression(expression, namespace)
             actual = namespace[name]
-            if _value(actual) != _value(expected):
+            aliases = _mutable_aliases(actual)
+            if aliases != _mutable_aliases(expected) or _value(actual) != _value(expected):
                 msg = "loaded host transform constant differs from held source"
                 raise ValueError(msg)
-            evidence[name] = _value(actual)
+            evidence[name] = (_value(actual), aliases)
     return evidence
 
 
@@ -511,10 +512,18 @@ def _dataclass_fields(
         raise ValueError(msg)
     for field, (_name, member) in zip(actual_fields, declared, strict=True):
         expected = MISSING if member.value is None else _expression(member.value, namespace)
+        aliases = _mutable_aliases(field.default)
+        if aliases != _mutable_aliases(expected):
+            msg = "loaded host dataclass field owner sharing differs from held source"
+            raise ValueError(msg)
         if field.default is not expected and _value(field.default) != _value(expected):
             msg = "loaded host dataclass default differs from held source"
             raise ValueError(msg)
-        evidence.append((field.name, "required" if expected is MISSING else _value(expected)))
+        evidence.append((
+            field.name,
+            "required" if expected is MISSING else _value(expected),
+            aliases,
+        ))
     return evidence
 
 
@@ -615,6 +624,7 @@ def _dataclass_constructor(
         for member in declaration.body
         if isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name)
     ]
+    _mutable_aliases(tuple(default for _name, _annotation, default in reference_fields))
     for _name, _annotation, default in reference_fields:
         if default is not MISSING:
             _constructor_value(default)
@@ -650,6 +660,10 @@ def _generated_constructor(
     ):
         msg = "loaded host dataclass constructor body or origin differs from held source"
         raise ValueError(msg)
+    aliases = _default_aliases(actual.__defaults__, actual.__kwdefaults__)
+    if aliases != _default_aliases(expected.__defaults__, expected.__kwdefaults__):
+        msg = "loaded host dataclass constructor owner sharing differs from held source"
+        raise ValueError(msg)
     defaults = (_constructor_value(actual.__defaults__), _constructor_value(actual.__kwdefaults__))
     reference_defaults = (
         _constructor_value(expected.__defaults__),
@@ -666,7 +680,7 @@ def _generated_constructor(
     ):
         msg = "loaded host dataclass constructor captures differ from supported generation"
         raise ValueError(msg)
-    return ["generated-constructor", actual.__qualname__, _code(actual.__code__), defaults]
+    return ["generated-constructor", actual.__qualname__, _code(actual.__code__), defaults, aliases]
 
 
 def _constructor_value(value: object) -> object:
@@ -739,9 +753,6 @@ def _function_body(
         raise ValueError(msg)
     defaults = tuple(_expression(item, namespace) for item in declaration.args.defaults)
     positional = () if actual.__defaults__ is None else actual.__defaults__
-    if not _same_bindings(positional, defaults, manifests, depth=depth):
-        msg = "loaded host function defaults differ from held source"
-        raise ValueError(msg)
     expected_keywords = {
         argument.arg: _expression(default, namespace)
         for argument, default in zip(
@@ -750,6 +761,13 @@ def _function_body(
         if default is not None
     }
     keywords = {} if actual.__kwdefaults__ is None else actual.__kwdefaults__
+    aliases = _default_aliases(positional, keywords)
+    if aliases != _default_aliases(defaults, expected_keywords):
+        msg = "loaded host function default owner sharing differs from held source"
+        raise ValueError(msg)
+    if not _same_bindings(positional, defaults, manifests, depth=depth):
+        msg = "loaded host function defaults differ from held source"
+        raise ValueError(msg)
     if not _same_keyword_bindings(keywords, expected_keywords, manifests, depth=depth):
         msg = "loaded host keyword defaults differ from held source"
         raise ValueError(msg)
@@ -769,7 +787,74 @@ def _function_body(
         [_binding(item, manifests, depth=depth) for item in defaults],
         {key: _binding(item, manifests, depth=depth) for key, item in expected_keywords.items()},
         constants,
+        aliases,
     ]
+
+
+def _default_aliases(
+    positional: tuple[object, ...] | None, keywords: dict[str, object] | None
+) -> object:
+    """Compare one owner graph across both default areas without container hooks."""
+    positional = () if positional is None else positional
+    keywords = {} if keywords is None else keywords
+    if (
+        type(positional) is not tuple
+        or type(keywords) is not dict
+        or len(positional) + len(keywords) + 3 > 4096
+        or any(type(name) is not str for name in keywords)
+    ):
+        msg = "host default owners require exact builtin default containers"
+        raise ValueError(msg)
+    return _mutable_aliases((positional, tuple(keywords[name] for name in sorted(keywords))))
+
+
+def _mutable_aliases(value: object) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    """Record repeated mutable builtin owners as paths, never persisted object IDs.
+
+    Immutable identity and relationships outside this root retain separate limits.
+    Exact set members cannot contain mutable builtins; their value encoder keeps
+    its existing canonical order. Cycles and oversized graphs remain UNKNOWN.
+    """
+    seen: dict[int, tuple[int, ...]] = {}
+    active: set[int] = set()
+    aliases: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    nodes = 0
+
+    def visit(item: object, path: tuple[int, ...]) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > 4096 or len(path) > 64:
+            msg = "host binding owner graph exceeds bounded source policy"
+            raise ValueError(msg)
+        if not any(type(item) is kind for kind in (tuple, list, dict, set, slice)):
+            return
+        owner = id(item)
+        if owner in active:
+            msg = "host binding owner graph contains an unsupported cycle"
+            raise ValueError(msg)
+        if any(type(item) is kind for kind in (list, dict, set)):
+            previous = seen.get(owner)
+            if previous is not None:
+                aliases.append((previous, path))
+            else:
+                seen[owner] = path
+        active.add(owner)
+        for index, child in enumerate(_alias_children(item)):
+            visit(child, (*path, index))
+        active.remove(owner)
+
+    visit(value, ())
+    return aliases
+
+
+def _alias_children(value: object) -> Iterator[object]:
+    if type(value) is dict and isinstance(value, dict):
+        return (child for pair in value.items() for child in pair)
+    if type(value) is slice and isinstance(value, slice):
+        return iter((value.start, value.stop, value.step))
+    if any(type(value) is kind for kind in (tuple, list)) and isinstance(value, tuple | list):
+        return iter(value)
+    return iter(())
 
 
 def _function_decorators(

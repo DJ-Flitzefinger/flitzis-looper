@@ -442,3 +442,22 @@ Set and frozenset evidence SHALL retain its existing unordered policy.
 - **THEN** the component is UNKNOWN even though its source and function code remain unchanged
 - **AND** an equal replacement retaining the original entry order preserves known identity
 - **AND** alias topology and complete-host, model, device and quality evidence retain their separate limits
+
+### Requirement: Host Evidence Preserves Bounded Mutable Owner Sharing
+Guarded host evidence SHALL compare the sharing topology of exact mutable list,
+dict and set owners across one function's positional and keyword defaults, across
+supported generated-constructor defaults, and within each measured constant.
+Exact tuple/list/dict/slice paths SHALL use deterministic evidence without
+persisting object IDs or invoking subclass hooks. Cycles and excessive graph
+depth or size SHALL remain UNKNOWN. Existing source-backed callable, exact-type,
+dictionary-order, canonical-set and runtime-carrier checks SHALL remain intact.
+Immutable identity and relationships across separate constants, functions or
+global/default roots retain separate limits; this is not complete object identity.
+
+#### Scenario: Equal defaults change their shared owner
+- **GIVEN** held source and loaded function code agree and two equal mutable defaults have distinct owners
+- **WHEN** actual defaults share one owner, including across positional and keyword areas
+- **THEN** the component is UNKNOWN even though memberwise values remain equal
+- **AND** splitting a declared shared owner is also UNKNOWN
+- **AND** replacing defaults with fresh owners preserving the declared topology retains identity
+- **AND** both original complete-host UNKNOWN gates and all model, device and quality gates remain open

@@ -4926,3 +4926,65 @@ suppression. Final staged byte/protected-bridge checks and one independent actua
 diff review complete publication. The isolated Release/API retained22 known Rust
 warnings and the unchanged einops0.6.1 warning. This is focused evidence, with no
 neural, device, hearing, full-quality, performance or installed-footprint claim.
+
+
+## STEP45 impact: preserve bounded mutable owner sharing
+
+The unchanged predicate reproduced four precise failures in2.54s: positional,
+keyword-only, cross-area and nested list defaults changed identity behavior
+under identical held source bytes and function code, while value evidence stayed
+known. Systems and Methods PRE approved this bounded correction.
+
+One graph compares mutable list/dict/set owners across each function's positional
+and keyword defaults, across supported generated-constructor defaults, and within
+each measured constant. Exact tuple/list/dict/slice paths record repeated owners
+as deterministic path pairs; raw object IDs remain temporary traversal keys.
+Cycles, more than4096 visited nodes or path depth above64 remain UNKNOWN before
+these roots reach their recursive value encoders. Existing exact type gates,
+dictionary entry order, canonical sets, source-backed callable defaults, retained
+aliases/contextmanagers and state-independent runtime carriers keep their checks.
+Fresh owners preserving the declared sharing graph retain the same evidence.
+
+This is mutable-owner topology within those roots, not arbitrary identity.
+Immutable scalar/tuple identity, cross-function/cross-constant/global-default
+relationships and other generated methods/metaclasses/new retain separate limits.
+Both original complete host manifests remain UNKNOWN at the Pydantic compiled
+validator/serializer and dependency-lineage boundary. Productive Python/Torch
+continues. No queue/admission/model math/source/OwnACK/reader/clock/realtime,
+dependency or installer path changes; no NN/CUDA/App/device/listening/latency/
+footprint acceptance follows. NativeREST46 retains ENTIRE former nativeREST45;
+FINAL47 retains ENTIRE former FINAL46, including all negative/UNKNOWN gates.
+
+Focused regression covers merge and split of lists/dicts/sets, nested containers,
+slices, source methods/constructors, generated defaults, retained callables,
+equivalent replacement owners and graph refusal. All existing processing/type/
+order/origin/constructor/native-conversion cases, eight positive roles and both
+original complete-host UNKNOWN controls remain required. Static checks cover
+changed format/Ruff, strict Mypy, strict OpenSpec and exact staged/protected bytes.
+One initial real C901/E501 lint pair was corrected by extracting children traversal
+and wrapping the test line, without suppression. Frozen Systems POST and one
+independent final actual-diff review precede checked English publication.
+
+Frozen Systems POST found that dictionary child collection was eager before the
+node guard. Child traversal now uses an exact-builtin lazy iterator, so refusal
+does not first materialize the complete dictionary; a large-dictionary UNKNOWN
+control joins the bounded graph cases. This correction precedes integrated tests.
+
+The same final review chain also identified generated field/reference defaults
+reaching recursive encoding before graph preflight. Field defaults now validate
+topology before value encoding; the shared reference field set is preflighted
+before constructor-default encoding. A generated-field refusal control makes
+recursive encoders fail if any unbounded graph reaches them.
+
+The graph walk counts repeated subtree occurrences as well as unique owners,
+bounding later recursive value expansion for acyclic shared DAGs. A depth12 DAG
+control requires refusal before recursive generated-field encoding. Exact default
+container arity also refuses a guaranteed oversized graph before keyword sorting.
+
+The integrated run passed all187 product cases (42 new plus145 existing), strict
+Mypy and strict OpenSpec in102.34s; Ruff found one unused test-local assignment.
+Removing that unused binding preserves the executed load and every assertion.
+Final verification reruns the five affected generated-field refusal cases plus
+all four static/index checks; other product results remain source-compatible.
+The isolated Release/API setup retained22 known Rust warnings and unchanged
+einops0.6.1; no neural/device/whole-quality or installed-footprint claim follows.
