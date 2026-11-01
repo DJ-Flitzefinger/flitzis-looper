@@ -624,7 +624,21 @@ former nativeREST43; FINAL45 retains ENTIRE former FINAL44 without omissions.
 Complete Pydantic compiled-plan/dependency, native process/model/CUDA, full quality
 and distribution evidence remain open; value evidence is not complete behavior proof.
 
-## 44. Remaining native parity before cutover
+## 44. Preserve dictionary insertion order in source value evidence
+
+- [x] Reproduce equal dictionaries changing iteration behavior under unchanged
+      held source and function bodies while the old predicate remains known.
+- [x] Preserve dictionary entry order recursively in ordinary and generated
+      constructor value evidence, retaining canonical set/frozenset evidence.
+- [x] Verify positional/keyword defaults, source methods/constructors, constants,
+      retained callable defaults, nested generated defaults and positive controls.
+
+This bounded order correction grows the plan to46. NativeREST45 retains ENTIRE
+former nativeREST44; FINAL46 retains ENTIRE former FINAL45 without omissions.
+Alias topology, complete Pydantic compiled-plan/dependency, native process/model/
+CUDA, full quality and distribution evidence remain open.
+
+## 45. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -641,10 +655,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP45, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP46, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 45. Combined regression and final architecture review
+## 46. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

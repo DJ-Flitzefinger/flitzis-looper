@@ -427,3 +427,18 @@ policies SHALL retain their separate evidence rules.
 - **THEN** the component is UNKNOWN even when Python equality considers the values equal
 - **AND** source-declared constructors and retained callable defaults apply the same type-preserving value policy
 - **AND** neither complete-host identity nor model, device or quality acceptance is inferred
+
+### Requirement: Host Dictionary Value Evidence Preserves Insertion Order
+Supported dictionary values SHALL retain their actual entry order recursively
+when compared with held source, including ordinary defaults, measured constants
+and supported generated-constructor defaults. Equal key/value pairs alone SHALL
+NOT establish that ordered dictionary behavior matches the source. Source-backed
+callable defaults SHALL apply the same rule to their retained inner defaults.
+Set and frozenset evidence SHALL retain its existing unordered policy.
+
+#### Scenario: Equal dictionaries produce different iteration results
+- **GIVEN** held source and loaded function code agree and a dictionary default returns its first key
+- **WHEN** the actual default is replaced by an equal dictionary with reversed insertion order
+- **THEN** the component is UNKNOWN even though its source and function code remain unchanged
+- **AND** an equal replacement retaining the original entry order preserves known identity
+- **AND** alias topology and complete-host, model, device and quality evidence retain their separate limits

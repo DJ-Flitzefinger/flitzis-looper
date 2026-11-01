@@ -4889,3 +4889,40 @@ byte/whitespace/protected-bridge checks and the same independent review chain
 complete the publication boundary. The isolated Release/API retained22 known
 Rust warnings and the unchanged einops0.6.1 warning. No neural, device, hearing,
 whole-quality, performance or installed-footprint acceptance is claimed.
+
+## STEP44 impact: preserve actual dictionary insertion order
+
+Both ordinary value evidence and the supported generated-constructor encoder
+sorted dictionary entries. Equal dictionaries with different insertion orders
+therefore shared evidence, although `next(iter(value))` returned a different key
+under unchanged held source and function code. The original predicate reproduced
+all20 new negative cases in3.77s; both equal-order positive controls passed.
+
+Both encoders now retain the entry sequence from exact builtin dictionaries,
+recursively through supported nested values. Set/frozenset sorting, exact builtin
+type gates, source-backed callable checks and state-independent mutable runtime
+carriers keep their existing rules. Ordinary positional/keyword defaults, source
+methods/constructors, constants, retained callables and tuple-wrapped dictionary
+defaults in generated constructors cover the affected paths. Dictionary evidence
+remains an entry list, so surrounding JSON metadata key sorting preserves order.
+
+This tightens value evidence without certifying alias topology, other generated
+methods, metaclasses, `__new__` or external compiled plans. Both original complete
+host manifests remain UNKNOWN; actual Pydantic compiled validator/serializer and
+dependency lineage are still open. No model/admission/queue/cancellation/reader/
+source/content/OwnACK/FinalCAS/clock/realtime/dependency/installer path changes.
+Productive Python/Torch remains active; no neural, CUDA or device run is justified.
+
+This justified split grows the plan to46. NativeREST45 retains ENTIRE former
+nativeREST44; FINAL46 retains ENTIRE former FINAL45, including all original
+process/numerical/CUDA/Demucs/platform/distribution and negative/UNKNOWN gates.
+
+The frozen integrated run passed145 product regressions and3 static checks
+in85.86s, including all22 new order cases, the existing exact-type/constructor/
+origin/source checks, all eight positive component roles and both original
+complete-host UNKNOWNs. Ruff format/lint, strict Mypy and strict OpenSpec passed;
+one initial test-only Yoda-condition lint finding was corrected without a
+suppression. Final staged byte/protected-bridge checks and one independent actual
+diff review complete publication. The isolated Release/API retained22 known Rust
+warnings and the unchanged einops0.6.1 warning. This is focused evidence, with no
+neural, device, hearing, full-quality, performance or installed-footprint claim.

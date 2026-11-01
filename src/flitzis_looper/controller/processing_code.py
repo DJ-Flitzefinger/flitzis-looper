@@ -688,7 +688,7 @@ def _constructor_value(value: object) -> object:
         entries = [
             (_constructor_value(key), _constructor_value(item)) for key, item in value.items()
         ]
-        return "dict", sorted(entries, key=lambda item: json.dumps(item[0], sort_keys=True))
+        return "dict", entries
     msg = "host dataclass constructor default requires an unsupported runtime type"
     raise ValueError(msg)
 
@@ -1141,7 +1141,7 @@ def _collection_value(
             sorted(items, key=lambda item: json.dumps(item, sort_keys=True)),
         )
     entries = [(_value(key), _value(item)) for key, item in value.items()]
-    return ("dict", sorted(entries, key=lambda item: json.dumps(item[0], sort_keys=True)))
+    return ("dict", entries)
 
 
 def _code(value: CodeType) -> str:

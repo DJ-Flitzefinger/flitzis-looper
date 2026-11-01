@@ -136,8 +136,10 @@ members. Equal values such as `True` and `1` cannot substitute for one another;
 builtin subclasses and custom default containers remain unsupported without
 calling their equality, iteration or encoding hooks. Guarded callable defaults
 retain their separate source proof, and mutable admission/cancellation carriers
-retain their existing state-independent policy. This value evidence does not
-certify dictionary insertion order or alias topology.
+retain their existing state-independent policy. Dictionary entries retain actual
+insertion order recursively, including supported generated-constructor defaults;
+reordering equal dictionaries cannot preserve source evidence when iteration
+behavior changes. This value evidence does not certify alias topology.
 This is compiled-source identity, not loaded-image or full compiler attestation.
 Conversion does not remove Torch or prove model quality.
 
