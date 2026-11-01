@@ -255,6 +255,80 @@ impl Transform {
     }
 }
 
+/// Retained spectral state for serial, externally admitted offline work.
+/// Prepare before the caller's allocation boundary; no plan, cache, window or
+/// FFT scratch is allocated by later calls. Features, masks and returned PCM
+/// still need separate backing and complete process admission.
+pub struct SpectralWorkspace {
+    max_frames: usize,
+    forward: Transform,
+    inverse: Inverse,
+}
+
+impl SpectralWorkspace {
+    pub fn new(max_frames: usize, rate: u32, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        let geometry = Geometry::new(max_frames, rate)?;
+        Ok(Self {
+            max_frames,
+            forward: Transform::new(false, cancelled)?,
+            inverse: Inverse::new(geometry, cancelled)?,
+        })
+    }
+
+    pub fn analyze(
+        &mut self,
+        pcm: &[f32],
+        rate: u32,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Spectrum, Error> {
+        if !pcm.len().is_multiple_of(CHANNELS) {
+            return Err(Error::Shape);
+        }
+        let g = Geometry::new(pcm.len() / CHANNELS, rate)?;
+        self.validate(g)?;
+        finite(pcm, cancelled)?;
+        Spectrum::analyze_transform(pcm, g, &mut self.forward, cancelled)
+    }
+
+    fn validate(&self, g: Geometry) -> Result<(), Error> {
+        if g.frames > self.max_frames {
+            Err(Error::Shape)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The exclusive borrow lasts through the final synchronous mask reader.
+    /// Every call rebuilds the envelope for THIS geometry, including its tail.
+    pub fn reconstruction<'a>(
+        &'a mut self,
+        spectrum: &'a Spectrum,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Reconstruction<'a>, Error> {
+        self.validate(spectrum.geometry)?;
+        self.inverse.prepare(spectrum.geometry, cancelled)?;
+        Ok(Reconstruction {
+            spectrum,
+            inverse: InverseStorage::Borrowed(&mut self.inverse),
+        })
+    }
+
+    pub fn reconstruct(
+        &mut self,
+        spectrum: &Spectrum,
+        masks: &[f32],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<f32>, Error> {
+        if masks.len() != spectrum.geometry.mask_len() {
+            return Err(Error::Shape);
+        }
+        self.validate(spectrum.geometry)?;
+        finite(masks, cancelled)?;
+        self.reconstruction(spectrum, cancelled)?
+            .all(masks, cancelled)
+    }
+}
+
 /// Immutable features in `[time, frequency, stereo, real/imag]` order.
 /// Shape-private ownership prevents reconstruction from accepting forged spectra.
 #[derive(Debug)]
@@ -279,6 +353,15 @@ impl Spectrum {
         let geometry = Geometry::new(pcm.len() / CHANNELS, rate)?;
         finite(pcm, cancelled)?;
         let mut transform = Transform::new(false, cancelled)?;
+        Self::analyze_transform(pcm, geometry, &mut transform, cancelled)
+    }
+
+    fn analyze_transform(
+        pcm: &[f32],
+        geometry: Geometry,
+        transform: &mut Transform,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, Error> {
         let mut features = zeros(geometry.features, "analyze.features")?;
         for time in 0..geometry.steps {
             for channel in 0..CHANNELS {
@@ -325,16 +408,7 @@ impl Spectrum {
             return Err(Error::Shape);
         }
         finite(masks, cancelled)?;
-        let mut inverse = self.reconstruction(cancelled)?;
-        let mut output = zeros(STEMS * CHANNELS * g.frames, "inverse.output")?;
-        for (mask, target) in masks
-            .chunks_exact(g.features)
-            .zip(output.chunks_exact_mut(CHANNELS * g.frames))
-        {
-            inverse.write_stem(mask, target, cancelled)?;
-        }
-        checkpoint(cancelled)?;
-        Ok(output)
+        self.reconstruction(cancelled)?.all(masks, cancelled)
     }
 
     /// Borrow the spectrum and prepare ONE reusable inverse context. All output
@@ -352,32 +426,86 @@ impl Spectrum {
 /// No application publication or resource-admission authority is supplied here.
 pub struct Reconstruction<'a> {
     spectrum: &'a Spectrum,
+    inverse: InverseStorage<'a>,
+}
+
+enum InverseStorage<'a> {
+    Owned(Inverse),
+    Borrowed(&'a mut Inverse),
+}
+
+impl InverseStorage<'_> {
+    fn get(&mut self) -> &mut Inverse {
+        match self {
+            Self::Owned(inverse) => inverse,
+            Self::Borrowed(inverse) => inverse,
+        }
+    }
+}
+
+struct Inverse {
     transform: Transform,
     envelope: Vec<f32>,
     accumulation: Vec<f32>,
 }
 
-impl<'a> Reconstruction<'a> {
-    fn new(spectrum: &'a Spectrum, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
-        let g = spectrum.geometry;
+impl Inverse {
+    fn new(g: Geometry, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
         let transform = Transform::new(true, cancelled)?;
-        let mut envelope: Vec<f32> = zeros(g.inverse_frames, "inverse.envelope")?;
+        let mut inverse = Self {
+            transform,
+            envelope: zeros(g.inverse_frames, "inverse.envelope")?,
+            accumulation: zeros(g.inverse_frames, "inverse.accumulation")?,
+        };
+        inverse.prepare(g, cancelled)?;
+        Ok(inverse)
+    }
+
+    fn prepare(&mut self, g: Geometry, cancelled: &dyn Fn() -> bool) -> Result<(), Error> {
+        checkpoint(cancelled)?;
+        let envelope = self
+            .envelope
+            .get_mut(..g.inverse_frames)
+            .ok_or(Error::Shape)?;
+        if self.accumulation.len() < g.inverse_frames {
+            return Err(Error::Shape);
+        }
+        // A maximum-geometry envelope prefix has additional trailing windows.
+        // Clear/rebuild the actual extent in the original accumulation order.
+        envelope.fill(0.0);
         for time in 0..g.steps {
             checkpoint(cancelled)?;
             for i in 0..FFT {
-                envelope[time * HOP + i] += transform.window[i] * transform.window[i];
+                envelope[time * HOP + i] += self.transform.window[i] * self.transform.window[i];
             }
         }
         let trimmed = &envelope[FFT / 2..FFT / 2 + g.frames];
         if trimmed.iter().any(|x| !x.is_finite() || *x <= 1e-11) {
             return Err(Error::Envelope);
         }
+        checkpoint(cancelled)
+    }
+}
+
+impl<'a> Reconstruction<'a> {
+    fn new(spectrum: &'a Spectrum, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
         Ok(Self {
             spectrum,
-            transform,
-            envelope,
-            accumulation: zeros(g.inverse_frames, "inverse.accumulation")?,
+            inverse: InverseStorage::Owned(Inverse::new(spectrum.geometry, cancelled)?),
         })
+    }
+
+    fn all(&mut self, masks: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>, Error> {
+        let g = self.spectrum.geometry;
+        let mut output = zeros(STEMS * CHANNELS * g.frames, "inverse.output")?;
+        for (mask, target) in masks
+            .chunks_exact(g.features)
+            .zip(output.chunks_exact_mut(CHANNELS * g.frames))
+        {
+            self.write_stem(mask, target, cancelled)?;
+        }
+        checkpoint(cancelled)?;
+        Ok(output)
     }
 
     /// Reconstruct one complete complex mask into exact planar stereo storage.
@@ -394,9 +522,10 @@ impl<'a> Reconstruction<'a> {
             return Err(Error::Shape);
         }
         finite(masks, cancelled)?;
-        let trimmed = &self.envelope[FFT / 2..FFT / 2 + g.frames];
+        let inverse = self.inverse.get();
+        let trimmed = &inverse.envelope[FFT / 2..FFT / 2 + g.frames];
         for channel in 0..CHANNELS {
-            self.accumulation.fill(0.0);
+            inverse.accumulation[..g.inverse_frames].fill(0.0);
             for time in 0..g.steps {
                 checkpoint(cancelled)?;
                 for bin in 0..BINS {
@@ -412,26 +541,26 @@ impl<'a> Reconstruction<'a> {
                         return Err(Error::NonFinite);
                     }
                     // Real irfft ignores imaginary DC and Nyquist parts.
-                    self.transform.buffer[bin] = if bin == 0 || bin == FFT / 2 {
+                    inverse.transform.buffer[bin] = if bin == 0 || bin == FFT / 2 {
                         Complex32::new(value.re, 0.0)
                     } else {
                         value
                     };
                 }
                 for bin in 1..FFT / 2 {
-                    self.transform.buffer[FFT - bin] = self.transform.buffer[bin].conj();
+                    inverse.transform.buffer[FFT - bin] = inverse.transform.buffer[bin].conj();
                 }
-                self.transform.run();
+                inverse.transform.run();
                 for i in 0..FFT {
-                    self.accumulation[time * HOP + i] +=
-                        self.transform.buffer[i].re / FFT as f32 * self.transform.window[i];
+                    inverse.accumulation[time * HOP + i] +=
+                        inverse.transform.buffer[i].re / FFT as f32 * inverse.transform.window[i];
                 }
             }
             let offset = channel * g.frames;
             for start in (0..g.frames).step_by(BLOCK) {
                 checkpoint(cancelled)?;
                 for i in start..(start + BLOCK).min(g.frames) {
-                    let value = self.accumulation[FFT / 2 + i] / trimmed[i];
+                    let value = inverse.accumulation[FFT / 2 + i] / trimmed[i];
                     if !value.is_finite() {
                         return Err(Error::NonFinite);
                     }

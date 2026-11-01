@@ -1,5 +1,167 @@
 # Performance audit and implementation design
 
+## STEP32 impact: retained spectral execution workspace
+
+The actual learned CLI now prepares ONE `SpectralWorkspace` before sealing its
+execution allocator. It retains both directional FFT plans, buffers, scratch and
+periodic Hann windows, plus maximum admitted inverse envelope/accumulation vectors.
+The all-four diagnostic and single-mask track paths use that SAME workspace;
+serial samples and later batches do not rebuild planners, clone plan Arcs or
+allocate FFT/window/inverse backing. Existing allocating APIs remain available
+and share their original numerical kernels with the prepared path. The productive
+application, dependencies, model operators, geometry and precision are unchanged.
+
+`Spectrum` independently owns its features. A reconstruction exclusively borrows
+the inverse workspace and spectrum through the final synchronous stem reader.
+Before every reconstruction, the exact current envelope extent is cleared and
+rebuilt in the original time/window order. A prefix of the maximum-geometry
+envelope would include extra trailing windows and is deliberately NOT used.
+Accumulation is cleared for each channel; each transform overwrites every input
+element before running. Cancellation or arithmetic failure invalidates the entire
+attempt, including previously written output. A later independent invocation
+reinitializes its exact working state. No source/content/OwnACK/FinalCAS/last-reader
+or realtime authority changes.
+
+This is a source-motivated lifetime correction in the real full track route,
+not learned acceptance or a claimed memory/speed improvement. Both inverse vectors
+now remain live during analysis and the neural forward as preseal process backing.
+They MUST be counted there, even though they no longer occupy the execution arena.
+Full track preparation uses485100 frames even for a shorter physical source;
+diagnostic preparation uses its actual checked complete chunk geometry.
+
+### Simplified ordered source schedule and exact remaining proof
+
+The STEP31 table remains historical evidence. Its later FFT/planner/Arc/HashMap/
+twiddle/shrink-to-Box requests are removed from the SEALED prepared CLI schedule.
+All their actual selected-branch allocations are retained before NN and still
+need the complete preNN process allowance; moving ownership does not erase bytes.
+The original unprepared library wrappers/control remain different branches.
+
+For the remaining source events let A(name,n) reserve exactly n float32 elements,
+D(name) release that owner, S=1101, F=S*4100 and X=S*62*384. A linear call L(rows,in,
+out) first allocates its rows*out result, then performs synchronous packing pulses.
+Norm allocates rows*width; final axial normalization is in-place. No success-path
+Vec grows beyond its initial exact reservation or reallocates after preparation.
+
+Model load reserves62 Band records; each band width w loads [w,w*384,384]. It then
+reserves8 Transformer pairs, each loading TWO ordered tensor lists
+[32,384,384*1536,384*8,8,512*384,384,384*1536,1536,1536*384,384]. Final norm loads384.
+It reserves4 Vec records and, for each stem,62 Mask records; each band loads
+[384*768,768,768*2w,2w]. These are1355 tensor and7 metadata requests. Numeric payload
+is526818448B. Candidate LP64 Band88/pair784/Vec24/Mask128 gives43568B metadata,
+but actual target `size_of`/alignment STILL must bind these values before any
+capacity claim. No stable Rust ABI is assumed.
+
+| Source episode | Ordered requests/releases; caller owners remain live |
+| --- | --- |
+| Latent bands | A(X); for each band A(selected,S*w), A(norm,S*w), D(selected), L(S,w,384), D(norm), D(projected). Each band returns with X only. |
+| Transformer attention, length N | A(norm,N*384), L(N,384,1536)=qkv, L(N,384,8)=gates, D(norm); A(attended,N*512), A(q,N*64), A(k,N*64), A(v,N*64), A(scores,16*N), A(tile,16*64); score/value packing pulses; D(tile),D(scores),D(v),D(k),D(q); D(qkv),D(gates); L(N,512,384)=attention, D(attended), residual add, D(attention). |
+| Transformer feedforward | A(norm,N*384), L(N,384,1536)=expanded, D(norm), GELU in-place, L(N,1536,384)=contracted, D(expanded), residual add, D(contracted). |
+| Axial traversal | Each of8 blocks runs62 time transformers with A(selected,S*384)/D(selected) around each; then S frequency transformers of length62 borrow X directly. Each transformer must restore its caller's exact free-list state. Final norm allocates nothing. |
+| Projection | For each band A(selected,S*384); for each selected stem L(S,384,768)=hidden, activation, L(S,768,2w)=projected, D(hidden), GLU copy, D(projected); D(selected). X and destination masks remain live throughout. |
+| All-four masks | Latent returns X; A(masks,4F); projection over4 stems; D(X) on return, retaining masks. |
+| Diagnostic | A(pcm,2*frames), A(features,F), D(pcm); all-four masks; A(prediction,8*frames); after writes D(prediction),D(masks),D(features). Optional original-feature pass then A(features,F), all-four masks, D(masks),D(features). |
+| Track persistent | In declaration order: input4*485100, source2*485100, result8*727650, counter727650, output8*485100, window485100. No wholetrack-length vector. |
+| Track batch/sample | For actual B=1 or2, A(destination,B*8*485100); each sample A(features,F), latent returns X, A(singlemask,F), four independent single-stem projection/inverse episodes; D(singlemask),D(X),D(features). The earlier sample is already INSIDE destination. After add, D(destination) BEFORE flush. Both sample and batch must restore their exact respective caller free lists to prove arbitrary track-length repetition. |
+
+Pinned matrixmultiply0.3.10 std/nonthreading/default packing creates one allocation
+before its loops and frees it on return, with no intervening Rust allocation.
+For dimensions m,k,n the request is
+4*min(k,256)*(round_up(min(m,64),8)+round_up(min(n,1024),NR)) bytes. AVX/FMA uses
+NR8/alignment32; SSE NR4/alignment16; fallback NR4/effective alignment4. All current
+column dimensions are divisible8, or62 rounded64, or1101 capped1024, so request
+sizes agree across these branches. The source maximum remains1081344B.
+A conservative maximum aligned packing pulse can dominate these smaller calls
+ONLY after proving allocate/free restores the EXACT preceding free list; size
+comparison alone does not handle first-fit holes. The actual allocator returns
+padding/tiny-tail absorption and coalesces adjacent extents, making this invariant
+available but still requiring complete validation. Repeated calls can then be
+collapsed by that explicit invariant rather than omitted from the proof.
+
+Next reconcile this entire finite schedule against the SAME actual allocator's
+fit/split/free/coalescing implementation, both possible16-aligned base residues
+mod32, actual target layouts, headers and tiny tails. A sparse header-store replay
+sharing the complete production algorithm is a possible proof without allocating
+NN payloads; an independent approximate simulator is insufficient. Verify the
+derived extent explicitly: first-fit success monotonicity must not be assumed
+when tiny-tail absorption changes placement. The max live payload is not capacity.
+No such full replay or smaller arena extent is selected or claimed in this step.
+
+### Native boundary and complete retained remainder
+
+The retained workspace removes later FFT planning/window-cosine calls. Learned
+sqrt/sin_cos/exp/tanh, synchronous native read/seek/write/flush/close, pre-existing
+heaps, original2MiB stack, image COW, CRT/TLS/loader and exit/error/panic remain
+unbounded. Rust wrappers alone do not supply a native allocation contract.
+[ReadFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile)
+specifies caller-buffer/completion rules without a finite user-memory allowance.
+[Process exit](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process)
+also invokes DLL detach callbacks; permitted
+[DLL initialization/cleanup work](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices)
+includes memory/TLS allocation. A fixed private heap would not bound other process
+heaps. The existing Job cap enforces refusal, not sufficient successful admission.
+No snapshot or after-the-fact no-growth observation closes these native paths.
+Arena backing already inside PrivateUsage MUST NEVER be added a second time.
+
+No complete process bound, sufficient fresh ORIGINAL admission, new learned/oracle
+or CUDA run is claimed. CPU spectral ownership alone is NO changed CUDA condition.
+This necessary source-ownership split grows the plan to34: STEP33 retains the
+ENTIRE former nativeREST32; FINAL34 the ENTIRE former FINAL33. Original full
+learned masks/PCM at mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4, full485100/1101/
+batch2/fulltrack, mandatory actual native NVIDIA CUDA under meaningful changed
+model/operator/runtime and fresh complete admission, actual same-model devicefault
+-> Tree AND Reader END -> fresh CPU, COMPLETE practical Demucs, ALL roles/platforms,
+Windows EXE AND actual Linux/macOS, CPU/CUDA releases/CRT/licenses/LGPLsource3patch/
+NVIDIA notices/installer/recovery/fullfootprint and ALL quality/functions/resources/
+cancel/final gates remain. Original fullhost/validator/32keys/32 parent failures/
+distinct216 watchdog/registry/pressure UNKNOWN and Overlap OPEN remain unchanged.
+Productive Torch/pins/closures/installer and installed savings ZERO are unchanged.
+
+### Verification boundary
+
+Release controls PASS31 with no ignored cases:10 core/learned,9 spectral,5 track
+and7 existing allocator/typed-I/O units. The two added spectral controls compare
+prepared and allocating features/all-four complex-mask PCM bitwise through
+4099->1025->2501->4099->485100->1025, including single-stem out-of-order writes and
+sentinels. They also cover extent/rate/odd-input refusal, nonfinite values,
+cancellation during analysis/envelope rebuild/channel two, overflow and successful
+fresh reuse after partial work. They exercise spectral kernels and ownership,
+NOT the complete learned network. Strict all-target Clippy and Release examples
+PASS. External isolated Release Native/API PASS with the same22 known warnings;
+the existing einops pin/warning and Human App/held Native remain unchanged.
+
+Final outer verification PASS2 in6.19s: Rustfmt, strict OpenSpec, four Markdown
+files/11 local targets, default/optional/application dependency isolation and
+unchanged productive closures/pins/locks, plus FIVE actual original-owned scoped
+child cases. The retained spectral fixture completes five geometry cycles with
+exactly15 later Rust payload requests (features, all-four masks, output), live0,
+failures0 and peak951216B in1MiB backing. This proves fixture request ownership
+only;1MiB is NOT a proposed full-model arena or native/process allowance.
+
+ONE actual full485100/1101 spectral process produces byte-identical archived
+prior-Release features and PCM: feature SHA256
+`d28a7f55356334f279f2c1eea899bf347a6e9e274decba6ec7e65161f44d8523`, PCM SHA256
+`f180af0c2fafba1a05915d0994dfe6860deb055da212267059714ab50893c0d6`.
+Together with bitwise prepared/allocating Rust comparisons, this checks unchanged
+spectral kernels, not learned neural outputs. Three actual CLI bad-header cases
+prepare the retained workspace and then reject BEFORE tensor loading/NN; track,
+chunk and chunk-with-original-features leave1,3,4 EMPTY files respectively, ALL
+INVALID. The nine unchanged STEP31 preload negatives and retained-I/O control
+are source-compatible reuse, not additional fresh cases here.
+
+One observer precedes one joined executor:5/5 original scopes closed, pending0,
+inflight0 and sampling errors[]. No full-model admission query, learned/oracle
+or CUDA was launched. Actual Windows x64 Release diagnostic1221632B SHA256
+`0dd744b0e69be1154df0fd24bcc38e53cb23565925dc5585d2e4112a86278d2c`, spectral1056768B
+SHA256 `6304c92ddb110a613fd66a8bbf0bf885c22d5677fa866f5db553fb7c3d7e809f` are component
+evidence ONLY, not Compiler/FullProducer/MappedImages/nonWindows/wholeNN/quality/
+distribution. Reconstruction uses `bs_learned --spectral-workspace-control`, the
+existing complete spectral diagnostic and bad-header recipes under the original
+admitted command owner. Generated logs/fixtures remain reconstructible cache;
+source/pins/this design retain durable facts. No speed/RSS or installed gain is
+claimed. Systems PRE/frozen POST, Methods and ONE independent final actual-diff
+chain review this scoped correction; all readers must end before publication.
+
 ## STEP31 impact: retained diagnostic I/O and allocation schedule
 
 The CLI now moves actual directory/path creation, exclusive output

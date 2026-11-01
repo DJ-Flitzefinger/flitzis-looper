@@ -8,7 +8,7 @@ mod workspace;
 static WORKSPACE: workspace::WorkspaceAllocator = workspace::WorkspaceAllocator::new();
 
 use flitzis_stem_dsp::{
-    Error, Geometry, RATE, Spectrum,
+    Error, Geometry, RATE, SpectralWorkspace, Spectrum,
     learned::{Model, activation_bytes, weight_bytes},
     track::{TrackPlan, process_track},
 };
@@ -38,6 +38,9 @@ fn execute(status: &mut impl Write) -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--workspace-control" {
         return workspace_control(status);
+    }
+    if args.len() == 1 && args[0] == "--spectral-workspace-control" {
+        return spectral_workspace_control(status);
     }
     if args.len() == 2 && args[0] == "--io-control" {
         return trial_io::control(Path::new(&args[1]), &WORKSPACE, status);
@@ -109,6 +112,18 @@ fn execute(status: &mut impl Write) -> Result<()> {
     // A later failure invalidates ALL new empty/partial private files. Nothing
     // in the sealed phase opens/reopens an output or formats platform error text.
     let mut outputs = Outputs::prepare(Path::new(&args[5]), mode == "chunk", args.len() == 7)?;
+    // Retain BOTH directional plans/FFT buffers/windows and maximum inverse
+    // vectors before seal. No FFT planning or backing growth occurs per sample.
+    // This is retained pre-NN process memory, NOT part of the arena or admission.
+    let mut spectral_workspace = SpectralWorkspace::new(
+        if mode == "chunk" {
+            frames
+        } else {
+            flitzis_stem_dsp::track::CHUNK
+        },
+        RATE,
+        &|| false,
+    )?;
     WORKSPACE.seal(capacity)?;
     let model = Model::load(&mut weights, &expected, &|| false)?;
     if let Outputs::Chunk(output) = &mut outputs {
@@ -118,11 +133,11 @@ fn execute(status: &mut impl Write) -> Result<()> {
             source.read_exact(&mut value).at("source.read")?;
             pcm.push(f32::from_le_bytes(value));
         }
-        let spectral = Spectrum::analyze(&pcm, RATE, &|| false)?;
+        let spectral = spectral_workspace.analyze(&pcm, RATE, &|| false)?;
         drop(pcm);
         let geometry = spectral.geometry();
         let masks = model.masks(spectral.features(), geometry.steps(), &|| false)?;
-        let prediction = spectral.reconstruct(&masks, &|| false)?;
+        let prediction = spectral_workspace.reconstruct(&spectral, &masks, &|| false)?;
         output.features.write_values(spectral.features())?;
         output.masks.write_values(&masks)?;
         output.prediction.write_values(&prediction)?;
@@ -181,7 +196,9 @@ fn execute(status: &mut impl Write) -> Result<()> {
                 }
                 Ok(count)
             },
-            |input, batch| model.track_batch(input, batch, &|| false),
+            |input, batch| {
+                model.track_batch_with_workspace(input, batch, &mut spectral_workspace, &|| false)
+            },
             |start, count, pcm| {
                 if start != written {
                     return Err(Error::Output);
@@ -285,6 +302,45 @@ fn workspace_control(status: &mut impl Write) -> Result<()> {
         after.capacity, after.peak, after.live, after.allocations, after.failures
     )
     .at("status.write")?;
+    Ok(())
+}
+
+fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
+    // FIXTURE ONLY: original process admission still belongs to the caller.
+    // Three later requests per cycle are features, all4 masks and output;
+    // the actual retained FFT/inverse path requests NO other Rust backing.
+    let mut workspace = SpectralWorkspace::new(4099, RATE, &|| false)?;
+    let pcm: Vec<_> = (0..2 * 4099)
+        .map(|i| (i % 17) as f32 * 0.001 - 0.008)
+        .collect();
+    WORKSPACE.seal(1 << 20)?;
+    let before = WORKSPACE.stats();
+    for frames in [4099, 1025, 2501, 4099, 1025] {
+        let spectrum = workspace.analyze(&pcm[..2 * frames], RATE, &|| false)?;
+        let mut mask = vec![0.0; spectrum.geometry().mask_len()];
+        for pair in mask.chunks_exact_mut(2) {
+            pair[0] = 1.0;
+        }
+        let output = workspace.reconstruct(&spectrum, &mask, &|| false)?;
+        if output.chunks_exact(2 * frames).any(|stem| {
+            stem.iter()
+                .zip(&pcm[..2 * frames])
+                .any(|(a, b)| (a - b).abs() > 1e-7)
+        }) {
+            return Err("retained spectral identity mismatch".into());
+        }
+    }
+    let after = WORKSPACE.stats();
+    if after.allocations - before.allocations != 15
+        || after.live != before.live
+        || after.failures != 0
+    {
+        return Err("retained spectral workspace backing changed".into());
+    }
+    writeln!(status,
+        "BS retained spectral control: cycles=5 payload_requests=15 capacity={} peak={} live={} failures={}",
+        after.capacity, after.peak, after.live, after.failures,
+    ).at("status.write")?;
     Ok(())
 }
 

@@ -264,6 +264,9 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** CLI-owned sealed I/O failures preserve a static owning phase and numeric OS code without platform error-message formatting; original core errors and allocation phase/bytes remain intact
 - **AND** any preparation, later I/O, arithmetic, allocation or cancellation failure invalidates the entire fresh private directory, including empty or partially flushed outputs, while an existing directory remains unchanged
 - **AND** retained I/O removes concrete late preparation paths but does not prove native I/O/CRT/TLS/loader/exit closure, full allocator sufficiency or complete process admission
+- **AND** the learned CLI retains both directional FFT plans, buffers, scratch, windows and bounded inverse storage before allocator activation, reusing the SAME exclusive workspace across all-four diagnostics and serial complete track samples
+- **AND** each reconstruction rebuilds its exact current geometry envelope and clears accumulation per channel; a maximum-envelope prefix, stale partial state or a previous successful stem cannot certify a later attempt
+- **AND** prepared spectral backing remains included in the preNN process allowance, and spectral/control reuse does not establish complete arena capacity, native process bounds, learned parity or a changed CUDA condition
 - **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
 
 #### Scenario: A standalone trial declares ORT package components

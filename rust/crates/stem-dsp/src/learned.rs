@@ -7,7 +7,10 @@
 //! CUDA/AMP, audio-quality, installation or platform acceptance.
 //! Derived from the pinned vendored BS-RoFormer (Phil Wang 2023, Roman Solovyev
 //! 2024); retain vendor/bs_roformer/LICENSE-LUCIDRAINS and LICENSE-ZFTURBO.
-use crate::{BINS, Error, Geometry, RATE, STEMS, Spectrum, checkpoint, finite, reserved, zeros};
+use crate::{
+    BINS, Error, Geometry, RATE, STEMS, SpectralWorkspace, Spectrum, checkpoint, finite, reserved,
+    zeros,
+};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -693,6 +696,28 @@ impl Model {
         output: &mut [f32],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(), Error> {
+        self.chunk_into_using(pcm, output, None, cancelled)
+    }
+
+    /// Same complete learned path, using the caller's retained spectral state.
+    /// The workspace stays exclusively borrowed through the last inverse reader.
+    pub fn chunk_into_with_workspace(
+        &self,
+        pcm: &[f32],
+        output: &mut [f32],
+        workspace: &mut SpectralWorkspace,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        self.chunk_into_using(pcm, output, Some(workspace), cancelled)
+    }
+
+    fn chunk_into_using(
+        &self,
+        pcm: &[f32],
+        output: &mut [f32],
+        mut workspace: Option<&mut SpectralWorkspace>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
         if !pcm.len().is_multiple_of(crate::CHANNELS) {
             return Err(Error::Shape);
         }
@@ -700,9 +725,15 @@ impl Model {
         if output.len() != STEMS * crate::CHANNELS * g.frames() {
             return Err(Error::Shape);
         }
-        let spectrum = Spectrum::analyze(pcm, RATE, cancelled)?;
+        let spectrum = match workspace.as_deref_mut() {
+            Some(workspace) => workspace.analyze(pcm, RATE, cancelled)?,
+            None => Spectrum::analyze(pcm, RATE, cancelled)?,
+        };
         let x = self.latent(spectrum.features(), g.steps(), cancelled)?;
-        let mut inverse = spectrum.reconstruction(cancelled)?;
+        let mut inverse = match workspace {
+            Some(workspace) => workspace.reconstruction(&spectrum, cancelled)?,
+            None => spectrum.reconstruction(cancelled)?,
+        };
         let mut masks = zeros(g.feature_len(), "learned.stem-mask")?;
         for (stem, target) in output
             .chunks_exact_mut(crate::CHANNELS * g.frames())
@@ -726,6 +757,27 @@ impl Model {
         batch: usize,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<f32>, Error> {
+        self.track_batch_using(pcm, batch, None, cancelled)
+    }
+
+    /// Original complete batch2 with one retained workspace across serial samples.
+    pub fn track_batch_with_workspace(
+        &self,
+        pcm: &[f32],
+        batch: usize,
+        workspace: &mut SpectralWorkspace,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<f32>, Error> {
+        self.track_batch_using(pcm, batch, Some(workspace), cancelled)
+    }
+
+    fn track_batch_using(
+        &self,
+        pcm: &[f32],
+        batch: usize,
+        mut workspace: Option<&mut SpectralWorkspace>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<f32>, Error> {
         let frames = crate::track::CHUNK;
         if !(1..=crate::track::BATCH).contains(&batch) || pcm.len() != batch * 2 * frames {
             return Err(Error::Shape);
@@ -738,7 +790,7 @@ impl Model {
             .zip(output.chunks_exact_mut(STEMS * 2 * frames))
         {
             checkpoint(cancelled)?;
-            self.chunk_into(sample, target, cancelled)?;
+            self.chunk_into_using(sample, target, workspace.as_deref_mut(), cancelled)?;
         }
         finite(&output, cancelled)?;
         checkpoint(cancelled)?;

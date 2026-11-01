@@ -444,7 +444,25 @@ This necessary ownership split grows the plan to33. STEP32 retains the ENTIRE
 former nativeREST31 and FINAL33 the ENTIRE former FINAL32. No arithmetic/control/
 preparation/static-schedule result completes learned execution or any final gate.
 
-## 32. Remaining native parity before cutover
+## 32. Retained spectral execution ownership
+
+- [x] Prepare and retain both directional FFT plans/buffers/scratch/windows and
+      bounded inverse storage before seal, using one exclusive workspace across
+      all-four diagnostics and complete serial track samples.
+- [x] Rebuild the exact current geometry envelope, preserve shared numerical
+      kernels and validate full485100/1101 spectral reuse, partial cancellation,
+      finite/extent refusal and fresh reuse after errors.
+- [x] Record the simplified complete ordered source episodes, including actual
+      packing round-trip requirements, metadata and repeat-state obligations.
+- [ ] Validate every episode against the SAME actual allocator and target layouts,
+      close ALL retained/native process backing, then obtain sufficient fresh
+      ORIGINAL admission before real full learned/original parity.
+
+This necessary ownership split grows the plan to34. STEP33 retains the ENTIRE
+former nativeREST32 and FINAL34 the ENTIRE former FINAL33. Prepared spectral
+controls do not complete allocator/process admission, learned parity or CUDA.
+
+## 33. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -461,10 +479,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP33, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP34, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 33. Combined regression and final architecture review
+## 34. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

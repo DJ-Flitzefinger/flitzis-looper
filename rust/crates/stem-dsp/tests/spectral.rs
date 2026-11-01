@@ -1,5 +1,6 @@
 use flitzis_stem_dsp::{
-    CHANNELS, Error, FFT, Geometry, MAX_CHUNK_FRAMES, MAX_TRANSIENT_BYTES, RATE, STEMS, Spectrum,
+    CHANNELS, Error, FFT, Geometry, MAX_CHUNK_FRAMES, MAX_TRANSIENT_BYTES, RATE, STEMS,
+    SpectralWorkspace, Spectrum,
 };
 use std::cell::Cell;
 
@@ -209,5 +210,143 @@ fn inverse_destination_failures_and_late_cancel_invalidate_private_attempt() {
     assert_eq!(
         inverse.write_stem(&mask, &mut output, &|| false),
         Err(Error::NonFinite)
+    );
+}
+
+#[test]
+fn retained_workspace_rebuilds_actual_envelopes_and_preserves_complete_bits() {
+    let mut workspace = SpectralWorkspace::new(MAX_CHUNK_FRAMES, RATE, &|| false).unwrap();
+    // Shorter geometry after a long one must not inherit extra trailing windows.
+    // Include the original full485100/1101 spectral geometry; no learned network.
+    for frames in [4099, 1025, 2501, 4099, MAX_CHUNK_FRAMES, 1025] {
+        let pcm = signal(frames);
+        let original = Spectrum::analyze(&pcm, RATE, &|| false).unwrap();
+        let prepared = workspace.analyze(&pcm, RATE, &|| false).unwrap();
+        assert!(
+            original
+                .features()
+                .iter()
+                .zip(prepared.features())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        let g = original.geometry();
+        let masks: Vec<_> = (0..g.mask_len())
+            .map(|i| ((i * 17 % 79) as f32 - 39.0) * 0.013)
+            .collect();
+        let expected = original.reconstruct(&masks, &|| false).unwrap();
+        let actual = workspace.reconstruct(&prepared, &masks, &|| false).unwrap();
+        assert!(
+            actual
+                .iter()
+                .zip(&expected)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        // The same borrowed inverse also serves the single-mask learned path.
+        let mut inverse = workspace.reconstruction(&prepared, &|| false).unwrap();
+        let mut target = vec![123.0; CHANNELS * frames + 2];
+        for stem in [3, 1, 0, 2] {
+            inverse
+                .write_stem(
+                    &masks[stem * g.feature_len()..(stem + 1) * g.feature_len()],
+                    &mut target[1..1 + CHANNELS * frames],
+                    &|| false,
+                )
+                .unwrap();
+            assert_eq!(target[0], 123.0);
+            assert_eq!(*target.last().unwrap(), 123.0);
+            assert!(
+                target[1..1 + CHANNELS * frames]
+                    .iter()
+                    .zip(&expected[stem * CHANNELS * frames..(stem + 1) * CHANNELS * frames])
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+        }
+    }
+}
+
+#[test]
+fn retained_workspace_recovers_after_partial_work_and_rejects_extent_changes() {
+    assert!(matches!(
+        SpectralWorkspace::new(1025, RATE, &|| true),
+        Err(Error::Cancelled)
+    ));
+    let frames = 8193;
+    let pcm = signal(frames);
+    let mut workspace = SpectralWorkspace::new(frames, RATE, &|| false).unwrap();
+    assert!(matches!(
+        workspace.analyze(&signal(frames + 1), RATE, &|| false),
+        Err(Error::Shape)
+    ));
+    assert!(matches!(
+        workspace.analyze(&pcm[..pcm.len() - 1], RATE, &|| false),
+        Err(Error::Shape)
+    ));
+    assert!(matches!(
+        workspace.analyze(&pcm, 48_000, &|| false),
+        Err(Error::Shape)
+    ));
+    let calls = Cell::new(0);
+    let cancelled = || {
+        calls.set(calls.get() + 1);
+        calls.get() > 8
+    };
+    assert!(matches!(
+        workspace.analyze(&pcm, RATE, &cancelled),
+        Err(Error::Cancelled)
+    ));
+    let mut bad = pcm.clone();
+    bad[frames] = f32::NAN;
+    assert!(matches!(
+        workspace.analyze(&bad, RATE, &|| false),
+        Err(Error::NonFinite)
+    ));
+    let spectrum = workspace.analyze(&pcm, RATE, &|| false).unwrap();
+    let g = spectrum.geometry();
+    let masks = identity(g.mask_len());
+    // Cancel while rebuilding the borrowed envelope, then rebuild it completely.
+    calls.set(0);
+    assert!(matches!(
+        workspace.reconstruction(&spectrum, &cancelled),
+        Err(Error::Cancelled)
+    ));
+    let mut output = vec![123.0; CHANNELS * frames];
+    {
+        let mut inverse = workspace.reconstruction(&spectrum, &|| false).unwrap();
+        let mask = &masks[..g.feature_len()];
+        assert_eq!(
+            inverse.write_stem(mask, &mut output[..1], &|| false),
+            Err(Error::Shape)
+        );
+        assert!(output.iter().all(|x| *x == 123.0));
+        calls.set(0);
+        let limit = mask.len().div_ceil(4096) + g.steps() + frames.div_ceil(4096) + 1;
+        let cancel_channel_two = || {
+            calls.set(calls.get() + 1);
+            calls.get() > limit
+        };
+        assert_eq!(
+            inverse.write_stem(mask, &mut output, &cancel_channel_two),
+            Err(Error::Cancelled)
+        );
+        assert!(output[..frames].iter().any(|x| *x != 123.0));
+        assert!(output[frames..].iter().all(|x| *x == 123.0));
+        let overflow = vec![f32::MAX; g.feature_len()];
+        assert_eq!(
+            inverse.write_stem(&overflow, &mut output, &|| false),
+            Err(Error::NonFinite)
+        );
+    }
+    let too_large = Spectrum::analyze(&signal(frames + 1), RATE, &|| false).unwrap();
+    assert!(matches!(
+        workspace.reconstruction(&too_large, &|| false),
+        Err(Error::Shape)
+    ));
+    let expected = spectrum.reconstruct(&masks, &|| false).unwrap();
+    let actual = workspace.reconstruct(&spectrum, &masks, &|| false).unwrap();
+    assert!(
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| a.to_bits() == b.to_bits())
     );
 }
