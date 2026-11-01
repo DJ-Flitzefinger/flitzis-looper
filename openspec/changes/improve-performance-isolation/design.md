@@ -5313,3 +5313,60 @@ isolated runtime setup built unchanged Release Rust once in61s with22 known
 warnings; matching Native/API was reused afterward. These are controlled Python
 supervision and actual Native admission results, not actual Native PCM failure,
 OS pressure, universal allocation failure, model/CUDA or whole-quality acceptance.
+
+## STEP53 impact: retire cancelled queued asynchronous analysis
+
+The productive Native start_analysis_with path had no receiving waiter to retire
+an invalidated queued request. Its shutdown and original source/request checks
+ran only after heavy claim. Four real LaunchFixture regressions failed against
+unchanged production in2.11s: request, Native source revocation and shutdown kept
+one queued admission and three task-token references behind a live heavy owner;
+the occupied-worker variant retained two active ordinary jobs plus that queued
+analysis. Each case recorded PCM/task/payload state before releasing all fixture
+owners. Source revocation here exercises the real Native primitive, not UI unload.
+
+The same queue now optionally retains a cancellation predicate for this async
+heavy path. Existing workers inspect it between eligibility waits; the existing
+loader control poll performs the same bounded inspection detached from Python.
+Predicates capture only the original NativeAnalysisOwner and shutdown flag, not
+another PCM reader or task guard. They use original source-cell/lifetime and
+request epoch authority; pending Pair mirrors and vacated numeric slots are not
+cancellation. No per-request thread, registry, queue extraction or scheduler is
+introduced. Both occupied workers require the serviced control pump for prompt
+queued retirement; no general latency or unserviced-pump guarantee is implied.
+
+An inspection borrows each observed job's SAME cold reservation and SAME heavy
+ticket while its predicate runs outside the queue mutex. The original remains
+visible to worker claims and existing strict terminal waiters. Cancellation
+removes only its exact queued receipt; a raced worker claim stays terminal-owned.
+Callable captures and predicate owners end before admission release; observation
+owners also end before their reservation and heavy borrows. This prevents a
+snapshot from retaining hidden owners beyond the complete original admission.
+Focused controls hold actual predicate/destructor and claimed-payload boundaries,
+exercise lane reentry and ordinary progress, and retain existing Pair, source,
+task-token and active terminal cancellation assertions.
+
+Systems and Methods PRE approved this stable-queue design after rejecting queue
+extraction's ordering and strict-waiter receipt races. Frozen review and affected
+checks precede publication. This substantive practical split grows the plan to55:
+nativeREST54 retains ENTIRE former nativeREST53 and FINAL55 retains ENTIRE former
+FINAL54. Productive Python/Torch, complete native process and fullhost UNKNOWN,
+compiled Pydantic lineage, original numerical/CUDA/fresh-CPU, platform, quality,
+distribution and all earlier negative/UNKNOWN gates remain unchanged.
+
+The frozen source passed49 distinct Native cases in separate selections:
+18 ColdJobs,14 analysis-owner,3 source-custody,2 prepared-content and12 public
+background-borrow/stream-shutdown/restore controls. One initially empty borrow
+selector was corrected to its actual nested module and is not counted as proof.
+The first integrated compile found four existing direct-helper fixtures missing
+the new optional argument; adding None preserved their original assertions.
+Final Release/API checks passed with20 library warnings and34 Looper test warnings;
+the compatible Native was reused afterward. Python Jobs and Heavywork passed56
+functional cases plus3 static checks in2.72s: Rustfmt on the four substantive
+Rust files, strict OpenSpec and exact LF stage/source plus protected bindings.
+The reviewed two-line mod.rs insertion leaves unrelated inherited formatting
+intact. The exact final-index check remains mandatory before publication.
+These separate successful selections are not a green whole-system matrix.
+Only task completion and this result paragraph change after functional checks;
+all five Rust inputs retain their tested bytes. No model/device/CUDA, physical
+pressure, latency, footprint or whole-quality acceptance is inferred.

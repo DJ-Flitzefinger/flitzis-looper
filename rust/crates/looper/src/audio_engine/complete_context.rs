@@ -518,7 +518,9 @@ fn start_analysis_with(
     id: usize,
     after_admission: impl FnOnce(Option<super::app_analysis::BpmRange>) + Send + 'static,
 ) -> pyo3::PyResult<u64> {
-    let automatic_bpm_range = *engine.automatic_bpm_range.lock()
+    let automatic_bpm_range = *engine
+        .automatic_bpm_range
+        .lock()
         .map_err(|_| PyRuntimeError::new_err("analysis configuration lock poisoned"))?;
     let reservation = engine
         .cold_jobs
@@ -560,131 +562,142 @@ fn start_analysis_with(
         task_tokens: engine.analysis_task_tokens.clone(),
     };
     let shutdown = engine.cold_cancelled.clone();
+    let queued_shutdown = shutdown.clone();
+    let queued_owner = owner.clone();
     engine
         .cold_jobs
-        .submit_heavy(reservation, move || {
-            let _task_guard = task_guard;
-            after_admission(automatic_bpm_range);
-            let cancelled = || {
-                shutdown.load(Ordering::Acquire)
-                    || !owner.current()
-                    || reader.guard.as_ref().is_some_and(|guard| !guard.current())
-            };
+        .submit_heavy_cancellable(
+            reservation,
+            move || queued_shutdown.load(Ordering::Acquire) || !queued_owner.current(),
+            move || {
+                let _task_guard = task_guard;
+                after_admission(automatic_bpm_range);
+                let cancelled = || {
+                    shutdown.load(Ordering::Acquire)
+                        || !owner.current()
+                        || reader.guard.as_ref().is_some_and(|guard| !guard.current())
+                };
 
-            let _ = loader_tx.send(owner.event(LoaderEvent::TaskStarted {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-            }));
+                let _ = loader_tx.send(owner.event(LoaderEvent::TaskStarted {
+                    id,
+                    request_id,
+                    task: BackgroundTaskKind::Analysis,
+                }));
 
-            let stage = LoadProgressStage::Analyzing.stage_label().to_string();
-            let _ = loader_tx.send(owner.event(LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                percent: 0.0,
-                stage: stage.clone(),
-            }));
+                let stage = LoadProgressStage::Analyzing.stage_label().to_string();
+                let _ = loader_tx.send(owner.event(LoaderEvent::TaskProgress {
+                    id,
+                    request_id,
+                    task: BackgroundTaskKind::Analysis,
+                    percent: 0.0,
+                    stage: stage.clone(),
+                }));
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reader
-                    .materialize(super::constant_timing::MAX_PCM_BYTES, &cancelled)
-                    .and_then(|sample| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    reader
+                        .materialize(super::constant_timing::MAX_PCM_BYTES, &cancelled)
+                        .and_then(|sample| {
+                            if cancelled() {
+                                return Err("Analysis superseded by another pad request".into());
+                            }
+                            let context = if let Some(installation) = installation {
+                                let generation = reader
+                                    .guard
+                                    .as_ref()
+                                    .ok_or("analysis source generation unavailable")?
+                                    .generation;
+                                let (descriptor, _) =
+                                    reader.raw_source_descriptor(generation, &cancelled)?;
+                                let (root, _) = reader.analysis_artifact_paths()?;
+                                let source_id = descriptor["original"]["sha256"]
+                                    .as_str()
+                                    .ok_or("analysis original digest missing")?
+                                    .to_owned();
+                                let owner = owner.clone();
+                                let shutdown = shutdown.clone();
+                                Some(super::app_analysis::NeuralContext {
+                                    installation,
+                                    staging_root: root.to_owned(),
+                                    descriptor,
+                                    identity: super::analysis_pcm::PcmIdentity {
+                                        pad_id: id,
+                                        request_id,
+                                        source_id,
+                                        source_generation: generation,
+                                    },
+                                    cancelled: Arc::new(move || {
+                                        shutdown.load(Ordering::Acquire) || !owner.current()
+                                    }),
+                                    additional_held_bytes: if reader.reference.resident_start() == 0
+                                        && reader.reference.resident_end()
+                                            == reader.reference.frame_count()
+                                    {
+                                        0
+                                    } else {
+                                        reader.reference.samples.len() * 4
+                                    },
+                                })
+                            } else {
+                                None
+                            };
+                            super::app_analysis::analyze_with_range(
+                                &sample,
+                                output_sample_rate,
+                                context,
+                                false,
+                                automatic_bpm_range,
+                            )
+                        })
+                }))
+                .unwrap_or_else(|_| Err("Analysis worker failed".into()));
+                let analysis = match result {
+                    Ok(result) => result,
+                    Err(error) => {
                         if cancelled() {
-                            return Err("Analysis superseded by another pad request".into());
+                            let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
+                                id,
+                                request_id,
+                                task: BackgroundTaskKind::Analysis,
+                                error: "Analysis superseded by another pad request".into(),
+                            }));
+                            return;
                         }
-                        let context = if let Some(installation) = installation {
-                            let generation = reader
-                                .guard
-                                .as_ref()
-                                .ok_or("analysis source generation unavailable")?
-                                .generation;
-                            let (descriptor, _) =
-                                reader.raw_source_descriptor(generation, &cancelled)?;
-                            let (root, _) = reader.analysis_artifact_paths()?;
-                            let source_id = descriptor["original"]["sha256"]
-                                .as_str()
-                                .ok_or("analysis original digest missing")?
-                                .to_owned();
-                            let owner = owner.clone();
-                            let shutdown = shutdown.clone();
-                            Some(super::app_analysis::NeuralContext {
-                                installation,
-                                staging_root: root.to_owned(),
-                                descriptor,
-                                identity: super::analysis_pcm::PcmIdentity {
-                                    pad_id: id,
-                                    request_id,
-                                    source_id,
-                                    source_generation: generation,
-                                },
-                                cancelled: Arc::new(move || {
-                                    shutdown.load(Ordering::Acquire) || !owner.current()
-                                }),
-                                additional_held_bytes: if reader.reference.resident_start() == 0
-                                    && reader.reference.resident_end()
-                                        == reader.reference.frame_count()
-                                {
-                                    0
-                                } else {
-                                    reader.reference.samples.len() * 4
-                                },
-                            })
-                        } else {
-                            None
-                        };
-                        super::app_analysis::analyze_with_range(&sample, output_sample_rate,
-                            context, false, automatic_bpm_range)
-                    })
-            }))
-            .unwrap_or_else(|_| Err("Analysis worker failed".into()));
-            let analysis = match result {
-                Ok(result) => result,
-                Err(error) => {
-                    if cancelled() {
                         let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
                             id,
                             request_id,
                             task: BackgroundTaskKind::Analysis,
-                            error: "Analysis superseded by another pad request".into(),
+                            error,
                         }));
                         return;
                     }
+                };
+
+                if cancelled() {
                     let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
                         id,
                         request_id,
                         task: BackgroundTaskKind::Analysis,
-                        error,
+                        error: "Analysis superseded by another pad request".into(),
                     }));
                     return;
                 }
-            };
 
-            if cancelled() {
-                let _ = loader_tx.send(owner.event(LoaderEvent::TaskError {
+                let _ = loader_tx.send(owner.event(LoaderEvent::TaskProgress {
                     id,
                     request_id,
                     task: BackgroundTaskKind::Analysis,
-                    error: "Analysis superseded by another pad request".into(),
+                    percent: 1.0,
+                    stage,
                 }));
-                return;
-            }
 
-            let _ = loader_tx.send(owner.event(LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                percent: 1.0,
-                stage,
-            }));
-
-            let _ = loader_tx.send(owner.event(LoaderEvent::TaskSuccess {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                analysis: Some(analysis),
-            }));
-        })
+                let _ = loader_tx.send(owner.event(LoaderEvent::TaskSuccess {
+                    id,
+                    request_id,
+                    task: BackgroundTaskKind::Analysis,
+                    analysis: Some(analysis),
+                }));
+            },
+        )
         .map_err(PyRuntimeError::new_err)?;
 
     Ok(request_id)

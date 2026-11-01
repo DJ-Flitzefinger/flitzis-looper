@@ -19,8 +19,10 @@ pub(super) const WORKERS: usize = 2;
 pub(super) const QUEUED_JOBS: usize = 32;
 pub(super) const PCM_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 type Job = Box<dyn FnOnce() + Send>;
+type Cancellation = Arc<dyn Fn() -> bool + Send + Sync>;
 struct AdmittedJob {
     job: Option<Job>,
+    cancelled: Option<Cancellation>,
     reservation: Option<Reservation>,
     heavy: Option<super::heavy_work::Ticket>,
 }
@@ -30,6 +32,23 @@ impl Drop for AdmittedJob {
         // Queued cancellation and worker unwind retire captured physical owners
         // before making either admission visible as free. Never under a lock.
         drop(self.job.take());
+        drop(self.cancelled.take());
+        drop(self.reservation.take());
+        drop(self.heavy.take());
+    }
+}
+
+/// An off-lock observation borrows the SAME complete admission until its own
+/// predicate owners end, even if a worker claims and finishes the original.
+struct QueuedCancellationProbe {
+    cancelled: Option<Cancellation>,
+    reservation: Option<ReservationRetirementGuard>,
+    heavy: Option<super::heavy_work::Ticket>,
+}
+
+impl Drop for QueuedCancellationProbe {
+    fn drop(&mut self) {
+        drop(self.cancelled.take());
         drop(self.reservation.take());
         drop(self.heavy.take());
     }
@@ -96,7 +115,7 @@ impl ColdJobsHandle {
         reservation: Reservation,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
-        self.submit_classified(reservation, job, None)
+        self.submit_classified(reservation, job, None, None)
     }
 
     pub(super) fn submit_heavy(
@@ -108,7 +127,7 @@ impl ColdJobsHandle {
             Some(owner) => owner,
             None => super::heavy_work::ticket()?,
         };
-        self.submit_classified(reservation, job, Some(ticket))
+        self.submit_classified(reservation, job, Some(ticket), None)
     }
 
     fn submit_classified(
@@ -116,9 +135,11 @@ impl ColdJobsHandle {
         reservation: Reservation,
         job: impl FnOnce() + Send + 'static,
         heavy: Option<super::heavy_work::Ticket>,
+        cancelled: Option<Cancellation>,
     ) -> Result<(), String> {
         let admitted = AdmittedJob {
             job: Some(Box::new(job)),
+            cancelled,
             reservation: Some(reservation),
             heavy,
         };
@@ -214,6 +235,46 @@ impl ColdJobsHandle {
         drop(queued);
     }
 
+    /// Inspect only queued asynchronous requests; predicates and every captured
+    /// destructor run off the queue mutex. The originals remain visible to
+    /// workers and terminal waiters throughout this bounded observation.
+    pub(super) fn retire_cancelled(&self) {
+        let mut probes: [Option<QueuedCancellationProbe>; QUEUED_JOBS] =
+            std::array::from_fn(|_| None);
+        {
+            let Ok(state) = self.shared.state.lock() else {
+                return;
+            };
+            for (slot, job) in probes
+                .iter_mut()
+                .zip(state.jobs.iter().filter(|job| job.cancelled.is_some()))
+            {
+                *slot = Some(QueuedCancellationProbe {
+                    cancelled: job.cancelled.clone(),
+                    reservation: Some(
+                        job.reservation
+                            .as_ref()
+                            .expect("reserved job")
+                            .retain_until_retired(),
+                    ),
+                    heavy: job.heavy.clone(),
+                });
+            }
+        }
+        for probe in probes.into_iter().flatten() {
+            if probe.cancelled.as_ref().expect("queued predicate")() {
+                self.retire_queued(
+                    &probe
+                        .reservation
+                        .as_ref()
+                        .expect("observed admission")
+                        .owner
+                        .retired,
+                );
+            }
+        }
+    }
+
     fn execute_owned_delivery<T: Send + 'static>(
         &self,
         cancelled: impl Fn() -> bool,
@@ -289,6 +350,7 @@ impl ColdJobsHandle {
                 })),
                 reservation: Some(reservation),
                 heavy,
+                cancelled: None,
             });
             self.shared.ready.notify_one();
         }
@@ -421,32 +483,35 @@ impl ColdJobs {
                 thread::Builder::new()
                     .name(format!("cold-source-{index}"))
                     .spawn(move || {
+                        let handle = ColdJobsHandle {
+                            shared: shared.clone(),
+                        };
                         loop {
-                            let mut job = {
+                            handle.retire_cancelled();
+                            let job = {
                                 let Ok(mut state) = shared.state.lock() else {
                                     return;
                                 };
-                                loop {
-                                    if state.stopped {
-                                        return;
-                                    }
-                                    let eligible = state.jobs.iter().position(|job| {
-                                        job.heavy.as_ref().is_none_or(|ticket| {
-                                            // Error retires the queued callable below; it
-                                            // never runs without an active capability.
-                                            ticket.try_acquire().unwrap_or(true)
-                                        })
-                                    });
-                                    if let Some(index) = eligible {
-                                        let job =
-                                            state.jobs.remove(index).expect("eligible bounded job");
-                                        state.active += 1;
-                                        job.reservation
-                                            .as_ref()
-                                            .expect("reserved job")
-                                            .mark_running();
-                                        break job;
-                                    }
+                                if state.stopped {
+                                    return;
+                                }
+                                let eligible = state.jobs.iter().position(|job| {
+                                    job.heavy.as_ref().is_none_or(|ticket| {
+                                        // Error retires the queued callable below; it
+                                        // never runs without an active capability.
+                                        ticket.try_acquire().unwrap_or(true)
+                                    })
+                                });
+                                if let Some(index) = eligible {
+                                    let job =
+                                        state.jobs.remove(index).expect("eligible bounded job");
+                                    state.active += 1;
+                                    job.reservation
+                                        .as_ref()
+                                        .expect("reserved job")
+                                        .mark_running();
+                                    Some(job)
+                                } else {
                                     // A Python owner releases the same native gate without
                                     // touching this queue. Wait off realtime, with no worker
                                     // occupied by a blocked heavy callable; ordinary work
@@ -456,8 +521,14 @@ impl ColdJobs {
                                     else {
                                         return;
                                     };
-                                    state = next;
+                                    // Revisit asynchronous cancellation outside the mutex
+                                    // before another eligibility scan.
+                                    drop(next);
+                                    None
                                 }
+                            };
+                            let Some(mut job) = job else {
+                                continue;
                             };
                             // A panic retires the reservation and does not destroy a worker slot.
                             ON_WORKER.with(|worker| worker.set(Arc::as_ptr(&shared) as usize));
@@ -521,6 +592,22 @@ impl ColdJobs {
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         self.handle().submit_heavy(reservation, job)
+    }
+
+    /// A queued Native analysis request has no receiving waiter. Existing
+    /// workers and the control pump observe its original cancellation authority.
+    pub(super) fn submit_heavy_cancellable(
+        &self,
+        reservation: Reservation,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        let ticket = match super::heavy_work::current() {
+            Some(owner) => owner,
+            None => super::heavy_work::ticket()?,
+        };
+        self.handle()
+            .submit_classified(reservation, job, Some(ticket), Some(Arc::new(cancelled)))
     }
 
     pub(super) fn submit_analysis(
@@ -621,6 +708,7 @@ mod tests {
                     let _ = release_rx.recv();
                 },
                 Some(gate.ticket().unwrap()),
+                None,
             )
             .unwrap();
         let (next_tx, next_rx) = mpsc::channel();
@@ -635,6 +723,7 @@ mod tests {
                     next_tx.send(()).unwrap();
                 },
                 Some(gate.ticket().unwrap()),
+                None,
             )
             .unwrap();
         let (ordinary_tx, ordinary_rx) = mpsc::channel();
@@ -674,6 +763,7 @@ mod tests {
                     tx.send(value).unwrap();
                 },
                 Some(owner.clone()),
+                None,
             )
             .unwrap();
         drop(owner);
@@ -690,7 +780,12 @@ mod tests {
         let mut lane = ColdJobs::new().unwrap();
         for _ in 0..QUEUED_JOBS {
             lane.handle()
-                .submit_classified(lane.reserve().unwrap(), || {}, Some(gate.ticket().unwrap()))
+                .submit_classified(
+                    lane.reserve().unwrap(),
+                    || {},
+                    Some(gate.ticket().unwrap()),
+                    None,
+                )
                 .unwrap();
         }
         assert!(lane.reserve().is_err());

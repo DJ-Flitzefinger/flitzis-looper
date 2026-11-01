@@ -68,6 +68,169 @@ fn actual_manual_analysis_waits_without_blocking_cold_and_retires_before_next_jo
     );
 }
 
+enum QueuedAnalysisCancellation {
+    Request,
+    Source,
+    Shutdown,
+}
+
+fn observe_cancelled_queued_analysis(kind: QueuedAnalysisCancellation, occupy_workers: bool) {
+    let fixture = LaunchFixture::new(4);
+    let samples = fixture.engine.sample_cache.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .samples
+        .clone();
+    let baseline = Arc::strong_count(&samples);
+    let blocker = super::super::heavy_work::ticket().unwrap();
+    assert!(blocker.try_acquire().unwrap());
+    let (entered, started) = mpsc::channel();
+    start_analysis_with(&fixture.engine, 0, move |_| {
+        let _ = entered.send(());
+    })
+    .unwrap();
+    let row = (
+        fixture
+            .engine
+            .input_runtime_ownership
+            .slot_snapshot(0)
+            .unwrap()
+            .cell()
+            .index(),
+        BackgroundTaskKind::Analysis,
+    );
+    let token = fixture.engine.analysis_task_tokens.lock().unwrap()[&row].clone();
+    let (ordinary, ran) = mpsc::channel();
+    fixture
+        .engine
+        .cold_jobs
+        .submit(fixture.engine.cold_jobs.reserve().unwrap(), move || {
+            ordinary.send(()).unwrap();
+        })
+        .unwrap();
+    let ordinary_ran = ran.recv_timeout(Duration::from_secs(5)).is_ok();
+    let mut releases = Vec::new();
+    if occupy_workers {
+        for _ in 0..super::super::cold_jobs::WORKERS {
+            let (entered, started) = mpsc::channel();
+            let (release, resumed) = mpsc::channel();
+            fixture
+                .engine
+                .cold_jobs
+                .submit(fixture.engine.cold_jobs.reserve().unwrap(), move || {
+                    entered.send(()).unwrap();
+                    let _ = resumed.recv_timeout(Duration::from_secs(10));
+                })
+                .unwrap();
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            releases.push(release);
+        }
+    }
+    match kind {
+        QueuedAnalysisCancellation::Request => {
+            super::super::next_pad_request_id(
+                &fixture.engine.pad_request_ids,
+                0,
+                fixture.engine.prepared_source_epoch(0).unwrap(),
+            )
+            .unwrap();
+        }
+        QueuedAnalysisCancellation::Source => {
+            fixture.engine.input_runtime_ownership.revoke_source(0);
+        }
+        QueuedAnalysisCancellation::Shutdown => {
+            fixture.engine.cold_cancelled.store(true, Ordering::Release);
+        }
+    }
+    let active = if occupy_workers {
+        super::super::cold_jobs::WORKERS
+    } else {
+        0
+    };
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let retired = loop {
+        // Exercise the actual non-realtime control pump, including with both
+        // existing cold workers occupied by independent ordinary work.
+        if occupy_workers {
+            Python::attach(|py| {
+                fixture.engine.poll_loader_events(py).unwrap();
+            });
+        }
+        if Arc::strong_count(&samples) == baseline
+            && !fixture.engine.active_tasks.lock().unwrap().contains(&row)
+            && !fixture
+                .engine
+                .analysis_task_tokens
+                .lock()
+                .unwrap()
+                .contains_key(&row)
+            && Arc::strong_count(&token) == 1
+            && fixture.engine.cold_jobs.counts_for_test() == (active, 0, active)
+        {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let counts = fixture.engine.cold_jobs.counts_for_test();
+    let payload_started = started.try_recv().is_ok();
+    let token_owners = Arc::strong_count(&token);
+    let blocker_still_active = blocker.is_active();
+
+    // Record the failed boundary before cleanup; no red assertion strands an
+    // actual global FIFO owner or leaves the fixture's worker payload running.
+    fixture.engine.cold_cancelled.store(true, Ordering::Release);
+    for release in releases {
+        let _ = release.send(());
+    }
+    drop(blocker);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture.engine.cold_jobs.counts_for_test() != (0, 0, 0) {
+        assert!(
+            Instant::now() < deadline,
+            "fixture analysis cleanup did not retire"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        ordinary_ran,
+        "queued analysis blocked an ordinary cold peer"
+    );
+    assert!(blocker_still_active);
+    assert!(
+        !payload_started,
+        "cancelled queued payload entered heavy work"
+    );
+    assert!(
+        retired,
+        "cancelled queued analysis retained PCM/task owners: {counts:?}, token owners {token_owners}"
+    );
+    assert_eq!(token_owners, 1);
+    assert_eq!(counts, (active, 0, active));
+}
+
+#[test]
+fn queued_analysis_request_cancellation_retires_before_heavy_predecessor() {
+    observe_cancelled_queued_analysis(QueuedAnalysisCancellation::Request, false);
+}
+
+#[test]
+fn queued_analysis_source_cancellation_retires_before_heavy_predecessor() {
+    observe_cancelled_queued_analysis(QueuedAnalysisCancellation::Source, false);
+}
+
+#[test]
+fn queued_analysis_shutdown_retires_before_heavy_predecessor() {
+    observe_cancelled_queued_analysis(QueuedAnalysisCancellation::Shutdown, false);
+}
+
+#[test]
+fn queued_analysis_control_poll_retires_with_both_workers_occupied() {
+    observe_cancelled_queued_analysis(QueuedAnalysisCancellation::Request, true);
+}
+
 fn owner(fixture: &LaunchFixture) -> NativeAnalysisOwner {
     let _requests = fixture.engine.pad_request_ids.lock().unwrap();
     NativeAnalysisOwner::new(
@@ -217,26 +380,39 @@ fn native_event_rejects_foreign_live_owner_with_equal_loaded_metadata() {
 
 #[test]
 fn actual_analysis_admission_keeps_its_range_after_settings_change() {
-    let fixture=LaunchFixture::new(4);
-    fixture.engine.configure_automatic_bpm_range(true,50.0,170.0).unwrap();
-    let (entered,started)=mpsc::channel();
-    let (release,resumed)=mpsc::channel();
-    start_analysis_with(&fixture.engine,0,move |snapshot| {
+    let fixture = LaunchFixture::new(4);
+    fixture
+        .engine
+        .configure_automatic_bpm_range(true, 50.0, 170.0)
+        .unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, resumed) = mpsc::channel();
+    start_analysis_with(&fixture.engine, 0, move |snapshot| {
         entered.send(snapshot).unwrap();
         resumed.recv_timeout(Duration::from_secs(5)).unwrap();
-    }).unwrap();
-    fixture.engine.configure_automatic_bpm_range(false,30.0,300.0).unwrap();
-    let snapshot=started.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-    assert_eq!(snapshot.minimum_bpm,50.0);
-    assert_eq!(snapshot.maximum_bpm,170.0);
+    })
+    .unwrap();
+    fixture
+        .engine
+        .configure_automatic_bpm_range(false, 30.0, 300.0)
+        .unwrap();
+    let snapshot = started
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.minimum_bpm, 50.0);
+    assert_eq!(snapshot.maximum_bpm, 170.0);
     assert!(fixture.engine.automatic_bpm_range.lock().unwrap().is_none());
     // No detector is needed to prove the admitted snapshot. Retire this actual
     // worker through the original whole-request cancellation boundary.
-    fixture.engine.cold_cancelled.store(true,Ordering::Release);
+    fixture.engine.cold_cancelled.store(true, Ordering::Release);
     release.send(()).unwrap();
-    let deadline=Instant::now()+Duration::from_secs(5);
-    while fixture.engine.cold_jobs.counts_for_test() != (0,0,0) {
-        assert!(Instant::now()<deadline,"range snapshot worker did not retire");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture.engine.cold_jobs.counts_for_test() != (0, 0, 0) {
+        assert!(
+            Instant::now() < deadline,
+            "range snapshot worker did not retire"
+        );
         std::thread::sleep(Duration::from_millis(1));
     }
 }

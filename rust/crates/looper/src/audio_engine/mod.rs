@@ -3811,6 +3811,8 @@ impl AudioEngine {
     ///
     /// Returns `None` when no events are available.
     pub fn poll_loader_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let cold_jobs = self.cold_jobs.handle();
+        py.detach(move || cold_jobs.retire_cancelled());
         prepared_stems_work::reconcile(self)?;
         loader_events::poll(self, py, || {})
     }

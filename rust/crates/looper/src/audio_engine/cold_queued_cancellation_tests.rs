@@ -168,3 +168,175 @@ fn terminal_queued_cancellation_preserves_an_independent_waiter() {
     assert!(joined.is_ok());
     assert_eq!(lane.counts_for_test(), (0, 0, 0));
 }
+
+fn occupy_workers(lane: &ColdJobs) -> Vec<mpsc::Sender<()>> {
+    (0..WORKERS)
+        .map(|_| {
+            let (entered, started) = mpsc::channel();
+            let (release, resumed) = mpsc::channel();
+            lane.submit(lane.reserve().unwrap(), move || {
+                entered.send(()).unwrap();
+                let _ = resumed.recv_timeout(Duration::from_secs(10));
+            })
+            .unwrap();
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            release
+        })
+        .collect()
+}
+
+struct ProbeOwner {
+    lane: ColdJobsHandle,
+    reentered: Arc<AtomicBool>,
+    _capture: Mutex<HeldCapture>,
+}
+
+impl Drop for ProbeOwner {
+    fn drop(&mut self) {
+        drop(self.lane.reserve().unwrap());
+        self.reentered.store(true, Ordering::Release);
+    }
+}
+
+#[test]
+fn async_observation_retains_whole_admission_through_final_predicate_drop() {
+    let mut lane = ColdJobs::new().unwrap();
+    let releases = occupy_workers(&lane);
+    let blocker = super::super::heavy_work::ticket().unwrap();
+    assert!(blocker.try_acquire().unwrap());
+    let (entered, observing) = mpsc::channel();
+    let (resume, resumed) = mpsc::channel();
+    let resumed = Mutex::new(resumed);
+    let first = AtomicBool::new(true);
+    let reentered = Arc::new(AtomicBool::new(false));
+    let (dropping, drop_started) = mpsc::channel();
+    let (finish_drop, drop_resumed) = mpsc::channel();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let predicate_owner = ProbeOwner {
+        lane: lane.handle(),
+        reentered: reentered.clone(),
+        _capture: Mutex::new(HeldCapture {
+            entered: dropping,
+            release: drop_resumed,
+            dropped: dropped.clone(),
+        }),
+    };
+    let (finished, payload_ended) = mpsc::channel();
+    lane.submit_heavy_cancellable(
+        lane.reserve().unwrap(),
+        move || {
+            // The callback itself must also be able to reenter lane admission.
+            let owner = &predicate_owner;
+            drop(owner.lane.reserve().unwrap());
+            if first.swap(false, Ordering::AcqRel) {
+                entered.send(()).unwrap();
+                let _ = resumed
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10));
+            }
+            false
+        },
+        move || {
+            finished.send(()).unwrap();
+        },
+    )
+    .unwrap();
+    let handle = lane.handle();
+    let observer = thread::spawn(move || handle.retire_cancelled());
+    let observing = observing.recv_timeout(Duration::from_secs(5)).is_ok();
+    for release in releases {
+        let _ = release.send(());
+    }
+    drop(blocker);
+    let completed = payload_ended.recv_timeout(Duration::from_secs(5)).is_ok();
+    let (peer, peer_ran) = mpsc::channel();
+    lane.submit(lane.reserve().unwrap(), move || {
+        peer.send(()).unwrap();
+    })
+    .unwrap();
+    let ordinary_progress = peer_ran.recv_timeout(Duration::from_secs(5)).is_ok();
+    let successor = super::super::heavy_work::ticket().unwrap();
+    let held_during_observation = !successor.try_acquire().unwrap();
+    let _ = resume.send(());
+    let final_drop = drop_started.recv_timeout(Duration::from_secs(5)).is_ok();
+    let held_during_drop = !successor.try_acquire().unwrap();
+    let still_admitted = lane.counts_for_test().2 != 0;
+    let _ = finish_drop.send(());
+    let joined = observer.join();
+    lane.shutdown();
+    let successor_admitted = successor.try_acquire().unwrap();
+
+    assert!(observing && completed && ordinary_progress);
+    assert!(held_during_observation && final_drop && held_during_drop && still_admitted);
+    assert!(
+        reentered.load(Ordering::Acquire),
+        "predicate destructor held the queue mutex"
+    );
+    assert!(dropped.load(Ordering::Acquire) && joined.is_ok() && successor_admitted);
+    assert_eq!(lane.counts_for_test(), (0, 0, 0));
+}
+
+#[test]
+fn async_stale_positive_observation_cannot_retire_a_claimed_payload() {
+    let mut lane = ColdJobs::new().unwrap();
+    let releases = occupy_workers(&lane);
+    let blocker = super::super::heavy_work::ticket().unwrap();
+    assert!(blocker.try_acquire().unwrap());
+    let (entered, observing) = mpsc::channel();
+    let (resume, resumed) = mpsc::channel();
+    let resumed = Mutex::new(resumed);
+    let first = AtomicBool::new(true);
+    let (payload, started) = mpsc::channel();
+    let (finish, finished) = mpsc::channel();
+    lane.submit_heavy_cancellable(
+        lane.reserve().unwrap(),
+        move || {
+            if first.swap(false, Ordering::AcqRel) {
+                entered.send(()).unwrap();
+                let _ = resumed
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10));
+                true
+            } else {
+                false
+            }
+        },
+        move || {
+            payload.send(()).unwrap();
+            let _ = finished.recv_timeout(Duration::from_secs(10));
+        },
+    )
+    .unwrap();
+    let handle = lane.handle();
+    let observer = thread::spawn(move || handle.retire_cancelled());
+    let observed = observing.recv_timeout(Duration::from_secs(5)).is_ok();
+    for release in releases {
+        let _ = release.send(());
+    }
+    drop(blocker);
+    let claimed = started.recv_timeout(Duration::from_secs(5)).is_ok();
+    let successor = super::super::heavy_work::ticket().unwrap();
+    let _ = resume.send(());
+    let joined = observer.join();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lane.counts_for_test() != (1, 0, 1) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let still_running = lane.counts_for_test() == (1, 0, 1);
+    let retained = !successor.try_acquire().unwrap();
+    let (peer, ran) = mpsc::channel();
+    lane.submit(lane.reserve().unwrap(), move || {
+        peer.send(()).unwrap();
+    })
+    .unwrap();
+    let peer_ran = ran.recv_timeout(Duration::from_secs(5)).is_ok();
+    let _ = finish.send(());
+    lane.shutdown();
+    let successor_admitted = successor.try_acquire().unwrap();
+
+    assert!(observed && claimed && joined.is_ok());
+    assert!(still_running && retained && peer_ran && successor_admitted);
+    assert_eq!(lane.counts_for_test(), (0, 0, 0));
+}

@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Thirty-nine coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
+Fifty-five coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
 native BeatThis/runtime/loader experiments and their explicit failed CUDA and
 incomplete producer limits. STEP25 implements independent BS spectral arithmetic;
 STEP26 adds whole-track reflection, padding, batching, fades and rolling overlap.
@@ -89,7 +89,9 @@ other native startup/runtime memory. Remaining native/process costs stay unknown
 STEP39 retains ALL former native
 parity duties, including mandatory CUDA/freshCPU, complete Demucs, provenance,
 platforms, quality and distribution; FINAL40 retains the ENTIRE former FINAL39,
-without omissions.
+without omissions. Later practical ownership and retirement splits are retained
+in the complete task list. STEP53 addresses queued asynchronous analysis
+cancellation; nativeREST54 and FINAL55 retain every former parity and final gate.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

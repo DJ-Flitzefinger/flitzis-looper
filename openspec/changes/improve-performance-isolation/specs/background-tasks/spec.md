@@ -555,3 +555,27 @@ deliveries. Legacy delivery reentry SHALL NOT submit a surviving owner twice.
 - **AND** deferred custody remains until unfenced delivery and ordinary disposal
 - **AND** obsolete subscribers cannot apply the failure to replacement content
 - **AND** later waiting work retains exact registry and admission ownership across delivery reentry
+
+### Requirement: Queued Asynchronous Analysis Retires Invalidated Captures
+Queued asynchronous Native analysis SHALL observe its original source/request
+and shutdown cancellation through existing workers and the serviced control pump,
+without waiting for unrelated heavy work. Predicate execution and captured-owner
+destruction SHALL occur outside the queue mutex and Python attachment. Every
+observation SHALL borrow the same complete cold admission and heavy capability
+until its predicate owners end. Queue visibility, ordinary cold progress and
+exact receipt removal SHALL remain intact; an already claimed payload SHALL
+retain its original admission until actual terminal retirement.
+
+#### Scenario: Queued analysis becomes invalid behind a live heavy predecessor
+- **GIVEN** an actual analysis request captures its PCM reader and task token while unrelated heavy work remains active
+- **WHEN** its original request, source or shutdown authority invalidates the queued request
+- **THEN** existing worker polling retires the unclaimed callable and its captured owners before the predecessor ends
+- **AND** the serviced control pump provides the same retirement when both cold workers are occupied
+- **AND** the cancelled callable never starts and unrelated ordinary cold jobs remain eligible
+
+#### Scenario: A cancellation snapshot races an actual worker claim
+- **GIVEN** a queued predicate observation borrows the original reservation and heavy ticket
+- **WHEN** a worker claims the original before that observation attempts exact queued removal
+- **THEN** the observation cannot remove or certify the running payload as terminal
+- **AND** neither payload nor predicate captures can outlive the complete original admission
+- **AND** ordinary peers and existing strict terminal waiters retain queue visibility
