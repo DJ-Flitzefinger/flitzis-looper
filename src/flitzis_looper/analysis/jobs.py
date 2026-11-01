@@ -18,7 +18,11 @@ from flitzis_looper.analysis.contracts import (
     WorkerLimits,
     validate_component_result,
 )
-from flitzis_looper.analysis.process import OfflineWorkCancelledError, heavy_work_scope
+from flitzis_looper.analysis.process import (
+    OfflineWorkAdmissionError,
+    OfflineWorkCancelledError,
+    heavy_work_scope,
+)
 from flitzis_looper.analysis.publication import encode_result
 from flitzis_looper.analysis.selected_bpm import summarize_published
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
@@ -222,6 +226,15 @@ class AnalysisJob:
                 self._set_stage(stage)
             self._key_thread.join(_POLL_SECONDS)
 
+    def _wait_for_beat(self, beat: BeatComponentResult) -> BeatComponentResult:
+        if self._beat_started and (
+            not beat.resources_released or not self._adapter.retired.is_set()
+        ):
+            self._set_stage("retiring", "Waiting for beat worker resource release")
+            self._adapter.retired.wait()
+            return replace(beat, resources_released=True)
+        return beat
+
     def _cleanup(self, directory: Path | None) -> None:
         if directory is None:
             return
@@ -314,8 +327,12 @@ class AnalysisJob:
             self._cancelled.set()
             self._native.cancel()
             self._supervise_owned()
+        except OfflineWorkAdmissionError as error:
+            # No preparation began. Reuse native failure settlement without
+            # presenting an admission failure as performer cancellation.
+            self._supervise_owned(admission_error=error)
 
-    def _supervise_owned(self) -> None:
+    def _supervise_owned(self, *, admission_error: OfflineWorkAdmissionError | None = None) -> None:
         directory: Path | None = None
         key_results: list[dict[str, object]] = []
         bridge = Thread(
@@ -325,6 +342,8 @@ class AnalysisJob:
         )
         bridge_started = False
         try:
+            if admission_error is not None:
+                raise admission_error
             bridge.start()
             bridge_started = True
             self._workdir.mkdir(parents=True, exist_ok=True)
@@ -332,12 +351,7 @@ class AnalysisJob:
             beat = self._run_branches(directory / "mono.f32le", key_results)
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             beat = self._failed_beats(str(error))
-        if self._beat_started and (
-            not beat.resources_released or not self._adapter.retired.is_set()
-        ):
-            self._set_stage("retiring", "Waiting for beat worker resource release")
-            self._adapter.retired.wait()
-            beat = replace(beat, resources_released=True)
+        beat = self._wait_for_beat(beat)
         self._wait_for_key()
         key = key_results[0] if key_results else _key_failure("Key analysis did not start")
         try:

@@ -6,6 +6,7 @@ from threading import Event, Thread, current_thread
 
 import pytest
 
+from flitzis_looper.analysis import jobs, process
 from flitzis_looper.analysis.contracts import (
     BeatComponentResult,
     BeatModelIdentity,
@@ -177,6 +178,51 @@ class _ReadyAdapter(_ControlledAdapter):
                 downbeat_logits=(0.5,) * self.logit_count,
             ),
         )
+
+
+@pytest.mark.parametrize("refuse_retirement", [False, True])
+def test_heavy_admission_failure_uses_native_settlement_without_starting_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, refuse_retirement: bool
+) -> None:
+    native = _NativeJob(retirement_error=refuse_retirement)
+    adapter = _ControlledAdapter()
+    error = process.OfflineWorkAdmissionError("heavy work gate poisoned")
+
+    def fail_admission(*_args: object) -> None:
+        raise error
+
+    monkeypatch.setattr(jobs, "heavy_work_scope", fail_admission)
+    job = jobs.AnalysisJob(
+        native,
+        jobs._loaded_input(native.metadata()),
+        tmp_path,
+        BeatModelIdentity(),
+        adapter,
+    )
+    job._supervise()
+
+    assert native.retirement_attempted.is_set()
+    assert native.pcm_path is None
+    assert not native.key_started.is_set()
+    assert not adapter.started.is_set()
+    assert not native.cancelled.is_set()
+    assert native.startup_abort_calls == 0
+    assert list(tmp_path.iterdir()) == []
+    if refuse_retirement:
+        assert not native.finished.is_set()
+        assert not job.done.is_set()
+        assert job.snapshot().stage == "retiring"
+        assert not native.result_json
+    else:
+        assert native.pcm_retired.is_set()
+        assert native.finished.is_set()
+        assert job.done.is_set()
+        result = json.loads(native.result_json)
+        assert result["beat"]["status"] == "failed"
+        assert result["beat"]["reason"] == str(error)
+        assert result["key"]["status"] == "failed"
+        assert job.snapshot().stage == "finished"
+        assert not job.snapshot().cancellation_requested
 
 
 def test_missing_optional_worker_preserves_native_key_and_retires_offthread(tmp_path: Path) -> None:

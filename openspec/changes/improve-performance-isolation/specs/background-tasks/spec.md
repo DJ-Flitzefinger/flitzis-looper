@@ -334,6 +334,14 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 - **AND** temporary storage, Beat slots and the same heavy-work permission remain owned until actual retirement, including delayed cleanup
 - **AND** another heavy job cannot start early, while a fresh Beat request can run after the failed attempt's resources retire
 
+#### Scenario: Native heavy admission fails before Beat work begins
+- **GIVEN** a Beat invocation has not begun payload work or created a child
+- **WHEN** Native heavy-ticket construction or acquisition reports an admission failure
+- **THEN** the invocation reports terminal supervision failure and settles its own retirement event
+- **AND** both CPU and CUDA protocol bridges can return without waiting for nonexistent readers
+- **AND** a diagnostic analysis job retires its captured Native PCM and reports failure without starting either branch or fabricating cancellation
+- **AND** caller callback and admitted-payload exceptions keep their original identity, while actual live tree and reader ownership remains protected
+
 #### Scenario: Other PADs play while stems are generated for a stopped PAD
 - **GIVEN** the requested stem PAD is stopped and resource admission permits background work
 - **WHEN** other PADs play or the performer operates their START/STOP controls

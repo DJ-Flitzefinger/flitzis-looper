@@ -29,6 +29,10 @@ class OfflineWorkCancelledError(RuntimeError):
     """A waiting offline owner was cancelled before acquiring heavy capacity."""
 
 
+class OfflineWorkAdmissionError(RuntimeError):
+    """Native heavy admission failed before this scope began any payload work."""
+
+
 @dataclass(slots=True)
 class _WorkOwner:
     thread: int
@@ -49,10 +53,19 @@ def heavy_work_scope(
     if owner is not None and owner.active and owner.thread == get_ident():
         yield owner
         return
-    ticket = OfflineWorkTicket()
+    try:
+        ticket = OfflineWorkTicket()
+    except RuntimeError as error:
+        raise OfflineWorkAdmissionError(str(error)) from error
     reported = False
     try:
-        while not ticket.try_acquire():
+        while True:
+            try:
+                acquired = ticket.try_acquire()
+            except RuntimeError as error:
+                raise OfflineWorkAdmissionError(str(error)) from error
+            if acquired:
+                break
             if not reported and on_wait is not None:
                 on_wait()
                 reported = True
@@ -785,6 +798,10 @@ def run_process(
     except OfflineWorkCancelledError:
         retired.set()
         return ProcessResult("cancelled")
+    except OfflineWorkAdmissionError:
+        # This scope never yielded: no child, pipe or temporary owner exists.
+        retired.set()
+        return ProcessResult("worker_supervision_failed")
 
 
 def _beat_response_reader(owned: _OwnedProcess, limit: int) -> _ResponseReader:

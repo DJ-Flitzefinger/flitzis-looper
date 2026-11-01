@@ -61,6 +61,14 @@ still finishes the owned process path. Delayed tree, reader or temporary cleanup
 retains the same heavy-work permission and Beat slots until actual retirement;
 a failure result or exception alone cannot release that custody.
 
+Native heavy-ticket construction or acquisition can also fail before this scope
+begins work. That admission refusal returns a terminal supervision failure with
+its Beat retirement event set, so both protocol bridges can return without waiting
+for a child that never existed. A diagnostic analysis job uses its existing Native
+PCM retirement and failed-result settlement without starting either model branch
+or inventing performer cancellation. Errors in caller callbacks or admitted work
+retain their ordinary exception and actual-reader retirement paths.
+
 ## Constant-tempo selection
 
 The productive first policy is `neural-stable-regions-v4`, not the scientific
