@@ -14,12 +14,86 @@ impl Drop for Local {
         assert_eq!(pool.stats.live, 0);
         // Only isolated tests release backing, after ALL pointers have ended.
         unsafe {
-            System.dealloc(
+            backing::release(
                 pool.base,
                 Layout::from_size_align(pool.stats.capacity, ALIGN).unwrap(),
             )
         };
     }
+}
+
+#[test]
+fn failed_backing_does_not_publish_or_prevent_a_later_seal() {
+    let allocator = WorkspaceAllocator::new();
+    assert_eq!(
+        allocator.seal_with(8192, |_| Err("controlled backing refusal")),
+        Err("controlled backing refusal")
+    );
+    assert_eq!(allocator.stats(), Stats::default());
+    assert_eq!(allocator.mapped_bytes(), None);
+    assert!(unsafe { (*allocator.pool.get()).base }.is_null());
+    allocator.seal(8192).unwrap();
+    let arena = Local(allocator);
+    assert_eq!(arena.0.stats().capacity, 8192);
+    assert!(arena.0.seal(8192).is_err());
+}
+
+#[cfg(all(windows, target_pointer_width = "64"))]
+#[test]
+fn actual_windows_mapping_is_private_committed_and_padding_stays_outside_pool() {
+    use std::ffi::c_void;
+
+    // MEMORY_BASIC_INFORMATION64 is the documented explicit 64-bit ABI.
+    #[repr(C, align(16))]
+    struct MemoryInfo {
+        base: u64,
+        allocation_base: u64,
+        allocation_protect: u32,
+        alignment1: u32,
+        region_bytes: u64,
+        state: u32,
+        protect: u32,
+        kind: u32,
+        alignment2: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn VirtualQuery(address: *const c_void, info: *mut MemoryInfo, bytes: usize) -> usize;
+    }
+
+    let capacity = 8192 + ALIGN;
+    let arena = Local::new(capacity);
+    let base = unsafe { (*arena.0.pool.get()).base };
+    let mapped = arena.0.mapped_bytes().unwrap();
+    assert!(mapped >= capacity);
+    assert_eq!(base as usize % 32, 0);
+    let mut info: MemoryInfo = unsafe { std::mem::zeroed() };
+    assert_eq!(size_of::<MemoryInfo>(), 48);
+    assert_eq!(
+        unsafe { VirtualQuery(base.cast(), &mut info, size_of::<MemoryInfo>()) },
+        size_of::<MemoryInfo>()
+    );
+    assert_eq!(info.base, base as u64);
+    assert_eq!(info.allocation_base, base as u64);
+    assert_eq!(info.region_bytes as usize, mapped);
+    assert_eq!(info.allocation_protect, 0x04);
+    assert_eq!(info.protect, 0x04);
+    assert_eq!(info.state, 0x1000);
+    assert_eq!(info.kind, 0x20000);
+    // The pool never exposes the rounded pages beyond its declared extent.
+    assert!(!unsafe { &*arena.0.pool.get() }.contains(unsafe { base.add(capacity) }));
+    let layout = Layout::from_size_align(capacity - HEADER, ALIGN).unwrap();
+    let address = unsafe { arena.0.alloc(layout) };
+    assert!(!address.is_null());
+    assert!(
+        unsafe { std::slice::from_raw_parts(address, layout.size()) }
+            .iter()
+            .all(|&byte| byte == 0)
+    );
+    assert!(unsafe { arena.0.alloc(Layout::from_size_align(1, 1).unwrap()) }.is_null());
+    unsafe { arena.0.dealloc(address, layout) };
+    assert_eq!(arena.0.stats().capacity, capacity);
+    assert_eq!(arena.0.stats().live, 0);
 }
 
 #[test]

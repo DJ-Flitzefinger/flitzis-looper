@@ -522,7 +522,23 @@ nativeREST36 and FINAL38 ENTIRE former FINAL37. Moving retained working vectors
 does not remove the actual plans/windows/System/native process gaps or authorize
 a model promise query, NN/oracle or unchanged CUDA retry.
 
-## 37. Remaining native parity before cutover
+## 37. Dedicated Windows arena backing
+
+- [x] Obtain the same logical arena capacity from a dedicated private Windows
+      reserve-and-commit mapping, with checked actual-page rounding and no heap
+      fallback or production release before process exit.
+- [x] Verify the actual small mapped region, padding exclusion, zero/reuse,
+      failed backing publication and original allocation/reader boundaries.
+- [x] Reuse the source-compatible STEP36 complete arena-only proof without
+      replay; retain all other native costs and complete admission as unproved.
+
+This necessary backing-ownership split grows the plan to39. STEP38 retains the
+ENTIRE former nativeREST37 and FINAL39 the ENTIRE former FINAL38. A known arena
+mapping extent is not a complete native/process allowance, successful ORIGINAL
+admission or meaningful changed CUDA condition. No model promise/NN/oracle retry
+is authorized by this correction alone.
+
+## 38. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -539,10 +555,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP38, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP39, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 38. Combined regression and final architecture review
+## 39. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

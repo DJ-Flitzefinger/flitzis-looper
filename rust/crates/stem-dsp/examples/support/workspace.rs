@@ -4,6 +4,9 @@
 //! pinned SGEMM packing and FFT planner allocations. No exhausted request falls
 //! back to System. Pre-seal pointers retain their original System ownership.
 //! The backing deliberately survives until process exit, after all readers.
+#[path = "backing.rs"]
+mod backing;
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::UnsafeCell,
@@ -197,11 +200,13 @@ fn round_up(value: usize, alignment: usize) -> Option<usize> {
 pub struct WorkspaceAllocator {
     locked: AtomicBool,
     pool: UnsafeCell<Pool>,
+    mapped_bytes: UnsafeCell<Option<usize>>,
 }
 
 // SAFETY: all access to Pool (including initialization) holds the allocation-free
-// atomic lock. No pointer/reference to Pool escapes it. System calls occur only
-// before sealing or for pre-seal pointers; they do not reenter this allocator.
+// atomic lock, also protecting mapped_bytes. No pointer/reference to Pool
+// escapes it. Native backing calls occur before sealing; System disposal is
+// only for pre-seal pointers. Neither reenters this allocator.
 unsafe impl Sync for WorkspaceAllocator {}
 
 struct Guard<'a>(&'a WorkspaceAllocator);
@@ -216,6 +221,7 @@ impl WorkspaceAllocator {
         Self {
             locked: AtomicBool::new(false),
             pool: UnsafeCell::new(Pool::empty()),
+            mapped_bytes: UnsafeCell::new(None),
         }
     }
 
@@ -234,6 +240,14 @@ impl WorkspaceAllocator {
     /// not authorize a model run or account for non-Rust process allocations.
     /// There is deliberately no unseal, resize or return-to-System operation.
     pub fn seal(&self, bytes: usize) -> Result<(), &'static str> {
+        self.seal_with(bytes, backing::allocate)
+    }
+
+    fn seal_with(
+        &self,
+        bytes: usize,
+        allocate: impl FnOnce(Layout) -> Result<backing::Allocation, &'static str>,
+    ) -> Result<(), &'static str> {
         let _guard = self.lock();
         // SAFETY: exclusive lock; no reference escapes.
         let pool = unsafe { &mut *self.pool.get() };
@@ -241,13 +255,12 @@ impl WorkspaceAllocator {
             return Err("workspace already sealed");
         }
         let layout = Self::validate_extent(bytes)?;
-        // System is called directly, not through GlobalAlloc dispatch. Zeroed
-        // storage does not itself prove physical page touching or residency.
-        let base = unsafe { System.alloc_zeroed(layout) };
-        if base.is_null() {
-            return Err("workspace backing allocation failed");
-        }
-        pool.base = base;
+        // Obtain backing directly, outside GlobalAlloc. Publish no pool state
+        // on failure. Windows uses a dedicated page-rounded mapping; other
+        // platforms retain System ownership. Neither proves physical residency.
+        let allocation = allocate(layout)?;
+        pool.base = allocation.base;
+        unsafe { *self.mapped_bytes.get() = allocation.mapped_bytes };
         pool.first = 0;
         pool.stats.capacity = bytes;
         unsafe {
@@ -275,6 +288,15 @@ impl WorkspaceAllocator {
         let _guard = self.lock();
         // SAFETY: lock protects this copy; no allocator activity is needed.
         unsafe { (*self.pool.get()).stats }
+    }
+
+    /// Extent of this Windows mapping ONLY; None for an unsealed or System
+    /// backing. Page padding is never usable pool capacity. This is not a
+    /// native/process allowance and must not be added again inside PrivateUsage.
+    pub fn mapped_bytes(&self) -> Option<usize> {
+        let _guard = self.lock();
+        // SAFETY: the same lock protects publication and this copy.
+        unsafe { *self.mapped_bytes.get() }
     }
 }
 

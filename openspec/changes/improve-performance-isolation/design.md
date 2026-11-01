@@ -1,5 +1,108 @@
 # Performance audit and implementation design
 
+## STEP37 impact: dedicated Windows arena backing
+
+The diagnostic allocator previously obtained its entire arena with
+System.alloc_zeroed. Windows now obtains that one owner directly with
+VirtualAlloc(NULL, checked_page_extent, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE).
+GetSystemInfo supplies the actual commitment page size, distinct from address
+allocation granularity. The same logical capacity and SAME first-fit pool remain;
+rounded page padding never enters contains, free lists or capacity statistics.
+A separate optional mapping extent describes ONLY this owner's pages. At4096B
+pages,768857616 logical bytes require768860160 mapped bytes, including2544B
+inaccessible-to-the-pool padding. This is an API-derived extent, not an actual
+full-model allocation or an estimate of complete process overhead.
+
+No pool state is published if backing acquisition fails. Fresh mapped pages
+supply zero initialization; they are not a physical residency guarantee. The
+production mapping deliberately survives until process exit, as the previous
+arena did; there is no new release/unseal or System exhaustion fallback. Only
+isolated tests release their mapping with VirtualFree after all pointers/readers
+have ended and live bytes are zero. Non-Windows retains the original System
+owner and an unknown native extent; no non-Windows execution is claimed.
+
+The unchanged pool algorithm, logical extent, payload/layout/lifetime sequence
+and both16-aligned base residues reuse STEP36's complete arena-only proof without
+another5M-request replay. This correction changes backing ownership, not FFT
+selection, math, neural operators, geometry, precision or quality. Other retained
+PRENN System/FFT/Arc/twiddle/windows/cache-RandomState/native heap costs, original
+2MiB stack, full image/COW, CRT/native TLS/Loader and later read/seek/write/flush/
+sync/close/stdio/exit/error/panic remain UNKNOWN. The mapping and its padding are
+already inside PrivateUsage; never add them twice. Neither this one-region
+contract, VirtualQuery nor Job failure caps establish successful process admission.
+
+This necessary native-backing split grows the plan to39. NEXT38 retains ENTIRE
+former nativeREST37 and FINAL39 ENTIRE former FINAL38, including EVERY remaining
+requirement and negative/UNKNOWN receipt below. Complete actual retained/native
+process closure and sufficient fresh ACTUAL ORIGINAL admission must precede true
+LearnedMasks/PCM/full485100/1101/B1/B2/fulltrack at unchanged mask atol/rtol3e-4
+and PCM atol3e-5/rtol3e-4. CPU allocation/I/O/FFT/math alone never permits another
+unchanged failed CUDA attempt: meaningful changed model/operator/runtime AND
+fresh complete admission are required for mandatory ACTUAL native NVIDIA CUDA.
+Real same-model device fault -> actual Tree AND Reader END -> fresh CPU/fallback/
+CPU-only; COMPLETE practical Demucs; ALL source/frontend/graph/weights/exporter/
+runtime/bootstrap/manifest/provider/native-dependency/compiler/binary/full-producer/
+mapped-image/OSarch roles; portable Windows EXE AND honest actual Linux/macOS;
+CPU/CUDA releases/CRT/licenses/LGPLsource+three patches/NVIDIA notices/installer/
+recovery/full footprint; ALL quality/functions/interactions/resources/cancel/AMP/
+final gates remain. Separate App3.14/Torch2.12/cu130 and Beat3.12/Torch2.8/cu128-or-
+CPU closures, independent Rust cores/thinPyO3 and trial-only provenance remain.
+Fullhost/narrow validator/schema/Pydantic/32keys UNKNOWN,32 parent failures,
+distinct216 watchdog UNCOMPARED, registry/pressure UNKNOWN, Overlap OPEN and
+combined2/4/6<=10 gates remain. No floor/cap/Jobbudget/OS/pagefile/foreign-process/
+productive dependency/installer change; no installed saving/runtime/RSS gain.
+
+API contracts:
+[VirtualAlloc](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc),
+[SYSTEM_INFO](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-system_info),
+[VirtualFree](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualfree)
+and fixture-only
+[VirtualQuery](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualquery).
+They describe this region, not the implementation's other native memory costs.
+
+### STEP37 verification receipt
+
+Fresh focused Windows x64 Release example controls PASS17/0 failed/0 ignored,
+with ONE compatible complete-original arena recipe deliberately filtered. Three
+new tests cover checked page rounding/overflow, controlled backing refusal with
+unchanged allocator state followed by successful seal, and the actual private
+committed read/write region via VirtualQuery. The region test checks original
+allocation base/extent/protection/type, initial zero bytes, exhaustion at the
+logical boundary despite mapped padding and complete reader cleanup. Existing
+fragmentation, zero/realloc, preseal System migration, concurrent ownership,
+small sparse/native parity and typed/nonflushing I/O controls pass again.
+The intentional caught fixture panics remain disposal controls, not whole-process
+panic freedom. Original library/spectral/track math and STEP36's full BOTH-base
+768857616B recipe are source-compatible reused evidence, not a fresh full suite.
+Strict all-target Clippy, focused Rustfmt and Release learned example PASS.
+The first invocation stopped at the new extern declaration's format only;
+corrected format and full focused build PASS1 in13.84s. No assertion was relaxed.
+
+Final outer verification PASS2 in4.70s includes strict OpenSpec, four Markdown
+files/11 local targets, unchanged productive closures/locks/pins, dependency
+isolation/actual nonthreaded packing and exact unchanged pool/proof/kernel source.
+FOUR actual small CLI scopes pass: SGEMM64/FFT8 uses logical/mapped1048576B,
+259 requests/peak368208B/live0/fail0; five-cycle retained spectral uses logical
+1065040B/mapped1069056B,6 working requests/113672 payload bytes,15 later requests,
+peak1065008B/live0/fail0; a real inverse.accumulation prefix refusal retains
+requested24068B/live0/fail1; retained I/O writes all four exact float32 files and
+preserves real Windows read-only-handle error5. ONE original observer precedes
+ONE joined executor:4/4 scope closes, pending0/inflight0/errors[]. These are
+FIXTURES ONLY. The full-model768860160B mapping was NOT allocated/executed here;
+its page extent above follows the source/API recipe, not an observed NN peak.
+
+Actual Windows x64 Release learned EXE1234944B SHA256
+3026b441d5ad3e71c028ff812ebe7dd78fc47fb5c1e810647bbda93e9abe6884 is COMPONENT
+evidence only, not Compiler/FullProducer/MappedImages/other OSes/learned/quality/
+distribution acceptance. External Release Native/API passes with the unchanged22
+warnings and einops0.6.1 warning/pin. No weights/model NN/oracle/CUDA or full-model
+promise query ran; productive Torch/installer and installed savings remain unchanged.
+Source, pins and these recipes retain the facts; generated build/control logs
+are reconstructible. Systems PRE/frozen POST, Methods BEFORE and ONE independent
+final actual-diff chain apply to this coherent step; all readers/jobs must end
+before its normal branch publication. Every remaining native/final gate above
+and below remains required under NEXT38/FINAL39, without omissions.
+
 ## STEP36 impact: arena-owned spectral working storage
 
 The actual learned CLI now prepares an opaque SpectralPlan containing both

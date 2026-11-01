@@ -306,8 +306,9 @@ fn workspace_control(status: &mut impl Write) -> Result<()> {
     }
     writeln!(
         status,
-        "BS workspace control: SGEMM64 FFT8 capacity={} peak={} live={} allocations={} failures={}",
-        after.capacity, after.peak, after.live, after.allocations, after.failures
+        "BS workspace control: SGEMM64 FFT8 capacity={} peak={} live={} allocations={} failures={} mapped_bytes={:?}",
+        after.capacity, after.peak, after.live, after.allocations, after.failures,
+        WORKSPACE.mapped_bytes(),
     )
     .at("status.write")?;
     Ok(())
@@ -380,9 +381,10 @@ fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
         return Err("spectral working vectors did not retire".into());
     }
     writeln!(status,
-        "BS retained spectral control: cycles=5 payload_requests=15 working_requests={requests} working_bytes={} capacity={} peak={} live={} failures={}",
+        "BS retained spectral control: cycles=5 payload_requests=15 working_requests={requests} working_bytes={} capacity={} peak={} live={} failures={} mapped_bytes={:?}",
         layouts.iter().map(|layout| layout.size()).sum::<usize>(),
         closed.capacity, closed.peak, closed.live, closed.failures,
+        WORKSPACE.mapped_bytes(),
     ).at("status.write")?;
     Ok(())
 }
