@@ -14,7 +14,7 @@ from typing import IO, TYPE_CHECKING
 from flitzis_looper.analysis.contracts import WorkerLimits
 from flitzis_looper.analysis.windows_job import CREATE_SUSPENDED, WindowsJob
 from flitzis_looper.offline_runtime import child_environment
-from flitzis_looper_audio import OfflineChildMemoryReservation
+from flitzis_looper_audio import OfflineChildMemoryReservation, OfflineWorkTicket
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -32,42 +32,71 @@ class OfflineWorkCancelledError(RuntimeError):
 @dataclass(slots=True)
 class _WorkOwner:
     thread: int
+    ticket: OfflineWorkTicket
     active: bool = True
+    process_slot: bool = False
 
 
 _WORK_OWNER: ContextVar[_WorkOwner | None] = ContextVar("offline-work-owner", default=None)
 
 
 @contextmanager
-def offline_work_scope(cancel: Event, on_wait: Callable[[], None] | None = None) -> Iterator[None]:
-    """Reuse the process slot for one heavy phase, with no queue or new executor.
-
-    Only same-thread nested calls reuse ownership. Waiting is off realtime and
-    cancellation does not release a different worker's permit.
-    """
+def heavy_work_scope(
+    cancel: Event, on_wait: Callable[[], None] | None = None
+) -> Iterator[_WorkOwner]:
+    """Hold whole-job capacity without taking the subordinate child-process slot."""
     owner = _WORK_OWNER.get()
     if owner is not None and owner.active and owner.thread == get_ident():
-        yield
+        yield owner
         return
+    ticket = OfflineWorkTicket()
     reported = False
-    while not _PROCESS_SLOT.acquire(blocking=False):
-        if not reported and on_wait is not None:
-            on_wait()
-            reported = True
-        if cancel.wait(_POLL_SECONDS):
-            message = "Offline work cancelled before resource admission"
-            raise OfflineWorkCancelledError(message)
-    owner = _WorkOwner(get_ident())
-    token = _WORK_OWNER.set(owner)
     try:
+        while not ticket.try_acquire():
+            if not reported and on_wait is not None:
+                on_wait()
+                reported = True
+            if cancel.wait(_POLL_SECONDS):
+                message = "Offline work cancelled before resource admission"
+                raise OfflineWorkCancelledError(message)
         if cancel.is_set():
             message = "Offline work cancelled before resource admission"
             raise OfflineWorkCancelledError(message)
-        yield
+        owner = _WorkOwner(get_ident(), ticket)
+        token = _WORK_OWNER.set(owner)
+        try:
+            yield owner
+        finally:
+            owner.active = False
+            _WORK_OWNER.reset(token)
     finally:
-        owner.active = False
-        _WORK_OWNER.reset(token)
-        _PROCESS_SLOT.release()
+        ticket.close()
+
+
+@contextmanager
+def offline_work_scope(cancel: Event, on_wait: Callable[[], None] | None = None) -> Iterator[None]:
+    """Acquire whole-job permission BEFORE the child slot; reuse only this owner."""
+    with heavy_work_scope(cancel, on_wait) as owner:
+        if owner.process_slot:
+            yield
+            return
+        reported = False
+        while not _PROCESS_SLOT.acquire(blocking=False):
+            if not reported and on_wait is not None:
+                on_wait()
+                reported = True
+            if cancel.wait(_POLL_SECONDS):
+                message = "Offline work cancelled before resource admission"
+                raise OfflineWorkCancelledError(message)
+        owner.process_slot = True
+        try:
+            if cancel.is_set():
+                message = "Offline work cancelled before resource admission"
+                raise OfflineWorkCancelledError(message)
+            yield
+        finally:
+            owner.process_slot = False
+            _PROCESS_SLOT.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,12 +347,14 @@ class _OwnedProcess:
         temporary: tempfile.TemporaryDirectory[str] | None,
         retired: Event,
         stderr_reader: _ResponseReader | None = None,
+        whole_work: OfflineWorkTicket | None = None,
     ) -> None:
         self.process = process
         self.reader = reader
         self.temporary = temporary
         self.retired = retired
         self.readers = tuple(item for item in (reader, stderr_reader) if item is not None)
+        self.whole_work = whole_work
 
     def add_reader(self, reader: _ResponseReader) -> None:
         """Attach each allocated reader while the suspended process already has an owner."""
@@ -341,9 +372,11 @@ class _OwnedProcess:
         except OSError:
             return False
         if self.temporary is None:
+            if self.whole_work is not None:
+                self.whole_work.close()
             self.retired.set()
             return True
-        return _release_temporary(self.temporary, self.retired)
+        return _release_temporary(self.temporary, self.retired, self.whole_work)
 
     def retire(self) -> None:
         # A failed finite reap must retain ownership; never pretend the PCM reader is gone.
@@ -685,34 +718,48 @@ def run_owned_command(  # noqa: PLR0913
     )
 
 
-def _release_temporary(temporary: tempfile.TemporaryDirectory[str], retired: Event) -> bool:
+def _release_temporary(
+    temporary: tempfile.TemporaryDirectory[str],
+    retired: Event,
+    whole_work: OfflineWorkTicket | None = None,
+) -> bool:
     try:
         temporary.cleanup()
     except OSError:
         return False
-    retired.set()
     _PROCESS_SLOT.release()
     _ANALYSIS_ADMISSION.release()
+    if whole_work is not None:
+        whole_work.close()
+    retired.set()
     return True
 
 
-def _retire_temporary(temporary: tempfile.TemporaryDirectory[str], retired: Event) -> None:
-    while not _release_temporary(temporary, retired):
+def _retire_temporary(
+    temporary: tempfile.TemporaryDirectory[str],
+    retired: Event,
+    whole_work: OfflineWorkTicket | None = None,
+) -> None:
+    while not _release_temporary(temporary, retired, whole_work):
         Event().wait(_POLL_SECONDS)
 
 
-def _start_failed(temporary: tempfile.TemporaryDirectory[str], retired: Event) -> ProcessResult:
-    if _release_temporary(temporary, retired):
+def _start_failed(
+    temporary: tempfile.TemporaryDirectory[str],
+    retired: Event,
+    whole_work: OfflineWorkTicket | None = None,
+) -> ProcessResult:
+    if _release_temporary(temporary, retired, whole_work):
         return ProcessResult("worker_start_failed")
     try:
         Thread(
             target=_retire_temporary,
-            args=(temporary, retired),
+            args=(temporary, retired, whole_work),
             name="beat-worker-cleanup",
             daemon=True,
         ).start()
     except OSError, RuntimeError:
-        _retire_temporary(temporary, retired)
+        _retire_temporary(temporary, retired, whole_work)
         return ProcessResult("worker_start_failed")
     return ProcessResult("worker_retiring", resources_released=False)
 
@@ -720,10 +767,38 @@ def _start_failed(temporary: tempfile.TemporaryDirectory[str], retired: Event) -
 def run_process(
     command: WorkerCommand, request: bytes, cancel: Event, limits: WorkerLimits, retired: Event
 ) -> ProcessResult:
+    """Queue one whole owner; a retiring child retains its independent borrow."""
+    # Reject an occupied Beat child before waiting on a later heavy ticket.
+    # Never hold this subordinate guard during that wait: an earlier native
+    # owner may still need to invoke its own Beat branch.
+    if not _ANALYSIS_ADMISSION.acquire(blocking=False):
+        return ProcessResult("worker_busy")
+    _ANALYSIS_ADMISSION.release()
+    retired.clear()
+    try:
+        with heavy_work_scope(cancel) as owner:
+            result = _run_process_admitted(command, request, cancel, limits, retired, owner)
+            if result.reason == "worker_busy":
+                # This invocation owned the pending Event, but launched nothing.
+                retired.set()
+            return result
+    except OfflineWorkCancelledError:
+        retired.set()
+        return ProcessResult("cancelled")
+
+
+def _run_process_admitted(
+    command: WorkerCommand,
+    request: bytes,
+    cancel: Event,
+    limits: WorkerLimits,
+    retired: Event,
+    whole_owner: _WorkOwner,
+) -> ProcessResult:
     """Run one process globally; a retiring process continues to occupy its slot.
 
     The caller must run this on its background supervisor. It owns the borrowed PCM
-    until ``retired`` is set. No queue is maintained and no extra process is launched
+    until ``retired`` is set. The existing global admission owns the wait; no process is launched
     while a previous process is active or retiring.
     """
     if not _ANALYSIS_ADMISSION.acquire(blocking=False):
@@ -746,17 +821,19 @@ def run_process(
         _PROCESS_SLOT.release()
         _ANALYSIS_ADMISSION.release()
         return ProcessResult("worker_scratch_unavailable")
+    whole_work = None
     try:
         request_path = Path(temporary.name) / "request.json"
+        whole_work = whole_owner.ticket.borrow()
         request_path.write_bytes(request)
         process = _start(command, request_path)
     except OSError, RuntimeError:
-        return _start_failed(temporary, retired)
+        return _start_failed(temporary, retired, whole_work)
     if process.stdout is None:
         msg = "worker stdout pipe was not created"
         raise RuntimeError(msg)
     reader = _ResponseReader(process.stdout, limits.max_response_bytes)
-    owned = _OwnedProcess(process, reader, temporary, retired)
+    owned = _OwnedProcess(process, reader, temporary, retired, whole_work=whole_work)
     try:
         if isinstance(process, _WorkerProcess):
             process.activate()

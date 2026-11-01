@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from flitzis_looper.controller.stem_job import StemGenerationInterest
 from flitzis_looper.controller.stem_workers import STEM_QUEUED_JOBS, STEM_WORKERS
+from flitzis_looper_audio import OfflineWorkTicket
 
 # Pytest discovers this imported autouse fixture under its declared name.
 from tests.flitzis_looper.controller.test_shared_stem_material import (
@@ -160,6 +161,48 @@ def _assert_preparation_handoff(
     audio.capture_prepared_stem_source.assert_called_once_with(0, original_source)
     assert len(backend.requests) == 1
     assert stems.stem_generation_error(0) is None
+
+
+def test_production_handoff_holds_capacity_until_actual_pair_worker_returns(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stems = controller.stems
+    resolved, inferred, prepared = _observe_phase_returns(stems, monkeypatch)
+    entered, release = threading.Event(), threading.Event()
+
+    def prepare(*_args: object) -> _PreparedPair:
+        entered.set()
+        assert release.wait(10)
+        return _PreparedPair()
+
+    monkeypatch.setattr(audio_engine_mock, "prepare_stem_pair", prepare)
+    successor = None
+    with _held_pool() as held:
+        _production_pool(controller, audio_engine_mock, tmp_path, held.pool)
+        try:
+            assert stems.request_generation_interest(0, StemGenerationInterest("handoff"))
+            stems.on_frame_render()
+            held.release.set()
+            assert resolved.wait(5)
+            stems.on_frame_render()
+            assert inferred.wait(5)
+            successor = OfflineWorkTicket()
+            assert not successor.try_acquire()  # Backend done; UI handoff still owns it.
+            stems.on_frame_render()
+            assert entered.wait(5)
+            assert not successor.try_acquire()  # Actual pair worker still owns its borrow.
+            release.set()
+            assert prepared.wait(5)
+            assert successor.try_acquire()
+            stems.on_frame_render()
+        finally:
+            release.set()
+            if successor is not None:
+                successor.close()
+            stems.shut_down()
 
 
 def test_original_holder_survives_full_pool_at_inference_and_pair_preparation_handoffs(

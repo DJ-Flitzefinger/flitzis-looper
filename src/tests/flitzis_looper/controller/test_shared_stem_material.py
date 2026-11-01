@@ -12,6 +12,7 @@ from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.stem_process import stem_conversion_checkpoint
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.stem_execution import StemExecution
+from flitzis_looper_audio import OfflineWorkTicket
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket, FakeProjectAssetLease
 
@@ -102,13 +103,13 @@ def test_playback_defers_only_inference_and_preserves_original_pending_request(
     stem_backend: FakeStemGenerationBackend,
 ) -> None:
     tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
-    controller.session.active_sample_ids.add(215)
+    controller.session.active_sample_ids.add(0)
     assert controller.stems.generate_stems_async(0)
     tasks.pop(0)()  # Existing source/identity resolution remains independent.
     controller.stems.on_frame_render()
     assert not tasks
     assert controller.stems.stem_generation_stage(0) == "Waiting for playback to stop"
-    assert controller.session.active_sample_ids == {215}
+    assert controller.session.active_sample_ids == {0}
     assert not stem_backend.requests
     original = next(iter(controller.stems._waiting_jobs))
     controller.session.active_sample_ids.clear()
@@ -119,12 +120,14 @@ def test_playback_defers_only_inference_and_preserves_original_pending_request(
     assert stem_backend.requests[0].cache_dir == original
 
 
-def test_actual_controller_poll_stops_generation_writes_when_playback_begins(
+@pytest.mark.parametrize("playing_pad", [0, 215])
+def test_playback_guard_tracks_only_current_job_pads(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
     stem_backend: FakeStemGenerationBackend,
     monkeypatch: pytest.MonkeyPatch,
+    playing_pad: int,
 ) -> None:
     tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
     assert controller.stems.generate_stems_async(0)
@@ -145,16 +148,47 @@ def test_actual_controller_poll_stops_generation_writes_when_playback_begins(
         running = executor.submit(tasks.pop(0))
         try:
             assert entered.wait(5)
-            controller.session.active_sample_ids.add(215)
+            controller.session.active_sample_ids.add(playing_pad)
             controller.stems.on_frame_render()
             assert controller.stems._stem_playback_active.is_set()
         finally:
             release.set()
         running.result(10)
     controller.stems.on_frame_render()
-    assert controller.session.active_sample_ids == {215}
-    assert not stem_backend.requests
-    assert "playback headroom" in (controller.stems.stem_generation_error(0) or "")
+    assert controller.session.active_sample_ids == {playing_pad}
+    if playing_pad == 215:
+        assert len(stem_backend.requests) == 1
+        assert controller.stems.stem_generation_error(0) is None
+    else:
+        assert not stem_backend.requests
+        assert "playback headroom" in (controller.stems.stem_generation_error(0) or "")
+
+
+def test_waiting_controller_job_withdraws_fifo_entry_when_own_playback_starts(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
+    analysis = OfflineWorkTicket()
+    successor = None
+    try:
+        assert analysis.try_acquire()
+        assert controller.stems.generate_stems_async(0)
+        tasks.pop(0)()
+        controller.stems.on_frame_render()
+        assert not tasks
+        job = next(iter(controller.stems._jobs.values()))
+        assert job.heavy_work.registered
+        successor = OfflineWorkTicket()
+        controller.session.active_sample_ids.add(0)
+        controller.stems.on_frame_render()
+        assert not job.heavy_work.registered
+        analysis.close()
+        assert successor.try_acquire()
+        assert not tasks
+    finally:
+        analysis.close()
+        if successor is not None:
+            successor.close()
 
 
 def test_coalesced_alignment_retains_device_for_current_shared_subscribers(

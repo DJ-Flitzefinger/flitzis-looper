@@ -1019,7 +1019,7 @@ fn admit_selected_material_incoming(
     };
     engine
         .cold_jobs
-        .submit(reservation, move || {
+        .submit_analysis(reservation, work.run_analysis || work.refine_tempo_only || work.restore_automatic, move || {
             let _guard = guard;
             let events = work.events.clone();
             run_worker_catching_panic_captured(panic_cleanup, &events, id, request_id, || {

@@ -17,6 +17,57 @@ fn source(fixture: &LaunchFixture) -> CompleteSourceReader {
     CompleteSourceReader::capture(&fixture.engine, 0, sample).unwrap()
 }
 
+#[test]
+fn actual_manual_analysis_waits_without_blocking_cold_and_retires_before_next_job() {
+    let fixture = LaunchFixture::new(4);
+    let samples = fixture.engine.sample_cache.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .samples
+        .clone();
+    let baseline = Arc::strong_count(&samples);
+    let blocker = super::super::heavy_work::ticket().unwrap();
+    assert!(blocker.try_acquire().unwrap());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let cancelled = fixture.engine.cold_cancelled.clone();
+    super::start_analysis_with(&fixture.engine, 0, move |_| {
+        assert!(super::super::heavy_work::current().is_some());
+        // A real captured request reached its worker, but no materialization,
+        // frontend or model is needed to verify the admission/lifetime boundary.
+        cancelled.store(true, Ordering::Release);
+        entered_tx.send(()).unwrap();
+    })
+    .unwrap();
+    let successor = super::super::heavy_work::ticket().unwrap();
+    let (ordinary_tx, ordinary_rx) = mpsc::channel();
+    fixture
+        .engine
+        .cold_jobs
+        .submit(fixture.engine.cold_jobs.reserve().unwrap(), move || {
+            ordinary_tx.send(()).unwrap();
+        })
+        .unwrap();
+    ordinary_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(entered_rx.try_recv().is_err());
+    assert!(!successor.try_acquire().unwrap());
+    drop(blocker);
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !successor.try_acquire().unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "analysis retained whole-job admission"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(fixture.engine.cold_jobs.counts_for_test(), (0, 0, 0));
+    assert_eq!(
+        Arc::strong_count(&samples),
+        baseline,
+        "captured PCM reader survived release"
+    );
+}
+
 fn owner(fixture: &LaunchFixture) -> NativeAnalysisOwner {
     let _requests = fixture.engine.pad_request_ids.lock().unwrap();
     NativeAnalysisOwner::new(
@@ -315,7 +366,10 @@ fn old_analysis_worker_retirement_preserves_blocked_successor_after_actual_unloa
         new_resumed.recv_timeout(Duration::from_secs(5)).unwrap();
     })
     .unwrap();
-    new_started.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The successor already owns its new task token, but its payload must
+    // remain queued until the old physical reader and heavy owner retire.
+    assert!(new_started.try_recv().is_err());
+    assert_eq!(fixture.engine.cold_jobs.counts_for_test(), (1, 1, 2));
     let successor_token = fixture
         .engine
         .analysis_task_tokens
@@ -327,6 +381,7 @@ fn old_analysis_worker_retirement_preserves_blocked_successor_after_actual_unloa
     assert!(!Arc::ptr_eq(&original_token, &successor_token));
 
     old_release.send(()).unwrap();
+    new_started.recv_timeout(Duration::from_secs(5)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     // The actual pool retires its admission only after the old closure and its
     // PadTaskGuard have dropped. The sole remaining worker is the blocked successor.

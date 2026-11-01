@@ -554,7 +554,23 @@ Rust mappings do not close complete startup/native backing, select a finite
 bootstrap capacity, establish sufficient ORIGINAL admission or permit a model/
 oracle/unchanged CUDA retry. Additional pages/API calls may increase cost.
 
-## 39. Remaining native parity before cutover
+## 39. Sequential heavy jobs and transient ownership
+
+- [x] Share one heavy-work admission across PAD/Generate-all stems and complete
+      manual/automatic BPM-Key analysis without replacing their existing queues.
+- [x] Start no successor before prior transient readers, child trees, temporary
+      storage and job-owned model/session resources retire; preserve cancellation,
+      source/request identity, same-job nested work and ordinary Cold progress.
+- [x] Keep dynamic actual-memory admission for16-32GiB targets, original floors/
+      caps and numerical quality; no OS RAM trimming or persistent playback eviction.
+- [x] Verify mixed jobs, waiting cancellation, late retirement, error/panic/shutdown,
+      shared interests/batch behavior and matching source/provenance regressions.
+
+This new Human priority grows the plan to41. STEP40 retains ENTIRE former
+nativeREST39; FINAL41 retains ENTIRE former FINAL40 without omissions. Historical
+STEP38 receipts above retain their original numbering as historical evidence.
+
+## 40. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -571,10 +587,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP40, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP41, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 40. Combined regression and final architecture review
+## 41. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

@@ -18,12 +18,14 @@ from flitzis_looper.analysis.contracts import (
     WorkerLimits,
     validate_component_result,
 )
+from flitzis_looper.analysis.process import OfflineWorkCancelledError, heavy_work_scope
 from flitzis_looper.analysis.publication import encode_result
 from flitzis_looper.analysis.selected_bpm import summarize_published
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.selected_bpm_models import SelectedBpmReport
+    from flitzis_looper_audio import OfflineWorkTicket
 
 _POLL_SECONDS = 0.02
 _MAX_KEY_JSON_BYTES = 16_384
@@ -172,6 +174,7 @@ class AnalysisJob:
         self._beat_started = False
         self._snapshot = JobSnapshot(loaded.identity, "preparing", cancellation_requested=False)
         self.done = Event()
+        self._heavy_work: OfflineWorkTicket | None = None
 
     def cancel(self) -> None:
         """Invalidate this request without waiting for its resources to retire."""
@@ -245,6 +248,9 @@ class AnalysisJob:
     def _run_branches(
         self, pcm_path: Path, key_results: list[dict[str, object]]
     ) -> BeatComponentResult:
+        if self._cancelled.is_set() or self._native.is_cancelled():
+            self._cancelled.set()
+            return self._failed_beats("Analysis cancelled before preparation")
         self._native.prepare_export(str(pcm_path))
         if self._native.is_cancelled():
             self._cancelled.set()
@@ -291,6 +297,25 @@ class AnalysisJob:
         return summary, None
 
     def _supervise(self) -> None:
+        try:
+            with heavy_work_scope(self._cancelled) as owner:
+                self._heavy_work = owner.ticket.borrow()
+                try:
+                    self._supervise_owned()
+                finally:
+                    # A refused native retirement is not release. Keep the
+                    # borrow with this still-retiring diagnostic owner.
+                    if self.done.is_set():
+                        self._heavy_work.close()
+                        self._heavy_work = None
+        except OfflineWorkCancelledError:
+            # No PCM/model work began. The original native cancellation/finish
+            # path still retires captured source admission and publishes state.
+            self._cancelled.set()
+            self._native.cancel()
+            self._supervise_owned()
+
+    def _supervise_owned(self) -> None:
         directory: Path | None = None
         key_results: list[dict[str, object]] = []
         bridge = Thread(

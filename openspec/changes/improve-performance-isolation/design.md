@@ -1,5 +1,98 @@
 # Performance audit and implementation design
 
+## STEP39 result: shared heavy-job admission and scoped playback fencing
+
+One native FIFO capability now covers complete manual/automatic BPM-Key work,
+Stem inference and its existing UI-to-pair-preparation continuation. Waiting
+heavy Cold jobs leave both ordinary workers available. An already admitted
+physical job executes its native continuation under the same bounded offline
+worker/capability, so a full queue of independent waiting analyses cannot block
+its own completion. Captured operations/readers retire before Cold reservations
+and finally the last heavy capability. Same-job borrows survive cancellation,
+worker return and delayed process/tree/pipe/temporary cleanup independently.
+
+Stem admission is nonblocking before submission to the existing worker pool.
+Ineligible waiting requests withdraw their FIFO entry; cancelled/disposed job
+carriers cannot register again. Transferred metadata retains no active handle.
+KeyNet retains only session serialization between calls, rather than a model
+session/arena. Native API reflection rejects older bindings before app startup.
+The Beat child duplicate guard remains subordinate to whole-job admission; its
+early probe never holds that guard while waiting. CPU/CUDA calls on one adapter
+share a nonblocking request guard and cannot mutate another call's retirement
+Event. Complete PAD analyses still queue through their original Native owners.
+
+Stopped-target Stem generation now continues while unrelated PADs play, subject
+to actual resource guards. Starting a current requested subscriber still fences
+that physical job. Provider calibration retains its separate playback exclusion.
+
+Verification: Release Native/API passed with the22 known compiler warnings.
+355 focused Python tests passed, with the unchanged real Torch-pool check
+deliberately deselected;233 additional Portable capability tests passed.56 Looper
+Rust tests and one owned KeyNet session-loading contract test passed. Tests cover
+actual FIFO/last-borrow release, queued cancellation, ordinary Cold progress,
+manual analysis coupling, saturated continuation, panic/cancel/shutdown reader
+retirement, production Stem handoff, playback scope, batch/source/provenance,
+real controlled child failures and duplicate requests. The old analysis ABA test
+now additionally requires a queued successor until prior retirement, retaining
+its original token/current-owner and complete settlement assertions.
+
+Owned Python lint and seven strict Mypy modules passed. Source formatting passed
+for the checked files/new analysis test; three inherited unformatted Rust files
+were not broadly rewritten. Fresh, separate Clippy targets found91 unique current
+diagnostics against92 on the actual parent, with no additions and one eliminated
+KeyNet builder diagnostic. Whole-library strict Clippy remains unsuccessful on
+existing Looper diagnostics; this is not an overall clean lint/quality claim.
+
+No new neural/oracle/CUDA inference, device/listening test, numerical model change
+or8GiB ceiling was introduced. Existing floors/caps, runtime/dependency pins,
+quality and productive Torch routes remain. OS working-set shrinkage, measured
+live overlap, native model cutover and the complete final matrix remain open in
+STEP40/41, including all earlier explicit failures and unknowns below.
+
+## Human priority: sequential heavy jobs and transient ownership
+
+Multiple PAD stem requests, including Generate all Stems, and complete BPM/Key
+analysis must share one sequential heavy-work admission. Keep the existing
+bounded Stem and Cold queues and their source/request/cancellation authority.
+Do not reduce the ordinary Cold worker pool: playback preparation must remain
+eligible while heavy analysis waits. Admission precedes complete PCM/model work
+and remains held through both analysis branches, subprocess trees/pipe readers,
+temporary cleanup and destruction of captured transient owners. A queued success
+or cancellation notification alone never releases that admission.
+
+The intended boundary is a shared native FIFO ticket above the existing Python
+child-process slot. Native analysis and its scoped BPM branch explicitly borrow
+the same active owner. Existing Python scopes acquire the whole-job permission
+before the subordinate process slot; queued cancellation never releases another
+owner. KeyNet sessions become job-owned rather than retaining a session/ORT arena
+between independent jobs. Repeated model loading is an explicit cost of releasing
+that owner; the model, frontend, numerical options and quality remain unchanged.
+Persistent playback sources and published results retain their legitimate owners.
+Owner retirement does not promise a particular OS working set or complete ORT/
+Windows runtime memory return. No global collection or working-set trimming.
+
+Normal hardware targets16-32GiB. Existing memory admission already scales with
+actual available physical memory/commit and pending reservations; no global8GiB
+machine ceiling was found. Preserve its floors, caps and refusal/retirement rules.
+The existing single-thread numerical policy is a separate performance question,
+not changed by this scheduling/lifetime step. Verification needs controlled mixed
+jobs, last-reader/drop witnesses, cancellation/failure/shutdown and ordinary Cold
+progress, not repeated model/CUDA inference.
+
+The Human also tested the published App with two playing PADs and requested
+stems on a third stopped PAD. The previous global any-active-PAD playback Event
+aborted that request when START/STOP activity became visible. The new explicit
+Human decision permits generation for a stopped target while other PADs play,
+subject to real resource checks. Playback fencing therefore follows the physical
+job's surviving requested subscribers, not unrelated active PADs. Provider cost
+learning still excludes background playback; this does not certify CPU/CUDA
+overlap, measured deadline headroom or universal glitch-free performance.
+
+This directly requested step takes priority over the previous native-only next
+step. Its implementation is STEP39; ENTIRE former nativeREST39 follows as STEP40
+and ENTIRE former FINAL40 as STEP41. All original unfinished numerical, native
+CUDA, quality, platform, distribution and final gates below remain unpassed.
+
 ## STEP38 impact: owned Windows bootstrap allocations
 
 The actual standalone learned CLI's global allocator now uses a dedicated

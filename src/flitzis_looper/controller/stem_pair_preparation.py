@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.stem_workers import StemWorkerReservation
     from flitzis_looper_audio import (
         AudioEngine,
+        OfflineWorkTicket,
         PreparedSourceTicket,
         PreparedStemPair,
         ProjectAssetLease,
@@ -49,6 +50,7 @@ class StemPairIntentBinding:
     source_path: str | None = None
     verify_saved_selection: bool = False
     interest_owner: StemGenerationInterests | None = None
+    heavy_work: OfflineWorkTicket | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,7 @@ class PairPreparation:
     artifact_source_version: str | None = None
     source_path: str | None = None
     interest_owner: StemGenerationInterests | None = None
+    heavy_work: OfflineWorkTicket | None = None
     started: Event = field(default_factory=Event, init=False, repr=False)
     _artifact_version_explicit: bool = field(init=False, repr=False)
 
@@ -106,6 +109,9 @@ class PairPreparation:
         """Release this job after actual worker return, preserving any saved assignment."""
         self.lease.release()
         self.retirement.close()
+        if self.heavy_work is not None:
+            self.heavy_work.close()
+            self.heavy_work = None
 
 
 class StemPairPreparationQueue:
@@ -181,6 +187,20 @@ class StemPairPreparationQueue:
         self, spec: StemPairPreparationSpec, runner: Callable[[Callable[[], None]], None]
     ) -> None:
         captured = StemPairIntentBinding() if spec.binding is None else spec.binding
+        try:
+            self._submit_captured_spec(spec, runner, captured)
+        finally:
+            # Specifications are metadata, including failed/retained ones.
+            # Only the actual queued operation may retain active capacity.
+            if captured.heavy_work is not None:
+                captured.heavy_work.close()
+
+    def _submit_captured_spec(
+        self,
+        spec: StemPairPreparationSpec,
+        runner: Callable[[Callable[[], None]], None],
+        captured: StemPairIntentBinding,
+    ) -> None:
         if captured.interest_owner is not None and not captured.interest_owner.allows_preparation:
             message = "Stem preparation has no current generation interests"
             raise RuntimeError(message)
@@ -221,6 +241,7 @@ class StemPairPreparationQueue:
             artifact_source_version=captured.artifact_source_version,
             source_path=captured.source_path,
             interest_owner=captured.interest_owner,
+            heavy_work=captured.heavy_work.borrow() if captured.heavy_work is not None else None,
         )
         self.pending[spec.sample_id] = request
         try:
@@ -231,6 +252,23 @@ class StemPairPreparationQueue:
             raise
 
     def _run(self, request: PairPreparation, *, components: bool) -> None:
+        work = request.heavy_work
+        if work is None:
+            self._run_owned(request, components=components)
+            return
+        try:
+            work.run(lambda: self._run_owned(request, components=components))
+        except (RuntimeError, ValueError) as error:
+            request.error = str(error)
+            request.close()
+            self._results.put(request)
+        finally:
+            # Native preparation has returned after captured scratch/readers
+            # retire. Prepared resident results keep their own accounted owners.
+            work.close()
+            request.heavy_work = None
+
+    def _run_owned(self, request: PairPreparation, *, components: bool) -> None:
         request.started.set()
         processing = None
         artifact = None
@@ -357,6 +395,7 @@ class StemPairPreparationQueue:
             if request.interest_owner is not None:
                 request.interest_owner.invalidate_all()
             request.cancelled.set()
+            self._release_unstarted_work(request)
 
     def cancel_interest_owner(self, owner: StemGenerationInterests) -> None:
         """Cancel exact final-owner requests after caller detachment, including moves.
@@ -367,6 +406,16 @@ class StemPairPreparationQueue:
         for request in self.pending.values():
             if request.interest_owner is owner:
                 request.cancelled.set()
+                self._release_unstarted_work(request)
+
+    @staticmethod
+    def _release_unstarted_work(request: PairPreparation) -> None:
+        # This changes no file/source reader custody. A concurrently entered
+        # run() holds its independent lexical borrow and observes cancellation
+        # before payload preparation. The worker still returns via its collector.
+        if not request.started.is_set() and request.heavy_work is not None:
+            request.heavy_work.close()
+            request.heavy_work = None
 
     def retain_returned(self, request: PairPreparation) -> bool:
         """Retain a collected result and its reservation without replacing newer work.

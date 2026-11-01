@@ -301,6 +301,39 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** loader policy and all admitted file pins remain process-local through actual runtime readers and process exit, without eagerly loading CUDA for CPU probes
 - **AND** legacy requests retain their behavior, unsupported platforms reject this policy, and observed declared backing files do not certify all loader overrides, relocated image bytes, full dependency closure, producer, CUDA execution or quality
 
+### Requirement: Heavy Stem And Analysis Jobs Execute Sequentially
+PAD stem generation, Generate all Stems and complete BPM/Key analysis SHALL share
+one sequential heavy-work admission while retaining their existing bounded queues.
+The next independent heavy job SHALL NOT start PCM/model preparation until the
+previous job's transient owners, actual child trees and readers have retired.
+Ordinary playback preparation SHALL remain eligible while heavy work waits.
+Same-job branches MAY overlap only under the same retained admission and SHALL
+both end before that admission is released. Cancellation and UI completion alone
+SHALL NOT certify resource release. Persistent playback sources and published
+results SHALL retain their valid ownership; no OS RAM trimming is required.
+
+#### Scenario: PAD and batch stems compete with complete analysis
+- **GIVEN** one Stem or BPM/Key job still owns transient model/PCM storage or a child/reader
+- **WHEN** more PAD requests, Generate all Stems or Analyze Audio are requested
+- **THEN** their existing bounded queues retain requests without starting another independent heavy job
+- **AND** a cancelled queued request releases only its own admission and cannot strand later work
+- **AND** the successor starts only after actual prior owner retirement, including error and shutdown paths
+- **AND** ordinary Cold playback preparation may progress while the heavy job remains occupied
+
+#### Scenario: Available memory differs between machines
+- **GIVEN** a supported machine with16-32GiB RAM or a smaller supported configuration
+- **WHEN** queued heavy work becomes eligible
+- **THEN** admission uses actual available memory/commit and outstanding reservations with the existing safety floors
+- **AND** a fixed8GiB machine assumption does not impose an additional global ceiling
+- **AND** original geometry, numerical quality and failure/retirement guards remain unchanged
+
+#### Scenario: Other PADs play while stems are generated for a stopped PAD
+- **GIVEN** the requested stem PAD is stopped and resource admission permits background work
+- **WHEN** other PADs play or the performer operates their START/STOP controls
+- **THEN** that unrelated playback does not defer or abort the stem calculation
+- **AND** current requested subscribers, original source/cancellation, actual memory pressure and publication guards remain authoritative
+- **AND** no PAD is stopped automatically to make background work eligible
+
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
 GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model

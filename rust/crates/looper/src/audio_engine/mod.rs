@@ -50,6 +50,7 @@ mod cold_residency_tests;
 mod cold_store;
 pub(crate) mod committed_stem_residency;
 mod complete_context;
+pub(crate) mod heavy_work;
 #[cfg(all(test, windows))]
 mod native_lifecycle_observation;
 pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
@@ -1662,6 +1663,8 @@ impl AudioEngine {
     const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 1;
     #[classattr]
     const ORDINARY_TRANSPORT_API_VERSION: u32 = 3;
+    #[classattr]
+    const OFFLINE_WORK_API_VERSION: u32 = 1;
 
     /// Seal an already committed immutable disk selection independently of component residency.
     #[pyo3(name = "register_committed_stem_pair")]

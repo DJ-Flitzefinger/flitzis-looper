@@ -776,7 +776,7 @@ def controller(
     stem_backend: FakeStemGenerationBackend,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> AppController:
+) -> Iterator[AppController]:
     monkeypatch.chdir(tmp_path)
 
     app = AppController(stem_backend=stem_backend, stem_task_runner=lambda target: target())
@@ -798,7 +798,11 @@ def controller(
             return configured_paths(request)
 
         monkeypatch.setattr(stem_provenance, "processing_paths", processing_paths)
-    return app
+    try:
+        yield app
+    finally:
+        # Retire physical jobs even when callback/controller cycles remain.
+        app.stems.shut_down()
 
 
 @pytest.fixture

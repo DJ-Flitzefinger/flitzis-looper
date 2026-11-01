@@ -2,9 +2,9 @@
 //!
 //! Loads the pretrained `keynet.onnx` model and runs inference on CQT
 //! spectrograms to produce 24-class key logits. The session is loaded
-//! lazily on first use and cached for all subsequent calls.
+//! for each complete source. The session and its arena retire after that call.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use ort::{
     session::Session,
@@ -16,12 +16,8 @@ use crate::key_detection::{KEYNET_INPUT_BINS, KeyError};
 /// Path to the KeyNet ONNX model file.
 const MODEL_FILENAME: &str = "keynet.onnx";
 
-/// Lazy-loaded ONNX session for the KeyNet model.
-///
-/// Wrapped in a Mutex to allow mutable access for `session.run()`.
-/// The inner Option handles the case where the session hasn't been
-/// initialized yet or failed to load.
-static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
+/// Serialize model construction/execution/disposal without retaining a session.
+static SESSION_ACCESS: Mutex<()> = Mutex::new(());
 
 /// Validate the loaded model's input/output signature.
 ///
@@ -122,9 +118,8 @@ fn validate_session(session: &Session) -> Result<(), KeyError> {
     Ok(())
 }
 
-/// Load the model and cache it. Returns an error if the model is not found
-/// or fails to load. On success, the session is cached for reuse.
-fn load_session() -> Result<(), KeyError> {
+/// Load one job-owned model with the unchanged resolver/options/signature.
+fn load_session() -> Result<Session, KeyError> {
     let path = resolve_model_path().ok_or_else(|| {
         KeyError::ModelError(format!(
             "model file '{}' not found in search paths",
@@ -132,18 +127,7 @@ fn load_session() -> Result<(), KeyError> {
         ))
     })?;
 
-    let session = build_session(&path)?;
-
-    // Get or initialize the mutex, then set the session.
-    SESSION.get_or_init(Default::default);
-    let mut guard = SESSION
-        .get()
-        .unwrap()
-        .lock()
-        .map_err(|e| KeyError::ModelError(format!("poisoned session lock: {e}")))?;
-    *guard = Some(session);
-
-    Ok(())
+    build_session(&path)
 }
 
 /// Build only this offline session's pools; never change process-global options.
@@ -151,38 +135,16 @@ fn build_session(path: &std::path::Path) -> Result<Session, KeyError> {
     let session = Session::builder()
         .map_err(|e| KeyError::ModelError(format!("failed to create session builder: {e}")))?
         .with_intra_threads(1)
-        .and_then(|builder| builder.with_inter_threads(1))
+        .map_err(|e| KeyError::ModelError(format!("failed to bound KeyNet threads: {e}")))?
+        .with_inter_threads(1)
         .map_err(|e| KeyError::ModelError(format!("failed to bound KeyNet threads: {e}")))?
         .commit_from_file(path)
         .map_err(|e| KeyError::ModelError(format!("failed to load model: {e}")))?;
 
-    // Validate model signature before caching.
+    // Validate the same model signature before execution.
     validate_session(&session)?;
 
     Ok(session)
-}
-
-/// Get a mutable reference to the cached session, loading it if needed.
-///
-/// Returns the session inside a MutexGuard so the caller can use `session.run()`
-/// which requires `&mut Session`.
-fn get_session_mut() -> Result<std::sync::MutexGuard<'static, Option<Session>>, KeyError> {
-    SESSION.get_or_init(Default::default);
-    let guard = SESSION
-        .get()
-        .unwrap()
-        .lock()
-        .map_err(|e| KeyError::ModelError(format!("poisoned session lock: {e}")))?;
-
-    if guard.is_none() {
-        // Can't load while holding the lock (would deadlock on recursion).
-        // Drop the lock, load, then re-acquire.
-        drop(guard);
-        load_session()?;
-        return get_session_mut();
-    }
-
-    Ok(guard)
 }
 
 /// Resolve the path to the KeyNet ONNX model.
@@ -269,12 +231,16 @@ pub fn run_inference(
         ));
     }
 
-    let mut session_guard = get_session_mut()?;
-    let session = session_guard
-        .as_mut()
-        .ok_or_else(|| KeyError::ModelError("session not initialized".into()))?;
-
-    run_inference_with_session(session, cqt_tensor, n_time_frames)
+    let serialization = SESSION_ACCESS
+        .lock()
+        .map_err(|error| KeyError::ModelError(format!("poisoned session lock: {error}")))?;
+    let mut session = load_session()?;
+    let result = run_inference_with_session(&mut session, cqt_tensor, n_time_frames);
+    // Outputs/input views end inside run_inference_with_session. The session
+    // ends before another job constructs a model, also on error or unwinding.
+    drop(session);
+    drop(serialization);
+    result
 }
 
 /// Execute the model with a validated session and preprocessed CQT rows.
@@ -348,12 +314,9 @@ mod tests {
             return;
         }
 
-        load_session().expect("a resolved KeyNet model must load and validate successfully");
-        let guard = SESSION.get().unwrap().lock().unwrap();
-        assert!(
-            guard.is_some(),
-            "session should be cached after successful load"
-        );
+        let session =
+            load_session().expect("a resolved KeyNet model must load and validate successfully");
+        validate_session(&session).expect("the owned session retains the original model signature");
     }
 
     #[test]

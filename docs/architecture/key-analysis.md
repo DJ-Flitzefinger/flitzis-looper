@@ -32,8 +32,11 @@ input can complete as unknown; the minimum useful input is 8820 frames.
 
 The exported `keynet.onnx` preserves the trained 104-row input and 24-class
 output. Model search is executable directory, cwd, assets/models, models, assets;
-the first applicable resource matters. The cached serialized ORT session avoids
-loading weights per call. Internal confidence describes a classifier result,
+the first applicable resource matters. Each serialized inference call owns its
+ORT session and releases it after its input/output views finish, including errors.
+Independent jobs reload the same weights; global session serialization remains.
+This releases job-owned model resources without promising OS working-set shrinkage.
+Internal confidence describes a classifier result,
 not musical correctness. `KeyResult` exposes key name/confidence;
 the productive loader publishes key/status/error rather than a logits DTO.
 

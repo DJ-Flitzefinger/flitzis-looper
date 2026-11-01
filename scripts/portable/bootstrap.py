@@ -391,6 +391,33 @@ def check_ordinary_transport_api(native_module: object) -> None:
     assert callable(getattr(message_type, "feedback_kind", None)), (
         "Native ordinary transport API missing method: feedback_kind"
     )
+    check_offline_work_api(native_module)
+
+
+def check_offline_work_api(native_module: object) -> None:
+    """Reject stale heavy-work bindings through reflection before app startup."""
+    version = getattr(getattr(native_module, "AudioEngine", None), "OFFLINE_WORK_API_VERSION", None)
+    assert type(version) is int, "Native offline work API requires OFFLINE_WORK_API_VERSION=1"
+    assert version == 1, "Native offline work API requires OFFLINE_WORK_API_VERSION=1"
+    ticket = getattr(native_module, "OfflineWorkTicket", None)
+    assert isinstance(ticket, type), "Native offline work API missing type: OfflineWorkTicket"
+    getter = inspect.getattr_static(ticket, "active", None)
+    assert (
+        (isinstance(getter, property) and getter.fget is not None and getter.fset is None)
+        or inspect.isgetsetdescriptor(getter)
+        or inspect.ismemberdescriptor(getter)
+    ), "Native offline work API missing getter: active"
+    for method, names in (
+        ("try_acquire", ("self",)),
+        ("borrow", ("self",)),
+        ("run", ("self", "operation")),
+        ("close", ("self",)),
+    ):
+        implementation = getattr(ticket, method, None)
+        assert callable(implementation), f"Native offline work API missing method: {method}"
+        assert tuple(inspect.signature(implementation).parameters) == names, (
+            f"Native offline work API invalid signature: {method}"
+        )
 
 
 def check_pitch_action_api(native_module: object) -> None:

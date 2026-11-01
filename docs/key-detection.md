@@ -37,7 +37,7 @@ The CQT implementation is a Rust port of librosa's pipeline (extracted from the 
 - **Input shape**: `(1, 1, 104, T)` — batch, channels, frequency bins, time frames
 - **Output shape**: `(1, 24)` — logits for 24 Camelot keys
 - **Search paths**: exe dir → cwd → `assets/models/` → `models/` → `assets/`
-- **Session caching**: lazy-loaded via `OnceLock<Mutex<Option<Session>>>`
+- **Session lifetime**: loaded per inference call under a global serialization mutex, then released after input/output views finish
 
 The model was originally trained on the GiantSteps key dataset and exported from
 PyTorch with `torch.onnx.export` (opset 20, `dynamo=False`). Its training preprocessing
@@ -116,6 +116,6 @@ rust/crates/analysis/src/key_detection/
 ## Notes
 
 - All errors return `KeyError` variants without panicking
-- The ONNX session is cached globally — repeated calls on different audio reuse the same session
+- Each ONNX inference call owns and releases its session, including errors. Subsequent calls reload the same model; this trades session-loading cost for transient resource release and does not promise a particular OS working set.
 - The model handles variable-length input via GlobalAvgPool over the time dimension
 - Key naming uses sharps for some keys (F#, C#, G#, D#, A#).

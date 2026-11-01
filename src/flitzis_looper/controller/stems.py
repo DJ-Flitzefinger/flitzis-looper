@@ -4,7 +4,7 @@ import threading
 import wave
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Literal, cast
@@ -30,6 +30,7 @@ from flitzis_looper.controller.stem_admission import (
     StemAdmissionArbiter,
     StemAdmissionCandidate,
     StemAdmissionResult,
+    StemHeavyAdmission,
 )
 from flitzis_looper.controller.stem_batch_inventory import (
     StemBatchInventory,
@@ -192,6 +193,7 @@ class _RequestedStemPreparation:
 
     spec: StemPairPreparationSpec
     ready_sequence: int
+    heavy_work: StemHeavyAdmission = field(default_factory=StemHeavyAdmission)
 
 
 type _StemAdmissionOwner = (
@@ -431,6 +433,7 @@ class StemController(BaseController):  # noqa: PLR0904
             requested.owner.invalidate_all()
         self._requested_generations.clear()
         for preparation in self._requested_preparations.values():
+            preparation.heavy_work.close()
             owner = preparation.spec.binding.interest_owner if preparation.spec.binding else None
             if owner is not None:
                 owner.invalidate_all()
@@ -1631,6 +1634,7 @@ class StemController(BaseController):  # noqa: PLR0904
         for sample_id, preparation in tuple(self._requested_preparations.items()):
             binding = preparation.spec.binding
             if binding is not None and binding.interest_owner is owner:
+                preparation.heavy_work.close()
                 self._requested_preparations.pop(sample_id, None)
 
     @staticmethod
@@ -1642,7 +1646,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def _inference_admissible(self, job: StemGenerationJob) -> bool:
         # Generation has no proved whole-model live deadline bound. Cache lookup
         # and committed-stem preparation keep their existing independent lanes.
-        if self._session.active_sample_ids:
+        if self._job_playback_blocked(job):
             return False
         deferred = getattr(self, "_pair_deferred_sample_ids", ())
         if not any(
@@ -1658,6 +1662,14 @@ class StemController(BaseController):  # noqa: PLR0904
             for active in self._inference_jobs
             if active in self._jobs
             for active_job in (self._jobs[active],)
+        )
+
+    def _job_playback_blocked(self, job: StemGenerationJob) -> bool:
+        """Only this physical job's surviving requested PADs fence its work."""
+        return any(
+            row.sample_id in self._session.active_sample_ids
+            and _generation_interest_allows_preparation(row.interest_owner)
+            for row in job.subscribers()
         )
 
     def _stem_preparation_count(self) -> int:
@@ -1723,10 +1735,7 @@ class StemController(BaseController):  # noqa: PLR0904
         return tuple(candidates)
 
     def _poll_stem_admissions(self) -> None:
-        if self._session.active_sample_ids:
-            self._stem_playback_active.set()
-        else:
-            self._stem_playback_active.clear()
+        self._refresh_stem_playback()
         pool = self._stem_worker_pool
         if self._shutting_down:
             return
@@ -1734,13 +1743,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._start_waiting_generations()
             return
         self._expire_requested_generations()
-        deferred = getattr(self, "_pair_deferred_sample_ids", ())
-        for sample_id, row in tuple(self._requested_preparations.items()):
-            if sample_id not in deferred and not self._requested_preparation_current(row.spec):
-                binding = row.spec.binding
-                if binding is not None and binding.interest_owner is not None:
-                    binding.interest_owner.mark_failed("Original stem preparation changed")
-                self._requested_preparations.pop(sample_id, None)
+        self._withdraw_waiting_preparations()
         if not self._stem_admission_candidates():
             return
         resources = self._stem_resources.admission()
@@ -1751,6 +1754,47 @@ class StemController(BaseController):  # noqa: PLR0904
         self._stem_admission.run(
             self._stem_admission_candidates, pool.try_reserve, self._admit_stem_candidate
         )
+
+    def _refresh_stem_playback(self) -> None:
+        if self._session.active_sample_ids:
+            self._stem_playback_active.set()
+        else:
+            self._stem_playback_active.clear()
+        for job in tuple(self._jobs.values()):
+            if self._job_playback_blocked(job):
+                job.playback_blocked.set()
+            else:
+                job.playback_blocked.clear()
+            if job.request.cache_dir in self._waiting_jobs and not self._inference_admissible(job):
+                job.heavy_work.withdraw_waiting()
+
+    def _withdraw_waiting_preparations(self) -> None:
+        deferred = getattr(self, "_pair_deferred_sample_ids", ())
+        for delivery in tuple(self._pair_held_generation_events.values()):
+            if delivery.event.event_type != "success" and delivery.admission_route != "reuse":
+                continue
+            if not any(
+                row.sample_id not in deferred
+                and not self._pair_preparations.admission_pending(row.sample_id)
+                and self._stem_preparation_count() < STEM_WORKERS + STEM_QUEUED_JOBS
+                and self._generation_subscriber_current(row, delivery.job)
+                for row in delivery.remaining
+            ):
+                delivery.job.heavy_work.withdraw_waiting()
+        for sample_id, row in tuple(self._requested_preparations.items()):
+            if (
+                sample_id in deferred
+                or self._pair_preparations.admission_pending(sample_id)
+                or self._stem_preparation_count() >= STEM_WORKERS + STEM_QUEUED_JOBS
+                or not self._requested_preparation_current(row.spec)
+            ):
+                row.heavy_work.withdraw_waiting()
+            if sample_id not in deferred and not self._requested_preparation_current(row.spec):
+                binding = row.spec.binding
+                if binding is not None and binding.interest_owner is not None:
+                    binding.interest_owner.mark_failed("Original stem preparation changed")
+                row.heavy_work.close()
+                self._requested_preparations.pop(sample_id, None)
 
     def _admit_stem_candidate(
         self,
@@ -1768,6 +1812,8 @@ class StemController(BaseController):  # noqa: PLR0904
                 or owner.request.cache_dir not in self._waiting_jobs
                 or not self._inference_admissible(owner)
             ):
+                return "deferred"
+            if not owner.heavy_work.try_acquire():
                 return "deferred"
             self._waiting_jobs.discard(owner.request.cache_dir)
             return (
@@ -1830,6 +1876,7 @@ class StemController(BaseController):  # noqa: PLR0904
     ) -> StemAdmissionResult:
         spec = requested.spec
         if self._requested_preparations.get(spec.sample_id) is not requested:
+            requested.heavy_work.close()
             return "settled"
         if spec.sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
             return "deferred"
@@ -1839,6 +1886,7 @@ class StemController(BaseController):  # noqa: PLR0904
             binding = spec.binding
             if binding is not None and binding.interest_owner is not None:
                 binding.interest_owner.mark_failed("Original stem preparation changed")
+            requested.heavy_work.close()
             self._requested_preparations.pop(spec.sample_id, None)
             return "settled"
         if (
@@ -1846,17 +1894,32 @@ class StemController(BaseController):  # noqa: PLR0904
             or self._stem_preparation_count() >= STEM_WORKERS + STEM_QUEUED_JOBS
         ):
             return "deferred"
+        return self._submit_requested_preparation(requested, reservation)
+
+    def _submit_requested_preparation(
+        self, requested: _RequestedStemPreparation, reservation: StemWorkerReservation
+    ) -> StemAdmissionResult:
+        spec = requested.spec
+        work = None
         try:
-            self._pair_preparations.submit_reserved(spec, reservation)
+            if not requested.heavy_work.try_acquire():
+                return "deferred"
+            work = requested.heavy_work.transfer()
+            binding = replace(spec.binding or StemPairIntentBinding(), heavy_work=work)
+            self._pair_preparations.submit_reserved(replace(spec, binding=binding), reservation)
         except (OSError, RuntimeError, TypeError, ValueError) as error:
-            binding = spec.binding
-            if binding is not None and binding.interest_owner is not None:
-                binding.interest_owner.mark_failed(str(error))
+            original_binding = spec.binding
+            if original_binding is not None and original_binding.interest_owner is not None:
+                original_binding.interest_owner.mark_failed(str(error))
             self._session.stem_generation_errors[spec.sample_id] = (
                 f"Stem preparation admission failed: {error}"
             )
+            requested.heavy_work.close()
             self._requested_preparations.pop(spec.sample_id, None)
             return "settled"
+        finally:
+            if work is not None:
+                work.close()
         self._requested_preparations.pop(spec.sample_id, None)
         return "submitted"
 
@@ -1906,6 +1969,8 @@ class StemController(BaseController):  # noqa: PLR0904
         submitted = False
         try:
             if self._generation_subscriber_current(subscriber, delivery.job):
+                if not delivery.job.heavy_work.try_acquire():
+                    return "deferred"
                 with subscriber.retirement.activate():
                     submitted = self._submit_generation_preparation(
                         delivery, subscriber, reservation
@@ -1978,6 +2043,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 own_source_version=own.source_version,
                 artifact_source_version=entry.source_version,
                 interest_owner=subscriber.interest_owner,
+                heavy_work=job.heavy_work.borrow(),
             ),
             reservation=reservation,
         )
@@ -2880,8 +2946,9 @@ class StemController(BaseController):  # noqa: PLR0904
     def stem_generation_stage(self, sample_id: int) -> str | None:
         """Return the last reported stem generation stage for a pad."""
         validate_sample_id(sample_id)
-        if self._session.active_sample_ids and any(
+        if any(
             (job := self._jobs.get(path)) is not None
+            and self._job_playback_blocked(job)
             and any(row.sample_id == sample_id for row in job.subscribers())
             for path in self._waiting_jobs
         ):
@@ -3514,7 +3581,7 @@ class StemController(BaseController):  # noqa: PLR0904
             if not job.subscribers():
                 self._discard_generation_artifacts(job.request.sample_id, path)
                 continue
-            if not self._inference_admissible(job):
+            if not self._inference_admissible(job) or not job.heavy_work.try_acquire():
                 continue
             self._waiting_jobs.discard(path)
             self._schedule_stem_job(job)
@@ -3945,6 +4012,8 @@ class StemController(BaseController):  # noqa: PLR0904
         elif self._stem_worker_pool is not None:
             previous = self._requested_preparations.get(sample_id)
             if previous is None or not self._requested_preparation_current(previous.spec):
+                if previous is not None:
+                    previous.heavy_work.close()
                 self._requested_preparations[sample_id] = _RequestedStemPreparation(
                     spec, self._next_stem_readiness()
                 )
@@ -4890,6 +4959,22 @@ class StemController(BaseController):  # noqa: PLR0904
         )
 
     def _run_stem_backend(self, job: StemGenerationJob) -> None:
+        if job.phase == "disposed":
+            self._put_generation_event(self._settled_job_event(job))
+            return
+        try:
+            job.heavy_work.run(lambda: self._run_stem_backend_owned(job))
+        except RuntimeError, ValueError:
+            self._settle_stem_admission_failure(job)
+
+    def _settle_stem_admission_failure(self, job: StemGenerationJob) -> None:
+        if job.phase != "disposed":
+            job.finish_read()
+        self._put_generation_event(
+            self._settled_job_event(job, error="Stem heavy admission ended before execution")
+        )
+
+    def _run_stem_backend_owned(self, job: StemGenerationJob) -> None:
         source_lease = job.begin()
         if source_lease is None:
             self._put_generation_event(self._settled_job_event(job))
@@ -4938,7 +5023,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 job.cancel_event,
                 directory=request.cache_dir,
                 resources=self._stem_resources,
-                playback=self._stem_playback_active,
+                playback=job.playback_blocked,
             ):
                 result = self._stem_backend.generate(
                     request, StemExecutionProgress(report_progress)
@@ -5048,6 +5133,8 @@ class StemController(BaseController):  # noqa: PLR0904
         if requested is not None:
             requested.owner.invalidate_all()
         preparation = self._requested_preparations.pop(sample_id, None)
+        if preparation is not None:
+            preparation.heavy_work.close()
         binding = preparation.spec.binding if preparation is not None else None
         if binding is not None and binding.interest_owner is not None:
             binding.interest_owner.invalidate_all()

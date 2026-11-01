@@ -409,7 +409,15 @@ pub(super) fn analyze_with_range(
         let probe = Python::attach(|py| Py::new(py, AnalysisCancellation(cancellation.clone())))
             .map_err(|e| e.to_string())?.into_any();
         let (beat, key_outcome) = std::thread::scope(|scope| {
-            let beat = scope.spawn(|| invoke_worker(source, identity, path_text, &context.installation, probe));
+            let whole_job = super::heavy_work::current();
+            let installation = &context.installation;
+            let beat = scope.spawn(move || {
+                let run = || invoke_worker(source, identity, path_text, installation, probe);
+                match whole_job {
+                    Some(owner) => owner.with_current(run).map_err(str::to_owned)?,
+                    None => run(),
+                }
+            });
             let key = optional_key(&admission, tempo_only, || {
                 let mut key_reader = file.try_clone().map_err(|e| e.to_string())?;
                 key_reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;

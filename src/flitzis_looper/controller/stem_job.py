@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 from flitzis_looper.constants import NUM_SAMPLES
+from flitzis_looper.controller.stem_admission import StemHeavyAdmission
 from flitzis_looper.controller.stem_identity import request_fingerprint, request_signature
 
 if TYPE_CHECKING:
@@ -279,6 +280,8 @@ class StemGenerationJob:
             raise
         self._lock = threading.Lock()
         self.cancel_event = threading.Event()
+        self.playback_blocked = threading.Event()
+        self.heavy_work = StemHeavyAdmission(self.cancel_event)
         self._cancelled = False
         self._running = False
         self._disposed = False
@@ -672,3 +675,4 @@ class StemGenerationJob:
                 self.request.cache_dir, recursive=True, lease=self._generation_lease
             )
         self.retirement.close()
+        self.heavy_work.retire()

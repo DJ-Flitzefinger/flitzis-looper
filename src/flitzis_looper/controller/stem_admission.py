@@ -1,10 +1,14 @@
 """Transient fair admission into the existing bounded offline stem worker pool."""
 
 from dataclasses import dataclass
+from threading import RLock
 from typing import TYPE_CHECKING, Literal
+
+from flitzis_looper_audio import OfflineWorkTicket
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from threading import Event
 
     from flitzis_looper.controller.stem_workers import StemWorkerReservation
 
@@ -22,6 +26,79 @@ STEM_ADMISSION_LANES: tuple[StemAdmissionLane, ...] = (
     ("batch", "prepare"),
 )
 STEM_ADMISSION_GRANTS_PER_POLL = len(STEM_ADMISSION_LANES)
+
+
+class StemHeavyAdmission:
+    """Lazy waiting capacity attached to an existing original request, not a job queue."""
+
+    def __init__(self, cancel: Event | None = None) -> None:
+        self._ticket: OfflineWorkTicket | None = None
+        self._cancel = cancel
+        self._retired = False
+        self._lock = RLock()
+
+    @property
+    def registered(self) -> bool:
+        """Whether this original metadata/physical owner still retains capacity."""
+        with self._lock:
+            return self._ticket is not None
+
+    def try_acquire(self) -> bool:
+        """Register only after all non-resource eligibility checks pass."""
+        with self._lock:
+            if self._retired or (self._cancel is not None and self._cancel.is_set()):
+                return False
+            if self._ticket is None:
+                self._ticket = OfflineWorkTicket()
+            return self._ticket.try_acquire()
+
+    def borrow(self) -> OfflineWorkTicket:
+        """Give submitted preparation its independent active owner handle."""
+        with self._lock:
+            if self._ticket is None:
+                message = "Stem preparation heavy work has not been admitted"
+                raise RuntimeError(message)
+            return self._ticket.borrow()
+
+    def run[T](self, operation: Callable[[], T]) -> T:
+        """Install a lexical borrow without retaining the carrier's control lock."""
+        work = self.borrow()
+        try:
+            return work.run(operation)
+        finally:
+            work.close()
+
+    def transfer(self) -> OfflineWorkTicket:
+        """Move capacity to submitted work; retained request metadata owns none."""
+        with self._lock:
+            ticket = self._ticket
+            self._ticket = None
+            if ticket is None:
+                message = "Stem preparation heavy work has not been admitted"
+                raise RuntimeError(message)
+            try:
+                return ticket.borrow()
+            finally:
+                ticket.close()
+
+    def close(self) -> None:
+        """Explicitly retire an unsubmitted or rejected metadata request."""
+        with self._lock:
+            if self._ticket is not None:
+                self._ticket.close()
+                self._ticket = None
+
+    def retire(self) -> None:
+        """Prevent a disposed physical job from ever registering another ticket."""
+        with self._lock:
+            self._retired = True
+            self.close()
+
+    def withdraw_waiting(self) -> None:
+        """An ineligible metadata request must not strand the common FIFO front."""
+        with self._lock:
+            if self._ticket is not None and not self._ticket.active:
+                self.close()
 
 
 @dataclass(frozen=True, slots=True)

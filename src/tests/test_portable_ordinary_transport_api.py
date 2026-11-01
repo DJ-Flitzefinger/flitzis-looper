@@ -42,6 +42,10 @@ def _admission(self: object, admission: object) -> Never:
     _forbidden()
 
 
+def _operation(self: object, operation: object) -> Never:
+    _forbidden()
+
+
 def ordinary_transport_native_module(engine_base: type = object) -> SimpleNamespace:
     """Return reflection-only current capabilities for complete-runtime preflight fixtures."""
     admission = type(
@@ -78,6 +82,12 @@ def ordinary_transport_native_module(engine_base: type = object) -> SimpleNamesp
         | {"__init__": _forbidden, "feedback_kind": _self},
     )
     return SimpleNamespace(
+        OfflineWorkTicket=type(
+            "OfflineWorkTicket",
+            (),
+            {"__init__": _forbidden, "active": property(_self), "run": _operation}
+            | dict.fromkeys(("try_acquire", "borrow", "close"), _self),
+        ),
         ExplicitPlaybackTarget=type(
             "ExplicitPlaybackTarget",
             (),
@@ -98,6 +108,7 @@ def ordinary_transport_native_module(engine_base: type = object) -> SimpleNamesp
             {
                 "__init__": _forbidden,
                 "ORDINARY_TRANSPORT_API_VERSION": 3,
+                "OFFLINE_WORK_API_VERSION": 1,
                 "current_explicit_playback_target": _self,
                 "stop_explicit_playback": _self,
                 "pause_sample": _pad,
@@ -120,6 +131,14 @@ def _check(native: object) -> None:
 
 def test_complete_ordinary_transport_interface_is_reflected_without_native_work() -> None:
     _check(ordinary_transport_native_module())
+
+
+@pytest.mark.parametrize("missing", ["try_acquire", "borrow", "run", "close", "active"])
+def test_stale_offline_work_binding_is_rejected_before_native_work(missing: str) -> None:
+    native = ordinary_transport_native_module()
+    delattr(native.OfflineWorkTicket, missing)
+    with pytest.raises(AssertionError, match="Native offline work API"):
+        _check(native)
 
 
 @pytest.mark.parametrize("version", [None, False, True, 0, 1, 2, 4, 3.0, "3"])

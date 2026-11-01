@@ -305,7 +305,7 @@ impl StemPairPreparationWork {
         let cache_dir = cache_dir.to_owned();
         let descriptor_reference = descriptor_reference.map(str::to_owned);
         let artifact_source_version = artifact_source_version.map(str::to_owned);
-        lane.execute_owned(
+        lane.execute_heavy_owned_until_terminal(
             || shutdown.load(Ordering::Acquire) || !publication.current(),
             move || {
                 self.prepare_inner(

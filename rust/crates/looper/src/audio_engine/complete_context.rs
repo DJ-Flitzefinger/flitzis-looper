@@ -562,7 +562,7 @@ fn start_analysis_with(
     let shutdown = engine.cold_cancelled.clone();
     engine
         .cold_jobs
-        .submit(reservation, move || {
+        .submit_heavy(reservation, move || {
             let _task_guard = task_guard;
             after_admission(automatic_bpm_range);
             let cancelled = || {

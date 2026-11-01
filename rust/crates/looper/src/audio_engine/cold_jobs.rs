@@ -16,8 +16,19 @@ pub(super) const QUEUED_JOBS: usize = 32;
 pub(super) const PCM_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 type Job = Box<dyn FnOnce() + Send>;
 struct AdmittedJob {
-    job: Job,
-    reservation: Reservation,
+    job: Option<Job>,
+    reservation: Option<Reservation>,
+    heavy: Option<super::heavy_work::Ticket>,
+}
+
+impl Drop for AdmittedJob {
+    fn drop(&mut self) {
+        // Queued cancellation and worker unwind retire captured physical owners
+        // before making either admission visible as free. Never under a lock.
+        drop(self.job.take());
+        drop(self.reservation.take());
+        drop(self.heavy.take());
+    }
 }
 
 #[derive(Default)]
@@ -81,6 +92,32 @@ impl ColdJobsHandle {
         reservation: Reservation,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
+        self.submit_classified(reservation, job, None)
+    }
+
+    pub(super) fn submit_heavy(
+        &self,
+        reservation: Reservation,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        let ticket = match super::heavy_work::current() {
+            Some(owner) => owner,
+            None => super::heavy_work::ticket()?,
+        };
+        self.submit_classified(reservation, job, Some(ticket))
+    }
+
+    fn submit_classified(
+        &self,
+        reservation: Reservation,
+        job: impl FnOnce() + Send + 'static,
+        heavy: Option<super::heavy_work::Ticket>,
+    ) -> Result<(), String> {
+        let admitted = AdmittedJob {
+            job: Some(Box::new(job)),
+            reservation: Some(reservation),
+            heavy,
+        };
         let mut state = self
             .shared
             .state
@@ -90,10 +127,7 @@ impl ColdJobsHandle {
             drop(state);
             return Err("cold lane stopped".into());
         }
-        state.jobs.push_back(AdmittedJob {
-            job: Box::new(job),
-            reservation,
-        });
+        state.jobs.push_back(admitted);
         self.shared.ready.notify_one();
         Ok(())
     }
@@ -104,7 +138,7 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        self.execute_owned_delivery(cancelled, operation, false)
+        self.execute_owned_delivery(cancelled, operation, false, false)
     }
 
     /// After admission, cancellation is sticky but never certifies an outstanding kernel as
@@ -115,7 +149,15 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        self.execute_owned_delivery(cancelled, operation, true)
+        self.execute_owned_delivery(cancelled, operation, true, false)
+    }
+
+    pub(super) fn execute_heavy_owned_until_terminal<T: Send + 'static>(
+        &self,
+        cancelled: impl Fn() -> bool,
+        operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        self.execute_owned_delivery(cancelled, operation, true, true)
     }
 
     fn waiting_error(
@@ -154,12 +196,22 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
         await_terminal: bool,
+        heavy: bool,
     ) -> Result<T, String> {
         if cancelled() {
             return Err("cold preparation proposal cancelled before admission".into());
         }
-        if ON_WORKER.with(Cell::get) == Arc::as_ptr(&self.shared) as usize {
-            let result = operation();
+        let borrowed_heavy = heavy && super::heavy_work::current().is_some();
+        if borrowed_heavy || ON_WORKER.with(Cell::get) == Arc::as_ptr(&self.shared) as usize {
+            if heavy && super::heavy_work::current().is_none() {
+                return Err("heavy nested preparation has no admitted owner".into());
+            }
+            // The same physical job already occupies a bounded offline worker.
+            // Its continuation must not reserve behind independent heavy jobs
+            // that cannot run until this owner retires (including a full queue).
+            self.ensure_open()?;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+                .unwrap_or_else(|_| Err("cold preparation worker failed".into()));
             if await_terminal && let Some(error) = self.waiting_error(&cancelled, await_terminal) {
                 drop(result);
                 return Err(error.into());
@@ -167,6 +219,14 @@ impl ColdJobsHandle {
             return result;
         }
         let reservation = reserve_shared(&self.shared)?;
+        let heavy = if heavy {
+            Some(match super::heavy_work::current() {
+                Some(owner) => owner,
+                None => super::heavy_work::ticket()?,
+            })
+        } else {
+            None
+        };
         let (sender, receiver) = mpsc::sync_channel(1);
         {
             let mut state = self
@@ -184,7 +244,7 @@ impl ColdJobsHandle {
                 sender: Some(sender),
             };
             state.jobs.push_back(AdmittedJob {
-                job: Box::new(move || {
+                job: Some(Box::new(move || {
                     let mut delivery = delivery;
                     #[cfg(test)]
                     let _observation =
@@ -201,8 +261,9 @@ impl ColdJobsHandle {
                         .take()
                         .expect("owned delivery is unique")
                         .send(result);
-                }),
-                reservation,
+                })),
+                reservation: Some(reservation),
+                heavy,
             });
             self.shared.ready.notify_one();
         }
@@ -331,32 +392,59 @@ impl ColdJobs {
                     .name(format!("cold-source-{index}"))
                     .spawn(move || {
                         loop {
-                            let job = {
+                            let mut job = {
                                 let Ok(mut state) = shared.state.lock() else {
                                     return;
                                 };
-                                while state.jobs.is_empty() && !state.stopped {
-                                    let Ok(next) = shared.ready.wait(state) else {
+                                loop {
+                                    if state.stopped {
+                                        return;
+                                    }
+                                    let eligible = state.jobs.iter().position(|job| {
+                                        job.heavy.as_ref().is_none_or(|ticket| {
+                                            // Error retires the queued callable below; it
+                                            // never runs without an active capability.
+                                            ticket.try_acquire().unwrap_or(true)
+                                        })
+                                    });
+                                    if let Some(index) = eligible {
+                                        let job =
+                                            state.jobs.remove(index).expect("eligible bounded job");
+                                        state.active += 1;
+                                        job.reservation
+                                            .as_ref()
+                                            .expect("reserved job")
+                                            .mark_running();
+                                        break job;
+                                    }
+                                    // A Python owner releases the same native gate without
+                                    // touching this queue. Wait off realtime, with no worker
+                                    // occupied by a blocked heavy callable; ordinary work
+                                    // can still become eligible on either existing worker.
+                                    let Ok((next, _)) =
+                                        shared.ready.wait_timeout(state, Duration::from_millis(20))
+                                    else {
                                         return;
                                     };
                                     state = next;
                                 }
-                                if state.stopped {
-                                    return;
-                                }
-                                {
-                                    let job =
-                                        state.jobs.pop_front().expect("nonempty bounded queue");
-                                    state.active += 1;
-                                    job.reservation.mark_running();
-                                    job
-                                }
                             };
                             // A panic retires the reservation and does not destroy a worker slot.
                             ON_WORKER.with(|worker| worker.set(Arc::as_ptr(&shared) as usize));
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.job));
+                            let operation = job.job.take().expect("unique cold callable");
+                            if let Some(ticket) = &job.heavy {
+                                let _ = ticket.with_current(|| {
+                                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                        operation,
+                                    ));
+                                });
+                            } else {
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                    operation,
+                                ));
+                            }
                             ON_WORKER.with(|worker| worker.set(0));
-                            drop(job.reservation);
+                            drop(job);
                         }
                     })?,
             );
@@ -395,6 +483,27 @@ impl ColdJobs {
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         self.handle().submit(reservation, job)
+    }
+
+    pub(super) fn submit_heavy(
+        &self,
+        reservation: Reservation,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        self.handle().submit_heavy(reservation, job)
+    }
+
+    pub(super) fn submit_analysis(
+        &self,
+        reservation: Reservation,
+        analysis: bool,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        if analysis {
+            self.submit_heavy(reservation, job)
+        } else {
+            self.submit(reservation, job)
+        }
     }
 
     /// Close worker claims before releasing active jobs through cancellation.
@@ -456,6 +565,159 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn queued_heavy_work_leaves_ordinary_workers_available_and_drops_before_successor() {
+        let gate = Arc::new(super::super::heavy_work::Gate::default());
+        let held = gate.ticket().unwrap();
+        assert!(held.try_acquire().unwrap());
+        let mut lane = ColdJobs::new().unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        struct Reader(Arc<AtomicBool>);
+        impl Drop for Reader {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let reader = Reader(dropped.clone());
+        let (first_tx, first_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        lane.handle()
+            .submit_classified(
+                lane.reserve().unwrap(),
+                move || {
+                    let _reader = reader;
+                    first_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                },
+                Some(gate.ticket().unwrap()),
+            )
+            .unwrap();
+        let (next_tx, next_rx) = mpsc::channel();
+        lane.handle()
+            .submit_classified(
+                lane.reserve().unwrap(),
+                move || {
+                    assert!(
+                        dropped.load(Ordering::Acquire),
+                        "prior captured reader is still alive"
+                    );
+                    next_tx.send(()).unwrap();
+                },
+                Some(gate.ticket().unwrap()),
+            )
+            .unwrap();
+        let (ordinary_tx, ordinary_rx) = mpsc::channel();
+        lane.submit(lane.reserve().unwrap(), move || {
+            ordinary_tx.send(()).unwrap();
+        })
+        .unwrap();
+        ordinary_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(first_rx.try_recv().is_err());
+        drop(held);
+        first_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(next_rx.try_recv().is_err());
+        release_tx.send(()).unwrap();
+        next_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        lane.shutdown();
+        assert_eq!(lane.counts_for_test(), (0, 0, 0));
+    }
+
+    #[test]
+    fn explicit_same_job_preparation_borrows_without_readmitting_or_starving() {
+        let gate = Arc::new(super::super::heavy_work::Gate::default());
+        let owner = gate.ticket().unwrap();
+        assert!(owner.try_acquire().unwrap());
+        let successor = gate.ticket().unwrap();
+        let mut lane = ColdJobs::new().unwrap();
+        let handle = lane.handle();
+        let nested = handle.clone();
+        let (tx, rx) = mpsc::channel();
+        handle
+            .submit_classified(
+                lane.reserve().unwrap(),
+                move || {
+                    assert!(super::super::heavy_work::current().is_some());
+                    let value = nested
+                        .execute_heavy_owned_until_terminal(|| false, || Ok(42))
+                        .unwrap();
+                    tx.send(value).unwrap();
+                },
+                Some(owner.clone()),
+            )
+            .unwrap();
+        drop(owner);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+        lane.shutdown();
+        assert!(successor.try_acquire().unwrap());
+    }
+
+    #[test]
+    fn active_external_job_continues_even_when_independent_heavy_queue_is_full() {
+        let gate = Arc::new(super::super::heavy_work::Gate::default());
+        let owner = gate.ticket().unwrap();
+        assert!(owner.try_acquire().unwrap());
+        let mut lane = ColdJobs::new().unwrap();
+        for _ in 0..QUEUED_JOBS {
+            lane.handle()
+                .submit_classified(lane.reserve().unwrap(), || {}, Some(gate.ticket().unwrap()))
+                .unwrap();
+        }
+        assert!(lane.reserve().is_err());
+        let handle = lane.handle();
+        let caller = std::thread::current().id();
+        owner
+            .with_current(|| {
+                assert_eq!(
+                    handle
+                        .execute_heavy_owned_until_terminal(
+                            || false,
+                            move || {
+                                assert_eq!(std::thread::current().id(), caller);
+                                Ok(42)
+                            }
+                        )
+                        .unwrap(),
+                    42
+                );
+                assert!(
+                    handle
+                        .execute_heavy_owned_until_terminal::<()>(
+                            || false,
+                            || panic!("controlled same-owner continuation panic"),
+                        )
+                        .is_err()
+                );
+                struct Reader(Arc<AtomicBool>);
+                impl Drop for Reader {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::Release);
+                    }
+                }
+                let retired = Arc::new(AtomicBool::new(false));
+                let reader = Reader(retired.clone());
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let cancel_during_work = cancelled.clone();
+                assert!(
+                    handle
+                        .execute_heavy_owned_until_terminal(
+                            || cancelled.load(Ordering::Acquire),
+                            move || {
+                                cancel_during_work.store(true, Ordering::Release);
+                                Ok(reader)
+                            },
+                        )
+                        .is_err()
+                );
+                assert!(retired.load(Ordering::Acquire));
+                assert!(super::super::heavy_work::current().is_some());
+            })
+            .unwrap();
+        assert_eq!(lane.counts_for_test(), (0, QUEUED_JOBS, QUEUED_JOBS));
+        lane.shutdown();
+        drop(owner);
+        assert_eq!(lane.counts_for_test(), (0, 0, 0));
+    }
 
     #[test]
     fn shutdown_and_drop_release_python_for_live_worker_retirement() {

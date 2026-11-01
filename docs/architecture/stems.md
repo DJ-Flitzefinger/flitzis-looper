@@ -38,23 +38,29 @@ policy below. This lease grants no assignment, accepted timing, resident-window 
 publication authority. Worker completion and borrowed reader retirement are both
 required before cleanup, including cancelled/obsolete results.
 
-Heavy stem generation and analysis children share one resource permit on their
-existing offline supervisors. The two-worker/32-queue stem pool and original
-single-analysis admission remain job authorities. An admitted analysis waits
-cancellably for heavy capacity; contention cannot count as a numerical failure
-or select approximate BPM. Native KeyNet's local ORT session uses one intra-op
-and one inter-op thread; its existing parallel analysis branch remains separate.
+Heavy stem generation and complete BPM/Key analysis share one native FIFO
+permission above their existing offline queues. It covers both analysis branches
+and the generation-to-pair-preparation handoff through actual transient retirement.
+The two-worker/32-queue stem pool and original Native analysis owners remain job
+authorities; ordinary Cold playback preparation can progress while heavy work waits.
+Beat child duplicate admission remains subordinate and never holds its guard while
+waiting for a later heavy ticket. Contention cannot count as a numerical failure
+or select approximate BPM. KeyNet's job-owned ORT session uses one intra-op and
+one inter-op thread; the branches within one admitted analysis may still overlap.
 Child environments bound numerical pools before imports, separator children
 verify effective Torch counts before model work, and FFmpeg decoder/encoder/filter
 pools are explicitly bounded. App-global numerical settings are unchanged.
 
-New inference displays **Waiting for playback to stop** while the existing active
-PAD projection is nonempty. Saved-set lookup and component preparation retain
-their separate lanes. If playback becomes active during generation, the existing
-control poll requests an explicit playback-headroom failure; the user can retry
-after playback stops. This never stops an active PAD. Observation and cooperative
+New inference displays **Waiting for playback to stop** while a current requested
+subscriber PAD is active. A stopped target can be processed while unrelated PADs
+play, subject to actual resource admission. Saved-set lookup retains its separate
+lane; heavy pair preparation participates in the common permission. If a current
+requested subscriber starts during generation, the control poll requests an
+explicit playback-headroom failure; the user can retry after that PAD stops.
+Provider calibration separately excludes playback. This never stops an active PAD.
+Observation and cooperative
 abort/forced tree retirement have a finite tail: this is not zero-overlap or
-device-deadline proof. A second admitted worker reports **Waiting for background
+device-deadline proof. A waiting job reports **Waiting for background
 resources** rather than a completed execution device.
 
 On Windows, before child activation an enforced Job commit ceiling is promised

@@ -271,8 +271,12 @@ def test_timeout_crash_and_output_flood_reap_before_releasing_resources(
     assert list(configuration.scratch_dir.glob("beat-request-*")) == []
 
 
+@pytest.mark.parametrize("reuse_adapter", [False, True])
 def test_cancellation_reaps_worker_and_busy_request_cannot_start_a_second_process(
-    prepared: tuple[WorkerConfiguration, BeatWorkerRequest], monkeypatch: pytest.MonkeyPatch
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reuse_adapter: bool,
 ) -> None:
     configuration, request = prepared
     configuration.script.write_text(_WORKER_HEADER + "time.sleep(60)", encoding="utf-8")
@@ -284,8 +288,10 @@ def test_cancellation_reaps_worker_and_busy_request_cannot_start_a_second_proces
         try:
             _wait_started(request)
             assert not adapter.retired.is_set()
-            busy = executor.submit(BeatWorkerAdapter(configuration).run, request, Event()).result(5)
+            duplicate = adapter if reuse_adapter else BeatWorkerAdapter(configuration)
+            busy = executor.submit(duplicate.run, request, Event()).result(5)
             assert busy.reason == "worker_busy"
+            assert not adapter.retired.is_set()
             assert len(processes) == 1
         finally:
             cancel.set()
@@ -320,7 +326,7 @@ def test_stem_contention_waits_without_degrading_a_valid_analysis(
     processes = _record_processes(monkeypatch)
     adapter = BeatWorkerAdapter(configuration)
     cancel = Event()
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         with process.offline_work_scope(Event()):
             pending = executor.submit(adapter.run, request, cancel)
             deadline = time.monotonic() + 10
@@ -329,6 +335,9 @@ def test_stem_contention_waits_without_degrading_a_valid_analysis(
                 Event().wait(0.005)
             assert not pending.done()
             assert processes == []
+            duplicate = executor.submit(adapter.run, request, Event()).result(5)
+            assert duplicate.reason == "worker_busy"
+            assert not adapter.retired.is_set()
             if cancel_waiter:
                 cancel.set()
                 result = pending.result(5)
@@ -505,10 +514,14 @@ def test_failed_process_start_keeps_temporary_resource_slot_during_cleanup(
         msg = "fixture process allocation failure"
         raise OSError(msg)
 
-    def release(temporary: TemporaryDirectory[str], retired: Event) -> bool:
+    def release(
+        temporary: TemporaryDirectory[str],
+        retired: Event,
+        whole_work: process.OfflineWorkTicket | None = None,
+    ) -> bool:
         if not release_cleanup.is_set():
             return False
-        return real_release(temporary, retired)
+        return real_release(temporary, retired, whole_work)
 
     monkeypatch.setattr(process, "_start", fail_start)
     monkeypatch.setattr(process, "_release_temporary", release)

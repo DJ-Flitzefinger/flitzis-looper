@@ -3,7 +3,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
-from threading import Event, current_thread, main_thread
+from threading import Event, Lock, current_thread, main_thread
 from typing import TYPE_CHECKING
 
 from flitzis_looper.analysis.contracts import (
@@ -61,12 +61,21 @@ class BeatWorkerAdapter:
         self._limits = limits or WorkerLimits()
         self.retired = Event()
         self.retired.set()
+        self._run_lock = Lock()
 
     def run(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult:
         """Return an independent outcome after teardown, or explicit retiring ownership."""
         if current_thread() is main_thread():
             msg = "beat analysis must run on a background supervisor"
             raise RuntimeError(msg)
+        if not self._run_lock.acquire(blocking=False):
+            return self._result(request, "failed", "worker_busy")
+        try:
+            return self._run_owned(request, cancel)
+        finally:
+            self._run_lock.release()
+
+    def _run_owned(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult:
         if cancel.is_set():
             return self._result(request, "cancelled", "cancelled")
         try:
@@ -176,6 +185,16 @@ class BeatWorkerAdapter:
         if current_thread() is main_thread():
             msg = "beat analysis must run on a background supervisor"
             raise RuntimeError(msg)
+        if not self._run_lock.acquire(blocking=False):
+            return CudaBeatComponentResult(request.identity, request.model, "failed", "worker_busy")
+        try:
+            return self._run_cuda_owned(request, cancel)
+        finally:
+            self._run_lock.release()
+
+    def _run_cuda_owned(
+        self, request: CudaBeatWorkerRequest, cancel: Event
+    ) -> CudaBeatComponentResult:
         if cancel.is_set():
             return CudaBeatComponentResult(
                 request.identity, request.model, "cancelled", "cancelled"
