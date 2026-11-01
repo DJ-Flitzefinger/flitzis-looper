@@ -787,6 +787,15 @@ def run_process(
         return ProcessResult("cancelled")
 
 
+def _beat_response_reader(owned: _OwnedProcess, limit: int) -> _ResponseReader:
+    if owned.process.stdout is None:
+        message = "worker stdout pipe was not created"
+        raise RuntimeError(message)
+    reader = _ResponseReader(owned.process.stdout, limit)
+    owned.add_reader(reader)
+    return reader
+
+
 def _run_process_admitted(
     command: WorkerCommand,
     request: bytes,
@@ -829,16 +838,16 @@ def _run_process_admitted(
         process = _start(command, request_path)
     except OSError, RuntimeError:
         return _start_failed(temporary, retired, whole_work)
-    if process.stdout is None:
-        msg = "worker stdout pipe was not created"
-        raise RuntimeError(msg)
-    reader = _ResponseReader(process.stdout, limits.max_response_bytes)
-    owned = _OwnedProcess(process, reader, temporary, retired, whole_work=whole_work)
+    owned = _OwnedProcess(process, None, temporary, retired, whole_work=whole_work)
+    reason = "worker_supervision_failed"
     try:
+        reader = _beat_response_reader(owned, limits.max_response_bytes)
         if isinstance(process, _WorkerProcess):
             process.activate()
         reader.thread.start()
         reason = _monitor(owned, cancel, limits)
     except OSError, RuntimeError:
         reason = "worker_supervision_failed"
-    return _finish(owned, reason, limits)
+    finally:
+        outcome = _finish(owned, reason, limits)
+    return outcome

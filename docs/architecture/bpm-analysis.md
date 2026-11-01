@@ -55,6 +55,12 @@ source/content/request ownership. Complete conversion validates finite data,
 extent, resampler delay trim and tail; zero-output padding is not automatically
 evidence that no progress is possible.
 
+The Beat supervisor claims its child before inspecting stdout or constructing an
+output reader. Reader setup failure, including a propagated allocation error,
+still finishes the owned process path. Delayed tree, reader or temporary cleanup
+retains the same heavy-work permission and Beat slots until actual retirement;
+a failure result or exception alone cannot release that custody.
+
 ## Constant-tempo selection
 
 The productive first policy is `neural-stable-regions-v4`, not the scientific

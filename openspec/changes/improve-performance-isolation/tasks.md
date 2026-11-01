@@ -654,7 +654,21 @@ nativeREST45; FINAL47 retains ENTIRE former FINAL46 without omissions. Immutable
 identity, relationships across separate roots, complete-host compiled plans,
 native process/model/CUDA, quality and distribution evidence remain separate.
 
-## 46. Remaining native parity before cutover
+## 46. Retain Beat child custody through early output setup failure
+
+- [x] Reproduce reader construction and missing-stdout failures after actual
+      child creation, retaining precise failed ownership observations.
+- [x] Establish the process owner before reader setup and always execute its
+      finish path, including unexpected exceptions that continue to propagate.
+- [x] Verify reader allocation/start failures, delayed retirement, unchanged
+      source PCM, blocked FIFO successors and successful fresh Beat admission.
+
+This practical lifecycle correction grows the plan to48. NativeREST47 retains
+ENTIRE former nativeREST46; FINAL48 retains ENTIRE former FINAL47 without
+omissions. Both complete host manifests, native process/model/CUDA, full quality
+and distribution evidence retain their separate open gates.
+
+## 47. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -671,10 +685,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP47, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP48, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 47. Combined regression and final architecture review
+## 48. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

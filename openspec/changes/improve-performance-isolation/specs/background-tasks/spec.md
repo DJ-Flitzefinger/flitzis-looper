@@ -327,6 +327,13 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 - **AND** a fixed8GiB machine assumption does not impose an additional global ceiling
 - **AND** original geometry, numerical quality and failure/retirement guards remain unchanged
 
+#### Scenario: Beat output setup fails after its child exists
+- **GIVEN** an admitted Beat worker has created its child process
+- **WHEN** stdout validation or output-reader construction fails, or an unexpected setup or supervision exception propagates
+- **THEN** the existing process owner still terminates and reaps the child and settles its readers
+- **AND** temporary storage, Beat slots and the same heavy-work permission remain owned until actual retirement, including delayed cleanup
+- **AND** another heavy job cannot start early, while a fresh Beat request can run after the failed attempt's resources retire
+
 #### Scenario: Other PADs play while stems are generated for a stopped PAD
 - **GIVEN** the requested stem PAD is stopped and resource admission permits background work
 - **WHEN** other PADs play or the performer operates their START/STOP controls

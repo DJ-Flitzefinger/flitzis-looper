@@ -4988,3 +4988,49 @@ Final verification reruns the five affected generated-field refusal cases plus
 all four static/index checks; other product results remain source-compatible.
 The isolated Release/API setup retained22 known Rust warnings and unchanged
 einops0.6.1; no neural/device/whole-quality or installed-footprint claim follows.
+
+## STEP46 impact: retain Beat custody before output setup
+
+Two precise failures reproduced on unchanged source in0.70s. A real isolated
+Beat child already existed when output-thread construction refused or stdout was
+absent; each exception escaped with retirement unset, the child still alive and
+its temporary request retained. The private red probe explicitly retired only its
+own fixtures afterward and proved the common FIFO could be reacquired.
+
+The Beat path now creates its existing process owner immediately after child
+creation. Stdout validation, reader construction/attachment, child activation,
+thread start and supervision run inside its guarded setup. The finish path runs
+in finally with a default supervision-failure reason, including when an unexpected
+allocation exception continues to propagate. This reuses the existing owned
+command and asynchronous retirement components rather than adding a new owner,
+queue or cleanup deadline. CPU and CUDA Beat adapters share the corrected path.
+
+Frozen verification covers constructor RuntimeError/OSError/MemoryError, missing
+stdout, an unexpected monitor error after reader start, and delayed temporary
+cleanup under both returned failure and propagated exception. The latter retains
+the original Beat slots and common Native FIFO borrow until actual tree/reader/
+temporary retirement, then proves a fresh successful request. Original source
+PCM remains unchanged. Existing thread-start, command/tree/readers, cancellation,
+heavy FIFO and stem-command regressions remain relevant. Systems PRE and Methods
+PRE approved this focused correction; frozen Systems POST and one independent
+actual-diff review precede publication.
+
+No numerical kernels, model/provider choices, memory floors, source/content/
+OwnACK/FinalCAS, playback eligibility, timing, callback, dependencies or installer
+change. The fresh isolated Release/API setup retained22 known Rust warnings and
+the einops0.6.1 warning; matching evidence can be reused after the Python-only
+correction. No neural, CUDA, App/device/listening, latency, footprint or whole-
+quality acceptance follows. This practical split grows the plan to48:
+nativeREST47 retains ENTIRE former nativeREST46 and FINAL48 retains ENTIRE former
+FINAL47, including all original negative/UNKNOWN gates and both complete-host
+Pydantic compiled-plan/dependency boundaries.
+
+The frozen integrated run passed95 functional checks and3 static checks in27.61s;
+strict Mypy found three test references to an imported, non-reexported ticket
+type, including one existing annotation. The test now imports the same Native
+type directly, preserving its class identity and assertions. Initial Ruff findings
+were corrected by extracting the guarded stdout/reader helper and test callbacks,
+assigning exception text and using an explicit raw regex; no suppression was added.
+Final verification reruns the affected Beat module, all four static checks and
+exact staged bytes. Other successful command/heavy/stem/probe results remain
+compatible with this test-import and documentation-only correction.

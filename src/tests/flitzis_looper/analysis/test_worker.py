@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ from flitzis_looper.analysis.contracts import (
     encode_request,
 )
 from flitzis_looper.analysis.worker import BeatWorkerAdapter, WorkerConfiguration
+from flitzis_looper_audio import OfflineWorkTicket
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -459,6 +461,146 @@ def test_output_thread_start_failure_still_kills_and_reaps_process(
     assert list(configuration.scratch_dir.glob("beat-request-*")) == []
 
 
+@pytest.mark.parametrize(
+    "failure", ["thread_runtime", "thread_os", "thread_memory", "missing_stdout", "monitor_memory"]
+)
+def test_early_output_setup_failure_retires_child_and_allows_fresh_analysis(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    configuration, request = prepared
+    children = _record_processes(monkeypatch)
+    original = process._start
+    before = request.pcm.path.read_bytes()
+    adapter = BeatWorkerAdapter(configuration)
+
+    def thread(*, target: Callable[[], None], name: str, daemon: bool) -> Thread:
+        if name == "beat-worker-output":
+            error = {
+                "thread_runtime": RuntimeError,
+                "thread_os": OSError,
+                "thread_memory": MemoryError,
+            }[failure]
+            message = "fixture reader constructor failure"
+            raise error(message)
+        return Thread(target=target, name=name, daemon=daemon)
+
+    def start(command: process.WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
+        child = original(command, request_path)
+        assert child.stdout is not None
+        child.stdout.close()
+        child.stdout = None
+        return child
+
+    with monkeypatch.context() as failing:
+        if failure.startswith("thread_"):
+            failing.setattr(process, "Thread", thread)
+        elif failure == "missing_stdout":
+            failing.setattr(process, "_start", start)
+        else:
+            failing.setattr(process, "_monitor", _fail_beat_monitor_allocation)
+        if failure.endswith("memory"):
+            with pytest.raises(MemoryError, match=r"fixture .* failure"):
+                _run(adapter, request)
+        else:
+            result = _run(adapter, request)
+            assert result.status == "failed"
+            assert result.reason == "worker_supervision_failed"
+            assert result.resources_released
+
+    assert adapter.retired.wait(5)
+    assert len(children) == 1
+    assert children[0].poll() is not None
+    if children[0].stdout is not None:
+        assert children[0].stdout.closed
+    assert not list(configuration.scratch_dir.glob("beat-request-*"))
+    assert request.pcm.path.read_bytes() == before
+    if os.name == "nt" and failure != "monitor_memory":
+        assert not request.pcm.path.with_suffix(".started").exists()
+    assert _run(adapter, request).status == "ready"
+    assert adapter.retired.is_set()
+    assert len(children) == 2
+    assert children[1].poll() is not None
+
+
+def _refuse_beat_output_thread(*, target: Callable[[], None], name: str, daemon: bool) -> Thread:
+    if name == "beat-worker-output":
+        message = "fixture reader constructor failure"
+        raise RuntimeError(message)
+    return Thread(target=target, name=name, daemon=daemon)
+
+
+def _fail_beat_monitor_allocation(*_args: object) -> str:
+    message = "fixture monitor allocation failure"
+    raise MemoryError(message)
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_output_setup_failure_keeps_fifo_and_beat_slots_until_actual_cleanup(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    unexpected: bool,
+) -> None:
+    configuration, request = prepared
+    children = _record_processes(monkeypatch)
+    release_cleanup, cleanup_attempted = Event(), Event()
+    real_release = process._release_temporary
+    adapter = BeatWorkerAdapter(configuration)
+    successor = None
+
+    def release(
+        temporary: TemporaryDirectory[str],
+        retired: Event,
+        whole_work: OfflineWorkTicket | None = None,
+    ) -> bool:
+        if not release_cleanup.is_set():
+            cleanup_attempted.set()
+            return False
+        return real_release(temporary, retired, whole_work)
+
+    with monkeypatch.context() as failing:
+        failing.setattr(process, "_release_temporary", release)
+        if unexpected:
+            failing.setattr(process, "_monitor", _fail_beat_monitor_allocation)
+        else:
+            failing.setattr(process, "Thread", _refuse_beat_output_thread)
+        try:
+            if unexpected:
+                with pytest.raises(MemoryError, match="fixture monitor allocation failure"):
+                    _run(adapter, request)
+            else:
+                result = _run(adapter, request)
+                assert result.reason == "worker_retiring"
+                assert not result.resources_released
+            assert cleanup_attempted.wait(5)
+            assert children[0].poll() is not None
+            assert children[0].stdout is not None
+            assert children[0].stdout.closed
+            assert not adapter.retired.is_set()
+            assert list(configuration.scratch_dir.glob("beat-request-*"))
+            successor = OfflineWorkTicket()
+            assert not successor.try_acquire()
+            assert not process._PROCESS_SLOT.acquire(blocking=False)
+            assert _run(BeatWorkerAdapter(configuration), request).reason == "worker_busy"
+            assert len(children) == 1
+        finally:
+            release_cleanup.set()
+            assert adapter.retired.wait(5)
+            if successor is not None:
+                try:
+                    assert successor.try_acquire()
+                finally:
+                    successor.close()
+
+    assert not list(configuration.scratch_dir.glob("beat-request-*"))
+    assert _run(adapter, request).status == "ready"
+    assert adapter.retired.is_set()
+    assert len(children) == 2
+    assert children[1].poll() is not None
+
+
 def test_retirement_thread_failure_keeps_supervisor_until_resources_are_released(
     prepared: tuple[WorkerConfiguration, BeatWorkerRequest], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -517,7 +659,7 @@ def test_failed_process_start_keeps_temporary_resource_slot_during_cleanup(
     def release(
         temporary: TemporaryDirectory[str],
         retired: Event,
-        whole_work: process.OfflineWorkTicket | None = None,
+        whole_work: OfflineWorkTicket | None = None,
     ) -> bool:
         if not release_cleanup.is_set():
             return False
