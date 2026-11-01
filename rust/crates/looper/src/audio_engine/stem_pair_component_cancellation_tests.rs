@@ -100,7 +100,7 @@ fn run_captured_work(h: &Harness, source: &LargeSource, cancel_first_read: bool)
         .engine
         .cold_jobs
         .handle()
-        .execute_owned(
+        .execute_heavy_owned_until_terminal(
             || false,
             move || {
                 let _reset = RangeObserverReset;

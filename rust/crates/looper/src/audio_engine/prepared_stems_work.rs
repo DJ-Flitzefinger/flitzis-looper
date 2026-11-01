@@ -255,7 +255,7 @@ impl PreparedStemsWork {
         let lane = self.lane.clone();
         let shutdown = self.cancelled.clone();
         let publication = self.publication.clone();
-        lane.execute_owned(
+        lane.execute_heavy_owned_until_terminal(
             || shutdown.load(std::sync::atomic::Ordering::Acquire) || !publication.current(),
             move || self.prepare_inner(),
         )

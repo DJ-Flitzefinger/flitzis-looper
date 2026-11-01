@@ -264,6 +264,19 @@ shared retirement gate recheck file/hash/identity and actual last use. Cleanup i
 off realtime; Unload, ACK, silence or a timeout alone cannot authorize deletion.
 Close continues settlement; unknown/changed custody is preserved.
 
+Strict Native Pair preparation observes source/shutdown cancellation while waiting
+in the existing cold lane. It removes only its exact unclaimed queued operation,
+then destroys captured readers outside the queue mutex before returning admission
+and heavy capacity. An unrelated heavy owner or occupied worker need not finish
+first. A worker-claimed operation still waits for its actual terminal result and
+reader retirement; independent queued originals retain their places. This does
+not change the separate asynchronous analysis submission path.
+
+Public prepared-stem publication enters this same heavy terminal-waiting owner
+for both Pair and legacy preparation. Its nested Pair kernel borrows that original
+owner inline instead of requesting another heavy position. Source capture,
+currentness, pending publication and final own-ACK remain separate fences.
+
 ## Models, setup and actual execution
 
 [Model setup](../stem-generation-setup.md) is the stable installation reference.

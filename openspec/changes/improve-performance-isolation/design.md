@@ -5207,3 +5207,60 @@ Mypy, strict OpenSpec and exact authoritative/staged source plus protected priva
 bindings passed. Systems PRE/frozen POST and Methods PRE/failure assessment were
 clear. These are controlled policy/FIFO results, not observed OS allocation
 pressure, numerical/provider parity, installed savings or whole-system acceptance.
+
+## STEP51 impact: retire cancelled queued preparation owners
+
+Two regressions failed on unchanged production source in10.27s. Strict terminal
+delivery observed cancellation but kept its operation, source captures, cold
+reservation and heavy ticket queued until an unrelated heavy predecessor or two
+occupied workers finished. Cleanup then allowed the already-cancelled callable
+to enter. The productive Pair preparation caller supplies existing source and
+shutdown cancellation; it needs actual captured-owner retirement before return.
+
+The strict waiter now retains only the unique existing reservation retirement
+receipt as queue identity. After its first terminal error it removes exactly its
+own still-queued entry under the existing mutex, then synchronously drops that
+entry outside the mutex. Existing operation/reservation/heavy Drop order remains
+intact. A worker claim wins under the same mutex; an absent entry leaves actual
+result/disconnection waiting unchanged. No new queue, cancellation registry,
+worker, source predicate under lock, memory policy or realtime work is introduced.
+
+Systems and Methods PRE chose this bounded existing-owner route. A real Native
+heavy blocker and held capture destructor test prove retirement begins before
+predecessor end, the queue mutex remains available, and caller/FIFO successor
+cannot escape unfinished capture destruction. Two occupied workers and an
+independent queued peer cover precise removal. Existing active cancellation,
+poison, shutdown, same-owner continuation and Pair source/OwnACK/read controls
+remain relevant. Frozen Systems POST and one independent final actual-diff
+review precede publication. Matching Native is reused after required builds.
+
+The separate asynchronous start_analysis queue has no strict receiving waiter
+and retains its existing cancellation limit. Optional diagnostic Python bridge
+startup robustness is also separate. This step does not claim either corrected,
+or close native process/fullhost/model/CUDA/quality/platform/distribution gates.
+Productive Python/Torch, all floors/caps, source publication, clock and RT remain.
+The substantive split grows the plan to53: nativeREST52 retains ENTIRE former
+nativeREST51 and FINAL53 retains ENTIRE former FINAL52 without omissions.
+
+The first integrated Native selection passed21 and failed3 in2.96s. Two component
+fixtures ran their nested heavy Pair operation inside an ordinary cold owner;
+their outer setup now uses the existing heavy terminal-waiting entry without
+changing any read, PCM, cancellation, registration or source assertions. The
+third failure exposed a real public-path mismatch: PreparedStemsWork::prepare
+also used ordinary admission before calling the heavy Pair kernel. Its public
+cold/legacy borrow test remains unchanged. That production outer call now enters
+one heavy terminal-waiting owner for both branches; nested Pair work reuses it
+inline and legacy transient source/component work shares the same FIFO custody.
+The early rejection guard and those callers matched parent source exactly;
+this is source-backed parent equivalence, not a separately executed baseline.
+Systems and Methods separately approved this coherent correction and the
+unchanged public receiver, render, OwnACK and actual-reader assertions.
+
+The final frozen Native selection passed26 in4.35s, including the unchanged
+public cold and legacy variants, both component cases and retained-result source/
+Pair controls. Python passed59 affected functional cases and three static checks
+in6.90s. Format, strict OpenSpec, exact staged-source/protected bindings and the
+final exact-index check form the publication checks. Only this result paragraph
+and the completed task state change afterward; all Rust and Python inputs retain
+their checked bytes. These separate runs are not one green combined matrix and
+do not close the original native/CUDA/fullhost/quality/distribution gates.

@@ -728,7 +728,23 @@ ENTIRE former nativeREST50; FINAL52 retains ENTIRE former FINAL51 without omissi
 Controlled resource observations are not observed OS pressure, a model-memory
 estimate, native/CUDA parity, footprint reduction or quality acceptance.
 
-## 51. Remaining native parity before cutover
+## 51. Retire cancelled queued preparation owners
+
+- [x] Reproduce strict queued cancellation retaining original captured owners
+      behind a real heavy predecessor and behind two occupied cold workers.
+- [x] Remove only the exact unclaimed original using its existing unique
+      reservation receipt and destroy its captures outside the queue mutex.
+- [x] Give public Pair and legacy prepared-stem publication one outer heavy
+      terminal-waiting owner so nested Pair work can reuse it inline.
+- [x] Verify capture-drop, admission and Native FIFO ordering, independent queued
+      work, active terminal cancellation and affected Pair preparation controls.
+
+This practical retirement correction grows the plan to53. NativeREST52 retains
+ENTIRE former nativeREST51; FINAL53 retains ENTIRE former FINAL52 without omission.
+The separate asynchronous analysis submission path retains its existing queued
+cancellation limits; this step changes strict terminal-waiting preparation only.
+
+## 52. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -745,10 +761,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP52, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP53, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 52. Combined regression and final architecture review
+## 53. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

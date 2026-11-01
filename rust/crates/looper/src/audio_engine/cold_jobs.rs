@@ -1,5 +1,9 @@
 //! Fixed cold-load lane. Reservations precede request mutations or PCM allocation.
 
+#[cfg(test)]
+#[path = "cold_queued_cancellation_tests.rs"]
+mod queued_cancellation_tests;
+
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io;
@@ -191,6 +195,25 @@ impl ColdJobsHandle {
         }
     }
 
+    fn retire_queued(&self, receipt: &Arc<AtomicBool>) {
+        let queued = {
+            // waiting_error owns poisoned-lane retirement. If poison races this
+            // lookup, the next observation still drains it before disconnection.
+            let Ok(mut state) = self.shared.state.lock() else {
+                return;
+            };
+            let index = state.jobs.iter().position(|job| {
+                job.reservation
+                    .as_ref()
+                    .is_some_and(|reservation| Arc::ptr_eq(&reservation.owner.retired, receipt))
+            });
+            index.and_then(|index| state.jobs.remove(index))
+        };
+        // A worker may already own this original. Only a queued match is ours
+        // to retire; its captured readers may themselves need the queue mutex.
+        drop(queued);
+    }
+
     fn execute_owned_delivery<T: Send + 'static>(
         &self,
         cancelled: impl Fn() -> bool,
@@ -219,6 +242,8 @@ impl ColdJobsHandle {
             return result;
         }
         let reservation = reserve_shared(&self.shared)?;
+        // This unique receipt retains neither admission nor captured owners.
+        let mut queued_owner = await_terminal.then(|| reservation.owner.retired.clone());
         let heavy = if heavy {
             Some(match super::heavy_work::current() {
                 Some(owner) => owner,
@@ -272,6 +297,11 @@ impl ColdJobsHandle {
             let observed = self.waiting_error(&cancelled, await_terminal);
             if await_terminal {
                 terminal_error = terminal_error.or(observed);
+                if terminal_error.is_some()
+                    && let Some(receipt) = queued_owner.take()
+                {
+                    self.retire_queued(&receipt);
+                }
             } else if let Some(error) = observed {
                 return Err(error.into());
             }

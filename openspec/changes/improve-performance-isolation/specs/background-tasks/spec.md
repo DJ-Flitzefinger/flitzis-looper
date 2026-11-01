@@ -87,6 +87,29 @@ model-memory estimate, physical working-set bound or whole-system guarantee.
 - **AND** recovery rejoins the same owner behind existing FIFO waiters under the unchanged memory thresholds
 - **AND** active tickets and independent borrows remain owned until ordinary retirement, while failed deferred terminal deliveries retain their separate custody
 
+### Requirement: Cancelled Strict Cold Preparation Retires Its Unclaimed Owners
+Strict terminal-waiting cold preparation SHALL retire its exact unclaimed queued
+operation after observing cancellation, without waiting for another heavy owner
+or occupied cold worker. Captured owners SHALL be destroyed outside the queue
+mutex before its reservation and heavy ticket are released and before the caller
+returns. Independent queued operations SHALL remain intact. A worker-claimed
+operation SHALL retain the existing actual-terminal wait and reader retirement.
+
+#### Scenario: A cancelled Pair preparation waits behind an unrelated heavy job
+- **GIVEN** the original strict Pair preparation is queued behind a live heavy owner
+- **WHEN** its existing source or shutdown predicate reports cancellation
+- **THEN** only that still-queued original is removed without starting its payload
+- **AND** captured readers, cold admission and its heavy ticket retire in that order
+- **AND** caller completion and a later FIFO owner remain blocked while capture destruction is unfinished
+- **AND** already running work and other queued originals keep their existing ownership
+
+#### Scenario: Public prepared-stem publication nests Pair preparation
+- **GIVEN** the public prepared-stem operation captures its original Pair or legacy source
+- **WHEN** its preparation enters the cold lane
+- **THEN** one common heavy owner and strict terminal wait cover its transient work
+- **AND** a nested Pair kernel reuses that same admitted owner without a second queue position
+- **AND** public engine borrowing, original source currency and own-ACK publication remain unchanged
+
 ### Requirement: Failed Precise BPM Has a Usable Approximate Fallback
 When precise automatic BPM estimation fails, the system SHALL attempt a simpler
 bounded source-derived scalar estimate outside realtime. A validated usable
