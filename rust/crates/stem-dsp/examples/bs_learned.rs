@@ -1,4 +1,6 @@
 //! Exclusive private diagnostic output, never an application publication receipt.
+#[path = "support/trial_io.rs"]
+mod trial_io;
 #[path = "support/workspace.rs"]
 mod workspace;
 
@@ -12,40 +14,33 @@ use flitzis_stem_dsp::{
 };
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
     process::ExitCode,
 };
+use trial_io::{BUFFER_BYTES, IoPhase, Outputs, Result, core_io};
 
-fn write(path: &Path, values: &[f32]) -> Result<(), String> {
-    let mut file = BufWriter::new(File::create_new(path).map_err(|e| e.to_string())?);
-    for value in values {
-        file.write_all(&value.to_le_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-    file.flush().map_err(|e| e.to_string())?;
-    file.get_ref().sync_all().map_err(|e| e.to_string())
-}
-
-fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>, String> {
+fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>> {
     let requested_bytes = len
         .checked_mul(size_of::<f32>())
         .ok_or("source extent overflow")?;
     let mut values = Vec::new();
-    values.try_reserve_exact(len).map_err(|_| {
-        Error::Allocation {
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| Error::Allocation {
             phase,
             requested_bytes,
-        }
-        .to_string()
-    })?;
+        })?;
     Ok(values)
 }
 
-fn execute() -> Result<(), String> {
+fn execute(status: &mut impl Write) -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--workspace-control" {
-        return workspace_control();
+        return workspace_control(status);
+    }
+    if args.len() == 2 && args[0] == "--io-control" {
+        return trial_io::control(Path::new(&args[1]), &WORKSPACE, status);
     }
     if !(6..=7).contains(&args.len()) {
         return Err("usage: bs_learned WEIGHTS SHA256 chunk|track PCM_F32 FRAMES NEW_PRIVATE_DIRECTORY [ORIGINAL_FEATURES_F32]".into());
@@ -60,7 +55,7 @@ fn execute() -> Result<(), String> {
     }
     let mut expected = [0u8; 32];
     for (i, value) in expected.iter_mut().enumerate() {
-        *value = u8::from_str_radix(&digest[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
+        *value = u8::from_str_radix(&digest[i * 2..i * 2 + 2], 16).map_err(|_| "invalid digest")?;
     }
     let frames: usize = args[4]
         .to_str()
@@ -76,42 +71,29 @@ fn execute() -> Result<(), String> {
     }
     let source_bytes = frames.checked_mul(8).ok_or("source extent overflow")?;
     if mode == "chunk" {
-        Geometry::new(frames, RATE).map_err(|e| e.to_string())?;
+        Geometry::new(frames, RATE)?;
     } else {
-        TrackPlan::new(frames, RATE).map_err(|e| e.to_string())?;
+        TrackPlan::new(frames, RATE)?;
     }
-    let mut source = BufReader::new(File::open(&args[3]).map_err(|e| e.to_string())?);
-    if source
-        .get_ref()
-        .metadata()
-        .map_err(|e| e.to_string())?
-        .len()
-        != source_bytes as u64
-    {
+    let mut source =
+        BufReader::with_capacity(BUFFER_BYTES, File::open(&args[3]).at("source.open")?);
+    if source.get_ref().metadata().at("source.metadata")?.len() != source_bytes as u64 {
         return Err("incomplete source".into());
     }
     let mut original_features = if args.len() == 7 {
-        let file = File::open(&args[6]).map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len()
-            != Geometry::new(frames, RATE)
-                .map_err(|e| e.to_string())?
-                .feature_len() as u64
-                * 4
+        let file = File::open(&args[6]).at("original-features.open")?;
+        if file.metadata().at("original-features.metadata")?.len()
+            != Geometry::new(frames, RATE)?.feature_len() as u64 * 4
         {
             return Err("incomplete original features".into());
         }
-        Some(BufReader::new(file))
+        Some(BufReader::with_capacity(BUFFER_BYTES, file))
     } else {
         None
     };
-    let mut weights = BufReader::new(File::open(&args[0]).map_err(|e| e.to_string())?);
-    if weights
-        .get_ref()
-        .metadata()
-        .map_err(|e| e.to_string())?
-        .len()
-        != weight_bytes() as u64
-    {
+    let mut weights =
+        BufReader::with_capacity(BUFFER_BYTES, File::open(&args[0]).at("weights.open")?);
+    if weights.get_ref().metadata().at("weights.metadata")?.len() != weight_bytes() as u64 {
         return Err("incomplete fixed-schema weights".into());
     }
     // External ORIGINAL admission must precede this process. The caller chooses
@@ -122,31 +104,28 @@ fn execute() -> Result<(), String> {
         .map_err(|_| "FLITZIS_BS_WORKSPACE_BYTES requires complete external original admission")?
         .parse::<usize>()
         .map_err(|_| "invalid FLITZIS_BS_WORKSPACE_BYTES")?;
+    workspace::WorkspaceAllocator::validate_extent(capacity)?;
+    // Paths, exclusive handles and buffered storage are prepared BEFORE seal.
+    // A later failure invalidates ALL new empty/partial private files. Nothing
+    // in the sealed phase opens/reopens an output or formats platform error text.
+    let mut outputs = Outputs::prepare(Path::new(&args[5]), mode == "chunk", args.len() == 7)?;
     WORKSPACE.seal(capacity)?;
-    // Existing private directory is never overwritten, even when later load or
-    // arithmetic fails. Every earlier partial file is invalid without exit0.
-    let output = Path::new(&args[5]);
-    std::fs::create_dir(output).map_err(|e| e.to_string())?;
-    let model = Model::load(&mut weights, &expected, &|| false).map_err(|e| e.to_string())?;
-    if mode == "chunk" {
+    let model = Model::load(&mut weights, &expected, &|| false)?;
+    if let Outputs::Chunk(output) = &mut outputs {
         let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
         for _ in 0..frames * 2 {
             let mut value = [0; 4];
-            source.read_exact(&mut value).map_err(|e| e.to_string())?;
+            source.read_exact(&mut value).at("source.read")?;
             pcm.push(f32::from_le_bytes(value));
         }
-        let spectral = Spectrum::analyze(&pcm, RATE, &|| false).map_err(|e| e.to_string())?;
+        let spectral = Spectrum::analyze(&pcm, RATE, &|| false)?;
         drop(pcm);
         let geometry = spectral.geometry();
-        let masks = model
-            .masks(spectral.features(), geometry.steps(), &|| false)
-            .map_err(|e| e.to_string())?;
-        let prediction = spectral
-            .reconstruct(&masks, &|| false)
-            .map_err(|e| e.to_string())?;
-        write(&output.join("features.f32"), spectral.features())?;
-        write(&output.join("masks.f32"), &masks)?;
-        write(&output.join("output.f32"), &prediction)?;
+        let masks = model.masks(spectral.features(), geometry.steps(), &|| false)?;
+        let prediction = spectral.reconstruct(&masks, &|| false)?;
+        output.features.write_values(spectral.features())?;
+        output.masks.write_values(&masks)?;
+        output.prediction.write_values(&prediction)?;
         // These private diagnostic buffers have no readers after the writes.
         // Do not retain the whole first forward during the independent oracle-
         // feature forward. A later failure still invalidates ALL private files.
@@ -157,34 +136,46 @@ fn execute() -> Result<(), String> {
             let mut features = reserved(geometry.feature_len(), "learned-trial.original-features")?;
             for _ in 0..geometry.feature_len() {
                 let mut raw = [0; 4];
-                reader.read_exact(&mut raw).map_err(|e| e.to_string())?;
+                reader.read_exact(&mut raw).at("original-features.read")?;
                 features.push(f32::from_le_bytes(raw));
             }
-            let original_masks = model
-                .masks(&features, geometry.steps(), &|| false)
-                .map_err(|e| e.to_string())?;
-            write(&output.join("original_features_masks.f32"), &original_masks)?;
+            let original_masks = model.masks(&features, geometry.steps(), &|| false)?;
+            output
+                .original_masks
+                .as_mut()
+                .ok_or("missing prepared original-feature output")?
+                .write_values(&original_masks)?;
         }
-        println!(
+        writeln!(
+            status,
             "BS learned CPU chunk trial: frames={frames} weights={} learned_payload_allowance={}",
             weight_bytes(),
-            activation_bytes(geometry.steps()).map_err(|e| e.to_string())?
-        );
-    } else {
-        let plan = TrackPlan::new(frames, RATE).map_err(|e| e.to_string())?;
-        let mut sink =
-            BufWriter::new(File::create_new(output.join("output.f32")).map_err(|e| e.to_string())?);
+            activation_bytes(geometry.steps())?
+        )
+        .at("status.write")?;
+    } else if let Outputs::Track(sink) = &mut outputs {
+        let plan = TrackPlan::new(frames, RATE)?;
         let mut written = 0;
-        process_track(
+        let mut source_error = None;
+        let mut sink_error = None;
+        let result = process_track(
             plan,
             |start, count, pcm| {
-                source
-                    .seek(SeekFrom::Start((start * 8) as u64))
-                    .map_err(|_| Error::Source)?;
+                core_io(
+                    source.seek(SeekFrom::Start((start * 8) as u64)),
+                    "source.seek",
+                    &mut source_error,
+                    Error::Source,
+                )?;
                 for i in 0..count {
                     for c in 0..2 {
                         let mut raw = [0; 4];
-                        source.read_exact(&mut raw).map_err(|_| Error::Source)?;
+                        core_io(
+                            source.read_exact(&mut raw),
+                            "source.read",
+                            &mut source_error,
+                            Error::Source,
+                        )?;
                         pcm[c * count + i] = f32::from_le_bytes(raw);
                     }
                 }
@@ -197,30 +188,37 @@ fn execute() -> Result<(), String> {
                 }
                 for i in 0..count {
                     for lane in 0..8 {
-                        sink.write_all(&pcm[lane * count + i].to_le_bytes())
-                            .map_err(|_| Error::Output)?;
+                        core_io(
+                            sink.writer.write_all(&pcm[lane * count + i].to_le_bytes()),
+                            "output.pcm.write",
+                            &mut sink_error,
+                            Error::Output,
+                        )?;
                     }
                 }
                 written += count;
                 Ok(())
             },
             &|| false,
-        )
-        .map_err(|e| e.to_string())?;
+        );
+        if let Err(error) = result {
+            return Err(source_error.or(sink_error).unwrap_or_else(|| error.into()));
+        }
         if written != frames {
             return Err("incomplete private track".into());
         }
-        sink.flush().map_err(|e| e.to_string())?;
-        sink.get_ref().sync_all().map_err(|e| e.to_string())?;
-        println!(
+        sink.finish()?;
+        writeln!(
+            status,
             "BS learned CPU track trial: frames={frames} chunks={}",
             plan.chunks()
-        );
+        )
+        .at("status.write")?;
     }
     Ok(())
 }
 
-fn workspace_control() -> Result<(), String> {
+fn workspace_control(status: &mut impl Write) -> Result<()> {
     // Implementation control ONLY: no weights, learned network or admission
     // claim. Use actual pinned SGEMM packing and actual FFT/spectral ownership.
     WORKSPACE.seal(1 << 20)?;
@@ -262,14 +260,12 @@ fn workspace_control() -> Result<(), String> {
     let before_fft = WORKSPACE.stats();
     for _ in 0..8 {
         let pcm: Vec<_> = (0..2050).map(|i| (i % 17) as f32 * 0.001 - 0.008).collect();
-        let spectrum = Spectrum::analyze(&pcm, RATE, &|| false).map_err(|e| e.to_string())?;
+        let spectrum = Spectrum::analyze(&pcm, RATE, &|| false)?;
         let mut mask = vec![0.0; spectrum.geometry().mask_len()];
         for pair in mask.chunks_exact_mut(2) {
             pair[0] = 1.0;
         }
-        let output = spectrum
-            .reconstruct(&mask, &|| false)
-            .map_err(|e| e.to_string())?;
+        let output = spectrum.reconstruct(&mask, &|| false)?;
         for stem in output.chunks_exact(2050) {
             if stem.iter().zip(&pcm).any(|(a, b)| (a - b).abs() > 1e-7) {
                 return Err("workspace FFT identity mismatch".into());
@@ -283,18 +279,27 @@ fn workspace_control() -> Result<(), String> {
     {
         return Err("workspace FFT ownership did not settle".into());
     }
-    println!(
+    writeln!(
+        status,
         "BS workspace control: SGEMM64 FFT8 capacity={} peak={} live={} allocations={} failures={}",
         after.capacity, after.peak, after.live, after.allocations, after.failures
-    );
+    )
+    .at("status.write")?;
     Ok(())
 }
 
 fn main() -> ExitCode {
-    match execute() {
+    // Initialize and retain the lazy standard streams before any seal, including
+    // the error path after execute returns. Formatting uses no OS error text.
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let mut status = stdout.lock();
+    let mut errors = stderr.lock();
+    let result = execute(&mut status).and_then(|()| status.flush().at("status.flush"));
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
+            let _ = writeln!(errors, "{error}");
             ExitCode::FAILURE
         }
     }

@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Thirty-one coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
+Thirty-three coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
 native BeatThis/runtime/loader experiments and their explicit failed CUDA and
 incomplete producer limits. STEP25 implements independent BS spectral arithmetic;
 STEP26 adds whole-track reflection, padding, batching, fades and rolling overlap.
@@ -63,10 +63,13 @@ STEP27 implements the experimental complete learned CPU network and strict inert
 weight export, with original/native completion failures retained. STEP28 attributes
 fallible allocations and shortens dead-buffer lifetimes. STEP29 reconstructs one
 learned stem mask at a time into the complete batch destination. Full process
-admission and practical learned/original parity remain unproved. STEP30 retains
+admission and practical learned/original parity remain unproved. STEP30 owns later
+Rust allocation backing; STEP31 retains prepared I/O and typed error reporting
+outside the sealed execution allocator. Complete allocation-sequence/fragmentation
+and native process bounds remain required before a real learned retry. STEP32 retains
 ALL former native parity duties, including mandatory CUDA/freshCPU, complete
-Demucs, provenance, platforms, quality and distribution; FINAL31 retains the
-ENTIRE former FINAL30, without omissions.
+Demucs, provenance, platforms, quality and distribution; FINAL33 retains the
+ENTIRE former FINAL32, without omissions.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

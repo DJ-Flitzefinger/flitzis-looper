@@ -425,7 +425,26 @@ The necessary allocator implementation grows the plan to32. STEP31 retains ALL
 former nativeREST30; FINAL32 retains the ENTIRE former FINAL31. Arena controls
 alone do not complete process admission, learned execution or any downstream gate.
 
-## 31. Remaining native parity before cutover
+## 31. Retained diagnostic I/O ownership
+
+- [x] Reconcile original all-four diagnostic and single-mask track allocation
+      lifetimes against the actual allocator; retain the exact remaining planner,
+      metadata, fragmentation/realloc and non-Rust process gaps without a guessed
+      arena or admission claim.
+- [x] Prepare exclusive output handles, paths and fixed I/O buffers before seal;
+      retain initialized standard streams through terminal reporting.
+- [x] Preserve core allocation phase/bytes and report static I/O phase/numeric OS
+      errors without late platform error-message formatting.
+- [x] Verify retained-handle output, actual I/O failure, preload no-effect and
+      complete private-output invalidation boundaries without learned inference.
+- [ ] Finish the complete allocation sequence and every native/process allowance,
+      then obtain sufficient fresh ORIGINAL admission for real learned parity.
+
+This necessary ownership split grows the plan to33. STEP32 retains the ENTIRE
+former nativeREST31 and FINAL33 the ENTIRE former FINAL32. No arithmetic/control/
+preparation/static-schedule result completes learned execution or any final gate.
+
+## 32. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -442,10 +461,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP32, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP33, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 32. Combined regression and final architecture review
+## 33. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

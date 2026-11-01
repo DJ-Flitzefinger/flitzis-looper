@@ -219,11 +219,7 @@ impl WorkspaceAllocator {
         if !pool.base.is_null() {
             return Err("workspace already sealed");
         }
-        if bytes < HEADER + ALIGN || !bytes.is_multiple_of(ALIGN) {
-            return Err("invalid aligned workspace extent");
-        }
-        let layout =
-            Layout::from_size_align(bytes, ALIGN).map_err(|_| "workspace extent overflow")?;
+        let layout = Self::validate_extent(bytes)?;
         // System is called directly, not through GlobalAlloc dispatch. Zeroed
         // storage does not itself prove physical page touching or residency.
         let base = unsafe { System.alloc_zeroed(layout) };
@@ -243,6 +239,15 @@ impl WorkspaceAllocator {
             )
         };
         Ok(())
+    }
+
+    /// Share the exact extent validation with pre-seal I/O preparation. Invalid
+    /// requests must reject before creating any private directory or files.
+    pub fn validate_extent(bytes: usize) -> Result<Layout, &'static str> {
+        if bytes < HEADER + ALIGN || !bytes.is_multiple_of(ALIGN) {
+            return Err("invalid aligned workspace extent");
+        }
+        Layout::from_size_align(bytes, ALIGN).map_err(|_| "workspace extent overflow")
     }
 
     pub fn stats(&self) -> Stats {

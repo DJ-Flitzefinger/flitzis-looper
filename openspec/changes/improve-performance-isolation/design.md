@@ -1,5 +1,144 @@
 # Performance audit and implementation design
 
+## STEP31 impact: retained diagnostic I/O and allocation schedule
+
+The CLI now moves actual directory/path creation, exclusive output
+handles and their fixed buffered writers before the execution allocator seal.
+Standard output/error locks are initialized before that boundary and retained
+through terminal reporting. Sealed failures retain a static phase and numeric OS
+code or the original core error; they do not format a platform error message.
+CLI track callbacks retain their first I/O detail across the core Source/Output
+boundary. The generic borrowed model decoder keeps its preexisting core Source
+error; raw OS-code propagation through every library reader is not claimed.
+This changes ownership in the real learned CLI, without changing a network
+operator, source geometry, precision, quality tolerance or productive runtime.
+Existing directories are rejected unchanged. Every newly created empty/partial
+file remains private and invalid unless the ENTIRE attempt succeeds.
+
+### Original source schedule checked before this correction
+
+The following describes actual calls in `learned.rs`, `lib.rs`, `track.rs` and
+the diagnostic, at original485100 frames/1101 steps, not the older summed
+`activation_bytes` allowance. Requests are `try_reserve_exact` unless the pinned
+library says otherwise. Counts are float32 elements below; multiply by4 for bytes.
+Let S=1101, F=S*4100=4514100 and X=S*62*384=26212608.
+
+| Phase | Live owners and requests |
+| --- | --- |
+| Model load | Monotonic1355 tensor requests, total131704612 floats;62 Band records,8 Transformer pairs,4 Vec records and4*62 Mask records in7 separate metadata vectors. Header8 is streamed, not a retained weight tensor. Decoder uses16384 stack bytes. |
+| Analyze | Caller PCM, one Transform (FFT plan/Arc, window2048, Complex32 buffer2048 and actual scratch), then F features. Transform dies on analyze return. Diagnostic PCM then dies; track input remains borrowed from its persistent core. |
+| Band latent | F features and X axial; selected S*width and normalized S*width overlap; selected dies before projected S*384 plus SGEMM packing. Each band temporary dies before the next band. |
+| Time attention | X plus selected S*384; normalized S*384, QKV S*1536, gates S*8; normalized dies before attended S*512, three S*64 head vectors,16*S scores and16*64 tile output. Packing is live during each synchronous multiply. QKV/gates die before final S*384 projection. |
+| Frequency attention | Same calls on each borrowed62*384 row, with length62; no second complete axial output. Each time/frequency reader finishes before reuse. |
+| Feedforward | Selected/borrowed input plus normalized L*384 and expanded L*1536; normalized dies before contracted L*384. Expanded dies before residual add. L is1101 or62. Final axial norm is in place. |
+| All-four diagnostic masks | F features, X latent,4F masks, selected S*384, hidden S*768 and contracted S*(2*width), plus synchronous packing. Hidden dies on project return; projected/selection die before the next band. Latent dies when masks returns. |
+| Diagnostic inverse/output | F features+4F masks+4*2*485100 output; one inverse Transform plus two487148-float accumulation/envelope vectors. All first-forward owners die after writes and before optional original-feature forward. That forward owns F features and the same all-four mask schedule. |
+| Track persistent | Six vectors: batch input2*2*485100, source2*485100, ring8*727650, counter727650, output8*485100, window485100:55301400B. Complete batch2 prediction is31046400B, allocated ONCE before serial samples. The earlier sample already lives inside it. |
+| Track sample projection | Persistent core+complete batch destination, F spectrum, X latent, one inverse Transform+two487148-float vectors, one F mask and the same selected/hidden/contracted projection. Inverse remains live during projection. No returned sample Vec or additional borrowed-input copy. |
+| Track batch retirement | All sample temporaries retire before the next sample. Complete prediction retires after add, before flush/next batch. No fulltrack-length output Vec exists. Retained I/O must not interleave persistent arena allocations into these transient lifetimes. |
+
+Pinned matrixmultiply0.3.10 std/nonthreaded packing uses Rust `std::alloc` and
+therefore the actual arena. Its source maximum1081344B and per-kernel alignment
+requests up to32B remain separate from vectors. No MATMUL compile overrides/threading are
+assumed. Model metadata must use the actual target `size_of` values, not a stable
+Rust ABI assumption. On LP64 the reviewed candidate sizes are Band88,
+Transformer392, Mask128 and Vec24; these are not portable attestation.
+
+The actual first-fit arena charges a16B header, absolute-address alignment and
+16B rounding; a tail shorter than32B is consumed. It returns the complete charged
+extent, with sorted adjacent coalescing. Default realloc allocates the new block
+BEFORE returning the old one. Thus live-payload maxima cannot prove capacity.
+1355 tensor+7 metadata allocations alone need at least21792 header bytes; weight
+payload+candidate metadata+headers is526883808B before fragmentation/alignment.
+No smaller arena is selected from these arithmetic observations.
+
+RustFFT6.4.1 chooses AVX/FMA, SSE4.1 or scalar planning for2048. The AVX branch
+has a boxed planner, two direction-cache HashMaps, radix Vec, aligned Butterfly256 Arc,
+14336B twiddle Box and mixed-radix Arc. SSE/scalar planning adds recipe/cache and
+butterfly ownership; its twiddle Vec shrinks into a boxed slice, so old/new
+storage can overlap in this allocator. Exact pinned HashMap/Arc layouts, Vec
+growth, planner branch and the full finite allocation/free sequence still need
+reconciliation against first-fit holes. The older1MiB `PLAN_ALLOWANCE` is not
+that proof. Repeated track chunks can reuse coalesced space only after ALL their
+readers end; post-run counters cannot establish this prospectively.
+
+### Process boundary and retained remainder
+
+The source-owned late native calls being removed are filesystem path conversion/
+open/create, first-use stdio initialization and platform error formatting.
+Rust1.95 [OS error formatting](https://github.com/rust-lang/rust/blob/1.95.0/library/std/src/sys/io/error/windows.rs)
+calls FormatMessageW with a stack UTF16 buffer, optionally GetModuleHandleW;
+it does not request FORMAT_MESSAGE_ALLOCATE_BUFFER. Its
+[stdio](https://github.com/rust-lang/rust/blob/1.95.0/library/std/src/io/stdio.rs)
+initializes stdout lazily. Preseal ownership removes those later call chains and
+persistent Rust buffers from the transient arena, rather than inferring safety
+from an observed no-growth run.
+
+This does NOT close synchronous native read/seek/write/flush/close, native math/
+CRT/TLS/loader or process-exit behavior. Actual before-NN retained heaps, original
+2MiB stack reserve, private image COW and every later native allocation remain
+unbounded here. A Windows region/image ledger is conditional on proving no new
+regions/threads/loader/native backing; a snapshot alone is insufficient. Arena
+backing already inside PrivateUsage must NEVER be added twice. There is no full
+arena capacity, complete process allowance or fresh sufficient ORIGINAL admission
+yet, so no NN/oracle/CUDA retry is authorized by this correction alone.
+
+This necessary I/O lifetime correction grows the plan to33: STEP32 retains the
+ENTIRE former nativeREST31; FINAL33 the ENTIRE former FINAL32. Genuine complete
+learned original masks/PCM at mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4,
+fullgeometry/batch2/fulltrack, mandatory actual native NVIDIA CUDA with meaningful
+changed model/operator/runtime and fresh complete admission, same-model actual
+devicefault -> Tree AND Reader END -> fresh CPU, COMPLETE Demucs, ALL roles,
+Windows EXE AND honest actual Linux/macOS, CPU/CUDA releases/CRT/licenses/LGPL
+source3patch/NVIDIA notices/installer/recovery/fullfootprint, quality/functions/
+interactions/resources/cancel and every final gate remain. All old terminal CUDA
+failures/cause UNKNOWN, fullhost/validator/32keys,32 parent failures, distinct216
+watchdog, registry/pressure UNKNOWN and Overlap OPEN remain. Productive pins/
+Torch/closures/installer and installed savings ZERO remain unchanged. No arithmetic,
+preparation, allocator control or static schedule is learned acceptance.
+
+### Actual verification boundary
+
+Final outer-entry verification PASS3 in11.07s: seven Rust unit controls (the four
+existing allocator cases plus three typed-error/first-callback-failure controls),
+strict all-target Clippy, Release build, Rustfmt, strict OpenSpec, four Markdown
+files/11 local targets and unchanged productive/dependency isolation. The original
+22 core/spectral/track controls have unchanged sources and are reused, not a new
+22-case run. External Release Native/API PASS with the same22 known warnings;
+the existing einops pin/warning and Human App/held Native are unchanged.
+
+Thirteen actual scoped child cases PASS: one retained-I/O control, nine preload
+negatives and three bad-initial-magic cases. The control prepares/retains four
+exclusive outputs, writes exact `[0.25,-0.5,1.0,-0.0]` little-endian float32 bytes,
+and observes a real read-only-handle write failure, OS code5 on this Windows run.
+The arena counters are unchanged across these writes and their status report.
+This is fixture Rust-allocation evidence ONLY, not native no-growth or a process
+allowance. Its1MiB backing is not a proposed full-model capacity.
+
+All nine preload negatives exit1 with empty stdout, no fresh target and an
+unchanged existing sentinel. Correct-size but bad-magic weight fixtures reject
+before tensor loading/network execution in track, chunk and chunk-with-original-
+features modes. Their prepared private directories contain respectively1,3,4
+empty files: ALL are explicitly INVALID, not successful or recoverable outputs.
+One observer precedes one joined executor;13/13 scopes closed, pending0,
+inflight0 and sampling errors[]. No original full-model admission query, NN,
+oracle or CUDA was launched. Floors, caps, geometry and tolerances are unchanged.
+
+Actual Windows x64 Release diagnostic1210368B SHA256
+`b1283065f5a81744ca967535c518a95191cffc9ef1e0ab21f02b5f8d91acebbc` is component
+evidence only, not Compiler/FullProducer/MappedImages/nonWindows/learned/quality/
+distribution proof. Reconstruction uses `bs_learned --io-control NEW_DIRECTORY`
+under the original admitted command owner, plus the documented preload and
+bad-header cases. Reconstructible build/test logs and fixture bytes stay cache;
+the source/pins/design retain durable facts. This correction claims no measured
+speed/RSS improvement or installed saving.
+
+Index verification separately checks all8 LF staged files equal the authoritative
+source, no unrelated work/private bindings/hidden flags, unchanged five local BAT
+bridges/pointer/exclusion, and strict OpenSpec/11 local Markdown targets. Systems
+PRE/frozen POST, Methods and one independent final actual-diff chain cover this
+narrow ownership correction; all reader scopes end before publication.
+
 ## STEP30 impact: bounded reusable diagnostic allocation ownership
 
 The isolated `bs_learned` executable now owns a fixed execution arena through
