@@ -258,6 +258,8 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** axial state remains live through the inverse; the complete batch destination, spectrum, single mask and inverse scratch remain included in simultaneous admission
 - **AND** any later stem, arithmetic or cancellation failure invalidates the ENTIRE private destination and all prior output
 - **AND** another real model attempt requires fresh original complete admission; conservative vector estimates do not attest total process/allocator memory
+- **AND** the isolated diagnostic may own subsequent Rust allocations, including FFT planning and SGEMM packing, in fixed reusable backing without an exhaustion fallback to System; pre-activation pointers retain their original allocator ownership
+- **AND** that backing survives every pointer/reader through process exit, and its capacity/counters do not prove full-model schedule sufficiency or remaining stack/image/CRT/loader/native process allocations
 - **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
 
 #### Scenario: A standalone trial declares ORT package components

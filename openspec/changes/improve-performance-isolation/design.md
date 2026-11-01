@@ -1,5 +1,108 @@
 # Performance audit and implementation design
 
+## STEP30 impact: bounded reusable diagnostic allocation ownership
+
+The isolated `bs_learned` executable now owns a fixed execution arena through
+Rust's supported `GlobalAlloc` boundary. After activation, every subsequent Rust
+allocation uses that backing, including unchanged learned/track vectors,
+RustFFT planner/Arc/cache storage and pinned matrixmultiply0.3.10's internal
+aligned SGEMM packing. This avoids rewriting numerical operators or vendoring
+the matrix kernel. The productive application and library allocator are unchanged.
+
+The arena keeps allocation metadata inside its backing, aligns absolute addresses,
+returns alignment padding on free, splits free extents and coalesces adjacent
+freed extents. Its allocation-free atomic lock serializes callers. Recycled
+zeroed allocation and realloc retain the standard Rust semantics, including old
+storage surviving a failed realloc. Pointers allocated before activation remain
+System-owned; their realloc can migrate into the arena. Exhaustion NEVER falls
+back to System. Fallible vector APIs retain their existing phase/byte errors;
+infallible library or error-message allocation may abort terminally if the backing
+is exhausted. Neither is a CUDA devicefault
+or authority for fallback/publication. Backing is retained until child exit, after
+every allocation and reader; only isolated local unit-test instances release it.
+
+The actual learned CLI requires `FLITZIS_BS_WORKSPACE_BYTES` before model loading.
+The external admitted owner must supply a source-backed aligned extent and retain
+the original Job promise through actual Tree AND Reader END. The executable does
+not derive a budget from free RAM or supply a guessed default. This environment
+value is a backing size, NOT evidence of complete admission or a valid numerical
+run. Pre-load malformed-input checks still precede arena/model allocation.
+
+The separate `bs_learned --workspace-control` is an implementation control only:
+it exercises actual pinned SGEMM packing and complete small spectral identity
+reconstruction under a bounded arena, without weights or a learned prediction.
+Its fixed fixture capacity is NOT a proposed full-model process allowance.
+
+### Remaining complete-process and execution proof
+
+The arena provides a hard bound on later Rust allocation backing/retention. It
+does NOT prove that a chosen size accommodates the complete model allocation
+schedule, fragmentation, headers/alignment or realloc old/new overlap. It also
+does not bound pre-existing retained process heaps, remaining original stack
+reserve, private image COW, CRT/TLS/loader or later direct OS/native allocations.
+Current PrivateUsage plus arena capacity would double-count the already committed
+backing and still miss future non-Rust growth. Post-run no-growth observations
+cannot retroactively create a missing prospective allowance.
+
+Next establish the exact full-geometry allocation schedule against this real
+allocator, initialize/audit the actual remaining process closure, and bind all
+later non-arena allocations. Windows reserved/committed regions and full image
+extents may supply a conservative actual backing ledger ONLY with a source-backed
+no-new-region/thread/loader/native-allocation closure. No arbitrary MiB margin,
+smaller logical inventory or repeated admission query substitutes for that work.
+Only adequate fresh ACTUAL ORIGINAL complete admission then permits the genuine
+original masks/PCM/full485100/1101/batch2/fulltrack comparison. No such full-model
+arena capacity or complete process allowance is claimed here; no NN was launched.
+CPU allocator ownership does not qualify as changed CUDA model/operator/runtime.
+
+This necessary allocator-ownership implementation split grows the plan to32.
+STEP31 retains the ENTIRE former nativeREST30; FINAL32 retains the ENTIRE former
+FINAL31, including complete practical learned execution, mandatory actual native
+NVIDIA CUDA/devicefault-to-freshCPU, COMPLETE Demucs, every provenance/platform/
+distribution/quality/resource/cancellation/final gate. Productive Torch/pins/
+closures/installer remain unchanged; installed savings ZERO. Original tolerances,
+geometry, precision, Job limits/floors and all previous failures/UNKNOWN gates
+remain unchanged. This is implementation progress, not full learned acceptance.
+
+### Actual verification boundary
+
+Four isolated allocator controls PASS, no ignored cases: mixed alignment and
+fragmented/coalesced reuse with live-payload sentinels; recycled zeroing and
+realloc growth/shrink/failure preservation; pre-activation System migration and
+exhaustion/overflow refusal; eight concurrent test callers with1600 settled
+allocations. Strict all-target Clippy and Release example build PASS. These are
+allocator tests, not a release network execution or changed model precision.
+The unchanged STEP29 core/spectral/track controls are source-compatible reuse.
+
+The first process-control harness used32 bytes for the existing-directory
+negative. It aborted3221226505 while allocating168 then30 bytes for path/error
+handling, BEFORE weights/model loading. Original observer7/7 scopes closed,
+pending0/inflight0/errors[]. This was a deliberately bounded fixture with an
+incorrectly small setup, not host exhaustion, a learned failure phase, an old
+failure cause or a devicefault. The fixture alone changed to1MiB; assertions and
+original Job/resource rules were preserved. Earlier partial diagnostics remain
+invalid without complete successful exit. No global process limit was changed.
+
+Final outer-entry checks PASS3 in7.49s, including comment-delta Release rebuild,
+strict OpenSpec/document links/dependency isolation and actual process controls.
+The final binary runs64 genuine SGEMMs and eight spectral identity reconstructions
+under1MiB backing: peak368208B INCLUDING allocator metadata/alignment, live0,
+259 allocations, failures0. These are fixture arena statistics, NOT process
+RSS/commit, full-model capacity or measured speed/memory improvement. All9 actual
+pre-load negatives exit1/stdout empty, create no fresh target and leave the
+existing0B output unchanged. One observer preceded one joined executor;10/10
+scopes closed, pending0/inflight0/errors[]. No weight/model NN or CUDA was run.
+No new full-model admission query was justified while process closure is open.
+
+Final Windows x64 Release diagnostic1213440B SHA256
+`1ca34851d682c96880d2e54e43fef2907e6b9a4365c14c5a72ba302c2deb122d` is component
+evidence ONLY, not Compiler/FullProducer/MappedImages/nonWindows/learned/quality/
+distribution attestation. Outer external Release Native/API PASS with22 known
+warnings and unchanged einops warning/pin; held Human Native/App remain untouched.
+Systems PRE/frozen POST, Methods and the single independent actual-diff chain
+cover this scoped correction. Generated logs/control outputs remain cache;
+source, pins, this design and the recipes retain the durable reconstruction facts.
+
 ## STEP29 impact: stem-wise learned reconstruction ownership
 
 The experimental CPU chunk/track path now retains one complex stem mask instead

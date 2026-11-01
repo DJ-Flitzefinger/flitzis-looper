@@ -1,4 +1,10 @@
 //! Exclusive private diagnostic output, never an application publication receipt.
+#[path = "support/workspace.rs"]
+mod workspace;
+
+#[global_allocator]
+static WORKSPACE: workspace::WorkspaceAllocator = workspace::WorkspaceAllocator::new();
+
 use flitzis_stem_dsp::{
     Error, Geometry, RATE, Spectrum,
     learned::{Model, activation_bytes, weight_bytes},
@@ -38,6 +44,9 @@ fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>, String> {
 
 fn execute() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "--workspace-control" {
+        return workspace_control();
+    }
     if !(6..=7).contains(&args.len()) {
         return Err("usage: bs_learned WEIGHTS SHA256 chunk|track PCM_F32 FRAMES NEW_PRIVATE_DIRECTORY [ORIGINAL_FEATURES_F32]".into());
     }
@@ -105,6 +114,15 @@ fn execute() -> Result<(), String> {
     {
         return Err("incomplete fixed-schema weights".into());
     }
+    // External ORIGINAL admission must precede this process. The caller chooses
+    // a source-backed extent, including allocation metadata/fragmentation; this
+    // executable never derives a process budget from free RAM or reduces one.
+    // Requiring it avoids accidentally running the old unbounded Rust heap path.
+    let capacity = std::env::var("FLITZIS_BS_WORKSPACE_BYTES")
+        .map_err(|_| "FLITZIS_BS_WORKSPACE_BYTES requires complete external original admission")?
+        .parse::<usize>()
+        .map_err(|_| "invalid FLITZIS_BS_WORKSPACE_BYTES")?;
+    WORKSPACE.seal(capacity)?;
     // Existing private directory is never overwritten, even when later load or
     // arithmetic fails. Every earlier partial file is invalid without exit0.
     let output = Path::new(&args[5]);
@@ -199,6 +217,76 @@ fn execute() -> Result<(), String> {
             plan.chunks()
         );
     }
+    Ok(())
+}
+
+fn workspace_control() -> Result<(), String> {
+    // Implementation control ONLY: no weights, learned network or admission
+    // claim. Use actual pinned SGEMM packing and actual FFT/spectral ownership.
+    WORKSPACE.seal(1 << 20)?;
+    let before = WORKSPACE.stats();
+    {
+        let a = vec![0.25f32; 32 * 384];
+        let b = vec![0.5f32; 384 * 64];
+        let mut c = vec![0.0f32; 32 * 64];
+        let baseline = WORKSPACE.stats();
+        for _ in 0..64 {
+            // SAFETY: exact contiguous nonaliasing initialized array extents.
+            unsafe {
+                matrixmultiply::sgemm(
+                    32,
+                    384,
+                    64,
+                    1.0,
+                    a.as_ptr(),
+                    384,
+                    1,
+                    b.as_ptr(),
+                    64,
+                    1,
+                    0.0,
+                    c.as_mut_ptr(),
+                    64,
+                    1,
+                );
+            }
+            if c.iter().any(|&value| value != 48.0) {
+                return Err("workspace SGEMM arithmetic mismatch".into());
+            }
+        }
+        let packed = WORKSPACE.stats();
+        if packed.allocations <= baseline.allocations || packed.live != baseline.live {
+            return Err("SGEMM packing did not allocate and retire inside workspace".into());
+        }
+    }
+    let before_fft = WORKSPACE.stats();
+    for _ in 0..8 {
+        let pcm: Vec<_> = (0..2050).map(|i| (i % 17) as f32 * 0.001 - 0.008).collect();
+        let spectrum = Spectrum::analyze(&pcm, RATE, &|| false).map_err(|e| e.to_string())?;
+        let mut mask = vec![0.0; spectrum.geometry().mask_len()];
+        for pair in mask.chunks_exact_mut(2) {
+            pair[0] = 1.0;
+        }
+        let output = spectrum
+            .reconstruct(&mask, &|| false)
+            .map_err(|e| e.to_string())?;
+        for stem in output.chunks_exact(2050) {
+            if stem.iter().zip(&pcm).any(|(a, b)| (a - b).abs() > 1e-7) {
+                return Err("workspace FFT identity mismatch".into());
+            }
+        }
+    }
+    let after = WORKSPACE.stats();
+    if after.allocations <= before_fft.allocations
+        || after.live != before.live
+        || after.failures != 0
+    {
+        return Err("workspace FFT ownership did not settle".into());
+    }
+    println!(
+        "BS workspace control: SGEMM64 FFT8 capacity={} peak={} live={} allocations={} failures={}",
+        after.capacity, after.peak, after.live, after.allocations, after.failures
+    );
     Ok(())
 }
 
