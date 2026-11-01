@@ -5616,3 +5616,89 @@ their tested bytes. Final formatting, strict OpenSpec, exact source/stage/index,
 protected binding checks and ONE independent actual staged-diff review remain
 required before publication. No model/CUDA, physical-pressure, UI/device/hearing,
 latency, footprint or whole-quality acceptance is claimed.
+
+## STEP58 impact: settle queued material migration after capture retirement
+
+The original production queue bodies reproduce four expected failures and two
+successful controls in0.53s on an inspected six-leaf compiled inventory. With both
+actual workers held, request cancellation plus the public loader pump leaves
+material/stem jobs queued at (active2,queued2,admitted4), retaining the original
+path pin and the stem job's actual last prepared PCM owner. Cancellation followed
+by permanent close drops those captures and returns admission, but both public
+statuses remain preparing with no error. Python correctly waits for terminal
+work before preclaim rollback, hold/owner disposal and writer release; that wait
+must remain. These are controlled queue-body observations, not UI timing, full
+source-memory, OS-release or historical-cause evidence. The first attempt
+contained four Python-initialization fixture failures and a noncanonical path
+observation; those setup faults were corrected before the qualified reproduction.
+
+Public material preparation still reads its actual stream and samples root, then
+delegates the SAME original queue body with explicit root/rate/channels. Stem
+preparation preserves its original material-before-root error order. These private
+helpers permit device-free tests without process-wide directory changes. The
+original submit/kernel semantics were unchanged for RED; this is not a parent
+comparison. Both held workers are released and joined before final assertions;
+diagnostic status/count/pin/Weak facts are captured before release.
+
+A thin ordinary submit_cancellable_retiring uses the SAME accepted-job retirement
+seam with heavy=None. Its cancellation probe owns only the original request and
+shutdown flags; material, PCM and path pins remain solely in the actual kernel.
+The queued callback first destroys that entire original callable, then changes
+only an empty result to its existing cancellation error. The queue and result
+mutexes are not held across capture destruction. Accepted-only registration and
+claimed job.take preserve submission rejection and actual running work. No new
+queue, scheduler, heavy capability, source adoption or realtime path is added.
+
+Claimed cancellation/catch_unwind/result paths remain unchanged. Successful
+material still needs its original explicit rollback/acknowledgement rules. A
+successful stem result retains created and cache_reference after later cancel,
+because the controller needs them for exact-owned cleanup. Queued retirement
+creates no artifacts and invents no rollback permission. The public preparation
+intentionally retains its own original pin until its caller releases it. This
+queued-only correction does not certify all claimed-status/last-reader timing.
+
+Systems PRE and frozen regression review clear the experiment; Methods approves
+the same six cases, existing ColdJobs retirement controls and the focused
+controller terminal/owned-cleanup contracts, with one original in-flight copy
+cancellation control. Frozen implementation review, appropriate checks and ONE
+independent actual-final-diff review remain required before publication.
+
+This substantive split grows the plan to60. NativeREST59 retains ENTIRE former
+nativeREST58 and FINAL60 retains ENTIRE former FINAL59, without omissions. The
+separate committed-stem client remains source-only, not a proved next fix. Full
+PRENN/successful-process allowance, fresh original admission, NN numerics, native
+NVIDIA/same-model fresh CPU, Demucs/BS/Beat/fullhost provenance, actual platforms,
+quality/distribution and every original negative UNKNOWN remain open. Productive
+Python/Torch stays active; installer saving remains ZERO.
+
+Frozen verification passes the SAME six migration cases in0.52s, all23 compiled
+ColdJobs controls in0.43s and the original in-flight copy cancellation test in
+0.31s. All three inventories were inspected before execution on the SAME actual
+compiled source stage, with all seven source files equal to the authoritative
+checkout after LF normalization. Four qualified RED failures become four passes
+with unchanged assertions, stimuli and timeouts. The close fixtures combine
+request cancellation followed by close; they do not claim a separate uncancelled
+shutdown runtime observation.
+
+Before either held worker ends, cancellation now leaves (active2,queued1,admitted3)
+with the independent peer retained. Material preparation keeps its intentional
+public original pin, then ends that pin after the caller drops the ticket. The
+stem job ends its actual last prepared PCM owner and cache pin before worker
+release. Cancellation followed by close leaves (2,0,2) with failed statuses.
+The peer runs exactly once in the cancellation case. Completed material retains
+its explicit rollback behavior; completed stem-copy success retains created=true,
+its cache reference, all five original WAV bytes and its marker after later cancel.
+The original in-flight copy case preserves unknown children and exact-owned
+rollback. Four existing Python contract leaves pass in1.19s, preserving terminal
+waits, hold/writer release, project/config bytes and created-versus-reused cleanup.
+These34 distinct functional successes across separate selections are not a whole
+green matrix, claimed-path lifetime certification or UI/device acceptance.
+
+Current isolated Release/API verification passes; release compilation takes45.73s
+with20 library warnings,33 Looper test warnings and the retained einops0.6.1
+warning. Only this result and task completion change after functional checks;
+all three Rust sources retain their tested bytes. Final formatting, strict
+OpenSpec, exact source/stage/index and protected bindings plus ONE independent
+actual-staged-diff review verify the publication boundary. No native/CUDA/model,
+physical-pressure, latency, footprint, device/hearing or whole-quality claim is
+made, and no historical failure cause or remaining parity gate is promoted.

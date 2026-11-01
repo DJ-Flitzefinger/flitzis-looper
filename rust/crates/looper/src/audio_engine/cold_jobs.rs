@@ -611,6 +611,23 @@ impl ColdJobs {
             .submit_classified(reservation, job, None, Some(Arc::new(cancelled)))
     }
 
+    /// Ordinary asynchronous owners settle only after accepted queued captures end.
+    pub(super) fn submit_cancellable_retiring(
+        &self,
+        reservation: Reservation,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        queued_retirement: impl FnOnce(Job) + Send + 'static,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        self.handle().submit_retiring_classified(
+            reservation,
+            job,
+            None,
+            Some(Arc::new(cancelled)),
+            Some(Box::new(queued_retirement)),
+        )
+    }
+
     /// A queued Native analysis request has no receiving waiter. Existing
     /// workers and the control pump observe its original cancellation authority.
     pub(super) fn submit_heavy_cancellable(

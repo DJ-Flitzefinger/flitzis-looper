@@ -15,6 +15,21 @@ use std::sync::{
 
 type PreparationOutcome = Result<Arc<PreparedMigrationMaterial>, String>;
 
+fn retire_unclaimed<T>(
+    job: Box<dyn FnOnce() + Send>,
+    output: &Mutex<Option<Result<T, String>>>,
+    message: &str,
+) {
+    // A terminal status permits controller rollback. End the actual kernel's
+    // material, PCM and path pins first, outside both queue and result locks.
+    drop(job);
+    if let Ok(mut result) = output.lock()
+        && result.is_none()
+    {
+        *result = Some(Err(message.into()));
+    }
+}
+
 struct MigrationAdmission {
     adoption: Arc<std::sync::atomic::AtomicU8>,
     publication: Arc<Mutex<Option<super::input_runtime_binding::SourcePublication>>>,
@@ -263,6 +278,22 @@ pub(super) fn prepare(
     let root = std::env::current_dir()
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
         .join("samples");
+    prepare_at_root(
+        engine,
+        source,
+        root,
+        stream.output_sample_rate,
+        stream.output_channels,
+    )
+}
+
+fn prepare_at_root(
+    engine: &AudioEngine,
+    source: String,
+    root: std::path::PathBuf,
+    rate: u32,
+    channels: usize,
+) -> PyResult<MaterialMigrationPreparation> {
     let path = super::material_paths::resolve(&root, Path::new(&source))
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     if !matches!(path.kind, super::material_paths::AssetKind::Original { .. }) {
@@ -286,31 +317,47 @@ pub(super) fn prepare(
     let output = result.clone();
     let cancellation = cancelled.clone();
     let shutdown = engine.cold_cancelled.clone();
-    let rate = stream.output_sample_rate;
-    let channels = stream.output_channels;
+    let queued_cancelled = cancellation.clone();
+    let queued_shutdown = shutdown.clone();
+    let retired_output = result.clone();
     engine
         .cold_jobs
-        .submit(reservation, move || {
-            let _pin = source_pin;
-            let cancelled =
-                || cancellation.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire);
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                material_migration::prepare_material(&root, &path.path, rate, channels, &cancelled)
-            }))
-            .unwrap_or_else(|_| Err("material migration worker failed".into()));
-            if let Ok(mut result) = output.lock() {
-                let outcome = if cancelled() {
-                    if let Ok(material) = &outcome {
-                        material.lease.rollback_unadopted_original();
-                        material.lease.rollback_unadopted_cache();
-                    }
-                    Err("material migration preparation cancelled".into())
-                } else {
-                    outcome
-                };
-                *result = Some(outcome.map(Arc::new));
-            }
-        })
+        .submit_cancellable_retiring(
+            reservation,
+            move || {
+                queued_cancelled.load(Ordering::Acquire) || queued_shutdown.load(Ordering::Acquire)
+            },
+            move |job| {
+                retire_unclaimed(
+                    job,
+                    &retired_output,
+                    "material migration preparation cancelled",
+                );
+            },
+            move || {
+                let _pin = source_pin;
+                let cancelled =
+                    || cancellation.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    material_migration::prepare_material(
+                        &root, &path.path, rate, channels, &cancelled,
+                    )
+                }))
+                .unwrap_or_else(|_| Err("material migration worker failed".into()));
+                if let Ok(mut result) = output.lock() {
+                    let outcome = if cancelled() {
+                        if let Ok(material) = &outcome {
+                            material.lease.rollback_unadopted_original();
+                            material.lease.rollback_unadopted_cache();
+                        }
+                        Err("material migration preparation cancelled".into())
+                    } else {
+                        outcome
+                    };
+                    *result = Some(outcome.map(Arc::new));
+                }
+            },
+        )
         .map_err(PyRuntimeError::new_err)?;
     Ok(MaterialMigrationPreparation {
         result,
@@ -585,6 +632,26 @@ pub(super) fn prepare_stems(
     let root = std::env::current_dir()
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
         .join("samples");
+    prepare_stems_at_root(
+        engine,
+        material,
+        old_cache,
+        old_source_version,
+        new_source_version,
+        generation_id,
+        root,
+    )
+}
+
+fn prepare_stems_at_root(
+    engine: &AudioEngine,
+    material: Arc<PreparedMigrationMaterial>,
+    old_cache: String,
+    old_source_version: String,
+    new_source_version: String,
+    generation_id: String,
+    root: std::path::PathBuf,
+) -> PyResult<MaterialMigrationStemPreparation> {
     let cache = super::material_paths::resolve(&root, Path::new(&old_cache))
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     if !matches!(
@@ -608,28 +675,40 @@ pub(super) fn prepare_stems(
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancellation = cancelled.clone();
     let shutdown = engine.cold_cancelled.clone();
+    let queued_cancelled = cancellation.clone();
+    let queued_shutdown = shutdown.clone();
+    let retired_output = result.clone();
     engine
         .cold_jobs
-        .submit(reservation, move || {
-            let _pin = pin;
-            let cancelled =
-                || cancellation.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire);
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                super::material_migration_stems::copy_stem_generation(
-                    &root,
-                    &material,
-                    &cache.path,
-                    &old_source_version,
-                    &new_source_version,
-                    &generation_id,
-                    &cancelled,
-                )
-            }))
-            .unwrap_or_else(|_| Err("material stem migration worker failed".into()));
-            if let Ok(mut result) = output.lock() {
-                *result = Some(outcome);
-            }
-        })
+        .submit_cancellable_retiring(
+            reservation,
+            move || {
+                queued_cancelled.load(Ordering::Acquire) || queued_shutdown.load(Ordering::Acquire)
+            },
+            move |job| {
+                retire_unclaimed(job, &retired_output, "stem migration cancelled");
+            },
+            move || {
+                let _pin = pin;
+                let cancelled =
+                    || cancellation.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::material_migration_stems::copy_stem_generation(
+                        &root,
+                        &material,
+                        &cache.path,
+                        &old_source_version,
+                        &new_source_version,
+                        &generation_id,
+                        &cancelled,
+                    )
+                }))
+                .unwrap_or_else(|_| Err("material stem migration worker failed".into()));
+                if let Ok(mut result) = output.lock() {
+                    *result = Some(outcome);
+                }
+            },
+        )
         .map_err(PyRuntimeError::new_err)?;
     Ok(MaterialMigrationStemPreparation { result, cancelled })
 }
@@ -664,3 +743,6 @@ pub(super) fn prepared_for_test(
         _old_original_pin: Arc::new(pin),
     })
 }
+#[cfg(all(test, windows))]
+#[path = "material_migration_queued_tests.rs"]
+mod queued_tests;

@@ -1,5 +1,29 @@
 ## ADDED Requirements
 
+### Requirement: Queued Material Migration Settles After Captured Owners End
+Accepted unclaimed material preparation and stem-copy jobs SHALL observe their
+original cancellation and shutdown flags in the existing cold lane. Queued
+retirement and permanent lane closure SHALL destroy the actual kernel's captured
+material, PCM and path pins before publishing a terminal preparation error.
+Retirement SHALL run outside the queue and result mutexes, retain the original
+reservation through cleanup, and SHALL NOT overwrite an existing result.
+Claimed kernels SHALL retain their original cancellation, rollback and result
+paths. Successful stem-copy results SHALL retain their `created` and
+`cache_reference` evidence for the controller's existing exact-owned cleanup.
+
+#### Scenario: Cancelled migration waits behind occupied workers
+- **GIVEN** accepted material or stem-copy work and an unrelated queued operation
+- **WHEN** the serviced control pump observes that migration's original cancellation
+- **THEN** its still-queued captures end and its preparation becomes failed before either worker finishes
+- **AND** the independent operation keeps its original queue position and execution
+- **AND** the controller's existing terminal wait continues to precede rollback and hold/writer release
+
+#### Scenario: Permanent close drains accepted migration work
+- **GIVEN** an accepted migration kernel has not been claimed by a cold worker
+- **WHEN** permanent close removes that queued callable
+- **THEN** actual capture destruction precedes its terminal preparation error
+- **AND** a completed successful stem generation retains its cleanup receipt after cancellation
+
 ### Requirement: Obsolete Queued Waveform Views Retire Before Worker Availability
 Asynchronous waveform projection SHALL register its original request cancellation,
 shutdown and source-incarnation authority with the existing cold lane. Existing

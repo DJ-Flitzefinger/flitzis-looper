@@ -96,6 +96,8 @@ STEP56 closes accepted queued ownership during controlled poisoned-lane shutdown
 nativeREST57 and FINAL58 retain their ENTIRE former56/57 requirements and negatives.
 STEP57 retires obsolete queued waveform views through the existing cancellation
 pump; nativeREST58 and FINAL59 retain every former57/58 duty and negative gate.
+STEP58 settles cancelled queued material migration after its captured owners end;
+nativeREST59 and FINAL60 retain the ENTIRE former58/59 scope and negative gates.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
