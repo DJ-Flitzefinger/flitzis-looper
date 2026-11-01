@@ -4786,3 +4786,53 @@ adapter checks, with no actual model, CUDA-device or listening acceptance claim.
 Both complete host manifests remain UNKNOWN at the unsupported Pydantic validator;
 this correction does not certify generated schemas or compiled validator/serializer
 connections. STEP42 and FINAL43 retain the entire former native and final remainder.
+
+## STEP42 impact: bind actual generated host constructors
+
+The host code policy previously checked AST-declared methods and dataclass
+field/configuration metadata without checking the generated `__init__` that runs.
+Replacing that function, its defaults or its frozen `object` closure could retain
+a known component identity while changing source, request or limit construction.
+In particular, a replacement `WorkerLimits.__init__` could omit the checked
+`__post_init__` and accept negative limits.
+
+For the supported direct-object, plain-field dataclasses, the policy now builds a
+stdlib `make_dataclass` reference from held field order/defaults, boolean options
+and source-declared hook presence. Reference generation uses trusted module globals,
+inert object annotations and an inert hook; it does not execute host source, a host
+constructor or a hook. Actual function/descriptor binding, structural code,
+qualified name, generated filename/module, positional/keyword defaults and exact
+closure bindings must match. Exact builtin defaults are checked recursively; bool
+is distinct from int, and equal builtin subclasses cannot substitute runtime
+behavior. Factories, custom field metadata, altered init/keyword policy and
+inheritance remain unsupported. Source-defined constructors keep the ordinary
+method proof; `init=False` without one requires exact `object.__init__`.
+
+This closes a constructor-specific false-known component gap, including actual
+`_Source`, `WorkerLimits` and `StemGenerationRequest`. It does not certify generated
+equality/hash/frozen setters, annotations, metaclasses, `__new__` or external runtime
+policy. Both complete original host manifests remain UNKNOWN at the unsupported
+Pydantic execution validator; its actual compiled validator/serializer and complete
+dependency lineage remain open. All eight existing component roles remain required.
+No admission, source/content/OwnACK, last-reader, realtime, quality, model, dependency
+or installation behavior changes. Productive Python/Torch paths remain active.
+
+The old predicate reproduced18 failed regressions and7 passing controls in4.72s,
+including the actual WorkerLimits bounds bypass and three actual constructor
+components. The initial focused implementation passed75 tests in54.33s. Frozen
+systems review then found an additional equal builtin-subclass default gap; the
+constructor-only canonicalizer and direct/nested positional/keyword regressions
+address it. All81 product regressions then passed, retaining the eight-role component positive
+and both complete original host UNKNOWN tests. Formatting, one static constructor
+access typing error and six test/type lint findings were corrected; subsequent
+31 constructor regressions plus strict Mypy/spec checks passed. One later lint
+finding in the test fake was corrected by retaining the captured canonical setter
+as its explicit delegate; the actual negative construction/UNKNOWN/restoration
+assertions remain unchanged. Final affected formatting/lint/index and independent
+review follow this frozen source. These are scoped controls, not a whole-system,
+model, device, hearing, performance or installed-footprint acceptance claim.
+
+This justified split grows the plan to44. NativeREST43 retains ENTIRE former
+nativeREST42 and FINAL44 retains ENTIRE former FINAL43, including every original
+process/numerical/CUDA/Demucs/platform/distribution/negative/UNKNOWN gate. No new
+neural execution or unchanged failed CUDA retry is authorized by this policy fix.

@@ -124,6 +124,12 @@ role. Currently both complete inference-host manifests remain fail-closed UNKNOW
 at the unchanged unsupported Pydantic execution validator, also reproduced on
 the parent; this port does not promote component proof to full producer proof.
 Narrow validator/schema/dependency attestation remains a final regression gate.
+Supported plain dataclass components additionally compare their actual generated
+constructor bodies, exact defaults and frozen captures against stdlib references
+from held declarations, including required post-init calls. Checking this evidence
+does not execute host constructors or hooks. Other generated methods, metaclasses,
+`__new__` and complete Pydantic compiled-plan evidence retain their separate limits;
+constructor evidence does not promote either complete host manifest to known.
 This is compiled-source identity, not loaded-image or full compiler attestation.
 Conversion does not remove Torch or prove model quality.
 

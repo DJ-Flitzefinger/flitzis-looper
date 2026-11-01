@@ -19,10 +19,10 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import Context, ContextVar
 from ctypes import wintypes
-from dataclasses import MISSING, dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass, make_dataclass
 from pathlib import Path
 from threading import Semaphore
-from types import CodeType, FunctionType, ModuleType
+from types import CodeType, FunctionType, MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -288,8 +288,10 @@ def _check_class(
         if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)
     )
     if is_dataclass(value):
-        evidence.append(_dataclass_policy(value, declaration, namespace))
+        policy = _dataclass_policy(value, declaration, namespace)
+        evidence.append(policy)
         evidence.extend(_dataclass_fields(value, declaration, namespace))
+        evidence.append(_dataclass_constructor(value, declaration, namespace, policy))
     if issubclass(value, ctypes.Structure):
         evidence.append(_ctypes_layout(value, declaration, namespace))
     return evidence
@@ -518,7 +520,7 @@ def _dataclass_fields(
 
 def _dataclass_policy(
     value: type, declaration: ast.ClassDef, namespace: dict[str, object]
-) -> dict[str, object]:
+) -> dict[str, bool]:
     decorators = [
         item for item in declaration.decorator_list if _decorator_name(item) == "dataclass"
     ]
@@ -532,13 +534,14 @@ def _dataclass_policy(
         else {}
     )
     supported = {"init", "repr", "eq", "order", "unsafe_hash", "frozen", "slots", "kw_only"}
-    if any(name not in supported for name in options) or (
-        isinstance(decorator, ast.Call) and decorator.args
-    ):
+    if any(
+        name not in supported or type(option) is not bool for name, option in options.items()
+    ) or (isinstance(decorator, ast.Call) and decorator.args):
         msg = "host dataclass requires unsupported generation options"
         raise ValueError(msg)
+    validated = cast("dict[str, bool]", options)
     params = inspect.getattr_static(value, "__dataclass_params__")
-    evidence = {}
+    evidence: dict[str, bool] = {}
     for name, default in (
         ("init", True),
         ("repr", True),
@@ -547,21 +550,143 @@ def _dataclass_policy(
         ("unsafe_hash", False),
         ("frozen", False),
     ):
-        expected = options.get(name, default)
-        if getattr(params, name) != expected:
+        expected = validated.get(name, default)
+        if getattr(params, name) is not expected:
             msg = "loaded host dataclass generation options differ from held source"
             raise ValueError(msg)
         evidence[name] = expected
     slots = "__slots__" in vars(value)
-    if slots != options.get("slots", False):
+    if slots != validated.get("slots", False):
         msg = "loaded host dataclass slots differ from held source"
         raise ValueError(msg)
     evidence["slots"] = slots
+    evidence["kw_only"] = validated.get("kw_only", False)
     for field in fields(value):
-        if field.kw_only != options.get("kw_only", False) or field.default_factory is not MISSING:
+        if (
+            field.kw_only is not evidence["kw_only"]
+            or field.init is not True
+            or field.default_factory is not MISSING
+            or type(field.metadata) is not MappingProxyType
+            or field.metadata
+        ):
             msg = "host dataclass field requires unsupported generation policy"
             raise ValueError(msg)
     return evidence
+
+
+def _dataclass_constructor(
+    value: type,
+    declaration: ast.ClassDef,
+    namespace: dict[str, object],
+    policy: dict[str, bool],
+) -> list[object]:
+    """Compare simple generated initialization without executing host code or hooks.
+
+    Other generated methods, annotations, metaclasses and __new__ retain their
+    separate policy limits; this reference certifies only constructor execution.
+    """
+    if value.__bases__ != (object,):
+        msg = "host dataclass constructor requires unsupported inheritance"
+        raise ValueError(msg)
+    declared_methods = {
+        member.name
+        for member in declaration.body
+        if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    has_post_init = "__post_init__" in declared_methods
+    if (inspect.getattr_static(value, "__post_init__", MISSING) is not MISSING) != has_post_init:
+        msg = "loaded host dataclass constructor hook differs from held source"
+        raise ValueError(msg)
+    # Declared constructors already passed the ordinary source method proof.
+    if "__init__" in declared_methods:
+        return ["source-constructor"]
+    actual = inspect.getattr_static(value, "__init__")
+    if not policy["init"]:
+        if actual is not object.__init__:
+            msg = "disabled host dataclass constructor differs from object initialization"
+            raise ValueError(msg)
+        return ["object-constructor"]
+    reference_fields = [
+        (
+            member.target.id,
+            object,
+            MISSING if member.value is None else _expression(member.value, namespace),
+        )
+        for member in declaration.body
+        if isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name)
+    ]
+    for _name, _annotation, default in reference_fields:
+        if default is not MISSING:
+            _constructor_value(default)
+    reference = make_dataclass(
+        declaration.name,
+        reference_fields,
+        namespace={"__post_init__": object.__init__} if has_post_init else {},
+        module=__name__,
+        init=policy["init"],
+        repr=policy["repr"],
+        eq=policy["eq"],
+        order=policy["order"],
+        unsafe_hash=policy["unsafe_hash"],
+        frozen=policy["frozen"],
+        slots=policy["slots"],
+        kw_only=policy["kw_only"],
+    )
+    return _generated_constructor(actual, inspect.getattr_static(reference, "__init__"), namespace)
+
+
+def _generated_constructor(
+    actual: object, expected: object, namespace: dict[str, object]
+) -> list[object]:
+    if not isinstance(actual, FunctionType) or not isinstance(expected, FunctionType):
+        msg = "loaded host dataclass constructor binding differs from generated function"
+        raise TypeError(msg)
+    if (
+        actual.__name__ != expected.__name__
+        or actual.__qualname__ != expected.__qualname__
+        or actual.__module__ != namespace.get("__name__")
+        or actual.__code__.co_filename != expected.__code__.co_filename
+        or _code(actual.__code__) != _code(expected.__code__)
+    ):
+        msg = "loaded host dataclass constructor body or origin differs from held source"
+        raise ValueError(msg)
+    defaults = (_constructor_value(actual.__defaults__), _constructor_value(actual.__kwdefaults__))
+    reference_defaults = (
+        _constructor_value(expected.__defaults__),
+        _constructor_value(expected.__kwdefaults__),
+    )
+    # JSON preserves bool/int distinctions that ordinary Python equality erases.
+    if json.dumps(defaults, sort_keys=True) != json.dumps(reference_defaults, sort_keys=True):
+        msg = "loaded host dataclass constructor defaults differ from held source"
+        raise ValueError(msg)
+    closure, reference_closure = actual.__closure__ or (), expected.__closure__ or ()
+    if len(closure) != len(reference_closure) or any(
+        first.cell_contents is not second.cell_contents
+        for first, second in zip(closure, reference_closure, strict=True)
+    ):
+        msg = "loaded host dataclass constructor captures differ from supported generation"
+        raise ValueError(msg)
+    return ["generated-constructor", actual.__qualname__, _code(actual.__code__), defaults]
+
+
+def _constructor_value(value: object) -> object:
+    """Keep constructor defaults within exact builtin values, including nested values."""
+    if value is None or value is Ellipsis or type(value) in {str, bool, int, float, bytes}:
+        return _value(value)
+    if type(value) in {tuple, list, set, frozenset} and isinstance(
+        value, tuple | list | set | frozenset
+    ):
+        items = [_constructor_value(item) for item in value]
+        if isinstance(value, set | frozenset):
+            items.sort(key=lambda item: json.dumps(item, sort_keys=True))
+        return type(value).__name__, items
+    if type(value) is dict and isinstance(value, dict):
+        entries = [
+            (_constructor_value(key), _constructor_value(item)) for key, item in value.items()
+        ]
+        return "dict", sorted(entries, key=lambda item: json.dumps(item[0], sort_keys=True))
+    msg = "host dataclass constructor default requires an unsupported runtime type"
+    raise ValueError(msg)
 
 
 def _check_function(

@@ -392,3 +392,23 @@ duplicate or oversized receipts SHALL remain invalid.
 - **WHEN** the host normalizes command output
 - **THEN** only the separate exact receipt is available to the execution parser
 - **AND** the diagnostic remains bounded and visibly distinct from protocol evidence
+
+### Requirement: Host Constructor Evidence Includes Generated Execution
+A known guarded dataclass component SHALL bind its actual supported constructor
+execution to held source declarations, including generated bodies, defaults,
+keyword defaults, captured bindings and source-declared post-init calls.
+Metadata or signatures alone SHALL NOT establish this constructor evidence.
+Unsupported constructor generation SHALL remain UNKNOWN, and constructor evidence
+SHALL NOT establish complete host, validator or other generated-method evidence.
+
+#### Scenario: A generated limits constructor skips source validation
+- **GIVEN** held source declares a dataclass with a checked post-init bounds method
+- **WHEN** the loaded constructor omits that call while retaining its field metadata
+- **THEN** the guarded component is UNKNOWN
+- **AND** checking constructor evidence does not invoke the host constructor or hook
+
+#### Scenario: Generated defaults or frozen captures change
+- **GIVEN** a component previously matched supported source-backed generation
+- **WHEN** positional or keyword defaults change their value or exact builtin type, or a frozen constructor captures a different object binding
+- **THEN** the component is UNKNOWN even when its code or field metadata is unchanged
+- **AND** existing complete-host UNKNOWN gates and actual reader-retirement authority remain intact
