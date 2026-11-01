@@ -92,6 +92,8 @@ platforms, quality and distribution; FINAL40 retains the ENTIRE former FINAL39,
 without omissions. Later practical ownership and retirement splits are retained
 in the complete task list. STEP53 addresses queued asynchronous analysis
 cancellation; nativeREST54 and FINAL55 retain every former parity and final gate.
+STEP56 closes accepted queued ownership during controlled poisoned-lane shutdown;
+nativeREST57 and FINAL58 retain their ENTIRE former56/57 requirements and negatives.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

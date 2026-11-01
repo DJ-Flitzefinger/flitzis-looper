@@ -642,12 +642,17 @@ impl ColdJobs {
 
     /// Close worker claims before releasing active jobs through cancellation.
     pub(super) fn close_admission(&self) {
-        let queued = if let Ok(mut state) = self.shared.state.lock() {
+        let queued = {
+            // Poison still refuses new admission, but asynchronous queued jobs
+            // have no terminal waiter to break their reservation/Shared cycle.
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stopped = true;
             self.shared.ready.notify_all();
             std::mem::take(&mut state.jobs)
-        } else {
-            VecDeque::new()
         };
         // Job destructors can take the admission mutex; drop outside that lock.
         drop(queued);

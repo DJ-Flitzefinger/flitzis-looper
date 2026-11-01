@@ -613,6 +613,14 @@ terminal reader obligations; rejection SHALL NOT run accepted-queue cleanup.
 - **AND** after the mirror settles the source can prepare, publish and reach its original own ACK
 - **AND** ordinary start-policy changes do not become source cancellation
 
+#### Scenario: A cold queue is poisoned before permanent shutdown
+- **GIVEN** accepted unclaimed jobs retain their callable, terminal cleanup and original admission owners
+- **WHEN** permanent shutdown closes a cold lane whose queue mutex is poisoned
+- **THEN** shutdown recovers the guard only to close admission and take the queued jobs
+- **AND** captured callables and accepted terminal cleanup end outside the queue mutex before their reservation and heavy capability
+- **AND** new admission remains refused and the mutex remains poisoned
+- **AND** claimed payloads retain their actual readers and admission until ordinary terminal retirement
+
 ### Requirement: Asset Sweep Observation Ends Under Its Admission Gate
 Temporary strong path-owner observations made by project asset collection SHALL
 end before releasing the shared owner-admission/deletion gate. An overlapping

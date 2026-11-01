@@ -27,6 +27,176 @@ fn queued(lane: &ColdJobs) -> bool {
         .unwrap_or(false)
 }
 
+fn poisoned_shutdown_retires_queued_owner(with_retirement: bool) {
+    let mut lane = ColdJobs::new().unwrap();
+    let running = Arc::new(());
+    let workers = Arc::new((Mutex::new(false), Condvar::new()));
+    let (entered, started) = mpsc::channel();
+    for _ in 0..WORKERS {
+        let running = running.clone();
+        let workers = workers.clone();
+        let entered = entered.clone();
+        lane.submit(lane.reserve().unwrap(), move || {
+            let _running = running;
+            entered.send(()).unwrap();
+            let mut released = workers.0.lock().unwrap();
+            while !*released {
+                released = workers.1.wait(released).unwrap();
+            }
+        })
+        .unwrap();
+    }
+    for _ in 0..WORKERS {
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    let gate = Arc::new(super::super::heavy_work::Gate::default());
+    let owner = gate.ticket().unwrap();
+    assert!(owner.try_acquire().unwrap());
+    let successor = gate.ticket().unwrap();
+    let capture = Arc::new(());
+    let captured = Arc::downgrade(&capture);
+    let ran = Arc::new(AtomicBool::new(false));
+    let executed = ran.clone();
+    let payload = move || {
+        executed.store(true, Ordering::Release);
+        drop(capture);
+    };
+    let (callback, callback_started) = mpsc::channel();
+    let (release, callback_release) = mpsc::channel();
+    owner
+        .with_current(|| {
+            let reservation = lane.reserve().unwrap();
+            if with_retirement {
+                let observed = captured.clone();
+                let shared = lane.shared.clone();
+                lane.submit_analysis_cancellable(
+                    reservation,
+                    true,
+                    || false,
+                    move |job| {
+                        let off_lock = match shared.state.try_lock() {
+                            Ok(guard) => {
+                                drop(guard);
+                                true
+                            }
+                            Err(std::sync::TryLockError::Poisoned(error)) => {
+                                drop(error.into_inner());
+                                true
+                            }
+                            Err(std::sync::TryLockError::WouldBlock) => false,
+                        };
+                        drop(job);
+                        callback.send((off_lock, observed.strong_count())).unwrap();
+                        callback_release
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                    },
+                    payload,
+                )
+                .unwrap();
+            } else {
+                lane.submit_heavy_cancellable(reservation, || false, payload)
+                    .unwrap();
+            }
+        })
+        .unwrap();
+    drop(owner);
+    assert_eq!(lane.counts_for_test(), (WORKERS, 1, WORKERS + 1));
+    assert!(!successor.try_acquire().unwrap());
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _state = lane.shared.state.lock().unwrap();
+            panic!("controlled queued shutdown poison");
+        })
+        .is_err()
+    );
+    let shared = lane.shared.clone();
+    let counts = || {
+        let state = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            state.active,
+            state.jobs.len(),
+            state.admitted,
+            state.stopped,
+        )
+    };
+    let callback_boundary = thread::scope(|scope| {
+        let close = scope.spawn(|| lane.close_admission());
+        let boundary = with_retirement.then(|| {
+            let receipt = callback_started.recv_timeout(Duration::from_secs(5));
+            let retained = !successor.try_acquire().unwrap();
+            let during = counts();
+            let _ = release.send(());
+            (receipt, retained, during)
+        });
+        close.join().unwrap();
+        boundary
+    });
+    let after = counts();
+    let queued_owners = captured.strong_count();
+    let running_owners = Arc::strong_count(&running);
+    let next_admitted = successor.try_acquire().unwrap();
+    let closed = lane.ensure_open().is_err() && lane.reserve().is_err();
+    let poisoned = lane.shared.state.is_poisoned();
+
+    // Repair only this fixture after taking RED facts, so the unchanged-source
+    // failure cannot leak captured owners or strand a test worker at teardown.
+    let retained = {
+        let mut state = lane
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.stopped = true;
+        std::mem::take(&mut state.jobs)
+    };
+    drop(retained);
+    *workers.0.lock().unwrap() = true;
+    workers.1.notify_all();
+    lane.shutdown();
+
+    assert_eq!(after, (WORKERS, 0, WORKERS, true));
+    assert_eq!(
+        queued_owners, 0,
+        "poisoned shutdown retained queued captures"
+    );
+    assert_eq!(
+        running_owners,
+        WORKERS + 1,
+        "shutdown released claimed readers"
+    );
+    assert!(next_admitted, "poisoned shutdown retained the heavy owner");
+    assert!(
+        closed && poisoned,
+        "cleanup must not revive poisoned admission"
+    );
+    assert!(
+        !ran.load(Ordering::Acquire),
+        "shutdown executed queued work"
+    );
+    assert_eq!(counts(), (0, 0, 0, true));
+    assert_eq!(Arc::strong_count(&running), 1);
+    if let Some((receipt, retained, during)) = callback_boundary {
+        assert_eq!(receipt.unwrap(), (true, 0));
+        assert!(retained, "heavy admission escaped queued terminal cleanup");
+        assert_eq!(during, (WORKERS, 0, WORKERS + 1, true));
+    }
+}
+
+#[test]
+fn poisoned_shutdown_retires_plain_queued_capture_and_heavy_owner() {
+    poisoned_shutdown_retires_queued_owner(false);
+}
+
+#[test]
+fn poisoned_shutdown_waits_queued_terminal_cleanup_before_releasing_admission() {
+    poisoned_shutdown_retires_queued_owner(true);
+}
+
 #[test]
 fn rejected_queue_never_invokes_retirement_under_callers_commit_lock() {
     let mut lane = ColdJobs::new().unwrap();

@@ -5494,3 +5494,57 @@ verification passed with20 existing library and35 test warnings; the einops0.6.1
 warning remains. Only this result and task completion change after functionals;
 both Rust inputs retain their tested bytes. Final index checks and the single
 independent actual-staged-diff review remain required before publication.
+
+## STEP56 impact: drain accepted queued ownership during poisoned shutdown
+
+Two new regressions fail against unchanged production after controlled poisoning
+of the actual cold queue mutex. Both existing workers are held in claimed ordinary
+jobs before an asynchronous job is accepted. Actual submission borrows a local
+active heavy capability; its caller then ends, leaving the queued job as its sole
+active owner. This is not a queued job behind an independent heavy predecessor.
+
+After the original close call, both cases still observe two claimed jobs, one
+queued job, three admissions and stopped=false. The original run fails both cases
+in5.01s. Weak capture observations never promote an owner. All observations precede
+explicit fixture repair and actual worker joins, so the failing tests leave no
+queued captures, heavy tickets or threads behind. This is a controlled internal
+failure boundary, not evidence of an ordinary production panic, OOM or the cause
+of any historical discard, watchdog or registry failure.
+
+Permanent close now recovers a poisoned guard solely to mark the lane stopped and
+take its actual queue. Accepted callables and terminal retirement callbacks are
+destroyed outside the queue mutex through the unchanged AdmittedJob ordering.
+This breaks the queued reservation/Shared ownership cycle even when no strict
+receiving waiter exists. The existing strict poison-waiter cleanup remains intact.
+New admission remains refused, poison is not cleared, and actual claimed kernels
+keep their readers and reservations until terminal return. Worker scheduling,
+cancellation predicates, source/request/OwnACK, queue bounds and realtime behavior
+are unchanged.
+
+The callback regression additionally holds terminal cleanup after actual callable
+capture END. Its original cold reservation and heavy capability must remain held
+until that callback ends; poisoned try_lock distinguishes an acquired guard from
+WouldBlock to check lock freedom. Independent claimed reader owners remain alive
+through close and end only when their workers are released and joined. Systems
+and Methods PRE clear this scoped correction. Frozen Systems review, focused
+ColdJobs and affected load controls, strict spec/format/source checks and the one
+independent final actual-diff review precede publication.
+
+This substantive failure-retirement split grows the plan to58. NativeREST57 retains
+ENTIRE former nativeREST56 and FINAL58 retains ENTIRE former FINAL57. Productive
+Python/Torch, installed saving ZERO, every inherited negative/UNKNOWN and all
+native process, fullhost/Pydantic, numerical/CUDA/fresh-CPU, quality, platform and
+distribution gates remain unchanged.
+
+Frozen verification passes all23 selected ColdJobs cases in0.52s, after inspecting
+their actual compiled inventory, and eight exact queued-load controls in0.50s.
+These are31 distinct successful cases in two selections, not one green whole-system
+matrix. The load controls retain original request, epoch, placement, resident and
+shutdown cancellation, replacement loading tokens and a valid source's own ACK.
+The actual current Release/API build passes in43.92s with20 existing library
+warnings;35 Looper test warnings and the pinned einops0.6.1 warning remain. Only
+this result paragraph and task completion change after functionals; both Rust
+inputs keep their tested bytes. Final format, strict spec, source/stage/index and
+protected-binding checks and the one independent final staged-diff review remain
+required before publication. No model, CUDA, physical-pressure, device, listening,
+latency, footprint or whole-quality acceptance follows from this correction.

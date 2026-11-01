@@ -804,7 +804,22 @@ nativeREST55; FINAL57 retains ENTIRE former FINAL56 without omissions. Productio
 has one shared collector; this overlap proof does not establish the cause of the
 historical discard timeout or close any of the inherited failed/UNKNOWN gates.
 
-## 56. Remaining native parity before cutover
+## 56. Drain accepted queued owners during poisoned shutdown
+
+- [x] Reproduce permanent shutdown retaining accepted asynchronous queued captures,
+      reservations and heavy ownership after controlled queue-mutex poison.
+- [x] Recover the poisoned guard only for permanent close and queue extraction;
+      destroy accepted queued owners and terminal callbacks outside the mutex.
+- [x] Verify callback retirement ordering, independent claimed readers, full
+      reservation return and continued fail-closed admission without clearing poison.
+
+This practical failure-retirement split grows the plan to58. NativeREST57 retains
+ENTIRE former nativeREST56; FINAL58 retains ENTIRE former FINAL57 without omissions.
+Controlled mutex poison does not establish a historical failure cause or ordinary
+production panic. All native process, numerical, CUDA, fullhost, quality, platform
+and distribution gates remain open under their original requirements.
+
+## 57. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -821,10 +836,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP57, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP58, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 57. Combined regression and final architecture review
+## 58. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
