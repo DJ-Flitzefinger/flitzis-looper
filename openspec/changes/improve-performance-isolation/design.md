@@ -1,5 +1,37 @@
 # Performance audit and implementation design
 
+## STEP40 result: current shared-job playback participants
+
+An obsolete subscriber can retain its physical job and source readers after its
+PAD's source or content changes. The previous playback fence treated that PAD as
+a current participant solely because its interest had not yet retired. Its new
+playback could indefinitely defer a stopped surviving subscriber or abort their
+shared calculation. The control-side fence now reuses the existing complete
+subscriber currentness check, including exact source ownership, Native source
+currency, content, path and intent. Active interested Pair-deferred rows remain
+conservatively fenced until their placement mirror settles.
+Obsolete playback yields only when a nondeferred interested participant is proved
+current; a job with no such survivor retains its previous playback fence.
+
+This changes only playback eligibility and its existing worker stop Event. It
+does not detach stale subscribers, release readers, alter inference admission,
+reorder heavy FIFO work or bypass cancellation, actual memory pressure or final
+publication. Five new controller cases cover source/content replacement, retained
+heavy admission, current active participants, unsettled Pair mirrors and all-stale
+ownership through shutdown. The four replacement cases failed on the original
+predicate. A first post-fix check exposed an incorrect new-test assumption about
+an existing unavailable cache placeholder; the corrected assertion checks exact
+object and serialized metadata preservation instead of expecting its absence.
+
+96 distinct controller cases passed across the focused runs:22 shared-material
+cases on the final test source and74 unchanged compatible interest, admission,
+Pair, resource and batch cases. Three final static checks cover formatting,
+strict controller types and OpenSpec/whitespace. Owned Ruff checks passed. Initial
+writer setup built and verified its isolated Release/API with the22 known Rust
+warnings; existing einops0.6.1 warnings remain. This is no whole-matrix, inference,
+latency, device or hearing claim. ENTIRE former nativeREST40 and FINAL41 follow as
+STEP41 and FINAL42, preserving all original failures and UNKNOWN gates.
+
 ## STEP39 result: shared heavy-job admission and scoped playback fencing
 
 One native FIFO capability now covers complete manual/automatic BPM-Key work,

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         StemGenerationResult,
         StemProgressCallback,
     )
+    from flitzis_looper.models import StemCacheEntry
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 
@@ -189,6 +190,140 @@ def test_waiting_controller_job_withdraws_fifo_entry_when_own_playback_starts(
         analysis.close()
         if successor is not None:
             successor.close()
+
+
+def _pending_cache_metadata(controller: AppController) -> tuple[StemCacheEntry, str]:
+    previous = controller.project.stem_cache[0]
+    assert previous is not None
+    assert not previous.available
+    assert previous.pair is None
+    return previous, previous.model_dump_json()
+
+
+def _invalidate_shared_subscriber(
+    controller: AppController,
+    audio: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    stale: str,
+) -> None:
+    if stale == "content":
+        controller.project.pad_content[0] = PadContentIdentity(instance_id="3" * 32)
+    else:
+        source_current = audio.offline_stem_source_is_current
+        monkeypatch.setattr(
+            audio,
+            "offline_stem_source_is_current",
+            lambda slot, source: slot != 0 and source_current(slot, source),
+        )
+
+
+@pytest.mark.parametrize("stale", ["content", "source"])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_shared_playback_fence_revalidates_subscribers_after_source_change(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    stem_backend: FakeStemGenerationBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    stale: str,
+    *,
+    deferred: bool,
+) -> None:
+    tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
+    stems = controller.stems
+    analysis = OfflineWorkTicket()
+    try:
+        assert analysis.try_acquire()
+        assert stems.generate_stems_async(0)
+        assert stems.generate_stems_async(215)
+        for _ in range(2):
+            tasks.pop(0)()
+        stems.on_frame_render()
+        assert not tasks
+        (job,) = stems._jobs.values()
+        rows = {row.sample_id: row for row in job.subscribers()}
+        assert set(rows) == {0, 215}
+        assert all(stems._generation_subscriber_current(row, job) for row in rows.values())
+        previous, previous_metadata = _pending_cache_metadata(controller)
+
+        controller.session.active_sample_ids.add(0)
+        stems.on_frame_render()
+        assert job.playback_blocked.is_set()
+        assert stems.stem_generation_stage(215) == "Waiting for playback to stop"
+        _invalidate_shared_subscriber(controller, audio_engine_mock, monkeypatch, stale)
+        assert not stems._generation_subscriber_current(rows[0], job)
+        assert stems._generation_subscriber_current(rows[215], job)
+        if deferred:
+            stems._pair_deferred_sample_ids = {0}
+            stems.on_frame_render()
+            assert job.playback_blocked.is_set()
+            assert stems.stem_generation_stage(215) == "Waiting for playback to stop"
+            assert not tasks
+            stems._pair_deferred_sample_ids = set()
+
+        stems.on_frame_render()
+        assert len(job.subscribers()) == 2  # Stale custody has not retired yet.
+        assert not job.playback_blocked.is_set()
+        assert stems.stem_generation_stage(215) != "Waiting for playback to stop"
+        assert not tasks  # Full heavy-job admission still owns its independent gate.
+        assert not stem_backend.requests
+        analysis.close()
+        stems.on_frame_render()
+        assert len(tasks) == 1
+        tasks.pop(0)()
+        stems.on_frame_render()
+        assert len(stem_backend.requests) == 1
+        assert controller.session.active_sample_ids == {0}
+        assert stems.stem_generation_error(215) is None
+        assert controller.project.stem_cache[0] is previous
+        assert previous.model_dump_json() == previous_metadata
+    finally:
+        analysis.close()
+        stems.shut_down()
+
+
+def test_obsolete_playback_cannot_admit_shared_work_without_a_current_survivor(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    stem_backend: FakeStemGenerationBackend,
+) -> None:
+    tasks, _ = _shared(controller, audio_engine_mock, tmp_path)
+    stems = controller.stems
+    analysis, successor = OfflineWorkTicket(), OfflineWorkTicket()
+    try:
+        assert analysis.try_acquire()
+        assert stems.generate_stems_async(0)
+        assert stems.generate_stems_async(215)
+        for _ in range(2):
+            tasks.pop(0)()
+        stems.on_frame_render()
+        (job,) = stems._jobs.values()
+        original_source, subscribers = job.source, job.subscribers()
+        assert original_source is not None
+        for slot, identity in ((0, "3" * 32), (215, "4" * 32)):
+            controller.project.pad_content[slot] = PadContentIdentity(instance_id=identity)
+        controller.session.active_sample_ids.add(0)
+        stems.on_frame_render()
+        assert job.playback_blocked.is_set()
+        assert not any(stems._generation_subscriber_current(row, job) for row in subscribers)
+        assert job.source is original_source
+        assert job.subscribers() == subscribers
+        assert all(row.interest_owner.current for row in subscribers)
+        assert not job.heavy_work.registered
+        analysis.close()
+        assert successor.try_acquire()
+        successor.close()
+        stems.on_frame_render()
+        assert not tasks
+        assert not stem_backend.requests
+        assert not job.cancel_event.is_set()
+    finally:
+        analysis.close()
+        successor.close()
+        stems.shut_down()
+    assert not job.subscribers()
+    assert job.source is None
 
 
 def test_coalesced_alignment_retains_device_for_current_shared_subscribers(

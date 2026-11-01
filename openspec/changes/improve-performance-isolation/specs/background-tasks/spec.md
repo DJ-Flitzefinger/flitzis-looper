@@ -334,6 +334,14 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 - **AND** current requested subscribers, original source/cancellation, actual memory pressure and publication guards remain authoritative
 - **AND** no PAD is stopped automatically to make background work eligible
 
+#### Scenario: A shared job retains an obsolete playing subscriber
+- **GIVEN** a shared physical stem job retains a stopped current subscriber and another subscriber whose source or content has changed
+- **WHEN** the obsolete subscriber's PAD plays while its old readers are still retained
+- **THEN** that unrelated current playback does not defer or abort the surviving subscriber's calculation
+- **AND** currentness is checked against the existing complete source, content, placement and intent authority without releasing the obsolete reader's custody
+- **AND** an active interested subscriber in an unsettled Pair mirror continues to fence work until that mirror settles
+- **AND** heavy admission, memory pressure, cancellation and final publication checks retain their existing authority
+
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete
 GPUs, Intel/AMD integrated GPUs and CPU paths using actual provider/model

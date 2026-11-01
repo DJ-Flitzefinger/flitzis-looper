@@ -1666,10 +1666,26 @@ class StemController(BaseController):  # noqa: PLR0904
 
     def _job_playback_blocked(self, job: StemGenerationJob) -> bool:
         """Only this physical job's surviving requested PADs fence its work."""
-        return any(
-            row.sample_id in self._session.active_sample_ids
+        deferred = getattr(self, "_pair_deferred_sample_ids", ())
+        subscribers = job.subscribers()
+        playing = tuple(
+            row
+            for row in subscribers
+            if row.sample_id in self._session.active_sample_ids
             and _generation_interest_allows_preparation(row.interest_owner)
-            for row in job.subscribers()
+        )
+        if not playing:
+            return False
+        current = {
+            row.sample_id
+            for row in subscribers
+            if row.sample_id not in deferred
+            and _generation_interest_allows_preparation(row.interest_owner)
+            and self._generation_subscriber_current(row, job)
+        }
+        # Obsolete playback can yield only to a proven current participant.
+        return not current or any(
+            row.sample_id in deferred or row.sample_id in current for row in playing
         )
 
     def _stem_preparation_count(self) -> int:
