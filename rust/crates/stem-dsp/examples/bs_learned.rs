@@ -8,7 +8,7 @@ mod workspace;
 static WORKSPACE: workspace::WorkspaceAllocator = workspace::WorkspaceAllocator::new();
 
 use flitzis_stem_dsp::{
-    Error, Geometry, RATE, SpectralWorkspace, Spectrum,
+    Error, Geometry, RATE, SpectralPlan, SpectralWorkspace, Spectrum,
     learned::{Model, activation_bytes, weight_bytes},
     track::{TrackPlan, process_track},
 };
@@ -41,6 +41,14 @@ fn execute(status: &mut impl Write) -> Result<()> {
     }
     if args.len() == 1 && args[0] == "--spectral-workspace-control" {
         return spectral_workspace_control(status);
+    }
+    if args.len() == 2 && args[0] == "--spectral-workspace-reject-control" {
+        let prefix = args[1]
+            .to_str()
+            .ok_or("invalid prefix")?
+            .parse()
+            .map_err(|_| "invalid prefix")?;
+        return spectral_workspace_rejection(status, prefix);
     }
     if args.len() == 2 && args[0] == "--io-control" {
         return trial_io::control(Path::new(&args[1]), &WORKSPACE, status);
@@ -112,10 +120,9 @@ fn execute(status: &mut impl Write) -> Result<()> {
     // A later failure invalidates ALL new empty/partial private files. Nothing
     // in the sealed phase opens/reopens an output or formats platform error text.
     let mut outputs = Outputs::prepare(Path::new(&args[5]), mode == "chunk", args.len() == 7)?;
-    // Retain BOTH directional plans/FFT buffers/windows and maximum inverse
-    // vectors before seal. No FFT planning or backing growth occurs per sample.
-    // This is retained pre-NN process memory, NOT part of the arena or admission.
-    let mut spectral_workspace = SpectralWorkspace::new(
+    // Retain selected plans/windows before seal; their System/native backing
+    // still needs a complete process allowance. Working vectors use the arena.
+    let spectral_plan = SpectralPlan::new(
         if mode == "chunk" {
             frames
         } else {
@@ -125,6 +132,7 @@ fn execute(status: &mut impl Write) -> Result<()> {
         &|| false,
     )?;
     WORKSPACE.seal(capacity)?;
+    let mut spectral_workspace = SpectralWorkspace::from_plan(spectral_plan, &|| false)?;
     let model = Model::load(&mut weights, &expected, &|| false)?;
     if let Outputs::Chunk(output) = &mut outputs {
         let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
@@ -305,16 +313,45 @@ fn workspace_control(status: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+fn spectral_fixture_capacity(layouts: &[std::alloc::Layout; 6]) -> Result<usize> {
+    if layouts.iter().any(|layout| layout.align() > 16) {
+        return Err("unsupported spectral fixture alignment".into());
+    }
+    let geometry = Geometry::new(4099, RATE)?;
+    // Fixture source sequence: persistent working prefix, then features/all4
+    // masks/output. Every cycle releases all three back to the exact free tail.
+    // Count16B headers/rounding and one structural32B minimum splittable tail.
+    let working: usize = layouts
+        .iter()
+        .filter(|layout| layout.size() != 0)
+        .map(|layout| (layout.size() + 16).div_ceil(16) * 16)
+        .sum();
+    Ok(working
+        + [geometry.feature_len(), geometry.mask_len(), 8 * 4099]
+            .into_iter()
+            .map(|floats| (floats * 4 + 16).div_ceil(16) * 16)
+            .sum::<usize>()
+        + 32)
+}
+
 fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
     // FIXTURE ONLY: original process admission still belongs to the caller.
     // Three later requests per cycle are features, all4 masks and output;
     // the actual retained FFT/inverse path requests NO other Rust backing.
-    let mut workspace = SpectralWorkspace::new(4099, RATE, &|| false)?;
+    let plan = SpectralPlan::new(4099, RATE, &|| false)?;
+    let layouts = plan.allocation_layouts();
+    let capacity = spectral_fixture_capacity(&layouts)?;
     let pcm: Vec<_> = (0..2 * 4099)
         .map(|i| (i % 17) as f32 * 0.001 - 0.008)
         .collect();
-    WORKSPACE.seal(1 << 20)?;
+    WORKSPACE.seal(capacity)?;
+    let prefix = WORKSPACE.stats();
+    let mut workspace = SpectralWorkspace::from_plan(plan, &|| false)?;
     let before = WORKSPACE.stats();
+    let requests = layouts.iter().filter(|layout| layout.size() != 0).count();
+    if before.allocations - prefix.allocations != requests || before.failures != 0 {
+        return Err("spectral vector preparation changed its source recipe".into());
+    }
     for frames in [4099, 1025, 2501, 4099, 1025] {
         let spectrum = workspace.analyze(&pcm[..2 * frames], RATE, &|| false)?;
         let mut mask = vec![0.0; spectrum.geometry().mask_len()];
@@ -337,10 +374,62 @@ fn spectral_workspace_control(status: &mut impl Write) -> Result<()> {
     {
         return Err("retained spectral workspace backing changed".into());
     }
+    drop(workspace);
+    let closed = WORKSPACE.stats();
+    if closed.live != prefix.live || closed.failures != 0 {
+        return Err("spectral working vectors did not retire".into());
+    }
     writeln!(status,
-        "BS retained spectral control: cycles=5 payload_requests=15 capacity={} peak={} live={} failures={}",
-        after.capacity, after.peak, after.live, after.failures,
+        "BS retained spectral control: cycles=5 payload_requests=15 working_requests={requests} working_bytes={} capacity={} peak={} live={} failures={}",
+        layouts.iter().map(|layout| layout.size()).sum::<usize>(),
+        closed.capacity, closed.peak, closed.live, closed.failures,
     ).at("status.write")?;
+    Ok(())
+}
+
+fn spectral_workspace_rejection(status: &mut impl Write, prefix: usize) -> Result<()> {
+    // Deliberately insufficient FIXTURE ONLY, never a model/process budget.
+    let plan = SpectralPlan::new(4099, RATE, &|| false)?;
+    let layouts = plan.allocation_layouts();
+    if prefix >= layouts.len() || layouts.iter().any(|layout| layout.size() == 0) {
+        return Err("unsupported rejection fixture prefix".into());
+    }
+    let phases = [
+        "analyze.fft",
+        "analyze.scratch",
+        "inverse.fft",
+        "inverse.scratch",
+        "inverse.envelope",
+        "inverse.accumulation",
+    ];
+    // These fixture layouts have alignment<=16. Each uses one16B header and
+    // rounds its extent to16; keep one minimum32B free tail for the next refusal.
+    if layouts.iter().any(|layout| layout.align() > 16) {
+        return Err("unsupported rejection fixture alignment".into());
+    }
+    let capacity = 32
+        + layouts[..prefix]
+            .iter()
+            .map(|layout| (layout.size() + 16).div_ceil(16) * 16)
+            .sum::<usize>();
+    WORKSPACE.seal(capacity)?;
+    let expected = Error::Allocation {
+        phase: phases[prefix],
+        requested_bytes: layouts[prefix].size(),
+    };
+    match SpectralWorkspace::from_plan(plan, &|| false) {
+        Err(error) if error == expected => {}
+        _ => return Err("spectral working-vector rejection changed".into()),
+    }
+    let after = WORKSPACE.stats();
+    if after.live != 0 || after.failures != 1 || after.allocations != prefix {
+        return Err("spectral prefix refusal did not retire all arena owners".into());
+    }
+    writeln!(
+        status,
+        "BS spectral rejection control: prefix={prefix} error=({expected}) live=0 failures=1"
+    )
+    .at("status.write")?;
     Ok(())
 }
 

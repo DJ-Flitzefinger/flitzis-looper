@@ -1,5 +1,121 @@
 # Performance audit and implementation design
 
+## STEP36 impact: arena-owned spectral working storage
+
+The actual learned CLI now prepares an opaque SpectralPlan containing both
+selected RustFFT plans, immutable scratch lengths and both original periodic
+Hann windows before seal. Consuming that plan after seal allocates ONLY the
+forward buffer/scratch, inverse buffer/scratch and maximum inverse envelope/
+accumulation vectors, in that order, before Model::load. No planner, cache,
+twiddle construction, Arc clone or Hann cosine runs in from_plan. Geometry is
+bound into the consumed plan; track mode still prepares the original485100
+frames even for a short source. Zero-length scratch has no allocation event.
+
+This transfers six retained working-vector owners from System to the existing
+arena, without changing FFT selection, expressions, reduction order, maximum
+geometry, precision, masks, model or track ownership. The ordinary allocating
+constructor preserves its original planner/cache lifetime and allocation order.
+Both paths share numerical kernels; an independent ordinary-prepared path is
+retained for exact-bit comparisons. Fallible partial construction releases all
+successful arena prefixes, and later error/cancel invalidates the entire private
+attempt. Plans/windows still dispose normally through their original owners.
+
+The complete SAME-production sparse-header recipe now starts with the exact
+nonzero layouts supplied by the actual retained SpectralPlan. That persistent
+prefix stays live through every original all-four diagnostic, optional-original
+forward, single-mask, B1/B2 and complete-track episode. The old764894800B arena
+receipt is historical for the old topology, not reused as sufficient here.
+The full new address-highwater derivation and concrete replay must cover both
+16-aligned base residues, exact packing/free-list restoration and cleanup.
+This is an arena-only proof, never a measured process/RSS or successful model.
+
+The selected FFT Arc/twiddle graph, windows, planner/cache/native RandomState
+retention, prepared I/O/arguments/stdio, original2MiB stack, images/COW, native
+heaps/CRT/TLS/Loader, File NtReadFile/NtWriteFile/optional waits/error conversion,
+seek/write/flush/sync/CloseHandle, normal exit/error/panic remain OPEN. System
+frees do not prove native retention disappears. Arena backing inside PrivateUsage
+is counted once. Snapshots/no-growth/private heaps/Job failure caps/import lists
+remain insufficient successful prospective process allowances.
+
+This necessary ownership split grows the plan to38: NEXT37 retains the ENTIRE
+former nativeREST36 and FINAL38 the ENTIRE former FINAL37. FIRST complete actual
+retainedPRENN/native/process closure and sufficient fresh ACTUAL ORIGINAL
+admission, THEN genuine original full LearnedMasks/PCM/full485100/1101/B1/B2/
+fulltrack at mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4. No standalone model
+promise query, NN/oracle for numbers or unchanged constrained CUDA retry.
+CPU math/allocator/I/O/FFT alone is no meaningful changed CUDA condition.
+ALL inherited mandatory actual native NVIDIA CUDA/real same-model device fault
+-> actual Tree AND Reader END -> fresh CPU/fallback/CPU-only, COMPLETE practical
+Demucs, all source/frontend/graph/weights/exporter/runtime/bootstrap/manifest/
+provider/native/compiler/binary/full-producer/mapped-image/OSarch roles, portable
+Windows EXE AND honest actual Linux/macOS, CPU/CUDA releases/CRT/licenses/LGPL
+source+three patches/NVIDIA notices/installer/recovery/full footprint, quality/
+functions/interactions/resources/cancel/AMP and final gates remain unchanged.
+Fullhost/narrow validator/schema/Pydantic/32keys UNKNOWN,32 parent failures,
+distinct216 watchdog UNCOMPARED, registry/pressure UNKNOWN, Overlap OPEN and
+combined2/4/6<=10 remain. Separate App3.14/Torch2.12/cu130 versus Beat3.12/
+Torch2.8/cu128-or-CPU, independent Rust/thinPyO3/trial-only provenance remain.
+No floors/caps/Job budgets, foreign processes, OS/pagefile, geometry, precision,
+quality or productive dependency/installer changes; no installed/runtime/RSS gain.
+
+### STEP36 verification receipt
+
+Fresh Release tests PASS42/0 failed/0 ignored:13 learned-library,10 spectral,
+5 track and14 example controls. The expanded spectral checks compare the split
+workspace against the ordinary prepared route and original allocating kernels,
+including exact feature/all-four complex-mask PCM bits at full485100/1101 and
+subsequent short-tail reuse; single-stem layout, malformed extents/rates, early/
+mid preparation cancellation, partial reconstruction, overflow and clean reuse
+remain covered. These are spectral/operator/ownership controls, not learned NN.
+
+The entire new original recipe derives AND explicitly replays768857616B for
+BOTH16-aligned base residues. Actual selected-plan working layouts are four
+16384B Complex32 requests plus two1948592B inverse float requests, all align4:
+3962720B payload plus allocator overhead. Address highwater/charged peak is
+768857568 at residue0 and768857584 at residue16, followed by the structural32B
+minimum splittable tail. Each exact replay performs5183960 verifier requests,
+not an observed NN allocation count. Model metadata remains5456/6272/96/7936B
+align8 from actual private types. Every original packing/band/transformer/sample/
+B1/B2/track restoration and terminal coalescing remains checked. Complete
+process admission, other selected FFT branches and other OSes remain unproved.
+
+The initial outer build harness stopped at an overly broad workspace format
+check on unchanged Looper files. The corrected focused Rustfmt/strict all-target
+Clippy/Release example checks PASS; build harness PASS1 in20.05s. The first actual
+spectral fixture then honestly FAILED with its former1MiB arena at inverse.output
+request131168B, because the new persistent prefix now also occupies its backing.
+Its original1/1 scope closed. No model ran. The FIXTURE-only correction derives
+1065040B from113792B charged prefix +951216B maximum simultaneous feature/mask/
+output requests +32B structural tail, retaining4099 frames and all five cycles.
+An added SAME-allocator test explicitly validates both residues, all cycles,
+exact persistent-state restoration and terminal cleanup. Delta harness PASS1
+in2.51s: that ONE new Release test passed,14 unrelated example tests filtered;
+fresh strict Clippy/format/build PASS. The prior42 remain compatible reused
+results, making43 distinct successful controls, not a new final43-case run.
+
+Final outer checks PASS2 in4.69s: strict OpenSpec/four Markdown files/11 local
+targets, default/optional/app isolation, actual nonthreaded packing and unchanged
+productive closures/pins/locks; ONE actual spectral reuse process plus SIX
+actual typed allocation-prefix refusals. Reuse reports6 working requests,
+113672B fixture payload,15 later requests/five cycles, capacity1065040,
+charged peak1065008 and final live0/failures0. Each refusal preserves its exact
+phase/requested bytes and retires every successful prefix: live0/failures1.
+ONE original observer precedes ONE joined executor:7/7 scopes closed,
+pending/inflight0, sampling errors[]. These counters are not native no-growth,
+model capacity or a successful prospective process allowance.
+
+Actual Windows x64 Release learned EXE1236992B SHA256
+1d713ed80af638585458b4b6f02414e7ac678b717480183ecb9b1560779e21ca is component
+evidence ONLY, not Compiler/FullProducer/MappedImages/non-Windows/learned/quality/
+distribution acceptance. No weights, model, oracle, full-model promise query or
+CUDA attempt occurred. Compatible STEP25/26/28/29/30/31/32/34/35 and older numerical/
+NN/CPU-cancel/CUDA-negative/role evidence remain reused within original limits;
+STEP33's old topology is superseded by the complete NEW arena-only recipe here.
+Source, pins, source-owned layout API, controls and recipes retain durable facts;
+generated logs/reports remain reconstructible. Productive Torch/installer and
+installed savings ZERO remain unchanged. ALL native/process and inherited final
+gates stated above stay OPEN.
+
 ## STEP35 impact: explicit private-output disposal
 
 The standalone learned CLI now owns every prepared output buffer through a

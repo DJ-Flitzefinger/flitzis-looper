@@ -200,8 +200,21 @@ struct Transform {
     window: Vec<f32>,
 }
 
-impl Transform {
+struct TransformPlan {
+    fft: Arc<dyn rustfft::Fft<f32>>,
+    window: Vec<f32>,
+    scratch_len: usize,
+}
+
+impl TransformPlan {
     fn new(inverse: bool, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        Ok(Self::prepare(inverse, cancelled)?.0)
+    }
+
+    fn prepare(
+        inverse: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(Self, FftPlanner<f32>), Error> {
         checkpoint(cancelled)?;
         let mut planner = FftPlanner::new();
         let fft = if inverse {
@@ -227,8 +240,27 @@ impl Transform {
             let angle = (i as f32) * (2.0_f32 * std::f32::consts::PI / FFT as f32);
             *value = (1.0 - angle.cos()) * 0.5;
         }
+        Ok((
+            Self {
+                fft,
+                window,
+                scratch_len,
+            },
+            planner,
+        ))
+    }
+}
+
+impl Transform {
+    fn new(inverse: bool, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        // Retain the legacy planner/cache lifetime through buffer preparation.
+        let (plan, _planner) = TransformPlan::prepare(inverse, cancelled)?;
+        Self::from_plan(plan, inverse)
+    }
+
+    fn from_plan(plan: TransformPlan, inverse: bool) -> Result<Self, Error> {
         Ok(Self {
-            fft,
+            fft: plan.fft,
             buffer: zeros(
                 FFT,
                 if inverse {
@@ -238,14 +270,14 @@ impl Transform {
                 },
             )?,
             scratch: zeros(
-                scratch_len,
+                plan.scratch_len,
                 if inverse {
                     "inverse.scratch"
                 } else {
                     "analyze.scratch"
                 },
             )?,
-            window,
+            window: plan.window,
         })
     }
 
@@ -255,10 +287,46 @@ impl Transform {
     }
 }
 
+/// Consumed spectral plans and Hann windows, without FFT working vectors.
+/// Planning may use System/native backing. Keeping it outside an allocation
+/// boundary does not remove that backing from the complete process allowance.
+pub struct SpectralPlan {
+    geometry: Geometry,
+    forward: TransformPlan,
+    inverse: TransformPlan,
+}
+
+impl SpectralPlan {
+    pub fn new(max_frames: usize, rate: u32, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        let geometry = Geometry::new(max_frames, rate)?;
+        Ok(Self {
+            geometry,
+            forward: TransformPlan::new(false, cancelled)?,
+            inverse: TransformPlan::new(true, cancelled)?,
+        })
+    }
+
+    /// Exact ordered vector requests made by from_plan for THIS retained plan.
+    /// Zero-sized layouts make no allocator request. This excludes the plans,
+    /// windows, allocator overhead and every other process/model allocation.
+    pub fn allocation_layouts(&self) -> [std::alloc::Layout; 6] {
+        use std::alloc::Layout;
+        [
+            Layout::array::<Complex32>(FFT).unwrap(),
+            Layout::array::<Complex32>(self.forward.scratch_len).unwrap(),
+            Layout::array::<Complex32>(FFT).unwrap(),
+            Layout::array::<Complex32>(self.inverse.scratch_len).unwrap(),
+            Layout::array::<f32>(self.geometry.inverse_frames).unwrap(),
+            Layout::array::<f32>(self.geometry.inverse_frames).unwrap(),
+        ]
+    }
+}
+
 /// Retained spectral state for serial, externally admitted offline work.
-/// Prepare before the caller's allocation boundary; no plan, cache, window or
-/// FFT scratch is allocated by later calls. Features, masks and returned PCM
-/// still need separate backing and complete process admission.
+/// Prepare completely with new, or prepare a SpectralPlan before an allocation
+/// boundary and consume it with from_plan afterward. Later calls allocate no
+/// plan/cache/window/FFT scratch. Features, masks and returned PCM still need
+/// separate backing and complete process admission.
 pub struct SpectralWorkspace {
     max_frames: usize,
     forward: Transform,
@@ -266,6 +334,22 @@ pub struct SpectralWorkspace {
 }
 
 impl SpectralWorkspace {
+    /// Consume already selected plans/windows and allocate only working vectors.
+    /// No planner, twiddle construction or Hann cosine runs in this phase.
+    pub fn from_plan(plan: SpectralPlan, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
+        checkpoint(cancelled)?;
+        let g = plan.geometry;
+        Ok(Self {
+            max_frames: g.frames,
+            forward: Transform::from_plan(plan.forward, false)?,
+            inverse: Inverse::from_transform(
+                g,
+                Transform::from_plan(plan.inverse, true)?,
+                cancelled,
+            )?,
+        })
+    }
+
     pub fn new(max_frames: usize, rate: u32, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
         let geometry = Geometry::new(max_frames, rate)?;
         Ok(Self {
@@ -452,6 +536,14 @@ struct Inverse {
 impl Inverse {
     fn new(g: Geometry, cancelled: &dyn Fn() -> bool) -> Result<Self, Error> {
         let transform = Transform::new(true, cancelled)?;
+        Self::from_transform(g, transform, cancelled)
+    }
+
+    fn from_transform(
+        g: Geometry,
+        transform: Transform,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, Error> {
         let mut inverse = Self {
             transform,
             envelope: zeros(g.inverse_frames, "inverse.envelope")?,

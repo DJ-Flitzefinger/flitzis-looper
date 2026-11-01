@@ -2,7 +2,7 @@
 //! This module changes header storage, NEVER the production allocator algorithm.
 use super::*;
 use flitzis_stem_dsp::{
-    CHANNELS, Geometry, MAX_CHUNK_FRAMES, RATE, STEMS,
+    CHANNELS, Geometry, MAX_CHUNK_FRAMES, RATE, STEMS, SpectralPlan,
     learned::{BANDS, DEPTH, DIM, FEATURES, Model, band_width, weight_bytes},
     track::{BATCH, CHUNK, RING},
 };
@@ -298,7 +298,8 @@ impl Recipe {
         self.d(pcm);
         let masks = self.all_masks(s);
         let prediction = self.a(STEMS * CHANNELS * frames);
-        // Retained FFT/inverse owners are PRESEAL, NOT erased process memory.
+        // Working vectors remain in the persistent prefix. Plans/windows are
+        // PRESEAL System owners, never erased from complete process accounting.
         for address in [prediction, masks, features] {
             self.d(address);
         }
@@ -365,7 +366,17 @@ impl Recipe {
         assert_eq!(self.state(), model);
     }
 
-    fn run(&mut self) {
+    fn spectral(&mut self, layouts: &[Layout; 6]) {
+        for &layout in layouts {
+            // Vec::try_reserve_exact(0) does not call the allocator.
+            if layout.size() != 0 {
+                self.layout(layout);
+            }
+        }
+    }
+
+    fn run(&mut self, layouts: &[Layout; 6]) {
+        self.spectral(layouts);
         self.model();
         self.diagnostic(MAX_CHUNK_FRAMES, true);
         self.track();
@@ -386,33 +397,71 @@ fn complete_original_source_recipe_uses_actual_allocator_and_exact_extent() {
     assert_eq!(HEADER, 16);
     assert_eq!(ALIGN, 16);
     assert_eq!(Geometry::new(CHUNK, RATE).unwrap().steps(), 1101);
+    // These are the actual selected retained plans, not a guessed FFT branch,
+    // trace of model requests or a full-process/native backing claim.
+    let plan = SpectralPlan::new(CHUNK, RATE, &|| false).unwrap();
+    let layouts = plan.allocation_layouts();
     // A virtual Layout-valid tail derives ADDRESS high water, never max-live
     // arithmetic, RAM headroom, guessed MiB margin or binary monotonic search.
     let discovery = (isize::MAX as usize - 8192) & !(ALIGN - 1);
     let mut extent = 0;
     for residue in [0, 16] {
         let mut recipe = Recipe::new(discovery, residue);
-        recipe.run();
+        recipe.run(&layouts);
         extent = extent.max(recipe.reached);
     }
     // Keep the algorithm's exact minimum splittable tail. This structural32B
     // also avoids changing discovery placement by absorbing a final tiny tail.
     extent += HEADER + ALIGN;
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
-    assert_eq!(
-        extent, 764_894_800,
-        "reconcile the recorded Windows x64 recipe receipt"
-    );
+    if std::is_x86_feature_detected!("avx") && std::is_x86_feature_detected!("fma") {
+        assert_eq!(
+            extent, 768_857_616,
+            "reconcile the recorded Windows x64 AVX/FMA recipe receipt"
+        );
+    }
     for residue in [0, 16] {
         let mut recipe = Recipe::new(extent, residue);
-        recipe.run(); // EXPLICIT validation; capacity monotonicity is NOT assumed
+        recipe.run(&layouts); // EXPLICIT replay; no capacity monotonicity assumption
         println!(
-            "arena-only extent={extent} residue={residue} highwater={} peak={} requests={} metadata={:?}",
+            "arena-only extent={extent} residue={residue} highwater={} peak={} requests={} metadata={:?} spectral={layouts:?}",
             recipe.reached,
             recipe.pool.stats.peak,
             recipe.pool.stats.allocations,
             Model::allocation_metadata_layouts()
         );
+    }
+}
+
+#[test]
+fn complete_spectral_fixture_restores_the_persistent_working_prefix() {
+    let plan = SpectralPlan::new(4099, RATE, &|| false).unwrap();
+    let layouts = plan.allocation_layouts();
+    let capacity = crate::spectral_fixture_capacity(&layouts).unwrap();
+    for residue in [0, 16] {
+        let mut recipe = Recipe::new(capacity, residue);
+        recipe.spectral(&layouts);
+        let prefix = recipe.state();
+        for frames in [4099, 1025, 2501, 4099, 1025] {
+            let geometry = Geometry::new(frames, RATE).unwrap();
+            let features = recipe.a(geometry.feature_len());
+            let masks = recipe.a(geometry.mask_len());
+            let output = recipe.a(STEMS * CHANNELS * frames);
+            for owner in [output, masks, features] {
+                recipe.d(owner);
+            }
+            assert_eq!(recipe.state(), prefix);
+        }
+        println!(
+            "spectral-fixture extent={capacity} residue={residue} highwater={} layouts={layouts:?}",
+            recipe.reached
+        );
+        let owners: Vec<_> = recipe.owners.keys().copied().collect();
+        for owner in owners {
+            recipe.d(owner);
+        }
+        assert_eq!(recipe.state().free, [(0, capacity, END)]);
+        assert_eq!(recipe.pool.stats.failures, 0);
     }
 }
 
@@ -506,9 +555,12 @@ fn failed_allocation_preserves_each_attention_prefix_and_cleanup_restores_model(
     // Exercise every allocation prefix of the largest attention-owner episode,
     // including the norm release. No learned arithmetic or host failure induced.
     let s = Geometry::new(CHUNK, RATE).unwrap().steps();
+    let plan = SpectralPlan::new(CHUNK, RATE, &|| false).unwrap();
+    let layouts = plan.allocation_layouts();
     for residue in [0, 16] {
         for prefix in 0..=12 {
             let mut recipe = Recipe::new(1 << 30, residue);
+            recipe.spectral(&layouts);
             recipe.model();
             let model = recipe.state();
             let mut transient = Vec::new();

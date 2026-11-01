@@ -505,7 +505,24 @@ ENTIRE former nativeREST35 and FINAL37 ENTIRE former FINAL36. Removing a
 previously permitted destructor path does not complete native I/O/close/exit/
 TLS/Loader backing or justify a new NN/oracle/promise query/CUDA retry.
 
-## 36. Remaining native parity before cutover
+## 36. Arena-owned spectral working storage
+
+- [x] Consume opaque preselected plans/windows after seal and allocate the six
+      exact working-vector owners in the shared arena before model loading.
+- [x] Derive and explicitly replay the complete new SAME-production allocator
+      recipe with actual selected-plan layouts, persistent prefix, both base
+      residues and every original diagnostic/B1/B2/track lifetime.
+- [x] Verify exact original spectral bits, full485100/1101/tail reuse and
+      cancellation/recovery plus every actual fallible working-vector prefix.
+- [x] Retain the COMPLETE native/process/admission/original learned/CUDA/Demucs/
+      roles/platforms/quality/distribution and final prerequisites unchanged.
+
+This necessary ownership split grows the plan to38. STEP37 retains ENTIRE former
+nativeREST36 and FINAL38 ENTIRE former FINAL37. Moving retained working vectors
+does not remove the actual plans/windows/System/native process gaps or authorize
+a model promise query, NN/oracle or unchanged CUDA retry.
+
+## 37. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -522,10 +539,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP37, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP38, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 37. Combined regression and final architecture review
+## 38. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

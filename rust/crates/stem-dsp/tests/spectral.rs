@@ -1,6 +1,6 @@
 use flitzis_stem_dsp::{
     CHANNELS, Error, FFT, Geometry, MAX_CHUNK_FRAMES, MAX_TRANSIENT_BYTES, RATE, STEMS,
-    SpectralWorkspace, Spectrum,
+    SpectralPlan, SpectralWorkspace, Spectrum,
 };
 use std::cell::Cell;
 
@@ -216,12 +216,22 @@ fn inverse_destination_failures_and_late_cancel_invalidate_private_attempt() {
 #[test]
 fn retained_workspace_rebuilds_actual_envelopes_and_preserves_complete_bits() {
     let mut workspace = SpectralWorkspace::new(MAX_CHUNK_FRAMES, RATE, &|| false).unwrap();
+    let plan = SpectralPlan::new(MAX_CHUNK_FRAMES, RATE, &|| false).unwrap();
+    let mut split = SpectralWorkspace::from_plan(plan, &|| false).unwrap();
     // Shorter geometry after a long one must not inherit extra trailing windows.
     // Include the original full485100/1101 spectral geometry; no learned network.
     for frames in [4099, 1025, 2501, 4099, MAX_CHUNK_FRAMES, 1025] {
         let pcm = signal(frames);
         let original = Spectrum::analyze(&pcm, RATE, &|| false).unwrap();
         let prepared = workspace.analyze(&pcm, RATE, &|| false).unwrap();
+        let split_spectrum = split.analyze(&pcm, RATE, &|| false).unwrap();
+        assert!(
+            prepared
+                .features()
+                .iter()
+                .zip(split_spectrum.features())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
         assert!(
             original
                 .features()
@@ -235,6 +245,15 @@ fn retained_workspace_rebuilds_actual_envelopes_and_preserves_complete_bits() {
             .collect();
         let expected = original.reconstruct(&masks, &|| false).unwrap();
         let actual = workspace.reconstruct(&prepared, &masks, &|| false).unwrap();
+        let split_output = split
+            .reconstruct(&split_spectrum, &masks, &|| false)
+            .unwrap();
+        assert!(
+            actual
+                .iter()
+                .zip(&split_output)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
         assert!(
             actual
                 .iter()
@@ -272,7 +291,8 @@ fn retained_workspace_recovers_after_partial_work_and_rejects_extent_changes() {
     ));
     let frames = 8193;
     let pcm = signal(frames);
-    let mut workspace = SpectralWorkspace::new(frames, RATE, &|| false).unwrap();
+    let plan = SpectralPlan::new(frames, RATE, &|| false).unwrap();
+    let mut workspace = SpectralWorkspace::from_plan(plan, &|| false).unwrap();
     assert!(matches!(
         workspace.analyze(&signal(frames + 1), RATE, &|| false),
         Err(Error::Shape)
@@ -349,4 +369,37 @@ fn retained_workspace_recovers_after_partial_work_and_rejects_extent_changes() {
             .zip(expected)
             .all(|(a, b)| a.to_bits() == b.to_bits())
     );
+}
+
+#[test]
+fn spectral_plan_binds_geometry_and_cancellation_before_and_during_working_storage() {
+    for (frames, rate) in [(1024, RATE), (MAX_CHUNK_FRAMES + 1, RATE), (4099, 48_000)] {
+        assert!(matches!(
+            SpectralPlan::new(frames, rate, &|| false),
+            Err(Error::Shape)
+        ));
+    }
+    assert!(matches!(
+        SpectralPlan::new(4099, RATE, &|| true),
+        Err(Error::Cancelled)
+    ));
+    let plan = SpectralPlan::new(4099, RATE, &|| false).unwrap();
+    assert!(matches!(
+        SpectralWorkspace::from_plan(plan, &|| true),
+        Err(Error::Cancelled)
+    ));
+    let plan = SpectralPlan::new(4099, RATE, &|| false).unwrap();
+    let calls = Cell::new(0);
+    assert!(matches!(
+        SpectralWorkspace::from_plan(plan, &|| {
+            calls.set(calls.get() + 1);
+            calls.get() > 3
+        }),
+        Err(Error::Cancelled)
+    ));
+    assert!(calls.get() > 3); // Cancellation during envelope construction.
+    let plan = SpectralPlan::new(4099, RATE, &|| false).unwrap();
+    let mut workspace = SpectralWorkspace::from_plan(plan, &|| false).unwrap();
+    let spectrum = workspace.analyze(&signal(1025), RATE, &|| false).unwrap();
+    assert_eq!(spectrum.geometry().frames(), 1025);
 }
