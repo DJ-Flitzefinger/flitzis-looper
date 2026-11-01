@@ -744,7 +744,21 @@ ENTIRE former nativeREST51; FINAL53 retains ENTIRE former FINAL52 without omissi
 The separate asynchronous analysis submission path retains its existing queued
 cancellation limits; this step changes strict terminal-waiting preparation only.
 
-## 52. Remaining native parity before cutover
+## 52. Settle analysis bridge construction failures
+
+- [x] Reproduce cancellation-thread construction escaping diagnostic settlement,
+      skipping Native retirement and retaining a real heavy-work borrow.
+- [x] Construct the bridge inside existing failure settlement and preserve actual
+      Native retirement refusal, joined started bridges and admission error identity.
+- [x] Verify terminal failure, early cancellation, original admission precedence,
+      real FIFO successor progress and existing delayed-reader/finish controls.
+
+This practical supervision correction grows the plan to54. NativeREST53 retains
+ENTIRE former nativeREST52; FINAL54 retains ENTIRE former FINAL53 without omission.
+Asynchronous productive Native analysis queued cancellation remains a separate
+source-identified OPEN gap; this step does not change worker claim scheduling.
+
+## 53. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -761,10 +775,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP53, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP54, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 53. Combined regression and final architecture review
+## 54. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

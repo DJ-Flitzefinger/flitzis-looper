@@ -192,6 +192,7 @@ def test_heavy_admission_failure_uses_native_settlement_without_starting_branche
         raise error
 
     monkeypatch.setattr(jobs, "heavy_work_scope", fail_admission)
+    bridge_constructors = _refuse_cancellation_bridge_construction(monkeypatch)
     job = jobs.AnalysisJob(
         native,
         jobs._loaded_input(native.metadata()),
@@ -201,6 +202,7 @@ def test_heavy_admission_failure_uses_native_settlement_without_starting_branche
     )
     job._supervise()
 
+    assert bridge_constructors == []
     assert native.retirement_attempted.is_set()
     assert native.pcm_path is None
     assert not native.key_started.is_set()
@@ -573,6 +575,111 @@ def test_thread_start_failure_never_orphans_native_admission(
     assert native.finished.is_set()
     assert not native.key_started.is_set()
     assert list(tmp_path.iterdir()) == []
+
+
+def _refuse_cancellation_bridge_construction(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    constructor_calls: list[str] = []
+
+    def fail_bridge(*, name: str, **_kwargs: object) -> Thread:
+        assert name == "offline-analysis-cancellation"
+        constructor_calls.append(name)
+        msg = "OS cancellation thread construction failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(jobs, "Thread", fail_bridge)
+    return constructor_calls
+
+
+@pytest.mark.parametrize("refuse_retirement", [False, True])
+def test_cancellation_bridge_constructor_failure_settles_before_heavy_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, refuse_retirement: bool
+) -> None:
+    native = _NativeJob(retirement_error=refuse_retirement)
+    adapter = _ControlledAdapter()
+    job = jobs.AnalysisJob(
+        native, jobs._loaded_input(native.metadata()), tmp_path, BeatModelIdentity(), adapter
+    )
+    constructor_calls = _refuse_cancellation_bridge_construction(monkeypatch)
+    successor = None
+    try:
+        escaped = None
+        try:
+            job._supervise()
+        except RuntimeError as error:
+            escaped = error
+        successor = process.OfflineWorkTicket()
+        acquired = successor.try_acquire()
+        assert (escaped, native.retirement_attempted.is_set(), acquired) == (
+            None,
+            True,
+            not refuse_retirement,
+        )
+        assert constructor_calls == ["offline-analysis-cancellation"]
+        assert native.retirement_attempted.is_set()
+        assert native.pcm_path is None
+        assert not native.key_started.is_set()
+        assert not adapter.started.is_set()
+        assert not native.cancelled.is_set()
+        assert list(tmp_path.iterdir()) == []
+        if refuse_retirement:
+            assert not acquired
+            assert job._heavy_work is not None
+            assert not native.finished.is_set()
+            assert not job.done.is_set()
+            assert job.snapshot().stage == "retiring"
+            assert not native.result_json
+        else:
+            assert acquired
+            assert job._heavy_work is None
+            assert native.pcm_retired.is_set()
+            assert native.finished.is_set()
+            assert job.done.is_set()
+            assert job.snapshot().stage == "finished"
+            result = json.loads(native.result_json)
+            assert result["beat"]["status"] == "failed"
+            assert result["beat"]["reason"] == "OS cancellation thread construction failed"
+            assert result["key"]["status"] == "failed"
+    finally:
+        # A RED constructor escape intentionally leaves this fixture's real borrow.
+        # A refused fake Native retirement also needs explicit fixture-only cleanup.
+        if job._heavy_work is not None:
+            job._heavy_work.close()
+            job._heavy_work = None
+        if successor is not None:
+            successor.close()
+
+
+def test_cancelled_unstarted_analysis_settles_when_bridge_construction_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = _NativeJob()
+    adapter = _ControlledAdapter()
+    job = jobs.AnalysisJob(
+        native, jobs._loaded_input(native.metadata()), tmp_path, BeatModelIdentity(), adapter
+    )
+    constructor_calls = _refuse_cancellation_bridge_construction(monkeypatch)
+    job.cancel()
+
+    job._supervise()
+
+    assert constructor_calls == ["offline-analysis-cancellation"]
+    assert job.done.is_set()
+    assert job.snapshot().cancellation_requested
+    assert native.pcm_retired.is_set()
+    assert native.finished.is_set()
+    assert job._heavy_work is None
+    assert not native.key_started.is_set()
+    assert not adapter.started.is_set()
+    assert native.pcm_path is None
+    assert list(tmp_path.iterdir()) == []
+    result = json.loads(native.result_json)
+    assert result["beat"]["status"] == "cancelled"
+    assert result["key"]["status"] == "cancelled"
+    successor = process.OfflineWorkTicket()
+    try:
+        assert successor.try_acquire()
+    finally:
+        successor.close()
 
 
 @pytest.mark.parametrize(

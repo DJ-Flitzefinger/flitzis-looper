@@ -335,15 +335,16 @@ class AnalysisJob:
     def _supervise_owned(self, *, admission_error: OfflineWorkAdmissionError | None = None) -> None:
         directory: Path | None = None
         key_results: list[dict[str, object]] = []
-        bridge = Thread(
-            target=self._bridge_cancellation,
-            name="offline-analysis-cancellation",
-            daemon=True,
-        )
+        bridge: Thread | None = None
         bridge_started = False
         try:
             if admission_error is not None:
                 raise admission_error
+            bridge = Thread(
+                target=self._bridge_cancellation,
+                name="offline-analysis-cancellation",
+                daemon=True,
+            )
             bridge.start()
             bridge_started = True
             self._workdir.mkdir(parents=True, exist_ok=True)
@@ -361,12 +362,12 @@ class AnalysisJob:
             # closing readers is required before filesystem cleanup or publication.
             self._set_stage("retiring", f"Native PCM retirement failed: {error}")
             self._bridge_done.set()
-            if bridge_started:
+            if bridge is not None and bridge_started:
                 bridge.join()
             return
         self._cleanup(directory)
         self._bridge_done.set()
-        if bridge_started:
+        if bridge is not None and bridge_started:
             bridge.join()
         if self._native.is_cancelled():
             self._cancelled.set()

@@ -373,6 +373,14 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 - **AND** a diagnostic analysis job retires its captured Native PCM and reports failure without starting either branch or fabricating cancellation
 - **AND** caller callback and admitted-payload exceptions keep their original identity, while actual live tree and reader ownership remains protected
 
+#### Scenario: Diagnostic cancellation bridge construction fails
+- **GIVEN** diagnostic analysis owns captured Native source admission and has not started either analysis branch
+- **WHEN** cancellation-thread construction raises an error covered by existing supervision failure handling
+- **THEN** the job follows its ordinary Native PCM retirement and terminal failure settlement without exporting PCM, starting inference or fabricating cancellation
+- **AND** an existing admission failure remains authoritative without constructing the optional bridge
+- **AND** prior cancellation remains cancellation, and a real Native retirement refusal remains nonterminal with any admitted heavy borrow retained
+- **AND** another heavy owner can acquire only after the original job's actual required retirement completes
+
 #### Scenario: Other PADs play while stems are generated for a stopped PAD
 - **GIVEN** the requested stem PAD is stopped and resource admission permits background work
 - **WHEN** other PADs play or the performer operates their START/STOP controls

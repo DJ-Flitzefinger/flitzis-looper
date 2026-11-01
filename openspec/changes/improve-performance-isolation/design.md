@@ -5264,3 +5264,52 @@ final exact-index check form the publication checks. Only this result paragraph
 and the completed task state change afterward; all Rust and Python inputs retain
 their checked bytes. These separate runs are not one green combined matrix and
 do not close the original native/CUDA/fullhost/quality/distribution gates.
+
+## STEP52 impact: settle analysis bridge construction failures
+
+The optional diagnostic supervisor constructed its cancellation Thread before
+entering existing failure settlement. Controlled constructor RuntimeErrors escaped
+the real supervisor without attempting Native PCM retirement or publishing a
+terminal result. The independent Native heavy borrow then remained intentionally
+held by that unfinished job, blocking a real FIFO successor. Both regressions
+failed on unchanged production in0.35s; a refined observation run failed both in
+0.33s and recorded the escaped error, absent retirement attempt and blocked actual
+successor before fixture cleanup. These injections are not observed OS thread or
+allocation failures and do not establish universal OOM handling.
+
+Bridge construction now occurs inside the existing try, after admission-error
+precedence. The same exception set, branch waits, Native PCM retirement, temporary
+cleanup and Native finish remain authoritative. An optional bridge reference and
+the existing started flag permit joins only for a bridge that actually started.
+No new thread, queue, scheduler, cancellation registry, retry, broad exception
+catch or fabricated completion is introduced. Refused Native retirement still
+retains the same heavy borrow and unfinished diagnostic state.
+
+Systems and Methods PRE selected this bounded correction before changing the
+separate productive Native queue claim path. Focused checks cover constructor
+failure with successful and refused retirement, original admission-error
+precedence, cancellation before heavy admission, real Native FIFO progress and
+unchanged delayed Beat/Key/PCM and finish-race controls. Tests observe the real
+heavy successor before fixture-only leaked-borrow cleanup. Original Native reader
+evidence remains compatible because no Rust, source admission, model, resource
+policy, dependency, installer, clock, OwnACK or realtime behavior changes.
+
+The asynchronous productive start_analysis queued-cancellation gap remains
+source-identified OPEN and is not claimed reproduced or fixed. Native process
+closure, both original fullhost UNKNOWN gates, compiled Pydantic lineage, actual
+CUDA/same-model fresh CPU, numerical quality, platforms and distribution remain
+open. This substantive supervision split grows the plan to54: nativeREST53
+retains ENTIRE former nativeREST52 and FINAL54 retains ENTIRE former FINAL53.
+
+The frozen integrated check passed56 functional cases and four static checks in
+11.20s (60PASS, one exact-index check deferred until staging). The actual Jobs
+and Heavywork suites include all three new constructor/cancellation controls,
+both strengthened admission-refusal cases and real Native FIFO/last-borrow
+controls. Ruff lint/format, strict production Mypy, strict OpenSpec and exact
+authoritative/staged source plus protected private bindings passed. Systems PRE
+and frozen POST were clear; one independent final actual-diff review precedes
+publication. No device fixture, model inference or new Rust test was run. Initial
+isolated runtime setup built unchanged Release Rust once in61s with22 known
+warnings; matching Native/API was reused afterward. These are controlled Python
+supervision and actual Native admission results, not actual Native PCM failure,
+OS pressure, universal allocation failure, model/CUDA or whole-quality acceptance.
