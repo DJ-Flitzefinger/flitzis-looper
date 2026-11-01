@@ -20,10 +20,14 @@ from flitzis_looper.controller.stem_workers import (
     STEM_WORKERS,
     StemWorkerPool,
 )
+from flitzis_looper_audio import OfflineWorkTicket
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
 from tests.flitzis_looper.controller.test_stem_interest_handoff import _PairAssets
 from tests.flitzis_looper.controller.test_stem_pair_preparation import _known_pair_entry
-from tests.flitzis_looper.controller.test_stem_worker_reservations import _occupied_pool
+from tests.flitzis_looper.controller.test_stem_worker_reservations import (
+    _occupied_pool,
+    _refuse_worker_start,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -252,6 +256,43 @@ def test_shutdown_submission_failure_rolls_back_pair_owners_and_capacity() -> No
     with _reserved_slots(pool, STEM_WORKERS + STEM_QUEUED_JOBS):
         assert pool.try_reserve() is None
     audio.prepare_stem_pair.assert_not_called()
+
+
+def test_thread_start_refusal_cannot_restart_pair_after_its_owners_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assets = _PairAssets()
+    pool = StemWorkerPool()
+    queue, audio = _queue(assets, pool)
+    reservation = pool.try_reserve()
+    assert reservation is not None
+    drained = Event()
+    work = OfflineWorkTicket()
+    assert work.try_acquire()
+    successor = OfflineWorkTicket()
+    try:
+        with (
+            _refuse_worker_start(monkeypatch),
+            pytest.raises(RuntimeError, match="fixture worker start refused"),
+        ):
+            queue.submit_reserved(
+                _spec(binding=StemPairIntentBinding(heavy_work=work)), reservation
+            )
+        assert not queue.pending
+        assert len(assets.leases) == len(assets.reservations) == 1
+        assert assets.leases[0].released
+        assert assets.reservations[0].closed
+        assert successor.try_acquire()
+        pool(drained.set)
+        assert drained.wait(5)
+    finally:
+        pool._executor.shutdown(wait=True)
+        successor.close()
+        work.close()
+    audio.prepare_stem_pair.assert_not_called()
+    assert queue.collect() == ()
+    with _reserved_slots(pool, STEM_WORKERS + STEM_QUEUED_JOBS):
+        assert pool.try_reserve() is None
 
 
 @pytest.mark.parametrize("notify_queue", [False, True])

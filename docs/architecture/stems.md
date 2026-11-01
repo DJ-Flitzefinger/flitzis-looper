@@ -25,6 +25,13 @@ that all possible inputs/process trees have certified lineage.
 
 [stem_workers.py](../../src/flitzis_looper/controller/stem_workers.py) owns two
 workers and 32 queued physical jobs, reserving capacity before ownership changes.
+The reservation decides executor acceptance under its existing lock before a
+worker can take the callable. If worker startup rejects submission after enqueue,
+the reservation releases the callable and capacity once; a later drained wrapper
+cannot restart the rejected job after its source or preparation owners close.
+Accepted callables execute outside that lock and hold capacity until actual return.
+Inert executor wrappers can remain queued until drain after startup failure;
+this does not bound their raw queue count under repeated failures.
 [stem_job.py](../../src/flitzis_looper/controller/stem_job.py) retains source and
 private-generation leases until the backend returns and its queued result settles.
 Each assignment/subscriber has its own interest. Cancellation/Unload removes that

@@ -1,8 +1,10 @@
 """Actual shared executor capacity; no inference or audio acceptance claims."""
 
 import threading
+import weakref
 from contextlib import contextmanager
 from functools import partial
+from time import monotonic
 from typing import TYPE_CHECKING
 
 import pytest
@@ -31,6 +33,102 @@ def _occupied_pool() -> Iterator[tuple[StemWorkerPool, threading.Event]]:
     finally:
         release.set()
         pool.shutdown()
+
+
+@contextmanager
+def _refuse_worker_start(
+    monkeypatch: pytest.MonkeyPatch, before_refusal: Callable[[], None] | None = None
+) -> Iterator[None]:
+    start = threading.Thread.start
+
+    def refuse(thread: threading.Thread) -> None:
+        if thread.name.startswith("stems_"):
+            if before_refusal is not None:
+                before_refusal()
+            message = "fixture worker start refused"
+            raise RuntimeError(message)
+        start(thread)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, "start", refuse)
+        yield
+
+
+@pytest.mark.parametrize("busy_worker", [False, True])
+def test_refused_thread_start_never_runs_or_retains_rejected_target(
+    monkeypatch: pytest.MonkeyPatch, *, busy_worker: bool
+) -> None:
+    pool = StemWorkerPool()
+    started, release, rejected, drained = (threading.Event() for _ in range(4))
+
+    def hold() -> None:
+        started.set()
+        assert release.wait(10)
+
+    target = partial(rejected.set)
+    reference = weakref.ref(target)
+    try:
+        if busy_worker:
+            pool(hold)
+            assert started.wait(5)
+        with (
+            _refuse_worker_start(monkeypatch),
+            pytest.raises(RuntimeError, match="fixture worker start refused"),
+        ):
+            pool.try_submit(target)
+        del target
+        assert reference() is None, "rejected queued wrapper retained its caller's target"
+        release.set()
+        pool(drained.set)
+        assert drained.wait(5)
+    finally:
+        release.set()
+        pool._executor.shutdown(wait=True)
+    assert not rejected.is_set(), "rejected work ran after its caller handled submission failure"
+    held = []
+    try:
+        for _ in range(STEM_WORKERS + STEM_QUEUED_JOBS):
+            reservation = pool.try_reserve()
+            assert reservation is not None
+            held.append(reservation)
+        assert pool.try_reserve() is None
+    finally:
+        for reservation in held:
+            reservation.close()
+            reservation.close()
+
+
+def test_existing_worker_cannot_enter_target_before_submission_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = StemWorkerPool()
+    started, release, rejected, drained = (threading.Event() for _ in range(4))
+
+    def hold() -> None:
+        started.set()
+        assert release.wait(10)
+
+    def dequeue_before_refusal() -> None:
+        release.set()
+        deadline = monotonic() + 5
+        while pool._executor._work_queue.qsize():
+            assert monotonic() < deadline, "existing worker did not dequeue rejected work"
+            threading.Event().wait(0.001)
+
+    try:
+        pool(hold)
+        assert started.wait(5)
+        with (
+            _refuse_worker_start(monkeypatch, dequeue_before_refusal),
+            pytest.raises(RuntimeError, match="fixture worker start refused"),
+        ):
+            pool.try_submit(rejected.set)
+        pool(drained.set)
+        assert drained.wait(5)
+    finally:
+        release.set()
+        pool._executor.shutdown(wait=True)
+    assert not rejected.is_set()
 
 
 def test_full_try_submit_is_nonterminal_and_original_callable_keeps_its_contract() -> None:
@@ -89,14 +187,15 @@ def test_submitted_context_keeps_capacity_until_the_actual_task_returns() -> Non
         entered = threading.Event()
         finish = threading.Event()
         returned = threading.Event()
+        reservation = pool.try_reserve()
+        assert reservation is not None
 
         def actual_read() -> None:
+            reservation.close()
             entered.set()
             assert finish.wait(10)
             returned.set()
 
-        reservation = pool.try_reserve()
-        assert reservation is not None
         try:
             with reservation:
                 reservation.submit(actual_read)

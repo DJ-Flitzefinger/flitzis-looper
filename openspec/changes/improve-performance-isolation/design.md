@@ -5034,3 +5034,47 @@ assigning exception text and using an explicit raw regex; no suppression was add
 Final verification reruns the affected Beat module, all four static checks and
 exact staged bytes. Other successful command/heavy/stem/probe results remain
 compatible with this test-import and documentation-only correction.
+
+## STEP47 impact: reject queued work after worker-start refusal
+
+Three precise regressions failed on unchanged product source in0.45s with the
+real CPython3.14.2 ThreadPoolExecutor. Submission queues its WorkItem before
+adjusting the worker count; Thread.start can raise RuntimeError after enqueue.
+The old stem reservation returned its permit and reported rejection while its
+queued callable remained retained and could later run. The Pair case actually
+called prepare_stem_pair after ordinary caller cleanup had already released its
+source and retirement owners. Controller generation cleanup shares this pool seam.
+
+The existing reservation now stores the callable and decides acceptance under
+its existing lock. Executor work retains only that reservation. A RuntimeError
+clears the callable and returns capacity once before unlocking and rethrowing;
+a worker takes the same lock and either skips rejection or takes the accepted
+callable. Target execution remains outside the lock, with ordinary final release.
+There is no second executor, admission queue, registry, Event or lifecycle owner.
+An inert wrapper can remain in the executor until drain after rejection; repeated
+startup failures do not acquire a new raw-wrapper queue bound. The fix is bounded
+to RuntimeError submission failure, not arbitrary Python allocation/exception closure.
+
+Systems PRE and Methods PRE approved the actual caller/stdlib interaction and
+the existing-carrier handshake. Verification uses real enqueue/start refusal with
+zero workers and one busy worker, a forced existing-worker dequeue before refusal,
+weakref callable retirement before drain, exact Pair source/retirement/heavy-work
+cleanup with a fresh Native FIFO successor, no late Native reads/results, all34
+permits, and accepted target closure outside the lock until actual return. Existing
+reservation, shutdown, target-failure and admission regressions remain relevant.
+Frozen Systems POST and one independent final actual-diff review precede publication.
+
+The new isolated writer required its normal environment/Release/API setup; further
+checks reuse its matching Native. No Rust, model, CUDA, numerical, resource-floor,
+playback, OwnACK, source-publication, clock, RT, dependency or installer change is
+needed. Unchanged neural/device/latency/footprint matrices add no evidence for this
+Python rejection seam and are not repeated. All prior negative/UNKNOWN gates stay
+open. This coherent split grows the plan to49: nativeREST48 retains ENTIRE former
+nativeREST47 and FINAL49 retains ENTIRE former FINAL48, without omissions.
+
+The integrated run passed48 functional cases and3 static checks in11.16s; the
+remaining Ruff check found formatting in the two changed test files. Parenthesized
+context-manager layout corrects this without changing test bodies or assertions.
+Final verification repeats the five affected lifecycle cases and all five static/
+staged checks, reusing the other43 source-compatible functional successes. The
+isolated Release/API retains22 known Rust warnings and unchanged einops0.6.1.

@@ -18,6 +18,7 @@ class StemWorkerReservation:
         self._lock = threading.Lock()
         self._submitted = False
         self._released = False
+        self._target: Callable[[], None] | None = None
 
     def __enter__(self) -> Self:
         """Keep unsubmitted capacity scoped to the caller's preparation attempt."""
@@ -38,11 +39,16 @@ class StemWorkerReservation:
                 message = "Stem worker reservation is no longer available or already submitted"
                 raise RuntimeError(message)
             self._submitted = True
-        try:
-            self._pool._executor.submit(self._run, target)
-        except RuntimeError:
-            self._release()
-            raise
+            self._target = target
+            try:
+                # Executor submission can enqueue before worker startup fails.
+                # The worker must wait for this acceptance decision.
+                self._pool._executor.submit(self._run)
+            except RuntimeError:
+                self._target = None
+                self._released = True
+                self._pool._slots.release()
+                raise
 
     def close(self) -> None:
         """Return unused capacity once without releasing a submitted task's slot."""
@@ -52,7 +58,13 @@ class StemWorkerReservation:
             self._released = True
         self._pool._slots.release()
 
-    def _run(self, target: Callable[[], None]) -> None:
+    def _run(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            target = self._target
+            self._target = None
+        assert target is not None
         try:
             target()
         finally:

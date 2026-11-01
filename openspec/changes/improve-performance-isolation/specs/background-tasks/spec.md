@@ -468,3 +468,20 @@ global/default roots retain separate limits; this is not complete object identit
 - **AND** splitting a declared shared owner is also UNKNOWN
 - **AND** replacing defaults with fresh owners preserving the declared topology retains identity
 - **AND** both original complete-host UNKNOWN gates and all model, device and quality gates remain open
+
+### Requirement: Rejected Stem Submission Cannot Restart Work
+The existing stem reservation SHALL decide executor acceptance before any worker
+can invoke the submitted callable. A RuntimeError during worker startup, including
+after executor enqueue, SHALL release the rejected callable and its reserved
+capacity exactly once before reporting failure. A later drained wrapper SHALL
+NOT invoke that callable or access caller-cleaned source or preparation owners.
+Accepted work SHALL execute outside the reservation lock and retain its capacity
+until actual return. The existing two-worker/32-queued admission remains intact;
+it does not bound the executor's raw count of inert wrappers after rejection.
+
+#### Scenario: Worker startup fails after Pair preparation is enqueued
+- **GIVEN** Pair preparation captures its source, retirement and heavy-work owners under an existing worker reservation
+- **WHEN** the real executor enqueues the wrapper and worker startup raises RuntimeError
+- **THEN** ordinary submission failure closes those captured owners and returns the reserved capacity once
+- **AND** a later executor drain performs no Native preparation or result delivery for the rejected request
+- **AND** an existing worker that dequeues before submission fails cannot enter the rejected callable
