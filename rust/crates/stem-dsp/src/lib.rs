@@ -1,15 +1,18 @@
 //! Offline BS-RoFormer spectral trial, independent of Python and tensor runtimes.
 //!
 //! Matches the pinned vendored model's stereo STFT, feature ordering, complex
-//! masking and length-preserving ISTFT. It does not implement the learned network,
-//! CUDA AMP, file custody or productive dispatch. The separate track module
-//! supplies bounded reflection/chunk batching and rolling overlap-add.
+//! masking and length-preserving ISTFT. The optional learned-trial module adds an
+//! experimental learned CPU candidate; CUDA AMP, file custody and productive
+//! dispatch remain external. The separate track module supplies bounded
+//! reflection/chunk batching and rolling overlap-add.
 //! Callers retain immutable readers and admit the complete transient envelope
 //! BEFORE allocating inputs/masks or calling this core, through actual return.
 
 use rustfft::{FftPlanner, num_complex::Complex32};
 use std::{fmt, sync::Arc};
 
+#[cfg(feature = "learned-trial")]
+pub mod learned;
 pub mod track;
 
 pub const RATE: u32 = 44_100;

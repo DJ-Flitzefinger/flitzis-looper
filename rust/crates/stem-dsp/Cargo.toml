@@ -5,3 +5,13 @@ edition = "2024"
 
 [dependencies]
 rustfft = "6.2"
+matrixmultiply = { version = "=0.3.10", optional = true }
+sha2 = { version = "=0.10.9", optional = true }
+libm = { version = "=0.2.16", optional = true }
+
+[features]
+learned-trial = ["dep:matrixmultiply", "dep:sha2", "dep:libm"]
+
+[[example]]
+name = "bs_learned"
+required-features = ["learned-trial"]

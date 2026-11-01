@@ -26,7 +26,16 @@ and is not linked into the application. Its caller owns original admission and
 immutable readers through actual return. See the
 [STEP25 design](../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
 for original Torch numerical comparisons and all remaining network/CUDA/whole-
-track/quality/distribution requirements. Neither crate is a full separator.
+track/quality/distribution requirements. Neither crate is a productive separator.
+
+The optional `learned-trial` feature adds a complete release BS learned CPU
+network candidate and a private `bs_learned` diagnostic. It uses fixed-schema verified
+effective weights, single-thread SGEMM and tiled full attention, together with the
+existing spectral and synchronous track cores. The
+[STEP27 design](../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network)
+retains original admission, cancellation and reader duties; complete execution,
+original numerical parity, batch2/wholetrack, CUDA/AMP, quality, producer and
+release/installation acceptance remain open.
 
 `maturin develop` builds the platform extension into that wrapper package.
 

@@ -245,6 +245,15 @@ SHALL remain distinct from mocked provider selection or an installed runtime.
 - **AND** short reads, invalid predictions, nonfinite/overflow values, sink failure or cancellation invalidate the entire private attempt, including earlier written blocks
 - **AND** arithmetic-only predictions do not attest learned BS attention/weights/export/CUDA AMP, complete Demucs, quality, provenance, distribution or productive Torch removal
 
+#### Scenario: An isolated native BS predictor evaluates learned release weights
+- **GIVEN** a complete admitted CPU attempt retains the original pinned configuration/checkpoint and a strict authenticated fixed-schema trial export
+- **WHEN** the independent learned core evaluates all62 bands, eight time/frequency blocks and four mask heads
+- **THEN** original L2-clamp normalization, adjacent-pair rotary, full noncausal scaled attention, normalized-input sigmoid gates, residual GELU feedforward and Tanh/GLU mask semantics are preserved
+- **AND** bounded query tiles avoid a complete quadratic score tensor without shortening the release1101 time positions or frequency extent
+- **AND** the existing spectral and track cores supply reconstruction and synchronous release-batch processing; weight/source/output readers and complete resource promises last through actual completion
+- **AND** bad weights/digest/tail, shape, finite, allocation or cancellation errors invalidate the whole private attempt
+- **AND** bounded CPU arithmetic comparisons do not establish batch2/wholetrack, CUDA AMP, complete Demucs, quality, full producer, distribution or productive Torch-removal acceptance
+
 #### Scenario: A standalone trial declares ORT package components
 - **GIVEN** an explicit runtime request and a separate SHA-authenticated package manifest
 - **WHEN** the standalone trial checks the declared package before ORT initialization

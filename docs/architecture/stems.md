@@ -264,9 +264,21 @@ It handles tiny physical sources by padding full release chunks before a predict
 can call the spectral core. Partial blocks remain private if a later failure or
 cancellation invalidates the attempt. The
 [STEP26 design](../../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration)
-separates complete track arithmetic from the still-missing learned network and
+separates complete track arithmetic from learned-network and
 whole-model/provider/quality/artifact/distribution requirements. It changes no
 productive generation, selection, live adoption or retirement path.
+
+The optional [learned CPU core](../../rust/crates/stem-dsp/src/learned.rs) now
+implements the complete release band split, eight axial attention/feedforward
+blocks and four learned masks. It reuses the spectral reconstruction and supplies
+a synchronous full-chunk track predictor. Fixed effective-state export and tiled
+attention preserve original geometry and bounded vector work; complete original
+process admission remains external. The
+[STEP27 design](../../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network)
+separates operator controls and failed full-model attempts from unproved complete
+execution/original numerical parity, batch2/wholetrack, CUDA/AMP, whole-quality,
+complete producer and distribution parity. Productive Torch paths
+and installer/recovery dependencies remain in place.
 
 The [canonical E-STEM/E-PCM/E-CUDA index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
 retains exact full reports, UNKNOWN producer/device lineage, queue/refusal/stale/

@@ -991,8 +991,21 @@ reflection, tail padding, batch2, per-chunk fades and rolling overlap-add. Its
 unchanged vendored source/OLA/PCM16 path with distinct arithmetic predictions;
 it loads no learned weights and initializes no CUDA. See the
 [STEP26 design](../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration).
-STEP27 retains ALL native parity requirements and FINAL28 the ENTIRE former
-FINAL27 regression scope, including every earlier unproved gate.
+STEP27 adds the opt-in `stem-dsp/learned-trial` complete learned CPU candidate:
+fixed-schema Torch-free export of the original SHA-pinned checkpoint, full
+release axial attention with bounded score tiles, and four learned mask heads.
+The [learned reference generator](../scripts/bs_learned_trial_reference.py) needs
+the original complete offline admission and `CUDA_VISIBLE_DEVICES=-1` before
+import. Run it as `python -B -m scripts.bs_learned_trial_reference` from an
+authenticated checkout. The private `bs_learned` executable can compare original-feature masks
+and composed spectral/model/PCM; it never publishes application artifacts. See
+the [STEP27 design](../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network).
+STEP28 retains ALL native parity requirements and FINAL29 the ENTIRE former
+FINAL28 regression scope, including every earlier unproved gate. No productive
+Torch dependency or installer/recovery path is removed by this trial.
+The actual original oracle failed importing Torch and both full-geometry native
+completion attempts failed allocation. Export/schema/operator controls pass;
+complete learned execution and original numerical parity remain unproved.
 
 The direct Human instruction sets2/4/6 simultaneous PADs as the productive
 optimization workload and10 as the maximum synthetic stress cohort, run directly

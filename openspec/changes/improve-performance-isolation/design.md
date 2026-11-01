@@ -1,5 +1,144 @@
 # Performance audit and implementation design
 
+## STEP27 impact: independent learned BS CPU network
+
+The opt-in `stem-dsp/learned-trial` candidate implements the complete release
+learned network candidate, reusing the delivered spectral frontend/reconstruction
+and track orchestration. The delivered effective-state exporter interprets the
+ONE SHA-pinned original checkpoint with a bounded inert stdlib ZIP/protocol2
+descriptor decoder, without importing Torch, NumPy or ONNX. It checks the same
+configuration/checkpoint pins as the original App loader. All1355 tensors/
+131704612 floats occupy526818456 exported bytes; this
+authenticates trial file bytes, not a complete producer. Shared rotary aliases
+use each axis's last block7 alias, reproducing original default copy_ traversal.
+The optional original Torch oracle still exports state after strict loading.
+
+The native path preserves62 bands/dim384, eight time-then-frequency blocks with
+eight64-wide heads, original L2 norm clamp1e-12, adjacent rotary pairs, normalized
+input gates after noncausal SDPA, two residuals/GELU FF1536, final norm and four
+independent Tanh/GLU mask heads with hidden768. Existing matrixmultiply0.3.10
+SGEMM has no threading feature; a checked slice/stride wrapper isolates unsafe
+calls. Attention uses16-query tiles, retaining ALL1101 release positions without
+the approximately4.81GB batch2 score tensor of an unfused graph. No precision,
+attention extent, chunk or original admission floor is reduced.
+
+All work stays offline with immutable borrowed inputs and owned fixed-schema
+weights. Complete original process admission remains mandatory through actual
+tree AND reader end. `activation_bytes` is a conservative visible vector-payload
+allowance only; weights, spectral/track buffers, SGEMM internal packing/allocator,
+process/stack/code and runtime overhead remain separate. It is not RSS/admission
+or a measured release peak. Serial independent samples in the existing batch2
+predictor preserve geometry but require actual original batch2/wholetrack parity.
+No callback, scheduler, source/content/OwnACK/FinalCAS, UI or productive dispatch
+path changes. Private diagnostic output is invalid after any later failure.
+
+The original learned-mask and full-PCM comparison remains UNPROVED. Its actual
+CPU attempt failed importing Torch, before export/model initialization/NN.
+Predeclared diagnostic mask atol/rtol3e-4 and PCM atol3e-5/rtol3e-4 were never
+relaxed and have NOT passed. The optional oracle must run as a repository module
+(`python -B -m scripts.bs_learned_trial_reference CHECKPOINT CONFIG NEW_DIRECTORY`),
+with the authenticated checkout on its import path, complete original admission
+and `CUDA_VISIBLE_DEVICES=-1` BEFORE import. STEP16's logged original BS references
+remain historical evidence, but their raw input/WAV bytes are absent from the
+relevant retained test cache; hashes alone cannot supply a new numeric comparison.
+Compatible STEP25/26 math and old CPU/cancel/failed-CUDA evidence is reused.
+
+### STEP27 actual export, controls and failed execution boundaries
+
+The stdlib path verifies exact527385512 checkpoint and4566 configuration bytes/SHA
+from retained SAME opened handles BEFORE interpreting metadata. The exact1345
+stored, unencrypted ZIP members include278035B protocol2 metadata and1341 CPU
+FloatStorage payloads. Unique names, bounded/fixed metadata extents, byteorder
+little/version3, direct1355-name tensor schema, float32, exact shape/contiguous
+stride/offset0/storage extent, conflicts and default integer module-version1
+metadata are checked. Unknown globals/reducers/BUILD/flags/hooks fail closed.
+`pickletools` only tokenizes; the interpreter constructs local inert descriptors,
+never calls pickle.load, an input-selected constructor/reducer, eval or Torch.
+Every admitted/superseded storage reaches exact finite/CRC EOF; output is exclusive
+and invalid after later failure. Caller-owned immutable custody remains required;
+same-handle hashing is not Windows write denial or complete producer attestation.
+
+Actual exported526818456B SHA256:
+`51619069b73bfcbdc444a16a4ebc8cf53ea8d3466fce67b594412a02b854cbdf`.
+The export child returned0 in3.7239202s with empty stderr and actual module-closure
+check excluding Torch/NumPy/ONNX. This is a weight-file boundary, NOT learned
+arithmetic/quality or productive provenance. Reconstruction uses
+`python -B scripts/bs_learned_weights.py CHECKPOINT CONFIG NEW_WEIGHTS` and the
+explicit `bs_learned WEIGHTS SHA track INTERLEAVED_F32 FRAMES NEW_PRIVATE_DIRECTORY`.
+Local actions retain the existing checkout-aware outer entry and original admitted
+owner; no new runtime, process manager, working path, installer or productive pin.
+
+| Actual attempt | Result and exact limit |
+| --- | --- |
+| Original App Torch CPU oracle |5.2892798s, exit1/MemoryError during `_meta_registrations` import, stdoutempty, no original export directory/model/NN. Before availablecommit4006535168; childpeakcommit927858688. Original1/1scopeclosed/pending0/inflight0/errors[]. |
+| First native complete-track attempt |1025 physical frames; original full485100 padding/1101 attention positions requested.146.6121437s, exit1/Allocation, stdoutempty, only empty private output. Mainpeakcommit834088960/WS726884352; exact allocation phase/causeUNKNOWN. The combined export+native observer proves2/2scopeclosed/pending0/inflight0/errors[]. |
+| Changed native final-RMS attempt |0.8110986s, exit1/Allocation, stdoutempty, exclusive directory remains empty with NO output file. Before availablecommit3012620288; mainpeakcommit433446912/WS431448064. Original1/1scopeclosed/pending0/inflight0/errors[]. Different progress/headroom; NOT a speed/peak-improvement comparison. |
+
+Both native attempts use synthetic interleaved1025-frame source SHA256
+`868c43ce52cec3359a74baa50898dd0d92118f9df4f3f01b19291e37d4fdae74`.
+Neither completes a prediction or supports any full learned execution/numerical/
+quality claim. Allocation/import failures are terminal host/resource boundaries,
+not CUDA/device errors or fallback receipts. Actual causes remain UNKNOWN;
+no floor/cap/precision/geometry/memorypattern, foreign process, OS or pagefile was
+changed. A further model attempt needs meaningful source/condition change and
+fresh complete original admission; do not repeat these constrained failures.
+
+The final RMS now computes each entire row's L2 BEFORE mutating the exclusively
+owned axial buffer, with exact old f32 divide→scale→gamma order and checks around
+rows/end. All synchronous axial readers have ended; residual attention/FF paths
+still retain copying norms. This removes a104850432B destination allocation at1101
+by source inspection. It does NOT identify the earlier failure phase/cause or
+prove actual RSS/peak improvement. A384×4-row bitwise owned-vs-in-place control
+includes distinct/zero/subepsilon/signed-gamma rows plus partial cancellation and
+finite-overflow rejection; private partial mutation never publishes output.
+
+Checks: final8 learned controls PASS; unchanged5 spectral+5 track controls are
+reused (18 distinct successful Rust controls, not one new final18-case run).
+Strict all-target Clippy/Release builds and Ruff/format/strict typing pass;
+11 Python metadata/gadget/CRC controls PASS. Original numerical harness FAIL
+and both native completion attempts FAIL remain separate real receipts. Initial
+lock/bootstrap, import/type/complexity/test-collection/format findings were fixed
+without suppressions, weakened assertions or renewed model runs for hashes.
+The originally chained existing-output negatives did not run after failed NN.
+Six later pre-load CLI negatives PASS without model/NN: malformed digest, source
+extent overflow, short source, short weights, invalid original-feature mode and
+existing directory. Each exits1/stdoutempty, leaves the fresh target absent and
+existing0B output unchanged. Original observer BEFORE one joined executor proves
+6/6scopeclosed/pending0/inflight0/errors[]. The final harness initially mistook
+the second attempt's empty directory for an empty file and failed BEFORE these
+cases; its setup was corrected to actual state, without weakening product checks.
+Final static/control runs reuse the first two passing checks and complete15
+remaining cases (including11 Python controls) in14.28s. Strict OpenSpec and all101
+local Markdown targets pass; default/dependency lock delta and original all-role
+fullhost UNKNOWN checks remain intact. No earlier failed model assertion changed.
+
+Actual Windows x64 Release `bs_learned-inplace.exe` is1195520B, SHA256
+`9ea417e6edeaa2599bb1d85417661a5cfb277b7dec5b6314ccba6cb4d0efc95c`;
+the first failed native component SHA was
+`383a85ade5cd35aadb7ee81a470a5af0b6ced5e3eead3acd3bff3ea7a25d3dbf`.
+These are component identities, not complete compiler/producer/mapped-image or
+Linux/macOS attestation. C `performance-step27-*` logs and `step27-learned-v1`
+artifacts are reconstructible cache only. Tracked code, pins and these exact
+receipts/recipes are durable authority. No successful whole-model, CUDA, listening,
+distribution, installed-footprint saving or general performance claim follows.
+
+This coherent learned split grows the plan to29. ALL former nativeREST27 is
+STEP28 and ENTIRE former FINAL28 is FINAL29: actual complete supported native
+CUDA/real same-model device fault/tree+reader end/freshCPU, batch2/wholetrack/
+quality/AMP, complete Demucs, every source/frontend/graph/weights/exporter/runtime/
+manifest/provider/native-dependency/compiler/binary/full-producer/mapped-image/
+OS/architecture role, full CPU/CUDA distribution/CRT/licenses/LGPLsource+3patches/
+NVIDIA notices/installer/recovery/footprint and all functions/resources/cancel
+remain required. Productive Torch pins/closures/installer/repair remain unchanged;
+actual installed saving is zero. All original32 Rust failures/fullhostUNKNOWN/
+validator/schema/Pydantic/all32 identity keys/overlap/pressure/quality/device/
+listening/combined2-4-6<=10/architecture/docs/distribution gates remain open.
+
+No unchanged failed CUDA attempt or NN merely for hashes/API is authorized by
+this CPU work. Fresh ORIGINAL admission AND meaningful source-motivated changed
+conditions remain prerequisites. Every actual earlier CUDA failure retains its
+distinct UNKNOWN cause and terminal classification. No whole acceptance claim.
+
 ## STEP26 impact: independent BS wholetrack orchestration
 
 The independent `stem-dsp::track` core implements the actual vendored

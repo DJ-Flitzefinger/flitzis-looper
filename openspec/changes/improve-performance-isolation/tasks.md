@@ -358,7 +358,28 @@ REST26 obligations and FINAL28 the ENTIRE former FINAL27. Learned BS attention,
 weights/export/AMP, complete Demucs, CUDA/freshCPU, all provenance roles and full
 distribution/quality/functions/resources remain mandatory before Torch removal.
 
-## 27. Remaining native parity before cutover
+## 27. Independent learned BS CPU network
+
+- [x] Implement the complete release learned band/axial-attention/feedforward/mask
+      path with strict effective-weight export and bounded tiled attention.
+- [ ] Compare original masks on identical original features and composed native
+      spectral/model/PCM, including all1101 release attention positions.
+- [x] Verify corruption, shape/finite failures, tile tails, rotary, gating and
+      cancellation; retain original admission and productive runtime closures.
+- [x] Implement and execute strict Torch-free pinned checkpoint export; retain
+      actual original Torch-import and native completion failures without claiming
+      learned numerical/runtime parity or weakening resource guards.
+
+This coherent learned-network split adds a29th step. STEP28 retains the ENTIRE
+former nativeREST27 and FINAL29 the ENTIRE former FINAL28. A CPU implementation
+or bounded chunk comparison alone does not close original batch2/wholetrack,
+CUDA/AMP, complete Demucs, quality, provenance, packaging or cutover gates.
+Original masks/full-float comparisons remain genuinely unproved: the Torch import
+failed before NN, and saved old source/output bytes are absent from retained cache.
+Both native full-geometry attempts end allocation-error terminally; the in-place
+finalnorm optimization has a bitwise unit proof, not measured peak/runtime success.
+
+## 28. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -375,10 +396,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP28, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP29, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 28. Combined regression and final architecture review
+## 29. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
