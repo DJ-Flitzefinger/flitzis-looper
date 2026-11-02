@@ -289,7 +289,23 @@ def test_recovery_held_missing_assignment_is_retained_without_startup_control_or
         assert all(item.args[0] != 0 for item in getattr(audio_engine_mock, method).call_args_list)
     audio_engine_mock.set_pad_gain.assert_called_once_with(1, -6.0)
     assert audio_engine_mock.load_sample_async.call_args.args == (1, "samples/valid.wav")
-    assert app.session.bpm_lock_anchor_pad_id is None
+    # Placement nomination preserves the one reference; it grants no source/master authority.
+    assert app.session.bpm_lock_anchor_pad_id == 0
+    assert (
+        app.session.bpm_lock_anchor_bpm,
+        app.session.bpm_lock_anchor_revision,
+        app.session.master_bpm,
+        app.session.master_period_seconds,
+    ) == (None, None, None, None)
+    application = app.transport.global_params._bpm_application
+    assert application is not None
+    assert (
+        application.original_content_id,
+        application.admitted_revision,
+        application.attempted,
+    ) == (None, None, False)
+    assert not app.transport.global_params._bpm_lock_master_ready()
+    audio_engine_mock.set_bpm_lock.assert_not_called()
     audio_engine_mock.set_master_bpm.assert_not_called()
     audio_engine_mock.set_master_period.assert_not_called()
 

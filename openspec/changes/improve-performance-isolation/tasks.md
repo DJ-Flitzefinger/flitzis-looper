@@ -989,6 +989,10 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Budget deferred Loader restore attempts after current recovery guards;
+      preserve missing original owners, independent progress, eight actual
+      attempts including refusals, and existing queue/pressure behavior.
+
 - [x] Budget actual disk-selection settlement attempts after current arrangement
       fences, preserving eight attempts, independent progress and exact original
       owners; verify source-bank admission and unchanged target refusal guards.

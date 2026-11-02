@@ -1,5 +1,21 @@
 ## ADDED Requirements
 
+### Requirement: Recovery-Held Missing Originals Do Not Consume Restore Attempts
+The Loader control poll SHALL attempt at most eight deferred original-source
+restores per invocation. Current observer fences, stale path/content checks and
+recovery-held missing-original checks SHALL precede the attempt budget. Skipped
+owners SHALL NOT prevent independent later originals from progressing. Each
+actual scheduling attempt, including a refused attempt, SHALL consume the budget.
+The fixed-PAD snapshot order, queue-full stop, resident-pressure rotation and
+original project/content/session/reader ownership SHALL remain unchanged.
+
+#### Scenario: Recognized Bank recovery retains eight missing originals
+- **GIVEN** a genuine interrupted Bank journal retains eight missing original assignments and seventeen valid originals exist outside its participant banks
+- **WHEN** startup admits the first eight valid originals and subsequent Loader polls run
+- **THEN** successive polls attempt eight and one remaining independent originals while retaining all missing assignments and their content, controls and deferred owners
+- **AND** returning original files can resume through those same deferred owners without inventing a source ACK or settling the Bank journal
+- **AND** failed Native admission attempts still consume the eight-attempt bound
+
 ### Requirement: Arrangement Fences Do Not Consume Disk Settlement Attempts
 The stem control poll SHALL attempt at most eight retained disk-selection
 settlements per invocation. It SHALL check each original owner's current

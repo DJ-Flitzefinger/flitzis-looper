@@ -1,7 +1,6 @@
 import json
 import math
 from dataclasses import dataclass, field, replace
-from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 from uuid import uuid4
@@ -2149,8 +2148,11 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._session.sample_load_stage.pop(sample_id, None)
 
     def _retry_deferred_restores(self) -> None:
-        pending = list(islice(self._deferred_restores.items(), self._RESTORE_ADMISSIONS_PER_POLL))
+        pending = list(self._deferred_restores.items())
+        attempts = 0
         for sample_id, rel in pending:
+            if attempts >= self._RESTORE_ADMISSIONS_PER_POLL:
+                break
             if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
                 continue
             current_path = self._project.sample_paths[sample_id]
@@ -2165,6 +2167,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 continue
             if not (Path.cwd() / rel).is_file() and self._preserve_recovery_restore(sample_id, rel):
                 continue
+            attempts += 1
             admitted = self._schedule_restored_load(sample_id, rel, run_analysis=False)
             if not admitted and sample_id in self._deferred_restores:
                 self._deferred_restores.pop(sample_id)

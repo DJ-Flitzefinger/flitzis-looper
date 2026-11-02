@@ -1,5 +1,47 @@
 # Performance audit and implementation design
 
+## Budget deferred restore attempts after current recovery guards
+
+Startup validates missing recovery-held originals before admitting valid originals.
+The old first-eight deferred slice let eight protected missing originals prevent
+later valid originals from receiving any retry attempt. A real captured Bank
+journal and Config reproduce this public startup composition without replacing
+the recovery guard. The recognized owner remains recovery_pending because actual
+original custody is missing; it retains its source/target fences and journal.
+
+Retry now snapshots the fixed-PAD deferred set and counts at most eight actual
+scheduling attempts after the existing observer, stale path/content and missing-
+recovery guards. Failed attempts count too. Existing queue-full stopping and
+resident-pressure rotation remain intact. Skipped originals keep their relative
+order, content, session state and recovery ownership; returning files can resume
+those same owners. No new scheduler, Native or realtime path is introduced.
+
+The focused Controller regression scripts Native admission and no loader success
+events. It cannot establish source adoption, actual file decoding, journal
+settlement, Native reader retirement, device/hearing or whole-assignment acceptance.
+All original STEP66/67 resource, platform, quality and Human gates remain open.
+
+The existing missing-held App assertion used an empty nominated placement as a
+proxy for absence of musical authority. The unchanged baseline fails that proxy:
+startup deliberately nominates the selected slot once, as required by the current
+startup/first-qualified-content contract. The test now retains that nomination
+while explicitly requiring no bound original content, admitted/attempted BPM Lock,
+anchor BPM/revision, master BPM/period or Native/legacy master publication.
+No BPM production code or historical restore guard is changed. A nomination is
+not a qualified musical source, applied receipt or master effect.
+
+Focused verification: six affected cases passed in 0.67s; sixteen
+source-compatible passes from the earlier 251.61-second run are reused.
+These form 22 distinct qualified cases, not one clean 17-case rerun.
+Ruff lint/format, strict Loader type checking, strict OpenSpec validation
+and diff whitespace checks passed. The original public progress assertion
+failed on unchanged product in 4.99s; its earlier fixture-status mistake
+and the private 240-second wrapper timeout are retained separately.
+The earlier complete run retained its one stale App nomination assertion
+failure; the unchanged baseline reproduced that same failure in 0.34s.
+Only that test function and this explanation changed afterward; all
+product code and the other tests remain identical to the reused run.
+
 ## Budget disk settlement attempts after arrangement fences
 
 The control poll sliced the first eight retained disk settlements before checking
