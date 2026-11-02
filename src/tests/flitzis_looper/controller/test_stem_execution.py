@@ -1,14 +1,18 @@
 """Execution diagnostics remain separate from source and cache authority."""
 
+import hashlib
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError
 
+from flitzis_looper import bs_input_provenance, encoder_provenance
 from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.controller import stem_generation
 from flitzis_looper.copy_snapshot import CopySnapshot, capture_copy_snapshot
 from flitzis_looper.encoder_provenance import ENCODER_RESULT
+from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
 from flitzis_looper.models import PadContentIdentity, StemCacheEntry
 from flitzis_looper.stem_execution import (
     StemExecution,
@@ -20,11 +24,82 @@ from flitzis_looper.stem_execution import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from flitzis_looper.controller import AppController
 
 
 def _receipt() -> StemExecution:
     return StemExecution(backend="demucs", model_name="htdemucs", device="cuda")
+
+
+@pytest.mark.parametrize(
+    "separator", ["\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+@pytest.mark.parametrize("genuine", [False, True])
+def test_embedded_diagnostic_separators_do_not_create_or_duplicate_device_receipts(
+    separator: str, *, genuine: bool
+) -> None:
+    execution = completed_execution_line("demucs", "htdemucs", "cuda")
+    stdout = f"diagnostic{separator}{CUDA_FAILURE_RECEIPT}\ndiagnostic{separator}{execution}"
+    if genuine:
+        stdout += f"\n{CUDA_FAILURE_RECEIPT}\r\n{execution}\r\n"
+    for text in (stdout, stem_generation._command_stdout(stdout)):
+        assert is_cuda_failure(70, text) is genuine
+        receipt = completed_execution(
+            text, backend="demucs", model_name="htdemucs", device="cuda", cpu_fallback=False
+        )
+        assert (receipt is not None) is genuine
+        assert not is_cuda_failure(1, text)
+
+
+@pytest.mark.parametrize(
+    "separator", ["\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+@pytest.mark.parametrize("genuine", [False, True])
+def test_embedded_diagnostic_separators_do_not_create_or_duplicate_file_receipts(
+    tmp_path: Path, separator: str, *, genuine: bool
+) -> None:
+    # These owned files exercise framing and FileID/body binding only; they do
+    # not claim any actual converter or decoder execution.
+    body = b"owned framing fixture"
+    for name, prefix, read in (
+        (
+            encoder_provenance.ENCODER_RECEIPT,
+            ENCODER_RESULT,
+            encoder_provenance._read_encoder_receipt,
+        ),
+        (
+            bs_input_provenance.BS_INPUT_RECEIPT,
+            BS_INPUT_RESULT,
+            bs_input_provenance._read_input_receipt,
+        ),
+    ):
+        path = tmp_path / name
+        path.write_bytes(body)
+        info = path.stat()
+        claim = prefix + json.dumps([
+            [str(path), info.st_dev, info.st_ino, hashlib.sha256(body).hexdigest()]
+        ])
+        stdout = f"diagnostic{separator}{claim}"
+        if genuine:
+            stdout += f"\n{claim}\r\n"
+        for text in (stdout, stem_generation._command_stdout(stdout)):
+            assert read(tmp_path, text) == (body if genuine else None)
+
+
+@pytest.mark.parametrize("ending", ["", "\n", "\r\n"])
+def test_exact_device_receipts_keep_lf_crlf_and_eof_framing(ending: str) -> None:
+    execution = completed_execution_line("demucs", "htdemucs", "cuda")
+    stdout = f"{CUDA_FAILURE_RECEIPT}\r\n{execution}{ending}"
+    for text in (stdout, stem_generation._command_stdout(stdout)):
+        assert is_cuda_failure(70, text)
+        assert (
+            completed_execution(
+                text, backend="demucs", model_name="htdemucs", device="cuda", cpu_fallback=False
+            )
+            is not None
+        )
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

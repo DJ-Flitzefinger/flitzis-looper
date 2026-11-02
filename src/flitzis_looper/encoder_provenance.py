@@ -249,8 +249,8 @@ def encoder_completion_line() -> str:
 
 def _read_encoder_receipt(output_root: Path, stdout: str) -> bytes | None:
     claims = [
-        line.removeprefix(ENCODER_RESULT)
-        for line in stdout.splitlines()
+        line.rstrip("\r").removeprefix(ENCODER_RESULT)
+        for line in stdout.split("\n")
         if line.startswith(ENCODER_RESULT)
     ]
     if len(claims) != 1:

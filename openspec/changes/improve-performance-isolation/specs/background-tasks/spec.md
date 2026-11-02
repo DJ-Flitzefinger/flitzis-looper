@@ -578,6 +578,15 @@ protocol lines while compacting or truncating command output. Whitespace
 normalization SHALL NOT manufacture encoder, BS input, completed-execution or
 CUDA-failure evidence. Genuine independent receipts SHALL remain available, and
 duplicate or oversized receipts SHALL remain invalid.
+Receipt framing SHALL use the raw child's LF boundaries, retaining the existing
+trailing-CR and end-of-stream tolerance. Embedded CR, VT, FF, record separators,
+NEL and Unicode line separators SHALL remain diagnostic text after decoding.
+
+#### Scenario: An embedded diagnostic separator precedes a marker
+- **GIVEN** an owned child embeds a protocol marker after a non-LF diagnostic separator
+- **WHEN** the host captures, decodes and compacts that output
+- **THEN** the marker remains diagnostic for all four receipt roles
+- **AND** one separate genuine LF-framed receipt remains valid without becoming a duplicate
 
 #### Scenario: An indented marker accompanies the CUDA-failure exit code
 - **GIVEN** an owned separator prints only an indented CUDA-failure marker as diagnostic text

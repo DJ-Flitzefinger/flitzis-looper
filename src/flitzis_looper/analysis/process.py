@@ -382,8 +382,11 @@ class _CommandReader(_ResponseReader):
         """Preserve receipt validity even when its original line left the bounded tail."""
         if not self.receipt_prefixes:
             return bytes(self.data)
+        # Match the observer's raw LF boundaries; embedded diagnostic separators
+        # cannot create a protocol line during capture or later text decoding.
+        lines = (line.rstrip(b"\r") for line in self.data.split(b"\n"))
         diagnostics = b"\n".join(
-            line for line in self.data.splitlines() if not line.startswith(self.receipt_prefixes)
+            line for line in lines if not line.startswith(self.receipt_prefixes)
         )
         if self.independent_receipts:
             retained = []

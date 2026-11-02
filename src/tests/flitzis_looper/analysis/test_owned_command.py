@@ -9,6 +9,7 @@ import venv
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from ctypes import wintypes
+from io import BytesIO
 from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING
@@ -259,6 +260,27 @@ def test_tail_trimming_cannot_make_duplicate_or_oversized_receipt_valid(
     assert result.reason == "ok"
     receipts = [line for line in result.stdout.splitlines() if line.startswith(b"OWNED-RECEIPT:")]
     assert len(receipts) == 2
+
+
+@pytest.mark.parametrize("limit", [64, 262144])
+@pytest.mark.parametrize("independent", [False, True])
+def test_receipt_capture_uses_raw_lf_across_chunks_and_retains_bare_cr_diagnostics(
+    limit: int, *, independent: bool
+) -> None:
+    prefix = b"OWNED-RECEIPT:"
+    diagnostic = b"diagnostic\r" + prefix + b"embedded"
+    payload = b"x" * 16380 + b"\n" + prefix + b"genuine\r\n"
+    payload += b"log\n" * 40000 + diagnostic + b"\n"
+    reader = process._CommandReader(
+        BytesIO(payload), limit, (prefix,), independent_receipts=independent
+    )
+    reader._read()
+    captured = reader.captured()
+    assert diagnostic in captured
+    assert captured.endswith(prefix + b"genuine")
+    assert captured.split(b"\n").count(prefix + b"genuine") == 1
+    assert len(captured) <= limit + 1001
+    assert not reader.failed.is_set()
 
 
 def test_reader_end_retains_caller_after_finite_reap_until_actual_reader_returns(

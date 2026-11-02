@@ -649,15 +649,14 @@ def _command_stdout(text: str | None) -> str:
     if text is None:
         return ""
     prefixes = (ENCODER_RESULT, BS_INPUT_RESULT, STEM_EXECUTION_RESULT, CUDA_FAILURE_RECEIPT)
-    diagnostic = _bounded_text(
-        "\n".join(line for line in text.splitlines() if not line.startswith(prefixes))
-    )
+    lines = [line.rstrip("\r") for line in text.split("\n")]
+    diagnostic = _bounded_text("\n".join(line for line in lines if not line.startswith(prefixes)))
     if diagnostic.startswith(prefixes):
         # Compaction must not turn a padded diagnostic into protocol evidence.
         diagnostic = _bounded_text("Diagnostic: " + diagnostic)
     receipts = []
     for prefix in prefixes:
-        matches = [line for line in text.splitlines() if line.startswith(prefix)]
+        matches = [line for line in lines if line.startswith(prefix)]
         if len(matches) == 1 and len(matches[0]) <= 1000:
             receipts.append(matches[0])
     return "\n".join([diagnostic, *receipts])

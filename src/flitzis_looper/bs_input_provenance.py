@@ -235,8 +235,8 @@ def verified_input_output(output: Path, contract: str | None, stdout: str) -> bo
 
 def _read_input_receipt(output: Path, stdout: str) -> bytes | None:
     claims = [
-        line.removeprefix(BS_INPUT_RESULT)
-        for line in stdout.splitlines()
+        line.rstrip("\r").removeprefix(BS_INPUT_RESULT)
+        for line in stdout.split("\n")
         if line.startswith(BS_INPUT_RESULT)
     ]
     if len(claims) != 1:

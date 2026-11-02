@@ -26,6 +26,7 @@ from flitzis_looper.controller.stem_process import (
     stem_command_checkpoint,
     stem_command_scope,
 )
+from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 
 if TYPE_CHECKING:
@@ -37,6 +38,23 @@ def _wait_file(path: Path) -> None:
     while not path.is_file() or not path.stat().st_size:
         assert time.monotonic() < deadline, "stem command fixture failed to start"
         Event().wait(0.01)
+
+
+def test_public_command_keeps_embedded_vertical_tab_marker_diagnostic(tmp_path: Path) -> None:
+    payload = b"diagnostic\v" + CUDA_FAILURE_RECEIPT.encode("ascii") + b"\n"
+    result = run_command(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            f"import sys; sys.stdout.buffer.write({payload!r}); raise SystemExit(70)",
+        ],
+        cwd=tmp_path,
+        env=dict(os.environ),
+    )
+    assert result.returncode == 70
+    assert "diagnostic" in result.stdout
+    assert not is_cuda_failure(result.returncode, result.stdout)
 
 
 def test_cancelled_scope_starts_no_command_and_resets_context_after_failure(tmp_path: Path) -> None:

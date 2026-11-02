@@ -223,7 +223,10 @@ def test_both_cpu_routes_skip_probe_and_auto_probe_uses_fresh_guarded_sources(
 
 
 @pytest.mark.parametrize("backend_name", ["demucs", "bs"])
-@pytest.mark.parametrize(("marker_count", "marker_padding"), [(1, ""), (2, ""), (1, " \t")])
+@pytest.mark.parametrize(
+    ("marker_count", "marker_padding"),
+    [(1, ""), (2, ""), (1, " \t"), (1, "diagnostic\v"), (1, "diagnostic\f"), (1, "diagnostic\r")],
+)
 def test_actual_owned_child_marker_survives_diagnostic_tail_and_controls_both_adapters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

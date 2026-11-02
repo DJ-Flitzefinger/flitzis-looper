@@ -1,5 +1,34 @@
 # Performance audit and implementation design
 
+## Preserve raw LF receipt framing through decoded diagnostics
+
+The shared command reader counted receipts at raw LF boundaries, while later
+text adapters and four receipt consumers used broader Unicode line splitting.
+A real public command emitting a diagnostic with an embedded VT and the CUDA
+marker reproduced a false positive at exit 70 on unchanged product code.
+Capture filtering, decoded normalization, CUDA fallback, completed execution,
+encoder and BS-input parsing now use the same LF boundaries and existing
+trailing-CR/EOF tolerance. Generic diagnostic formatting retains its independent
+length bound and prefix guard. No source role, owner, launch, cleanup, publication
+or realtime behavior changes; both separator adapters consume the corrected text.
+
+Focused checks cover the actual public regression, both real adapter fallback
+routes, all four roles with embedded CR/VT/FF/record/NEL/Unicode separators, separate
+genuine receipts, CRLF/EOF, chunk boundaries, tail bounds, duplicate/size refusal
+and existing reader/cancellation settlement. Native is reused without a build or
+inference. The complete successful process allowance, original admission, native
+CUDA/fresh CPU, whole producer, platform and quality gates remain open under the
+entire unchanged STEP66/67 scope and earlier negative/UNKNOWN evidence.
+
+Verification: the unchanged-product public regression failed once in 0.45 seconds.
+The frozen corrected selection passed 162 tests in 23.82 seconds. Ruff lint/format
+for ten files, strict Mypy for six product modules, strict OpenSpec and whitespace
+checks pass. Two retained thread warnings come from existing junction fixtures'
+direct text-mode mklink calls and cp1252 decoding, outside the binary reader path;
+their original output encoding remains unproved. No warning-free run is claimed.
+No product or test bytes change after this run; only this result and task status
+are updated. The same immutable Native and supported runtime are reused.
+
 ## Retain Linux supervisor and isolated broker source custody
 
 The shared process helper imports and references `LinuxProcess` on every host,

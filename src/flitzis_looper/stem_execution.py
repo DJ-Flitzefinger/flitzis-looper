@@ -62,7 +62,9 @@ def completed_execution(
     stdout: str, *, backend: str, model_name: str, device: str, cpu_fallback: bool
 ) -> StemExecution | None:
     """Missing, duplicate, malformed or mismatched diagnostics stay unknown."""
-    lines = [line for line in stdout.splitlines() if line.startswith(STEM_EXECUTION_RESULT)]
+    lines = [
+        line.rstrip("\r") for line in stdout.split("\n") if line.startswith(STEM_EXECUTION_RESULT)
+    ]
     if len(lines) != 1 or len(lines[0]) > 1000:
         return None
     try:
