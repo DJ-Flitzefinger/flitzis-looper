@@ -469,15 +469,22 @@ impl SelectedWetFixture {
             assert!(start.accepted(), "reason={:?}", start.reason());
             start
         });
-        let execution = starts[0].execution_frame().unwrap();
-        assert!(execution > captured_at);
+        let fallback = starts[0].execution_frame().unwrap();
+        assert!(fallback > captured_at);
         assert!(
             starts
                 .iter()
-                .all(|start| start.execution_frame() == Some(execution))
+                .all(|start| start.execution_frame() == Some(fallback))
         );
+        let originals = starts.each_ref().map(|start| {
+            (
+                start.original_frame(),
+                start.sequence(),
+                start.content_key(),
+            )
+        });
         // Host readiness retains both original ordinary owners at the same frozen
-        // output coordinate. Only actual rendering consumes their lead and first PCM.
+        // output coordinate. Only the callback can bind their completed execution.
         wait_until(|| {
             let runtime = mixer.pitch_runtime.as_mut().unwrap();
             runtime.poll();
@@ -487,7 +494,40 @@ impl SelectedWetFixture {
             })
         });
         assert_eq!(transport.output_frame(), captured_at);
-        let frames = usize::try_from(execution - captured_at + 1).unwrap();
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.peek_next_target_frame(), Some(fallback));
+        // The real callback accelerates both ready originals before emitting PCM;
+        // their earlier worker fallback is no longer the execution coordinate.
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut [],
+            &mut [0.0; NUM_SAMPLES],
+            captured_at,
+            2,
+            &mut transport,
+            &mut feedback,
+            &mut retirement,
+        );
+        assert_eq!(transport.output_frame(), captured_at);
+        for (start, original) in starts.iter().zip(originals) {
+            assert_eq!(start.original_frame(), Some(captured_at));
+            assert_eq!(
+                (
+                    start.original_frame(),
+                    start.sequence(),
+                    start.content_key()
+                ),
+                original
+            );
+            assert_eq!(start.execution_frame(), Some(captured_at));
+            assert_eq!(start.effective_frame(), Some(captured_at));
+            assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+        }
+        assert!(scheduler.is_empty());
+        assert!(scheduler.deferred_due().is_none());
+        let execution = captured_at;
+        let frames = 1;
         let mut output = vec![0.0; frames * 2];
         render_scheduled_audio(
             &mut mixer,
@@ -501,11 +541,6 @@ impl SelectedWetFixture {
             &mut retirement,
         );
         transport.advance_by_rendered_frames(frames);
-        assert!(
-            output[..(frames - 1) * 2]
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
         assert_eq!(transport.output_frame(), execution + 1);
         let native = starts.each_ref().map(|start| {
             assert_eq!(start.original_frame(), Some(captured_at));
