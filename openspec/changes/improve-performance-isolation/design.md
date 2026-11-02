@@ -5964,3 +5964,99 @@ generic lifetime closure or whole-assignment acceptance is established. All
 native/process/numerical/fullhost/quality/platform/distribution gates remain open
 under their original requirements; Python/Torch remains productive and installed
 savings remain zero.
+
+## Queued window captures after FullMix admission (STEP63)
+
+The productive FullMix admission helper queues its fixed callback command before
+advancing the original resident storage-intent epoch. Existing WindowWork.current
+already rejects that epoch mismatch before publication. The queued cancellation
+probe did not observe it, so an obsolete callable could retain its original
+source/component readers and a full cold-lane reservation until a worker returned.
+
+The reproduction first completes an actual selected disk pair's AllStems capture,
+adoption, own ACK and control reconcile. Both real cold workers are then held; an
+actual public window request and 31 independent ordinary peers fill the 32-job
+queue. Invoke the exact FullMix production admission helper with its real control
+producer. The public FullMix wrapper requires a device stream, so this bounded
+test uses that same helper without opening a device or claiming GUI acceptance.
+A separate actual full-control-queue refusal must preserve the original request.
+
+Weak-only observations distinguish WindowWork's old and bank source readers, its
+cloned stem-reference reader and four independent component readers. Borrowed
+cache metadata identifies the original Pending mirror by its exact status and
+source/component pointers. It verifies other Pending/relocation slots are empty
+and the window proposal holds no prepared cache readers. No observer acquires a
+strong PCM reader. FullMix admission transfers the accepted set into its fixed
+command, leaving counts unchanged before polling. The existing loader reconcile
+separately ends the original Pending mirror; that is distinct from queued cleanup.
+
+On unchanged production, the qualified two-test run reproduced one failure and
+one passing refusal control in 1.01 seconds. The actual six-leaf compiled inventory
+was inspected before selecting exactly those two leaves. Successful admission
+left the full queue at (2 running,32 queued,34 admitted), source owners 5/8/8/7
+before window/after capture/after FullMix/after pump and each component 3/4/4/3.
+The original Pending mirror ended, but all three queued source and four component
+captures remained. Intent advanced 1 to 2; the old receipt still reported current
+and preparing. Original source, selected authority and callback window remained
+unchanged, no peer ran and replacement admission failed. The genuine callback
+changed AllStems to FullMix. A fresh window reached its own ACK for 1024..1536;
+that acceptance and adoption were asserted before the desired reader assertion
+failed, after all actual workers had shut down.
+
+The refused FullMix control retained queue (2,32,34), source owners 5/8/8/8 and
+each component 3/4/4/4. Its original Pending mirror and intent 1 remained current;
+the actual control-queue error preceded any authority change. After draining the
+control blockers, its original window reached its own ACK for 512..1024.
+
+The fix adds only the SAME original intent-epoch atomic and captured base value
+to the SAME ordinary queued predicate. It adds no PCM, Pair, selection or file
+reader, lane, scheduler or authority. It preserves status/shutdown/proposal checks,
+off-lock callable-before-reservation retirement and the full claimed worker guard.
+Do not negate publication.current for future unarmed intent or admitted_current
+for temporary Pending placement. FullMix has no separate acknowledgement ticket;
+its actual callback mode change and the windows' independent ACKs are different.
+
+This proves one reproduced FullMix transition's extra queued-reader obligations,
+not backing-last-reader/OS memory release, generic stale/claimed closure, latency,
+device/hearing or historical failure causes. The diagnostic AnalysisJob cancellation
+candidate remains wholly unreproduced. NativeREST64 retains ENTIRE former63 and
+FINAL65 retains ENTIRE former64, including every original process/numerical/CUDA/
+fullhost/quality/platform/distribution gate and negative UNKNOWN. Python/Torch
+remains productive; installed savings remain zero.
+
+### STEP63 measured result and limits
+
+All 41 distinct selected native tests passed in one 9.41-second run, after checking
+the exact selected set against the actual compiled inventory. Successful FullMix
+now leaves (2 running,31 queued,33 admitted), source owners 5/8/8/4 and each of
+the four component owners 3/4/4/2. The original Pending mirror still ends through
+its separate existing path. The three obsolete queued source readers and four
+component readers end before callback or worker release; replacement admission
+succeeds while all 31 independent peers remain unrun. The obsolete receipt is
+cancelled and non-current. Source, selected disk authority, original callback
+window and actual AllStems demand remain intact until FullMix is dispatched.
+
+The genuine FullMix callback changes demand, and the subsequent fresh window
+reaches its own ACK for frames 1024..1536. The refusal control retains (2,32,34),
+source owners 5/8/8/8, each component 3/4/4/4, its original Pending mirror, current
+preparing receipt and unchanged intent. It subsequently reaches the original
+window's own ACK for 512..1024. Every independent peer runs once; only the success
+case admits and runs one replacement. All actual held workers are joined before
+the final regression assertions. The qualified reproduction assertions, stimuli,
+timeouts and borrowed-only observation helper remain byte-identical through this
+functional run; all four original queued-window leaves are unchanged.
+
+The exact set comprises 23 original ColdJobs leaves, six queued-window leaves,
+three actual Window/Pair/Pending/lifetime/deadline controls, two shared-member and
+independent-owner controls, four original FullMix/window OwnACK controls and three
+strict Pending/claim/terminal guards. Controlled poison/unwind fixtures pass;
+they do not establish production panics or old failure causes. This is one set
+of 41 distinct cases, not a cumulative rerun count or a broad cold-load suite.
+
+The isolated Release/Native API check and changed-Rust formatting, strict OpenSpec,
+exact source-stage/protection and qualified-byte checks pass. Existing 20 Looper
+library and 33 Looper test warnings remain; pinned einops 0.6.1 remains unchanged.
+No NN, CUDA, pressure, UI/device/hearing, latency or whole-assignment acceptance
+is established. Every original native/process/numerical/fullhost/quality/platform/
+distribution requirement and negative UNKNOWN remains open under its original
+contract. Productive Python/Torch and zero installed savings remain unchanged.

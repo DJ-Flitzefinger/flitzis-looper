@@ -760,3 +760,28 @@ owner and claimed-reader guards SHALL remain intact.
 - **WHEN** admission of a different newer loop request is refused
 - **THEN** the original proposal, readers and reservation remain eligible
 - **AND** it subsequently requires its own original callback acknowledgement for its exact requested window
+
+### Requirement: FullMix Intent Revocation Retires Queued Window Captures
+A queued resident-window preparation SHALL observe a definitive change to its
+original prepublication storage-intent epoch through the existing ordinary
+cancellable lane. Successful FullMix control admission SHALL retire that obsolete
+callable and its actual source/component captures before returning its reservation,
+without waiting for occupied workers or the FullMix callback. The original
+Pending mirror SHALL retain its distinct settlement and reader obligations.
+Control-queue refusal SHALL NOT revoke current window work. Original source,
+selection, proposal, shared-owner, placement, worker-claim and claimed-reader
+guards SHALL remain authoritative.
+
+#### Scenario: FullMix replaces an unclaimed window after genuine AllStems adoption
+- **GIVEN** actual AllStems adoption has completed and a full cold queue retains the subsequent window preparation behind occupied workers
+- **WHEN** FullMix is successfully admitted and the ordinary loader control pump runs before its callback
+- **THEN** only the obsolete window's actual source/component captures and reservation retire through existing off-lock queued cleanup
+- **AND** the separately invalidated original Pending mirror settles through its existing path
+- **AND** callback demand, original source and selected disk authority remain intact until the genuine FullMix callback
+- **AND** independent queued work and a fresh window with its own acknowledgement remain valid
+
+#### Scenario: A full control queue refuses FullMix
+- **GIVEN** an original queued window remains eligible after genuine AllStems adoption
+- **WHEN** the actual control queue refuses FullMix before changing its intent epoch
+- **THEN** the original window and Pending readers, reservation and intent remain intact
+- **AND** that original window still requires its own actual callback acknowledgement

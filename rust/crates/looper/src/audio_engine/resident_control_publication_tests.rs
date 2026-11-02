@@ -4,6 +4,21 @@ use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 
+/// Borrow only cache metadata; this observation never acquires a PCM reader.
+pub(in crate::audio_engine) fn queued_window_has_no_prepared_cache_readers(
+    engine: &AudioEngine,
+    id: usize,
+) -> bool {
+    let owners = engine.resident_stem_cache.lock().unwrap();
+    let owner = &owners[id];
+    owner.pending.is_none()
+        && owner.relocation.is_none()
+        && owner
+            .proposal
+            .as_ref()
+            .is_some_and(|proposal| proposal.sample.is_none() && proposal.stems.is_none())
+}
+
 thread_local! {
     static BEFORE_COMMIT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
 }
