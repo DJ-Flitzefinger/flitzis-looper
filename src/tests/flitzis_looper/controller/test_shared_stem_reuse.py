@@ -196,12 +196,16 @@ def _bs_implementation_witnesses(
     assert processing[1] is None
     witnesses = processing[0].witnesses()
     expected = stem_provenance.processing_paths(request)
-    assert len(witnesses) == 26
-    assert len(expected) == 26
+    # Exact cumulative inventory: two model files, eight package files, probe,
+    # isolated broker, 23 parent roles and the explicitly unproved encoder.
+    assert len(witnesses) == 36
+    assert len(expected) == 36
     assert {
         "stem_process.py",
         "process.py",
         "windows_job.py",
+        "linux_process.py",
+        "linux_broker.py",
         "contracts.py",
         "stem_cancellation.py",
         "stem_execution.py",
@@ -247,6 +251,56 @@ def test_actual_bs_implementation_changes_are_sealed_but_unproved_tools_keep_pro
     assert after[str(changed)] != before[str(changed)]
     assert request_fingerprint(request) is None
     assert stem_provenance.processing_library_versions(request) is None
+
+
+def _held_broker_witness(request: StemGenerationRequest, broker: Path) -> tuple[str, int]:
+    processing = stem_provenance.capture_processing_files(request)
+    assert processing is not None
+    guard, identity = processing
+    assert identity is None
+    paths = stem_provenance.processing_paths(request)
+    parents = stem_provenance._parent_processing_paths(request, paths)
+    supervisor = broker.with_name("linux_process.py")
+    assert supervisor in parents
+    assert broker in paths
+    assert broker not in parents
+    assert parents[-1].name == "__init__.py"
+    assert stem_provenance.processing_source_roots(request, guard)
+    witness = guard.witnesses()[paths.index(broker)]
+    assert Path(witness[0]).samefile(broker)
+    assert witness[1] == hashlib.sha256(broker.read_bytes()).hexdigest()
+    with pytest.raises(PermissionError):
+        broker.write_bytes(b"rewrite during actual isolated broker source custody")
+    guard.verify()
+    return witness[1], witness[2]
+
+
+@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
+def test_isolated_linux_broker_source_is_held_separately_from_loaded_parent_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
+) -> None:
+    request, _package = _actual_bs_processing_request(tmp_path, monkeypatch)
+    request = replace(request, separator=separator)
+    original_package = Path(stem_provenance.__file__).parent.parent
+    owned_package = tmp_path / "owned-host" / "flitzis_looper"
+    monkeypatch.setattr(
+        stem_provenance, "__file__", str(owned_package / "controller" / "stem_provenance.py")
+    )
+    paths = stem_provenance.processing_paths(request)
+    for path in paths:
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            original = (
+                original_package / path.relative_to(owned_package)
+                if path.is_relative_to(owned_package)
+                else None
+            )
+            path.write_bytes(original.read_bytes() if original is not None else b"owned model role")
+    broker = owned_package / "analysis" / "linux_broker.py"
+    before = _held_broker_witness(request, broker)
+    broker.write_bytes(broker.read_bytes() + b"\n# changed after actual source guard end\n")
+    after = _held_broker_witness(request, broker)
+    assert after != before
 
 
 class _SelectedPair:
@@ -678,14 +732,16 @@ def test_owned_encoder_witness_covers_common_pcm_and_keeps_unproved_demucs_produ
         encoder_executable=resolved,
     )
     paths = stem_provenance.processing_paths(request)
-    assert len(paths) == 30
+    # One checkpoint, fifteen package files, wrapper/probe/broker, twenty parent
+    # roles and the explicitly unproved encoder are held in their original order.
+    assert len(paths) == 40
     assert any(path.name == "pcm16_wav.py" for path in paths)
     assert any(path.name == "stem_execution.py" for path in paths)
     assert paths[-1] == resolved
     assert stem_provenance.processing_library_versions(request) is None
     processing = stem_provenance.capture_processing_files(request)
     assert processing is not None
-    assert len(processing[0].witnesses()) == 30
+    assert len(processing[0].witnesses()) == 40
     assert processing[1] is None  # no shared encoder DLL execution identity is inferred
     with pytest.raises(PermissionError):
         encoder.write_bytes(b"encoder changed before publication")

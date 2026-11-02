@@ -37,6 +37,7 @@ def test_actual_guarded_artifact_and_process_roles_remain_known_with_native_conv
         "stem_process.py",
         "process.py",
         "windows_job.py",
+        "linux_process.py",
         "contracts.py",
         "stem_cancellation.py",
         "offline_runtime.py",
@@ -44,7 +45,7 @@ def test_actual_guarded_artifact_and_process_roles_remain_known_with_native_conv
     paths = tuple(
         path for path in stem_provenance._host_processing_paths(_request()) if path.name in roles
     )
-    assert len(paths) == 8
+    assert len(paths) == 9
     held = native.SealedProcessingFiles([str(path) for path in paths])
     assert loaded_code_identity(paths) is not None
     held.verify()

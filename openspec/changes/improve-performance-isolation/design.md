@@ -1,5 +1,45 @@
 # Performance audit and implementation design
 
+## Retain Linux supervisor and isolated broker source custody
+
+The shared process helper imports and references `LinuxProcess` on every host,
+but its defining source was absent from the guarded parent roles. The existing
+branch-independent imported-class check therefore rejected the process component
+even on Windows. The unchanged positive process-role relocation test reproduced
+that regression. Include `linux_process.py` in the parent inventory without
+weakening declaration, binding, default or constant verification.
+
+Linux additionally executes the exact sibling `linux_broker.py` as an isolated
+`-I -S` script. Both separator inventories now hold that source under the existing
+`SealedProcessingFiles` lifetime through actual processing and publication. The
+broker is a child source role, excluded from parent loaded-code inspection; no
+broker import, extra executor or new process ownership is introduced. Separator
+package-init positions, the final host-init role and source-root checks remain.
+
+Focused verification covers actual process-role relocation, changed supervisor
+source and imported-class rebinding, both separators' owned broker write refusal
+and changes after guard retirement, existing source-root and publication/cancel
+custody, and the original unsupported full-host validator. Old fixed fixture
+counts were already stale against the cumulative inventory: 34 BS and 38 Demucs
+roles before this change, now 36 and 40 with the supervisor and broker. Their
+explicit ordered inventories retain model, package, host and encoder roles.
+
+The complete finite successful Native-process allowance still lacks native I/O,
+stack/image, CRT/TLS/loader and shutdown closure. Arena backing, a Job ceiling or
+observed memory cannot replace it. WHOLE allowance, then fresh sufficient COMPLETE
+ORIGINAL admission, then learned execution remains required. No new Native/Rust
+build, Linux execution, NN, complete producer, device or quality claim follows.
+All native REST66 and final67 requirements and earlier negative evidence remain.
+
+Verification: the original positive relocation test failed on unchanged product
+source; the corrected focused selection passed 71 tests in 89.71 seconds. The
+focused wrapper then exited 1 because its unstaged-only file query supplied no
+paths to Ruff, exposing existing vendor findings. The original result is retained.
+A separate explicit four-file static pass completed Ruff lint/format, strict
+product Mypy, strict actual-source OpenSpec and whitespace checks. No runtime
+rerun or product/test edit followed the 71 passes. Initial import-order/assertion
+lint failures are retained and resolved. The same immutable Native was reused.
+
 ## Beat launch preparation before child construction
 
 The worker constructor acquired its Native child-memory reservation before

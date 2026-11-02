@@ -949,6 +949,10 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Retain the shared Linux supervisor as a guarded parent source and its
+      isolated broker as a separately held child source for both separators;
+      verify component relocation, changed-source/binding refusal and actual
+      source custody without relabelling full-host or platform UNKNOWN.
 - [x] Prepare Beat arguments and child environment before child-memory reservation
       and construction, retaining temporary storage, the real ticket borrow and
       both permits through allocation-failure cleanup; verify fresh execution.

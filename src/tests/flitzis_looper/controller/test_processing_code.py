@@ -15,8 +15,8 @@ import pytest
 
 from flitzis_looper import offline_runtime, stem_cancellation
 from flitzis_looper.analysis import contracts as analysis_contracts
+from flitzis_looper.analysis import linux_process, windows_job
 from flitzis_looper.analysis import process as analysis_process
-from flitzis_looper.analysis import windows_job
 from flitzis_looper.controller import bs_roformer_assets, stem_process
 from flitzis_looper.controller.processing_code import (
     fresh_python_source_environment,
@@ -92,6 +92,7 @@ def _owned_process_roles(
         offline_runtime,
         analysis_contracts,
         windows_job,
+        linux_process,
         stem_cancellation,
         analysis_process,
         stem_process,
@@ -137,7 +138,7 @@ def test_active_cancel_events_context_paths_and_admission_slot_do_not_change_cod
     assert _guarded_identity(paths) == before
 
 
-@pytest.mark.parametrize("role", ["process", "windows_job", "stem_cancellation"])
+@pytest.mark.parametrize("role", ["process", "windows_job", "linux_process", "stem_cancellation"])
 def test_changed_actual_process_helper_source_rejects_loaded_code_until_own_reload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
@@ -149,6 +150,7 @@ def test_changed_actual_process_helper_source_rejects_loaded_code_until_own_relo
     replacements = {
         "process": ("_READ_CHUNK_BYTES = 16384", "_READ_CHUNK_BYTES = 8192"),
         "windows_job": ("_MAX_JOB_PROCESSES = 64", "_MAX_JOB_PROCESSES = 32"),
+        "linux_process": ("time.monotonic() + 5.0", "time.monotonic() + 4.0"),
         "stem_cancellation": ("TOOL_POLL_SECONDS = 0.02", "TOOL_POLL_SECONDS = 0.03"),
     }
     first, second = replacements[role]
@@ -165,7 +167,7 @@ def test_changed_actual_process_helper_source_rejects_loaded_code_until_own_relo
 
 
 @pytest.mark.parametrize(
-    "binding", ["command", "job", "context", "work_context", "aliased_slots", "layout"]
+    "binding", ["command", "job", "linux", "context", "work_context", "aliased_slots", "layout"]
 )
 def test_changed_actual_process_helper_binding_cannot_claim_known_loaded_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding: str
@@ -176,6 +178,8 @@ def test_changed_actual_process_helper_binding_cannot_claim_known_loaded_code(
         modules["stem_process.py"].__dict__["run_owned_command"] = lambda *_args, **_kwargs: None
     elif binding == "job":
         modules["process.py"].__dict__["WindowsJob"] = object
+    elif binding == "linux":
+        modules["process.py"].__dict__["LinuxProcess"] = object
     elif binding == "context":
         modules["stem_process.py"].__dict__["_COMMAND_SCOPE"] = ContextVar(
             "different-channel", default=None

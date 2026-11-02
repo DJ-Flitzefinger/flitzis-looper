@@ -592,6 +592,27 @@ duplicate or oversized receipts SHALL remain invalid.
 - **THEN** only the separate exact receipt is available to the execution parser
 - **AND** the diagnostic remains bounded and visibly distinct from protocol evidence
 
+### Requirement: Offline Process Producer Sources Retain Their Actual Roles
+Guarded separator producer inventories SHALL retain the shared Linux supervisor
+source as a loaded parent role and its directly executed isolated broker source
+as a separate child role. Existing actual tree, reader and publication custody
+SHALL retain both files without importing the broker into the parent or relaxing
+loaded-class evidence. Incomplete full-host evidence SHALL remain UNKNOWN.
+
+#### Scenario: A shared process class references the Linux supervisor
+- **GIVEN** the shared process helper imports the Linux supervisor on the current host
+- **WHEN** the host component compares its loaded declarations and bindings with held source
+- **THEN** its supervisor declaration is available in the guarded parent inventory, including on Windows
+- **AND** changed supervisor source or a substituted imported class invalidates that component
+- **AND** equal-byte relocation preserves component identity without certifying the complete inference host
+
+#### Scenario: Either separator retains the isolated broker source
+- **GIVEN** either separator captures its complete producer source inventory
+- **WHEN** its existing source guard remains live through processing and publication or cancellation
+- **THEN** the exact sibling broker file is held against replacement as a child source role
+- **AND** the broker is excluded from parent loaded-code inspection and is never imported for evidence
+- **AND** changes after actual guard retirement alter the next source witness while package roots and full-host UNKNOWN remain authoritative
+
 ### Requirement: Host Constructor Evidence Includes Generated Execution
 A known guarded dataclass component SHALL bind its actual supported constructor
 execution to held source declarations, including generated bodies, defaults,
