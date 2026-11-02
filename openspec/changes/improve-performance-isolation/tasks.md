@@ -934,7 +934,20 @@ NativeREST65 retains ENTIRE former nativeREST64; FINAL66 retains ENTIRE former
 FINAL65 without omission. Every original process/numerical/CUDA/fullhost/quality/
 platform/distribution gate and negative UNKNOWN retains its original requirements.
 
-## 65. Remaining native parity before cutover
+## 65. Own Linux offline descendants through actual reader end
+
+- [x] Preserve the qualified original inherited-pipe and silent-descendant failures.
+- [x] Own a gated payload through a private subreaper with separate payload status,
+      actual ECHILD/tree retirement, broker exit and independent reader settlement.
+- [x] Verify escaped descendants, stable pre-GO identity, observer refusal/cancel,
+      signal/timeout, broker loss and affected Windows Job/custody compatibility.
+
+This substantive Linux ownership split grows the plan to67. NativeREST66 retains
+ENTIRE former nativeREST65; FINAL67 retains ENTIRE former FINAL66, without omission.
+Linux application/Native/admission and macOS acceptance remain open, along with
+every original CUDA/fullhost/quality/platform/distribution gate and negative UNKNOWN.
+
+## 66. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -951,10 +964,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP66, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP67, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 66. Combined regression and final architecture review
+## 67. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

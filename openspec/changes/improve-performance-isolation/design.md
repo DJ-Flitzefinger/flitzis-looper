@@ -1,5 +1,56 @@
 # Performance audit and implementation design
 
+## Linux descendant ownership
+
+Linux previously treated payload exit as complete tree retirement. A silent
+descendant survived cancellation; inherited pipes also kept the actual readers
+alive. The private Linux broker now owns a single gated payload as a subreaper.
+Only that isolated, single-thread process forks, adopts escaped orphans and reaps
+its private children. The multithreaded application retains its existing admission
+and source owners without changing global subreaper or numerical state.
+
+A bounded private socket transfers the blocked payload's actual pidfd before any
+observer can bind and before GO. Payload EXIT carries its original returncode;
+TreeEND requires private ECHILD and an empty direct-child set. The parent also
+acknowledges TreeEND, allowing the broker to drain a racing stop request before
+closing its private socket. Unread teardown must not reset away a genuine queued
+proof. The parent still requires actual successful broker exit and independent reader joins
+and resource cleanup. Reaping before GO is forbidden while observer binding may
+still occur. Numeric PID identity, payload status and broker lifetime remain
+separate. Missing executable exec is an owned payload failure with exit127.
+
+After sending genuine TreeEND, the broker closes its own output streams before
+awaiting acknowledgement, including the raw descriptors retained by CPython's
+`closefd=False` standard streams. Python wrapper closure alone is insufficient.
+Actual readers can therefore reach EOF without another
+parent control poll. If a payload wait already accepted TreeEND, it also joins the
+acknowledged broker within its remaining deadline; payload-only completion still
+retains separate tree ownership. Neither EOF nor payload status releases custody.
+
+Protocol or broker loss closes control to request remaining private cleanup while
+retaining failed ownership proof and admission. This conservative failure cannot
+start a replacement CPU process. Windows keeps its suspended Job assignment,
+commit reservation and genuine descendant/reader checks through a composed Popen.
+Other POSIX systems retain their prior behavior; macOS ownership and whole Linux
+application/Native/resource-admission acceptance remain open.
+
+Verification targets the unchanged original two Linux failures, real escaped
+descendants, payload status, observer/cancellation before GO, signal/timeout,
+broker loss and actual reader end, plus affected Windows ownership integration.
+No numerical models, audio callback, DSP or resource floors change. All original
+native parity, CUDA, fullhost, quality, platform and distribution gates remain.
+
+The final actual Linux run passes both unchanged original regressions and nine
+expanded cases, including the real exit/stop acknowledgement race and failed
+ownership retention. Both original cases assert descendant END, independent
+stdout/stderr reader END before cleanup, an unrelated survivor and exact output.
+The affected Windows evidence covers92 distinct cases:49 worker cases after the
+mutable-stream compatibility repair and43 compatible owned-command, tree and
+pressure cases. Six Python lint/format checks, platform-appropriate strict types
+for three changed production modules and strict OpenSpec validation pass. The
+matching isolated Windows Release/API build is reused; this is not Linux Native,
+whole application/admission, macOS, model, device or listening acceptance.
+
 ## STEP40 result: current shared-job playback participants
 
 An obsolete subscriber can retain its physical job and source readers after its

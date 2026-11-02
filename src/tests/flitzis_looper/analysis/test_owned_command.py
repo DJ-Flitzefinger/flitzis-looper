@@ -30,6 +30,32 @@ def _wait_file(path: Path) -> None:
         Event().wait(0.01)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="actual suspended Windows Job activation")
+def test_observer_cancellation_prevents_suspended_payload_execution(tmp_path: Path) -> None:
+    cancel, retired = Event(), Event()
+    marker = tmp_path / "must-not-execute"
+    observed = []
+
+    def observer(pid: int) -> None:
+        observed.append(pid)
+        assert not marker.exists()
+        cancel.set()
+
+    result = process.run_owned_command(
+        [sys.executable, "-I", "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        cancel=cancel,
+        retired=retired,
+        on_process_started=observer,
+        limits=WorkerLimits(reap_timeout_seconds=1),
+    )
+    assert len(observed) == 1
+    assert result.reason == "cancelled"
+    assert retired.is_set()
+    assert not marker.exists()
+
+
 def _run(
     args: list[str],
     tmp_path: Path,

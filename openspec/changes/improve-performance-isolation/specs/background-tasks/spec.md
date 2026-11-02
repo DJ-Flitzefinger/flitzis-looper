@@ -1,5 +1,36 @@
 ## ADDED Requirements
 
+### Requirement: Linux Offline Workers Own Descendants Through Reader Retirement
+Linux offline supervision SHALL bind any observer to the gated original payload
+before execution. A private subreaper SHALL retain descendants independently of
+payload exit, process groups and sessions, reap its complete private subtree and
+acknowledge ECHILD before successful broker exit can certify tree retirement.
+Final acknowledgement SHALL drain racing teardown before closing the proof channel.
+Payload PID and returncode SHALL remain distinct from broker PID and exit.
+Existing admission, temporary storage and source custody SHALL remain held until
+both actual tree retirement and independent output-reader settlement. Lost or
+invalid ownership proof SHALL remain nonterminal and SHALL NOT admit a successor.
+The application SHALL NOT become a global subreaper or reap unrelated children.
+
+#### Scenario: A successful payload leaves an escaped or silent descendant
+- **GIVEN** a Linux worker has inherited-output or silent descendants, including a changed session or double fork
+- **WHEN** its original payload exits, fails, times out or is cancelled
+- **THEN** its private broker terminates and reaps the complete owned subtree while unrelated processes remain alive
+- **AND** payload status, genuine tree end, broker exit and both output-reader ends remain independent requirements
+
+#### Scenario: Observer admission fails before Linux payload activation
+- **GIVEN** the broker retains a gated payload and its stable original identity
+- **WHEN** observer admission fails or cancellation is observed before activation
+- **THEN** no payload code executes and private teardown still precedes resource release
+- **AND** an externally killed gated payload remains unreaped until its identity can no longer be bound to a new observer
+
+#### Scenario: Linux ownership proof is lost
+- **GIVEN** an admitted invocation still owns its original source and resources
+- **WHEN** the private broker disappears or its protocol cannot prove complete tree retirement
+- **THEN** root exit or output EOF cannot certify retirement or release the original admission
+- **AND** closing private control requests cleanup from a still-owning broker without inventing a tree-end receipt
+- **AND** this bounded Linux ownership contract does not establish whole Linux application admission or macOS support
+
 ### Requirement: Queued Material Migration Settles After Captured Owners End
 Accepted unclaimed material preparation and stem-copy jobs SHALL observe their
 original cancellation and shutdown flags in the existing cold lane. Queued

@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager, suppress
@@ -12,6 +13,7 @@ from threading import Event, Semaphore, Thread, get_ident
 from typing import IO, TYPE_CHECKING
 
 from flitzis_looper.analysis.contracts import WorkerLimits
+from flitzis_looper.analysis.linux_process import LinuxProcess
 from flitzis_looper.analysis.windows_job import CREATE_SUSPENDED, WindowsJob
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper_audio import OfflineChildMemoryReservation, OfflineWorkTicket
@@ -148,8 +150,8 @@ class IndependentReceipts:
     prefixes: tuple[bytes, ...]
 
 
-class _OwnedTreeProcess(subprocess.Popen[bytes]):
-    """Popen-compatible process with explicit ownership of Windows descendants."""
+class _OwnedTreeProcess:
+    """Payload-compatible process with independent ownership of its descendants."""
 
     def __init__(
         self,
@@ -171,54 +173,93 @@ class _OwnedTreeProcess(subprocess.Popen[bytes]):
             if os.name == "nt"
             else None
         )
+        self._linux: LinuxProcess | None = None
         started = False
         try:
-            super().__init__(
-                arguments,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
-                cwd=cwd,
-                env=env,
-                creationflags=(
-                    subprocess.CREATE_NO_WINDOW | CREATE_SUSPENDED if self._job is not None else 0
-                ),
-            )
+            if sys.platform == "linux":
+                self._linux = LinuxProcess(
+                    arguments, cwd=cwd, env=env, capture_stderr=capture_stderr
+                )
+                self._process: subprocess.Popen[bytes] | LinuxProcess = self._linux
+            else:
+                self._process = subprocess.Popen(
+                    arguments,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
+                    cwd=cwd,
+                    env=env,
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW | CREATE_SUSPENDED
+                        if self._job is not None
+                        else 0
+                    ),
+                )
+            self.stdout: IO[bytes] | None = self._process.stdout
+            self.stderr: IO[bytes] | None = self._process.stderr
             started = True
         finally:
             if not started and self._job is not None:
                 self._job.close()
 
+    @property
+    def pid(self) -> int:
+        """Expose the gated payload PID to observers, never the Linux broker PID."""
+        return self._process.pid
+
+    @property
+    def returncode(self) -> int | None:
+        """Expose payload status independently of complete descendant retirement."""
+        return self._process.returncode
+
+    def poll(self) -> int | None:
+        """Observe payload exit without certifying descendant or reader retirement."""
+        return self._process.poll()
+
+    def wait(self, timeout: float | None = None) -> int:
+        """Wait for the payload; tree and reader settlement remain separate."""
+        return self._process.wait(timeout=timeout)
+
     def activate(self) -> None:
         """Associate and resume only after the supervisor owns teardown on every failure."""
         if self._job is not None:
             self._job.assign_suspended(self.pid)
+        elif self._linux is not None:
+            self._linux.activate()
 
     def kill(self) -> None:
-        """Terminate the whole owned Windows job, or the directly owned POSIX process."""
+        """Terminate the owned tree while retaining its independent retirement proof."""
         if self._job is not None:
             try:
                 self._job.terminate()
             finally:
                 # Assignment failures leave the newly created root suspended outside
                 # the job. Keep its direct Popen handle covered by the same teardown.
-                super().kill()
+                self._process.kill()
         else:
-            super().kill()
+            self._process.kill()
 
     def tree_active(self) -> bool:
         """Return actual tree ownership after launcher exit, including silent descendants."""
-        return self._job.active() if self._job is not None else self.poll() is None
+        if self._job is not None:
+            return self._job.active()
+        if self._linux is not None:
+            return self._linux.active()
+        return self.poll() is None
 
     def observe_tree(self) -> None:
         """Retain actual descendant handles while the worker is running."""
         if self._job is not None:
             self._job.observe_members()
+        elif self._linux is not None:
+            self._linux.poll()
 
     def close_tree(self) -> None:
         """Release the owning job handle after the supervisor has observed an empty tree."""
         if self._job is not None:
             self._job.close()
+        elif self._linux is not None:
+            self._linux.close()
 
 
 class _WorkerProcess(_OwnedTreeProcess):
@@ -355,7 +396,7 @@ class _CommandReader(_ResponseReader):
 class _OwnedProcess:
     def __init__(
         self,
-        process: subprocess.Popen[bytes],
+        process: subprocess.Popen[bytes] | _OwnedTreeProcess,
         reader: _ResponseReader | None,
         temporary: tempfile.TemporaryDirectory[str] | None,
         retired: Event,
@@ -433,7 +474,7 @@ def _environment() -> dict[str, str]:
     return env
 
 
-def _start(command: WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
+def _start(command: WorkerCommand, request_path: Path) -> _OwnedTreeProcess:
     return _WorkerProcess(
         [
             str(command.interpreter),
@@ -617,6 +658,10 @@ def _supervise_command(
     abort_grace_seconds: float,
 ) -> str:
     _bind_command_observer(process, cancel, on_process_started)
+    if on_process_started is None:
+        _ = process.pid
+    if cancel.is_set():
+        return "cancelled"
     process.activate()
     for reader in owned.readers:
         reader.thread.start()
@@ -813,6 +858,19 @@ def _beat_response_reader(owned: _OwnedProcess, limit: int) -> _ResponseReader:
     return reader
 
 
+def _activate_beat_process(
+    process: subprocess.Popen[bytes] | _OwnedTreeProcess, cancel: Event
+) -> bool:
+    """Resolve gated identity before the final pre-execution cancellation check."""
+    if isinstance(process, _WorkerProcess):
+        _ = process.pid
+    if cancel.is_set():
+        return False
+    if isinstance(process, _WorkerProcess):
+        process.activate()
+    return True
+
+
 def _run_process_admitted(
     command: WorkerCommand,
     request: bytes,
@@ -859,10 +917,11 @@ def _run_process_admitted(
     reason = "worker_supervision_failed"
     try:
         reader = _beat_response_reader(owned, limits.max_response_bytes)
-        if isinstance(process, _WorkerProcess):
-            process.activate()
-        reader.thread.start()
-        reason = _monitor(owned, cancel, limits)
+        if _activate_beat_process(process, cancel):
+            reader.thread.start()
+            reason = _monitor(owned, cancel, limits)
+        else:
+            reason = "cancelled"
     except OSError, RuntimeError:
         reason = "worker_supervision_failed"
     finally:
