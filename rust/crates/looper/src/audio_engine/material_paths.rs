@@ -440,6 +440,10 @@ pub fn resolve_project_asset(
     let root = Path::new(&samples_root);
     let resolved = resolve(root, Path::new(&path))
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok(project_asset_tuple(resolved))
+}
+
+fn project_asset_tuple(resolved: ResolvedAsset) -> (String, String, Option<String>) {
     let (kind, material) = match resolved.kind {
         AssetKind::Original { material } => ("original", material),
         AssetKind::StemDirectory { material, .. } => ("stem_directory", material),
@@ -452,11 +456,11 @@ pub fn resolve_project_asset(
         AssetKind::SlotMembership => ("slot_membership", None),
         AssetKind::MigrationJournal => ("migration_journal", None),
     };
-    Ok((
+    (
         kind.to_owned(),
         ordinary_windows_path(&resolved.path),
         material,
-    ))
+    )
 }
 
 pub(super) fn ordinary_windows_path(path: &Path) -> String {
@@ -582,7 +586,7 @@ pub fn resolve_project_asset_details(
         Some(_) => "readable",
     };
     let material_path = material.map(ordinary_windows_path).unwrap_or_default();
-    let (kind, path, id) = resolve_project_asset(samples_root, path)?;
+    let (kind, path, id) = project_asset_tuple(resolved);
     Ok((kind, path, id, layout.to_owned(), material_path))
 }
 
@@ -789,5 +793,71 @@ mod tests {
         assert_eq!(details.2.as_deref(), Some(id));
         assert_eq!(details.3, "material_id");
         assert_eq!(Path::new(&details.4), material.as_path());
+    }
+
+    #[test]
+    fn readable_details_revalidate_original_and_stem_binding_on_each_call() {
+        let temp = tempfile::tempdir().unwrap();
+        let samples = temp.path().join("samples");
+        let material = samples.join("Take.wav");
+        std::fs::create_dir_all(&material).unwrap();
+        let original = material.join("Take.wav");
+        std::fs::write(&original, b"owned readable fixture").unwrap();
+        let generation = "0123456789abcdef0123456789abcdef";
+        let stems = material.join("stems").join(format!(".ready-{generation}"));
+        let mut binding = MaterialBinding {
+            schema_version: 1,
+            sha256: "a".repeat(64),
+            bytes: 22,
+            original_leaf: "Take.wav".to_owned(),
+        };
+        for digest in ["a".repeat(64), "b".repeat(64)] {
+            binding.sha256 = digest;
+            std::fs::write(
+                material.join(readable::BINDING_LEAF),
+                serde_json::to_vec(&binding).unwrap(),
+            )
+            .unwrap();
+            for (path, expected_kind) in [(&original, "original"), (&stems, "stem_directory")] {
+                let details = resolve_project_asset_details(
+                    samples.to_string_lossy().into_owned(),
+                    path.to_string_lossy().into_owned(),
+                )
+                .unwrap();
+                assert_eq!(details.0, expected_kind);
+                assert_eq!(Path::new(&details.1), path);
+                assert_eq!(details.2, Some(binding.material_id()));
+                assert_eq!(details.3, "readable");
+                assert_eq!(Path::new(&details.4), material.as_path());
+                assert_eq!(
+                    (details.0, details.1, details.2),
+                    resolve_project_asset(
+                        samples.to_string_lossy().into_owned(),
+                        path.to_string_lossy().into_owned(),
+                    )
+                    .unwrap()
+                );
+            }
+        }
+        binding.original_leaf = "Other.wav".to_owned();
+        std::fs::write(
+            material.join(readable::BINDING_LEAF),
+            serde_json::to_vec(&binding).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            resolve_project_asset_details(
+                samples.to_string_lossy().into_owned(),
+                original.to_string_lossy().into_owned(),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_project_asset(
+                samples.to_string_lossy().into_owned(),
+                original.to_string_lossy().into_owned(),
+            )
+            .is_err()
+        );
     }
 }
