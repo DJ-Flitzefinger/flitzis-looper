@@ -462,7 +462,7 @@ fn coordinate() {
         .ancestors()
         .nth(4)
         .unwrap();
-    let owned = workspace.join("test-artifacts/bank36-process-20261020");
+    let owned = workspace.join("bank");
     for ancestor in owned.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => assert_eq!(metadata.file_attributes() & 0x400, 0),
