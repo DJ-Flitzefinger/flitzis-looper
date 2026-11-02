@@ -785,3 +785,26 @@ guards SHALL remain authoritative.
 - **WHEN** the actual control queue refuses FullMix before changing its intent epoch
 - **THEN** the original window and Pending readers, reservation and intent remain intact
 - **AND** that original window still requires its own actual callback acknowledgement
+
+### Requirement: FullMix Revocation Retires Unarmed Committed Captures
+Queued committed-residency preparation SHALL observe a definitive change to its
+original storage intent while its proposal remains unarmed. Successful direct
+FullMix admission SHALL retire the obsolete callable's actual source and component
+captures through the existing ordinary lane before returning its reservation,
+without waiting for occupied workers or the FullMix callback. An armed proposal
+SHALL retain its existing publication and claimed-reader obligations. Original
+Pending mirrors SHALL settle through their distinct existing path. Refused
+FullMix admission SHALL preserve the current committed request and its own ACK.
+
+#### Scenario: Direct FullMix follows a committed Capture from actual AllStems
+- **GIVEN** actual AllStems adoption and own acknowledgement have completed and a subsequent committed request retains its real callback Capture behind occupied workers in a full queue
+- **WHEN** the public FullMix admission helper succeeds and the loader pump runs before its callback
+- **THEN** the obsolete unarmed capture's two source readers, four component readers and queue reservation retire outside the queue mutex
+- **AND** the old Pending mirror settles separately while source, disk selection and callback AllStems demand remain intact until the genuine FullMix callback
+- **AND** a fresh committed request subsequently requires its own acknowledgement and exact requested component mask
+
+#### Scenario: A full control queue refuses direct FullMix during committed preparation
+- **GIVEN** an original committed Capture remains eligible after actual AllStems adoption
+- **WHEN** the actual control queue refuses FullMix before advancing storage intent
+- **THEN** the original capture, Pending mirror, storage intent and reservation remain intact
+- **AND** after workers resume the original request reaches its own acknowledgement for its exact requested mask

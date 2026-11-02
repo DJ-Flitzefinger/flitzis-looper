@@ -7,6 +7,27 @@ use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 
+/// Return only addresses from the original committed mirror, never new PCM readers.
+pub(in crate::audio_engine) fn committed_pending_pcm_addresses(
+    engine: &AudioEngine,
+    id: usize,
+    ticket: &ResidentStemTicket,
+) -> Option<[usize; 5]> {
+    let owners = engine.resident_stem_cache.lock().unwrap();
+    let pending = owners[id].committed.pending.as_ref()?;
+    if !Arc::ptr_eq(&pending.status, &ticket.status) {
+        return None;
+    }
+    let set = pending.stems.as_ref()?;
+    Some([
+        set.reference_samples.as_ptr() as usize,
+        set.stems[0].samples.as_ptr() as usize,
+        set.stems[1].samples.as_ptr() as usize,
+        set.stems[2].samples.as_ptr() as usize,
+        set.stems[3].samples.as_ptr() as usize,
+    ])
+}
+
 thread_local! {
     static BEFORE_COMMIT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
 }

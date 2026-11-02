@@ -6060,3 +6060,102 @@ No NN, CUDA, pressure, UI/device/hearing, latency or whole-assignment acceptance
 is established. Every original native/process/numerical/fullhost/quality/platform/
 distribution requirement and negative UNKNOWN remains open under its original
 contract. Productive Python/Torch and zero installed savings remain unchanged.
+
+## Queued committed captures after direct FullMix admission (STEP64)
+
+The supported public AudioEngine FullMix API uses the same production helper as
+legacy FullMix, deletion and material migration. Normal GUI committed-mode
+selection instead admits a new proposal, and deletion additionally cancels its
+tracked receipts. This reproduction concerns the direct supported API interval;
+it does not claim a normal GUI mode-selection defect.
+
+ResidencyWork already rejects changed original storage intent while its proposal
+is unarmed. Its queued predicate observed status, shutdown and launch authority
+but omitted that same intent condition. Initial actual selected-disk registration,
+AllStems Capture/adoption/own ACK, productive reference PCM and control reconcile
+precede the affected request. Both real cold workers are held, a second actual
+committed mask request reaches its callback Capture, and 31 ordinary peers fill
+the remaining queue. Weak source/component observations add no PCM reader. A
+borrowed-only helper matches the original Pending status and five PCM addresses,
+separately witnessing that mirror's reader obligations.
+
+The actual StemVoicePin holds sample plus stems.reference_samples and each of
+four independent component buffers. Thus this committed Capture adds two source
+readers and one reader per component, unlike STEP63's three-source WindowWork
+graph. Successful FullMix transfers the accepted set into its fixed command
+without changing counts. Existing polling independently ends one original
+Pending source/component mirror before queued retirement is considered.
+
+The six actual compiled leaves were inspected before executing exactly the two
+new leaves separately on unchanged production functions. Success reproduced a
+failure in 0.96 seconds: queue (2,32,34), source owners 7/9/9/8 before Capture /
+after Capture / after FullMix / after polling, and each component 3/4/4/3.
+The original Pending mirror ended and intent advanced 2 to 3, but the queued
+receipt remained captured/current and replacement admission failed. Original
+source, disk selection and callback AllStems demand remained unchanged. Genuine
+FullMix mode effect and exact reference PCM, transition END, then fresh AllStems
+own ACK for mask 5 and matching PCM were asserted before the final 8-versus-6
+reader failure, after all real cold workers had shut down.
+
+Actual full-control-queue refusal passed in 0.94 seconds: queue (2,32,34), source
+7/9/9/9, each component 3/4/4/4, original Pending mirror retained, intent 2/2,
+captured/current receipt and original own ACK for mask 10 with reference PCM.
+All 31 independent peers ran once. Both executable hashes remained unchanged.
+
+Before any compilation, Systems caught and corrected a draft helper's wrong
+module/private-field access and missing reference FullMix transition. The helper
+now lives under the committed test module; only cfg(test) module visibility was
+opened. Source method and fat-pointer lookup corrections also preceded compilation.
+No unqualified runtime or runtime-fitted expectation is claimed. The qualified
+test/helper bytes, stimuli, timeouts and assertions remain fixed through the fix.
+
+The implementation adds only the original intent atomic/base and the original
+proposal's unarmed condition to the existing ordinary cancellation predicate:
+!proposal.armed() && intent != base. It does not clone a PCM, selection, Pair or
+file reader, add a lane/scheduler/authority, or change realtime mutation. Armed
+publication, status/shutdown/launch guards, claimed work and off-lock capture-before-
+reservation destruction retain their existing obligations. A broad current()
+negation would incorrectly include transient placement and future unarmed intent.
+
+NativeREST65 retains ENTIRE former nativeREST64; FINAL66 retains ENTIRE former
+FINAL65. Every original process/numerical/CUDA/fullhost/quality/platform/distribution
+gate and negative UNKNOWN remains under its original contract. This scoped
+additional-reader proof does not certify backing-last-reader or OS memory release,
+generic stale/claimed closure, latency, GUI/device/hearing or whole acceptance.
+Productive Python/Torch remains; installed savings remain zero.
+
+### STEP64 measured result and limits
+
+All 47 distinct selected tests passed in one 14.43-second run. The actual compiled
+selection was checked against the intended complete set before execution using
+the same compact libtest filter list. Successful FullMix now leaves queue
+(2 running,31 queued,33 admitted), source owners 7/9/9/6 and each component
+3/4/4/2. The old Pending mirror ends separately. The two obsolete queued source
+readers and four component readers retire before either worker or FullMix callback,
+and replacement admission succeeds while all 31 independent peers remain unrun.
+The obsolete receipt becomes rejected/non-current. Original source, disk selection
+and actual AllStems callback demand remain intact until the genuine callback.
+
+Actual FullMix mode effect and matching reference PCM finish their transition
+before a fresh committed request reaches its own ACK for mask 5 and matching PCM.
+Refusal preserves queue (2,32,34), source 7/9/9/9, each component 3/4/4/4, original
+Pending mirror, intent 2, captured/current receipt and its own ACK for mask 10
+with matching PCM. All 31 peers run once; only success admits one replacement,
+which also runs once. Actual held workers shut down before the final assertions.
+The qualified test/helper bytes and all four prior committed-queue leaves remain
+unchanged. The executable hash is unchanged before and after the functional run.
+
+The exact set contains 23 original ColdJobs controls, six committed-queue cases,
+six queued-window cases, three Window/Pair/Pending/lifetime/deadline cases, two
+shared-member/independent-owner cases, four original FullMix/window own-ACK cases
+and three strict Pending/claim/terminal guards. This is one 47-case set, not a
+cumulative rerun count or broad cold-load suite. Controlled poison/unwind cases
+pass without establishing production panic or historical failure causes.
+
+The isolated functional Release/Native API check and four static checks pass:
+changed-Rust format, strict OpenSpec, exact source-stage/protected-file boundaries
+and qualified reproduction bytes. Existing 20 Looper library, 33 Looper test and
+two analysis test warnings remain; einops 0.6.1 remains pinned. No NN/CUDA,
+pressure, GUI/device/hearing, latency, backing-last-reader/OS-release, whole-quality
+or whole-assignment acceptance is established. ENTIRE nativeREST65/FINAL66 and
+every original requirement and negative UNKNOWN remain unchanged.

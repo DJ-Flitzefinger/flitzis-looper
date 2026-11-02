@@ -1261,15 +1261,20 @@ impl CommittedStemResidencyAdmission {
             status: status.clone(),
             enqueued: false,
         };
-        // Observe the original authority without cloning the captured selection or reader.
+        // Observe original unarmed intent without cloning the captured selection or reader.
         let queued_status = status.clone();
         let queued_cancelled = self.cold_cancelled.clone();
+        let queued_proposal = work.proposal.clone();
+        let queued_intent = work.intent_epoch.clone();
+        let queued_base_intent = work.base_intent;
         self.cold_jobs
             .submit_cancellable(
                 reservation,
                 move || {
                     queued_cancelled.load(Ordering::Acquire)
                         || !queued_status.preparation_current()
+                        || (!queued_proposal.armed()
+                            && queued_intent.load(Ordering::Acquire) != queued_base_intent)
                         || queued_status
                             .ownership
                             .binding_cell(queued_status.id, queued_status.binding)
@@ -1888,7 +1893,7 @@ impl ResidencyWork {
 
 #[cfg(test)]
 #[path = "committed_control_publication_tests.rs"]
-mod control_publication_tests;
+pub(super) mod control_publication_tests;
 
 impl super::resident_control_context::CommittedControlContext {
     pub(super) fn stable_committed_placement_read<T>(

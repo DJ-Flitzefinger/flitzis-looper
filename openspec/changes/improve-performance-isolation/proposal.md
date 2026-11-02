@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Sixty-five coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
+Sixty-six coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
 native BeatThis/runtime/loader experiments and their explicit failed CUDA and
 incomplete producer limits. STEP25 implements independent BS spectral arithmetic;
 STEP26 adds whole-track reflection, padding, batching, fades and rolling overlap.
@@ -114,6 +114,10 @@ STEP63 retires queued window captures when successful FullMix admission changes
 their original storage intent, preserving an original window when the control
 queue refuses FullMix. NativeREST64 and FINAL65 retain the ENTIRE former63/64
 scope and every original negative gate, without omissions.
+STEP64 applies the existing unarmed-intent guard to queued committed callback
+captures after successful direct FullMix admission, with actual refusal and
+independent own-ACK controls. NativeREST65 and FINAL66 retain the ENTIRE former
+64/65 scope and every original negative gate, without omissions.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.
