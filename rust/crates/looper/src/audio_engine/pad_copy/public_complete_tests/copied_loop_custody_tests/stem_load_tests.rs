@@ -58,8 +58,7 @@ fn copied_pad_external_stem_load_retains_success_and_decode_error_keeps_predeces
                 .ancestors()
                 .nth(4)
                 .unwrap();
-            let parent =
-                workspace.join("test-artifacts/stem-load-custody-20261021/copy-loader-native");
+            let parent = workspace.join("test-artifacts/stem-load");
             fs::create_dir_all(&parent).unwrap();
             fs::write(
                 parent.join("OWNER.md"),
@@ -153,8 +152,7 @@ fn managed_stem_import_captures_independent_copy_and_empty_pad_originals() {
                 .ancestors()
                 .nth(4)
                 .unwrap();
-            let parent =
-                workspace.join("test-artifacts/stem-load-custody-20261021/copy-loader-native");
+            let parent = workspace.join("test-artifacts/stem-load");
             fs::create_dir_all(&parent).unwrap();
             fs::write(
                 parent.join("OWNER.md"),
