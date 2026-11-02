@@ -537,6 +537,131 @@ def _fail_beat_monitor_allocation(*_args: object) -> str:
     raise MemoryError(message)
 
 
+def _owner_allocation_failure(
+    error: MemoryError, children: list[subprocess.Popen[bytes]]
+) -> Callable[..., None]:
+    def fail_owner(*_args: object, **_kwargs: object) -> None:
+        assert len(children) == 1
+        raise error
+
+    return fail_owner
+
+
+def _observe_suspended_child_close(tree_ended: Event) -> Callable[[process._WorkerProcess], None]:
+    real_close = process._WorkerProcess.close_tree
+
+    def close(child: process._WorkerProcess) -> None:
+        assert child._job is not None
+        assert isinstance(child._process, subprocess.Popen)
+        assert child._job._kernel.WaitForSingleObject(int(child._process._handle), 0) == 0
+        assert child.poll() is not None
+        assert not child.tree_active()
+        if not tree_ended.is_set():
+            assert child._job._handle is not None
+            tree_ended.set()
+        real_close(child)
+
+    return close
+
+
+def _delayed_owner_temporary_release(
+    children: list[subprocess.Popen[bytes]],
+    tree_ended: Event,
+    release_cleanup: Event,
+    cleanup_attempted: Event,
+) -> Callable[..., bool]:
+    real_release = process._release_temporary
+
+    def release(
+        temporary: TemporaryDirectory[str],
+        retired: Event,
+        whole_work: OfflineWorkTicket | None = None,
+    ) -> bool:
+        assert tree_ended.is_set()
+        assert whole_work is not None
+        assert children[0].stdout is not None
+        assert children[0].stdout.closed
+        if not release_cleanup.is_set():
+            cleanup_attempted.set()
+            return False
+        return real_release(temporary, retired, whole_work)
+
+    return release
+
+
+def _cleanup_suspended_children(children: list[subprocess.Popen[bytes]]) -> None:
+    # The unchanged-production RED must also settle its genuine suspended root.
+    for child in children:
+        if child.poll() is None:
+            assert isinstance(child, process._OwnedTreeProcess)
+            child.kill()
+            child.wait(timeout=5)
+            child.close_tree()
+            if child.stdout is not None:
+                child.stdout.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual suspended Windows child ownership")
+def test_process_owner_allocation_failure_retains_actual_child_and_cleanup_custody(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration, request = prepared
+    children = _record_processes(monkeypatch)
+    adapter = BeatWorkerAdapter(configuration)
+    error = MemoryError("fixture process owner allocation failure")
+    release_cleanup, cleanup_attempted, tree_ended = Event(), Event(), Event()
+    original_bytes = request.pcm.path.read_bytes()
+    successor = None
+    cancel = Event()
+
+    try:
+        with monkeypatch.context() as failing, ThreadPoolExecutor(max_workers=1) as executor:
+            failing.setattr(
+                process._OwnedProcess, "__init__", _owner_allocation_failure(error, children)
+            )
+            failing.setattr(
+                process._WorkerProcess, "close_tree", _observe_suspended_child_close(tree_ended)
+            )
+            failing.setattr(
+                process,
+                "_release_temporary",
+                _delayed_owner_temporary_release(
+                    children, tree_ended, release_cleanup, cleanup_attempted
+                ),
+            )
+            future = executor.submit(adapter.run, request, cancel)
+            try:
+                assert cleanup_attempted.wait(5)
+                assert not future.done()
+                assert not adapter.retired.is_set()
+                assert not request.pcm.path.with_suffix(".started").exists()
+                assert list(configuration.scratch_dir.glob("beat-request-*"))
+                successor = OfflineWorkTicket()
+                assert not successor.try_acquire()
+                assert not process._PROCESS_SLOT.acquire(blocking=False)
+                assert _run(BeatWorkerAdapter(configuration), request).reason == "worker_busy"
+            finally:
+                release_cleanup.set()
+                cancel.set()
+            with pytest.raises(MemoryError) as caught:
+                future.result(timeout=5)
+            assert caught.value is error
+        assert adapter.retired.is_set()
+        assert not list(configuration.scratch_dir.glob("beat-request-*"))
+        assert request.pcm.path.read_bytes() == original_bytes
+        assert successor is not None
+        assert successor.try_acquire()
+    finally:
+        release_cleanup.set()
+        if successor is not None:
+            successor.close()
+        _cleanup_suspended_children(children)
+    assert _run(adapter, request).status == "ready"
+    assert adapter.retired.is_set()
+    assert len(children) == 2
+    assert children[1].poll() is not None
+
+
 def _request_write_failure(error: MemoryError) -> Callable[[Path, bytes], int]:
     real_write = Path.write_bytes
 

@@ -139,6 +139,58 @@ def test_output_reader_construction_failure_keeps_suspended_root_owned_until_rea
         assert not marker.exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="actual suspended Windows child ownership")
+def test_process_owner_allocation_failure_reaps_actual_command_before_propagating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launches = _record_processes(monkeypatch)
+    retired = Event()
+    error = MemoryError("fixture command owner allocation failure")
+    real_close = process._OwnedTreeProcess.close_tree
+    tree_ended = Event()
+    marker = tmp_path / "must-not-run"
+
+    def fail_owner(*_args: object, **_kwargs: object) -> None:
+        assert len(launches) == 1
+        raise error
+
+    def close(child: process._OwnedTreeProcess) -> None:
+        assert child._job is not None
+        assert child._job._handle is not None
+        assert isinstance(child._process, subprocess.Popen)
+        assert child._job._kernel.WaitForSingleObject(int(child._process._handle), 0) == 0
+        assert child.poll() is not None
+        assert not child.tree_active()
+        tree_ended.set()
+        real_close(child)
+
+    with monkeypatch.context() as failing:
+        failing.setattr(process._OwnedProcess, "__init__", fail_owner)
+        failing.setattr(process._OwnedTreeProcess, "close_tree", close)
+        with pytest.raises(MemoryError) as caught:
+            process.run_owned_command(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    f"from pathlib import Path; Path({str(marker)!r}).touch()",
+                ],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                cancel=Event(),
+                retired=retired,
+            )
+        assert caught.value is error
+    assert tree_ended.is_set()
+    assert retired.is_set()
+    assert not marker.exists()
+    assert launches[0].stdout is not None
+    assert launches[0].stdout.closed
+    assert launches[0].stderr is not None
+    assert launches[0].stderr.closed
+    assert _run([sys.executable, "-I", "-c", "print('fresh command')"], tmp_path).reason == "ok"
+
+
 def test_stderr_reader_failure_triggers_visible_failure_and_reaps_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

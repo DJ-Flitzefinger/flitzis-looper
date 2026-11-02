@@ -420,32 +420,13 @@ class _OwnedProcess:
         self.readers += (reader,)
 
     def release(self) -> bool:
-        try:
-            if isinstance(self.process, _OwnedTreeProcess):
-                self.process.close_tree()
-            for stream in (self.process.stdout, self.process.stderr):
-                if stream is not None:
-                    stream.close()
-        except OSError:
-            return False
-        if self.temporary is None:
-            if self.whole_work is not None:
-                self.whole_work.close()
-            self.retired.set()
-            return True
-        return _release_temporary(self.temporary, self.retired, self.whole_work)
+        return _release_process_resources(
+            self.process, self.temporary, self.retired, self.whole_work
+        )
 
     def retire(self) -> None:
         # A failed finite reap must retain ownership; never pretend the PCM reader is gone.
-        while True:
-            try:
-                self.terminate_tree()
-                self.process.wait()
-                if self.wait_tree(_POLL_SECONDS):
-                    break
-            except OSError:
-                pass
-            Event().wait(_POLL_SECONDS)
+        _retire_process_tree(self.process)
         for reader in self.readers:
             if reader.thread.ident is not None:
                 reader.thread.join()
@@ -455,19 +436,81 @@ class _OwnedProcess:
 
     def terminate_tree(self) -> None:
         """Also terminate descendants when the launcher already returned success or crashed."""
-        if isinstance(self.process, _OwnedTreeProcess) or self.process.poll() is None:
-            self.process.kill()
+        _terminate_process_tree(self.process)
 
     def wait_tree(self, timeout: float) -> bool:
         """Retain admission until the job's active-process count is zero."""
-        if not isinstance(self.process, _OwnedTreeProcess):
-            return self.process.poll() is not None
-        deadline = time.monotonic() + timeout
-        while self.process.tree_active():
-            if time.monotonic() >= deadline:
-                return False
-            Event().wait(_POLL_SECONDS)
+        return _wait_process_tree(self.process, timeout)
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes] | _OwnedTreeProcess) -> None:
+    if isinstance(process, _OwnedTreeProcess) or process.poll() is None:
+        process.kill()
+
+
+def _wait_process_tree(
+    process: subprocess.Popen[bytes] | _OwnedTreeProcess, timeout: float
+) -> bool:
+    if not isinstance(process, _OwnedTreeProcess):
+        return process.poll() is not None
+    deadline = time.monotonic() + timeout
+    while process.tree_active():
+        if time.monotonic() >= deadline:
+            return False
+        Event().wait(_POLL_SECONDS)
+    return True
+
+
+def _retire_process_tree(process: subprocess.Popen[bytes] | _OwnedTreeProcess) -> None:
+    while True:
+        try:
+            _terminate_process_tree(process)
+            process.wait()
+            if _wait_process_tree(process, _POLL_SECONDS):
+                return
+        except OSError:
+            pass
+        Event().wait(_POLL_SECONDS)
+
+
+def _release_process_resources(
+    process: subprocess.Popen[bytes] | _OwnedTreeProcess,
+    temporary: tempfile.TemporaryDirectory[str] | None,
+    retired: Event,
+    whole_work: OfflineWorkTicket | None,
+) -> bool:
+    try:
+        if isinstance(process, _OwnedTreeProcess):
+            process.close_tree()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+    except OSError:
+        return False
+    if temporary is None:
+        if whole_work is not None:
+            whole_work.close()
+        retired.set()
         return True
+    return _release_temporary(temporary, retired, whole_work)
+
+
+def _own_process(
+    process: subprocess.Popen[bytes] | _OwnedTreeProcess,
+    temporary: tempfile.TemporaryDirectory[str] | None,
+    retired: Event,
+    whole_work: OfflineWorkTicket | None = None,
+) -> _OwnedProcess:
+    """Retain the returned child even if its supervisor cannot be allocated."""
+    try:
+        return _OwnedProcess(process, None, temporary, retired, whole_work=whole_work)
+    except MemoryError:
+        # No output reader has been allocated or started at this boundary. Keep
+        # raw custody here instead of trying to allocate a replacement owner.
+        _retire_process_tree(process)
+        while not _release_process_resources(process, temporary, retired, whole_work):
+            Event().wait(_POLL_SECONDS)
+        raise
 
 
 def _environment() -> dict[str, str]:
@@ -739,7 +782,7 @@ def run_owned_command(  # noqa: PLR0913
     except OSError:
         retired.set()
         raise
-    owned = _OwnedProcess(process, None, None, retired)
+    owned = _own_process(process, None, retired)
     stdout = None
     stderr = None
     reason = "worker_supervision_failed"
@@ -932,7 +975,7 @@ def _run_process_admitted(
         process = _start(command, request_path)
     except OSError, RuntimeError:
         return _start_failed(temporary, retired, whole_work)
-    owned = _OwnedProcess(process, None, temporary, retired, whole_work=whole_work)
+    owned = _own_process(process, temporary, retired, whole_work)
     reason = "worker_supervision_failed"
     try:
         reader = _beat_response_reader(owned, limits.max_response_bytes)

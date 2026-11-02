@@ -1,5 +1,46 @@
 # Performance audit and implementation design
 
+## Returned-child supervisor allocation recovery
+
+Both Beat and shared commands returned a genuine gated child before allocating
+`_OwnedProcess` outside their cleanup guard. A `MemoryError` there could retain
+the suspended root and its pipes, plus Beat temporary storage, the actual Native
+ticket borrow and both global permits. The isolated unchanged-production Beat
+regression fails because cleanup is never attempted; its own fixture explicitly
+reaps the genuine suspended root afterward. This injected exception does not
+establish an actual OOM or explain historical memory-pressure measurements.
+
+One constructor wrapper now retains raw process custody while allocating the
+supervisor. On that specific error it synchronously reuses the existing terminate,
+payload wait, actual tree wait and resource-release operations, then bare-raises
+the original exception. The ordinary supervisor delegates to the same extracted
+operations without changing its tree, started-reader, pipe or temporary ordering.
+No replacement owner or retirement thread is allocated on the constructor failure
+path. No reader exists at that boundary, so pipe closure is verified directly.
+Payload wait remains mandatory even when its unassigned Windows Job is empty.
+
+One public Beat regression holds actual temporary cleanup after observing the
+original retained Windows process handle ended, an empty still-open tree and
+closed stdout. While blocked, its future, retirement event, real FIFO ticket and
+both permits retain custody. After cleanup the exact exception propagates, source
+bytes remain intact and fresh ticket acquisition and Beat execution succeed.
+One shared-command neighbor verifies its genuine suspended child, both closed
+pipes, retirement and fresh successful execution. Neither fixture activates the
+failed child merely to manufacture descendants. Existing descendant and reader
+controls cover normal activated supervision. Unknown effects inside `_start`,
+partial temporary construction and continuous OOM remain separate open gaps.
+No Rust, Native build, inference, audio path or resource policy changes.
+
+The frozen integrated run passes 49 cases in 22.43 seconds, including both new
+public failures and the affected command, Windows descendant, reader, FIFO,
+startup, cancellation and unsupported-platform controls. Ruff lint/format and
+strict Mypy for the product module pass. Strict OpenSpec initially rejected the
+wrapped new requirement text; moving its existing SHALL into its first text line
+corrects that format without changing behavior. Final prose/status and this spec
+format are checked separately against the final index; the tested product and
+test bytes remain unchanged. Systems PRE/frozen POST and independent actual-diff
+review retain the bounded failure and platform limits above.
+
 ## Prelaunch Beat allocation recovery
 
 The public Beat path acquired both global permits before allocating temporary
@@ -16,8 +57,9 @@ preparation settles its actual temporary and borrow before retirement, or retain
 them in the existing deferred cleanup. The original `MemoryError` propagates
 unchanged. Failure to allocate that cleanup thread falls back to synchronous
 cleanup. Child construction remains outside this no-child cleanup boundary:
-unknown allocation effects within `_start` and the later `_OwnedProcess` handoff
-remain separate open ownership gaps. No broader setup guarantee is claimed.
+unknown allocation effects within `_start` remain a separate open ownership gap.
+The returned-child supervisor handoff is addressed separately above; no broader
+setup guarantee is claimed.
 
 Four public regressions cover failure before temporary creation, request writing
 after a real Native borrow, delayed cleanup and cleanup-thread allocation failure.

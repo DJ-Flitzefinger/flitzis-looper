@@ -1,5 +1,23 @@
 ## ADDED Requirements
 
+### Requirement: Returned Offline Children Survive Supervisor Allocation Failure
+The caller SHALL retain raw custody of a genuine returned Beat or shared-command
+child when allocating its supervisor raises `MemoryError`. Synchronous custody
+SHALL continue through payload and actual tree retirement, output-pipe closure
+and resource cleanup. No reader has started at this boundary. Cleanup SHALL NOT
+allocate a replacement supervisor or treat Job closure as tree-end proof.
+The original exception SHALL propagate unchanged only after retirement. Beat
+temporary storage, the real Native ticket borrow and both global permits SHALL
+remain held through delayed cleanup. This bounded guarantee SHALL NOT certify
+unknown partial effects inside child construction or continuous allocation failure.
+
+#### Scenario: Supervisor allocation fails after a suspended child returns
+- **GIVEN** the public Beat or shared-command path owns a genuine returned child
+- **WHEN** allocating its supervisor raises a memory allocation error
+- **THEN** the original child ends before its tree and output resources close
+- **AND** delayed Beat temporary cleanup retains admission and the actual ticket borrow
+- **AND** retirement precedes unchanged exception propagation and fresh successful execution
+
 ### Requirement: Prelaunch Beat Allocation Failure Retains Cleanup Ownership
 Before child construction, a Beat request's allocation failure SHALL release its
 unused global permits or retain them through actual temporary cleanup. An

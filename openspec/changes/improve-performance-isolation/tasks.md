@@ -949,6 +949,9 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Retain genuine returned Beat/shared-command children through supervisor
+      allocation failure, using existing actual tree/pipe/resource retirement;
+      verify delayed real-borrow/admission cleanup and fresh public execution.
 - [x] Recover unused Beat admission and actual temporary/ticket custody after
       prelaunch allocation failure, preserving the original exception and delayed
       cleanup; verify fresh public execution without claiming child-constructor
