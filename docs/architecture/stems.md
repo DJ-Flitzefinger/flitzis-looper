@@ -104,6 +104,14 @@ actual platform validation. Windows enforcement and Linux subtree ownership do n
 establish Linux/macOS host monitoring or whole application/resource-admission
 acceptance; those remain explicit distribution gates.
 
+Beat request preparation also retains ownership on allocation failure before
+child construction. If temporary construction returns no owner, unused global
+permits retire immediately. If preparing the request fails after a temporary
+owner exists, its actual cleanup precedes permit and Native-ticket-borrow release.
+The original allocation exception propagates; unavailable cleanup-thread memory
+uses synchronous cleanup. This bounded recovery does not certify allocation
+failure inside child construction or the later process-owner handoff.
+
 ## Complete artifacts and durable selection
 
 Source-backed paths are material-root `stems` and aligned `.pcm-cache` areas,

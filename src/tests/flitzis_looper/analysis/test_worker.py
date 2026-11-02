@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, Thread
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -534,6 +535,131 @@ def _refuse_beat_output_thread(*, target: Callable[[], None], name: str, daemon:
 def _fail_beat_monitor_allocation(*_args: object) -> str:
     message = "fixture monitor allocation failure"
     raise MemoryError(message)
+
+
+def _request_write_failure(error: MemoryError) -> Callable[[Path, bytes], int]:
+    real_write = Path.write_bytes
+
+    def write(path: Path, data: bytes) -> int:
+        if path.name == "request.json" and path.parent.name.startswith("beat-request-"):
+            raise error
+        return real_write(path, data)
+
+    return write
+
+
+def _assert_successful_beat_retry(
+    adapter: BeatWorkerAdapter,
+    request: BeatWorkerRequest,
+    children: list[subprocess.Popen[bytes]],
+) -> None:
+    assert _run(adapter, request).status == "ready"
+    assert adapter.retired.is_set()
+    assert len(children) == 1
+    assert children[0].poll() is not None
+
+
+@pytest.mark.parametrize("allocation", ["temporary", "request"])
+def test_prelaunch_allocation_failure_releases_admission_for_fresh_analysis(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    allocation: str,
+) -> None:
+    configuration, request = prepared
+    children = _record_processes(monkeypatch)
+    adapter = BeatWorkerAdapter(configuration)
+    error = MemoryError("fixture prelaunch allocation failure")
+    original_bytes = request.pcm.path.read_bytes()
+
+    def fail_temporary(**_kwargs: object) -> None:
+        raise error
+
+    with monkeypatch.context() as failing:
+        if allocation == "temporary":
+            failing.setattr(process, "tempfile", SimpleNamespace(TemporaryDirectory=fail_temporary))
+        else:
+            failing.setattr(Path, "write_bytes", _request_write_failure(error))
+        with pytest.raises(MemoryError) as caught:
+            _run(adapter, request)
+        assert caught.value is error
+
+    assert children == []
+    assert adapter.retired.is_set()
+    assert not list(configuration.scratch_dir.glob("beat-request-*"))
+    assert request.pcm.path.read_bytes() == original_bytes
+    successor = OfflineWorkTicket()
+    try:
+        assert successor.try_acquire()
+    finally:
+        successor.close()
+    _assert_successful_beat_retry(adapter, request, children)
+
+
+@pytest.mark.parametrize("thread_memory", [False, True])
+def test_prelaunch_memory_failure_retains_borrow_until_actual_temporary_cleanup(
+    prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    thread_memory: bool,
+) -> None:
+    configuration, request = prepared
+    children = _record_processes(monkeypatch)
+    adapter = BeatWorkerAdapter(configuration)
+    error = MemoryError("fixture request allocation failure")
+    release_cleanup, cleanup_attempted = Event(), Event()
+    real_release = process._release_temporary
+    original_bytes = request.pcm.path.read_bytes()
+
+    def release(
+        temporary: TemporaryDirectory[str],
+        retired: Event,
+        whole_work: OfflineWorkTicket | None = None,
+    ) -> bool:
+        assert whole_work is not None
+        if not release_cleanup.is_set():
+            cleanup_attempted.set()
+            return False
+        return real_release(temporary, retired, whole_work)
+
+    def thread(*, target: Callable[..., None], name: str, **kwargs: object) -> Thread:
+        if name == "beat-worker-cleanup":
+            message = "fixture cleanup thread allocation failure"
+            raise MemoryError(message)
+        return Thread(target=target, name=name, **kwargs)
+
+    successor = None
+    cancel = Event()
+    try:
+        with monkeypatch.context() as failing, ThreadPoolExecutor(max_workers=1) as executor:
+            failing.setattr(Path, "write_bytes", _request_write_failure(error))
+            failing.setattr(process, "_release_temporary", release)
+            if thread_memory:
+                failing.setattr(process, "Thread", thread)
+            future = executor.submit(adapter.run, request, cancel)
+            try:
+                assert cleanup_attempted.wait(5)
+                assert not adapter.retired.is_set()
+                successor = OfflineWorkTicket()
+                assert not successor.try_acquire()
+                assert list(configuration.scratch_dir.glob("beat-request-*"))
+                assert children == []
+                if thread_memory:
+                    assert not future.done()
+            finally:
+                release_cleanup.set()
+                cancel.set()
+            with pytest.raises(MemoryError) as caught:
+                future.result(timeout=5)
+            assert caught.value is error
+            assert adapter.retired.wait(5)
+        assert not list(configuration.scratch_dir.glob("beat-request-*"))
+        assert request.pcm.path.read_bytes() == original_bytes
+        assert successor.try_acquire()
+    finally:
+        release_cleanup.set()
+        if successor is not None:
+            successor.close()
+    _assert_successful_beat_retry(adapter, request, children)
 
 
 @pytest.mark.parametrize("unexpected", [False, True])

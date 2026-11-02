@@ -1,5 +1,41 @@
 # Performance audit and implementation design
 
+## Prelaunch Beat allocation recovery
+
+The public Beat path acquired both global permits before allocating temporary
+storage and preparing the request. An unexpected `MemoryError` before child
+construction escaped the expected startup-error handlers, leaving retirement
+clear and later analyses permanently busy. The shared heavy scope closed its
+parent ticket but did not settle these permits or a retained ticket borrow.
+An isolated request-write regression reproduces the unset retirement event on
+unchanged production source; it does not explain historical memory-pressure
+measurements or establish a real out-of-memory event.
+
+The no-returned-temporary path now settles unused permits in `finally`. Request
+preparation settles its actual temporary and borrow before retirement, or retains
+them in the existing deferred cleanup. The original `MemoryError` propagates
+unchanged. Failure to allocate that cleanup thread falls back to synchronous
+cleanup. Child construction remains outside this no-child cleanup boundary:
+unknown allocation effects within `_start` and the later `_OwnedProcess` handoff
+remain separate open ownership gaps. No broader setup guarantee is claimed.
+
+Four public regressions cover failure before temporary creation, request writing
+after a real Native borrow, delayed cleanup and cleanup-thread allocation failure.
+They retain exception identity, source bytes, no-child proof, actual retirement,
+fresh real ticket admission and subsequent successful Beat execution. The
+constructor injection raises before allocating a directory; it does not prove
+cleanup of partial effects inside the temporary constructor. No inference,
+Native rebuild, resource-floor or audio-path change is needed.
+
+The final focused run passes 17 cases: four new allocation-recovery cases and
+13 affected existing setup, FIFO, scratch/start, cancellation and unsupported-host
+cases. Ruff lint/format, whitespace and strict OpenSpec validation pass. The
+existing Windows Release Native is reused because Rust is unchanged. The Linux
+route inventory found no complete application runtime in the existing Arch WSL
+system interpreter; it did not import Native or run application admission.
+No actual macOS verification route was identified. Those platform requirements
+and the complete native-inference, CUDA, quality and distribution gates stay open.
+
 ## Linux descendant ownership
 
 Linux previously treated payload exit as complete tree retirement. A silent

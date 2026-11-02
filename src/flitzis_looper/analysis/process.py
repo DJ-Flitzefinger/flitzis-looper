@@ -819,7 +819,7 @@ def _start_failed(
             name="beat-worker-cleanup",
             daemon=True,
         ).start()
-    except OSError, RuntimeError:
+    except OSError, RuntimeError, MemoryError:
         _retire_temporary(temporary, retired, whole_work)
         return ProcessResult("worker_start_failed")
     return ProcessResult("worker_retiring", resources_released=False)
@@ -874,6 +874,21 @@ def _activate_beat_process(
     return True
 
 
+def _acquire_beat_process_slot(cancel: Event, retired: Event) -> bool:
+    """Keep existing Beat admission while waiting for its subordinate process slot."""
+    while not _PROCESS_SLOT.acquire(blocking=False):
+        if cancel.wait(_POLL_SECONDS):
+            retired.set()
+            _ANALYSIS_ADMISSION.release()
+            return False
+    if cancel.is_set():
+        retired.set()
+        _PROCESS_SLOT.release()
+        _ANALYSIS_ADMISSION.release()
+        return False
+    return True
+
+
 def _run_process_admitted(
     command: WorkerCommand,
     request: bytes,
@@ -891,28 +906,29 @@ def _run_process_admitted(
     if not _ANALYSIS_ADMISSION.acquire(blocking=False):
         return ProcessResult("worker_busy")
     retired.clear()
-    while not _PROCESS_SLOT.acquire(blocking=False):
-        if cancel.wait(_POLL_SECONDS):
-            retired.set()
-            _ANALYSIS_ADMISSION.release()
-            return ProcessResult("cancelled")
-    if cancel.is_set():
-        retired.set()
-        _PROCESS_SLOT.release()
-        _ANALYSIS_ADMISSION.release()
+    if not _acquire_beat_process_slot(cancel, retired):
         return ProcessResult("cancelled")
+    temporary = None
     try:
         temporary = tempfile.TemporaryDirectory(prefix="beat-request-", dir=command.scratch_dir)
     except OSError:
-        retired.set()
-        _PROCESS_SLOT.release()
-        _ANALYSIS_ADMISSION.release()
         return ProcessResult("worker_scratch_unavailable")
+    finally:
+        if temporary is None:
+            retired.set()
+            _PROCESS_SLOT.release()
+            _ANALYSIS_ADMISSION.release()
     whole_work = None
     try:
         request_path = Path(temporary.name) / "request.json"
         whole_work = whole_owner.ticket.borrow()
         request_path.write_bytes(request)
+    except MemoryError:
+        _start_failed(temporary, retired, whole_work)
+        raise
+    except OSError, RuntimeError:
+        return _start_failed(temporary, retired, whole_work)
+    try:
         process = _start(command, request_path)
     except OSError, RuntimeError:
         return _start_failed(temporary, retired, whole_work)

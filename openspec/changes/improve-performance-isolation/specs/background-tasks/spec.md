@@ -1,5 +1,19 @@
 ## ADDED Requirements
 
+### Requirement: Prelaunch Beat Allocation Failure Retains Cleanup Ownership
+Before child construction, a Beat request's allocation failure SHALL release its
+unused global permits or retain them through actual temporary cleanup. An
+acquired Native ticket borrow SHALL remain held until that cleanup ends. The
+original allocation exception SHALL propagate unchanged. Failure to allocate the
+cleanup thread SHALL use synchronous cleanup with the same ownership guards.
+
+#### Scenario: Request preparation fails before child construction
+- **GIVEN** Beat admission has acquired both global permits
+- **WHEN** temporary construction returns no owner or request preparation raises a memory allocation error
+- **THEN** no child is launched and the original exception propagates
+- **AND** retirement and fresh admission require actual temporary and ticket-borrow cleanup
+- **AND** a delayed cleanup retains both permits and the borrow until it completes, including when the cleanup thread cannot be allocated
+
 ### Requirement: Shared Offline Workers Require Process Tree Ownership Before Launch
 The shared Beat/stem worker launcher SHALL refuse execution on platforms without
 an owning process-tree adapter before allocating a child or tree owner. Launcher

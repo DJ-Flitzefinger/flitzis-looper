@@ -949,6 +949,10 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Recover unused Beat admission and actual temporary/ticket custody after
+      prelaunch allocation failure, preserving the original exception and delayed
+      cleanup; verify fresh public execution without claiming child-constructor
+      or later process-owner allocation safety.
 - [x] Refuse shared offline worker launch before allocating an unowned child on
       unsupported hosts; verify command refusal and Beat startup cleanup without
       claiming full macOS support or actual platform acceptance.
