@@ -4323,10 +4323,14 @@ class StemController(BaseController):  # noqa: PLR0904
             raise RuntimeError(message)
 
     def _poll_disk_selection_settlements(self) -> None:
-        for settlement in tuple(self._disk_selection_settlements.values())[:8]:
+        attempted = 0
+        for settlement in tuple(self._disk_selection_settlements.values()):
             if settlement.request.sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
                 continue
             self._settle_disk_selection(settlement)
+            attempted += 1
+            if attempted == 8:
+                break
 
     def _settle_disk_selection(self, settlement: _DiskSelectionSettlement) -> None:
         if settlement.verified_restore:

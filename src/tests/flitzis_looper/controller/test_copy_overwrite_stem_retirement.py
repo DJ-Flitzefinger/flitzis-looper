@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         ProjectAssetLease,
         ResidentStemTicket,
     )
+    from tests.flitzis_looper.controller.test_pair_stem_observers import _ObserverRig
     from tests.flitzis_looper.controller.test_stem_job import _Lease, _Reservation
 
 
@@ -233,6 +234,116 @@ def test_overwrite_releases_pending_publication_and_keeps_disk_settlement_until_
     assert controller._project.stem_cache[0] is successor
     assert rig.audio.method_calls == []
     request.close()
+
+
+def _retained_disk_settlements(
+    rig: _ObserverRig,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_ids: tuple[int, ...],
+) -> tuple[list[stems._DiskSelectionSettlement], Mock]:
+    controller = rig.controller
+    settlements = []
+    selections = Mock()
+    for sample_id in sample_ids:
+        entry = _entry()
+        original_content_id = f"{sample_id + 1:032x}"
+        controller._project.pad_content[sample_id] = PadContentIdentity(
+            instance_id=original_content_id
+        )
+        controller._project.sample_paths[sample_id] = "samples/shared.wav"
+        controller._project.stem_cache[sample_id] = entry
+        prepared = _PreparedPair(components=False)
+        select = Mock(side_effect=prepared.select)
+        monkeypatch.setattr(prepared, "select", select)
+        selections.attach_mock(select, f"pad_{sample_id}")
+        request = PairPreparation(
+            sample_id,
+            entry,
+            cast("PreparedSourceTicket", FakePreparedSourceTicket()),
+            original_content_id,
+            None,
+            cast("AssetRetirementReservation", rig.assets.reserve(16)),
+            cast("ProjectAssetLease", rig.assets.acquire(Path(entry.cache_dir))),
+            Event(),
+            prepared=cast("PreparedStemPair", prepared),
+            source_path="samples/shared.wav",
+        )
+        settlement = stems._DiskSelectionSettlement(
+            request,
+            entry,
+            request.ticket,
+            cast("ProjectAssetLease", rig.assets.acquire(Path(entry.cache_dir))),
+            None,
+            cast("AssetRetirementReservation", rig.assets.reserve(16)),
+        )
+        controller._disk_selection_settlements[sample_id] = settlement
+        settlements.append(settlement)
+    return settlements, selections
+
+
+@pytest.mark.parametrize("deferred_count", [0, 8])
+def test_disk_settlement_budget_skips_fenced_owners_and_preserves_outside_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deferred_count: int,
+) -> None:
+    """Exercise control retirement owners, without asserting Native ACK or disk integrity."""
+    rig = _rig(tmp_path, monkeypatch)
+    controller = rig.controller
+    deferred_ids = tuple(range(deferred_count))
+    outside_ids = tuple(range(72, 81))
+    sample_ids = deferred_ids + outside_ids
+    settlements, selections = _retained_disk_settlements(rig, monkeypatch, sample_ids)
+    controller._pair_deferred_sample_ids = frozenset(sample_ids)
+    for settlement in settlements:
+        sample_id = settlement.request.sample_id
+        controller.retire_overwritten_native_state(
+            sample_id, original_content_id=settlement.request.content_id
+        )
+        controller._project.stem_cache[sample_id] = settlement.entry.model_copy(deep=True)
+        controller._project.pad_content[sample_id] = PadContentIdentity(
+            instance_id=f"{sample_id + 4096:032x}"
+        )
+    replacement = controller._project.model_dump_json()
+    flush = Mock()
+    controller._flush_superseded_disk_selection = flush
+    controller._pair_deferred_sample_ids = frozenset(deferred_ids)
+    rig.audio.reset_mock()
+
+    controller._poll_disk_selection_settlements()
+
+    assert tuple(controller._disk_selection_settlements) == deferred_ids + outside_ids[8:]
+    assert [call[0] for call in selections.mock_calls] == [
+        f"pad_{sample_id}" for sample_id in outside_ids[:8]
+    ]
+    assert flush.call_count == 8
+    for settlement in settlements:
+        sample_id = settlement.request.sample_id
+        completed = sample_id in outside_ids[:8]
+        assert cast("_PreparedPair", settlement.request.prepared).selected is completed
+        assert cast("_Lease", settlement.lease).released is completed
+        assert cast("_Reservation", settlement.retirement).closed is completed
+        assert not cast("_Lease", settlement.request.lease).released
+        assert not cast("_Reservation", settlement.request.retirement).closed
+        if not completed:
+            assert controller._disk_selection_settlements[sample_id] is settlement
+
+    controller._poll_disk_selection_settlements()
+    assert tuple(controller._disk_selection_settlements) == deferred_ids
+    controller._pair_deferred_sample_ids = frozenset()
+    controller._poll_disk_selection_settlements()
+
+    assert not controller._disk_selection_settlements
+    assert [call[0] for call in selections.mock_calls] == [
+        f"pad_{sample_id}" for sample_id in outside_ids + deferred_ids
+    ]
+    assert flush.call_count == len(sample_ids)
+    assert controller._project.model_dump_json() == replacement
+    assert rig.audio.method_calls == []
+    for settlement in settlements:
+        assert cast("_Lease", settlement.lease).released
+        assert cast("_Reservation", settlement.retirement).closed
+        settlement.request.close()
 
 
 @pytest.mark.parametrize("guard", ["unfenced", "replacement"])

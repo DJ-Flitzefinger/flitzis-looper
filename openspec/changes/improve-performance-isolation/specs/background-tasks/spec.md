@@ -1,5 +1,21 @@
 ## ADDED Requirements
 
+### Requirement: Arrangement Fences Do Not Consume Disk Settlement Attempts
+The stem control poll SHALL attempt at most eight retained disk-selection
+settlements per invocation. It SHALL check each original owner's current
+arrangement fence before attempting settlement; a fenced owner SHALL NOT consume
+that attempt budget or prevent independent later owners from progressing. The
+stable snapshot order, durable selection, source/content checks and existing
+prepared-pair, lease and retirement authority SHALL remain unchanged. A fenced
+owner SHALL remain retained until the original arrangement releases its fence.
+
+#### Scenario: A Bank Copy fences eight retained source settlements
+- **GIVEN** eight retained source-PAD disk settlements are fenced by an admitted Bank Copy and later independent settlements remain eligible
+- **WHEN** the stem control poll runs before that Bank arrangement settles
+- **THEN** it attempts up to eight independent settlements in their original order without consuming or releasing the fenced owners
+- **AND** later polls preserve the same bound and allow the original owners to settle after their fence is released
+- **AND** existing unsettled-target preflight refusal and Native acknowledgement obligations remain unchanged
+
 ### Requirement: Returned Offline Children Survive Supervisor Allocation Failure
 The caller SHALL retain raw custody of a genuine returned Beat or shared-command
 child when allocating its supervisor raises `MemoryError`. Synchronous custody

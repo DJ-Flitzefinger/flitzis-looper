@@ -989,6 +989,10 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Budget actual disk-selection settlement attempts after current arrangement
+      fences, preserving eight attempts, independent progress and exact original
+      owners; verify source-bank admission and unchanged target refusal guards.
+
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct
 216 complete-phase watchdog and an unexplained initial registry exception despite

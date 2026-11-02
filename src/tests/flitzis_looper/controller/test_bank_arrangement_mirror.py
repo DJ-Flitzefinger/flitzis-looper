@@ -660,6 +660,49 @@ def test_public_preflight_preserves_pending_worker_or_durable_retirement_owners(
     assert not cast("_Lease", preparation.lease).released
 
 
+def test_public_bank_copy_preflight_preserves_eight_source_disk_settlement_owners(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path, full=True)
+    app = harness.controls.app
+    originals = []
+    for sample_id in range(8):
+        entry = app._project.stem_cache[sample_id]
+        identity = app._project.pad_content[sample_id]
+        assert entry is not None
+        assert identity is not None
+        preparation = replace(
+            _preparation(harness),
+            sample_id=sample_id,
+            entry=entry,
+            previous_entry=entry,
+            content_id=identity.instance_id,
+            source_path=app._project.sample_paths[sample_id],
+        )
+        settlement = stems._DiskSelectionSettlement(
+            preparation,
+            preparation.entry,
+            preparation.ticket,
+            preparation.lease,
+            None,
+            preparation.retirement,
+        )
+        app.stems._disk_selection_settlements[sample_id] = settlement
+        originals.append(settlement)
+    before = _owned_images(harness)
+    musical = app._project.model_dump_json()
+
+    validate_bank_mirror_admission(app, harness.journal)
+
+    _assert_same_images(harness, before)
+    assert app._project.model_dump_json() == musical
+    assert tuple(app.stems._disk_selection_settlements.values()) == tuple(originals)
+    for settlement in originals:
+        assert not settlement.request.cancelled.is_set()
+        assert not cast("_Reservation", settlement.retirement).closed
+        assert not cast("_Lease", settlement.lease).released
+
+
 def test_a_new_target_collector_blocks_apply_before_any_prepared_store(tmp_path: Path) -> None:
     harness = _harness(tmp_path)
     plan = harness.prepare()

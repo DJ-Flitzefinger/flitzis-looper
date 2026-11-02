@@ -1,5 +1,41 @@
 # Performance audit and implementation design
 
+## Budget disk settlement attempts after arrangement fences
+
+The control poll sliced the first eight retained disk settlements before checking
+their Pair/Copy/Bank observer fences. A Bank Copy may retain existing source-PAD
+settlements, while its target preflight still rejects unsettled target collectors.
+Eight fenced source owners therefore prevented later independent settlements
+from progressing. The new control regression reproduces this failure on unchanged
+product code; it does not establish the cause of the historical distinct-216
+watchdog or a Native acknowledgement.
+
+Keep the complete stable owner snapshot and check each current fence immediately
+before settlement. Count only actual settlement attempts, stopping after eight.
+The original dictionary order, currentness checks, durable selection, prepared
+pair, lease and retirement paths stay authoritative. Fenced owners remain intact
+until their existing arrangement releases them. Permanently failing eligible head
+entries retain their prior retry priority; this is no general fairness guarantee.
+There is no new owner, queue, Native, source-custody or realtime behavior.
+
+Focused controls cover eight fenced owners plus independent later retirements,
+the eight-attempt bound with and without fences, stable order while settlements
+remove their dictionary entries, exact retained owners and later fence release.
+A separate real StemController preflight control preserves eight Bank source
+settlements, alongside the existing target-refusal guards. These control doubles
+do not prove Native ACK, disk integrity, inference or device acceptance. Written
+disk-commit and verified-restore ownership controls cover the unchanged consumers.
+The complete Native allowance, original admission and all remaining STEP66/67
+quality, platform, CUDA/fresh-CPU, registry and pressure gates remain open.
+
+Verification: the unchanged-product regression failed once in 0.54 seconds.
+The frozen four-module selection passed 57 tests in 31.66 seconds. Ruff lint and
+format for three files, strict product Mypy, strict OpenSpec and whitespace pass.
+The initial test-complexity lint failures are retained and resolved by extracting
+setup without suppression. No product or test bytes change after the 57 passes;
+only this result and task status are updated. The same immutable Native and
+supported runtime are reused without a Rust build or inference.
+
 ## Preserve raw LF receipt framing through decoded diagnostics
 
 The shared command reader counted receipts at raw LF boundaries, while later
