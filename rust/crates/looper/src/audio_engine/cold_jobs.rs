@@ -127,6 +127,16 @@ impl ColdJobsHandle {
         self.submit_classified(reservation, job, None, None)
     }
 
+    /// Retire cancelled queued captures in this same ordinary lane, off lock.
+    pub(super) fn submit_cancellable(
+        &self,
+        reservation: Reservation,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        self.submit_classified(reservation, job, None, Some(Arc::new(cancelled)))
+    }
+
     fn submit_classified(
         &self,
         reservation: Reservation,
@@ -608,7 +618,7 @@ impl ColdJobs {
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         self.handle()
-            .submit_classified(reservation, job, None, Some(Arc::new(cancelled)))
+            .submit_cancellable(reservation, cancelled, job)
     }
 
     /// Ordinary asynchronous owners settle only after accepted queued captures end.

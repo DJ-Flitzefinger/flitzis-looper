@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Fifty-nine coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
+Sixty-one coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
 native BeatThis/runtime/loader experiments and their explicit failed CUDA and
 incomplete producer limits. STEP25 implements independent BS spectral arithmetic;
 STEP26 adds whole-track reflection, padding, batching, fades and rolling overlap.
@@ -98,6 +98,9 @@ STEP57 retires obsolete queued waveform views through the existing cancellation
 pump; nativeREST58 and FINAL59 retain every former57/58 duty and negative gate.
 STEP58 settles cancelled queued material migration after its captured owners end;
 nativeREST59 and FINAL60 retain the ENTIRE former58/59 scope and negative gates.
+STEP59 retires cancelled unclaimed committed residency captures through the same
+cold lane, restoring full-queue replacement admission without waiting for workers.
+NativeREST60 and FINAL61 retain the ENTIRE former59/60 scope and negative gates.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

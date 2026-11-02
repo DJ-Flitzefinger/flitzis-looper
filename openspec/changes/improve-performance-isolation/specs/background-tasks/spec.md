@@ -222,6 +222,14 @@ placement, intent, memory reservations and operation-specific acknowledgement.
 - **AND** an older captured request cannot supersede a newer admitted intent
 - **AND** a failed newer admission does not revoke an earlier viable request or current proposal
 
+#### Scenario: A cancelled committed request remains behind occupied workers
+- **GIVEN** both cold workers are occupied and an unclaimed committed residency request holds its actual callback capture in the queue
+- **WHEN** its own receipt is cancelled and the ordinary loader control pump runs
+- **THEN** the original queued callable and its captured readers retire off realtime before its cold admission becomes available
+- **AND** replacement admission does not wait for either occupied worker to finish
+- **AND** independent queued work, current selection authority and original acknowledgements remain intact
+- **AND** an uncancelled lane close retains the existing job guard settlement, while claimed readers keep their original lifetime
+
 #### Scenario: Intent changes during a committed component read
 - **GIVEN** a worker holds immutable source and file pins with a scoped component reservation
 - **WHEN** cancellation, source/content replacement or a newer intent supersedes it during the read

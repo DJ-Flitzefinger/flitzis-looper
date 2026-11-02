@@ -1261,16 +1261,25 @@ impl CommittedStemResidencyAdmission {
             status: status.clone(),
             enqueued: false,
         };
+        // Observe the original authority without cloning the captured selection or reader.
+        let queued_status = status.clone();
+        let queued_cancelled = self.cold_cancelled.clone();
         self.cold_jobs
-            .submit(reservation, move || {
-                let mut guard = guard;
-                match work.prepare() {
-                    Ok(()) => guard.enqueued = true,
-                    Err(error) => {
-                        guard.status.fail(error);
+            .submit_cancellable(
+                reservation,
+                move || {
+                    queued_cancelled.load(Ordering::Acquire) || !queued_status.preparation_current()
+                },
+                move || {
+                    let mut guard = guard;
+                    match work.prepare() {
+                        Ok(()) => guard.enqueued = true,
+                        Err(error) => {
+                            guard.status.fail(error);
+                        }
                     }
-                }
-            })
+                },
+            )
             .map_err(PyRuntimeError::new_err)?;
         Ok(ResidentStemTicket {
             status,

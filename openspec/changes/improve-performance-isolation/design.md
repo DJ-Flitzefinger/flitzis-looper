@@ -5702,3 +5702,66 @@ OpenSpec, exact source/stage/index and protected bindings plus ONE independent
 actual-staged-diff review verify the publication boundary. No native/CUDA/model,
 physical-pressure, latency, footprint, device/hearing or whole-quality claim is
 made, and no historical failure cause or remaining parity gate is promoted.
+
+## Queued committed residency capture retirement (STEP59)
+
+The original committed residency submission used the ordinary cold handle with
+no queued cancellation predicate. Under two actually held workers, an actual
+callback Capture adds one source PCM reader. Public receipt cancellation already
+reports rejected; it does not destroy the unclaimed callable. With all 32 queued
+slots occupied, public loader polling leaves (active=2, queued=32, admitted=34), keeps
+PCM owner counts 5/6/6 (before capture/after capture/after polling), and refuses replacement
+admission. The separate uncancelled-close control already passes: its existing
+ResidencyJobGuard settles rejection and destroys the capture. This is a qualified
+one-pass/one-failure reproduction in 2.57 s on the actual compiled source stage, not a parent
+comparison or a missing-close-status diagnosis. All observations precede worker
+release; the real workers are joined before final regression assertions.
+
+Expose the SAME submit_cancellable path on ColdJobsHandle and delegate the existing
+ColdJobs convenience method to it. Committed submission observes only its original
+shutdown flag and status.preparation_current() authority. The predicate clones no
+SelectionOwner, Pair reader or PCM. It uses the existing off-lock cancellation
+scan and ordinary reservation, with heavy=None and no new retirement callback,
+worker, scheduler or queue. AdmittedJob still destroys the complete captured
+callable before returning admission. The existing work.prepare closure and
+ResidencyJobGuard retain submission rejection, claimed work and settlement.
+
+The scoped promise is prompt retirement after receipt cancellation and the same
+proposal/source invalidity observed by that predicate. It does not independently
+prove every ResidencyWork.current fence, all claimed status/last-reader timing or
+UI latency. The actual PCM measurement observes the extra capture reader returning
+to five legitimate owners; it never claims the shared backing's last reader ended.
+Current selection, full-mix playback, independent peers and original own ACKs must
+remain valid. Source/placement/launch/selection checks inside claimed work remain
+unchanged. The original successful-process, NN, CUDA, fullhost, platform, quality
+and distribution requirements and every historical negative remain open.
+
+Systems PRE and frozen-regression review approve the actual experiment; Methods
+selects the two new cases, existing cold-lane controls and original claimed-cancel,
+sharing/own-ACK, active-cancel/STOP and successful residency controls. Frozen POST,
+focused runtime checks, formatting, strict OpenSpec and one independent actual
+final-diff review remain required for publication. NativeREST60 retains ENTIRE
+former nativeREST59 and FINAL61 retains ENTIRE former FINAL60 without omissions.
+
+Fresh verification passes all 29 selected cases in 11.75 s on the implementation's
+fixed compiled source stage after its exact qualified inventory was inspected. Cancel
+and public polling now leave (active=2, queued=31, admitted=33), return actual PCM
+owner counts from 5/6/6 to 5/6/5 and admit the replacement while both workers remain
+held. After release, all 31 independent peers and the replacement run exactly
+once. The uncancelled-close control retains (2,0,2), capture reader retirement
+and rejected receipts through its original guard. The four unchanged residency
+controls preserve claimed cancellation, immutable sharing with independent own
+ACKs, active cancel/STOP rejection and successful native FIFO/ramp behavior.
+The 23 unchanged cold-lane controls preserve off-lock capture retirement, claimed
+work, cancellation observations, poisoned shutdown and admission lifetime.
+An initial matching run passed in 13.45 s; the final format-normalized source
+repeats the same 29 cases, so distinct coverage remains 29. These results do not
+constitute a green whole matrix or device/hearing acceptance.
+
+The isolated current Release/API verification passes; release compilation takes
+43.11 s. The existing 20 library warnings, 33 Looper test warnings and pinned
+einops 0.6.1 warning remain. Only result/task documentation changes after these
+functional checks; all four Rust files retain their tested bytes, including the
+two exact qualified RED test files. Final static checks and the independent actual
+staged-diff review establish only this publication boundary. No NN, CUDA, fullhost,
+physical-pressure, latency, footprint or historical-cause gate is promoted.

@@ -45,6 +45,9 @@ mod retained_committed_stem_tests;
 #[path = "committed_stem_control_isolation_tests.rs"]
 mod committed_stem_control_isolation_tests;
 
+#[path = "committed_stem_queued_tests.rs"]
+mod committed_stem_queued_tests;
+
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;
 
