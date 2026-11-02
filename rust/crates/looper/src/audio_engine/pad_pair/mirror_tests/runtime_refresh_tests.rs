@@ -65,6 +65,7 @@ impl RuntimeRows {
 fn dispatch_pair(
     fixture: &mut LaunchFixture,
     target: usize,
+    expect_collapse_before_ack: bool,
     before_ack: impl FnOnce(&AudioEngine),
 ) -> (CapturedPadPair, PadPairTicket) {
     let mut mixer = fixture.mixer();
@@ -74,17 +75,60 @@ fn dispatch_pair(
     let ticket = prepare(&fixture.engine, &captured, 48_000, 1).unwrap();
     publish(&fixture.engine, &ticket).unwrap();
     assert!(ticket.native_acknowledgement().is_none());
+    let collapse_sources = expect_collapse_before_ack.then(|| {
+        [0, 1].map(|slot| {
+            let ownership = &fixture.engine.input_runtime_ownership;
+            let key = ownership
+                .slot_snapshot(slot)
+                .unwrap()
+                .content_key()
+                .unwrap();
+            (key, ownership.ordinary_source_epoch(key.cell()).unwrap())
+        })
+    });
     before_ack(&fixture.engine);
     let message = fixture.consumer.pop().unwrap();
     assert!(matches!(&message, ControlMessage::PadPair(_)));
+    let mut scheduler = FixedCapacityScheduler::<8>::new();
+    let mut transport = TransportTimeline::new(48_000);
+    let mut mode = TriggerQuantization::Immediate;
+    let mut feedback = Vec::new();
     dispatch(
         &mut mixer,
         message,
-        &mut FixedCapacityScheduler::<8>::new(),
-        &mut TransportTimeline::new(48_000),
-        &mut TriggerQuantization::Immediate,
-        &mut Vec::new(),
+        &mut scheduler,
+        &mut transport,
+        &mut mode,
+        &mut feedback,
     );
+    if let Some(expected_sources) = collapse_sources {
+        // MultiLoop OFF publishes its own source-bound STOP after the Pair.
+        // The Pair must already reject before that real callback effect runs.
+        assert!(ticket.native_acknowledgement().is_none());
+        assert_eq!(ticket.publication_status(), "rejected");
+        let message = fixture.consumer.pop().unwrap();
+        let ControlMessage::GlobalPlaybackBatch(batch) = &message else {
+            panic!("expected the explicit MultiLoop collapse batch");
+        };
+        assert!(!batch.start);
+        assert!(batch.entries.is_empty());
+        let stop = batch.explicit_stop.as_ref().unwrap();
+        assert!(stop.collapse);
+        assert!(stop.target.is_none());
+        assert_eq!(stop.sources.len(), expected_sources.len());
+        for (source, expected) in stop.sources.iter().zip(expected_sources) {
+            assert_eq!((source.key, source.source), expected);
+        }
+        dispatch(
+            &mut mixer,
+            message,
+            &mut scheduler,
+            &mut transport,
+            &mut mode,
+            &mut feedback,
+        );
+        assert!(mixer.deferred_control().is_none());
+    }
     assert!(fixture.consumer.is_empty());
     (captured, ticket)
 }
@@ -153,7 +197,7 @@ fn installed_runtime_pair_move_and_swap_reconcile_and_finish_without_refresh() {
     for target in [1, 2] {
         let mut fixture = fixture();
         let _rows = RuntimeRows::install(&mut fixture);
-        let (_, ticket) = dispatch_pair(&mut fixture, target, |_| {});
+        let (_, ticket) = dispatch_pair(&mut fixture, target, false, |_| {});
         reconcile_and_finish(&fixture, target, &ticket);
     }
 }
@@ -163,7 +207,9 @@ fn installed_runtime_pair_periodic_refresh_before_and_after_ack_preserves_own_ro
     for target in [1, 2] {
         let mut fixture = fixture();
         let rows = RuntimeRows::install(&mut fixture);
-        let (_, ticket) = dispatch_pair(&mut fixture, target, |engine| rows.publish(engine, true));
+        let (_, ticket) = dispatch_pair(&mut fixture, target, false, |engine| {
+            rows.publish(engine, true)
+        });
         assert!(ticket.native_acknowledgement().is_some());
         rows.publish(&fixture.engine, true);
         reconcile_and_finish(&fixture, target, &ticket);
@@ -199,7 +245,7 @@ fn installed_runtime_pair_explicit_multi_loop_after_ack_forward_settles_same_own
                 .unwrap()
                 .pair_binding_for_test(slot)
         });
-        let (_, ticket) = dispatch_pair(&mut fixture, target, |_| {});
+        let (_, ticket) = dispatch_pair(&mut fixture, target, false, |_| {});
         assert!(ticket.native_acknowledgement().is_some());
         for (index, multi_loop) in [false, true, false, true].into_iter().enumerate() {
             rows.publish(&fixture.engine, multi_loop);
@@ -232,8 +278,9 @@ fn installed_runtime_pair_explicit_multi_loop_before_ack_rejects_and_cancels_ori
     for target in [1, 2] {
         let mut fixture = fixture();
         let rows = RuntimeRows::install(&mut fixture);
-        let (captured, ticket) =
-            dispatch_pair(&mut fixture, target, |engine| rows.publish(engine, false));
+        let (captured, ticket) = dispatch_pair(&mut fixture, target, true, |engine| {
+            rows.publish(engine, false)
+        });
         assert!(ticket.native_acknowledgement().is_none());
         assert_eq!(ticket.publication_status(), "rejected");
         assert!(!reconcile(&fixture.engine, &ticket).unwrap());
@@ -256,7 +303,7 @@ fn installed_runtime_pair_foreign_source_custody_stays_fenced_then_retries_origi
     for target in [1, 2] {
         let mut fixture = fixture();
         let _rows = RuntimeRows::install(&mut fixture);
-        let (captured, ticket) = dispatch_pair(&mut fixture, target, |_| {});
+        let (captured, ticket) = dispatch_pair(&mut fixture, target, false, |_| {});
         let original = fixture.engine.sample_cache.lock().unwrap()[0]
             .clone()
             .unwrap();
