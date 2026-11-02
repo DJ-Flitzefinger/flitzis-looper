@@ -101,6 +101,7 @@ class SharedJobProbe(BankControllerProbe):
 
     def __init__(self, seed: object, source_audio: object, wavs: tuple[bytes, ...]) -> None:
         super().__init__(seed, actual_workers=True)
+        self.project.stem_separator = "demucs:htdemucs"
         self.backend = _DeclaredBackend(wavs)
         self.app.stems._stem_backend = self.backend
         self.app.stems._on_project_changed = self.persistence.mark_dirty

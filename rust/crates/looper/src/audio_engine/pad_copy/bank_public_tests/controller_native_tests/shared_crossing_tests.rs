@@ -51,7 +51,7 @@ fn crossing_profile() {
         .ancestors()
         .nth(4)
         .unwrap();
-    let parent = workspace.join("test-artifacts/bank36-shared-crossing-20261020");
+    let parent = workspace.join("bank");
     for ancestor in parent.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => assert_eq!(
