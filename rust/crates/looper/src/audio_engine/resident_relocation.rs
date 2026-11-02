@@ -3483,10 +3483,17 @@ fn prepare_window_with_producer_and_trigger(
     };
     #[cfg(test)]
     let observer = super::native_owned_work::take_preparation_observer();
+    // Observe whole-publication cancellation without retaining any PCM reader.
+    let queued_publication = publication.clone();
+    let queued_cancelled = engine.cold_cancelled.clone();
     engine
         .cold_jobs
-        .submit(
+        .submit_cancellable(
             reservation.expect("new storage reserved cold capacity"),
+            move || {
+                queued_cancelled.load(Ordering::Acquire)
+                    || queued_publication.status() == "rejected"
+            },
             move || {
                 #[cfg(test)]
                 let _observation =

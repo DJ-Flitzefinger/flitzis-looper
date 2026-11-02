@@ -119,6 +119,7 @@ impl ColdJobsHandle {
     }
 
     /// The same lane and shutdown fence, without retaining its Engine owner.
+    #[cfg(test)]
     pub(super) fn submit(
         &self,
         reservation: Reservation,
@@ -601,6 +602,7 @@ impl ColdJobs {
     }
 
     /// Enqueue under the same reserved admission. No thread is spawned per pad.
+    #[cfg(test)]
     pub(super) fn submit(
         &self,
         reservation: Reservation,

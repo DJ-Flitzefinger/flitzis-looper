@@ -5765,3 +5765,74 @@ functional checks; all four Rust files retain their tested bytes, including the
 two exact qualified RED test files. Final static checks and the independent actual
 staged-diff review establish only this publication boundary. No NN, CUDA, fullhost,
 physical-pressure, latency, footprint or historical-cause gate is promoted.
+
+## Queued resident-window reader retirement (STEP60)
+
+The actual window-preparation client used plain ordinary cold submission. Its
+WindowWork retains two real SampleBuffer readers (old and bank), its source lease
+and optional preparation owners. Public whole-ticket cancellation already reports
+cancelled but leaves the unclaimed callable alive. Under two held workers and all
+32 queued slots occupied, public loader polling leaves (active=2, queued=32,
+admitted=34), actual PCM owner counts 2/4/4 (before admission/after capture/after
+polling), and refuses replacement admission. The original independent uncancelled
+close control passes: its existing JobGuard settles cancellation and returns PCM
+counts to 2/4/2 with lane counts (2,0,2). The qualified reproduction is one pass
+and one failure in 1.37 s on its actual compiled source stage, without a parent
+comparison. All observations precede worker release; actual workers join before
+final regression assertions. Both legitimate old-window owners still remain, so
+this is additional-reader retirement, not backing-last-reader or OS release.
+
+The fixture first completes its original real cold-load delivery through public
+polling, checking exact PAD/request identity, allowed event types and one success,
+then drops all Python/native event owners before measuring the window baseline.
+An earlier two-failure run stopped at that missing setup prerequisite and supplied
+no product cancellation evidence. Initial test-only mutable-shutdown and Rustfmt
+line-wrap corrections also precede the qualified reproduction. No original queue,
+reader, status, source or replacement assertion is weakened.
+
+Submit this same work through the existing ordinary submit_cancellable path. Its
+predicate clones only the original PreparedSourcePermit and shutdown flag; those
+metadata owners contain no PCM, selection or source lease. It observes shutdown
+or that exact whole-publication rejection, never !publication.current(), a member
+cancellation flag or every WindowWork.current() fence. Unarmed valid proposals
+and shared preparation with another live member or independent owner remain
+eligible. Original work.prepare, JobGuard, raced worker claims, source/placement/
+proposal/intent checks and native acknowledgements remain unchanged. Existing
+off-lock retirement destroys the callable before returning its reservation;
+no worker, queue, scheduler, heavy ticket or retirement callback is added.
+
+Systems PRE and Methods approve this focused source-backed plan. Frozen POST,
+31 selected actual qualified tests, formatting, strict OpenSpec and one independent
+actual final-diff review remain required. The selected set retains all 23 cold-lane
+controls, both qualified window cases, three original Pair/window/mirror/clock
+controls, two actual shared-member/independent-owner controls and one original
+claimed capture/pressure/cancel/shutdown/stopped-seek control. This scope does not
+close all stale window or claimed-reader transitions, any historical failure
+cause, native process/NN/CUDA/fullhost parity, latency, device/hearing, platforms,
+quality or distribution gates. NativeREST61 retains ENTIRE former nativeREST60;
+FINAL62 retains ENTIRE former FINAL61 without omission.
+
+Fresh verification passes all 31 distinct selected cases in 5.59 s on the fixed
+compiled source stage after its exact actual qualified inventory was inspected.
+Cancellation plus public polling now leaves (active=2, queued=31, admitted=33),
+returns actual old/bank PCM counts from 2/4/4 to 2/4/2 and admits a replacement
+before either held worker is released. All 31 independent peers and the replacement
+run once after release. The uncancelled-close control retains (2,0,2), counts
+2/4/2 and the original guard's cancelled status. Source/window playback and
+selection remain current; no cancelled window publishes. Original Pair/mirror/
+clock, shared-member/independent-owner own ACKs and claimed-worker cancellation,
+shutdown and seek controls all pass, as do all 23 existing cold-lane controls.
+Expected injected poison/unwind fixtures pass without a production panic claim.
+
+After migrating the last production plain-submit client, both plain convenience
+submit wrappers are test-only with unchanged bodies. The final isolated Release
+build and Native/API verification pass (45.52 s compilation), retaining the prior
+20 library warnings, 33 test warnings and pinned einops 0.6.1 warning. Four-file
+Rustfmt and strict OpenSpec pass together in 1.92 s. An initial specification
+check rejected SHALL on the second description line; placing it on the first line
+preserves the same normative contract. Only result/task documentation changes
+after the functional run; all four Rust files retain their tested bytes, including
+both exact qualified RED test files. Final source/index/protection checks and one
+independent actual staged-diff review still govern this publication boundary.
+No whole matrix, process/NN/CUDA/fullhost, physical-memory, latency, footprint,
+platform, distribution or device/hearing acceptance is inferred.

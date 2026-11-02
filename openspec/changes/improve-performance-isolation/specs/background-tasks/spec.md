@@ -691,3 +691,26 @@ SHALL remain authoritative. Observation END alone SHALL NOT certify reader END.
 - **THEN** the previous observation cannot keep the exact retired path alive
 - **AND** an independent surviving application pin still preserves its bytes until its own release
 - **AND** unknown, replaced or actually read files retain their existing protection
+
+### Requirement: Whole Resident Window Cancellation Retires Unclaimed Captures
+A queued resident-window preparation SHALL retire its complete callable when its
+original whole publication is rejected. Retirement SHALL run outside the cold
+queue mutex through the existing ordinary lane and serviced loader pump. Its old/bank readers
+SHALL end before its ordinary reservation becomes available. Lane shutdown SHALL
+retain the original job guard settlement. Shared member cancellation that leaves
+an independent owner or another live member SHALL NOT reject the whole physical
+preparation. Claimed work SHALL retain its existing source, proposal, placement,
+publication and actual reader-lifetime checks.
+
+#### Scenario: A cancelled window waits behind occupied workers
+- **GIVEN** both cold workers are occupied and an unclaimed window preparation retains its actual old/bank readers in a full queue
+- **WHEN** its whole ticket is cancelled and the ordinary loader control pump runs
+- **THEN** those queued captures retire before replacement admission without waiting for either occupied worker
+- **AND** current source/window playback, selection authority and independent queued jobs remain intact
+- **AND** this additional-reader retirement does not certify the shared backing's last reader or OS memory release
+
+#### Scenario: One member cancels a shared window preparation
+- **GIVEN** a queued physical window preparation has another live member or an independent owner
+- **WHEN** one member cancels its own ticket
+- **THEN** that member loses its own launch authority while the shared preparation remains eligible
+- **AND** the surviving owner still requires its original independent acknowledgement
