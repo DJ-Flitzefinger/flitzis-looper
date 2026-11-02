@@ -5836,3 +5836,65 @@ both exact qualified RED test files. Final source/index/protection checks and on
 independent actual staged-diff review still govern this publication boundary.
 No whole matrix, process/NN/CUDA/fullhost, physical-memory, latency, footprint,
 platform, distribution or device/hearing acceptance is inferred.
+
+## Queued committed capture launch retirement (STEP61)
+
+A public STOP admits the original content's launch revision change before its
+callback command is consumed. A committed operation may already have captured
+a real voice pin and then wait behind both ordinary workers. Its current queued
+probe observes status and shutdown, while its worker separately checks launch
+authority. Reproduce that precise interval before changing production behavior.
+
+Hold both workers, capture actual committed work, fill the remaining 31 ordinary
+slots and call public STOP. Observe queue, extra PCM reader, exact launch revision,
+original selection/source, receipt and replacement admission through the real
+loader pump before consuming that STOP. A separate other-PAD STOP control must
+retain the original operation and later reach its own ACK and reference PCM.
+Consume the genuine STOP and join all workers before final assertions. Keep the
+original qualified cancellation/close tests and deadlines unchanged.
+
+If reproduced, extend only the existing metadata probe with a definitive original
+content-lifetime-qualified launch scalar mismatch. Do not use a broad negation of
+launch eligibility: temporary migration holds and Pending layout are not scalar
+revocation. Do not clone SelectionOwner, Pair, PCM or pin into the predicate.
+Keep the existing guard's status settlement, claimed kernel, source/proposal/
+placement/callback checks and off-lock callable-before-reservation retirement.
+This is an additional queued reader proof, not backing-last-reader/OS release,
+generic stale/claimed closure or a historical failure-cause inference.
+
+### STEP61 measured result and limits
+
+The unchanged production predicate reproduced one failure and one passing
+other-PAD control in 2.57 seconds. After target public STOP and the actual loader
+pump, the queue remained (2 running, 32 queued, 34 admitted), PCM owners were
+5/6/6 before Capture/after Capture/after pump, receipt status stayed captured
+and current was false. Original selection, source and playback remained intact;
+all independent peers were held and replacement admission was refused.
+
+The fix adds only a definitive launch scalar mismatch from the original
+content-lifetime-qualified binding already owned by the existing queued status.
+It adds no PCM, selection or Pair capture, scheduler or worker. Original worker
+preparation, guard settlement, source/proposal/placement/claim checks and off-lock
+callable-before-reservation destruction remain unchanged. A missing binding or
+temporary migration eligibility is not treated as a new definitive mismatch.
+
+All 34 distinct selected native tests passed in one 21.56-second run, after the
+actual compiled inventory was checked. Target STOP now leaves (2,31,33), PCM
+5/6/5 and a rejected receipt, admitting a replacement before worker or STOP
+callback release. The other-PAD STOP retains (2,32,34), PCM5/6/6 and current
+captured status, then reaches its original own ACK and reference PCM. Every
+independent peer and the admitted replacement runs once. The genuine STOP is
+consumed and all held workers are joined before final regression assertions.
+
+The set includes 23 original ColdJobs tests, the unchanged original cancellation/
+uncancelled-close leaves, both unchanged qualified STOP reproductions and seven
+claimed-reader, successful FIFO/128-frame ramp, shared OwnACK/reservation,
+FullMix, Pending control and actual Pair-mirror/lifetime regressions. Expected
+controlled poison/unwind fixtures pass; these are not production panic evidence.
+The isolated Release/API check passes with 20 existing Looper library warnings and
+33 Looper test warnings; the pinned einops warning remains. Changed Rust formatting
+and strict OpenSpec checks pass. Neither UI/device/hearing acceptance nor
+backing-last-reader/OS memory release, generic stale/claimed closure or a
+historical failure cause is established. Productive Python/Torch remains active
+and installed savings remain zero. NativeREST62 and FINAL63 retain the ENTIRE
+former61/62 duties and every original failed or UNKNOWN gate.

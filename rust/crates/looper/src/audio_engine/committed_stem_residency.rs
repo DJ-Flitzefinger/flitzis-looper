@@ -1268,7 +1268,18 @@ impl CommittedStemResidencyAdmission {
             .submit_cancellable(
                 reservation,
                 move || {
-                    queued_cancelled.load(Ordering::Acquire) || !queued_status.preparation_current()
+                    queued_cancelled.load(Ordering::Acquire)
+                        || !queued_status.preparation_current()
+                        || queued_status
+                            .ownership
+                            .binding_cell(queued_status.id, queued_status.binding)
+                            .is_some_and(|cell| {
+                                queued_status
+                                    .ownership
+                                    .launch_revision_for_cell(cell)
+                                    .load(Ordering::Acquire)
+                                    != launch_revision
+                            })
                 },
                 move || {
                     let mut guard = guard;

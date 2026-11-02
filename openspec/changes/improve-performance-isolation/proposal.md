@@ -55,7 +55,7 @@ do not satisfy them. Preserve the single transport and source authority.
 
 ## Delivery
 
-Sixty-two coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
+Sixty-three coherent steps are recorded in [tasks](tasks.md). STEP18-24 retain the
 native BeatThis/runtime/loader experiments and their explicit failed CUDA and
 incomplete producer limits. STEP25 implements independent BS spectral arithmetic;
 STEP26 adds whole-track reflection, padding, batching, fades and rolling overlap.
@@ -104,6 +104,9 @@ NativeREST60 and FINAL61 retain the ENTIRE former59/60 scope and negative gates.
 STEP60 retires cancelled unclaimed resident-window old/bank readers through that
 ordinary lane while preserving shared member ownership and original window ACKs.
 NativeREST61 and FINAL62 retain the ENTIRE former60/61 scope and negative gates.
+STEP61 retires queued committed captures after a public STOP changes their
+original launch authority, preserving other PADs and temporary placement.
+NativeREST62 and FINAL63 retain the ENTIRE former61/62 scope and negative gates.
 Each important step runs
 in its own chat, finishes its appropriate checks and independent reviews, then
 commits and normally pushes to `performance-upgrade` before its successor starts.

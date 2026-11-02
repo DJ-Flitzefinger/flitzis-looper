@@ -714,3 +714,26 @@ publication and actual reader-lifetime checks.
 - **WHEN** one member cancels its own ticket
 - **THEN** that member loses its own launch authority while the shared preparation remains eligible
 - **AND** the surviving owner still requires its original independent acknowledgement
+
+### Requirement: Definitive Launch Revocation Retires Queued Committed Captures
+A queued committed-residency capture SHALL retire through its existing ordinary
+cold lane and serviced loader pump when its original content lifetime has a
+definitively different launch revision. Its actual captured reader SHALL end
+before its reservation becomes available, without waiting for occupied workers
+or consumption of an already admitted STOP callback. Temporary placement
+unavailability or another PAD's STOP SHALL NOT substitute for that definitive
+revision change. Original status settlement, source/selection authority, worker
+claim and actual claimed-reader lifetime checks SHALL remain intact.
+
+#### Scenario: Public STOP follows a real queued voice capture
+- **GIVEN** both workers are occupied and a full queue includes a committed operation with its actual callback capture
+- **WHEN** public STOP revokes that content's original launch revision and the loader pump runs before the STOP callback
+- **THEN** the extra queued reader and reservation retire before replacement admission
+- **AND** original selection, source and current playback remain intact until the genuine STOP callback is consumed
+- **AND** this additional-reader retirement does not certify the backing's last reader or OS memory release
+
+#### Scenario: Another PAD stops while the capture remains eligible
+- **GIVEN** a queued committed operation retains its original content and launch revision
+- **WHEN** public STOP affects a different PAD or placement is temporarily pending without changing that revision
+- **THEN** the original operation remains eligible and retains its actual capture
+- **AND** after preparation its own original acknowledgement remains necessary
