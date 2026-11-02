@@ -10,6 +10,7 @@ import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
+from unittest.mock import patch
 
 from imgui_bundle import imgui
 
@@ -716,10 +717,14 @@ class Probe:
         self.stale_registration = self.restored._committed_residency._selections[0].ticket
         assert self.stale_registration.publication_status() == "accepted"
         self.stale_jobs: list[Callable[[], None]] = []
-        self.restored._pair_preparations._runner = self.stale_jobs.append
+        pool = self.restored._stem_worker_pool
+        assert pool is not None
         self.restored.restore_stem_cache_from_project_state()
         assert self.restored.publish_restored_stem_cache_if_available(0)
-        self.restored._poll_residency_demands()
+        # Hold the actual reservation wrapper after normal resource/FIFO admission.
+        with patch.object(pool._executor, "submit", side_effect=self.stale_jobs.append):
+            self.restored._poll_residency_demands()
+            self.restored._poll_stem_admissions()
         assert len(self.stale_jobs) == 1
         self.stale_request = self.restored._pair_preparations.pending[0]
         assert self.stale_request.verify_saved_selection

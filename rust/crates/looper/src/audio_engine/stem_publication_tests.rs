@@ -270,6 +270,14 @@ fn bind_public_control_fixture(
         engine.test_control_channels =
             Some((producer.clone(), Arc::new(Mutex::new(unused_feedback_rx))));
         engine.test_output_format = Some((RATE, 2));
+        // Controller readiness publishes through the genuine input runtime too.
+        let runtime = crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
+            producer.clone(),
+            engine.input_clock,
+            engine.input_runtime_ownership.clone(),
+        );
+        runtime.set_render_format(RATE, 2).unwrap();
+        engine.input_runtime = Some(runtime);
     });
     // Three accepted exclusive originals produce three births and two real stops.
     let (feedback, feedback_rx) = rtrb::RingBuffer::new(16);
