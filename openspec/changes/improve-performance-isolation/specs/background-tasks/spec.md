@@ -737,3 +737,26 @@ claim and actual claimed-reader lifetime checks SHALL remain intact.
 - **WHEN** public STOP affects a different PAD or placement is temporarily pending without changing that revision
 - **THEN** the original operation remains eligible and retains its actual capture
 - **AND** after preparation its own original acknowledgement remains necessary
+
+### Requirement: Superseded Resident Window Proposals Retire Queued Readers
+A queued resident-window preparation SHALL retire through its existing ordinary
+cancellable lane when its original proposal definitively loses authority after
+a successfully admitted newer preparation. Its actual old/bank readers SHALL end
+before its reservation becomes available, outside the queue mutex and without
+waiting for occupied workers. Refusal of a newer request SHALL NOT invalidate a
+still-current original proposal. The surviving preparation SHALL retain its own
+publication and acknowledgement; source, placement, shared-member, independent
+owner and claimed-reader guards SHALL remain intact.
+
+#### Scenario: A newer public loop request supersedes queued preparation
+- **GIVEN** two successfully admitted public loop requests for the same content retain their actual readers behind occupied workers in a full queue
+- **WHEN** the newer proposal makes the original proposal non-current and the loader control pump runs
+- **THEN** only the obsolete preparation's queued readers and reservation retire before replacement admission
+- **AND** original source, selection and window remain intact until the surviving request's actual callback and own acknowledgement
+- **AND** independent queued jobs remain eligible and this additional-reader retirement does not certify backing-last-reader or OS memory release
+
+#### Scenario: A full queue refuses a newer public loop request
+- **GIVEN** an original queued loop preparation remains current and its ordinary queue is full
+- **WHEN** admission of a different newer loop request is refused
+- **THEN** the original proposal, readers and reservation remain eligible
+- **AND** it subsequently requires its own original callback acknowledgement for its exact requested window

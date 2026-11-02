@@ -5898,3 +5898,69 @@ backing-last-reader/OS memory release, generic stale/claimed closure or a
 historical failure cause is established. Productive Python/Torch remains active
 and installed savings remain zero. NativeREST62 and FINAL63 retain the ENTIRE
 former61/62 duties and every original failed or UNKNOWN gate.
+
+## Superseded queued resident-window readers (STEP62)
+
+Two successfully admitted public loop requests for the same content can leave
+both storage preparations behind occupied ordinary workers. The second admission
+advances the original proposal epoch, so the first worker can no longer prepare
+or publish. Its queued probe previously observed only publication rejection and
+shutdown, retaining its actual old/bank PCM readers and ordinary reservation.
+
+Reproduce the interval with the actual loaded source, file lease and selected
+registration, two held workers, two public loop requests and 30 independent peers.
+Observe both receipts, actual reader counts, queue capacity, original source and
+window before releasing workers. A separate full-queue refusal must preserve the
+first valid request. In both cases, finish the surviving actual callback and its
+own ACK, then join all workers before evaluating the retirement assertions.
+
+The fix observes the SAME original ResidentProposal through the existing ordinary
+cancellable lane. Its clone holds only original atomic metadata, no PCM, file,
+selection or Pair reader. Keep the existing worker, guard, publication, source,
+placement and claimed-reader checks. Do not negate publication.current(): a valid
+unarmed proposal deliberately has a future intent. Temporary Pending placement
+and public STOP alone do not establish obsolete window storage work. Shared live
+members and independent owners retain their original eligible preparation.
+
+This is an additional-reader proof for successful same-content window proposal
+supersession, not backing-last-reader/OS memory release, generic source/member/
+claimed closure or a historical failure-cause comparison. Productive Python/Torch
+remains active and installed savings remain zero. NativeREST63 and FINAL64 retain
+the ENTIRE former62/63 duties and every original failed or UNKNOWN gate.
+
+### STEP62 measured result and limits
+
+The unchanged production predicate reproduced one failure and one passing
+full-queue refusal control in 0.95 seconds. After two successful public loop
+requests and the actual loader pump, the queue remained (2 running, 32 queued,
+34 admitted), PCM owners were 2/4/6/6 before requests/after first/after second/
+after pump, and the obsolete receipt stayed preparing with current false.
+The latest request remained current; original source, selection and window were
+unchanged, no callback had published, and replacement admission was refused.
+Both actual surviving callbacks had the correct geometry and were dispatched;
+all workers were shut down before the desired reader-retirement assertion failed.
+The original refusal control also passed its own-ACK assertions. Two test-only compilation
+failures were corrected before this qualified reproduction and are not runtime
+failures or historical cause evidence.
+
+All 32 distinct selected native tests passed in one 5.16-second run, after the
+actual compiled inventory was checked. Supersession now leaves (2,31,33), PCM
+2/4/6/4 and a cancelled obsolete receipt, admitting replacement before either
+worker is released. The current request retains its original two readers and
+reaches its own actual callback ACK for frames 1024..1536. The refusal control
+retains (2,32,34), PCM 2/4/4/4 and its original current preparing receipt, then
+reaches its own ACK for frames 512..1024. All independent peers and the admitted
+replacement run exactly once. Only these two obsolete queued readers end; other
+legitimate owners still hold the shared backing.
+
+The set includes 23 original ColdJobs tests, both unchanged whole-cancellation/
+uncancelled-close leaves, both unchanged qualified new reproductions, three actual
+Pair/Pending window controls and two shared-member/independent-owner controls.
+Expected controlled poison/unwind fixtures pass; these are not production panic
+evidence. The isolated Release/API check passes with 20 existing Looper library
+warnings and 33 Looper test warnings. Changed Rust formatting and strict OpenSpec
+checks pass. No broad cold-load, NN, CUDA, pressure, UI/device/hearing, latency,
+generic lifetime closure or whole-assignment acceptance is established. All
+native/process/numerical/fullhost/quality/platform/distribution gates remain open
+under their original requirements; Python/Torch remains productive and installed
+savings remain zero.

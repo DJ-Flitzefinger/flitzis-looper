@@ -892,7 +892,21 @@ retains ENTIRE former nativeREST61; FINAL63 retains ENTIRE former FINAL62 withou
 omission. All original process/numerical/CUDA/fullhost/quality/platform/distribution
 gates and every negative UNKNOWN remain under their original requirements.
 
-## 62. Remaining native parity before cutover
+## 62. Retire superseded queued resident-window readers
+
+- [x] Reproduce two successful public loop requests retaining the obsolete first
+      preparation's actual readers and full queue capacity behind occupied workers.
+- [x] Observe the original proposal's definitive invalidation through ordinary
+      queued retirement, preserving current preparation and original guard settlement.
+- [x] Verify reader/capacity return, a refused newer request preserving its predecessor,
+      independent peers, shared members, actual Pair mirrors and original own ACKs.
+
+This substantive window-supersession split grows the plan to 64. NativeREST63
+retains ENTIRE former nativeREST62; FINAL64 retains ENTIRE former FINAL63 without
+omission. All original process/numerical/CUDA/fullhost/quality/platform/distribution
+gates and every negative UNKNOWN remain under their original requirements.
+
+## 63. Remaining native parity before cutover
 
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
@@ -909,10 +923,10 @@ This split separates implemented admission/control diagnostics and one bounded
 CPU termination from unproved CUDA, whole-quality, full producer and distribution
 parity. Earlier host refusals and newer cause-UNKNOWN failures remain distinct;
 floors/caps and unrelated processes are unchanged. ALL former FINAL21 work
-follows as STEP63, without omissions. STEP21 only adds explicit runtime loading;
+follows as STEP64, without omissions. STEP21 only adds explicit runtime loading;
 every unproved native parity requirement continues here unchanged.
 
-## 63. Combined regression and final architecture review
+## 64. Combined regression and final architecture review
 
 STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplicate
 216 has the same assertion with different async snapshots), an UNCOMPARED distinct

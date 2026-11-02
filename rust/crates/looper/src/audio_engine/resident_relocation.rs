@@ -3483,9 +3483,10 @@ fn prepare_window_with_producer_and_trigger(
     };
     #[cfg(test)]
     let observer = super::native_owned_work::take_preparation_observer();
-    // Observe whole-publication cancellation without retaining any PCM reader.
+    // Observe original proposal/publication authority without retaining PCM readers.
     let queued_publication = publication.clone();
     let queued_cancelled = engine.cold_cancelled.clone();
+    let queued_proposal = work.proposal.clone();
     engine
         .cold_jobs
         .submit_cancellable(
@@ -3493,6 +3494,7 @@ fn prepare_window_with_producer_and_trigger(
             move || {
                 queued_cancelled.load(Ordering::Acquire)
                     || queued_publication.status() == "rejected"
+                    || !queued_proposal.current()
             },
             move || {
                 #[cfg(test)]
