@@ -265,6 +265,10 @@ impl RefreshFixture {
     fn complete_launch(&mut self, start: &CapturedPadStart) -> usize {
         let frame = self.callback.transport.output_frame();
         let execution = start.execution_frame().unwrap();
+        let original = start.original_frame();
+        let sequence = start.sequence();
+        let content = start.content_key();
+        assert_eq!(original, Some(frame));
         assert!(execution > frame);
         wait_until(|| {
             let runtime = self.callback.mixer.pitch_runtime.as_mut().unwrap();
@@ -277,11 +281,19 @@ impl RefreshFixture {
             self.callback.scheduler.peek_next_target_frame(),
             Some(execution)
         );
-        self.render(usize::try_from(execution - frame).unwrap());
-        self.render(1);
-        assert_eq!(start.effective_frame(), Some(execution));
-        assert_eq!(start.execution_frame(), Some(execution));
+        // The real callback binds this ready original at the current frame;
+        // the earlier worker fallback is no longer its execution target.
+        self.render(0);
+        assert_eq!(self.callback.transport.output_frame(), frame);
+        assert_eq!(start.original_frame(), original);
+        assert_eq!(start.sequence(), sequence);
+        assert_eq!(start.content_key(), content);
+        assert_eq!(start.effective_frame(), Some(frame));
+        assert_eq!(start.execution_frame(), Some(frame));
         assert_eq!(start.state(), "applied", "reason={:?}", start.reason());
+        assert!(self.callback.scheduler.is_empty());
+        assert!(self.callback.scheduler.deferred_due().is_none());
+        self.render(1);
         let voice = &self.callback.mixer.voices[self.lane(SOURCE)];
         assert_eq!(
             voice.source_admission.as_ref().unwrap().content_key(),
