@@ -600,13 +600,13 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
     );
     assert_eq!(loaded.callback.transport.output_frame(), 1);
     assert_eq!(drain_current(&mut loaded), 0);
-    let execution = 8_193;
+    let fallback = 8_193;
     assert_eq!(original.original_frame(), Some(0));
-    assert_eq!(original.execution_frame(), Some(execution));
+    assert_eq!(original.execution_frame(), Some(fallback));
     assert_eq!(original.effective_frame(), None);
     assert_eq!(
         loaded.callback.scheduler.peek_next_target_frame(),
-        Some(execution)
+        Some(fallback)
     );
     assert!(loaded.callback.scheduler.deferred_due().is_none());
     // Host waiting never advances the product clock or admits a replacement gesture.
@@ -618,7 +618,7 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
     });
     assert_eq!(loaded.callback.transport.output_frame(), 1);
     assert_eq!(original.original_frame(), Some(0));
-    assert_eq!(original.execution_frame(), Some(execution));
+    assert_eq!(original.execution_frame(), Some(fallback));
     assert_eq!(original.effective_frame(), None);
     assert_eq!(original.content_key(), key);
     assert_eq!(original.received_timestamp(), timestamp);
@@ -633,13 +633,12 @@ fn ready_full_feedback_retains_start_until_real_poll_and_next_callback_with_one_
             .iter()
             .any(|voice| voice.is_playing_sample(0))
     );
-    assert!(
-        render_current(&mut loaded, (execution - 1) as usize)
-            .iter()
-            .all(|value| *value == 0.0)
-    );
-    assert_eq!(loaded.callback.transport.output_frame(), execution);
-    assert_eq!(original.effective_frame(), None);
+    // Genuine readiness permits the same original to bind E=max(T, callback).
+    // Polling above caused no effect; the next real callback must not wait for
+    // the fallback deadline or admit a replacement gesture.
+    let execution = loaded.callback.transport.output_frame();
+    assert_eq!(execution, 1);
+    assert!(execution < fallback);
     let output = render_current(&mut loaded, 300);
     assert!(loaded.callback.scheduler.is_empty());
     assert_eq!(original.state(), "applied");
