@@ -273,10 +273,9 @@ impl Callback {
     fn complete_start(&mut self, start: &CapturedPadStart, starts_before: usize) {
         let id = start.diagnostic_slot().unwrap();
         assert!(start.accepted(), "reason={:?}", start.reason());
-        let execution = start.execution_frame().unwrap();
         if start.effective_frame().is_none() {
             // Host readiness never advances the callback or the source. The original
-            // owner keeps its own worker request and its already frozen scheduler E.
+            // owner keeps its own worker request until the callback binds its ready E.
             let frame = self.frame;
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
@@ -294,9 +293,18 @@ impl Callback {
             }
             assert_eq!(self.frame, frame);
             assert_eq!(self.transport.output_frame(), frame);
-            while self.frame < execution {
-                self.render((execution - self.frame).min(512) as usize);
-            }
+            // Service genuine completion before observing E, without consuming PCM.
+            self.render(0);
+            assert_eq!(self.frame, frame);
+            assert_eq!(self.transport.output_frame(), frame);
+            assert_eq!(
+                start.execution_frame(),
+                Some(start.original_frame().unwrap().max(frame))
+            );
+        }
+        let execution = start.execution_frame().unwrap();
+        while self.frame < execution {
+            self.render((execution - self.frame).min(512) as usize);
         }
         // Include the first output frame at E, including the prepared Native FIFO.
         self.render(37);

@@ -1053,9 +1053,34 @@ fn run_case_with_cancellation(order: Order, lock: bool, selected: bool, cancel_o
     assert_eq!(fresh.content_key(), new_key);
     assert_ne!(fresh.content_key(), original.1);
     assert_eq!(fresh.render().pitch, PitchIntent::new(12, -4).unwrap());
+    let fresh_original = (
+        fresh.sequence(),
+        fresh.content_key(),
+        fresh.received_timestamp(),
+        fresh.original_due_frame(),
+    );
     actual.expect_pitch_start(&fresh);
     actual.publish(&fresh);
     actual.wait_ready(&fresh);
+    // Bind the ready original before collecting its complete physical beginning.
+    let frame = actual.copy.callback.frame;
+    actual.copy.callback.render(0);
+    reference.copy.callback.render(0);
+    for callback in [&actual.copy.callback, &reference.copy.callback] {
+        assert_eq!(callback.frame, frame);
+        assert_eq!(callback.transport.output_frame(), frame);
+    }
+    assert_eq!(fresh.execution_target(), fresh_original.3.max(frame));
+    assert_eq!(
+        (
+            fresh.sequence(),
+            fresh.content_key(),
+            fresh.received_timestamp(),
+            fresh.original_due_frame(),
+        ),
+        fresh_original
+    );
+    assert_source_chronology(&actual, &reference);
     while actual.copy.callback.frame < fresh.execution_target() {
         let frames = (fresh.execution_target() - actual.copy.callback.frame).min(257) as usize;
         assert_eq!(
