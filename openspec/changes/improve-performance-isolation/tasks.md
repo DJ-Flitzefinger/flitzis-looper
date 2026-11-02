@@ -949,6 +949,9 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Refuse shared offline worker launch before allocating an unowned child on
+      unsupported hosts; verify command refusal and Beat startup cleanup without
+      claiming full macOS support or actual platform acceptance.
 - [ ] Complete actual native CUDA and same-model device failure to fresh CPU,
       real mid-ORT/process cancellation and memory/reader settlement under fresh
       original resource admission. Reuse STEP19 numerical references; do not repeat

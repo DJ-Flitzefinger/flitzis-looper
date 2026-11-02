@@ -1,5 +1,20 @@
 ## ADDED Requirements
 
+### Requirement: Shared Offline Workers Require Process Tree Ownership Before Launch
+The shared Beat/stem worker launcher SHALL refuse execution on platforms without
+an owning process-tree adapter before allocating a child or tree owner. Launcher
+exit and closed output pipes SHALL NOT substitute for descendant retirement.
+Refusal SHALL use existing startup-failure cleanup to settle unused admission,
+temporary storage and ticket borrows. Windows and Linux ownership routes SHALL
+retain their existing behavior. This interim refusal SHALL NOT establish or
+remove the outstanding requirement for full macOS support and actual validation.
+
+#### Scenario: The host has no owning offline process adapter
+- **GIVEN** an offline command or Beat request on an unsupported host such as macOS
+- **WHEN** its shared launcher attempts to start the worker
+- **THEN** it refuses before creating a child, native memory budget or tree owner
+- **AND** the unused request's temporary storage, ticket borrows and admission settle so a later request is not stranded
+
 ### Requirement: Linux Offline Workers Own Descendants Through Reader Retirement
 Linux offline supervision SHALL bind any observer to the gated original payload
 before execution. A private subreaper SHALL retain descendants independently of

@@ -95,9 +95,14 @@ promise afterward. The original 3 GiB recovery and 512 MiB critical commit guard
 remain. Recording finalization keeps its independent existing owner and does not
 wait behind separator inference.
 
-Windows enforcement does not establish Linux/macOS host monitoring or complete
-POSIX descendant retirement. Those existing platform limits remain explicit final
-distribution gates; child-only numerical limits and the portable core still apply.
+The shared Beat/stem worker launcher requires owned process-tree supervision: a
+Windows Job or the private Linux broker. Other platforms, including macOS,
+currently refuse new offline workers before launch, because launcher exit and closed output pipes
+cannot establish descendant retirement. Verified saved-set restoration retains its
+existing model-free path. Full macOS support still requires an owning adapter and
+actual platform validation. Windows enforcement and Linux subtree ownership do not
+establish Linux/macOS host monitoring or whole application/resource-admission
+acceptance; those remain explicit distribution gates.
 
 ## Complete artifacts and durable selection
 

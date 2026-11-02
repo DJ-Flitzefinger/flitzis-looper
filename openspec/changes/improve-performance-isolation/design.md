@@ -31,8 +31,20 @@ Protocol or broker loss closes control to request remaining private cleanup whil
 retaining failed ownership proof and admission. This conservative failure cannot
 start a replacement CPU process. Windows keeps its suspended Job assignment,
 commit reservation and genuine descendant/reader checks through a composed Popen.
-Other POSIX systems retain their prior behavior; macOS ownership and whole Linux
-application/Native/resource-admission acceptance remain open.
+Other platforms, including macOS, refuse offline child creation with an explicit
+ownership error before allocating a launcher or tree owner. Their former
+launcher-only fallback could release source custody while silent descendants
+survived. The existing command and Beat startup-failure paths settle unused
+admission, temporary storage and ticket borrows after refusal. This is an interim
+safety boundary: an owning macOS adapter and actual macOS validation, along with
+whole Linux application/Native/resource-admission acceptance, remain open.
+
+Two public-entry regressions verify unsupported-host refusal without constructing
+a child or tree owner, command retirement, and Beat temporary/ticket/admission
+recovery across repeated requests. Four existing real Windows cases verify the
+venv launcher and silent descendant end together after success, crash, cancellation
+and timeout. These six cases do not establish actual macOS or fresh Linux runtime
+acceptance; the supported Linux route retains its source-compatible evidence.
 
 Verification targets the unchanged original two Linux failures, real escaped
 descendants, payload status, observer/cancellation before GO, signal/timeout,
@@ -40,7 +52,7 @@ broker loss and actual reader end, plus affected Windows ownership integration.
 No numerical models, audio callback, DSP or resource floors change. All original
 native parity, CUDA, fullhost, quality, platform and distribution gates remain.
 
-The final actual Linux run passes both unchanged original regressions and nine
+The retained actual Linux run passes both unchanged original regressions and nine
 expanded cases, including the real exit/stop acknowledgement race and failed
 ownership retention. Both original cases assert descendant END, independent
 stdout/stderr reader END before cleanup, an unrelated survivor and exact output.

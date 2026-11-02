@@ -162,6 +162,9 @@ class _OwnedTreeProcess:
         capture_stderr: bool = False,
         commit_limit_bytes: int | None = None,
     ) -> None:
+        if os.name != "nt" and sys.platform != "linux":
+            message = f"Offline worker process-tree supervision is unavailable on {sys.platform}"
+            raise OSError(message)
         self._job = (
             WindowsJob(
                 **(
