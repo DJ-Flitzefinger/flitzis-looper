@@ -24,6 +24,10 @@ unused global permits or retain them through actual temporary cleanup. An
 acquired Native ticket borrow SHALL remain held until that cleanup ends. The
 original allocation exception SHALL propagate unchanged. Failure to allocate the
 cleanup thread SHALL use synchronous cleanup with the same ownership guards.
+Worker arguments and the child-only environment SHALL be prepared within this
+prechild cleanup boundary, before acquiring a child-memory reservation or
+constructing a process. Unknown partial effects inside process construction
+SHALL remain outside that no-child guarantee.
 
 #### Scenario: Request preparation fails before child construction
 - **GIVEN** Beat admission has acquired both global permits
@@ -31,6 +35,13 @@ cleanup thread SHALL use synchronous cleanup with the same ownership guards.
 - **THEN** no child is launched and the original exception propagates
 - **AND** retirement and fresh admission require actual temporary and ticket-borrow cleanup
 - **AND** a delayed cleanup retains both permits and the borrow until it completes, including when the cleanup thread cannot be allocated
+
+#### Scenario: Child environment preparation fails before launch
+- **GIVEN** request preparation retains both Beat permits, temporary storage and a real Native ticket borrow
+- **WHEN** preparing the child-only environment raises a memory allocation error
+- **THEN** neither child-memory reservation nor process construction begins
+- **AND** actual delayed temporary and borrow cleanup precedes retirement and fresh admission
+- **AND** the exact exception and immutable source bytes remain unchanged and fresh Beat execution succeeds
 
 ### Requirement: Shared Offline Workers Require Process Tree Ownership Before Launch
 The shared Beat/stem worker launcher SHALL refuse execution on platforms without

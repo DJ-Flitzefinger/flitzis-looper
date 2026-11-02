@@ -115,8 +115,10 @@ def _record_launchers(monkeypatch: pytest.MonkeyPatch) -> list[subprocess.Popen[
     launches: list[subprocess.Popen[bytes]] = []
     original = process._start
 
-    def start(command: process.WorkerCommand, path: Path) -> subprocess.Popen[bytes]:
-        child = original(command, path)
+    def start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> subprocess.Popen[bytes]:
+        child = original(command, launch)
         launches.append(child)
         return child
 

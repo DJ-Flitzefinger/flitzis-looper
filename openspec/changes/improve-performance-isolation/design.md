@@ -1,5 +1,43 @@
 # Performance audit and implementation design
 
+## Beat launch preparation before child construction
+
+The worker constructor acquired its Native child-memory reservation before
+`_environment()` copied and populated the child dictionaries. A `MemoryError`
+there bypassed both constructor and startup cleanup, stranding the request's
+temporary storage, real Native ticket borrow and both Beat permits. The launch
+arguments, environment and named launch value now form part of the existing
+guarded request preparation. The constructor receives those unchanged prepared
+values and retains its original process-tree and memory-ceiling behavior.
+
+One additional public environment-failure case retains actual temporary cleanup
+and its real ticket borrow while a fresh FIFO ticket and both permits remain
+blocked. It requires that neither startup, child-memory reservation nor Popen
+is entered, then checks exact exception identity, source bytes, actual retirement,
+fresh ticket acquisition and fresh successful Beat execution. Existing request,
+cleanup-thread, returned-child owner, start/cancel and Windows-tree controls cover
+the affected private launch wrappers. No Rust/Native build or inference is needed.
+
+The constructor trace does not justify a blanket `_start` allocation handler:
+the actual CPython Windows route can create a process before allocating its
+Python handle wrapper, without returning raw custody to this caller. Plain
+post-return attribute stores provide no proved allocator fault for a synthetic
+`__setattr__` regression. Partial Native reservation, Windows Job and Linux broker
+initialization, internal Popen effects and continuous OOM remain separate open
+boundaries. No general construction, platform, memory-pressure or quality claim
+follows from this prechild fix; the entire remaining STEP66/67 scope is retained.
+
+The frozen integrated run passes 82 cases in 18.89 seconds across the affected
+Beat worker, Windows descendant, heavy-work and unsupported-platform modules.
+Ruff lint/format, strict product-module Mypy and strict OpenSpec pass. Systems
+PRE/frozen POST and independent actual-diff review retain the bounded scope.
+The asynchronous failure checks the exact exception before creating the blocked
+successor ticket, proving that the real borrow survives its parent owner. Two
+initial static-only runs rejected test complexity/statement counts; extracting
+injection helpers preserves all assertions and the final checks pass. No product
+or test bytes change after this run; final result prose and task status are bound
+separately to the tested index. Existing Native is reused without a rebuild.
+
 ## Returned-child supervisor allocation recovery
 
 Both Beat and shared commands returned a genuine gated child before allocating

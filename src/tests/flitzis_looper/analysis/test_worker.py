@@ -100,8 +100,10 @@ def _record_processes(monkeypatch: pytest.MonkeyPatch) -> list[subprocess.Popen[
     processes: list[subprocess.Popen[bytes]] = []
     original = process._start
 
-    def start(command: process.WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
-        child = original(command, request_path)
+    def start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> subprocess.Popen[bytes]:
+        child = original(command, launch)
         processes.append(child)
         return child
 
@@ -405,8 +407,10 @@ def test_failed_finite_reap_stays_retiring_until_process_is_reaped(
     release_reaper = Event()
     reaper_started = Event()
 
-    def start(command: process.WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
-        child = original(command, request_path)
+    def start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> subprocess.Popen[bytes]:
+        child = original(command, launch)
         real_wait: Callable[[float | None], int] = child.wait
 
         def wait(timeout: float | None = None) -> int:
@@ -487,8 +491,10 @@ def test_early_output_setup_failure_retires_child_and_allows_fresh_analysis(
             raise error(message)
         return Thread(target=target, name=name, daemon=daemon)
 
-    def start(command: process.WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
-        child = original(command, request_path)
+    def start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> subprocess.Popen[bytes]:
+        child = original(command, launch)
         assert child.stdout is not None
         child.stdout.close()
         child.stdout = None
@@ -720,17 +726,52 @@ def test_prelaunch_allocation_failure_releases_admission_for_fresh_analysis(
     _assert_successful_beat_retry(adapter, request, children)
 
 
-@pytest.mark.parametrize("thread_memory", [False, True])
+def _assert_process_slot_occupied() -> None:
+    acquired = process._PROCESS_SLOT.acquire(blocking=False)
+    if acquired:
+        process._PROCESS_SLOT.release()
+    assert not acquired
+
+
+def _refuse_cleanup_thread(*, target: Callable[..., None], name: str, **kwargs: object) -> Thread:
+    if name == "beat-worker-cleanup":
+        message = "fixture cleanup thread allocation failure"
+        raise MemoryError(message)
+    return Thread(target=target, name=name, **kwargs)
+
+
+def _inject_prelaunch_failure(
+    failing: pytest.MonkeyPatch, allocation: str, error: MemoryError
+) -> None:
+    def fail_environment() -> dict[str, str]:
+        raise error
+
+    def unexpected_launch(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("environment preparation must precede native reservation and process launch")
+
+    if allocation == "environment":
+        failing.setattr(process, "_environment", fail_environment)
+        failing.setattr(process, "_start", unexpected_launch)
+        failing.setattr(process, "OfflineChildMemoryReservation", unexpected_launch)
+        failing.setattr(subprocess, "Popen", unexpected_launch)
+    else:
+        failing.setattr(Path, "write_bytes", _request_write_failure(error))
+
+
+@pytest.mark.parametrize(
+    ("allocation", "thread_memory"), [("request", False), ("request", True), ("environment", False)]
+)
 def test_prelaunch_memory_failure_retains_borrow_until_actual_temporary_cleanup(
     prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
     monkeypatch: pytest.MonkeyPatch,
+    allocation: str,
     *,
     thread_memory: bool,
 ) -> None:
     configuration, request = prepared
     children = _record_processes(monkeypatch)
     adapter = BeatWorkerAdapter(configuration)
-    error = MemoryError("fixture request allocation failure")
+    error = MemoryError("fixture prelaunch preparation allocation failure")
     release_cleanup, cleanup_attempted = Event(), Event()
     real_release = process._release_temporary
     original_bytes = request.pcm.path.read_bytes()
@@ -746,28 +787,26 @@ def test_prelaunch_memory_failure_retains_borrow_until_actual_temporary_cleanup(
             return False
         return real_release(temporary, retired, whole_work)
 
-    def thread(*, target: Callable[..., None], name: str, **kwargs: object) -> Thread:
-        if name == "beat-worker-cleanup":
-            message = "fixture cleanup thread allocation failure"
-            raise MemoryError(message)
-        return Thread(target=target, name=name, **kwargs)
-
     successor = None
     cancel = Event()
     try:
         with monkeypatch.context() as failing, ThreadPoolExecutor(max_workers=1) as executor:
-            failing.setattr(Path, "write_bytes", _request_write_failure(error))
+            _inject_prelaunch_failure(failing, allocation, error)
             failing.setattr(process, "_release_temporary", release)
             if thread_memory:
-                failing.setattr(process, "Thread", thread)
+                failing.setattr(process, "Thread", _refuse_cleanup_thread)
             future = executor.submit(adapter.run, request, cancel)
             try:
                 assert cleanup_attempted.wait(5)
                 assert not adapter.retired.is_set()
+                if not thread_memory:
+                    assert future.exception(timeout=5) is error
                 successor = OfflineWorkTicket()
                 assert not successor.try_acquire()
                 assert list(configuration.scratch_dir.glob("beat-request-*"))
                 assert children == []
+                _assert_process_slot_occupied()
+                assert _run(BeatWorkerAdapter(configuration), request).reason == "worker_busy"
                 if thread_memory:
                     assert not future.done()
             finally:
@@ -862,9 +901,9 @@ def test_retirement_thread_failure_keeps_supervisor_until_resources_are_released
     children: list[subprocess.Popen[bytes]] = []
 
     def start_process(
-        command: process.WorkerCommand, request_path: Path
+        command: process.WorkerCommand, launch: process._WorkerLaunch
     ) -> subprocess.Popen[bytes]:
-        child = original(command, request_path)
+        child = original(command, launch)
         children.append(child)
         real_wait: Callable[[float | None], int] = child.wait
 
@@ -903,7 +942,9 @@ def test_failed_process_start_keeps_temporary_resource_slot_during_cleanup(
     real_release = process._release_temporary
     release_cleanup = Event()
 
-    def fail_start(command: process.WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
+    def fail_start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> subprocess.Popen[bytes]:
         msg = "fixture process allocation failure"
         raise OSError(msg)
 

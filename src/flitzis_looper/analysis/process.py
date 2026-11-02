@@ -134,6 +134,12 @@ class WorkerCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _WorkerLaunch:
+    arguments: list[str]
+    environment: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class OwnedCommandResult:
     """Bounded command output returned only after its actual tree and readers retire."""
 
@@ -268,16 +274,18 @@ class _OwnedTreeProcess:
 class _WorkerProcess(_OwnedTreeProcess):
     """Beat-worker launch adapter; analysis retains its independent global admission."""
 
-    def __init__(self, arguments: list[str], command: WorkerCommand) -> None:
+    def __init__(
+        self, arguments: list[str], command: WorkerCommand, environment: dict[str, str]
+    ) -> None:
         self._memory_budget = OfflineChildMemoryReservation() if os.name == "nt" else None
         try:
             if self._memory_budget is None:
-                super().__init__(arguments, cwd=command.scratch_dir, env=_environment())
+                super().__init__(arguments, cwd=command.scratch_dir, env=environment)
             else:
                 super().__init__(
                     arguments,
                     cwd=command.scratch_dir,
-                    env=_environment(),
+                    env=environment,
                     commit_limit_bytes=self._memory_budget.limit_bytes,
                 )
         except OSError, RuntimeError, ValueError:
@@ -520,8 +528,8 @@ def _environment() -> dict[str, str]:
     return env
 
 
-def _start(command: WorkerCommand, request_path: Path) -> _OwnedTreeProcess:
-    return _WorkerProcess(
+def _prepare_worker_launch(command: WorkerCommand, request_path: Path) -> _WorkerLaunch:
+    return _WorkerLaunch(
         [
             str(command.interpreter),
             "-I",
@@ -531,8 +539,12 @@ def _start(command: WorkerCommand, request_path: Path) -> _OwnedTreeProcess:
             "--checkpoint",
             str(command.checkpoint),
         ],
-        command,
+        _environment(),
     )
+
+
+def _start(command: WorkerCommand, launch: _WorkerLaunch) -> _OwnedTreeProcess:
+    return _WorkerProcess(launch.arguments, command, launch.environment)
 
 
 def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str | None:
@@ -966,13 +978,14 @@ def _run_process_admitted(
         request_path = Path(temporary.name) / "request.json"
         whole_work = whole_owner.ticket.borrow()
         request_path.write_bytes(request)
+        launch = _prepare_worker_launch(command, request_path)
     except MemoryError:
         _start_failed(temporary, retired, whole_work)
         raise
     except OSError, RuntimeError:
         return _start_failed(temporary, retired, whole_work)
     try:
-        process = _start(command, request_path)
+        process = _start(command, launch)
     except OSError, RuntimeError:
         return _start_failed(temporary, retired, whole_work)
     owned = _own_process(process, temporary, retired, whole_work)
