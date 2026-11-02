@@ -1,7 +1,7 @@
 import os
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from flitzis_looper.models import ProjectState, StemCacheEntry
+    from flitzis_looper.project_materials import ProjectAssetPath
     from flitzis_looper_audio import AudioEngine, ProjectAssetLease
 
 type AssignmentImage = tuple[
@@ -554,38 +555,37 @@ class ProjectAssetLifecycle:
     ) -> dict[tuple[str, int], Path]:
         project = self._project if project is None else project
         result: dict[tuple[str, int], Path] = {}
+        stems: dict[tuple[str, int], Path] = {}
         for sample_id, source in enumerate(project.sample_paths):
-            path = self._owned_original(source)
-            if path is not None and path.is_file():
-                result["original", sample_id] = path
-        for sample_id, entry in enumerate(project.stem_cache):
-            if entry is None:
-                continue
-            path = self._stem_assignment_path(sample_id, entry, project)
-            if path is not None:
-                result["stems", sample_id] = path
-        return result
+            entry = project.stem_cache[sample_id]
+            resolved = None
+            if entry is not None:
+                with suppress(OSError, ValueError):
+                    if (self._root / "samples").is_dir():
+                        resolved = resolve_asset(Path(entry.cache_dir), project_root=self._root)
+            original = None
+            if source is not None:
+                with suppress(OSError, ValueError):
+                    # Validate the original leaf after the stem's binding read.
+                    original = original_asset(source, project_root=self._root)
+            if original is not None and original.path.is_file():
+                result["original", sample_id] = original.path
+            if entry is not None and resolved is not None:
+                path = self._stem_assignment_path(
+                    sample_id, entry, resolved, original.material_root if original else None
+                )
+                if path is not None:
+                    stems["stems", sample_id] = path
+        return result | stems
 
     def _stem_assignment_path(
-        self, sample_id: int, entry: StemCacheEntry, project: ProjectState | None = None
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        resolved: ProjectAssetPath,
+        material_root: Path | None,
     ) -> Path | None:
-        try:
-            if not (self._root / "samples").is_dir():
-                return None
-            resolved = resolve_asset(Path(entry.cache_dir), project_root=self._root)
-            path = resolved.path
-        except OSError, ValueError:
-            return None
-        project = self._project if project is None else project
-        source = project.sample_paths[sample_id]
-        try:
-            material_root = (
-                original_asset(source, project_root=self._root).material_root
-                if source is not None
-                else None
-            )
-        except OSError, ValueError:
-            material_root = None
+        path = resolved.path
         pad = (
             material_root / "stems"
             if material_root is not None
