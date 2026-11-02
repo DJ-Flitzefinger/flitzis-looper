@@ -30,7 +30,11 @@ from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stem_batch import StemBatchController
 from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stem_job import DIRECT_STEM_INTEREST
-from flitzis_looper.controller.stem_workers import STEM_QUEUED_JOBS, STEM_WORKERS
+from flitzis_looper.controller.stem_workers import (
+    STEM_QUEUED_JOBS,
+    STEM_WORKERS,
+    StemWorkerReservation,
+)
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper_audio import SealedProcessingFiles
@@ -46,7 +50,6 @@ if TYPE_CHECKING:
     )
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
     from flitzis_looper.controller.stem_job import StemGenerationInterests
-    from flitzis_looper.controller.stem_workers import StemWorkerReservation
     from flitzis_looper.controller.stems import _StemAdmissionOwner
     from flitzis_looper_audio import AudioEngine
 
@@ -111,6 +114,7 @@ class _DeclaredBackend:
         self, request: StemGenerationRequest, progress: Callable[[float, str], None]
     ) -> StemGenerationResult:
         """Substitute inference only; preserve actual source reads and verification."""
+        assert request.separator == "demucs:htdemucs"
         assert threading.current_thread().name.startswith("stems_")
         encoded = request.source_path.read_bytes()
         digest = hashlib.sha256(encoded).hexdigest()
@@ -164,6 +168,7 @@ class _PoolObservation:
         pool = stems._stem_worker_pool
         assert pool is not None
         assert pool._executor._max_workers == STEM_WORKERS == 2
+        self._pool = pool
         self.stems = stems
         self.running = self.queued = self.submitted = 0
         self.peak_running = self.peak_queued = self.peak_submitted = 0
@@ -175,20 +180,25 @@ class _PoolObservation:
         stack.enter_context(patch.object(pool._executor, "submit", self.submit))
         stack.enter_context(patch.object(stems, "_admit_stem_candidate", self.admit))
 
-    def submit(
-        self, target: Callable[[Callable[[], None]], None], work: Callable[[], None]
-    ) -> Future[None]:
+    def submit(self, target: Callable[[], None]) -> Future[None]:
         """Count actual executor custody from accepted submission through return."""
+        reservation = getattr(target, "__self__", None)
+        assert isinstance(reservation, StemWorkerReservation)
+        assert reservation._pool is self._pool
+        assert getattr(target, "__func__", None) is StemWorkerReservation._run
+        work = reservation._target
+        assert work is not None
         with self._lock:
             self.queued += 1
             self.submitted += 1
             self.peak_queued = max(self.peak_queued, self.queued)
             self.peak_submitted = max(self.peak_submitted, self.submitted)
             assert self.submitted <= STEM_WORKERS + STEM_QUEUED_JOBS
-        # Preserve the original reservation's _run/release wrapper. Observe
-        # actual work inside it so a returned permit cannot temporarily make
-        # observation count an already completed target plus its successor.
-        return self._submit(target, partial(self._execute, work))
+        # The executor hook runs while submit holds the reservation lock.
+        # Observe work inside its original _run/release wrapper so counters
+        # drop before the permit admits a successor; never reacquire that lock.
+        reservation._target = partial(self._execute, work)
+        return self._submit(target)
 
     def _execute(self, target: Callable[[], None]) -> None:
         with self._lock:
@@ -233,7 +243,11 @@ class StemBatch216Probe:
         assert len(rows) == 216
         self.audio = cast("AudioEngine", _ShapeAudio(audio, shape_audio))
         self.project = ProjectState(
-            key_lock=False, resident_pcm_budget_mib=128, selected_pad=215, selected_bank=5
+            key_lock=False,
+            resident_pcm_budget_mib=128,
+            selected_pad=215,
+            selected_bank=5,
+            stem_separator="demucs:htdemucs",
         )
         for slot, row in enumerate(rows):
             self.project.sample_paths[slot] = row["new_reference"]

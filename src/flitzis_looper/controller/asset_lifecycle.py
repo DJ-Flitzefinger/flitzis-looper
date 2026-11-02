@@ -572,17 +572,20 @@ class ProjectAssetLifecycle:
         try:
             if not (self._root / "samples").is_dir():
                 return None
-            path = self._checked_path(Path(entry.cache_dir))
-            resolved = resolve_asset(path, project_root=self._root)
+            resolved = resolve_asset(Path(entry.cache_dir), project_root=self._root)
+            path = resolved.path
         except OSError, ValueError:
             return None
         project = self._project if project is None else project
-        original = self._owned_original(project.sample_paths[sample_id])
-        material_root = (
-            original_asset(original, project_root=self._root).material_root
-            if original is not None
-            else None
-        )
+        source = project.sample_paths[sample_id]
+        try:
+            material_root = (
+                original_asset(source, project_root=self._root).material_root
+                if source is not None
+                else None
+            )
+        except OSError, ValueError:
+            material_root = None
         pad = (
             material_root / "stems"
             if material_root is not None
