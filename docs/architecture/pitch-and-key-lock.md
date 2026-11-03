@@ -395,8 +395,8 @@ This is a bounded functional bridge, without a production DSP/API change. Its
 software callback clock and PCM checks do not establish device timing, latency,
 hearing, quality, neural or full-matrix acceptance. Existing GUI/MIDI and physical
 Hold tests remain separate scoped evidence. The ordinary Loader pause/seek/resume
-bridge below is separate; combined Loader Hold/Piano histories and all original
-acceptance gates remain open.
+and loaded Hold/retrigger/original-release bridges below provide separate bounded
+histories; all original acceptance gates remain open.
 
 
 ### Actual loaded ordinary pause, seek and resume bridge
@@ -432,3 +432,30 @@ This bounded software callback history does not establish device timing, latency
 hearing, quality, neural or full-matrix acceptance. No production DSP/API change is
 implied; existing controller, source-replacement, Hold and Piano proofs remain
 separate scoped evidence.
+
+### Actual loaded Hold, Piano retrigger and original release bridge
+
+The Windows-only ignored diagnostic
+`held_lifecycle_tests::piano_bridge::actual_loader_hold_retrigger_and_original_release_preserve_peer`
+combines a real public Loader physical Hold with public Piano SET_RETRIGGER and
+the original physical release. Two complete three-second 48 kHz stereo sources
+retain their Loader acknowledgements, content/source identity, file digests,
+resident PCM hashes, allocations, loop markers and current bindings. Project and
+Native selection remain on peer PAD 1 while Hold and Piano explicitly target PAD 0.
+
+The original Hold ticket precedes its actual pause acknowledgement; the original
+Piano capture precedes polling. Until that action's own E, the held voice retains
+its full playback state, generation, Native allocation, FIFO and productive
+pitch/DSP histories while the peer advances and contributes actual post-DSP PCM.
+At E, the retrigger adopts the exact prepared Native state and original request,
+creates one new generation at position1 and preserves original T. The Hold becomes
+Superseded at E, retaining its original pause effect with `effect_current=false`.
+
+The original physical release precedes controller terminal polling and must leave
+the new attack's full playback state, Native allocation, FIFO and productive
+histories unchanged. Subsequent renders check its trajectory, actual target PCM
+and continued peer contribution. Feedback, source custody, final stop, actual
+cold-worker join with zero jobs and observed callback retirement remain checked.
+This is one bounded functional history, with no production DSP/API change or
+device, latency, hearing, quality, neural or full-matrix acceptance. Existing
+SET, Key Lock, MIDI and release-before-E proofs remain separate scoped evidence.

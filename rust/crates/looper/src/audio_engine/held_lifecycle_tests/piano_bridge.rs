@@ -3,6 +3,7 @@
 use super::controller_overlap::{script_value, settle, start};
 use super::*;
 use crate::audio_engine::pitch_actions::{CapturedPitchAction, PitchActionVariant};
+use crate::audio_engine::productive_source_history::ProductiveSourceHistory;
 use crate::audio_engine::source_playback::SourcePlayback;
 
 fn source_image(f: &mut Fixture, id: usize) -> (usize, String) {
@@ -294,5 +295,262 @@ fn actual_loader_piano_set_and_repeated_retrigger_preserve_peer() {
         "mixed_pcm_sha256": format!("{:x}", pcm_hash.finalize()),
         "joined_counts": joined_counts, "callback_retired": true,
         "limits": "One full-source controller bridge; no device, hearing, latency, NN, quality or full-matrix acceptance"})
+    );
+}
+
+struct HeldTargetImage {
+    lane: usize,
+    generation: u64,
+    pcm: usize,
+    native: usize,
+    paused: bool,
+    playback: SourcePlayback,
+    fifo: (usize, usize),
+    pitch: Option<ProductiveSourceHistory>,
+    dsp: Option<ProductiveSourceHistory>,
+}
+
+fn held_target(f: &mut Fixture) -> HeldTargetImage {
+    let state = f.state();
+    let (lane, voice) = state
+        .mixer
+        .voices
+        .iter()
+        .enumerate()
+        .find(|(_, voice)| voice.is_playing_sample(0))
+        .unwrap();
+    HeldTargetImage {
+        lane,
+        generation: voice.generation,
+        pcm: voice.sample.as_ref().unwrap().samples.as_ptr() as usize,
+        native: voice.stretch.native_state_address(),
+        paused: voice.paused,
+        playback: voice.source_playback,
+        fifo: voice.stretch.pending_fifo_frames(),
+        pitch: voice.stretch.productive_history(),
+        dsp: state.mixer.dsp_source_history_for_test(0),
+    }
+}
+
+fn unchanged_target(before: &HeldTargetImage, after: &HeldTargetImage) {
+    assert_eq!(after.lane, before.lane);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(after.pcm, before.pcm);
+    assert_eq!(after.native, before.native);
+    assert_eq!(after.paused, before.paused);
+    assert!(after.playback.matches_exact(&before.playback));
+    assert_eq!(after.fifo, before.fifo);
+    for (before, after) in [(before.pitch, after.pitch), (before.dsp, after.dsp)] {
+        match (before, after) {
+            (Some(before), Some(after)) => {
+                assert_eq!(after.binding, before.binding);
+                assert_eq!(after.next_position, before.next_position);
+                assert_eq!(after.domain, before.domain);
+                assert_eq!(after.fed_output_frames, before.fed_output_frames);
+            }
+            (None, None) => {}
+            _ => panic!("Hold or old release changed productive history"),
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit loaded physical Hold/Piano/original release bridge; no device claim"]
+fn actual_loader_hold_retrigger_and_original_release_preserve_peer() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut f = Fixture::new(root, false);
+    Python::attach(|py| {
+        let module = PyModule::from_code(
+            py,
+            &CString::new(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../src/tests/flitzis_looper/controller/controller_overlap_probe.py"
+            )))
+            .unwrap(),
+            c"controller_overlap_probe.py",
+            c"controller_overlap_probe",
+        )
+        .unwrap();
+        module
+            .call_method1(
+                "write_source",
+                (root.join("source.wav").to_string_lossy().as_ref(), RATE, 3),
+            )
+            .unwrap();
+    });
+    let path = root.join("source.wav");
+    f.load(&path);
+    f.script(&format!("probe.load(1, {:?})", path.to_string_lossy()));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !script_value(&f, "probe.poll_load(1)") {
+        f.drain();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    f.drain();
+    let sources = [0, 1].map(|id| source_image(&mut f, id));
+    let markers = [0, 1].map(|id| f.state().mixer.loop_region_frames(id));
+    f.script("probe.piano_sources = tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(2))");
+    start(&mut f, 0, true);
+    settle(&mut f, &[0]);
+    start(&mut f, 1, true);
+    settle(&mut f, &[0, 1]);
+    f.script("probe.select_pad(1)\nprobe.input_mapping.on_frame_render()");
+    render_with_peer(&mut f, 4096);
+    let ticket = f.press();
+    let projection = || Python::attach(|py| ticket.borrow(py).action.projection());
+    let admitted = projection();
+    assert_eq!(admitted.state, HoldActionState::Admitted);
+    assert!(admitted.effect.is_none());
+    assert!(!held_target(&mut f).paused);
+    let pause_frame = f.state().transport.output_frame();
+    f.drain();
+    let hold = projection();
+    assert_eq!(hold.state, HoldActionState::PausedOwned);
+    assert!(hold.effect_current);
+    assert_eq!(hold.effect.unwrap().paused_at_output_frame, pause_frame);
+    f.call("observe_owned");
+    f.script("assert probe.project.selected_pad == 1\nassert probe._audio.input_selected_projection()[1] == 1");
+    let frozen = held_target(&mut f);
+    assert!(frozen.paused);
+    for frames in [128, 385, 512] {
+        render_with_peer(&mut f, frames);
+        unchanged_target(&frozen, &held_target(&mut f));
+        assert_eq!(f.state().pad_peaks[0], 0.0);
+        assert_eq!(projection(), hold);
+    }
+    let old_pitch = f.state().mixer.pad_pitch_intent(0);
+    let action = capture(&mut f, true);
+    assert_eq!(action.variant(), PitchActionVariant::SetRetrigger);
+    assert!(!action.exclusive() && !action.sync());
+    let original = (
+        action.sequence(),
+        action.content_key(),
+        action.received_timestamp(),
+        action.original_due_frame(),
+    );
+    f.drain();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let prepared_native = loop {
+        let runtime = f.state().mixer.pitch_runtime.as_mut().unwrap();
+        runtime.poll();
+        assert_ne!(action.state(), "rejected", "{:?}", action.reason());
+        if let Some(native) = runtime.ready_pitch_native_address(action.sequence()) {
+            break native;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "original retrigger never prepared"
+        );
+        thread::sleep(Duration::from_millis(1));
+    };
+    assert!(action.accepted() && !action.effective());
+    render_with_peer(&mut f, 0);
+    let execution = action.execution_target();
+    while f.state().transport.output_frame() < execution {
+        let frames = (execution - f.state().transport.output_frame()).min(512) as usize;
+        render_with_peer(&mut f, frames);
+        unchanged_target(&frozen, &held_target(&mut f));
+        assert_eq!(projection(), hold);
+        assert_eq!(f.state().mixer.pad_pitch_intent(0), old_pitch);
+        assert!(!action.effective(), "no effect before own E");
+    }
+    render_with_peer(&mut f, 1);
+    assert!(action.effective(), "{:?}", action.reason());
+    assert_adopted(&mut f, &action);
+    let attack = held_target(&mut f);
+    assert!(!attack.paused);
+    assert_eq!(attack.generation, frozen.generation + 1);
+    assert_eq!(attack.lane, frozen.lane);
+    assert_eq!(attack.pcm, frozen.pcm);
+    assert_eq!(attack.native, prepared_native);
+    assert_ne!(attack.native, frozen.native);
+    let position = attack.playback.position();
+    assert_eq!((position.frame, position.fraction), (1, 0.0));
+    assert_eq!(
+        attack.playback.diagnostic_launch_reference().unwrap().1,
+        original.3
+    );
+    let superseded = projection();
+    assert_eq!(superseded.state, HoldActionState::Superseded);
+    assert_eq!(superseded.settled_at_output_frame, execution);
+    assert_eq!(superseded.effect, hold.effect);
+    assert!(!superseded.effect_current);
+    // The original physical owner is still registered: Up precedes terminal polling.
+    let peer_before_release = voice_image(&mut f, 1);
+    f.call("release");
+    f.drain();
+    f.call("poll_terminal");
+    unchanged_target(&attack, &held_target(&mut f));
+    assert_eq!(projection(), superseded);
+    let peer_after_release = voice_image(&mut f, 1);
+    assert_eq!(peer_after_release.0, peer_before_release.0);
+    assert_eq!(peer_after_release.1, peer_before_release.1);
+    assert_eq!(peer_after_release.2, peer_before_release.2);
+    assert!(peer_after_release.3.matches_exact(&peer_before_release.3));
+    let mut pcm_hash = Sha256::new();
+    let mut target_contributed = false;
+    for frames in [73, 511, 127, 512]
+        .into_iter()
+        .chain(std::iter::repeat_n(512, 16))
+    {
+        let mut expected = held_target(&mut f).playback;
+        assert!(expected.advance(frames));
+        for sample in render_with_peer(&mut f, frames) {
+            pcm_hash.update(sample.to_le_bytes());
+        }
+        let after = held_target(&mut f);
+        assert!(!after.paused);
+        assert_eq!(after.generation, attack.generation);
+        assert_eq!(after.native, prepared_native);
+        assert!(after.playback.matches_exact(&expected));
+        assert_adopted(&mut f, &action);
+        target_contributed |= f.state().pad_peaks[0] > 1e-6;
+    }
+    assert!(target_contributed);
+    assert_eq!(action.execution_target(), execution);
+    assert_eq!(
+        (
+            action.sequence(),
+            action.content_key(),
+            action.received_timestamp(),
+            action.original_due_frame()
+        ),
+        original
+    );
+    f.call("poll_feedback");
+    f.script(&format!("probe.transport.on_frame_render()\nprobe.input_mapping.on_frame_render()\nassert probe.piano_capture.effective_output_frame == {execution}\nassert probe.piano_capture.execution_frame == {execution}\nassert probe.transport.pitch.status(0) == ('applied', None)\nassert probe.session.active_sample_ids == {{0, 1}}\nassert not probe.session.paused_sample_ids\nassert probe.project.selected_pad == 1\nassert probe._audio.input_selected_projection()[1] == 1\nassert tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(2)) == probe.piano_sources\nassert all(probe._audio.current_input_runtime_pad_binding(i).is_current() for i in range(2))"));
+    for (id, before) in sources.iter().enumerate() {
+        assert_eq!(&source_image(&mut f, id), before);
+        assert_eq!(f.state().mixer.loop_region_frames(id), markers[id]);
+    }
+    f.script("probe.transport.playback.stop_all_pads()");
+    f.drain();
+    f.render(512);
+    f.call("poll_feedback");
+    f.script("assert not probe.session.active_sample_ids");
+    let joined_counts = Python::attach(|py| {
+        let mut engine = f.engine.borrow_mut(py);
+        engine.shut_down().unwrap();
+        engine.cold_jobs.counts_for_test()
+    });
+    assert_eq!(joined_counts, (0, 0, 0));
+    f.close_callback();
+    eprintln!(
+        "hold_retrigger_bridge_raw {}",
+        serde_json::json!({
+            "rate": RATE, "channels": 2, "frames_per_source": 3 * RATE,
+            "sources": sources, "hold_action": hold.action_id,
+            "hold_physical_press": hold.physical_press_id, "pause_frame": pause_frame,
+            "sequence": original.0, "received_ns": original.2, "T": original.3, "E": execution,
+            "old_generation": frozen.generation, "new_generation": attack.generation,
+            "position_after_effect": [position.frame as f64, position.fraction],
+            "exact_native_adoption": true, "old_release_preserved_attack": true,
+            "target_actual_pcm": target_contributed, "peer_actual_post_dsp": true,
+            "mixed_pcm_sha256": format!("{:x}", pcm_hash.finalize()),
+            "joined_counts": joined_counts, "callback_retired": true,
+            "limits": "One loaded Hold/retrigger/release bridge; no device, hearing, latency, NN, quality or full-matrix acceptance"
+        })
     );
 }
