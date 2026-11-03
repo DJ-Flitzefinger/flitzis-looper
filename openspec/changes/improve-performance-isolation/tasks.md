@@ -952,6 +952,10 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Consume retained diagnostic input/output files after their last readers and
+      before positive status; preserve first failure, all-owner completion and
+      no destructor write retry, without claiming whole Native SUCCESS.
+
 - [x] Replace the opaque zero-argument kernel decorator with one source-owned
       cache, preserving success-only concurrent publication and clear races;
       narrowly bind the captured resource clock without changing capture policy

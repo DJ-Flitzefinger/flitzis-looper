@@ -1312,6 +1312,48 @@ source/pins/this design retain durable facts. No speed/RSS or installed gain is
 claimed. Systems PRE/frozen POST, Methods and ONE independent final actual-diff
 chain review this scoped correction; all readers must end before publication.
 
+## Retained diagnostic file completion
+
+The private learned CLI consumes its prepared input and output owners after all
+synchronous numerical readers end and before its positive chunk/track report.
+The original work-success flag is independent of the first completion error:
+every intended successful output attempts flush, sync and close even if an input
+or earlier output failed completion. A failed flush skips that sink's sync but
+still closes it. Failed work discards pending bytes without flushing or syncing.
+Partial preparation and all ordinary later errors visit every prepared owner;
+unwind remains unsuccessful abandonment without destructor writes.
+
+Windows completion consumes `File` through `into_raw_handle` before one checked
+`CloseHandle`, capturing `GetLastError` immediately. No File is reconstructed and
+neither return nor Drop retries close. Close failure leaves OS settlement unknown
+and the attempt invalid. Non-Windows checked completion fails closed. Borrowed
+stdout/stderr are explicitly flushed and unlocked; report errors cannot replace
+the original failure or produce a successful exit. Runtime standard handles stay
+runtime-owned, including the separate stdio cleanup after main.
+
+The installed selected Rust source routes Windows File reads/writes through
+NtReadFile/NtWriteFile and possible pending waits; seek uses SetFilePointerEx,
+sync uses FlushFileBuffers and File flush is a no-op. OwnedHandle Drop ignores
+CloseHandle's result, which is the narrow reason for consuming checked close.
+This component completion is not a finite prospective native-memory allowance:
+all native operations, pending/abort paths, entry/error/unwind/stdcleanup/exit,
+stack/images/COW/CRT/TLS/loader and outside-native overhead remain separate.
+Complete SUCCESS then fresh sufficient COMPLETE ORIGINAL admission must still
+precede any justified learned attempt. No NN, Torch cutover or saving is implied.
+
+Focused Windows verification passes all16 diagnostic I/O tests, strict scoped
+Clippy and the real tiny sealed control. The control retains three input readers,
+four output owners and a rejected read-only sink before seal; afterward it checks
+exact float32 bytes, seek/EOF, all eight successful native closes and immediate
+invalid-handle observation for the completed source. Rust arena counters remain
+unchanged. No model/weight payload or learned inference is executed. The first
+broader test selection was explicitly interrupted during unchanged arena proof
+after the same16 I/O tests passed; it is not a complete broader-suite result.
+The first Release payload compiled successfully, while its strict owning-Job
+wrapper needed cleanup of a remaining own compiler helper. A subsequent cached
+build passed the wrapper and reused the same actual Cargo artifact. These facts
+do not erase the initial wrapper failure or prove native allocator/OS bounds.
+
 ## STEP31 impact: retained diagnostic I/O and allocation schedule
 
 The CLI now moves actual directory/path creation, exclusive output

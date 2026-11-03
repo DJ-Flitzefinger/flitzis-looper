@@ -4,7 +4,7 @@ use flitzis_stem_dsp::Error;
 use std::{
     fmt,
     fs::File,
-    io::{self, BufWriter, Write},
+    io::{self, BufReader, BufWriter, Write},
     path::Path,
 };
 
@@ -76,6 +76,148 @@ pub fn core_io<T>(
     })
 }
 
+/// Visit every completion even after failure; the first error stays authoritative.
+pub fn retain_first<T>(result: &mut Result<T>, completion: Result<()>) {
+    if let Err(error) = completion
+        && result.is_ok()
+    {
+        *result = Err(error);
+    }
+}
+
+/// Consumes Rust ownership before the sole native close attempt. A failed close
+/// is unresolved OS ownership, never proof of settlement and never retried.
+fn close_file(file: File) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::{ffi::c_void, os::windows::io::IntoRawHandle};
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CloseHandle(handle: *mut c_void) -> i32;
+            fn GetLastError() -> u32;
+        }
+        let handle = file.into_raw_handle();
+        // SAFETY: this is the unique owned File handle, after all readers end.
+        // No File remains to close it again, including on native failure.
+        if unsafe { CloseHandle(handle) } == 0 {
+            let code = unsafe { GetLastError() };
+            Err(io::Error::from_raw_os_error(code as i32))
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        drop(file);
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(windows)]
+fn observe_closed_control(handle: std::os::windows::io::RawHandle) -> Result<()> {
+    use std::ffi::c_void;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetHandleInformation(handle: *mut c_void, flags: *mut u32) -> i32;
+        fn GetLastError() -> u32;
+    }
+    let mut flags = 0;
+    // SAFETY: observation only, immediately after the control's owned close;
+    // no intervening handle creation. It neither uses nor closes the old handle.
+    let found = unsafe { GetHandleInformation(handle, &mut flags) };
+    let error = if found == 0 {
+        unsafe { GetLastError() }
+    } else {
+        0
+    };
+    if found != 0 || error != 6 {
+        return Err("control did not observe an invalid closed handle".into());
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+pub struct Inputs {
+    pub source: Option<BufReader<File>>,
+    pub weights: Option<BufReader<File>>,
+    pub original: Option<BufReader<File>>,
+}
+
+impl Inputs {
+    pub fn prepare(
+        &mut self,
+        source: &Path,
+        source_bytes: u64,
+        weights: &Path,
+        weight_bytes: u64,
+        original: Option<(&Path, u64)>,
+    ) -> Result<()> {
+        self.source = Some(BufReader::with_capacity(
+            BUFFER_BYTES,
+            File::open(source).at("source.open")?,
+        ));
+        if self
+            .source
+            .as_ref()
+            .unwrap()
+            .get_ref()
+            .metadata()
+            .at("source.metadata")?
+            .len()
+            != source_bytes
+        {
+            return Err("incomplete source".into());
+        }
+        if let Some((path, bytes)) = original {
+            self.original = Some(BufReader::with_capacity(
+                BUFFER_BYTES,
+                File::open(path).at("original-features.open")?,
+            ));
+            if self
+                .original
+                .as_ref()
+                .unwrap()
+                .get_ref()
+                .metadata()
+                .at("original-features.metadata")?
+                .len()
+                != bytes
+            {
+                return Err("incomplete original features".into());
+            }
+        }
+        self.weights = Some(BufReader::with_capacity(
+            BUFFER_BYTES,
+            File::open(weights).at("weights.open")?,
+        ));
+        if self
+            .weights
+            .as_ref()
+            .unwrap()
+            .get_ref()
+            .metadata()
+            .at("weights.metadata")?
+            .len()
+            != weight_bytes
+        {
+            return Err("incomplete fixed-schema weights".into());
+        }
+        Ok(())
+    }
+
+    pub fn complete<T>(self, result: &mut Result<T>) {
+        for (reader, phase) in [
+            (self.source, "source.close"),
+            (self.weights, "weights.close"),
+            (self.original, "original-features.close"),
+        ] {
+            if let Some(reader) = reader {
+                retain_first(result, close_file(reader.into_inner()).at(phase));
+            }
+        }
+    }
+}
+
 /// Only explicit writes/flushes may reach the sink. Abandoning private output,
 /// including unwinding after a failure, discards buffered bytes without retrying.
 pub struct ExplicitBuffer<W: Write> {
@@ -93,12 +235,44 @@ impl<W: Write> ExplicitBuffer<W> {
         self.writer.as_mut().expect("buffer retained until drop")
     }
 
-    fn get_ref(&self) -> &W {
-        self.writer
-            .as_ref()
-            .expect("buffer retained until drop")
-            .get_ref()
+    fn into_sink(mut self) -> W {
+        let (sink, _pending) = self
+            .writer
+            .take()
+            .expect("buffer retained until completion")
+            .into_parts();
+        sink
     }
+}
+
+// A diagnostic sink seam, also used by deterministic sync/close failure controls.
+trait CompleteSink: Write {
+    fn sync(&mut self) -> io::Result<()>;
+    fn close(self) -> io::Result<()>;
+}
+
+impl CompleteSink for File {
+    fn sync(&mut self) -> io::Result<()> {
+        self.sync_all()
+    }
+
+    fn close(self) -> io::Result<()> {
+        close_file(self)
+    }
+}
+
+fn complete_buffer<W: CompleteSink>(mut writer: ExplicitBuffer<W>, successful: bool) -> Result<()> {
+    let mut result = Ok(());
+    if successful {
+        retain_first(&mut result, writer.flush().at("output.flush"));
+    }
+    // into_parts never flushes, including after a partial write or writer panic.
+    let mut sink = writer.into_sink();
+    if successful && result.is_ok() {
+        retain_first(&mut result, sink.sync().at("output.sync"));
+    }
+    retain_first(&mut result, sink.close().at("output.close"));
+    result
 }
 
 impl<W: Write> Write for ExplicitBuffer<W> {
@@ -143,12 +317,11 @@ impl Output {
         for value in values {
             self.writer.write_all(&value.to_le_bytes()).at(self.phase)?;
         }
-        self.finish()
+        Ok(())
     }
 
-    pub fn finish(&mut self) -> Result<()> {
-        self.writer.flush().at(self.phase)?;
-        self.writer.get_ref().sync_all().at(self.phase)
+    pub fn complete(self, successful: bool) -> Result<()> {
+        complete_buffer(self.writer, successful)
     }
 }
 
@@ -169,29 +342,83 @@ impl Outputs {
     /// invalidates ALL its empty/partial files; no cleanup or success is implied.
     pub fn prepare(directory: &Path, chunk: bool, original: bool) -> Result<Self> {
         std::fs::create_dir(directory).at("output.directory")?;
-        if chunk {
-            Ok(Self::Chunk(ChunkOutputs {
-                features: Output::prepare(directory, "features.f32", "output.features")?,
-                masks: Output::prepare(directory, "masks.f32", "output.masks")?,
-                prediction: Output::prepare(directory, "output.f32", "output.pcm")?,
-                original_masks: if original {
-                    Some(Output::prepare(
+        let mut staged: [Option<Output>; 4] = [None, None, None, None];
+        let result = (|| {
+            if chunk {
+                for (slot, name, phase) in [
+                    (0, "features.f32", "output.features"),
+                    (1, "masks.f32", "output.masks"),
+                    (2, "output.f32", "output.pcm"),
+                ] {
+                    staged[slot] = Some(Output::prepare(directory, name, phase)?);
+                }
+                if original {
+                    staged[3] = Some(Output::prepare(
                         directory,
                         "original_features_masks.f32",
                         "output.original-masks",
-                    )?)
-                } else {
-                    None
-                },
+                    )?);
+                }
+            } else {
+                staged[0] = Some(Output::prepare(directory, "output.f32", "output.pcm")?);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let mut failed = Err(error);
+            for output in staged.into_iter().flatten() {
+                retain_first(&mut failed, output.complete(false));
+            }
+            return failed;
+        }
+        if chunk {
+            Ok(Self::Chunk(ChunkOutputs {
+                features: staged[0].take().unwrap(),
+                masks: staged[1].take().unwrap(),
+                prediction: staged[2].take().unwrap(),
+                original_masks: staged[3].take(),
             }))
         } else {
-            Ok(Self::Track(Output::prepare(
-                directory,
-                "output.f32",
-                "output.pcm",
-            )?))
+            Ok(Self::Track(staged[0].take().unwrap()))
         }
     }
+
+    pub fn complete<T>(self, successful: bool, result: &mut Result<T>) {
+        match self {
+            Self::Chunk(outputs) => {
+                for output in [
+                    Some(outputs.features),
+                    Some(outputs.masks),
+                    Some(outputs.prediction),
+                    outputs.original_masks,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    retain_first(result, output.complete(successful));
+                }
+            }
+            Self::Track(output) => retain_first(result, output.complete(successful)),
+        }
+    }
+}
+
+/// Check both borrowed sinks without closing their runtime-owned handles.
+/// Diagnostic failure never replaces the original error or triggers recursion.
+pub fn report_terminal(
+    mut result: Result<()>,
+    status: &mut impl Write,
+    errors: &mut impl Write,
+) -> Result<()> {
+    retain_first(&mut result, status.flush().at("status.flush"));
+    if let Err(error) = &result {
+        let mut report = writeln!(errors, "{error}").at("error.write");
+        retain_first(&mut report, errors.flush().at("error.flush"));
+        // Both operations were checked once. Their failure cannot erase the
+        // original failure, and this path never reports its own report failure.
+        retain_first(&mut result, report);
+    }
+    result
 }
 
 /// Real retained-handle writes and a real read-only-handle failure, without a
@@ -201,48 +428,104 @@ pub fn control(
     workspace: &crate::workspace::WorkspaceAllocator,
     status: &mut impl Write,
 ) -> Result<()> {
-    let Outputs::Chunk(mut outputs) = Outputs::prepare(directory, true, true)? else {
-        return Err("invalid I/O control setup".into());
-    };
-    let read_only = File::open(directory.join("features.f32")).at("control.open")?;
-    let mut rejected = ExplicitBuffer::new(read_only);
-    workspace.seal(1 << 20)?;
-    let before = workspace.stats();
-    let values = [0.25f32, -0.5, 1.0, -0.0];
-    outputs.features.write_values(&values)?;
-    outputs.masks.write_values(&values)?;
-    outputs.prediction.write_values(&values)?;
-    outputs
-        .original_masks
-        .as_mut()
-        .ok_or("missing I/O control output")?
-        .write_values(&values)?;
-    let error = rejected
-        .write_all(&[1, 2, 3, 4])
-        .and_then(|()| rejected.flush())
-        .at("control.read-only")
-        .err()
-        .ok_or("read-only output unexpectedly succeeded")?;
-    // The same nonflushing owner as real outputs retains this prepared buffer
-    // and handle through the control report, then discards the rejected bytes.
-    if !matches!(
-        error,
-        Failure::Io {
-            os_error: Some(_),
-            ..
+    let mut prepared = Outputs::prepare(directory, true, true)?;
+    let mut inputs = Inputs::default();
+    let mut rejected = None;
+    let mut baseline = None;
+    let mut result = (|| {
+        let Outputs::Chunk(outputs) = &mut prepared else {
+            return Err("invalid I/O control setup".into());
+        };
+        // Tiny retained inputs only: these are initially empty control files,
+        // not weights/model data. All readers and buffers exist before seal.
+        inputs.prepare(
+            &directory.join("features.f32"),
+            0,
+            &directory.join("masks.f32"),
+            0,
+            Some((&directory.join("output.f32"), 0)),
+        )?;
+        rejected = Some(ExplicitBuffer::new(
+            File::open(directory.join("features.f32")).at("control.open")?,
+        ));
+        workspace.seal(1 << 20)?;
+        baseline = Some(workspace.stats());
+        let values = [0.25f32, -0.5, 1.0, -0.0];
+        outputs.features.write_values(&values)?;
+        outputs.masks.write_values(&values)?;
+        outputs.prediction.write_values(&values)?;
+        outputs
+            .original_masks
+            .as_mut()
+            .ok_or("missing I/O control output")?
+            .write_values(&values)?;
+        let rejected = rejected.as_mut().unwrap();
+        let error = rejected
+            .write_all(&[1, 2, 3, 4])
+            .and_then(|()| rejected.flush())
+            .at("control.read-only")
+            .err()
+            .ok_or("read-only output unexpectedly succeeded")?;
+        // The expected rejected bytes are abandoned, never retried during completion.
+        if !matches!(
+            error,
+            Failure::Io {
+                os_error: Some(_),
+                ..
+            }
+        ) {
+            return Err("read-only output lost its numeric OS error".into());
         }
-    ) {
-        return Err("read-only output lost its numeric OS error".into());
+        Ok(error)
+    })();
+    let successful = result.is_ok();
+    prepared.complete(successful, &mut result);
+    if let Some(reader) = &mut inputs.source {
+        let read_result = (|| {
+            if result.is_ok() {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut bytes = [0; 16];
+                reader.read_exact(&mut bytes).at("control.read")?;
+                for (raw, expected) in bytes.chunks_exact(4).zip([0.25f32, -0.5, 1.0, -0.0]) {
+                    if raw != expected.to_le_bytes() {
+                        return Err("retained I/O control bytes differ".into());
+                    }
+                }
+                reader.seek(SeekFrom::Start(0)).at("control.seek")?;
+                let mut too_long = [0; 17];
+                match reader.read_exact(&mut too_long) {
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {}
+                    _ => return Err("retained I/O control lost EOF".into()),
+                }
+            }
+            Ok(())
+        })();
+        retain_first(&mut result, read_result);
+    }
+    #[cfg(windows)]
+    let handle = inputs
+        .source
+        .as_ref()
+        .map(|reader| std::os::windows::io::AsRawHandle::as_raw_handle(reader.get_ref()));
+    inputs.complete(&mut result);
+    #[cfg(windows)]
+    if result.is_ok()
+        && let Some(handle) = handle
+    {
+        retain_first(&mut result, observe_closed_control(handle));
+    }
+    if let Some(rejected) = rejected {
+        retain_first(&mut result, complete_buffer(rejected, false));
+    }
+    let error = result?;
+    if Some(workspace.stats()) != baseline {
+        return Err("retained I/O allocated after seal".into());
     }
     writeln!(
         status,
-        "BS retained I/O control: outputs=4 writes=4 expected_error=({error})"
+        "BS retained I/O control: outputs=4 writes=4 closed=8 expected_error=({error})"
     )
     .at("status.write")?;
-    let after = workspace.stats();
-    if after != before {
-        return Err("retained I/O allocated after seal".into());
-    }
     Ok(())
 }
 

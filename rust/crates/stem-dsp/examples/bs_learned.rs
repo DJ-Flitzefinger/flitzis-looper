@@ -13,12 +13,33 @@ use flitzis_stem_dsp::{
     track::{TrackPlan, process_track},
 };
 use std::{
-    fs::File,
-    io::{BufReader, Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
     process::ExitCode,
 };
-use trial_io::{BUFFER_BYTES, IoPhase, Outputs, Result, core_io};
+use trial_io::{Inputs, IoPhase, Outputs, Result, core_io};
+
+enum TrialReport {
+    Chunk { frames: usize, allowance: usize },
+    Track { frames: usize, chunks: usize },
+}
+
+impl TrialReport {
+    fn write(self, status: &mut impl Write) -> Result<()> {
+        match self {
+            Self::Chunk { frames, allowance } => writeln!(
+                status,
+                "BS learned CPU chunk trial: frames={frames} weights={} learned_payload_allowance={allowance}",
+                weight_bytes(),
+            ),
+            Self::Track { frames, chunks } => writeln!(
+                status,
+                "BS learned CPU track trial: frames={frames} chunks={chunks}",
+            ),
+        }
+        .at("status.write")
+    }
+}
 
 fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>> {
     let requested_bytes = len
@@ -86,161 +107,173 @@ fn execute(status: &mut impl Write) -> Result<()> {
     } else {
         TrackPlan::new(frames, RATE)?;
     }
-    let mut source =
-        BufReader::with_capacity(BUFFER_BYTES, File::open(&args[3]).at("source.open")?);
-    if source.get_ref().metadata().at("source.metadata")?.len() != source_bytes as u64 {
-        return Err("incomplete source".into());
-    }
-    let mut original_features = if args.len() == 7 {
-        let file = File::open(&args[6]).at("original-features.open")?;
-        if file.metadata().at("original-features.metadata")?.len()
-            != Geometry::new(frames, RATE)?.feature_len() as u64 * 4
-        {
-            return Err("incomplete original features".into());
-        }
-        Some(BufReader::with_capacity(BUFFER_BYTES, file))
+    let original = if args.len() == 7 {
+        Some((
+            Path::new(&args[6]),
+            Geometry::new(frames, RATE)?.feature_len() as u64 * 4,
+        ))
     } else {
         None
     };
-    let mut weights =
-        BufReader::with_capacity(BUFFER_BYTES, File::open(&args[0]).at("weights.open")?);
-    if weights.get_ref().metadata().at("weights.metadata")?.len() != weight_bytes() as u64 {
-        return Err("incomplete fixed-schema weights".into());
-    }
-    // External ORIGINAL admission must precede this process. The caller chooses
-    // a source-backed extent, including allocation metadata/fragmentation; this
-    // executable never derives a process budget from free RAM or reduces one.
-    // Requiring it avoids accidentally running the old unbounded Rust heap path.
-    let capacity = std::env::var("FLITZIS_BS_WORKSPACE_BYTES")
-        .map_err(|_| "FLITZIS_BS_WORKSPACE_BYTES requires complete external original admission")?
-        .parse::<usize>()
-        .map_err(|_| "invalid FLITZIS_BS_WORKSPACE_BYTES")?;
-    workspace::WorkspaceAllocator::validate_extent(capacity)?;
-    // Paths, exclusive handles and buffered storage are prepared BEFORE seal.
-    // A later failure invalidates ALL new empty/partial private files. Nothing
-    // in the sealed phase opens/reopens an output or formats platform error text.
-    let mut outputs = Outputs::prepare(Path::new(&args[5]), mode == "chunk", args.len() == 7)?;
-    // Retain selected plans/windows before seal; their bootstrap/native backing
-    // still needs a complete process allowance. Working vectors use the arena.
-    let spectral_plan = SpectralPlan::new(
-        if mode == "chunk" {
-            frames
-        } else {
-            flitzis_stem_dsp::track::CHUNK
-        },
-        RATE,
-        &|| false,
-    )?;
-    WORKSPACE.seal(capacity)?;
-    let mut spectral_workspace = SpectralWorkspace::from_plan(spectral_plan, &|| false)?;
-    let model = Model::load(&mut weights, &expected, &|| false)?;
-    if let Outputs::Chunk(output) = &mut outputs {
-        let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
-        for _ in 0..frames * 2 {
-            let mut value = [0; 4];
-            source.read_exact(&mut value).at("source.read")?;
-            pcm.push(f32::from_le_bytes(value));
-        }
-        let spectral = spectral_workspace.analyze(&pcm, RATE, &|| false)?;
-        drop(pcm);
-        let geometry = spectral.geometry();
-        let masks = model.masks(spectral.features(), geometry.steps(), &|| false)?;
-        let prediction = spectral_workspace.reconstruct(&spectral, &masks, &|| false)?;
-        output.features.write_values(spectral.features())?;
-        output.masks.write_values(&masks)?;
-        output.prediction.write_values(&prediction)?;
-        // These private diagnostic buffers have no readers after the writes.
-        // Do not retain the whole first forward during the independent oracle-
-        // feature forward. A later failure still invalidates ALL private files.
-        drop(prediction);
-        drop(masks);
-        drop(spectral);
-        if let Some(reader) = &mut original_features {
-            let mut features = reserved(geometry.feature_len(), "learned-trial.original-features")?;
-            for _ in 0..geometry.feature_len() {
-                let mut raw = [0; 4];
-                reader.read_exact(&mut raw).at("original-features.read")?;
-                features.push(f32::from_le_bytes(raw));
-            }
-            let original_masks = model.masks(&features, geometry.steps(), &|| false)?;
-            output
-                .original_masks
-                .as_mut()
-                .ok_or("missing prepared original-feature output")?
-                .write_values(&original_masks)?;
-        }
-        writeln!(
-            status,
-            "BS learned CPU chunk trial: frames={frames} weights={} learned_payload_allowance={}",
-            weight_bytes(),
-            activation_bytes(geometry.steps())?
-        )
-        .at("status.write")?;
-    } else if let Outputs::Track(sink) = &mut outputs {
-        let plan = TrackPlan::new(frames, RATE)?;
-        let mut written = 0;
-        let mut source_error = None;
-        let mut sink_error = None;
-        let result = process_track(
-            plan,
-            |start, count, pcm| {
-                core_io(
-                    source.seek(SeekFrom::Start((start * 8) as u64)),
-                    "source.seek",
-                    &mut source_error,
-                    Error::Source,
-                )?;
-                for i in 0..count {
-                    for c in 0..2 {
-                        let mut raw = [0; 4];
-                        core_io(
-                            source.read_exact(&mut raw),
-                            "source.read",
-                            &mut source_error,
-                            Error::Source,
-                        )?;
-                        pcm[c * count + i] = f32::from_le_bytes(raw);
-                    }
-                }
-                Ok(count)
+    // All ordinary exits after the first open reach consuming completion. Inner
+    // numerical borrows and callback readers end before ownership is consumed.
+    let mut inputs = Inputs::default();
+    let mut outputs = None;
+    let mut result = (|| {
+        inputs.prepare(
+            Path::new(&args[3]),
+            source_bytes as u64,
+            Path::new(&args[0]),
+            weight_bytes() as u64,
+            original,
+        )?;
+        // External ORIGINAL admission must precede this process. The caller chooses
+        // a source-backed extent, including allocation metadata/fragmentation; this
+        // executable never derives a process budget from free RAM or reduces one.
+        // Requiring it avoids accidentally running the old unbounded Rust heap path.
+        let capacity = std::env::var("FLITZIS_BS_WORKSPACE_BYTES")
+            .map_err(
+                |_| "FLITZIS_BS_WORKSPACE_BYTES requires complete external original admission",
+            )?
+            .parse::<usize>()
+            .map_err(|_| "invalid FLITZIS_BS_WORKSPACE_BYTES")?;
+        workspace::WorkspaceAllocator::validate_extent(capacity)?;
+        // Paths, exclusive handles and buffered storage are prepared BEFORE seal.
+        // A later failure invalidates ALL new empty/partial private files. Nothing
+        // in the sealed phase opens/reopens an output or formats platform error text.
+        outputs = Some(Outputs::prepare(
+            Path::new(&args[5]),
+            mode == "chunk",
+            args.len() == 7,
+        )?);
+        // Retain selected plans/windows before seal; their bootstrap/native backing
+        // still needs a complete process allowance. Working vectors use the arena.
+        let spectral_plan = SpectralPlan::new(
+            if mode == "chunk" {
+                frames
+            } else {
+                flitzis_stem_dsp::track::CHUNK
             },
-            |input, batch| {
-                model.track_batch_with_workspace(input, batch, &mut spectral_workspace, &|| false)
-            },
-            |start, count, pcm| {
-                if start != written {
-                    return Err(Error::Output);
-                }
-                for i in 0..count {
-                    for lane in 0..8 {
-                        core_io(
-                            sink.writer.write_all(&pcm[lane * count + i].to_le_bytes()),
-                            "output.pcm.write",
-                            &mut sink_error,
-                            Error::Output,
-                        )?;
-                    }
-                }
-                written += count;
-                Ok(())
-            },
+            RATE,
             &|| false,
-        );
-        if let Err(error) = result {
-            return Err(source_error.or(sink_error).unwrap_or_else(|| error.into()));
+        )?;
+        WORKSPACE.seal(capacity)?;
+        let mut spectral_workspace = SpectralWorkspace::from_plan(spectral_plan, &|| false)?;
+        let model = Model::load(inputs.weights.as_mut().unwrap(), &expected, &|| false)?;
+        let source = inputs.source.as_mut().unwrap();
+        let outputs = outputs.as_mut().unwrap();
+        if let Outputs::Chunk(output) = outputs {
+            let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
+            for _ in 0..frames * 2 {
+                let mut value = [0; 4];
+                source.read_exact(&mut value).at("source.read")?;
+                pcm.push(f32::from_le_bytes(value));
+            }
+            let spectral = spectral_workspace.analyze(&pcm, RATE, &|| false)?;
+            drop(pcm);
+            let geometry = spectral.geometry();
+            let masks = model.masks(spectral.features(), geometry.steps(), &|| false)?;
+            let prediction = spectral_workspace.reconstruct(&spectral, &masks, &|| false)?;
+            output.features.write_values(spectral.features())?;
+            output.masks.write_values(&masks)?;
+            output.prediction.write_values(&prediction)?;
+            // These private diagnostic buffers have no readers after the writes.
+            // Do not retain the whole first forward during the independent oracle-
+            // feature forward. A later failure still invalidates ALL private files.
+            drop(prediction);
+            drop(masks);
+            drop(spectral);
+            if let Some(reader) = &mut inputs.original {
+                let mut features =
+                    reserved(geometry.feature_len(), "learned-trial.original-features")?;
+                for _ in 0..geometry.feature_len() {
+                    let mut raw = [0; 4];
+                    reader.read_exact(&mut raw).at("original-features.read")?;
+                    features.push(f32::from_le_bytes(raw));
+                }
+                let original_masks = model.masks(&features, geometry.steps(), &|| false)?;
+                output
+                    .original_masks
+                    .as_mut()
+                    .ok_or("missing prepared original-feature output")?
+                    .write_values(&original_masks)?;
+            }
+            Ok(TrialReport::Chunk {
+                frames,
+                allowance: activation_bytes(geometry.steps())?,
+            })
+        } else if let Outputs::Track(sink) = outputs {
+            let plan = TrackPlan::new(frames, RATE)?;
+            let mut written = 0;
+            let mut source_error = None;
+            let mut sink_error = None;
+            let result = process_track(
+                plan,
+                |start, count, pcm| {
+                    core_io(
+                        source.seek(SeekFrom::Start((start * 8) as u64)),
+                        "source.seek",
+                        &mut source_error,
+                        Error::Source,
+                    )?;
+                    for i in 0..count {
+                        for c in 0..2 {
+                            let mut raw = [0; 4];
+                            core_io(
+                                source.read_exact(&mut raw),
+                                "source.read",
+                                &mut source_error,
+                                Error::Source,
+                            )?;
+                            pcm[c * count + i] = f32::from_le_bytes(raw);
+                        }
+                    }
+                    Ok(count)
+                },
+                |input, batch| {
+                    model.track_batch_with_workspace(input, batch, &mut spectral_workspace, &|| {
+                        false
+                    })
+                },
+                |start, count, pcm| {
+                    if start != written {
+                        return Err(Error::Output);
+                    }
+                    for i in 0..count {
+                        for lane in 0..8 {
+                            core_io(
+                                sink.writer.write_all(&pcm[lane * count + i].to_le_bytes()),
+                                "output.pcm.write",
+                                &mut sink_error,
+                                Error::Output,
+                            )?;
+                        }
+                    }
+                    written += count;
+                    Ok(())
+                },
+                &|| false,
+            );
+            if let Err(error) = result {
+                return Err(source_error.or(sink_error).unwrap_or_else(|| error.into()));
+            }
+            if written != frames {
+                return Err("incomplete private track".into());
+            }
+            Ok(TrialReport::Track {
+                frames,
+                chunks: plan.chunks(),
+            })
+        } else {
+            unreachable!()
         }
-        if written != frames {
-            return Err("incomplete private track".into());
-        }
-        sink.finish()?;
-        writeln!(
-            status,
-            "BS learned CPU track trial: frames={frames} chunks={}",
-            plan.chunks()
-        )
-        .at("status.write")?;
+    })();
+    let successful = result.is_ok();
+    inputs.complete(&mut result);
+    if let Some(outputs) = outputs {
+        outputs.complete(successful, &mut result);
     }
-    Ok(())
+    result?.write(status)
 }
 
 fn workspace_control(status: &mut impl Write) -> Result<()> {
@@ -444,12 +477,14 @@ fn main() -> ExitCode {
     let stderr = std::io::stderr();
     let mut status = stdout.lock();
     let mut errors = stderr.lock();
-    let result = execute(&mut status).and_then(|()| status.flush().at("status.flush"));
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            let _ = writeln!(errors, "{error}");
-            ExitCode::FAILURE
-        }
+    let result = execute(&mut status);
+    let result = trial_io::report_terminal(result, &mut status, &mut errors);
+    // Release borrowed locks; runtime standard handles remain runtime-owned.
+    drop(status);
+    drop(errors);
+    if result.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
