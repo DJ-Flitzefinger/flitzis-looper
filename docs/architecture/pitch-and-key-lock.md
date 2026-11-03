@@ -510,3 +510,64 @@ without claiming independently reconstructed per-PAD stereo PCM.
 This synthetic cohort does not establish a 7–10-PAD device guarantee, whole matrix,
 latency, neural, quality or Human acceptance. Retained raw rows and observed memory
 samples do not establish a plateau or a finite Native/appwide resource bound.
+
+### Matched all-wet Key Lock render workload
+
+The ignored Windows diagnostic
+`ordinary_endpoint_reserve_tests::response_probe::multivoice_probe::matched_multivoice_key_lock_workload`
+compares four, five and six effective wet voices with a six-voice Key Lock OFF
+reference. It reuses six complete three-second 48 kHz stereo reference buffers
+across the cases. Public Native group captures retain original T, admitted E and
+actual common E. BPM Lock and MultiLoop are enabled; manual master 120/source
+100 BPM produces an observed rate of 1.2 with zero transposition. No stems are
+selected. Each case renders 768 paced 512-frame periods, including several full
+loop wraps. Every onset row is retained; the declared 8192-frame settling interval
+only scopes the sustained positive-PCM check and is not an onset or quality gate.
+
+Preallocated output is timed through the existing scheduled-render test entry,
+which calls the production render path. Drain time is measured separately;
+snapshots, pacing, assertions and serialization are outside these intervals.
+Thread-scoped test counters record actual Native shift calls and elapsed time,
+Rust adapter output shortages/resets and refused source reads. Per-voice rows
+retain actual rate/Native pitch/wet readiness, source and Native identity,
+generation, FIFO phase, exact playback trajectory, Native history where present
+and peaks. Missing Native history in the dry reference is not a history-growth
+witness. Native readiness is awaited only for the wet cases; skipped-wait timing
+in the dry case is not Native preparation latency.
+All four cases finish before their named checks are aggregated. Setup and source
+custody failures remain immediate.
+
+The 48 kHz/512-frame software budget is 10.667 ms. Native elapsed time includes
+possible host preemption; test instrumentation and stack activity initialization
+are included in render time. Aggregate sample steps are descriptive, without an
+independent discontinuity oracle. Rust FIFO counters do not expose Native internal
+fallback. One fixed-order reference workload at one ratio does not establish
+selected-stem, device, musical quality or Human acceptance.
+
+The application uses the default output device's rate and channel count and
+requests 512 frames; actual callback frames come from the supplied buffer. A
+practical crackle report therefore still requires the actual build, device
+format, effective wet ratios and stem selections to be bound to its workload.
+The productive target remains six PADs.
+
+Observed release reference run (2026-11-03), AMD Ryzen 9 9955HX3D, 768 active
+periods per case including onset. Render intervals in milliseconds:
+
+| Active voices | Key Lock | p50 | p99 | Observed maximum | Native shifts per period |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 4 | ON | 1.8818 | 2.7696 | 3.0071 | 4 |
+| 5 | ON | 2.2962 | 3.4053 | 3.5811 | 5 |
+| 6 | ON | 2.3642 | 3.4338 | 4.6970 | 6 |
+| 6 | OFF | 0.4189 | 0.8311 | 0.9153 | 0 |
+
+No measured render or drain-plus-render interval exceeded the 10.667 ms software
+budget. Rust adapter shortages/resets, refused source reads, clipping and exact
+trajectory errors were zero. Every wet voice had actual Native pitch 1/1.2;
+Native shift elapsed accounted for 85.3–86.0% of ON render wall time. The raw
+onset rows remain separate from sustained output checks.
+
+This reference workload showed no software deadline overrun or listed Rust
+adapter/source failure matching the reported four/five/six-voice boundary. The
+audible cause remains unbound. It provides no reason to change DSP quality or impose a PAD
+cap. Further diagnosis needs the actual App callback geometry, rates, effective
+wet state, stem/background state and build identity. The six-PAD target remains.

@@ -328,6 +328,8 @@ impl RubberBandLiveShifter {
     ) -> Result<(), RubberBandError> {
         self.prepare_channel_ptrs(input, output)?;
 
+        #[cfg(test)]
+        let observed_begin = super::native_render_observation::shift_begin();
         unsafe {
             rubberband_live_shift(
                 self.handle.as_ptr(),
@@ -335,6 +337,8 @@ impl RubberBandLiveShifter {
                 self.output_ptrs.as_ptr(),
             );
         }
+        #[cfg(test)]
+        super::native_render_observation::shift_end(observed_begin);
         Ok(())
     }
 

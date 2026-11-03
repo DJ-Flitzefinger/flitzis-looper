@@ -761,6 +761,8 @@ impl NativeAdapterState {
 
     /// Clears only fixed adapter storage. Source/native owners remain pinned until worker recycling.
     pub(crate) fn reset_adapter(&mut self) {
+        #[cfg(test)]
+        super::native_render_observation::reset();
         self.dirty |= self.used;
         self.input.iter_mut().for_each(|channel| channel.fill(0.0));
         self.output.iter_mut().for_each(|channel| channel.fill(0.0));
@@ -1254,6 +1256,8 @@ impl NativeAdapterState {
         }
         for (fifo, channel) in self.output_fifo.iter_mut().zip(output) {
             let read = fifo.pop_into(&mut channel[..frames]);
+            #[cfg(test)]
+            super::native_render_observation::shortfall(frames - read);
             channel[read..frames].fill(0.0);
         }
         Ok(())

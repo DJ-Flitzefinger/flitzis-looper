@@ -5985,6 +5985,8 @@ impl RtMixer {
                         chunk_frames,
                         key_lock,
                     );
+                    #[cfg(test)]
+                    super::native_render_observation::source_result(source_read.is_some());
                     if let Some(receipt) = source_read {
                         if let Some(cell) = ownership.callback_cell(voice.sample_id) {
                             voice.source_control_epoch.record(

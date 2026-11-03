@@ -191,6 +191,8 @@ mod processing_files;
 use prepared_source::next_epoch;
 pub use processing_files::SealedProcessingFiles;
 pub use project_assets::ProjectAssetLease;
+#[cfg(test)]
+mod native_render_observation;
 pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;

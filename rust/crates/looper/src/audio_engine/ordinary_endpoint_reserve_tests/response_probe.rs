@@ -7,6 +7,9 @@ use crate::messages::SampleBuffer;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+#[path = "multivoice_probe.rs"]
+mod multivoice_probe;
+
 #[derive(Clone, Copy, Debug)]
 struct GroupRenderSpan {
     first: u64,
