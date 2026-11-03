@@ -3,7 +3,7 @@
 use super::*;
 use crate::audio_engine::pad_start::CapturedPadStart;
 
-fn script_value(f: &Fixture, source: &str) -> bool {
+pub(super) fn script_value(f: &Fixture, source: &str) -> bool {
     Python::attach(|py| {
         let locals = PyDict::new(py);
         locals.set_item("probe", f.probe.bind(py)).unwrap();
@@ -26,7 +26,7 @@ impl Drop for ConversionSession {
     }
 }
 
-fn active(f: &mut Fixture, id: usize) -> bool {
+pub(super) fn active(f: &mut Fixture, id: usize) -> bool {
     f.state()
         .mixer
         .voices
@@ -34,7 +34,7 @@ fn active(f: &mut Fixture, id: usize) -> bool {
         .any(|v| v.is_playing_sample(id))
 }
 
-fn settle(f: &mut Fixture, ids: &[usize]) {
+pub(super) fn settle(f: &mut Fixture, ids: &[usize]) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         f.drain();
@@ -52,7 +52,7 @@ fn settle(f: &mut Fixture, ids: &[usize]) {
     }
 }
 
-fn start(f: &mut Fixture, id: usize, multi: bool) -> CapturedPadStart {
+pub(super) fn start(f: &mut Fixture, id: usize, multi: bool) -> CapturedPadStart {
     f.script(&format!(
         "try:\n    probe.transport.global_params.set_multi_loop(enabled={multi})\nexcept RuntimeError as error:\n    signature = probe.input_mapping._last_input_runtime_state_signature\n    cached = None if signature is None else [(i, None if row.binding is None else (row.binding.is_current(), row.binding.metadata())) for i, row in enumerate(signature[2]) if i < 3]\n    fresh = [(i, None if (binding := probe._audio.current_input_runtime_pad_binding(i)) is None else (binding.is_current(), binding.metadata())) for i in range(3)]\n    raise RuntimeError(str(error) + '; native=' + str(probe.input_mapping._last_input_runtime_state_error) + '; cached=' + repr(cached) + '; fresh=' + repr(fresh) + '; selected=' + repr(probe._audio.input_selected_projection()) + '; deferred=' + repr(probe.transport._pair_deferred_sample_ids)) from error\nprobe.transport.playback.trigger_pad({id})",
         multi = if multi { "True" } else { "False" }

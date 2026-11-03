@@ -1022,6 +1022,8 @@ fn admit_selected_material_incoming(
         slots: engine.cold_loading.clone(),
         loading: engine.loading_sample_ids.clone(),
     };
+    #[cfg(all(test, windows))]
+    let loader_observer = super::loader_overlap_observation::take();
     engine
         .cold_jobs
         .submit_analysis_cancellable(
@@ -1052,6 +1054,9 @@ fn admit_selected_material_incoming(
                 let _ = queued_events.send(event);
             },
             move || {
+                #[cfg(all(test, windows))]
+                let _observation =
+                    super::loader_overlap_observation::Scope::install(loader_observer);
                 let _guard = guard;
                 let events = work.events.clone();
                 run_worker_catching_panic_captured(panic_cleanup, &events, id, request_id, || {
@@ -1505,6 +1510,8 @@ impl ColdLoad {
             .map_err(|error| error.to_string())?;
         let mut progress = ProgressReporter::new(self.id, self.request_id, self.events.clone());
         let mut report = |update: SampleLoadProgress| {
+            #[cfg(all(test, windows))]
+            super::loader_overlap_observation::observe(self.id, self.request_id, update);
             let stage = match update.subtask {
                 SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
                 SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,
@@ -1676,6 +1683,8 @@ impl ColdLoad {
             .map_err(|error| error.to_string())?;
         let mut progress = ProgressReporter::new(self.id, self.request_id, self.events.clone());
         let mut report = |update: SampleLoadProgress| {
+            #[cfg(all(test, windows))]
+            super::loader_overlap_observation::observe(self.id, self.request_id, update);
             let stage = match update.subtask {
                 SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
                 SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,

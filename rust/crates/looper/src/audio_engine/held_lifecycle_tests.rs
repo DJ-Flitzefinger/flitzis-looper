@@ -35,6 +35,10 @@ mod arrangement_tests;
 #[path = "held_lifecycle_tests/controller_overlap.rs"]
 mod controller_overlap;
 
+#[cfg(windows)]
+#[path = "held_lifecycle_tests/loader_overlap.rs"]
+mod loader_overlap;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();

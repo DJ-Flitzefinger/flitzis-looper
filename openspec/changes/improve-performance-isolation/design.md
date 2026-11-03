@@ -7007,3 +7007,52 @@ pause/resume/Hold/seek, productive 2/4/6-PAD and at-most-ten synthetic stress,
 all original numerical/resource/platform/source/last-reader/realtime duties,
 device/hearing/quality and positive Human acceptance remain open. Existing group
 observations are reused within their original scope; no green matrix is replayed.
+
+
+### Actual Loader-worker CPU observation during playback
+
+The explicit Windows-only ignored diagnostic
+`held_lifecycle_tests::loader_overlap::actual_loader_cpu_during_active_playback`
+uses the real public Loader, cold-job admission, complete source publication and
+headless callback fixture. Two full three-second sources remain active while a
+stopped fourth PAD imports a complete sixty-second 44.1 kHz stereo source into
+the existing 48 kHz stereo output. That same incoming request explicitly selects
+manual ALL (start zero, absent end) through the public incoming-loop-intent API;
+the adopted Project settings and complete residency are checked. PAD 2 stays
+selected and stopped. The original
+Loader request, Native source acknowledgement and original-file digest are
+checked by the existing fixture. Full resident frame extents are checked, and every resident PCM scalar is hashed
+for the raw record. The playing sources' hashes and original allocations are
+compared with their initial values.
+Stereo/divisibility follow the unchanged verified output-format and residency
+contracts; the raw source tuples do not separately log channel/scalar counts.
+
+A test-only TLS observer transfers with exactly the admitted job and is restored
+when that worker scope ends, including unwind. Both ordinary and incoming cold
+PCM callbacks record producer progress before the existing 100 ms UI-event
+throttle. Actual Windows thread ID, creation time and `GetThreadTimes` CPU values
+are independent of UI receipt times. A common `Instant` epoch brackets both CPU
+queries conservatively. No producer gate, artificial work, sampler thread or
+realtime callback instrumentation is added.
+
+The original software sample recorded 4886 producer points and
+6 of 95 consecutive active playback periods containing
+a complete same-request, same-worker, same-stage advancing producer interval
+with an observed positive worker CPU-counter delta. Every playback step advanced
+512 frames. The maximum whole drain/allocation/render harness bracket was
+0.285100 ms, with 0
+brackets longer than the nominal 512/48000 interval. The maximum paced playback
+period was 49.152100 ms; 43
+periods exceeded nominal duration. Raw producer/period/identity/source rows are
+emitted before derived assertions. Engine shutdown joins the actual cold workers,
+their active/queued/admitted counts are all zero, and callback retirement is
+observed before source-directory destruction.
+
+This is one observed Loader-worker CPU-counter/progress sample within active,
+paced software playback periods. Counter-accounting granularity, ordinary
+reporting, observer overhead, I/O and cancellation checks are included. It does
+not isolate decoder/FFT CPU, prove CPU inside the short render call, establish a
+device deadline, exact uninterrupted voice phase, neural overlap, distribution,
+hearing, quality or Human acceptance. Existing conversion and controller/matrix
+proofs retain their original scope and samples. No production DSP/API behavior
+changes, whole-matrix completion or practical Torch replacement are claimed.
