@@ -1010,6 +1010,11 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Observe eight six-PAD groups as four actual Key Lock OFF/ON pairs for
+      slower 44.1/96 kHz and exactly one faster 48 kHz member, retaining own-E
+      landmarks, full source/adoption/capture guards and selected-PAD0-only
+      preparation; keep actual product routes, overlap, stress and acceptance open.
+
 - [x] Observe twelve six-PAD groups as six matched actual Key Lock OFF/ON pairs
       for BPM Lock OFF unity and smaller/irregular callback partitions; verify
       actual rates, source identity, bounded capture and each own-E landmark,

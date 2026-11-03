@@ -1091,3 +1091,33 @@ fn paced_bpm_and_partition_group_response() {
         }
     }
 }
+
+#[test]
+#[ignore = "missing rate-topology group controls; explicit software observation, not acceptance"]
+fn paced_slower_other_rate_and_single_faster_group_response() {
+    // Exact missing recipes; do not infer any unsampled rate/count/selection cell.
+    for (rate, ratio, rate_changed, warm) in [
+        (44_100, 0.8, 2, false),
+        (96_000, 0.8, 2, false),
+        (RATE, 1.16, 1, false),
+        (RATE, 1.16, 1, true),
+    ] {
+        let off = group_rate_case(6, warm, rate_changed, false, rate, ratio);
+        let on = group_rate_case(6, warm, rate_changed, true, rate, ratio);
+        assert_eq!(
+            off.rates, on.rates,
+            "paired actual source trajectories differ"
+        );
+        for id in 0..6 {
+            let difference = (
+                on.attacks[id].0.unwrap() - off.attacks[id].0.unwrap(),
+                on.attacks[id].1.unwrap() - off.attacks[id].1.unwrap(),
+                on.attacks[id].2.unwrap() - off.attacks[id].2.unwrap(),
+            );
+            eprintln!(
+                "response_group_coverage_matched rate={rate} ratio={ratio} rate_changed={rate_changed} warm={warm} id={id} off_from_E={:?} on_from_E={:?} on_minus_off_frames={difference:?}; paired actual source rate bits equal; selected PAD0 only, own-E landmarks, no fitted alignment/PCM equality/device/quality acceptance",
+                off.attacks[id], on.attacks[id]
+            );
+        }
+    }
+}

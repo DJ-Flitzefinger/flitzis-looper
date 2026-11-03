@@ -6888,3 +6888,51 @@ one-changed faster groups, other relevant counts/selected states, real backgroun
 inference/conversion/loading overlap, final productive 2/4/6 PADs and synthetic
 stress at most 10 remain open. Full source/OwnACK/last-reader/realtime, numerical,
 platform, device, hearing, quality and positive Human acceptance gates remain.
+
+
+## Slower other-rate and single-faster group controls
+
+The explicit `paced_slower_other_rate_and_single_faster_group_response` adds one
+new leaf with four matched actual Key Lock OFF/ON pairs: eight six-PAD groups
+and 48 individual PAD observations. It uses the existing group owner at BPM Lock
+ON, 512-frame partitions, mono resident PCM and the stated loop region. Cold
+44.1/96 kHz cases have two actual rate-0.8 members; 48 kHz cases have exactly one
+rate-1.16 member, cold or with only PAD0 selected. Selected OFF only selects;
+selected ON awaits that nonunity PAD's Native endpoint. Peers remain cold.
+
+| Rate / ratio / changed PADs / selected PAD0 | Common E, OFF / ON | PAD0 OFF first / significant / principal after own E | PAD0 ON first / significant / principal after own E | Additional principal displacement |
+| --- | --- | --- | --- | --- |
+| 44,100 / 0.8 / 2 / false | 512 / 1024 | 1 / 1 / 27 | 1084 / 2852 / 2980 | 2953 frames / 66.9615 ms |
+| 96,000 / 0.8 / 2 / false | 512 / 1536 | 1 / 2 / 59 | 1121 / 5009 / 5055 | 4996 frames / 52.0417 ms |
+| 48,000 / 1.16 / 1 / false | 512 / 1024 | 1 / 1 / 30 | 1093 / 2755 / 2867 | 2837 frames / 59.1042 ms |
+| 48,000 / 1.16 / 1 / true | 512 / 512 | 1 / 1 / 30 | 1093 / 2755 / 2867 | 2837 frames / 59.1042 ms |
+
+Every changed member's three landmarks and every unity peer's contribution are
+recorded individually; unity peers have zero additional OFF/ON displacement in
+these observations. The first functional sample completed in 5.78 seconds,
+with 464 instrumented render brackets, 0 observed per-span deadline
+overruns and a maximum harness render interval of 1.4148 ms. Raw frame/host
+spans retain all per-group callback percentiles, admission times and each own E.
+These are N1 software observations including drain/render/allocation/capture work.
+Callback percentiles are not onset percentiles or device guarantees; 30 ms remains
+advisory. Actual samples from any necessary same-artifact check are retained
+separately and add no distinct coverage.
+
+The existing helper is unchanged: complete three-second source address/extent,
+actual SourceACK adoption path, neutral pitch, adopted Lock, paired active source
+rate/target bits, immutable T and common applied admission remain checked.
+Preallocated same-render per-PAD contributions reconstruct the mono mix within
+absolute/relative 1e-6. Capture alone is not an independent FirstTap or OwnACK
+proof. No source trim, fitted alignment, dry replacement for an active wet path,
+cross-control PCM-quality oracle or production DSP change is introduced.
+
+The previous group, BPMOFF, partition and Piano observations retain their exact
+source-compatible N1 scope; no green timing replay is performed. These eight
+groups do not cover every sample-rate/count/selection combination. Actual public
+ordinary/exclusive/global start, Piano retrigger/live SET, pause/resume, Hold and
+seek routes need path-specific assessment. As the user guide states, there is no
+separate Normal/Intro/Tail/OneShot performer selector; internal source-read/seek
+domains must not be relabeled as measured product modes. Real background
+inference/conversion/loading overlap, final productive 2/4/6 PADs and at most ten
+synthetic stress PADs, full numerical/resource/platform/source/last-reader/realtime,
+device/hearing/quality and positive Human acceptance gates remain open.

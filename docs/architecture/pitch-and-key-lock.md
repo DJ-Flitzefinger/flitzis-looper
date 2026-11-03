@@ -248,8 +248,15 @@ or the cycle [128, 256, 64, 1024]. Cold and selected-PAD0 cases use actual Key L
 OFF/ON; BPMOFF asserts unity source rates and requires no neutral Native endpoint.
 Every actual span, bounded capture extent, source identity and own-E landmark is
 retained. See the [scoped partition observations](../../openspec/changes/improve-performance-isolation/design.md#bpm-authority-and-callback-partitions).
-Further modes, sample rates/counts/selected states, real background overlap,
-final stress, device, quality and Human acceptance remain open.
+The explicit `paced_slower_other_rate_and_single_faster_group_response` adds eight
+six-PAD controls: cold slower 0.8 groups at 44.1/96 kHz and exactly one faster
+1.16 member at 48 kHz, cold or selected-PAD0. Both actual Lock states retain the
+unchanged group helper, source/adoption/capture guards and each own-E landmark.
+See the [scoped rate-topology observations](../../openspec/changes/improve-performance-isolation/design.md#slower-other-rate-and-single-faster-group-controls).
+Actual ordinary/exclusive/global start, Piano retrigger/live SET, pause/Hold/seek,
+unobserved rate/count/selection combinations, real background overlap, final
+stress, device, quality and Human acceptance remain open. Internal source-read
+domains do not imply a separate Normal/Intro/Tail/OneShot performer selector.
 
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
