@@ -163,10 +163,7 @@ enum ScalarKind {
     OptionalFloat,
 }
 
-const SCALARS: [(usize, &str, ScalarKind); 41] = [
-    (3, "callback_observed_at_ns", ScalarKind::Integer),
-    (4, "output_frame", ScalarKind::Integer),
-    (5, "callback_frames", ScalarKind::Integer),
+const SCALARS: [(usize, &str, ScalarKind); 38] = [
     (7, "sample_count", ScalarKind::Integer),
     (8, "channels", ScalarKind::Integer),
     (9, "source_generation", ScalarKind::Integer),
@@ -228,8 +225,10 @@ pub(super) fn metadata(
     let binding = input_runtime_binding::capture(engine, id)?;
     let now = engine.input_clock.capture_ns();
     let snapshot_age = now.checked_sub(snapshot.0[3]);
+    // The callback envelope also exists without an accepted source/sample rate.
+    let output_rate = u64::from(engine.output_sample_rate()?);
     let freshness_ns =
-        (snapshot.0[5].saturating_mul(4_000_000_000) / snapshot.0[14].max(1)).max(100_000_000);
+        (snapshot.0[5].saturating_mul(4_000_000_000) / output_rate.max(1)).max(100_000_000);
     let fresh = snapshot_age.is_some_and(|age| age <= freshness_ns);
     let current = fresh
         && binding
@@ -243,6 +242,11 @@ pub(super) fn metadata(
     dict.set_item("snapshot_age_ns", snapshot_age)?;
     dict.set_item("status", if current { "available" } else { "unavailable" })?;
     dict.set_item("boundary", "next-output-frame-after-callback")?;
+    dict.set_item("callback_observed_at_ns", snapshot.0[3])?;
+    dict.set_item("output_frame", snapshot.0[4])?;
+    dict.set_item("callback_frames", snapshot.0[5])?;
+    dict.set_item("callback_sample_rate_hz", output_rate)?;
+    dict.set_item("timestamp_boundary", "callback-start-before-render")?;
     dict.set_item(
         "reason",
         match snapshot.0[0] {

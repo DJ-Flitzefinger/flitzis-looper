@@ -16,6 +16,7 @@ This guide describes the current constant-BPM application. Start with
 - [First session](#first-session)
 - [Screen and fresh defaults](#screen-and-fresh-defaults)
 - [Audio output and startup](#audio-output-and-startup)
+- [Capturing an audio workload report](#capturing-an-audio-workload-report)
 - [Banks, loading and PAD gestures](#banks-loading-and-pad-gestures)
 - [Transport, MultiLoop and quantization](#transport-multiloop-and-quantization)
 - [Tempo and BPM Lock](#tempo-and-bpm-lock)
@@ -829,3 +830,20 @@ For current implementation detail, follow the [documentation map](README.md).
 Historical reports preserve their original failures, UNKNOWN outcomes and open
 acceptance gates; they are not additional performer controls or an automatic
 feature queue.
+
+## Capturing an audio workload report
+
+While a playback issue occurs, open Settings and choose **Capture audio workload**.
+After capture, use **Copy workload report** to share the report. Capture observes
+the existing stream and PADs one after another for at most five seconds. Playback
+continues; **Cancel capture** keeps a partial report. A new capture replaces it.
+
+The report includes the audio endpoint name, actual stream rate/channels, requested
+buffer size and observed callback frames when available. It also distinguishes
+control choices from source-confirmed effective Key Lock, rates and stem selection.
+Manual timing, multiple voices, stale sources or unanswered requests can leave
+effective values unavailable. Requested 512 frames does not guarantee an actual
+512-frame callback. These serial observations do not measure CPU load, render
+duration, sound quality or the cause of an audible issue. The extension file hash
+identifies that file; complete Python/build provenance and external background
+load remain unknown. Source paths and project contents are omitted.

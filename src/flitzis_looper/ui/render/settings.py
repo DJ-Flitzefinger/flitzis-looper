@@ -62,6 +62,8 @@ def settings_overlay(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (SPACING, SPACING)):
         imgui.text_unformatted("Settings")
         imgui.separator()
+        _audio_workload_controls(ctx)
+        imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Input Mapping")
         _input_mapping_controls(ctx)
         imgui.separator()
@@ -83,6 +85,26 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Resident Audio RAM")
         _resident_pcm_controls(ctx)
+
+
+def _audio_workload_controls(ctx: UiContext) -> None:
+    capture = ctx.ui.settings.audio_workload
+    imgui.text_colored(TEXT_MUTED_RGBA, "Audio workload report")
+    if capture.active:
+        if imgui.button("Cancel capture"):
+            capture.cancel()
+    elif imgui.button("Capture audio workload"):
+        capture.start()
+    report = capture.report_text
+    if report is not None and imgui.button("Copy workload report"):
+        imgui.set_clipboard_text(report)
+    imgui.text_wrapped(capture.summary)
+    imgui.text_wrapped(
+        "Capture while the issue occurs, then copy the report to share it. "
+        "PAD observations are taken one after another over at most five seconds. "
+        "Playback continues. The report includes the audio endpoint name; "
+        "unavailable values remain unknown."
+    )
 
 
 def _recording_choice(

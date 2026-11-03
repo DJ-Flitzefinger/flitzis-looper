@@ -9,6 +9,7 @@ from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.control_diagnostics import ConsoleDiagnostics, poll_control_diagnostics
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
+from flitzis_looper.controller.audio_workload import AudioWorkloadCapture
 from flitzis_looper.controller.bank_arrangement import BankArrangementController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
@@ -90,9 +91,7 @@ class AppController:
         self._shutdown_complete = False
         self._gui_native_selection: tuple[int, int] | None = None
         self._pair_waveform_views: list[WaveformEditorActions] = []
-        self._init_audio_feedback()
-
-        self._audio = AudioEngine()
+        self._init_audio_runtime()
         self._apply_startup_resident_admission()
         if not self._audio.set_key_lock_start_behavior(self._project.key_lock_start_behavior):
             message = "Key Lock start behavior could not be restored before audio startup"
@@ -186,6 +185,13 @@ class AppController:
 
         self._restore_initial_runtime_state()
         self._discover_recordings()
+
+    def _init_audio_runtime(self) -> None:
+        self._init_audio_feedback()
+        self._audio: AudioEngine = AudioEngine()
+        self.audio_workload: AudioWorkloadCapture = AudioWorkloadCapture(
+            self._project, self._session, self._audio
+        )
 
     def _init_audio_feedback(self) -> None:
         self._pending_content_feedback: deque[AudioMessage] = deque()
@@ -425,6 +431,7 @@ class AppController:
         self, *, holds_polled: bool = False, deletion_polled: bool = False
     ) -> bool:
         """Settle recording and arrangement while their callback ownership remains alive."""
+        self.audio_workload.cancel("application closing")
         if self._shutdown_complete:
             return True
         if self._shutdown_preparing:
@@ -528,6 +535,7 @@ class AppController:
         self.arrangement.poll()
         self._sync_arrangement_observers()
 
+        self.audio_workload.poll()
         poll_control_diagnostics(self)
 
     def _sync_arrangement_observers(self) -> None:

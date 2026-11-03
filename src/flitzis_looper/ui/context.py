@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.audio_workload import AudioWorkloadCapture
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PendingConfirmation
@@ -1636,6 +1637,11 @@ class SettingsActions:
 
     def toggle(self) -> None:
         self._controller.session.settings_open = not self._controller.session.settings_open
+
+    @property
+    def audio_workload(self) -> AudioWorkloadCapture:
+        """Expose the existing finite capture owner without polling while rendering."""
+        return self._controller.audio_workload
 
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)

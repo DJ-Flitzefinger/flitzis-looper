@@ -538,6 +538,19 @@ def test_controller_registers_controllers(controller: AppController) -> None:
     assert len(controller._controllers) == 5
 
 
+def test_workload_uses_runtime_tick_and_stops_before_shutdown(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.poll_loader_events.return_value = None
+    audio_engine_mock.receive_msg.return_value = None
+    with patch.object(controller.audio_workload, "poll") as poll:
+        controller.poll_runtime_events()
+        poll.assert_called_once_with()
+    with patch.object(controller.audio_workload, "cancel") as cancel:
+        controller.prepare_shutdown()
+        cancel.assert_called_once_with("application closing")
+
+
 def test_controller_poll_runtime_events_dispatches_audio_messages(
     controller: AppController,
     audio_engine_mock: Mock,

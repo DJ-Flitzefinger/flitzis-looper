@@ -77,6 +77,104 @@ fn assert_status(engine: &AudioEngine, request: u64, available: bool) {
 }
 
 #[test]
+fn callback_envelope_survives_unavailable_manual_ambiguous_and_absent_voices() {
+    let (engine, mut mixer) = fixture();
+    // Each case goes through the actual bounded mixer observation, not a fabricated map.
+    for state in 0..3 {
+        if state == 0 {
+            mixer
+                .voices
+                .iter_mut()
+                .find(|voice| voice.active)
+                .unwrap()
+                .source_timing
+                .accepted = None;
+        } else if state == 1 {
+            let active = mixer.voices.iter().find(|voice| voice.active).unwrap();
+            let config = crate::audio_engine::voice_slot::VoiceStartConfig {
+                sample_id: 0,
+                sample: active.sample.clone().unwrap(),
+                initial_frame_pos: 0,
+                volume: 1.0,
+                initial_tempo_ratio: 0.73,
+                start_output_frame: Some(512),
+                source_timing: active.source_timing,
+                source_admission: None,
+            };
+            mixer.voices[1].start_rt(config, &mut ImmediateAudioBufferRetirement);
+        } else {
+            for voice in &mut mixer.voices {
+                voice.active = false;
+            }
+        }
+        let request = engine.loop_acceptance.request(0).unwrap();
+        engine
+            .loop_acceptance
+            .observe(&mixer, engine.input_clock.capture_ns(), 640, 128);
+        assert_status(&engine, request, false);
+        Python::attach(|py| {
+            let response = loop_acceptance::metadata(&engine, py, 0, request)
+                .unwrap()
+                .unwrap();
+            let dict = response.bind(py).cast::<PyDict>().unwrap();
+            let get = |key| dict.get_item(key).unwrap().unwrap();
+            assert_eq!(get("callback_frames").extract::<u64>().unwrap(), 128);
+            assert_eq!(get("output_frame").extract::<u64>().unwrap(), 640);
+            assert_eq!(
+                get("callback_sample_rate_hz").extract::<u64>().unwrap(),
+                48_000
+            );
+            assert!(get("fresh").extract::<bool>().unwrap());
+            for key in [
+                "applied_source_rate",
+                "native_pitch_scale",
+                "stem_enabled_mask",
+            ] {
+                assert!(dict.get_item(key).unwrap().is_none());
+            }
+            assert!(get("current_binding").is_none());
+        });
+    }
+}
+
+#[test]
+fn callback_envelope_without_accepted_rate_expires_using_output_stream_rate() {
+    let (engine, mut mixer) = fixture();
+    mixer
+        .voices
+        .iter_mut()
+        .find(|voice| voice.active)
+        .unwrap()
+        .source_timing
+        .accepted = None;
+    let request = observe(&engine, &mixer);
+    std::thread::sleep(std::time::Duration::from_millis(125));
+    Python::attach(|py| {
+        let response = loop_acceptance::metadata(&engine, py, 0, request)
+            .unwrap()
+            .unwrap();
+        let dict = response.bind(py).cast::<PyDict>().unwrap();
+        assert!(
+            !dict
+                .get_item("fresh")
+                .unwrap()
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+        assert!(
+            !dict
+                .get_item("current_acknowledged")
+                .unwrap()
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+        );
+        assert!(dict.get_item("native_pitch_scale").unwrap().is_none());
+    });
+}
+
+#[test]
 fn effective_fractional_voice_snapshot_preserves_progression_and_full_current_ack() {
     let (engine, mixer) = fixture();
     let before = mixer
