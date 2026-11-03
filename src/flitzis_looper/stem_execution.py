@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from flitzis_looper.stem_execution_protocol import ExecutionReceipt, execution_fields
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -36,6 +38,13 @@ class StemExecution(BaseModel):
             message = "CUDA memory observation requires completed CUDA inference"
             raise ValueError(message)
         return self
+
+
+def public_execution(receipt: ExecutionReceipt | StemExecution | None) -> StemExecution | None:
+    """Convert at public diagnostic boundaries, outside producer policy."""
+    if receipt is None or isinstance(receipt, StemExecution):
+        return receipt
+    return StemExecution.model_validate(execution_fields(receipt))
 
 
 def completed_execution_line(
@@ -103,9 +112,9 @@ class StemExecutionProgress:
     def __call__(self, percent: float, stage: str) -> None:
         self._report(percent, stage, self._execution)
 
-    def execution(self, receipt: StemExecution) -> None:
-        self._execution = receipt
-        self._report(None, None, receipt)
+    def execution(self, receipt: ExecutionReceipt | StemExecution) -> None:
+        self._execution = public_execution(receipt)
+        self._report(None, None, self._execution)
 
 
 def device_label(receipt: StemExecution | None) -> str:

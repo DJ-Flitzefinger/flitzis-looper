@@ -35,7 +35,7 @@ from flitzis_looper.controller.stem_provider import (
     StemProviderSelector,
 )
 from flitzis_looper.inference_provider import is_cuda_failure
-from flitzis_looper.stem_execution import completed_execution, report_execution
+from flitzis_looper.stem_execution_protocol import completed_execution, report_execution
 
 __all__ = ["BsRoformerStemGenerationBackend", "verify_model_assets"]
 

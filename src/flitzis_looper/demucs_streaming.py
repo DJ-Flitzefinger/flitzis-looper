@@ -44,7 +44,7 @@ from flitzis_looper.stem_cancellation import (
     tool_environment,
     wait_cancellable,
 )
-from flitzis_looper.stem_execution import completed_execution_line
+from flitzis_looper.stem_execution_protocol import completed_execution_line
 
 if TYPE_CHECKING:
     from argparse import Namespace

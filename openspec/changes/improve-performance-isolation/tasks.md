@@ -158,10 +158,13 @@ evidence. This scoped completion does not mark the overall regression matrix gre
 - [x] Check cross-rate/channel/block byte parity, corruption and injected failures;
       measure throughput and concurrent control progress without model inference.
 
-Complete inference-host attestation remains UNKNOWN at the existing unsupported
-Pydantic execution validator, reproduced on the unchanged parent. The converter's
-positive component/subset evidence does not close that mandatory FINAL19 gate or
-the previously retained 32 Rust failures, watchdog and registry uncertainty.
+The historical complete inference-host attestation failed at the unsupported
+Pydantic execution validator, reproduced on its unchanged parent. The actual
+producer receipt path now uses a guarded source-owned internal codec while the
+public Pydantic facade remains diagnostic and separately unsupported. Every host
+role still needs its own positive proof. This redesign and the converter's positive
+component/subset evidence do not close mandatory FINAL19 whole-producer/runtime
+gates or the retained 32 Rust failures, watchdog and registry uncertainty.
 
 ## 16. Background CPU and process resource policy
 

@@ -15,10 +15,10 @@ from threading import Lock
 from typing import TYPE_CHECKING, Literal
 
 from flitzis_looper.controller.stem_identity import request_fingerprint
+from flitzis_looper.stem_execution_protocol import ExecutionReceipt
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
-    from flitzis_looper.stem_execution import StemExecution
 
 type Device = Literal["cpu", "cuda"]
 _MAX_KEYS = 32
@@ -148,7 +148,7 @@ class StemProviderSelector:
     def observe(
         self,
         plan: ProviderPlan,
-        execution: StemExecution | None,
+        execution: ExecutionReceipt | None,
         seconds: float,
         *,
         verified: bool,
@@ -156,7 +156,12 @@ class StemProviderSelector:
         observed_at: float | None = None,
     ) -> None:
         """Train only complete verified successful artifacts, never a fallback cost."""
-        if plan.key is None or execution is None or not verified or execution.cpu_fallback:
+        if (
+            plan.key is None
+            or not isinstance(execution, ExecutionReceipt)
+            or not verified
+            or execution.cpu_fallback
+        ):
             return
         if execution.device not in plan.devices or not math.isfinite(seconds) or seconds <= 0:
             return
@@ -178,7 +183,7 @@ class StemProviderSelector:
     def accept(
         self,
         calibration: ProviderCalibration,
-        execution: StemExecution | None,
+        execution: ExecutionReceipt | None,
         *,
         now: float | None = None,
     ) -> None:

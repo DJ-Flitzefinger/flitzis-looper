@@ -82,7 +82,7 @@ def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         package / "analysis" / "linux_process.py",
         package / "analysis" / "contracts.py",
         package / "stem_cancellation.py",
-        package / "stem_execution.py",
+        package / "stem_execution_protocol.py",
         package / "offline_runtime.py",
         package / "system_resources.py",
         package / "controller" / "stem_resources.py",

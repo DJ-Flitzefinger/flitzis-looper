@@ -29,7 +29,7 @@ from flitzis_looper.stem_cancellation import (
     StemInferenceCancelledError,
     emit_cancellation_ack,
 )
-from flitzis_looper.stem_execution import completed_execution_line
+from flitzis_looper.stem_execution_protocol import completed_execution_line
 
 
 def main() -> None:

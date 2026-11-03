@@ -76,10 +76,13 @@ def test_unsupported_full_inference_host_is_not_relabelled_known_by_converter(
     # A native converter identity cannot certify the remaining inference host.
     paths = stem_provenance._host_processing_paths(replace(_request(), separator=separator))
     held = native.SealedProcessingFiles([str(path) for path in paths])
-    manifests = {path.resolve(): processing_code._manifest(path) for path in paths}
     origin = Path(execution.__file__).resolve()
+    manifests = {path.resolve(): processing_code._manifest(path) for path in (*paths, origin)}
     with pytest.raises(ValueError, match="unsupported decorator policy"):
         processing_code._check_namespace(vars(execution), manifests[origin], manifests)
+    # The retained public facade is still unsupported. The new internal producer
+    # closure is tested independently and must never attest this compiled plan.
+    assert origin not in paths
     assert loaded_code_identity(paths) is None
     held.verify()
 

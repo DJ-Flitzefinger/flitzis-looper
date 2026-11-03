@@ -47,9 +47,9 @@ from flitzis_looper.encoder_provenance import (
 from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
 from flitzis_looper.models import STEM_KINDS, StemSeparator
 from flitzis_looper.offline_runtime import child_environment
-from flitzis_looper.stem_execution import (
+from flitzis_looper.stem_execution_protocol import (
     STEM_EXECUTION_RESULT,
-    StemExecution,
+    ExecutionReceipt,
     completed_execution,
     report_execution,
 )
@@ -122,7 +122,7 @@ class StemGenerationResult:
     diagnostic: str | None = None
     encoder_verified: bool = False
     decoder_verified: bool = False
-    execution: StemExecution | None = None
+    execution: ExecutionReceipt | None = None
     provider_calibration: ProviderCalibration | None = None
 
 

@@ -151,16 +151,27 @@ bounded block and before writes; native work returns before worker custody ends.
 The validated native component identity binds the loaded converter's embedded
 numeric/bridge/Cargo sources, lock and platform/profile. A supported complete v3
 producer proof additionally composes this component with every guarded Python
-role. Currently both complete inference-host manifests remain fail-closed UNKNOWN
-at the unchanged unsupported Pydantic execution validator, also reproduced on
-the parent; this port does not promote component proof to full producer proof.
-Narrow validator/schema/dependency attestation remains a final regression gate.
+role. Producer completion encoding, parsing and passive calibration now use the
+strict frozen source-owned `ExecutionReceipt` in `stem_execution_protocol.py`.
+Both actual child emitters import that codec directly. The public Pydantic
+`StemExecution` stays at control-event, session and cache-history boundaries;
+those converted diagnostics never feed producer identity or calibration.
+The V1 wire fields, LF framing, strict bounds and independent final publication
+and reader guards remain unchanged. Every actual host role, including the codec,
+must pass before the host source identity becomes known; missing or altered roles
+remain UNKNOWN. Public Pydantic compiled plans retain their separate unsupported
+attestation limits, without schema/reduction/repr shortcuts.
+Both current complete host manifests still return UNKNOWN: retained resource
+declarations require further source proof, and the Demucs selector also references
+a backend class outside its current host role set. These are observed remaining
+gaps, not an exhaustive whole-runtime diagnosis. Codec component proof does not
+remove those roles or establish complete producer identity.
 Supported plain dataclass components additionally compare their actual generated
 constructor bodies, exact defaults and frozen captures against stdlib references
 from held declarations, including required post-init calls. Checking this evidence
 does not execute host constructors or hooks. Other generated methods, metaclasses,
 `__new__` and complete Pydantic compiled-plan evidence retain their separate limits;
-constructor evidence does not promote either complete host manifest to known.
+constructor evidence alone does not promote a complete producer to known.
 Ordinary function and method defaults, keyword defaults and measured constants
 retain exact builtin types recursively, including dictionary keys and slice
 members. Equal values such as `True` and `1` cannot substitute for one another;

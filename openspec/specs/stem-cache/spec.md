@@ -430,6 +430,12 @@ without a completed execution receipt SHALL display `Device unknown`.
 Owned separator children MAY emit one bounded completed-device receipt after
 successful inference. The host SHALL check its backend, model and explicit device;
 missing, duplicated, malformed or mismatched receipts SHALL remain unknown.
+Producer encoding, decoding and passive cost observations SHALL use the same
+strict source-owned internal receipt codec. Public execution models SHALL remain
+diagnostic values at control, session and history boundaries. Converted diagnostics
+SHALL NOT establish producer identity or promote passive calibration. Source
+identity SHALL include the actual internal codec and every other executed host
+role; unsupported or altered roles SHALL remain unknown.
 Encoder and BS-input execution witnesses SHALL remain independently preserved and
 validated. Existing two-argument progress callbacks SHALL remain compatible.
 

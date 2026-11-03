@@ -34,7 +34,7 @@ from flitzis_looper.inference_provider import (
     emit_cuda_failure,
     is_cuda_failure,
 )
-from flitzis_looper.stem_execution import StemExecution
+from flitzis_looper.stem_execution_protocol import ExecutionReceipt
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.controller.test_pair_stem_observers import _job, _resolve_identity, _rig
 from tests.flitzis_looper.controller.test_stem_generation import (
@@ -55,13 +55,13 @@ from tests.flitzis_looper.controller.test_stem_separators import (
 CAPABILITY = CudaCapability(available=True, identity="3" * 64, free_bytes=8 * 1024**3)
 
 
-def _execution(device: str) -> StemExecution:
-    return StemExecution.model_validate({
-        "backend": "demucs",
-        "model_name": "htdemucs",
-        "device": device,
-        "cuda_peak_bytes": 1024**3 if device == "cuda" else None,
-    })
+def _execution(device: str) -> ExecutionReceipt:
+    return ExecutionReceipt(
+        backend="demucs",
+        model_name="htdemucs",
+        device=device,
+        cuda_peak_bytes=1024**3 if device == "cuda" else None,
+    )
 
 
 def test_passive_total_cost_changes_only_comparable_workload_and_retains_explicit_cpu() -> None:
@@ -97,7 +97,7 @@ def test_unknown_producer_failed_unverified_or_fallback_run_never_teaches_prefer
     for receipt, seconds, verified in (
         (None, 1, True),
         (_execution("cpu"), 1, False),
-        (_execution("cpu").model_copy(update={"cpu_fallback": True}), 1, True),
+        (replace(_execution("cpu"), cpu_fallback=True), 1, True),
         (_execution("cpu"), float("nan"), True),
         (_execution("cpu"), -1, True),
     ):

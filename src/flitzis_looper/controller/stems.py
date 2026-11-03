@@ -108,7 +108,8 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
-from flitzis_looper.stem_execution import StemExecution, StemExecutionProgress
+from flitzis_looper.stem_execution import StemExecution, public_execution
+from flitzis_looper.stem_execution_protocol import ExecutionProgress, ExecutionReceipt
 from flitzis_looper.stem_intent import transition_stem_intent
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
@@ -3842,7 +3843,9 @@ class StemController(BaseController):  # noqa: PLR0904
             result = delivery.event.result if delivery is not None else None
             # New production overwrites optional history even when its execution
             # is unknown. Reuse takes its existing immutable entry elsewhere.
-            entry = entry.model_copy(update={"execution": result.execution if result else None})
+            entry = entry.model_copy(
+                update={"execution": public_execution(result.execution) if result else None}
+            )
             if job is not None:
                 entry = entry.model_copy(
                     update={
@@ -5024,7 +5027,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return
 
         def report_progress(
-            percent: float | None, stage: str | None, execution: StemExecution | None
+            percent: float | None, stage: str | None, execution: ExecutionReceipt | None
         ) -> None:
             self._put_generation_event(
                 _StemBackendEvent(
@@ -5036,7 +5039,7 @@ class StemController(BaseController):  # noqa: PLR0904
                     percent=percent,
                     stage=stage,
                     source_path=request.source_path,
-                    execution=execution,
+                    execution=public_execution(execution),
                 )
             )
 
@@ -5063,9 +5066,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 resources=self._stem_resources,
                 playback=job.playback_blocked,
             ):
-                result = self._stem_backend.generate(
-                    request, StemExecutionProgress(report_progress)
-                )
+                result = self._stem_backend.generate(request, ExecutionProgress(report_progress))
             self._verified_original_extent(request, source_lease)
             self._verify_generation_provenance(job, request, processing, result)
             event = _StemBackendEvent(
@@ -5234,8 +5235,9 @@ class StemController(BaseController):  # noqa: PLR0904
     ) -> None:
         if result is None:
             return
-        if result.execution is not None:
-            self._session.stem_generation_execution[sample_id] = result.execution
+        execution = public_execution(result.execution)
+        if execution is not None:
+            self._session.stem_generation_execution[sample_id] = execution
         else:
             self._session.stem_generation_execution.pop(sample_id, None)
         if result.diagnostic:
