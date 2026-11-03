@@ -7,6 +7,72 @@ use crate::messages::SampleBuffer;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug)]
+struct GroupRenderSpan {
+    first: u64,
+    end: u64,
+    begin_ns: u128,
+    end_ns: u128,
+}
+
+fn group_render(
+    fixture: &mut Fixture,
+    frames: usize,
+    epoch: Instant,
+    spans: &mut Vec<GroupRenderSpan>,
+) -> Vec<f32> {
+    let first = fixture.transport.output_frame();
+    let begin_ns = epoch.elapsed().as_nanos();
+    fixture.drain();
+    let output = fixture.render(frames);
+    let end_ns = epoch.elapsed().as_nanos();
+    spans.push(GroupRenderSpan {
+        first,
+        end: fixture.transport.output_frame(),
+        begin_ns,
+        end_ns,
+    });
+    output
+}
+
+fn group_host_span(spans: &[GroupRenderSpan], frame: u64) -> Option<(u128, u128)> {
+    spans
+        .iter()
+        .find(|span| span.first <= frame && frame < span.end)
+        .map(|span| (span.begin_ns, span.end_ns))
+}
+
+fn nearest_rank(sorted: &[u128], percentile: usize) -> u128 {
+    assert!(!sorted.is_empty() && (1..=100).contains(&percentile));
+    sorted[(sorted.len() * percentile).div_ceil(100) - 1]
+}
+
+#[test]
+fn group_timing_uses_half_open_callback_spans_and_callback_percentiles() {
+    let spans = [
+        GroupRenderSpan {
+            first: 100,
+            end: 612,
+            begin_ns: 20,
+            end_ns: 80,
+        },
+        GroupRenderSpan {
+            first: 612,
+            end: 1124,
+            begin_ns: 90,
+            end_ns: 120,
+        },
+    ];
+    assert_eq!(group_host_span(&spans, 99), None);
+    assert_eq!(group_host_span(&spans, 100), Some((20, 80)));
+    assert_eq!(group_host_span(&spans, 611), Some((20, 80)));
+    assert_eq!(group_host_span(&spans, 612), Some((90, 120)));
+    assert_eq!(group_host_span(&spans, 1124), None);
+    assert_eq!(nearest_rank(&[30, 60], 50), 30);
+    assert_eq!(nearest_rank(&[30, 60], 95), 60);
+    assert_eq!(nearest_rank(&[30, 60], 99), 60);
+}
+
 #[test]
 #[ignore = "explicit live-original diagnostic; frozen readiness, software timeline only"]
 fn live_original_chain_response() {
@@ -441,6 +507,15 @@ fn paced_production_response_matrix() {
 #[test]
 #[ignore = "paced production diagnostic; run explicitly with --ignored --nocapture --test-threads=1"]
 fn paced_production_group_response() {
+    use crate::audio_engine::mixer::group_response_capture::GroupResponseCapture;
+    const PARTITION: usize = 512;
+    let frames = (RATE as usize / 2).div_ceil(PARTITION) * PARTITION;
+    let authored = burst(RATE, 0);
+    let authored_start = RATE as usize / 10;
+    let authored_points = landmarks(
+        &authored.samples[authored_start..authored_start + frames],
+        RATE,
+    );
     for count in [2, 4, 6] {
         for warm in [false, true] {
             for wet in [1, 2] {
@@ -459,8 +534,21 @@ fn paced_production_group_response() {
                 if warm {
                     select_and_wait(&mut fixture);
                 }
+                let origin = fixture.transport.output_frame();
+                let sources = (0..count)
+                    .map(|id| {
+                        let bank = fixture.mixer.bank_for_measurement();
+                        let sample = bank[id].as_ref().unwrap();
+                        (id, (sample.source_address(), sample.source_sample_count()))
+                    })
+                    .collect::<Vec<_>>();
+                fixture.mixer.group_response_capture =
+                    Some(GroupResponseCapture::new(origin, frames, &sources));
+                let mut pcm = Vec::with_capacity(frames);
+                let mut spans = Vec::with_capacity(frames / PARTITION);
                 let epoch = Instant::now();
                 fixture.refresh_clock();
+                let capture_begin_ns = epoch.elapsed().as_nanos();
                 let captured = Python::attach(|py| {
                     let entries = (0..count)
                         .map(|id| {
@@ -479,6 +567,7 @@ fn paced_production_group_response() {
                         .capture_global_start(py, entries, None)
                         .unwrap()
                 });
+                let capture_end_ns = epoch.elapsed().as_nanos();
                 fixture.drain();
                 let starts = captured
                     .resolve()
@@ -487,8 +576,8 @@ fn paced_production_group_response() {
                     .into_iter()
                     .map(|member| member.start)
                     .collect::<Vec<_>>();
-                let mut pcm = fixture.render(512);
-                sleep_until(epoch, 512, RATE);
+                pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
+                sleep_until(epoch, PARTITION as u64, RATE);
                 assert!(
                     fixture
                         .control
@@ -499,22 +588,75 @@ fn paced_production_group_response() {
                 );
                 fixture.drain();
                 let admission_us = epoch.elapsed().as_micros();
-                let mut max_callback_us = 0;
-                while fixture.transport.output_frame() < u64::from(RATE) / 2 {
-                    let before = Instant::now();
-                    fixture.drain();
-                    pcm.extend(fixture.render(512));
-                    max_callback_us = max_callback_us.max(before.elapsed().as_micros());
-                    sleep_until(epoch, fixture.transport.output_frame(), RATE);
+                while fixture.transport.output_frame() - origin < frames as u64 {
+                    pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
+                    sleep_until(epoch, fixture.transport.output_frame() - origin, RATE);
                 }
                 let effects = starts
                     .iter()
                     .map(CapturedPadStart::effective_frame)
                     .collect::<Vec<_>>();
+                let capture = fixture.mixer.group_response_capture.take().unwrap();
+                capture.validate(&pcm).unwrap();
+                let mut callback_ns = spans
+                    .iter()
+                    .map(|span| span.end_ns - span.begin_ns)
+                    .collect::<Vec<_>>();
+                callback_ns.sort_unstable();
+                let overruns = spans
+                    .iter()
+                    .filter(|span| {
+                        span.end_ns - span.begin_ns
+                            > u128::from(span.end - span.first) * 1_000_000_000 / u128::from(RATE)
+                    })
+                    .count();
+                let max_pacing_late_ns = spans
+                    .iter()
+                    .map(|span| {
+                        span.begin_ns.saturating_sub(
+                            u128::from(span.first - origin) * 1_000_000_000 / u128::from(RATE),
+                        )
+                    })
+                    .max()
+                    .unwrap();
                 eprintln!(
-                    "response_group pads={count} wet={wet} warm={warm} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} harness_render_max_us={max_callback_us}; commonE/mix only, per-wet attack separately unresolved",
+                    "response_group pads={count} wet={wet} warm={warm} rate={RATE} partition={PARTITION} start_n=1 capture_host_ns={capture_begin_ns}..{capture_end_ns} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} authored_landmarks={authored_points:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns} max_pacing_late_ns={max_pacing_late_ns}; SAME-pass mono, harness drain/render/allocation/tap included, callback percentiles are not onset percentiles; host spans from epoch before capture, 30ms advisory, no device/overlap/whole-matrix acceptance",
                     captured.original_frame(),
-                    landmarks(&pcm, RATE)
+                    landmarks(&pcm, RATE),
+                    spans.len(),
+                    [
+                        nearest_rank(&callback_ns, 50),
+                        nearest_rank(&callback_ns, 95),
+                        nearest_rank(&callback_ns, 99),
+                        *callback_ns.last().unwrap()
+                    ],
+                );
+                for id in 0..count {
+                    let points = landmarks(capture.pcm(id), RATE);
+                    assert!(points.0.is_some() && points.1.is_some() && points.2.is_some());
+                    let significant_host = points
+                        .1
+                        .and_then(|point| group_host_span(&spans, origin + point as u64));
+                    let principal_host = points
+                        .2
+                        .and_then(|point| group_host_span(&spans, origin + point as u64));
+                    assert!(significant_host.is_some() && principal_host.is_some());
+                    let principal_from_effect = points
+                        .2
+                        .zip(effects[id])
+                        .map(|(point, effect)| origin as i64 + point as i64 - effect as i64);
+                    let principal_minus_authored = principal_from_effect
+                        .zip(authored_points.2)
+                        .map(|(point, reference)| point - reference as i64);
+                    eprintln!(
+                        "response_group_pad pads={count} wet={wet} warm={warm} id={id} source={:?} capture_ns={} E={:?} landmarks={points:?} significant_host_ns={significant_host:?} principal_host_ns={principal_host:?} principal_from_E={principal_from_effect:?} principal_minus_authored={principal_minus_authored:?}; observed contribution, not inferred from commonE",
+                        sources[id].1,
+                        starts[id].received_timestamp(),
+                        effects[id]
+                    );
+                }
+                eprintln!(
+                    "response_group_raw pads={count} wet={wet} warm={warm} frame_host_spans_ns={spans:?}"
                 );
                 assert!(
                     effects

@@ -1,5 +1,60 @@
 # Performance audit and implementation design
 
+## Individual group-response observations
+
+The explicit paced group diagnostic observes every declared PAD's actual final
+master-scaled contribution in the same scheduled render, after its source reader,
+Native processing, gain and PAD DSP. A Windows test-only capture stores borrowed
+source address/extent identities and preallocated mono PCM. Rendering only adds
+to fixed slots at actual output frames; unknown sources, channels, missing frame
+coordinates and overflow invalidate the capture without allocating or logging.
+Control-side validation reconstructs the actual mix (absolute/relative tolerance
+1e-6) and refuses every silent member, even when another PAD makes the mix audible.
+This observes output; common effect E alone cannot establish individual attacks.
+
+The existing 12 combinations retain 2/4/6 PADs, cold/warm preparation and one/two
+slowed Key Lock PADs at 48 kHz with 512-frame partitions. Warm means selected
+PAD 0 is ready; it does not imply that every group member was prewarmed. Each PAD reports first,
+significant and principal landmarks, its principal displacement from the authored
+burst at its own E, and the containing host render bracket. The initial unpublished
+partition is included. Raw frame/host spans support callback-duration percentiles,
+deadline overruns and pacing lateness. These timings include fixture allocation,
+control drain and capture overhead. Host spans use an epoch before capture; the
+capture call's host bracket and original Native timestamps are reported separately.
+There is one input start per combination; callback percentiles are not onset
+percentiles. Late or slow observations remain visible, and 30 ms is advisory.
+
+This bounded observation seam does not complete the full response matrix,
+concurrent inference/conversion/loading, stress, device/listening, quality or
+Native-process admission gates. Productive rendering has no capture field or
+hook. All Native SUCCESS, ORIGINAL admission, CUDA/fresh-CPU, distribution,
+platform and Human acceptance requirements remain open wherever unproved.
+
+### Measured scoped result
+
+Five distinct tests pass, including the audible-dry/silent-wet negative, source/
+frame/channel/capacity refusals, additive same-PAD contributions and host-span
+boundaries. The existing group test completes all 12 combinations in the same
+8.37-second five-test run: 48 individually nonzero finite PAD observations and
+564 render brackets. On Windows 11 build 26200, Ryzen 9 9955HX3D, 48 kHz mono,
+all measured harness intervals meet their 512-frame (10.667 ms) deadline:
+
+| PADs | Configurations | Largest observed harness interval |
+| --- | --- | --- |
+| 2 | 4 | 0.9573 ms |
+| 4 | 4 | 1.4999 ms |
+| 6 | 4 | 1.7375 ms |
+
+These are observed maxima with the capture enabled, not device guarantees.
+All slowed PADs have a principal landmark 2,967 frames (61.8125 ms) later than
+the authored source landmark relative to their own E. Their enclosing input-call
+to significant-output host brackets range from 64.364 to 76.159 ms. The source
+reference is the authored burst, not a matched-rate Key Lock OFF render. That
+remaining comparison and the cause/possible reduction of the displacement require
+separate investigation preserving quality and the complete physical beginning.
+An audible dry member can conceal this wet displacement in the mixed landmark.
+No 30 ms acceptance, whole latency matrix or listening result follows.
+
 ## Prepare native Windows ownership before child creation
 
 The Python launcher previously needed a returned `Popen` object before its Job

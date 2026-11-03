@@ -1010,6 +1010,10 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Verify individual same-pass group PCM contributions and host render spans
+      for the existing 2/4/6-PAD diagnostic; retain full overlap/stress, device,
+      listening and combined acceptance gates separately.
+
 - [x] Budget deferred Loader restore attempts after current recovery guards;
       preserve missing original owners, independent progress, eight actual
       attempts including refusals, and existing queue/pressure behavior.

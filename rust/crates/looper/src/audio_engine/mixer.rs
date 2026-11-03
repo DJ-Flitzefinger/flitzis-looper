@@ -240,7 +240,12 @@ pub(crate) enum PadPitchApplyError {
     PreparationUnavailable,
 }
 
+#[cfg(all(test, windows))]
+pub(super) mod group_response_capture;
+
 pub struct RtMixer {
+    #[cfg(all(test, windows))]
+    pub(super) group_response_capture: Option<group_response_capture::GroupResponseCapture>,
     /// Number of output channels (1 for mono, 2 for stereo).
     channels: usize,
 
@@ -944,6 +949,8 @@ impl RtMixer {
         // Result<Self> and its caller's `?` extraction otherwise duplicate the
         // large fixed voice image on the Debug startup stack before boxing it.
         Ok(Box::new(Self {
+            #[cfg(all(test, windows))]
+            group_response_capture: None,
             channels,
             sample_rate_hz,
             volume: VOLUME_MAX,
@@ -6026,6 +6033,8 @@ impl RtMixer {
                         Some(source_plan.domain()),
                     );
                     let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
+                    #[cfg(all(test, windows))]
+                    let capture_source = (sample.source_address(), sample.source_sample_count());
                     let output_buffers = voice.stretch.output_buffers();
                     for frame in 0..chunk_frames {
                         let out_base = (rendered + frame) * channels;
@@ -6036,6 +6045,18 @@ impl RtMixer {
                             let sample = pad_dsp_chain.process_sample(channel, sample);
                             let contribution = sample * voice.volume;
                             output[out_base + channel] += contribution * volume;
+                            #[cfg(all(test, windows))]
+                            if let Some(capture) = &mut self.group_response_capture {
+                                capture.record(
+                                    voice.sample_id,
+                                    capture_source,
+                                    output_start_frame.and_then(|start| {
+                                        start.checked_add((rendered + frame) as u64)
+                                    }),
+                                    channel,
+                                    contribution * volume,
+                                );
+                            }
                             pad_peaks[voice.sample_id] =
                                 pad_peaks[voice.sample_id].max(contribution.abs());
                         }

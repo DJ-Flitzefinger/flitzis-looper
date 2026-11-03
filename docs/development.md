@@ -331,12 +331,25 @@ and separate BeatThis workers retain full Torch pipelines. Model/device/installe
 parity is required before removing their existing inference runtime.
 
 Measure original input, requested target T, actual E, significant sound and
-principal attack separately. The ready 2/4/6-PAD quantization-OFF engineering goal
-is at most 30 ms to significant rendered output, with no lost beginning or hidden
-attack displacement. Declare the machine, rates, partitions and cold/warm/refusal
+principal attack separately. For ready 2/4/6-PAD quantization-OFF workloads, 30 ms
+to significant rendered output is an advisory reference, not a mandatory acceptance
+gate. Seek the shortest practical response without lost beginnings or hidden attack
+displacement. Declare the machine, rates, partitions and cold/warm/refusal
 coverage. Intentional grid wait, device latency and listening acceptance are
 separate. Include rapid unselected/slowed PADs and concurrent inference,
 conversion and component loading; stress at most 10 PADs.
+
+The explicit `paced_production_group_response` diagnostic captures each PAD's
+actual contribution in the same mono render and checks its sum against the mixed
+output. Its 12 cold/warm, one/two-wet combinations report individual burst landmarks,
+host brackets, raw callback spans, deadline overruns and pacing lateness. Timings
+include the test fixture, control drain and capture overhead; each combination has
+one input start. Callback-duration percentiles do not establish onset percentiles,
+device latency, concurrent background-work acceptance or the whole final matrix.
+Here warm means selected PAD 0 is ready, not that all group members are prewarmed.
+Principal displacement uses the authored source burst; a matched-rate Key Lock OFF
+comparison remains separate. See the measured scoped result in the
+[performance design](../openspec/changes/improve-performance-isolation/design.md#measured-scoped-result).
 
 Use the production-route tests as well as the adapter probe below. Adapter/native
 delay and Rust allocation counters alone do not establish whole-route latency,
