@@ -7056,3 +7056,14 @@ device deadline, exact uninterrupted voice phase, neural overlap, distribution,
 hearing, quality or Human acceptance. Existing conversion and controller/matrix
 proofs retain their original scope and samples. No production DSP/API behavior
 changes, whole-matrix completion or practical Torch replacement are claimed.
+
+
+### Actual single-mode explicit target integration
+
+A dedicated ignored controller diagnostic now connects the real Loader/Project
+source owners to the MultiLoop-OFF global START/STOP route while editor selection
+differs from the last effective explicit target. It retains the original capture,
+T and own E, source/content identity, full stereo PCM, actual feedback and retirement.
+The [architecture evidence](../../../docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
+records its functional scope; no production, timing, device or whole-quality claim
+is added. Existing Piano, pause/Hold/seek and neural gates remain separate.

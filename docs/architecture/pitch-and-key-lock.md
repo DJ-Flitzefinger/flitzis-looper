@@ -342,3 +342,30 @@ device deadline, exact uninterrupted voice phase, neural overlap, distribution,
 hearing, quality or Human acceptance. Existing conversion and controller/matrix
 proofs retain their original scope and samples. No production DSP/API behavior
 changes, whole-matrix completion or practical Torch replacement are claimed.
+
+
+### Actual single-mode global target controller bridge
+
+The explicit Windows-only ignored diagnostic
+`held_lifecycle_tests::controller_overlap::actual_global_off_preserves_explicit_target_across_selection`
+loads three complete three-second 48 kHz stereo sources through the real public
+Loader and retains their original Native acknowledgement, source/content identity,
+file digest, resident PCM extent, allocation and full PCM hash. With MultiLoop OFF,
+it starts PAD 0 through the actual controller, changes both Project and Native
+selection to PAD 2, and uses global STOP. PAD 0 stops with an accepted Native fence;
+its explicit target history survives and the selected PAD stays stopped.
+
+After selection changes to PAD 1, the actual global START route creates a new
+original PAD-0 capture. Its timestamp, sequence, content key and original T are
+retained through application. Single-frame callback steps observe its own E,
+matching execution/effective frames and original launch reference. PAD 0 has a
+new voice generation and finite nonzero PCM; PADs 1 and 2 remain stopped. Actual
+feedback agrees with the voice state, all loaded sources remain unchanged, and
+Native bindings remain current. Final stop and actual engine shutdown join the cold workers
+with zero active/queued/admitted jobs; callback retirement is observed before the
+temporary source directory is released.
+
+This is one functional controller-to-Native bridge, with no production DSP/API
+change. It does not establish latency, device, Piano, pause/Hold/seek, neural,
+whole-matrix, hearing, quality or Human acceptance. Existing scoped explicit-target
+failure, source-replacement, peer and retirement evidence remains separate.
