@@ -987,3 +987,35 @@ FullMix admission SHALL preserve the current committed request and its own ACK.
 - **WHEN** the actual control queue refuses FullMix before advancing storage intent
 - **THEN** the original capture, Pending mirror, storage intent and reservation remain intact
 - **AND** after workers resume the original request reaches its own acknowledgement for its exact requested mask
+
+### Requirement: Configured Kernel Cache Retains One Source-Owned Publication Owner
+The offline Windows memory-query cache SHALL use one lazy source-owned owner with
+short locked lookup/publication and configuration outside its lock. It SHALL
+publish only fully configured successful wrappers, propagate initialization errors,
+and permit retry. Concurrent cold callers SHALL return their own configured wrapper;
+clearing SHALL NOT cancel initialization or prevent subsequent in-flight publication.
+Guarded evidence SHALL bind actual constructor/type, methods, slots, lock and owner
+relationships without encoding live WinDLL or lock state as implementation.
+
+#### Scenario: Clear overlaps a cold initializer
+- **GIVEN** a cache initializer has started but has not returned a complete wrapper
+- **WHEN** another caller clears the cache and successfully initializes a new wrapper
+- **THEN** the original initializer may later return and publish its own wrapper
+- **AND** no partially configured wrapper or failed initialization becomes cached
+- **AND** original observation policy, resource thresholds and failure deadlines remain unchanged
+
+### Requirement: Resource Clock Evidence Preserves Definition-Time Capture
+The exact declared StemResourceGuard constructor clock default SHALL retain its
+definition-time capture. Guarded evidence MAY compare it to an independently
+captured time.monotonic builtin object. This policy SHALL be
+restricted to that source role, constructor, clock parameter and expression. It
+SHALL retain definition-time capture and explicit clock injection. Arbitrary builtin
+defaults SHALL remain unsupported. Native C/image provenance SHALL remain separate.
+
+#### Scenario: Module clock changes after constructor definition
+- **GIVEN** the actual constructor retains its independently matched original default
+- **WHEN** the mutable time.monotonic module attribute is replaced afterward
+- **THEN** default guard construction retains the originally captured clock
+- **AND** explicit injected clocks retain their original behavior
+- **AND** replacing the constructor default itself refuses guarded identity
+- **AND** component binding proof does not establish complete-host, native-image or model acceptance

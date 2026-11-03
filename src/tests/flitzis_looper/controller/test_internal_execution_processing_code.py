@@ -28,7 +28,7 @@ from tests.flitzis_looper.controller.test_stem_separators import _request as _bs
 
 
 @pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-def test_actual_receipt_roles_bind_codec_while_unrelated_full_host_stays_unknown(
+def test_actual_receipt_roles_and_every_host_binding_match_held_sources(
     separator: str,
 ) -> None:
     paths = stem_provenance._host_processing_paths(replace(_request(), separator=separator))
@@ -40,15 +40,13 @@ def test_actual_receipt_roles_bind_codec_while_unrelated_full_host_stays_unknown
     if separator == "bs-roformer:musdb18hq":
         assert _namespace(bs_roformer_generation, manifests)
     assert loaded_code_identity((Path(protocol.__file__),)) is not None
-    assert loaded_code_identity(paths) is None
-    for name, error_type, error in (
-        ("system_resources.py", TypeError, "guarded host callable binding is unavailable"),
-        ("stem_resources.py", ValueError, "host attribute requires an unsupported runtime binding"),
-    ):
-        path = next(path for path in paths if path.name == name)
-        module = processing_code._loaded_at(path.resolve())[0]
-        with pytest.raises(error_type, match=error):
-            _namespace(module, manifests)
+    # No whole-tuple positive until every actual loaded role passes independently.
+    for path in paths:
+        modules = processing_code._loaded_at(path.resolve())
+        assert modules
+        for module in modules:
+            assert _namespace(module, manifests)
+    assert loaded_code_identity(paths) is not None
     del manifests[Path(protocol.__file__).resolve()]
     with pytest.raises(ValueError, match="outside the guarded producer roles"):
         _namespace(stem_generation, manifests)

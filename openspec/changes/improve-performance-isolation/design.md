@@ -6550,3 +6550,25 @@ two analysis test warnings remain; einops 0.6.1 remains pinned. No NN/CUDA,
 pressure, GUI/device/hearing, latency, backing-last-reader/OS-release, whole-quality
 or whole-assignment acceptance is established. ENTIRE nativeREST65/FINAL66 and
 every original requirement and negative UNKNOWN remain unchanged.
+
+## Source-owned kernel cache and captured resource clock (STEP66)
+
+The single zero-argument Windows kernel cache uses an explicit slotted source-owned
+carrier. Short locked lookup/publication surrounds initialization outside the lock.
+Only fully configured successful wrappers publish; failures retry. Concurrent cold
+callers each return their own wrapper and the last completion publishes. Clearing
+empties current state but does not cancel already running initialization. Displaced
+wrapper release occurs outside the cache lock. No memory observations are cached
+by this owner, and resource thresholds, hysteresis and failure deadlines are unchanged.
+The private test-only cache clearing route now names this explicit owner.
+
+Guarded source evidence checks actual cache constructor/type, slots, methods, method
+receiver/global owner and lock constructor binding. Mutable WinDLL contents and
+lock state are not implementation evidence. The resource constructor retains its
+definition-time time.monotonic default and injected clocks. Only that exact declared
+clock parameter may match an independently captured builtin object; later module
+attribute replacement does not change the original capture. This proves the Python
+binding only, with native C/image provenance separate. Arbitrary builtin defaults
+and compiled decorator targets remain unsupported. Full host identity requires
+every actual role; this package establishes no Native SUCCESS, admission, inference,
+platform, quality or Human acceptance. ENTIRE66/67 remains open; Torch savings zero.

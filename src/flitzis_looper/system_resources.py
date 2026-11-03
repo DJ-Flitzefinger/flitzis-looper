@@ -10,7 +10,7 @@ import ctypes
 import os
 import time
 from ctypes import wintypes
-from functools import cache
+from threading import Lock
 
 
 class HostMemory(ctypes.Structure):
@@ -79,10 +79,45 @@ def system_commit_bytes(total: int, limit: int, page_size: int) -> tuple[int, in
     return values
 
 
-@cache
+class _WindowsKernelCache:
+    """One lazy configured-wrapper owner, independent of live memory observations."""
+
+    __slots__ = ("_kernel", "_lock")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._kernel: ctypes.WinDLL | None = None
+
+    def get(self) -> ctypes.WinDLL:
+        """Publish successful initialization; cold callers return their own wrapper."""
+        with self._lock:
+            kernel = self._kernel
+        if kernel is not None:
+            return kernel
+        kernel = _configure_windows_kernel()
+        with self._lock:
+            previous = self._kernel
+            self._kernel = kernel
+        # Release a displaced wrapper outside the cache lock.
+        del previous
+        return kernel
+
+    def clear(self) -> None:
+        """Empty the cache; an already running initializer may publish afterward."""
+        with self._lock:
+            previous = self._kernel
+            self._kernel = None
+        del previous
+
+
+_WINDOWS_KERNEL = _WindowsKernelCache()
+
+
 def _windows_kernel() -> ctypes.WinDLL:
-    # cache publishes only fully configured objects. Concurrent initial calls may
-    # configure independent WinDLL wrappers; each wrapper has identical signatures.
+    return _WINDOWS_KERNEL.get()
+
+
+def _configure_windows_kernel() -> ctypes.WinDLL:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(HostMemory)]
     kernel.GlobalMemoryStatusEx.restype = wintypes.BOOL

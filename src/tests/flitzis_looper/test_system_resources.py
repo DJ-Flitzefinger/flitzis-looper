@@ -153,7 +153,7 @@ def test_query_failure_retains_last_error_and_stops_at_failed_api(
 def test_default_query_lazily_reuses_configured_functions(monkeypatch: pytest.MonkeyPatch) -> None:
     kernel = _kernel()
     load = Mock(return_value=kernel)
-    system_resources._windows_kernel.cache_clear()
+    system_resources._WINDOWS_KERNEL.clear()
     monkeypatch.setattr(ctypes, "WinDLL", load)
     try:
         first = host_memory_snapshot()
@@ -170,7 +170,7 @@ def test_default_query_lazily_reuses_configured_functions(monkeypatch: pytest.Mo
         ]
         assert kernel.K32GetPerformanceInfo.restype is wintypes.BOOL
     finally:
-        system_resources._windows_kernel.cache_clear()
+        system_resources._WINDOWS_KERNEL.clear()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="actual Windows query failure")

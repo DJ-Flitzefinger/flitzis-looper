@@ -16,13 +16,15 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from contextvars import Context, ContextVar
 from ctypes import wintypes
 from dataclasses import MISSING, dataclass, fields, is_dataclass, make_dataclass
 from pathlib import Path
-from threading import Semaphore
-from types import CodeType, FunctionType, MappingProxyType, ModuleType
+from threading import Lock, Semaphore
+from time import monotonic as _captured_monotonic
+from types import CodeType, FunctionType, MappingProxyType, MemberDescriptorType, ModuleType
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -207,6 +209,8 @@ def _runtime_constant(
 ) -> tuple[object, ...] | None:
     """Check exact declared carriers without measuring mutable cancellation/admission state."""
     role = Path(str(namespace["__file__"])).name, name
+    if role == ("system_resources.py", "_WINDOWS_KERNEL"):
+        return _kernel_cache_carrier(expression, namespace)
     if role not in {
         ("process.py", "_PROCESS_SLOT"),
         ("process.py", "_ANALYSIS_ADMISSION"),
@@ -258,6 +262,66 @@ def _runtime_constant(
         msg = "stem cancellation context name/default differs from its declaration"
         raise ValueError(msg)
     return "runtime-carrier", "contextvars.ContextVar", arguments[0], None
+
+
+def _kernel_cache_carrier(expression: ast.expr, namespace: dict[str, object]) -> tuple[object, ...]:
+    """Bind the single source-owned cache, never its mutable WinDLL or lock state."""
+    kind = namespace.get("_WindowsKernelCache")
+    actual = namespace.get("_WINDOWS_KERNEL")
+    msg = "kernel cache carrier differs from its source-owned constructor"
+    if (
+        not isinstance(expression, ast.Call)
+        or not isinstance(expression.func, ast.Name)
+        or expression.func.id != "_WindowsKernelCache"
+        or expression.args
+        or expression.keywords
+    ):
+        raise ValueError(msg)
+    if not isinstance(kind, type) or type(actual) is not kind:
+        raise ValueError(msg)
+    if (
+        namespace.get("Lock") is not Lock
+        or inspect.getattr_static(kind, "__slots__") != ("_kernel", "_lock")
+        or inspect.getattr_static(kind, "__getattribute__") is not object.__getattribute__
+        or inspect.getattr_static(kind, "__setattr__") is not object.__setattr__
+        or inspect.getattr_static(kind, "__new__") is not object.__new__
+    ):
+        raise ValueError(msg)
+    for name in ("_kernel", "_lock"):
+        descriptor = inspect.getattr_static(kind, name)
+        if (
+            type(descriptor) is not MemberDescriptorType
+            or descriptor.__objclass__ is not kind
+            or descriptor.__name__ != name
+        ):
+            msg = "kernel cache slot owner differs from its source-owned carrier"
+            raise ValueError(msg)
+    if type(getattr(actual, "_lock", None)) is not Lock:
+        msg = "kernel cache lock differs from its supported constructor"
+        raise ValueError(msg)
+    _kernel_cache_methods(kind, actual, namespace)
+    return "runtime-carrier", "source-owned-windows-kernel-cache", "threading.Lock"
+
+
+def _kernel_cache_methods(kind: type, actual: object, namespace: dict[str, object]) -> None:
+    """Check exact cache receivers and source-global owners after carrier validation."""
+    for name in ("get", "clear"):
+        method = getattr(actual, name)
+        if getattr(method, "__self__", None) is not actual or getattr(
+            method, "__func__", None
+        ) is not inspect.getattr_static(kind, name):
+            msg = "kernel cache method owner differs from its source-owned carrier"
+            raise ValueError(msg)
+    for function in (
+        inspect.getattr_static(kind, "__init__"),
+        inspect.getattr_static(kind, "get"),
+        inspect.getattr_static(kind, "clear"),
+        namespace.get("_windows_kernel"),
+        namespace.get("_configure_windows_kernel"),
+    ):
+        if not isinstance(function, FunctionType) or function.__globals__ is not namespace:
+            msg = "kernel cache method globals differ from its source-owned carrier"
+            raise ValueError(msg)
 
 
 def _assignment(statement: ast.stmt) -> tuple[str, ast.expr] | None:
@@ -751,7 +815,11 @@ def _function_body(
     if Path(actual.__code__.co_filename).resolve() != Path(expected.co_filename).resolve():
         msg = "loaded host function origin differs from the declared source"
         raise ValueError(msg)
-    defaults = tuple(_expression(item, namespace) for item in declaration.args.defaults)
+    clock_index = _captured_clock_index(actual, declaration, namespace)
+    defaults = tuple(
+        _captured_monotonic if index == clock_index else _expression(item, namespace)
+        for index, item in enumerate(declaration.args.defaults)
+    )
     positional = () if actual.__defaults__ is None else actual.__defaults__
     expected_keywords = {
         argument.arg: _expression(default, namespace)
@@ -765,7 +833,7 @@ def _function_body(
     if aliases != _default_aliases(defaults, expected_keywords):
         msg = "loaded host function default owner sharing differs from held source"
         raise ValueError(msg)
-    if not _same_bindings(positional, defaults, manifests, depth=depth):
+    if not _same_bindings(positional, defaults, manifests, depth=depth, clock_index=clock_index):
         msg = "loaded host function defaults differ from held source"
         raise ValueError(msg)
     if not _same_keyword_bindings(keywords, expected_keywords, manifests, depth=depth):
@@ -784,11 +852,46 @@ def _function_body(
     return [
         actual.__qualname__,
         _code(actual.__code__),
-        [_binding(item, manifests, depth=depth) for item in defaults],
+        [
+            _binding(item, manifests, depth=depth, captured_clock=index == clock_index)
+            for index, item in enumerate(defaults)
+        ],
         {key: _binding(item, manifests, depth=depth) for key, item in expected_keywords.items()},
         constants,
         aliases,
     ]
+
+
+def _captured_clock_index(
+    actual: FunctionType,
+    declaration: ast.FunctionDef | ast.AsyncFunctionDef,
+    namespace: dict[str, object],
+) -> int | None:
+    """Recognize only the resource guard's exact definition-time clock declaration."""
+    if (
+        namespace.get("__name__") != "flitzis_looper.controller.stem_resources"
+        or Path(str(namespace["__file__"])).name != "stem_resources.py"
+        or actual.__qualname__ != "StemResourceGuard.__init__"
+        or namespace.get("time") is not time
+    ):
+        return None
+    arguments = (*declaration.args.posonlyargs, *declaration.args.args)
+    for index, (argument, expression) in enumerate(
+        zip(
+            arguments[len(arguments) - len(declaration.args.defaults) :],
+            declaration.args.defaults,
+            strict=True,
+        )
+    ):
+        if (
+            argument.arg == "clock"
+            and isinstance(expression, ast.Attribute)
+            and isinstance(expression.value, ast.Name)
+            and expression.value.id == "time"
+            and expression.attr == "monotonic"
+        ):
+            return index
+    return None
 
 
 def _default_aliases(
@@ -912,13 +1015,15 @@ def _same_bindings(
     manifests: dict[Path, tuple[ast.Module, dict[str, CodeType]]],
     *,
     depth: int = 0,
+    clock_index: int | None = None,
 ) -> bool:
     return (
         type(actual) is tuple
         and len(actual) == len(expected)
         and all(
-            _binding(first, manifests, depth=depth) == _binding(second, manifests, depth=depth)
-            for first, second in zip(actual, expected, strict=True)
+            _binding(first, manifests, depth=depth, captured_clock=index == clock_index)
+            == _binding(second, manifests, depth=depth, captured_clock=index == clock_index)
+            for index, (first, second) in enumerate(zip(actual, expected, strict=True))
         )
     )
 
@@ -1028,7 +1133,14 @@ def _binding(
     manifests: dict[Path, tuple[ast.Module, dict[str, CodeType]]],
     *,
     depth: int = 0,
+    captured_clock: bool = False,
 ) -> object:
+    if captured_clock:
+        if value is not _captured_monotonic:
+            msg = "resource clock default differs from the independently captured binding"
+            raise ValueError(msg)
+        # Exact Python binding only; native C implementation/image proof is separate.
+        return "captured-builtin-binding", "time.monotonic", "native-image-unproven"
     if isinstance(value, FunctionType):
         return ("function", _guarded_function(value, manifests, depth=depth + 1))
     return _value(value)

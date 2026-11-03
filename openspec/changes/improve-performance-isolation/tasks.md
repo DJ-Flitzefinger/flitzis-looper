@@ -952,6 +952,11 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Replace the opaque zero-argument kernel decorator with one source-owned
+      cache, preserving success-only concurrent publication and clear races;
+      narrowly bind the captured resource clock without changing capture policy
+      or claiming native image, whole-host or Native SUCCESS acceptance.
+
 - [x] Declare ABI-equivalent host memory fields and resource constants in the
       supported source form; retain both consulted backend host role families
       for either selection, without promoting cached-factory/captured-clock or
