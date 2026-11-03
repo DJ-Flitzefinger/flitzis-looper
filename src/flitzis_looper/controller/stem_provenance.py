@@ -175,10 +175,12 @@ def capture_processing_files(
 
 
 def native_conversion_identity() -> tuple[str, str] | None:
-    """Bind the loaded converter's compiled-source policy, without claiming image attestation."""
+    """Bind both executed Native bridges, without claiming full loaded-image attestation."""
     identity = native.stem_conversion_identity
     converter = getattr(stem_artifacts, "StemConversionReservation", None)
     budget = getattr(stem_process, "OfflineChildMemoryReservation", None)
+    process_type = getattr(analysis_process, "PreparedWindowsProcess", None)
+    process_identity = getattr(analysis_process, "offline_process_identity", None)
     if (
         converter is not native.StemConversionReservation
         or budget is not native.OfflineChildMemoryReservation
@@ -187,13 +189,29 @@ def native_conversion_identity() -> tuple[str, str] | None:
         or identity.__module__ != native.StemConversionReservation.__module__
     ):
         return None
+    if (
+        process_type is not getattr(native, "PreparedWindowsProcess", None)
+        or process_identity is not getattr(native, "offline_process_identity", None)
+        or not isinstance(process_identity, BuiltinFunctionType)
+        or process_identity.__module__ != identity.__module__
+    ):
+        return None
     try:
         policy, digest = identity(converter, budget)
+        process_policy, process_digest = process_identity(process_type)
     except TypeError, ValueError:
         return None
     if policy != TRANSFORM_POLICY or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         return None
-    return policy, digest
+    if (
+        process_policy != "prepared-windows-process-v1"
+        or re.fullmatch(r"[0-9a-f]{64}", process_digest) is None
+    ):
+        return None
+    payload = json.dumps(
+        ((policy, digest), (process_policy, process_digest)), separators=(",", ":")
+    )
+    return policy, hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def _parent_processing_paths(

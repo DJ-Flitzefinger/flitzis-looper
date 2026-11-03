@@ -348,6 +348,12 @@ existing suspended Job Object adapter; Linux/macOS process-tree and host-monitor
 evidence remains a separate distribution gate. No running installation is updated
 by development verification.
 
+The Windows worker API also requires a prepared native process owner. Runtime
+preflight rejects an older Native before worker activation. Process and pipe
+ownership now precede child creation; existing suspended Job activation and
+actual process-tree/reader retirement remain required. This does not change
+model repair, runtime pins, audio startup or the platform acceptance gates.
+
 The opt-in native BeatThis complete-source experiment is not part of installation or
 model repair. Its ONNX graph and standalone developer EXE have no productive
 cutover or complete CUDA/CPU-only/quality/DLL-closure acceptance. Keep the original

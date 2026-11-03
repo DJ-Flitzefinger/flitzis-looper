@@ -7,7 +7,7 @@ import sys
 import time
 import venv
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 from io import BytesIO
 from pathlib import Path
@@ -150,22 +150,25 @@ def test_process_owner_allocation_failure_reaps_actual_command_before_propagatin
     real_close = process._OwnedTreeProcess.close_tree
     tree_ended = Event()
     marker = tmp_path / "must-not-run"
+    observations = []
+    observers = ExitStack()
 
     def fail_owner(*_args: object, **_kwargs: object) -> None:
         assert len(launches) == 1
+        observations.append(observers.enter_context(_observed_process(launches[0].pid)))
         raise error
 
     def close(child: process._OwnedTreeProcess) -> None:
         assert child._job is not None
         assert child._job._handle is not None
-        assert isinstance(child._process, subprocess.Popen)
-        assert child._job._kernel.WaitForSingleObject(int(child._process._handle), 0) == 0
+        kernel, handle = observations[0]
+        assert kernel.WaitForSingleObject(handle, 0) == 0
         assert child.poll() is not None
         assert not child.tree_active()
         tree_ended.set()
         real_close(child)
 
-    with monkeypatch.context() as failing:
+    with observers, monkeypatch.context() as failing:
         failing.setattr(process._OwnedProcess, "__init__", fail_owner)
         failing.setattr(process._OwnedTreeProcess, "close_tree", close)
         with pytest.raises(MemoryError) as caught:

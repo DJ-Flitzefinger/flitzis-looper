@@ -999,6 +999,14 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
         "source-bound-aligned-pcm16-native-v3",
         "a" * 64,
     )
+    complete_native.PreparedWindowsProcess = type(
+        "CompatiblePreparedProcess",
+        (),
+        dict.fromkeys(("start", "poll", "wait", "kill", "abort_startup"), lambda *_: None),
+    )
+    for name in ("stdout", "stderr", "pid", "returncode"):
+        setattr(complete_native.PreparedWindowsProcess, name, property(lambda _: None))
+    complete_native.offline_process_identity = lambda _: ("prepared-windows-process-v1", "b" * 64)
     native = SimpleNamespace(
         flitzis_looper_audio=SimpleNamespace(
             __file__=str(checkout / "src/flitzis_looper_audio/native.pyd")

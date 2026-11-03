@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, Thread
@@ -26,8 +27,10 @@ from flitzis_looper.analysis.contracts import (
 )
 from flitzis_looper.analysis.worker import BeatWorkerAdapter, WorkerConfiguration
 from flitzis_looper_audio import OfflineWorkTicket
+from tests.flitzis_looper.analysis.test_owned_command import _observed_process
 
 if TYPE_CHECKING:
+    import ctypes
     from collections.abc import Callable
     from tempfile import TemporaryDirectory
 
@@ -525,10 +528,7 @@ def test_early_output_setup_failure_retires_child_and_allows_fresh_analysis(
     assert request.pcm.path.read_bytes() == before
     if os.name == "nt" and failure != "monitor_memory":
         assert not request.pcm.path.with_suffix(".started").exists()
-    assert _run(adapter, request).status == "ready"
-    assert adapter.retired.is_set()
-    assert len(children) == 2
-    assert children[1].poll() is not None
+    _assert_successful_beat_retry(adapter, request, children, expected_children=2)
 
 
 def _refuse_beat_output_thread(*, target: Callable[[], None], name: str, daemon: bool) -> Thread:
@@ -544,22 +544,28 @@ def _fail_beat_monitor_allocation(*_args: object) -> str:
 
 
 def _owner_allocation_failure(
-    error: MemoryError, children: list[subprocess.Popen[bytes]]
+    error: MemoryError,
+    children: list[subprocess.Popen[bytes]],
+    observations: list[tuple[ctypes.WinDLL, int]],
+    observers: ExitStack,
 ) -> Callable[..., None]:
     def fail_owner(*_args: object, **_kwargs: object) -> None:
         assert len(children) == 1
+        observations.append(observers.enter_context(_observed_process(children[0].pid)))
         raise error
 
     return fail_owner
 
 
-def _observe_suspended_child_close(tree_ended: Event) -> Callable[[process._WorkerProcess], None]:
+def _observe_suspended_child_close(
+    tree_ended: Event, observations: list[tuple[ctypes.WinDLL, int]]
+) -> Callable[[process._WorkerProcess], None]:
     real_close = process._WorkerProcess.close_tree
 
     def close(child: process._WorkerProcess) -> None:
         assert child._job is not None
-        assert isinstance(child._process, subprocess.Popen)
-        assert child._job._kernel.WaitForSingleObject(int(child._process._handle), 0) == 0
+        kernel, handle = observations[0]
+        assert kernel.WaitForSingleObject(handle, 0) == 0
         assert child.poll() is not None
         assert not child.tree_active()
         if not tree_ended.is_set():
@@ -619,14 +625,20 @@ def test_process_owner_allocation_failure_retains_actual_child_and_cleanup_custo
     original_bytes = request.pcm.path.read_bytes()
     successor = None
     cancel = Event()
+    observations = []
+    observers = ExitStack()
 
     try:
         with monkeypatch.context() as failing, ThreadPoolExecutor(max_workers=1) as executor:
             failing.setattr(
-                process._OwnedProcess, "__init__", _owner_allocation_failure(error, children)
+                process._OwnedProcess,
+                "__init__",
+                _owner_allocation_failure(error, children, observations, observers),
             )
             failing.setattr(
-                process._WorkerProcess, "close_tree", _observe_suspended_child_close(tree_ended)
+                process._WorkerProcess,
+                "close_tree",
+                _observe_suspended_child_close(tree_ended, observations),
             )
             failing.setattr(
                 process,
@@ -661,11 +673,11 @@ def test_process_owner_allocation_failure_retains_actual_child_and_cleanup_custo
         release_cleanup.set()
         if successor is not None:
             successor.close()
-        _cleanup_suspended_children(children)
-    assert _run(adapter, request).status == "ready"
-    assert adapter.retired.is_set()
-    assert len(children) == 2
-    assert children[1].poll() is not None
+        try:
+            _cleanup_suspended_children(children)
+        finally:
+            observers.close()
+    _assert_successful_beat_retry(adapter, request, children, expected_children=2)
 
 
 def _request_write_failure(error: MemoryError) -> Callable[[Path, bytes], int]:
@@ -683,11 +695,12 @@ def _assert_successful_beat_retry(
     adapter: BeatWorkerAdapter,
     request: BeatWorkerRequest,
     children: list[subprocess.Popen[bytes]],
+    expected_children: int = 1,
 ) -> None:
     assert _run(adapter, request).status == "ready"
     assert adapter.retired.is_set()
-    assert len(children) == 1
-    assert children[0].poll() is not None
+    assert len(children) == expected_children
+    assert children[-1].poll() is not None
 
 
 @pytest.mark.parametrize("allocation", ["temporary", "request"])
@@ -753,6 +766,7 @@ def _inject_prelaunch_failure(
         failing.setattr(process, "_environment", fail_environment)
         failing.setattr(process, "_start", unexpected_launch)
         failing.setattr(process, "OfflineChildMemoryReservation", unexpected_launch)
+        failing.setattr(process, "PreparedWindowsProcess", unexpected_launch)
         failing.setattr(subprocess, "Popen", unexpected_launch)
     else:
         failing.setattr(Path, "write_bytes", _request_write_failure(error))

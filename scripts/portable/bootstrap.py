@@ -143,6 +143,25 @@ def check_stem_conversion_api(native_module: object) -> None:
         "Native offline child memory budget missing; rebuild the Release extension"
     )
     assert hasattr(budget, "limit_bytes"), "Native offline child commit ceiling missing"
+    prepared = getattr(native_module, "PreparedWindowsProcess", None)
+    identity = getattr(native_module, "offline_process_identity", None)
+    assert prepared is not None, (
+        "Native prepared Windows process owner missing; rebuild the Release extension"
+    )
+    assert callable(identity), "Native prepared Windows process owner missing"
+    if os.name == "nt":
+        assert all(
+            callable(getattr(prepared, name, None))
+            for name in ("start", "poll", "wait", "kill", "abort_startup")
+        ), "Native prepared Windows process lifecycle API missing"
+        assert all(hasattr(prepared, name) for name in ("stdout", "stderr", "pid", "returncode")), (
+            "Native prepared Windows process observations missing"
+        )
+    policy, digest = identity(prepared)
+    assert policy == "prepared-windows-process-v1", "Native prepared process policy incompatible"
+    assert isinstance(digest, str), "Native prepared process identity missing"
+    assert len(digest) == 64, "Native prepared process identity missing"
+    assert all(c in "0123456789abcdef" for c in digest), "Native prepared process identity invalid"
 
 
 def check_pad_copy_api(engine_type: type) -> None:

@@ -1,5 +1,7 @@
 """Actual numeric bridge, provenance and pre-allocation admission; no inference."""
 
+import hashlib
+import json
 import runpy
 import struct
 from dataclasses import replace
@@ -10,6 +12,7 @@ import pytest
 
 import flitzis_looper.stem_execution as execution
 import flitzis_looper_audio as native
+from flitzis_looper.analysis import process as analysis_process
 from flitzis_looper.controller import processing_code, stem_artifacts, stem_provenance
 from flitzis_looper.controller.processing_code import loaded_code_identity
 from flitzis_looper.controller.stem_generation import AudioShape
@@ -27,7 +30,21 @@ def test_real_native_identity_binds_compiled_core_and_executed_wrapper() -> None
     policy, digest = stem_conversion_identity()
     assert policy == TRANSFORM_POLICY
     assert len(digest) == 64
-    assert stem_provenance.native_conversion_identity() == (policy, digest)
+    process_identity = native.offline_process_identity(native.PreparedWindowsProcess)
+    payload = json.dumps(((policy, digest), process_identity), separators=(",", ":"))
+    assert stem_provenance.native_conversion_identity() == (
+        policy,
+        hashlib.sha256(payload.encode("ascii")).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize("binding", ["PreparedWindowsProcess", "offline_process_identity"])
+def test_native_producer_identity_refuses_replaced_process_bindings(
+    monkeypatch: pytest.MonkeyPatch, binding: str
+) -> None:
+    assert stem_provenance.native_conversion_identity() is not None
+    monkeypatch.setattr(analysis_process, binding, object())
+    assert stem_provenance.native_conversion_identity() is None
 
 
 def test_actual_guarded_artifact_and_process_roles_remain_known_with_native_conversion() -> None:

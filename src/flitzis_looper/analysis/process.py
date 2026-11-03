@@ -10,13 +10,18 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Semaphore, Thread, get_ident
-from typing import IO, TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, cast
 
 from flitzis_looper.analysis.contracts import WorkerLimits
 from flitzis_looper.analysis.linux_process import LinuxProcess
-from flitzis_looper.analysis.windows_job import CREATE_SUSPENDED, WindowsJob
+from flitzis_looper.analysis.windows_job import WindowsJob
 from flitzis_looper.offline_runtime import child_environment
-from flitzis_looper_audio import OfflineChildMemoryReservation, OfflineWorkTicket
+from flitzis_looper_audio import (
+    OfflineChildMemoryReservation,
+    OfflineWorkTicket,
+    PreparedWindowsProcess,
+    offline_process_identity,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -156,6 +161,20 @@ class IndependentReceipts:
     prefixes: tuple[bytes, ...]
 
 
+def _prepare_windows_process(
+    *, capture_stderr: bool, budget_keeper: object | None
+) -> PreparedWindowsProcess:
+    policy, digest = offline_process_identity(PreparedWindowsProcess)
+    if (
+        policy != "prepared-windows-process-v1"
+        or len(digest) != 64
+        or any(value not in "0123456789abcdef" for value in digest)
+    ):
+        message = "Prepared Windows process identity is unavailable"
+        raise RuntimeError(message)
+    return PreparedWindowsProcess(capture_stderr=capture_stderr, budget_keeper=budget_keeper)
+
+
 class _OwnedTreeProcess:
     """Payload-compatible process with independent ownership of its descendants."""
 
@@ -168,6 +187,7 @@ class _OwnedTreeProcess:
         capture_stderr: bool = False,
         commit_limit_bytes: int | None = None,
     ) -> None:
+        self._startup_abort: Callable[[], None] | None = None
         if os.name != "nt" and sys.platform != "linux":
             message = f"Offline worker process-tree supervision is unavailable on {sys.platform}"
             raise OSError(message)
@@ -183,33 +203,39 @@ class _OwnedTreeProcess:
             else None
         )
         self._linux: LinuxProcess | None = None
-        started = False
+        self._arguments = arguments
+        prepared = None
         try:
             if sys.platform == "linux":
                 self._linux = LinuxProcess(
                     arguments, cwd=cwd, env=env, capture_stderr=capture_stderr
                 )
-                self._process: subprocess.Popen[bytes] | LinuxProcess = self._linux
+                self._process: PreparedWindowsProcess | LinuxProcess = self._linux
             else:
-                self._process = subprocess.Popen(
-                    arguments,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
-                    cwd=cwd,
-                    env=env,
-                    creationflags=(
-                        subprocess.CREATE_NO_WINDOW | CREATE_SUSPENDED
-                        if self._job is not None
-                        else 0
-                    ),
+                prepared = _prepare_windows_process(
+                    capture_stderr=capture_stderr,
+                    budget_keeper=getattr(self, "_memory_budget", None),
                 )
-            self.stdout: IO[bytes] | None = self._process.stdout
-            self.stderr: IO[bytes] | None = self._process.stderr
-            started = True
-        finally:
-            if not started and self._job is not None:
-                self._job.close()
+                # Every Python owner, stream projection and bound cleanup method
+                # exists before native start can create its suspended root.
+                self._process = prepared
+                self._startup_abort = prepared.abort_startup
+            self.stdout = cast("IO[bytes] | None", self._process.stdout)
+            self.stderr = cast("IO[bytes] | None", self._process.stderr)
+            if prepared is not None:
+                prepared.start(subprocess.list2cmdline(arguments), str(cwd), env)
+        except BaseException:
+            self.abort_startup()
+            raise
+
+    def abort_startup(self) -> None:
+        """Retire the known suspended root before releasing startup resources."""
+        abort = getattr(self, "_startup_abort", None)
+        if abort is not None:
+            abort()
+        job = getattr(self, "_job", None)
+        if job is not None:
+            job.close()
 
     @property
     def pid(self) -> int:
@@ -227,7 +253,13 @@ class _OwnedTreeProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         """Wait for the payload; tree and reader settlement remain separate."""
-        return self._process.wait(timeout=timeout)
+        result = self._process.wait(timeout=timeout)
+        if result is None:
+            if timeout is None:
+                message = "Unbounded process wait returned without an exit status"
+                raise RuntimeError(message)
+            raise subprocess.TimeoutExpired(self._arguments, timeout)
+        return result
 
     def activate(self) -> None:
         """Associate and resume only after the supervisor owns teardown on every failure."""
@@ -243,7 +275,7 @@ class _OwnedTreeProcess:
                 self._job.terminate()
             finally:
                 # Assignment failures leave the newly created root suspended outside
-                # the job. Keep its direct Popen handle covered by the same teardown.
+                # the job. Keep its native root handle covered by the same teardown.
                 self._process.kill()
         else:
             self._process.kill()
@@ -288,7 +320,8 @@ class _WorkerProcess(_OwnedTreeProcess):
                     env=environment,
                     commit_limit_bytes=self._memory_budget.limit_bytes,
                 )
-        except OSError, RuntimeError, ValueError:
+        except OSError, RuntimeError, ValueError, MemoryError:
+            self.abort_startup()
             if self._memory_budget is not None:
                 self._memory_budget.close()
             raise
@@ -547,7 +580,19 @@ def _prepare_worker_launch(command: WorkerCommand, request_path: Path) -> _Worke
 
 
 def _start(command: WorkerCommand, launch: _WorkerLaunch) -> _OwnedTreeProcess:
-    return _WorkerProcess(launch.arguments, command, launch.environment)
+    if os.name != "nt":
+        return _WorkerProcess(launch.arguments, command, launch.environment)
+    pending = object.__new__(_WorkerProcess)
+    initialize = _WorkerProcess.__init__
+    try:
+        initialize(pending, launch.arguments, command, launch.environment)
+    except BaseException:
+        pending.abort_startup()
+        budget = getattr(pending, "_memory_budget", None)
+        if budget is not None:
+            budget.close()
+        raise
+    return pending
 
 
 def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str | None:
@@ -738,6 +783,47 @@ def _supervise_command(
     return reason
 
 
+def _create_owned_command(
+    arguments: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    retired: Event,
+    commit_limit_bytes: int | None,
+) -> _OwnedTreeProcess:
+    """Settle only known prelaunch or positively retired Windows startup failure."""
+    pending = None
+    try:
+        if os.name == "nt":
+            pending = object.__new__(_OwnedTreeProcess)
+            initialize = _OwnedTreeProcess.__init__
+            initialize(
+                pending,
+                arguments,
+                cwd=cwd,
+                env=child_environment(env),
+                capture_stderr=True,
+                commit_limit_bytes=commit_limit_bytes,
+            )
+            return pending
+        return _OwnedTreeProcess(
+            arguments,
+            cwd=cwd,
+            env=child_environment(env),
+            capture_stderr=True,
+            **(
+                {"commit_limit_bytes": commit_limit_bytes} if commit_limit_bytes is not None else {}
+            ),
+        )
+    except BaseException as error:
+        if os.name == "nt":
+            if pending is not None:
+                pending.abort_startup()
+            retired.set()
+        elif isinstance(error, OSError):
+            retired.set()
+        raise
+
+
 # Preserve the existing keyword API and optional observer hook.
 def run_owned_command(  # noqa: PLR0913
     arguments: list[str],
@@ -784,19 +870,7 @@ def run_owned_command(  # noqa: PLR0913
     if cancel.is_set():
         retired.set()
         return OwnedCommandResult("cancelled", -1, b"", b"")
-    try:
-        process = _OwnedTreeProcess(
-            arguments,
-            cwd=cwd,
-            env=child_environment(env),
-            capture_stderr=True,
-            **(
-                {"commit_limit_bytes": commit_limit_bytes} if commit_limit_bytes is not None else {}
-            ),
-        )
-    except OSError:
-        retired.set()
-        raise
+    process = _create_owned_command(arguments, cwd, env, retired, commit_limit_bytes)
     owned = _own_process(process, None, retired)
     stdout = None
     stderr = None

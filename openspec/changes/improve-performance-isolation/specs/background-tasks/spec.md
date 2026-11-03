@@ -1,5 +1,33 @@
 ## ADDED Requirements
 
+### Requirement: Windows Child Ownership Precedes Process Creation
+Beat and shared offline Windows commands SHALL allocate and retain a native
+process owner and their private pipe objects before creating a child. Successful
+`CreateProcessW` output SHALL write directly into that owner's retained state,
+without requiring a newly allocated Python process-result or handle wrapper.
+Python constructor failure SHALL positively retire the exact suspended root before
+releasing its original child reservation. Existing complete-tree and independent
+reader-retirement obligations SHALL remain unchanged after activation.
+
+The child SHALL remain suspended until the existing observer, Job assignment and
+resume path admits it. Only explicit standard-handle duplicates SHALL be inherited;
+parent writer copies SHALL close before output supervision begins. Argument
+quoting, UTF-16 paths, separate stdout/stderr, environment spelling/deduplication
+and timeout behavior SHALL retain the supported Windows semantics.
+
+#### Scenario: Python publication fails after an actual suspended child starts
+- **GIVEN** the native owner and pipe objects already exist and an actual suspended Windows child has been created
+- **WHEN** a controlled Python error occurs before the constructor publishes its result
+- **THEN** cleanup terminates the held root and observes its actual kernel-handle END before closing its original child reservation
+- **AND** the child has performed no worker effects and a fresh reservation can be admitted afterward
+- **AND** this test does not claim arbitrary continuous-OOM closure or an observed defect in an unproved CPython binary build
+
+#### Scenario: Selective Windows launch preserves the public worker protocol
+- **GIVEN** a command contains quoted and non-ASCII arguments, a private working directory and a supported Windows environment
+- **WHEN** the existing owned-command supervisor activates its prepared child
+- **THEN** stdin is DEVNULL, stdout/stderr remain independent and their EOF follows closure of the actual owned writers
+- **AND** ordinary failure, cancellation, descendants, timeout and fresh retries retain the existing Job/tree/reader contracts
+
 ### Requirement: Recovery-Held Missing Originals Do Not Consume Restore Attempts
 The Loader control poll SHALL attempt at most eight deferred original-source
 restores per invocation. Current observer fences, stale path/content checks and

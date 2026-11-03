@@ -1,5 +1,70 @@
 # Performance audit and implementation design
 
+## Prepare native Windows ownership before child creation
+
+The Python launcher previously needed a returned `Popen` object before its Job
+could observe the suspended root. Upstream CPython 3.14.2 performs fallible Python
+result/handle wrapping after `CreateProcessW`. The installed Python source/version
+is retained separately; a matching release tag alone does not prove every native
+runtime patch or an actual leak in the installed DLL.
+
+The Windows adapter now prepares a native owner, private pipe readers/writers and
+Python stream projections before a separate start call. Raw process information
+belongs to that owner before `CreateProcessW`; success needs no new Python result
+tuple or process object. Existing Job assignment, observation and initial-thread
+resume remain the sole activation path. Explicit startup abort requires a positive
+kernel root wait before constructor failure can release the original reservation.
+Native fallback cleanup also waits for the actual root while releasing the GIL.
+Windows callers retain their partially initialized owner outside its constructor.
+Both the base constructor and the outer Beat reservation owner explicitly abort
+before releasing startup resources, including single errors at constructor return.
+The native owner also holds the original budget keeper before child creation;
+its positive root wait precedes destruction of that reference. This does not
+claim arbitrary repeated cleanup-allocation failure or complete Job construction.
+
+An explicit `STARTUPINFOEX` handle list permits only owned standard-handle
+duplicates. The stable Rust 1.95 `Command` default was rejected because it enables
+general handle inheritance; its custom-attribute API is unstable. No nightly or
+toolchain workaround is used. Python's existing Windows quoting is retained.
+Native preparation preserves UTF-16 surrogates and CPython's invariant-uppercase
+stable environment ordering plus ordinal ignore-case duplicate removal. No
+environment values are logged. Blocking pipe reads/closes and waits release the
+GIL and keep child/reader mutexes independent.
+Direct root termination preserves CPython's access-denied race handling after
+Job termination: a fresh non-active exit code permits the request to settle, but
+only the independent kernel wait and existing tree/reader checks prove END.
+
+The Native API, type stub, compiled source/type identity and Portable stale-binding
+preflight change together. The producer's Native bridge identity combines the
+converter and prepared-process policies/digests, checking the actual imported
+constructor and identity-function bindings. Future process-only Native changes
+therefore invalidate the producer key without claiming complete image closure.
+This component does not attest complete producer hosts,
+Pydantic execution plans, Native SUCCESS memory bounds or learned-model parity.
+Job construction, arbitrary continuous OOM, other platforms and all prior whole
+process/quality/CUDA/Human gates retain their separate unproved obligations.
+
+### Focused Windows owner verification
+
+All 54 distinct selected cases pass: 52 unchanged passes from the corrected
+selection and two fresh Windows interoperability cases. Source comparison and
+unchanged retained test ASTs qualify that reuse; both runs load the same matching
+Release Native image and compiled process identity. The early native-return,
+base-constructor-return and Beat-constructor-return errors require an independent
+positive kernel wait before every budget close. Shared constructor-return failure,
+native budget-keeper destruction, suspended-thread state, ambient-handle exclusion
+with a positive identity control, arguments/environment, both pipes, descendants,
+admission failures and pressure/reader retirement remain covered.
+
+Both Native compilation, wheel and API checks succeeded. Their strict external
+job wrappers separately failed a no-forced-cleanup condition because an owned
+MSVC telemetry process survived the build; the existing owning job terminated it
+and positively observed all retained process handles end. Those wrapper failures,
+the initial runtime failures and the focused error-5 diagnostic are retained as
+qualified evidence. They are not unqualified clean-build or upstream-runtime-OOM
+claims. Final lint, type, format, OpenSpec and source-boundary checks pass. No
+whole NN, platform, hearing, latency or complete performance acceptance follows.
+
 ## Budget deferred restore attempts after current recovery guards
 
 Startup validates missing recovery-held originals before admitting valid originals.

@@ -949,6 +949,10 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Prepare native Windows child and pipe ownership before process creation;
+      preserve selective standard-handle inheritance, existing Job activation
+      and positive root/tree/reader retirement before reservation release.
+
 - [x] Preserve raw LF receipt framing through capture, decoded normalization and
       all four parsers, verifying embedded diagnostic separators, independent
       genuine receipts, both adapter fallback routes and actual reader custody.

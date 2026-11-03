@@ -2,6 +2,7 @@ use pyo3::{pyfunction, pymodule};
 
 mod audio_engine;
 mod messages;
+mod offline_process;
 mod selected_bpm;
 
 #[cfg(test)]
@@ -40,6 +41,8 @@ mod flitzis_looper_audio {
     };
     #[pymodule_export]
     use super::native_build_profile;
+    #[pymodule_export]
+    use super::offline_process::{PreparedWindowsProcess, offline_process_identity};
     #[pymodule_export]
     use super::selected_bpm::summarize_selected_bpm_json;
 
