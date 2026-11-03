@@ -4246,6 +4246,11 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(crate) fn bpm_lock_for_measurement(&self) -> bool {
+        self.bpm_lock_enabled
+    }
+
+    #[cfg(test)]
     pub fn set_bpm_lock(&mut self, enabled: bool) {
         if self.refuse_legacy_global_rate_if_pending() {
             return;

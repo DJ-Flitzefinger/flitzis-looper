@@ -1010,6 +1010,11 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Observe twelve six-PAD groups as six matched actual Key Lock OFF/ON pairs
+      for BPM Lock OFF unity and smaller/irregular callback partitions; verify
+      actual rates, source identity, bounded capture and each own-E landmark,
+      retaining all further mode/matrix/overlap/stress/quality/Human gates.
+
 - [x] Observe 16 faster/other-rate groups as eight matched actual Key Lock
       OFF/ON pairs with 72 individual PAD observations and exact paired source
       rates; retain selected-PAD0-only warmth, historical source-path qualification

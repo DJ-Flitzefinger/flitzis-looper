@@ -530,7 +530,42 @@ fn group_rate_case(
     rate: u32,
     ratio: f64,
 ) -> GroupRateResult {
+    group_recipe_case(
+        count,
+        warm,
+        rate_changed,
+        lock,
+        rate,
+        ratio,
+        GroupCallbackRecipe {
+            bpm_lock: true,
+            partitions: &[512],
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct GroupCallbackRecipe<'a> {
+    bpm_lock: bool,
+    partitions: &'a [usize],
+}
+
+/// Observe actual BPM authority and callback partitions without changing DSP.
+fn group_recipe_case(
+    count: usize,
+    warm: bool,
+    rate_changed: usize,
+    lock: bool,
+    rate: u32,
+    ratio: f64,
+    recipe: GroupCallbackRecipe<'_>,
+) -> GroupRateResult {
+    let GroupCallbackRecipe {
+        bpm_lock,
+        partitions,
+    } = recipe;
     use crate::audio_engine::mixer::group_response_capture::GroupResponseCapture;
+    assert!(!partitions.is_empty() && partitions.iter().all(|&frames| frames > 0));
     const PARTITION: usize = 512;
     let frames = (rate as usize / 2).div_ceil(PARTITION) * PARTITION;
     let authored = burst(rate, 0);
@@ -556,15 +591,19 @@ fn group_rate_case(
             }),
         );
     }
+    if !bpm_lock {
+        fixture.mixer.set_bpm_lock(false);
+    }
+    assert_eq!(fixture.mixer.bpm_lock_for_measurement(), bpm_lock);
     for id in 0..count {
         assert_eq!(fixture.mixer.key_lock_for_measurement(id), lock);
     }
-    let native_ready_wait = warm && lock;
+    let native_ready_wait = warm && lock && bpm_lock && rate_changed > 0 && ratio != 1.0;
     let before_selection = fixture.transport.output_frame();
     if native_ready_wait {
         select_and_wait(&mut fixture);
     } else if warm {
-        // Neutral OFF deliberately has no Native endpoint to prepare or await.
+        // Neutral unity-rate cases have no Native endpoint to prepare or await.
         fixture.control.engine.select_input_pad(0).unwrap();
     }
     if warm {
@@ -595,7 +634,7 @@ fn group_rate_case(
     fixture.mixer.group_response_capture =
         Some(GroupResponseCapture::new(origin, frames, &sources));
     let mut pcm = Vec::with_capacity(frames);
-    let mut spans = Vec::with_capacity(frames / PARTITION);
+    let mut spans = Vec::with_capacity(frames.div_ceil(*partitions.iter().min().unwrap()) + 1);
     let epoch = Instant::now();
     fixture.refresh_clock();
     let capture_begin_ns = epoch.elapsed().as_nanos();
@@ -627,8 +666,15 @@ fn group_rate_case(
         .into_iter()
         .map(|member| member.start)
         .collect::<Vec<_>>();
-    pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
-    sleep_until(epoch, PARTITION as u64, rate);
+    let first_partition = partitions[0].min(frames);
+    pcm.extend(group_render(
+        &mut fixture,
+        first_partition,
+        epoch,
+        &mut spans,
+    ));
+    sleep_until(epoch, fixture.transport.output_frame() - origin, rate);
+    let mut partition_index = 1;
     assert!(
         fixture
             .control
@@ -640,9 +686,14 @@ fn group_rate_case(
     fixture.drain();
     let admission_us = epoch.elapsed().as_micros();
     while fixture.transport.output_frame() - origin < frames as u64 {
-        pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
+        let remaining = frames - (fixture.transport.output_frame() - origin) as usize;
+        let partition = partitions[partition_index % partitions.len()].min(remaining);
+        pcm.extend(group_render(&mut fixture, partition, epoch, &mut spans));
+        partition_index += 1;
         sleep_until(epoch, fixture.transport.output_frame() - origin, rate);
     }
+    assert_eq!(fixture.mixer.bpm_lock_for_measurement(), bpm_lock);
+    assert_eq!(fixture.transport.output_frame() - origin, frames as u64);
     let effects = starts
         .iter()
         .map(CapturedPadStart::effective_frame)
@@ -670,7 +721,8 @@ fn group_rate_case(
         .max()
         .unwrap();
     eprintln!(
-        "response_group lock={lock} pads={count} rate_changed={rate_changed} warm={warm} selected_pad0={warm} native_ready_wait={native_ready_wait} rate={rate} ratio={ratio} partition={PARTITION} start_n=1 capture_host_ns={capture_begin_ns}..{capture_end_ns} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} authored_landmarks={authored_points:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns} max_pacing_late_ns={max_pacing_late_ns}; SAME-pass mono, harness drain/render/allocation/tap included, callback percentiles are not onset percentiles; host spans from epoch before capture, 30ms advisory, no device/overlap/whole-matrix acceptance",
+        "response_group lock={lock} pads={count} rate_changed={rate_changed} warm={warm} selected_pad0={warm} native_ready_wait={native_ready_wait} rate={rate} ratio={ratio} partition={} start_n=1 capture_host_ns={capture_begin_ns}..{capture_end_ns} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} authored_landmarks={authored_points:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns} max_pacing_late_ns={max_pacing_late_ns}; SAME-pass mono, harness drain/render/allocation/tap included, callback percentiles are not onset percentiles; host spans from epoch before capture, 30ms advisory, no device/overlap/whole-matrix acceptance",
+        partitions[0],
         captured.original_frame(),
         landmarks(&pcm, rate),
         spans.len(),
@@ -680,6 +732,14 @@ fn group_rate_case(
             nearest_rank(&callback_ns, 99),
             *callback_ns.last().unwrap()
         ],
+    );
+    eprintln!(
+        "response_group_recipe bpm_lock={bpm_lock} pads={count} warm={warm} lock={lock} configured_bpm_different={rate_changed} actual_rate_changed={} partition_cycle={partitions:?} capture_frames={frames}; actual span lengths retained, BPMOFF unity is not a wet Native path",
+        if bpm_lock && ratio != 1.0 {
+            rate_changed
+        } else {
+            0
+        }
     );
     let mut observations = Vec::with_capacity(count);
     let mut rates = Vec::with_capacity(count);
@@ -696,9 +756,17 @@ fn group_rate_case(
             sources[id].1
         );
         let playback = &voice.source_playback;
-        let expected_rate: f64 = if id < rate_changed { ratio } else { 1.0 };
+        let expected_rate: f64 = if bpm_lock && id < rate_changed {
+            ratio
+        } else {
+            1.0
+        };
         assert!((playback.tempo_ratio() - expected_rate).abs() < 1.0e-12);
         assert!((playback.rate_target() - expected_rate).abs() < 1.0e-12);
+        if !bpm_lock {
+            assert_eq!(playback.tempo_ratio().to_bits(), 1.0_f64.to_bits());
+            assert_eq!(playback.rate_target().to_bits(), 1.0_f64.to_bits());
+        }
         rates.push((
             playback.tempo_ratio().to_bits(),
             playback.rate_target().to_bits(),
@@ -987,5 +1055,39 @@ fn paced_faster_and_other_rate_group_response() {
     }
     for rate in [44_100, 96_000] {
         matched_faster_group(6, false, rate);
+    }
+}
+
+#[test]
+#[ignore = "BPM authority and partition diagnostic; explicit software observation, not acceptance"]
+fn paced_bpm_and_partition_group_response() {
+    for (bpm_lock, partitions) in [
+        (false, &[512][..]),
+        (true, &[128][..]),
+        (true, &[128, 256, 64, 1024][..]),
+    ] {
+        for warm in [false, true] {
+            let recipe = GroupCallbackRecipe {
+                bpm_lock,
+                partitions,
+            };
+            let off = group_recipe_case(6, warm, 2, false, RATE, 1.16, recipe);
+            let on = group_recipe_case(6, warm, 2, true, RATE, 1.16, recipe);
+            assert_eq!(
+                off.rates, on.rates,
+                "paired actual source trajectories differ"
+            );
+            for id in 0..6 {
+                let difference = (
+                    on.attacks[id].0.unwrap() - off.attacks[id].0.unwrap(),
+                    on.attacks[id].1.unwrap() - off.attacks[id].1.unwrap(),
+                    on.attacks[id].2.unwrap() - off.attacks[id].2.unwrap(),
+                );
+                eprintln!(
+                    "response_group_partition_matched bpm_lock={bpm_lock} warm={warm} partition_cycle={partitions:?} id={id} off_from_E={:?} on_from_E={:?} on_minus_off_frames={difference:?}; paired actual rate bits equal; no cross-partition PCM equality, fitted alignment, latency threshold or quality acceptance",
+                    off.attacks[id], on.attacks[id]
+                );
+            }
+        }
     }
 }

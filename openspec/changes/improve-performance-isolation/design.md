@@ -6842,3 +6842,49 @@ binding only, with native C/image provenance separate. Arbitrary builtin default
 and compiled decorator targets remain unsupported. Full host identity requires
 every actual role; this package establishes no Native SUCCESS, admission, inference,
 platform, quality or Human acceptance. ENTIRE66/67 remains open; Torch savings zero.
+
+## BPM authority and callback partitions
+
+The explicit `paced_bpm_and_partition_group_response` diagnostic observes twelve
+six-PAD groups at 48 kHz: six matched actual Key Lock OFF/ON pairs, 72 individual
+PAD contributions and 36 paired PAD observations. Two source BPM values are
+configured for ratio 1.16. With BPM Lock OFF, all six actual source tempo and target
+rates are asserted to be exactly unity; Key Lock ON at neutral pitch therefore
+requires no wet Native endpoint. Selected cases select only PAD0. A Native wait
+occurs only for that selected nonunity Key Lock ON path. Actual BPM authority,
+selection and unchanged output frame before capture are checked directly.
+
+| BPM Lock | Callback cycle (frames) | Preparation | Actual changed-rate PADs | Common E, OFF / ON | PAD0 additional principal frames | Unity peer additional principal frames |
+| --- | --- | --- | ---: | --- | ---: | ---: |
+| OFF | [512] | Cold | 0 | 512 / 512 | 0 | 0 |
+| OFF | [512] | Selected PAD0 | 0 | 512 / 512 | 0 | 0 |
+| ON | [128] | Cold | 2 | 128 / 384 | 2837 | 0 |
+| ON | [128] | Selected PAD0 | 2 | 128 / 512 | 2837 | 0 |
+| ON | [128, 256, 64, 1024] | Cold | 2 | 128 / 384 | 2837 | 0 |
+| ON | [128, 256, 64, 1024] | Selected PAD0 | 2 | 128 / 448 | 2837 | 0 |
+
+This first functional sample completed in 8.35 seconds, with
+1212 recorded render brackets, 0 observed per-span deadline
+overruns and a maximum instrumented render bracket of 2.2635 ms.
+Every callback length follows its declared cycle; the final render is bounded by
+the original 24,064-frame capture extent. Spans are preallocated for the smallest
+partition. Host pacing follows cumulative rendered frames, and deadlines use each
+actual span length. These costs include harness drain/render/allocation/capture
+work. Callback percentiles are not onset percentiles or device guarantees.
+
+Each control retains the complete three-second source, current source-adoption
+path, neutral pitch, actual Key Lock and source rate bits, immutable T, common
+applied group E and each PAD's own-E attack landmarks. The same-render individual
+contributions reconstruct the mono mix with absolute/relative 1e-6 tolerance.
+Capture alone does not prove
+independent FirstTap or OwnACK. OFF/ON controls assert identical actual source-rate
+bits; cross-partition PCM or attack equality is not an oracle. No source cropping,
+delay fitting, dry substitution for an active wet route or DSP change is made.
+
+Older 512-frame observations remain their original N1 software evidence, without
+new host timing or readiness claims. These rows cover loop mode, mono resident
+PCM, 48 kHz and the stated recipes only. Further modes, slower other-rate groups,
+one-changed faster groups, other relevant counts/selected states, real background
+inference/conversion/loading overlap, final productive 2/4/6 PADs and synthetic
+stress at most 10 remain open. Full source/OwnACK/last-reader/realtime, numerical,
+platform, device, hearing, quality and positive Human acceptance gates remain.

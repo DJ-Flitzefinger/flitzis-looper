@@ -242,8 +242,14 @@ rate bits match across controls, with each individual attack measured after its
 own E and same-render source/mix checks retained. See the [scoped group observations](../../openspec/changes/improve-performance-isolation/design.md#faster-and-other-rate-group-controls).
 Path-specific qualification permits the exact older ordinary/Piano fixtures'
 source/DSP landmark reuse; their T/E and host costs remain historical N1.
-BPM Lock OFF, further modes/partitions, real background overlap, final stress,
-device, quality and Human acceptance remain open.
+The explicit `paced_bpm_and_partition_group_response` adds twelve six-PAD
+controls for actual BPM Lock OFF at 512 frames and BPM Lock ON at 128 frames
+or the cycle [128, 256, 64, 1024]. Cold and selected-PAD0 cases use actual Key Lock
+OFF/ON; BPMOFF asserts unity source rates and requires no neutral Native endpoint.
+Every actual span, bounded capture extent, source identity and own-E landmark is
+retained. See the [scoped partition observations](../../openspec/changes/improve-performance-isolation/design.md#bpm-authority-and-callback-partitions).
+Further modes, sample rates/counts/selected states, real background overlap,
+final stress, device, quality and Human acceptance remain open.
 
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
