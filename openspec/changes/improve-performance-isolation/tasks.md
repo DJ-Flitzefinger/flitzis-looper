@@ -1010,6 +1010,11 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Observe eight cold public neutral Piano cells at 44.1/96 kHz and ratios
+      0.8/1.16 with actual Key Lock OFF/ON, own-E landmarks, source identity and
+      same-render reconstruction; qualify historical ordinary/Piano reuse and
+      retain full current matrix, overlap, stress and quality acceptance gates.
+
 - [x] Compare one cold same-rate Key Lock OFF/ON group through actual per-PAD
       capture, checking adopted Lock and active rates; retain measured additional
       wet displacement separately from source-rate change and all remaining

@@ -223,6 +223,16 @@ therefore remain separate. The matched comparison diagnoses the additional wet
 displacement; it does not justify cropping valid source beginnings or certify
 device, whole-matrix, listening or quality acceptance.
 
+The explicit `paced_other_rate_cold_piano_response` diagnostic adds cold public
+neutral Piano OFF/ON controls at 44.1/96 kHz and ratios 0.8/1.16. It verifies
+actual Lock, active source rate and retained source identity/extent, reconstructs
+the same-render mono output and records attack landmarks after each action's
+own E alongside host brackets. See the [scoped observations](../../openspec/changes/improve-performance-isolation/design.md#other-rate-cold-piano-controls).
+Existing 48 kHz Piano observations remain historical where later shared
+completion changes lack path-specific compatibility proof. Neither an unchanged
+test body nor these eight new cells establishes whole-matrix, quality, overlap,
+device or Human acceptance.
+
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
 and the Rust test wrapper are described in [development](../development.md).

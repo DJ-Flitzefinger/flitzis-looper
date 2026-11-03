@@ -102,6 +102,56 @@ counted as new tests. Run explicitly with the existing Rust test wrapper and the
 exact `paced_group_matched_rate_key_lock_response` leaf (`--ignored --nocapture
 --test-threads=1`). All original remaining gates stay open.
 
+### Other-rate cold Piano controls
+
+The exact `paced_other_rate_cold_piano_response` diagnostic passes one new leaf
+in 5.88 seconds on the same Windows reference host. It adds eight cold
+resident-PCM cells: 44.1/96 kHz, ratios 0.8/1.16, and actual Key Lock OFF/ON.
+Each cell uses the public neutral `pitch.extra:0:set_retrigger` action with one
+playing PAD and two loaded PADs. There is no selected-endpoint preparation or
+worker-ready wait. The existing six 48 kHz Piano cases are unchanged and were
+not replayed. OFF is a legal neutral varispeed control; ON compensates pitch
+through Native. Their different pitches preclude using PCM equality as quality proof.
+
+The test checks the action and mixer Lock, neutral numeric pitch, active source
+tempo/target rate, immutable original T and actual effective E. It retains the
+three-second source address/extent through the existing complete-source-adoption
+and SourceACK path. The existing preallocated mono contribution capture covers
+every rendered partition and reconstructs the same actual mix within 1e-6
+absolute/relative tolerance. That capture verifies identity and output; it is not
+an independent first-source-tap or OwnACK oracle. Existing physical-birth proofs
+retain their original scope. No source trimming, replacement dry output for ON,
+waveform fitting or production DSP change is introduced.
+
+| Sample rate / ratio | OFF first / significant / principal after E | ON first / significant / principal after E | Additional principal displacement |
+| --- | --- | --- | --- |
+| 44,100 Hz / 0.8 | 1 / 1 / 27 | 1084 / 2852 / 2980 | 2953 frames / 66.9615 ms |
+| 44,100 Hz / 1.16 | 1 / 1 / 27 | 1087 / 2752 / 2861 | 2834 frames / 64.2630 ms |
+| 96,000 Hz / 0.8 | 1 / 2 / 59 | 1121 / 5009 / 5055 | 4996 frames / 52.0417 ms |
+| 96,000 Hz / 1.16 | 1 / 2 / 59 | 1106 / 5128 / 5175 | 5116 frames / 53.2917 ms |
+
+All points above use each action's own actual E. Scheduling/readiness displacement
+from immutable T is separate from processing displacement after E. Actual-rate
+half-open significant/principal host brackets and raw frame spans are retained
+per cell alongside the three output landmarks.
+There are 552 instrumented render brackets, with largest observed harness interval
+0.7498 ms and 0 observed partition-deadline overruns. Lock-ON input-call-to-significant-output
+host brackets span 53.6449..70.2876 ms across these four cells. These are
+n1/cell observations including fixture, control drain and capture overhead;
+callback percentiles are not onset percentiles. Thirty milliseconds remains
+advisory, with no device, hearing, waveform-quality or overlap acceptance.
+
+The evidence inventory retains the historical 30 ordinary and six 48 kHz Piano
+observations separately. An unchanged probe body does not prove unchanged
+production inputs after shared completion changes: current T/E/onset reuse
+requires path-specific compatibility evidence. The current twelve group rows
+and matched 48 kHz pair remain compatible with this append-only diagnostic
+change. These eight new cells do not establish a complete current response
+matrix. Missing group rate/Lock/BPM Lock/mode/partition combinations, actual
+inference/conversion/loading overlap, productive 2/4/6 and at most ten synthetic
+stress PADs, and all original numerical, resource, platform, Native SUCCESS,
+CUDA/fresh-CPU, cancellation, quality and Human acceptance gates remain.
+
 ## Prepare native Windows ownership before child creation
 
 The Python launcher previously needed a returned `Popen` object before its Job

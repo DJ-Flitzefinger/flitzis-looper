@@ -756,3 +756,128 @@ fn paced_production_piano_response() {
         }
     }
 }
+
+fn cold_piano_rate_case(rate: u32, ratio: f64, lock: bool) -> GroupAttackPoints {
+    use crate::audio_engine::mixer::group_response_capture::GroupResponseCapture;
+    const PARTITION: usize = 512;
+    let frames = (rate as usize / 2).div_ceil(PARTITION) * PARTITION;
+    let mut fixture = configured(rate, lock, ratio, 0);
+    fixture.rows(crate::audio_engine::input_mapping::PitchPadProjection {
+        key_lock: lock,
+        source_root: Some(0),
+        source_mode: Some(crate::audio_engine::pitch_actions::PitchKeyMode::Major),
+        ..crate::audio_engine::input_mapping::PitchPadProjection::default()
+    });
+    assert_eq!(fixture.mixer.key_lock_for_measurement(0), lock);
+    let origin = fixture.transport.output_frame();
+    let source = {
+        let bank = fixture.mixer.bank_for_measurement();
+        let sample = bank[0].as_ref().unwrap();
+        (sample.source_address(), sample.source_sample_count())
+    };
+    assert_eq!(source.1, 3 * rate as usize);
+    fixture.mixer.group_response_capture =
+        Some(GroupResponseCapture::new(origin, frames, &[(0, source)]));
+    let mut pcm = Vec::with_capacity(frames);
+    let mut spans = Vec::with_capacity(frames / PARTITION);
+    let epoch = Instant::now();
+    let capture_begin_ns = epoch.elapsed().as_nanos();
+    let action = fixture.capture(0, "pitch.extra:0:set_retrigger");
+    let capture_end_ns = epoch.elapsed().as_nanos();
+    let original = action.original_due_frame();
+    assert_eq!(action.render().key_lock, lock);
+    assert_eq!(action.render().pitch, PitchIntent::default());
+    assert!(
+        fixture
+            .control
+            .engine
+            .publish_pitch_action(&action)
+            .unwrap()
+    );
+    fixture.drain();
+    let admission_us = epoch.elapsed().as_micros();
+    while fixture.transport.output_frame() - origin < frames as u64 {
+        pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
+        sleep_until(epoch, fixture.transport.output_frame() - origin, rate);
+    }
+    assert!(action.effective(), "{:?}", action.reason());
+    assert_eq!(action.original_due_frame(), original);
+    assert_eq!(fixture.mixer.key_lock_for_measurement(0), lock);
+    assert_eq!(fixture.starts(0), 1);
+    assert_eq!(fixture.starts(1), 0);
+    let voice = fixture.voice(0);
+    let sample = voice.sample.as_ref().unwrap();
+    assert_eq!(sample.source_address(), source.0);
+    assert_eq!(sample.source_sample_count(), source.1);
+    assert_eq!(
+        voice.source_playback.tempo_ratio().to_bits(),
+        ratio.to_bits()
+    );
+    assert_eq!(
+        voice.source_playback.rate_target().to_bits(),
+        ratio.to_bits()
+    );
+    let effect = action.execution_target();
+    let capture = fixture.mixer.group_response_capture.take().unwrap();
+    capture.validate(&pcm).unwrap();
+    let points = landmarks(capture.pcm(0), rate);
+    assert!(points.0.is_some() && points.1.is_some() && points.2.is_some());
+    let relative =
+        |point: Option<usize>| point.map(|frame| origin as i64 + frame as i64 - effect as i64);
+    let own_effect = (relative(points.0), relative(points.1), relative(points.2));
+    let significant_host = points
+        .1
+        .and_then(|point| group_host_span(&spans, origin + point as u64));
+    let principal_host = points
+        .2
+        .and_then(|point| group_host_span(&spans, origin + point as u64));
+    assert!(significant_host.is_some() && principal_host.is_some());
+    let mut callback_ns = spans
+        .iter()
+        .map(|span| span.end_ns - span.begin_ns)
+        .collect::<Vec<_>>();
+    callback_ns.sort_unstable();
+    let overruns = spans
+        .iter()
+        .filter(|span| {
+            span.end_ns - span.begin_ns
+                > u128::from(span.end - span.first) * 1_000_000_000 / u128::from(rate)
+        })
+        .count();
+    eprintln!(
+        "response_piano_other_rate rate={rate} ratio={ratio} lock={lock} warm=false source={source:?} capture_host_ns={capture_begin_ns}..{capture_end_ns} capture_ns={} admission_us={admission_us} T={original} E={effect} own_E_landmarks={own_effect:?} significant_host_ns={significant_host:?} principal_host_ns={principal_host:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns}; mono same-pass source-checked contribution, complete-source adoption, n1/cell, harness overhead included, no onset percentiles/device/quality/overlap acceptance",
+        action.received_timestamp(),
+        spans.len(),
+        [
+            nearest_rank(&callback_ns, 50),
+            nearest_rank(&callback_ns, 95),
+            nearest_rank(&callback_ns, 99),
+            *callback_ns.last().unwrap()
+        ]
+    );
+    eprintln!(
+        "response_piano_other_rate_raw rate={rate} ratio={ratio} lock={lock} frame_host_spans_ns={spans:?}"
+    );
+    own_effect
+}
+
+#[test]
+#[ignore = "other-rate cold Piano diagnostic; explicit software observation, not acceptance"]
+fn paced_other_rate_cold_piano_response() {
+    for rate in [44_100, 96_000] {
+        for ratio in [0.8, 1.16] {
+            // Same authored burst and source rate, through both public actions.
+            // OFF changes pitch; do not fit waveforms or require PCM equality.
+            let off = cold_piano_rate_case(rate, ratio, false);
+            let on = cold_piano_rate_case(rate, ratio, true);
+            let difference = (
+                on.0.unwrap() - off.0.unwrap(),
+                on.1.unwrap() - off.1.unwrap(),
+                on.2.unwrap() - off.2.unwrap(),
+            );
+            eprintln!(
+                "response_piano_other_rate_matched rate={rate} ratio={ratio} off_from_E={off:?} on_from_E={on:?} on_minus_off_frames={difference:?}; actual neutral Piano retrigger, no fitted alignment/latency threshold/quality acceptance"
+            );
+        }
+    }
+}
