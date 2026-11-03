@@ -60,14 +60,12 @@ DEMUCS_PRODUCER_FILES = (
 def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
     """Name ordered executed host roles independently of optional encoder images."""
     package = Path(__file__).parent.parent
+    # The shared selector constructs both adapters for either request. These host
+    # roles are consulted even when only the Demucs child is selected.
     separator = (
-        (
-            package / "controller" / "bs_roformer_generation.py",
-            Path(bs_roformer_generation.verify_model_assets.__code__.co_filename),
-            package / "bs_input_provenance.py",
-        )
-        if request.separator == "bs-roformer:musdb18hq"
-        else ()
+        package / "controller" / "bs_roformer_generation.py",
+        Path(bs_roformer_generation.verify_model_assets.__code__.co_filename),
+        package / "bs_input_provenance.py",
     )
     return (
         package / "controller" / "stem_artifacts.py",

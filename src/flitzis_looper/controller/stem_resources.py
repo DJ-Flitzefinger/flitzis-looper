@@ -10,7 +10,7 @@ from flitzis_looper.system_resources import host_memory_snapshot
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_MIB = 1024**2
+_MIB = 1024 * 1024
 _ADMISSION_COMMIT = 2048 * _MIB
 _RECOVERY_COMMIT = 3072 * _MIB
 _ADMISSION_PHYSICAL = 512 * _MIB

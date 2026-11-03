@@ -16,43 +16,38 @@ from functools import cache
 class HostMemory(ctypes.Structure):
     """Win32 MEMORYSTATUSEX layout, including caller-specific commit bytes."""
 
-    _fields_ = [
+    _fields_ = (
         ("length", wintypes.DWORD),
         ("load", wintypes.DWORD),
-        ("total_physical", ctypes.c_ulonglong),
-        ("available_physical", ctypes.c_ulonglong),
-        ("commit_limit", ctypes.c_ulonglong),
-        ("available_commit", ctypes.c_ulonglong),
-        ("total_virtual", ctypes.c_ulonglong),
-        ("available_virtual", ctypes.c_ulonglong),
-        ("available_extended_virtual", ctypes.c_ulonglong),
-    ]
+        ("total_physical", ctypes.c_uint64),
+        ("available_physical", ctypes.c_uint64),
+        ("commit_limit", ctypes.c_uint64),
+        ("available_commit", ctypes.c_uint64),
+        ("total_virtual", ctypes.c_uint64),
+        ("available_virtual", ctypes.c_uint64),
+        ("available_extended_virtual", ctypes.c_uint64),
+    )
 
 
 class PerformanceInformation(ctypes.Structure):
     """Win32 PERFORMANCE_INFORMATION layout; commit quantities are page counts."""
 
-    _fields_ = [
+    _fields_ = (
         ("size", wintypes.DWORD),
-        *[
-            (name, ctypes.c_size_t)
-            for name in (
-                "commit_total",
-                "commit_limit",
-                "commit_peak",
-                "physical_total",
-                "physical_available",
-                "system_cache",
-                "kernel_total",
-                "kernel_paged",
-                "kernel_nonpaged",
-                "page_size",
-            )
-        ],
+        ("commit_total", ctypes.c_size_t),
+        ("commit_limit", ctypes.c_size_t),
+        ("commit_peak", ctypes.c_size_t),
+        ("physical_total", ctypes.c_size_t),
+        ("physical_available", ctypes.c_size_t),
+        ("system_cache", ctypes.c_size_t),
+        ("kernel_total", ctypes.c_size_t),
+        ("kernel_paged", ctypes.c_size_t),
+        ("kernel_nonpaged", ctypes.c_size_t),
+        ("page_size", ctypes.c_size_t),
         ("handles", wintypes.DWORD),
         ("processes", wintypes.DWORD),
         ("threads", wintypes.DWORD),
-    ]
+    )
 
 
 def system_commit_bytes(total: int, limit: int, page_size: int) -> tuple[int, int, int]:

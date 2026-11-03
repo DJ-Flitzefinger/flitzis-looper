@@ -161,11 +161,14 @@ and reader guards remain unchanged. Every actual host role, including the codec,
 must pass before the host source identity becomes known; missing or altered roles
 remain UNKNOWN. Public Pydantic compiled plans retain their separate unsupported
 attestation limits, without schema/reduction/repr shortcuts.
-Both current complete host manifests still return UNKNOWN: retained resource
-declarations require further source proof, and the Demucs selector also references
-a backend class outside its current host role set. These are observed remaining
-gaps, not an exhaustive whole-runtime diagnosis. Codec component proof does not
-remove those roles or establish complete producer identity.
+Both selectors include the BS adapter, asset verifier and input-provenance host
+roles because their shared constructor consults both backends. Child model roles
+remain specific to the selected separator. The Win32 memory layouts use explicit
+ABI-equivalent field tuples and resource constants use supported arithmetic.
+Both complete host manifests still return UNKNOWN: the cached Win32 factory and
+the captured monotonic-clock default retain separate unsupported binding proofs.
+These are observed remaining gaps, not an exhaustive whole-runtime diagnosis.
+Component proof does not remove those roles or establish complete producer identity.
 Supported plain dataclass components additionally compare their actual generated
 constructor bodies, exact defaults and frozen captures against stdlib references
 from held declarations, including required post-init calls. Checking this evidence

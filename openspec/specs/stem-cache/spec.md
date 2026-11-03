@@ -436,6 +436,12 @@ diagnostic values at control, session and history boundaries. Converted diagnost
 SHALL NOT establish producer identity or promote passive calibration. Source
 identity SHALL include the actual internal codec and every other executed host
 role; unsupported or altered roles SHALL remain unknown.
+The shared selector's host roles SHALL include both consulted backend adapters
+and their required host dependencies for either selection. Selected child model
+roles SHALL retain their separate source custody. Equivalent explicit resource
+declarations SHALL preserve the live sampler, captured clock, shared mutable
+owners, admission thresholds, recovery latch and fixed query-failure deadline;
+component declaration proof SHALL NOT certify unsupported runtime bindings.
 Encoder and BS-input execution witnesses SHALL remain independently preserved and
 validated. Existing two-argument progress callbacks SHALL remain compatible.
 

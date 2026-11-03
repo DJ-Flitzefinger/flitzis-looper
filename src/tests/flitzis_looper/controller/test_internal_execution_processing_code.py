@@ -41,13 +41,13 @@ def test_actual_receipt_roles_bind_codec_while_unrelated_full_host_stays_unknown
         assert _namespace(bs_roformer_generation, manifests)
     assert loaded_code_identity((Path(protocol.__file__),)) is not None
     assert loaded_code_identity(paths) is None
-    for name, error in (
-        ("system_resources.py", "host ctypes fields require supported direct tuple declarations"),
-        ("stem_resources.py", "host default or constant requires unmeasured execution"),
+    for name, error_type, error in (
+        ("system_resources.py", TypeError, "guarded host callable binding is unavailable"),
+        ("stem_resources.py", ValueError, "host attribute requires an unsupported runtime binding"),
     ):
         path = next(path for path in paths if path.name == name)
         module = processing_code._loaded_at(path.resolve())[0]
-        with pytest.raises(ValueError, match=error):
+        with pytest.raises(error_type, match=error):
             _namespace(module, manifests)
     del manifests[Path(protocol.__file__).resolve()]
     with pytest.raises(ValueError, match="outside the guarded producer roles"):
