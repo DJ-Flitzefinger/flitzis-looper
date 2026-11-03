@@ -253,10 +253,21 @@ six-PAD controls: cold slower 0.8 groups at 44.1/96 kHz and exactly one faster
 1.16 member at 48 kHz, cold or selected-PAD0. Both actual Lock states retain the
 unchanged group helper, source/adoption/capture guards and each own-E landmark.
 See the [scoped rate-topology observations](../../openspec/changes/improve-performance-isolation/design.md#slower-other-rate-and-single-faster-group-controls).
-Actual ordinary/exclusive/global start, Piano retrigger/live SET, pause/Hold/seek,
+Further ordinary/exclusive/global states, Piano retrigger/live SET, pause/Hold/seek,
 unobserved rate/count/selection combinations, real background overlap, final
 stress, device, quality and Human acceptance remain open. Internal source-read
 domains do not imply a separate Normal/Intro/Tail/OneShot performer selector.
+
+The explicit `actual_controller_routes_with_conversion_and_load` diagnostic adds
+actual ordinary exclusive/peer-preserving and global-current-group controller
+routes using complete three-second stereo sources. Actual selection differs from
+the global target group. Productive guarded artifact conversion makes complete
+call/worker-CPU progress inside adjacent paced playback periods while
+two PADs play; all five numeric fixture outputs are verified. A real separate cold
+import receives its original source ACK, with exact Loader CPU overlap still
+unproved. See the [scoped controller observations](../../openspec/changes/improve-performance-isolation/design.md#actual-controller-routes-beside-artifact-conversion).
+This neither runs inference nor closes further source states, the full overlap
+matrix, device, quality or Human acceptance. Production DSP remains unchanged.
 
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup

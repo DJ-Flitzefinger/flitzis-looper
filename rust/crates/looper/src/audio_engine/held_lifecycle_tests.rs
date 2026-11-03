@@ -31,6 +31,10 @@ mod retarget_tests;
 #[path = "held_lifecycle_tests/arrangement_tests.rs"]
 mod arrangement_tests;
 
+#[cfg(windows)]
+#[path = "held_lifecycle_tests/controller_overlap.rs"]
+mod controller_overlap;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();
@@ -506,6 +510,30 @@ impl Fixture {
             before,
             "old Hold release changed the new source voice"
         );
+        self.script("probe._current_feedback_before = probe.session.model_dump(mode='json')");
+        self.call("poll_feedback");
+        self.script("probe._current_feedback_after = probe.session.model_dump(mode='json')\nprobe._current_feedback_delta = [(key, probe._current_feedback_before[key], value) for key, value in probe._current_feedback_after.items() if probe._current_feedback_before[key] != value]");
+        Python::attach(|py| {
+            let delta = self
+                .probe
+                .bind(py)
+                .getattr("_current_feedback_delta")
+                .unwrap();
+            eprintln!(
+                "R2 current_feedback_settlement delta={}",
+                delta.str().unwrap()
+            );
+        });
+        assert_eq!(
+            self.voice(),
+            before,
+            "current feedback projection changed the new source voice"
+        );
+        self.script("assert probe.session.active_sample_ids == {0}\nassert probe.session.waveform_pause_hold_pad_id is None");
+        self.script(&format!(
+            "assert probe.session.paused_sample_ids == {}",
+            if before.paused { "{0}" } else { "set()" }
+        ));
         self.script("probe._late_feedback_before = probe.session.model_dump(mode='json')");
         for message in messages {
             assert!(self.state().producer_out.producer.push(message).is_ok());

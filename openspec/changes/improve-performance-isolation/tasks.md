@@ -1010,6 +1010,12 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Observe actual ordinary exclusive/peer-preserving and global-current-group
+      controller starts beside advancing guarded five-output artifact conversion;
+      retain original captures, complete source/adoption, contained call/CPU
+      playback periods, genuine cold-import ACK and true worker retirement. Keep exact
+      Loader CPU/inference overlap, other routes and all final acceptance open.
+
 - [x] Observe eight six-PAD groups as four actual Key Lock OFF/ON pairs for
       slower 44.1/96 kHz and exactly one faster 48 kHz member, retaining own-E
       landmarks, full source/adoption/capture guards and selected-PAD0-only

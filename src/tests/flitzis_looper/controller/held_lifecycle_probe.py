@@ -7,7 +7,6 @@ it never supplies a source publication, Native acknowledgement or audio effect.
 
 import hashlib
 import json
-from collections import deque
 from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -746,7 +745,7 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrange
             self._shutdown_complete = False
             self._gui_native_selection = None
             self._pair_waveform_views = []
-            self._pending_content_feedback = deque()
+            self._init_audio_feedback()
             self._audio.set_resident_pcm_budget_mib(self._project.resident_pcm_budget_mib)
             self._assets = ProjectAssetLifecycle(self._project, audio)
             self._assets.sync_assignments()
@@ -828,7 +827,7 @@ class HeldLifecycleProbe(AppController, _HeldLifecycleJoin, _HeldRenderedArrange
             self.stems,
             self.input_mapping,
         }
-        self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
+        self._bind_playback_feedback()
         self.diagnostics = ConsoleDiagnostics(
             lambda: (
                 path

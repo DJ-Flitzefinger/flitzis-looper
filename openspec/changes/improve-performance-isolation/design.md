@@ -6936,3 +6936,70 @@ domains must not be relabeled as measured product modes. Real background
 inference/conversion/loading overlap, final productive 2/4/6 PADs and at most ten
 synthetic stress PADs, full numerical/resource/platform/source/last-reader/realtime,
 device/hearing/quality and positive Human acceptance gates remain open.
+
+
+### Actual controller routes beside artifact conversion
+
+The explicit `actual_controller_routes_with_conversion_and_load` diagnostic uses
+the existing device-free HeldLifecycle fixture with actual App components,
+TransportController, InputMapping, Loader, Native source publication, scheduler
+and renderer. Its common headless envelope reuses the current App feedback
+initialization and observation fences. It observes two stereo PADs at 48 kHz with complete
+three-second sources. A normal InputMapping frame publishes current source rows
+before actual App selection. Ordinary `trigger_pad` first starts a peer while
+Multi Loop is OFF, then an exclusive START actually stops that peer. Enabling
+Multi Loop and starting it again retains both voices. Global START captures the
+actual active {0, 1} group while Native selection is PAD2; both new generations
+take effect at the same observed output frame. Native selection is checked before these routes and project selection at global
+capture; neither is asserted unchanged after the subsequent new import.
+
+In the first sample of the final test bytes, exclusive T/E were 1536/2560,
+the subsequent ordinary T/E were 3072/3584, and global E was
+4096. The retained group T remains unchanged and agrees with both original
+voice launch references; those references are not relabelled as E. Original source
+digests, complete resident geometry and retained PCM addresses are checked across
+background work. No new production DSP or preparation policy is implemented.
+
+One background executor runs productive guarded `write_project_cache_artifacts`
+on four complete numeric 60-second, 48 kHz stereo WAV fixtures. Its original
+Native reservations, memory floors and bounded 4096-frame conversion calls stay
+in use. Every frame of all five complete outputs is compared against independent
+exact constants; geometry and whole-file digests are verified. This is a
+nonneural artifact conversion, without a new resampling-quality claim. All actual
+call intervals, same-worker CPU brackets, frame spans and five output hashes are
+retained. The executor is joined and the temporary converter binding restored on
+success and error paths before the engine and temporary directory retire.
+
+Across 96 paced 512-frame playback observations, 14
+of the 95 adjacent playback periods contained at least one complete guarded
+converter call with an observed positive same-worker CPU-counter delta. Each
+period advances exactly 512 actual output frames and includes explicit pacing
+between render calls. The maximum observed period was 48.7865 ms;
+63 periods exceeded the nominal 10.6667 ms spacing. Maximum
+render-entry lateness relative to this harness's cumulative target was
+38.6954 ms. These observations include scheduling, startup,
+snapshot and controller overhead; they do not establish device callback deadlines.
+
+The shorter before/after control/render observer brackets separately recorded
+2 completed-accounting advances and
+1 fully contained CPU-positive converter calls.
+Neither short metric is the playback-period witness. A completed-counter delta
+alone cannot place all of that call's CPU after the first snapshot. Background
+work may run between render calls; no exact native CPU duration or per-render CPU
+parallelism is claimed. The maximum drain/allocation/render harness
+bracket was 0.3156 ms, with 0 observed
+512-frame harness deadline overruns. The leaf took 4.02 seconds; all
+are one software sample, not an onset or readiness distribution.
+
+A separate 60-second 44.1 kHz stereo import is admitted for stopped PAD3 while
+the two voices play. The real Loader later supplies its original source ACK,
+complete source digest and 2,880,000-frame 48 kHz extent. Admission and observed
+success brackets do not establish exactly when Loader CPU ran within playback.
+Engine shutdown joins its actual cold jobs, and callback retirement is observed.
+
+Broader Loader computation and real CPU/CUDA inference overlap, explicit-target
+global OFF, further controller/source states, Piano SET/SET_RETRIGGER,
+pause/resume/Hold/seek, productive 2/4/6-PAD and at-most-ten synthetic stress,
+all original numerical/resource/platform/source/last-reader/realtime duties,
+device/hearing/quality and positive Human acceptance remain open. Existing group
+observations are reused within their original scope; no green matrix is replayed.
