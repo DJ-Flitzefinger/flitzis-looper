@@ -152,6 +152,82 @@ inference/conversion/loading overlap, productive 2/4/6 and at most ten synthetic
 stress PADs, and all original numerical, resource, platform, Native SUCCESS,
 CUDA/fresh-CPU, cancellation, quality and Human acceptance gates remain.
 
+### Faster and other-rate group controls
+
+The explicit `paced_faster_and_other_rate_group_response` diagnostic passes one
+new leaf in 11.44 seconds on the same Windows reference host. It adds
+16 render groups and eight matched Key Lock OFF/ON pairs: 48 kHz with 2/4/6 PADs,
+each unselected and selected-PAD0, plus cold six-PAD groups at 44.1/96 kHz. Exactly
+two members use source tempo 1.16; all remaining members use unity. Thus the two-PAD
+case has two changed members, while four/six-PAD cases retain unity peers.
+There are 72 individual PAD observations and 36 matched individual comparisons.
+The diagnostic's warm flag means selected PAD0. Only Lock ON awaits that PAD's
+Native endpoint; neutral OFF selects PAD0 without Native preparation or a readiness
+wait. Actual selection and unchanged output frame are asserted. This does not
+certify the second changed member as warm. BPM Lock remains ON, partitions remain
+512 frames and playback loops.
+
+The original slower `group_case` wrapper still selects 48 kHz, ratio 0.8 and its
+original exact active-rate bit assertions. Its 12 group observations and matched
+slower pair are reused within their previous scope. The generic diagnostic uses
+actual sample rate consistently for complete three-second sources, capture extent,
+landmark windows, pacing and callback deadlines. It checks actual adopted Lock,
+neutral pitch, retained source address/extent and immutable original T; every group
+applies with common E while each observed contribution is analyzed from its own E.
+The existing complete-source-adoption helper supplies the actual SourceACK path.
+Preallocated same-render mono contributions reconstruct the actual mix within
+1e-6 absolute/relative tolerance. Capture alone is not an independent first-source-
+tap or OwnACK oracle. Matched controls verify identical active source rate/target
+bits; OFF uses legal varispeed and changes pitch, so PCM equality is not quality
+proof. Unscaled authored landmarks are descriptive, not a matched OFF reference.
+
+| Rate / PADs / selected PAD0 warm | Changed-PAD additional principal displacement | Unity-peer additional principal displacement |
+| --- | --- | --- |
+| 48,000 Hz / 2 / false | 2837 frames / 59.1042 ms | No unity peer |
+| 48,000 Hz / 2 / true | 2837 frames / 59.1042 ms | No unity peer |
+| 48,000 Hz / 4 / false | 2837 frames / 59.1042 ms | 0 frames |
+| 48,000 Hz / 4 / true | 2837 frames / 59.1042 ms | 0 frames |
+| 48,000 Hz / 6 / false | 2837 frames / 59.1042 ms | 0 frames |
+| 48,000 Hz / 6 / true | 2837 frames / 59.1042 ms | 0 frames |
+| 44,100 Hz / 6 / false | 2834 frames / 64.2630 ms | 0 frames |
+| 96,000 Hz / 6 / false | 5116 frames / 53.2917 ms | 0 frames |
+
+The table reports ON-minus-OFF principal attack after each member's own E, in
+frames at the declared rate. All first/significant/principal observations, each
+member's effective frame, host brackets and raw frame spans are retained separately.
+No alignment fitting, source crop, substituted dry ON path or production DSP change
+is introduced. Across 840 instrumented render intervals, the largest
+observed harness interval is 1.6540 ms with 0 observed deadline overruns.
+These are N1/group software observations including control drain, rendering,
+allocation and capture overhead. Callback percentiles are not onset percentiles;
+30 ms remains advisory. They establish no device, quality, overlap or Human acceptance.
+
+Fresh path-specific qualification of historical ordinary30 (`e8e0725f`) and six
+48 kHz Piano (`75fc32b9`) observations supports source/DSP and E-relative landmark
+reuse for those exact fixtures. Each old cell has one initial original, no group
+or predecessor and historical E at most 1024, before its 8192-frame fallback.
+Later group/deferred/predecessor and late-reprepared branches are outside those
+inputs; source, physical history and DSP remain compatible. The earlier statement
+that unchanged probe bodies alone are insufficient still applies. Historical T/E,
+host spans and callback costs remain historical N1 observations: added callback
+scanning and control-context work can change scheduling and host cost. They are
+not fresh current readiness, callback or onset distributions. No timestamp-only
+replay is justified, and these landmarks are not fitted expectations for new cells.
+
+The first compiled attempt failed after its initial cold OFF/ON pair: the new
+selected-OFF case waited for a Native endpoint that neutral OFF intentionally
+does not create. The diagnostic now selects OFF directly and preserves the
+original ON readiness path; its three-second timeout and production behavior
+are unchanged. That failed run and partial observations remain retained, with
+no additional distinct coverage. Any compiler-helper cleanup failure remains
+separate from the functional test outcome.
+
+BPM Lock OFF, further modes and partitions, actual inference/conversion/loading
+overlap, final productive 2/4/6 and at most ten synthetic stress PADs remain open.
+All original numerical/full-track/resource/platform/producer/CUDA-to-fresh-CPU,
+cancellation/reader settlement, finite whole Native SUCCESS, quality and Human
+acceptance gates remain. Productive Torch remains; installed savings remain zero.
+
 ## Prepare native Windows ownership before child creation
 
 The Python launcher previously needed a returned `Popen` object before its Job

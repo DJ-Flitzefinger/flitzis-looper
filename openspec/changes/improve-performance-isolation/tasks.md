@@ -1010,6 +1010,12 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Observe 16 faster/other-rate groups as eight matched actual Key Lock
+      OFF/ON pairs with 72 individual PAD observations and exact paired source
+      rates; retain selected-PAD0-only warmth, historical source-path qualification
+      and all remaining BPM Lock/mode/partition/overlap/stress/acceptance gates.
+
+
 - [x] Observe eight cold public neutral Piano cells at 44.1/96 kHz and ratios
       0.8/1.16 with actual Key Lock OFF/ON, own-E landmarks, source identity and
       same-render reconstruction; qualify historical ordinary/Piano reuse and

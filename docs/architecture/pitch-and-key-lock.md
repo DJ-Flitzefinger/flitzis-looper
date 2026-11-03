@@ -233,6 +233,18 @@ completion changes lack path-specific compatibility proof. Neither an unchanged
 test body nor these eight new cells establishes whole-matrix, quality, overlap,
 device or Human acceptance.
 
+The explicit `paced_faster_and_other_rate_group_response` diagnostic extends
+matched Key Lock OFF/ON observations to faster 1.16 groups at 48 kHz with 2/4/6
+PADs and cold six-PAD groups at 44.1/96 kHz. Two members change source rate;
+remaining members stay at unity. Warm selects only PAD0: ON awaits its Native
+endpoint, while neutral OFF uses selection only without Native preparation. Actual source
+rate bits match across controls, with each individual attack measured after its
+own E and same-render source/mix checks retained. See the [scoped group observations](../../openspec/changes/improve-performance-isolation/design.md#faster-and-other-rate-group-controls).
+Path-specific qualification permits the exact older ordinary/Piano fixtures'
+source/DSP landmark reuse; their T/E and host costs remain historical N1.
+BPM Lock OFF, further modes/partitions, real background overlap, final stress,
+device, quality and Human acceptance remain open.
+
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
 and the Rust test wrapper are described in [development](../development.md).

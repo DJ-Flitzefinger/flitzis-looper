@@ -506,35 +506,79 @@ fn paced_production_response_matrix() {
 
 type GroupAttackPoints = (Option<i64>, Option<i64>, Option<i64>);
 
-/// Both controls retain the actual source adoption, capture and renderer path.
+struct GroupRateResult {
+    attacks: Vec<GroupAttackPoints>,
+    rates: Vec<(u64, u64)>,
+}
+
+/// Preserve the original slower 48 kHz observation recipe.
 fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupAttackPoints> {
+    let result = group_rate_case(count, warm, slowed, lock, RATE, 0.8);
+    for (id, &actual) in result.rates.iter().enumerate() {
+        let expected: f64 = if id < slowed { 0.8 } else { 1.0 };
+        assert_eq!(actual, (expected.to_bits(), expected.to_bits()));
+    }
+    result.attacks
+}
+
+/// Both controls retain the actual source adoption, capture and renderer path.
+fn group_rate_case(
+    count: usize,
+    warm: bool,
+    rate_changed: usize,
+    lock: bool,
+    rate: u32,
+    ratio: f64,
+) -> GroupRateResult {
     use crate::audio_engine::mixer::group_response_capture::GroupResponseCapture;
     const PARTITION: usize = 512;
-    let frames = (RATE as usize / 2).div_ceil(PARTITION) * PARTITION;
-    let authored = burst(RATE, 0);
-    let authored_start = RATE as usize / 10;
+    let frames = (rate as usize / 2).div_ceil(PARTITION) * PARTITION;
+    let authored = burst(rate, 0);
+    let authored_start = rate as usize / 10;
     let authored_points = landmarks(
         &authored.samples[authored_start..authored_start + frames],
-        RATE,
+        rate,
     );
-    let mut fixture = configured(RATE, lock, 0.8, 0);
+    let mut fixture = configured(rate, lock, ratio, 0);
     for id in 1..count {
-        publish_tone_with_rate(&fixture.control, id, burst(RATE, 0), true, RATE);
+        publish_tone_with_rate(&fixture.control, id, burst(rate, 0), true, rate);
     }
     adopt_current_source_ids(&mut fixture, lock, &(0..count).collect::<Vec<_>>());
     refresh_actual_runtime_bindings(&fixture);
     for id in 0..count {
         fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
-        fixture
-            .mixer
-            .set_pad_bpm(id, Some(if id < slowed { 150.0 } else { 120.0 }));
+        fixture.mixer.set_pad_bpm(
+            id,
+            Some(if id < rate_changed {
+                120.0 / ratio
+            } else {
+                120.0
+            }),
+        );
     }
     for id in 0..count {
         assert_eq!(fixture.mixer.key_lock_for_measurement(id), lock);
     }
-    if warm {
+    let native_ready_wait = warm && lock;
+    let before_selection = fixture.transport.output_frame();
+    if native_ready_wait {
         select_and_wait(&mut fixture);
+    } else if warm {
+        // Neutral OFF deliberately has no Native endpoint to prepare or await.
+        fixture.control.engine.select_input_pad(0).unwrap();
     }
+    if warm {
+        assert_eq!(
+            fixture
+                .control
+                .engine
+                .input_selected_projection()
+                .unwrap()
+                .1,
+            Some(0)
+        );
+    }
+    assert_eq!(fixture.transport.output_frame(), before_selection);
     let origin = fixture.transport.output_frame();
     let sources = (0..count)
         .map(|id| {
@@ -543,6 +587,11 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
             (id, (sample.source_address(), sample.source_sample_count()))
         })
         .collect::<Vec<_>>();
+    assert!(
+        sources
+            .iter()
+            .all(|(_, source)| source.1 == 3 * rate as usize)
+    );
     fixture.mixer.group_response_capture =
         Some(GroupResponseCapture::new(origin, frames, &sources));
     let mut pcm = Vec::with_capacity(frames);
@@ -570,6 +619,7 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
     });
     let capture_end_ns = epoch.elapsed().as_nanos();
     fixture.drain();
+    let original = captured.original_frame();
     let starts = captured
         .resolve()
         .unwrap()
@@ -578,7 +628,7 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
         .map(|member| member.start)
         .collect::<Vec<_>>();
     pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
-    sleep_until(epoch, PARTITION as u64, RATE);
+    sleep_until(epoch, PARTITION as u64, rate);
     assert!(
         fixture
             .control
@@ -591,7 +641,7 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
     let admission_us = epoch.elapsed().as_micros();
     while fixture.transport.output_frame() - origin < frames as u64 {
         pcm.extend(group_render(&mut fixture, PARTITION, epoch, &mut spans));
-        sleep_until(epoch, fixture.transport.output_frame() - origin, RATE);
+        sleep_until(epoch, fixture.transport.output_frame() - origin, rate);
     }
     let effects = starts
         .iter()
@@ -608,21 +658,21 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
         .iter()
         .filter(|span| {
             span.end_ns - span.begin_ns
-                > u128::from(span.end - span.first) * 1_000_000_000 / u128::from(RATE)
+                > u128::from(span.end - span.first) * 1_000_000_000 / u128::from(rate)
         })
         .count();
     let max_pacing_late_ns = spans
         .iter()
         .map(|span| {
             span.begin_ns
-                .saturating_sub(u128::from(span.first - origin) * 1_000_000_000 / u128::from(RATE))
+                .saturating_sub(u128::from(span.first - origin) * 1_000_000_000 / u128::from(rate))
         })
         .max()
         .unwrap();
     eprintln!(
-        "response_group lock={lock} pads={count} slowed={slowed} warm={warm} rate={RATE} partition={PARTITION} start_n=1 capture_host_ns={capture_begin_ns}..{capture_end_ns} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} authored_landmarks={authored_points:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns} max_pacing_late_ns={max_pacing_late_ns}; SAME-pass mono, harness drain/render/allocation/tap included, callback percentiles are not onset percentiles; host spans from epoch before capture, 30ms advisory, no device/overlap/whole-matrix acceptance",
+        "response_group lock={lock} pads={count} rate_changed={rate_changed} warm={warm} selected_pad0={warm} native_ready_wait={native_ready_wait} rate={rate} ratio={ratio} partition={PARTITION} start_n=1 capture_host_ns={capture_begin_ns}..{capture_end_ns} admission_us={admission_us} T={:?} effects={effects:?} mix_landmarks={:?} authored_landmarks={authored_points:?} callback_n={} harness_callback_ns_p50_p95_p99_max={:?} harness_overruns={overruns} max_pacing_late_ns={max_pacing_late_ns}; SAME-pass mono, harness drain/render/allocation/tap included, callback percentiles are not onset percentiles; host spans from epoch before capture, 30ms advisory, no device/overlap/whole-matrix acceptance",
         captured.original_frame(),
-        landmarks(&pcm, RATE),
+        landmarks(&pcm, rate),
         spans.len(),
         [
             nearest_rank(&callback_ns, 50),
@@ -632,13 +682,28 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
         ],
     );
     let mut observations = Vec::with_capacity(count);
+    let mut rates = Vec::with_capacity(count);
     for id in 0..count {
         assert_eq!(fixture.mixer.key_lock_for_measurement(id), lock);
-        let playback = &fixture.voice(id).source_playback;
-        let expected_rate: f64 = if id < slowed { 0.8 } else { 1.0 };
-        assert_eq!(playback.tempo_ratio().to_bits(), expected_rate.to_bits());
-        assert_eq!(playback.rate_target().to_bits(), expected_rate.to_bits());
-        let points = landmarks(capture.pcm(id), RATE);
+        assert_eq!(
+            fixture.mixer.pad_pitch_intent(id),
+            Some(PitchIntent::default())
+        );
+        let voice = fixture.voice(id);
+        let sample = voice.sample.as_ref().unwrap();
+        assert_eq!(
+            (sample.source_address(), sample.source_sample_count()),
+            sources[id].1
+        );
+        let playback = &voice.source_playback;
+        let expected_rate: f64 = if id < rate_changed { ratio } else { 1.0 };
+        assert!((playback.tempo_ratio() - expected_rate).abs() < 1.0e-12);
+        assert!((playback.rate_target() - expected_rate).abs() < 1.0e-12);
+        rates.push((
+            playback.tempo_ratio().to_bits(),
+            playback.rate_target().to_bits(),
+        ));
+        let points = landmarks(capture.pcm(id), rate);
         assert!(points.0.is_some() && points.1.is_some() && points.2.is_some());
         let significant_host = points
             .1
@@ -659,14 +724,15 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
             .zip(authored_points.2)
             .map(|(point, reference)| point - reference as i64);
         eprintln!(
-            "response_group_pad lock={lock} pads={count} slowed={slowed} warm={warm} id={id} source={:?} capture_ns={} E={:?} landmarks={points:?} significant_host_ns={significant_host:?} principal_host_ns={principal_host:?} principal_from_E={principal_from_effect:?} principal_minus_authored={principal_minus_authored:?}; observed contribution, not inferred from commonE",
+            "response_group_pad lock={lock} pads={count} rate_changed={rate_changed} warm={warm} selected_pad0={warm} native_ready_wait={native_ready_wait} rate={rate} ratio={ratio} id={id} actual_rate_bits={:?} source={:?} capture_ns={} E={:?} landmarks={points:?} significant_host_ns={significant_host:?} principal_host_ns={principal_host:?} principal_from_E={principal_from_effect:?} principal_minus_authored={principal_minus_authored:?}; observed contribution, not inferred from commonE",
+            rates[id],
             sources[id].1,
             starts[id].received_timestamp(),
             effects[id]
         );
     }
     eprintln!(
-        "response_group_raw lock={lock} pads={count} slowed={slowed} warm={warm} frame_host_spans_ns={spans:?}"
+        "response_group_raw lock={lock} pads={count} rate_changed={rate_changed} warm={warm} selected_pad0={warm} native_ready_wait={native_ready_wait} rate={rate} ratio={ratio} frame_host_spans_ns={spans:?}"
     );
     assert!(
         effects
@@ -674,7 +740,16 @@ fn group_case(count: usize, warm: bool, slowed: usize, lock: bool) -> Vec<GroupA
             .all(|effect| *effect == effects[0] && effect.is_some())
     );
     assert!(starts.iter().all(|start| start.state() == "applied"));
-    observations
+    assert_eq!(captured.original_frame(), original);
+    assert!(
+        starts
+            .iter()
+            .all(|start| start.original_frame() == original)
+    );
+    GroupRateResult {
+        attacks: observations,
+        rates,
+    }
 }
 
 #[test]
@@ -879,5 +954,38 @@ fn paced_other_rate_cold_piano_response() {
                 "response_piano_other_rate_matched rate={rate} ratio={ratio} off_from_E={off:?} on_from_E={on:?} on_minus_off_frames={difference:?}; actual neutral Piano retrigger, no fitted alignment/latency threshold/quality acceptance"
             );
         }
+    }
+}
+
+fn matched_faster_group(count: usize, warm: bool, rate: u32) {
+    let off = group_rate_case(count, warm, 2, false, rate, 1.16);
+    let on = group_rate_case(count, warm, 2, true, rate, 1.16);
+    assert_eq!(
+        off.rates, on.rates,
+        "matched controls need the same actual source trajectory"
+    );
+    for id in 0..count {
+        let difference = (
+            on.attacks[id].0.unwrap() - off.attacks[id].0.unwrap(),
+            on.attacks[id].1.unwrap() - off.attacks[id].1.unwrap(),
+            on.attacks[id].2.unwrap() - off.attacks[id].2.unwrap(),
+        );
+        eprintln!(
+            "response_group_faster_matched pads={count} warm={warm} rate={rate} ratio=1.16 rate_changed=2 id={id} off_from_E={:?} on_from_E={:?} on_minus_off_frames={difference:?}; actual source rate bits equal, first/significant/principal from each own E; OFF changes pitch, no PCM equality/fitted alignment/device/quality acceptance",
+            off.attacks[id], on.attacks[id]
+        );
+    }
+}
+
+#[test]
+#[ignore = "faster and other-rate group diagnostic; explicit software observation, not acceptance"]
+fn paced_faster_and_other_rate_group_response() {
+    for count in [2, 4, 6] {
+        for warm in [false, true] {
+            matched_faster_group(count, warm, RATE);
+        }
+    }
+    for rate in [44_100, 96_000] {
+        matched_faster_group(6, false, rate);
     }
 }
