@@ -1,4 +1,5 @@
-//! Six complete Loader sources and repeated public groups beside real conversion.
+//! Complete Loader cohorts and repeated public groups beside real conversion.
+//! The ten-PAD cohort is synthetic stress, separate from the productive six-PAD target.
 
 use super::controller_overlap::{ConversionSession, active, script_value, settle, start};
 use super::*;
@@ -6,12 +7,11 @@ use crate::audio_engine::CapturedGlobalStart;
 use crate::audio_engine::c3_process_metrics;
 use crate::audio_engine::source_playback::SourcePlayback;
 
-const PADS: [usize; 6] = [0, 1, 2, 3, 4, 5];
 type ConversionCall = (u64, u64, u64, u64, usize, usize);
 type ConversionSnapshot = (u64, usize, u64, usize);
 
-fn sources(f: &mut Fixture) -> [(usize, usize, String); 6] {
-    PADS.map(|id| {
+fn sources<const N: usize>(f: &mut Fixture, pads: &[usize; N]) -> [(usize, usize, String); N] {
+    pads.map(|id| {
         let source = f.state().mixer.bank_for_measurement()[id].as_ref().unwrap();
         assert_eq!(source.frame_count(), 3 * RATE as usize);
         assert_eq!(
@@ -32,8 +32,11 @@ fn sources(f: &mut Fixture) -> [(usize, usize, String); 6] {
     })
 }
 
-fn voices(f: &mut Fixture) -> [(u64, usize, usize, SourcePlayback); 6] {
-    PADS.map(|id| {
+fn voices<const N: usize>(
+    f: &mut Fixture,
+    pads: &[usize; N],
+) -> [(u64, usize, usize, SourcePlayback); N] {
+    pads.map(|id| {
         let voice = f
             .state()
             .mixer
@@ -56,15 +59,15 @@ fn poll(f: &Fixture) {
     f.script("probe.transport.on_frame_render()\nprobe.input_mapping.on_frame_render()");
 }
 
-fn stop(f: &mut Fixture) {
+fn stop(f: &mut Fixture, pads: &[usize]) {
     // MultiLoop ON retains this original in _pending, not _fenced_batches.
-    f.script("probe.transport.playback.stop_global_start_stop()\nprobe.six_stop = probe.transport.playback._global_playback._pending.ticket\nassert probe.six_stop.publication_status() == 'pending'");
+    f.script("probe.transport.playback.stop_global_start_stop()\nprobe.conversion_stop = probe.transport.playback._global_playback._pending.ticket\nassert probe.conversion_stop.publication_status() == 'pending'");
     f.drain();
     let pcm = f.render(512);
     assert!(pcm.iter().all(|value| *value == 0.0));
-    assert!(PADS.iter().all(|id| !active(f, *id)));
+    assert!(pads.iter().all(|id| !active(f, *id)));
     poll(f);
-    f.script("assert probe.six_stop.publication_status() == 'accepted'\nassert not probe.session.active_sample_ids\nassert not probe.session.paused_sample_ids\nassert probe.session.global_stop_restore_sample_ids == set(range(6))\nassert probe.session.global_stop_engaged");
+    f.script("assert probe.conversion_stop.publication_status() == 'accepted'\nassert not probe.session.active_sample_ids\nassert not probe.session.paused_sample_ids\nassert probe.session.global_stop_restore_sample_ids == set(range(probe.conversion_pad_count))\nassert probe.session.global_stop_engaged");
 }
 
 fn snapshot(conversion: &ConversionSession) -> ConversionSnapshot {
@@ -81,9 +84,22 @@ fn snapshot(conversion: &ConversionSession) -> ConversionSnapshot {
 #[test]
 #[ignore = "explicit six-PAD repeated controller/conversion diagnostic; no device"]
 fn actual_six_pad_repeated_start_stop_with_conversion() {
+    run::<6>("six_pad_conversion");
+}
+
+#[test]
+#[ignore = "explicit ten-PAD synthetic overlap/settlement diagnostic; no device"]
+fn actual_ten_pad_synthetic_restarts_with_conversion() {
+    run::<10>("ten_pad_conversion");
+}
+
+fn run<const N: usize>(label: &str) {
+    assert!(N == 6 || N == 10);
+    let pads: [usize; N] = std::array::from_fn(|id| id);
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut f = Fixture::new(root, false);
+    f.script(&format!("probe.conversion_pad_count = {N}"));
     let module = Python::attach(|py| {
         PyModule::from_code(
             py,
@@ -98,7 +114,7 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
         .unwrap()
         .unbind()
     });
-    for id in PADS {
+    for id in pads {
         let path = root.join(format!("source-{id}.wav"));
         Python::attach(|py| {
             module
@@ -118,21 +134,21 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
         }
     }
     f.drain();
-    let original_sources = sources(&mut f);
-    let markers = PADS.map(|id| f.state().mixer.loop_region_frames(id));
-    f.script("probe.six_sources = tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(6))\nprobe.input_mapping.on_frame_render()\nprobe.select_pad(5)");
+    let original_sources = sources(&mut f, &pads);
+    let markers = pads.map(|id| f.state().mixer.loop_region_frames(id));
+    f.script("probe.conversion_sources = tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(probe.conversion_pad_count))\nprobe.input_mapping.on_frame_render()\nprobe.select_pad(probe.conversion_pad_count - 1)");
     let mut source_keys = Vec::new();
-    for id in PADS {
+    for id in pads {
         let capture = start(&mut f, id, true);
-        settle(&mut f, &PADS[..=id]);
+        settle(&mut f, &pads[..=id]);
         assert_eq!(capture.state(), "applied");
         source_keys.push(capture.content_key());
     }
-    let mut previous_generations = voices(&mut f).map(|voice| voice.0);
-    stop(&mut f);
+    let mut previous_generations = voices(&mut f, &pads).map(|voice| voice.0);
+    stop(&mut f, &pads);
     let initial_metrics = c3_process_metrics::snapshot();
     let mut rows = Vec::new();
-    let mut previous_sequences = [0; 6];
+    let mut previous_sequences = [0; N];
     for cycle in 0..6 {
         let conversion = ConversionSession(Python::attach(|py| {
             module.getattr(py, "Conversion").unwrap().call1(py, (
@@ -165,20 +181,20 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
                 .extract::<bool>(py)
                 .unwrap()
         });
-        f.script("probe.transport.playback.start_or_restart_global_start_stop()\nprobe.six_capture = (probe.transport.playback._global_playback._pending or probe.transport.playback._global_playback._deferred).capture\nassert probe.six_capture.diagnostic_slots() == list(range(6))");
+        f.script("probe.transport.playback.start_or_restart_global_start_stop()\nprobe.conversion_capture = (probe.transport.playback._global_playback._pending or probe.transport.playback._global_playback._deferred).capture\nassert probe.conversion_capture.diagnostic_slots() == list(range(probe.conversion_pad_count))");
         // Public start may already publish. Retain the original owners before
         // the first subsequent callback drain/render or controller poll.
         let capture = Python::attach(|py| {
             f.probe
                 .bind(py)
-                .getattr("six_capture")
+                .getattr("conversion_capture")
                 .unwrap()
                 .extract::<PyRef<CapturedGlobalStart>>()
                 .unwrap()
                 .clone()
         });
         let members = capture.diagnostic_members();
-        assert_eq!(members.len(), 6);
+        assert_eq!(members.len(), N);
         let originals = members
             .iter()
             .enumerate()
@@ -206,18 +222,18 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
             assert_eq!(capture.original_frame(), Some(original_t));
             assert_eq!(capture.received_timestamp(), received);
             if capture.state() == "applied" {
-                assert!(PADS.iter().all(|id| active(&mut f, *id)));
+                assert!(pads.iter().all(|id| active(&mut f, *id)));
                 break frame;
             }
             assert!(
-                PADS.iter().all(|id| !active(&mut f, *id)),
+                pads.iter().all(|id| !active(&mut f, *id)),
                 "no partial group before E"
             );
             assert_ne!(capture.state(), "rejected", "{:?}", capture.reason());
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(1));
         };
-        let births = voices(&mut f);
+        let births = voices(&mut f, &pads);
         for (id, member) in members.iter().enumerate() {
             assert_eq!(
                 (
@@ -241,7 +257,7 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
         }
         let began = Instant::now();
         let mut spans = Vec::new();
-        let mut contributions = [0; 6];
+        let mut contributions = [0; N];
         for period in 0..96 {
             let target = Duration::from_secs_f64(period as f64 * 512.0 / f64::from(RATE));
             if target > began.elapsed() {
@@ -249,16 +265,16 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
             }
             let before = snapshot(&conversion);
             let first = f.state().transport.output_frame();
-            let mut expected = voices(&mut f);
+            let mut expected = voices(&mut f, &pads);
             for voice in &mut expected {
                 assert!(voice.3.advance(512));
             }
             f.drain();
             let pcm = f.render(512);
             let after = snapshot(&conversion);
-            let actual = voices(&mut f);
-            let peaks = PADS.map(|id| f.state().pad_peaks[id]);
-            for id in PADS {
+            let actual = voices(&mut f, &pads);
+            let peaks = pads.map(|id| f.state().pad_peaks[id]);
+            for id in pads {
                 assert_eq!(
                     (actual[id].0, actual[id].1, actual[id].2),
                     (expected[id].0, expected[id].1, expected[id].2)
@@ -273,10 +289,10 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
             assert!(pcm.iter().all(|value| value.is_finite()));
             assert!(pcm.iter().any(|value| value.abs() > 1e-6));
             poll(&f);
-            f.script("assert probe.session.active_sample_ids == set(range(6))\nassert not probe.session.paused_sample_ids");
-            spans.push((first, before, after, peaks));
+            f.script("assert probe.session.active_sample_ids == set(range(probe.conversion_pad_count))\nassert not probe.session.paused_sample_ids");
+            spans.push((first, before, after, peaks.to_vec()));
         }
-        stop(&mut f);
+        stop(&mut f, &pads);
         Python::attach(|py| conversion.0.call_method0(py, "finish").unwrap());
         let (calls, worker): (Vec<ConversionCall>, (u64, u64, u64)) = Python::attach(|py| {
             let value = conversion.0.bind(py);
@@ -308,29 +324,29 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
                 fs::read(root.join(format!("cycle-{cycle}/generation/{name}.wav"))).unwrap();
             (name, bytes.len(), format!("{:x}", Sha256::digest(&bytes)))
         });
-        assert_eq!(sources(&mut f), original_sources);
+        assert_eq!(sources(&mut f, &pads), original_sources);
         assert_eq!(
-            PADS.map(|id| f.state().mixer.loop_region_frames(id)),
+            pads.map(|id| f.state().mixer.loop_region_frames(id)),
             markers
         );
-        f.script("assert tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(6)) == probe.six_sources\nassert all(probe._audio.current_input_runtime_pad_binding(i).is_current() for i in range(6))\nassert probe.project.selected_pad == 5\nassert probe._audio.input_selected_projection()[1] == 5\ndel probe.six_capture\ndel probe.six_stop");
+        f.script("assert tuple((probe._audio.waveform_source_identity(i), probe._audio.loaded_source_digest(i), probe.source_history[i][-1]) for i in range(probe.conversion_pad_count)) == probe.conversion_sources\nassert all(probe._audio.current_input_runtime_pad_binding(i).is_current() for i in range(probe.conversion_pad_count))\nassert probe.project.selected_pad == probe.conversion_pad_count - 1\nassert probe._audio.input_selected_projection()[1] == probe.conversion_pad_count - 1\ndel probe.conversion_capture\ndel probe.conversion_stop");
         let counts = Python::attach(|py| f.engine.borrow(py).cold_jobs.counts_for_test());
         drop(members);
         drop(capture);
         drop(conversion);
         let metrics = c3_process_metrics::snapshot();
         let row = serde_json::json!({"cycle":cycle,"warmup":cycle==0,"T":original_t,"E":effect,
-            "received_ns":received,"sequences":previous_sequences,"contributions":contributions,
+            "received_ns":received,"sequences":previous_sequences.as_slice(),"contributions":contributions.as_slice(),
             "unfinished_at_start":unfinished_at_start,"spans":spans,"calls":calls,"worker":worker,
             "witnesses":witnesses,"outputs":output_hashes,"cold_job_counts":counts,
             "conversion_executor_joined":true,"full_output_oracle":true,"settled_metrics":metrics});
-        eprintln!("six_pad_conversion_cycle_raw {row}");
+        eprintln!("{label}_cycle_raw {row}");
         assert!(unfinished_at_start);
         assert!(
             !witnesses.is_empty(),
-            "complete advancing converter call inside consecutive six-active playback period"
+            "complete advancing converter call inside consecutive all-PAD-active playback periods"
         );
-        assert_eq!(contributions, [96; 6]);
+        assert_eq!(contributions, [96; N]);
         assert_eq!(
             counts,
             (0, 0, 0),
@@ -350,12 +366,12 @@ fn actual_six_pad_repeated_start_stop_with_conversion() {
     drop(f);
     let final_metrics = c3_process_metrics::snapshot();
     eprintln!(
-        "six_pad_conversion_raw {}",
+        "{label}_raw {}",
         serde_json::json!({
-            "pads":6,"cycles":6,"warmup_cycles":1,"frames_per_source":3*RATE,"channels":2,
-            "sources":original_sources,"rows":rows,"initial_metrics":initial_metrics,"final_metrics":final_metrics,
+            "pads":N,"synthetic_stress":N==10,"cycles":6,"warmup_cycles":1,"frames_per_source":3*RATE,"channels":2,
+            "sources":original_sources.as_slice(),"rows":rows,"initial_metrics":initial_metrics,"final_metrics":final_metrics,
             "joined_counts":joined_counts,"callback_retired":true,
-            "limits":"One software six-PAD history; per-PAD post-DSP peaks and exact trajectories, not independently reconstructed stereo PCM. Metrics are observed samples only, no finite Native/appwide bound, device deadline, latency, neural, quality, Human or full-matrix acceptance."
+            "limits":"One software cohort history; per-PAD post-DSP peaks and exact trajectories, not independently reconstructed stereo PCM. Metrics are observed samples only, no finite Native/appwide bound, device deadline, latency, neural, quality, Human or full-matrix acceptance."
         })
     );
 }

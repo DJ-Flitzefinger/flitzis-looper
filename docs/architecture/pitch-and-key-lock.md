@@ -488,3 +488,25 @@ Zero cold-job counts mean work settlement; persistent cold workers are joined on
 at final shutdown, followed by observed callback retirement before source teardown.
 This diagnostic does not establish a finite Native or app-wide memory bound,
 device timing, latency, hearing, quality, neural or full-matrix acceptance.
+
+
+### Ten-PAD synthetic conversion and settlement diagnostic
+
+The shared complete-Loader conversion runner also declares a separate ignored
+Windows diagnostic for ten simultaneous PADs. It keeps the productive six-PAD
+entry and its inputs and assertions, and applies the same one-warmup/five-repeat
+public START/STOP history to ten complete three-second stereo sources. Every
+member retains original capture ownership, sequence/content/received time and T,
+common E, source allocation/binding/loop markers, actual post-DSP peaks and exact
+SourcePlayback trajectories across 96 paced 512-frame periods per cycle.
+
+The guarded converter must complete real calls with positive worker CPU between
+consecutive all-ten-active periods. All five full outputs, per-cycle executor
+join, settled work counts and final pool join/callback retirement use the existing
+oracles. The pre-START unfinished sample is not atomic CPU-at-gesture evidence;
+STOP may follow conversion completion. Finite stereo mix is checked separately,
+without claiming independently reconstructed per-PAD stereo PCM.
+
+This synthetic cohort does not establish a 7–10-PAD device guarantee, whole matrix,
+latency, neural, quality or Human acceptance. Retained raw rows and observed memory
+samples do not establish a plateau or a finite Native/appwide resource bound.
