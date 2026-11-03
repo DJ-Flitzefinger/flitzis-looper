@@ -459,3 +459,32 @@ cold-worker join with zero jobs and observed callback retirement remain checked.
 This is one bounded functional history, with no production DSP/API change or
 device, latency, hearing, quality, neural or full-matrix acceptance. Existing
 SET, Key Lock, MIDI and release-before-E proofs remain separate scoped evidence.
+
+### Six loaded PADs with repeated public START/STOP and artifact conversion
+
+The Windows-only ignored diagnostic
+`held_lifecycle_tests::six_pad_conversion::actual_six_pad_repeated_start_stop_with_conversion`
+loads six complete three-second 48 kHz stereo sources through the public Loader.
+One warm-up and five repeated cycles retain those sources while public MultiLoop
+START restores the six-member set and public STOP acknowledges its remembered
+targets. Original group and member owners are retained before the first subsequent
+drain, render or poll. Their content, sequences, input timestamp, original T and
+actual common E are checked against all six resulting voices.
+
+Every paced playback period checks every PAD's actual post-DSP contribution before
+master gain, full copied-and-advanced source trajectory, generation and source/Native
+allocation. Finite nonzero stereo mix is checked separately. These are per-PAD
+contribution and trajectory observations, not independently reconstructed stereo
+PCM for each PAD; the existing mono group capture is deliberately unused.
+
+Each cycle owns an actual guarded artifact conversion. Complete converter calls
+with positive worker CPU must occur within consecutive six-active-PAD periods.
+Conversion completion joins the executor, verifies its threads ended, restores the
+reservation binding and verifies every frame and digest of all five output files.
+Full Loader acknowledgements, source identity, original file digests, resident PCM
+hashes, allocations, loop markers and current bindings remain checked. Settled
+process memory and handle samples are observations of these repetitions only.
+Zero cold-job counts mean work settlement; persistent cold workers are joined only
+at final shutdown, followed by observed callback retirement before source teardown.
+This diagnostic does not establish a finite Native or app-wide memory bound,
+device timing, latency, hearing, quality, neural or full-matrix acceptance.

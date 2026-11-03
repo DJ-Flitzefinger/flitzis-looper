@@ -14,7 +14,7 @@ pub(super) fn script_value(f: &Fixture, source: &str) -> bool {
     })
 }
 
-struct ConversionSession(Py<PyAny>);
+pub(super) struct ConversionSession(pub(super) Py<PyAny>);
 
 impl Drop for ConversionSession {
     fn drop(&mut self) {

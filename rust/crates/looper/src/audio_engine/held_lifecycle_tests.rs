@@ -47,6 +47,10 @@ mod piano_bridge;
 #[path = "held_lifecycle_tests/pause_seek_bridge.rs"]
 mod pause_seek_bridge;
 
+#[cfg(windows)]
+#[path = "held_lifecycle_tests/six_pad_conversion.rs"]
+mod six_pad_conversion;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();

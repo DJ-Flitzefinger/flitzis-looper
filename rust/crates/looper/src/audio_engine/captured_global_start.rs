@@ -59,6 +59,15 @@ pub(crate) struct ResolvedGlobalStart {
 }
 
 impl CapturedGlobalStart {
+    #[cfg(test)]
+    pub(crate) fn diagnostic_members(&self) -> Vec<CapturedPadStart> {
+        self.owner
+            .members
+            .iter()
+            .map(|member| member.start.clone())
+            .collect()
+    }
+
     pub(crate) fn claim_effect(&self) -> bool {
         self.owner
             .effect
