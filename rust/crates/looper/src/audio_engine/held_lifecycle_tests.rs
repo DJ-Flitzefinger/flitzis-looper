@@ -39,6 +39,10 @@ mod controller_overlap;
 #[path = "held_lifecycle_tests/loader_overlap.rs"]
 mod loader_overlap;
 
+#[cfg(windows)]
+#[path = "held_lifecycle_tests/piano_bridge.rs"]
+mod piano_bridge;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();

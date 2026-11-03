@@ -369,3 +369,30 @@ This is one functional controller-to-Native bridge, with no production DSP/API
 change. It does not establish latency, device, Piano, pause/Hold/seek, neural,
 whole-matrix, hearing, quality or Human acceptance. Existing scoped explicit-target
 failure, source-replacement, peer and retirement evidence remains separate.
+
+
+### Actual loaded Piano controller bridge
+
+The Windows-only ignored diagnostic
+`held_lifecycle_tests::piano_bridge::actual_loader_piano_set_and_repeated_retrigger_preserve_peer`
+connects the real public Loader and Project source owners to public Piano SET and
+SET_RETRIGGER actions. Two complete three-second 48 kHz stereo sources retain
+their original Loader acknowledgement, content/source identity, file digest, full
+resident PCM hash and allocation. Both PADs advance; Project and Native selection
+stay on peer PAD 1 while Piano explicitly targets PAD 0.
+
+Each action retains the newly created original controller capture before polling:
+sequence, timestamp, content key and original T survive through its own actual E.
+The diagnostic checks no early pitch or generation effect, exact source chronology
+for SET, and a new generation at the loop beginning for each same-note RETRIGGER.
+The peer retains its generation, source and Native state and advances throughout;
+its actual post-DSP contribution is nonzero. Both PADs contribute finite PCM,
+feedback agrees with active voices, and current source bindings survive. Final
+stop, cold-worker join with zero jobs and observed callback retirement precede
+temporary source destruction.
+
+This is a bounded functional bridge, without a production DSP/API change. Its
+software callback clock and PCM checks do not establish device timing, latency,
+hearing, quality, neural or full-matrix acceptance. Existing GUI/MIDI and physical
+Hold tests remain separate scoped evidence; actual Loader pause/resume/Hold/seek
+bridges and all original acceptance gates remain open.
