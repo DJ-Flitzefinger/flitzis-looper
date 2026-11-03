@@ -6953,7 +6953,7 @@ actual active {0, 1} group while Native selection is PAD2; both new generations
 take effect at the same observed output frame. Native selection is checked before these routes and project selection at global
 capture; neither is asserted unchanged after the subsequent new import.
 
-In the first sample of the final test bytes, exclusive T/E were 1536/2560,
+In the recorded combined-controller sample, exclusive T/E were 1536/2560,
 the subsequent ordinary T/E were 3072/3584, and global E was
 4096. The retained group T remains unchanged and agrees with both original
 voice launch references; those references are not relabelled as E. Original source
@@ -6990,6 +6990,10 @@ parallelism is claimed. The maximum drain/allocation/render harness
 bracket was 0.3156 ms, with 0 observed
 512-frame harness deadline overruns. The leaf took 4.02 seconds; all
 are one software sample, not an onset or readiness distribution.
+
+These combined observations retain their original embedded Python helper bytes.
+A later type-only binding lookup correction is checked separately with the
+complete five-output conversion oracle.
 
 A separate 60-second 44.1 kHz stereo import is admitted for stopped PAD3 while
 the two voices play. The real Loader later supplies its original source ACK,

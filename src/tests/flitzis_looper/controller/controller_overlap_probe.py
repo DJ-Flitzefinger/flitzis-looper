@@ -58,7 +58,7 @@ class Conversion:
         self.started_ns = 0
         self.ended_ns = 0
         self.cpu_ns = 0
-        self.original = stem_artifacts.StemConversionReservation
+        self.original: object = vars(stem_artifacts)["StemConversionReservation"]
         self.converter = converter
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="conversion-overlap")
         self.closed = False
@@ -109,7 +109,7 @@ class Conversion:
             self.executor.shutdown(wait=True)
             self.closed = True
             assert not any(thread.is_alive() for thread in self.executor._threads)
-            assert stem_artifacts.StemConversionReservation is self.original
+            assert vars(stem_artifacts)["StemConversionReservation"] is self.original
         if self.future is None:
             return
         for name, value in (
