@@ -204,6 +204,25 @@ decision preserves current wet continuation; it establishes neither technical
 optimality nor whole-quality or listening acceptance. The Human's 30 ms suggestion
 is advisory, with practical benefit and proportionate complexity controlling further work.
 
+The explicit `paced_group_matched_rate_key_lock_response` diagnostic compares two
+cold 48 kHz mono groups: a rate-0.8 PAD and a unity peer, with Key Lock OFF and ON.
+Both controls use actual source adoption, global capture, publication, conditional
+worker preparation, scheduler and the same-render per-PAD capture. OFF with neutral
+Native pitch skips that preparation. The test verifies the adopted Lock
+and active source rates, reconstructs the mix and measures each attack relative
+to its own effective frame E. OFF is the existing varispeed route; its pitch is
+intentionally different, so aligned PCM equality is not a quality oracle.
+
+For a fresh physical birth, `OrdinaryStartWork::prepare` calls
+`prepare_source_at_physical_birth`. The retained-start path feeds silent history
+without advancing the chosen source endpoint, then transfers the same Native and
+FIFO to rendering. This prepares state before E while preserving the real source
+beginning; it does not automatically remove processing displacement of the burst
+first supplied at E. Readiness, E, first significant output and principal attack
+therefore remain separate. The matched comparison diagnoses the additional wet
+displacement; it does not justify cropping valid source beginnings or certify
+device, whole-matrix, listening or quality acceptance.
+
 Rubber Band Live symbols must be available before audio starts. Public build
 discovery uses documented pkg-config/environment/vcpkg routes; Windows DLL setup
 and the Rust test wrapper are described in [development](../development.md).

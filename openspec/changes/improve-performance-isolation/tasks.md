@@ -1010,6 +1010,11 @@ every unproved native parity requirement continues here unchanged.
 
 ## 67. Combined regression and final architecture review
 
+- [x] Compare one cold same-rate Key Lock OFF/ON group through actual per-PAD
+      capture, checking adopted Lock and active rates; retain measured additional
+      wet displacement separately from source-rate change and all remaining
+      latency/quality/overlap/stress/Human gates.
+
 - [x] Verify individual same-pass group PCM contributions and host render spans
       for the existing 2/4/6-PAD diagnostic; retain full overlap/stress, device,
       listening and combined acceptance gates separately.

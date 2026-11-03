@@ -49,11 +49,58 @@ These are observed maxima with the capture enabled, not device guarantees.
 All slowed PADs have a principal landmark 2,967 frames (61.8125 ms) later than
 the authored source landmark relative to their own E. Their enclosing input-call
 to significant-output host brackets range from 64.364 to 76.159 ms. The source
-reference is the authored burst, not a matched-rate Key Lock OFF render. That
-remaining comparison and the cause/possible reduction of the displacement require
-separate investigation preserving quality and the complete physical beginning.
+reference is the authored burst, not a matched-rate Key Lock OFF render. The
+matched-rate follow-up below separates that comparison; the cause and possible
+reduction still require quality and complete-physical-beginning proof.
 An audible dry member can conceal this wet displacement in the mixed landmark.
 No 30 ms acceptance, whole latency matrix or listening result follows.
+
+### Matched-rate Key Lock control
+
+One new explicit test passes in 1.38 seconds. It captures two cold 2-PAD groups at
+48 kHz mono, with one rate-0.8 PAD and one unity peer, once with Lock OFF and once
+ON. Initial setup and post-load source adoption both receive the same Lock flag;
+the actual mixer Lock is checked before capture and after rendering. Each active
+voice's actual source tempo ratio and target rate are checked after rendering.
+Both routes retain the same global capture/publication delay, scheduler, complete
+source beginning, source-address/extent binding and independent per-PAD capture.
+Every member is finite/nonzero, the same-pass mix reconstructs within 1e-6
+absolute/relative tolerance, and each group applies at one common actual E.
+
+| PAD / route | First / significant / principal frames after own E |
+| --- | --- |
+| Rate 0.8, Lock OFF | 1 / 1 / 30 |
+| Rate 0.8, Lock ON | 1078 / 2827 / 2991 |
+| Unity peer, either route | 1 / 1 / 24 |
+
+The additional slowed-PAD displacement is 1077 / 2826 / 2961 frames, respectively
+22.4375 / 58.875 / 61.6875 ms. The authored principal was 24, while the matched-rate
+OFF principal is 30: the previous 2967-frame authored comparison included six
+frames of rate-dependent landmark change. Each measurement uses its own actual
+E: OFF E=512, ON E=1024. Their input-call-to-significant-output host brackets are
+11.2012..11.5568 ms and 74.9678..75.5205 ms, respectively. E-relative waveform
+displacement and publication/readiness scheduling remain separate observations.
+
+`OrdinaryStartWork::prepare` uses `prepare_source_at_physical_birth`; the retained
+start feeds silent history without moving the source endpoint and adopts that
+same Native/FIFO state at E. Neutral-pitch Lock ON uses Native pitch 1/rate; OFF
+uses pitch 1 and the existing varispeed route. The burst supplied from E still
+traverses the wet processor and adapter. This explains why prepared readiness is
+not an immediate principal attack, without assigning the exact measured delay to
+nominal backend latency or proving a new implementation bug. Existing STEP11
+already assesses the separate 511-frame packing-lead opportunity and its wider
+feed/ownership costs; this pair does not authorize cropping or a new DSP path.
+
+Four member observations and 94 render brackets are retained. Largest instrumented
+intervals are 0.2448 ms OFF and 0.8037 ms ON, with no observed 10.667 ms harness
+overrun. There is n1 start per control; fixture/drain/allocation/tap overhead is
+included, callback percentiles are not onset percentiles, and OFF/ON pitch differs
+intentionally. No aligned PCM-quality equivalence, device/listening, background
+overlap, stress, whole-matrix or 30 ms acceptance follows. The previous twelve
+compatible group cases and unchanged capture controls are reused, not rerun or
+counted as new tests. Run explicitly with the existing Rust test wrapper and the
+exact `paced_group_matched_rate_key_lock_response` leaf (`--ignored --nocapture
+--test-threads=1`). All original remaining gates stay open.
 
 ## Prepare native Windows ownership before child creation
 
