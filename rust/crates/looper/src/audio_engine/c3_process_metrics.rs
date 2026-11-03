@@ -371,6 +371,88 @@ pub(super) fn snapshot() -> Value {
         "read_transfer_bytes":io[3], "write_transfer_bytes":io[4], "other_transfer_bytes":io[5]})
 }
 
+/// Fixed-size Rust counters for the explicit settlement diagnostic.
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub(super) struct SettlementSnapshot {
+    pub(super) private_committed_bytes: usize,
+    pub(super) working_set_bytes: usize,
+    pub(super) handle_count: u32,
+    pub(super) thread_count: u32,
+}
+
+pub(super) fn settlement_snapshot() -> SettlementSnapshot {
+    #[repr(C)]
+    struct ThreadEntry {
+        size: u32,
+        usage: u32,
+        id: u32,
+        owner: u32,
+        priority: i32,
+        delta: i32,
+        flags: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, process: u32) -> *mut c_void;
+        fn Thread32First(snapshot: *mut c_void, entry: *mut ThreadEntry) -> i32;
+        fn Thread32Next(snapshot: *mut c_void, entry: *mut ThreadEntry) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    // SAFETY: TH32CS_SNAPTHREAD needs no caller pointers. Every successful
+    // snapshot is closed before assertion or process-memory/handle sampling.
+    let (threads, error) = unsafe {
+        let handle = CreateToolhelp32Snapshot(4, 0);
+        assert_ne!(handle, -1_isize as *mut c_void);
+        let mut entry = ThreadEntry {
+            size: size_of::<ThreadEntry>() as u32,
+            usage: 0,
+            id: 0,
+            owner: 0,
+            priority: 0,
+            delta: 0,
+            flags: 0,
+        };
+        let pid = GetCurrentProcessId();
+        let mut count = 0;
+        let mut found = Thread32First(handle, &mut entry);
+        while found != 0 {
+            count += u32::from(entry.owner == pid);
+            entry.size = size_of::<ThreadEntry>() as u32;
+            found = Thread32Next(handle, &mut entry);
+        }
+        let error = std::io::Error::last_os_error().raw_os_error();
+        assert_ne!(CloseHandle(handle), 0);
+        (count, error)
+    };
+    assert_eq!(error, Some(18), "thread enumeration must reach normal EOF");
+    assert!(threads > 0);
+    let size = size_of::<Memory>() as u32;
+    let mut memory = Memory {
+        size,
+        faults: 0,
+        values: [0; 9],
+    };
+    let mut handles = 0;
+    // SAFETY: valid current-process pseudo-handle and correctly sized writable
+    // outputs. The Toolhelp handle has already closed and cannot inflate handles.
+    unsafe {
+        assert_ne!(
+            K32GetProcessMemoryInfo(-1_isize as *mut c_void, &mut memory, size),
+            0
+        );
+        assert_ne!(
+            GetProcessHandleCount(-1_isize as *mut c_void, &mut handles),
+            0
+        );
+    }
+    SettlementSnapshot {
+        private_committed_bytes: memory.values[8],
+        working_set_bytes: memory.values[1],
+        handle_count: handles,
+        thread_count: threads,
+    }
+}
+
 pub(super) fn delta(before: &Value, after: &Value) -> Value {
     let mut result = serde_json::Map::new();
     for (key, value) in after.as_object().unwrap() {

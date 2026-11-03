@@ -21,6 +21,7 @@ from flitzis_looper.pcm16_wav import PcmWavReader
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
+    from types import TracebackType
 
     from flitzis_looper_audio import StemConversionReservation
 
@@ -163,3 +164,50 @@ class _Reservation:
     def close(self) -> None:
         """Release the original native reservation after synchronous conversion."""
         self.native.close()
+
+
+class SettlementConversion(Conversion):
+    """Count actual reader closure for the separate fixed-storage diagnostic."""
+
+    def __init__(self, directory: str, converter: type[StemConversionReservation]) -> None:
+        super().__init__(directory, converter)
+        self.readers_opened = 0
+        self.readers_closed = 0
+        self.live_readers = 0
+
+    def _reader(self, path: Path) -> PcmWavReader:
+        return _SettlementReader(path, self)
+
+    def _work(self) -> None:
+        with patch.object(stem_artifacts, "PcmWavReader", self._reader):
+            super()._work()
+
+    def finish(self) -> None:
+        """Join conversion, then audit the full oracle's real reader context exits."""
+        # Join before patching the oracle's globals; _work uses stem_artifacts.
+        self.executor.shutdown(wait=True)
+        with patch.dict(globals(), PcmWavReader=self._reader):
+            super().finish()
+        assert self.readers_opened == self.readers_closed > 0
+        assert self.live_readers == 0
+
+
+class _SettlementReader(PcmWavReader):
+    """Observe a real PCM reader without retaining it in a diagnostic ledger."""
+
+    def __init__(self, path: Path, owner: SettlementConversion) -> None:
+        super().__init__(path)
+        self.owner = owner
+        owner.readers_opened += 1
+        owner.live_readers += 1
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        super().__exit__(exc_type, exc_value, traceback)
+        assert self._handle.closed
+        self.owner.readers_closed += 1
+        self.owner.live_readers -= 1

@@ -489,6 +489,28 @@ at final shutdown, followed by observed callback retirement before source teardo
 This diagnostic does not establish a finite Native or app-wide memory bound,
 device timing, latency, hearing, quality, neural or full-matrix acceptance.
 
+The separate ignored diagnostic
+`held_lifecycle_tests::six_pad_conversion::actual_six_pad_settlement_after_diagnostic_release`
+reuses that complete six-PAD workload with exactly one warmup and five measured
+cycles. Six fixed scalar result slots exist before source loading. Each cycle
+retains its original functional oracles, then releases its variable evidence and
+Python converter owners before the same stopped-fixture sampling boundary.
+Actual converter and output-oracle PCM reader context exits are counted after
+their handles close; opened and closed counts must match with no live readers.
+The existing executor join and zero cold-work assertions remain separate proofs.
+
+Fixed-size Rust counter samples record PrivateUsage, working set, handles and
+threads; the thread query closes its own snapshot handle before memory/handle
+sampling. These counters are sequential observations, not an atomic OS snapshot.
+Windows/Toolhelp internal allocation behavior is outside this source proof.
+The warmup-settled sample is the baseline for the five measured cycles. Final
+pool join and observed callback retirement precede a separately labeled teardown
+sample. Results are serialized only after that final sample. Prior diagnostics
+retain their original evidence and include retained diagnostic allocations;
+their memory samples cannot attribute residual growth to the product. Releasing
+transient objects can still leave allocator retention. Neither history proves
+leak absence, a general plateau or a finite Native/app-wide bound.
+
 
 ### Ten-PAD synthetic conversion and settlement diagnostic
 
