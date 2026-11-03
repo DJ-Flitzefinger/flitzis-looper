@@ -394,5 +394,41 @@ temporary source destruction.
 This is a bounded functional bridge, without a production DSP/API change. Its
 software callback clock and PCM checks do not establish device timing, latency,
 hearing, quality, neural or full-matrix acceptance. Existing GUI/MIDI and physical
-Hold tests remain separate scoped evidence; actual Loader pause/resume/Hold/seek
-bridges and all original acceptance gates remain open.
+Hold tests remain separate scoped evidence. The ordinary Loader pause/seek/resume
+bridge below is separate; combined Loader Hold/Piano histories and all original
+acceptance gates remain open.
+
+
+### Actual loaded ordinary pause, seek and resume bridge
+
+The Windows-only ignored diagnostic
+`held_lifecycle_tests::pause_seek_bridge::actual_loader_pause_seek_resume_preserves_peer`
+uses two complete three-second 48 kHz stereo sources from the real public Loader.
+Project and Native selection remain on peer PAD 1 while public ordinary pause,
+resident seek and resume target PAD 0. Original pause/resume admissions are retained
+before polling, then matched against actual content, revision, effect and outcome.
+The source-qualified queued commands and their actual callback drain frames are
+observed separately; an admission alone never proves an effect.
+
+Pause freezes the target cursor, generation, Native allocation, FIFO and productive
+DSP history while the peer advances and contributes actual post-DSP PCM. A paused
+seek to source frame 36000 retains its actual residency ticket before polling.
+The original capture only pins the voice; a later resident relocation must adopt
+the seek before its ticket reports accepted, current and the effective target.
+The callback voice and the subsequently acknowledged Session cursor must agree.
+No pitch-action timestamp/T or ordinary seek admission is invented for this route.
+Explicit seek deliberately increments the voice generation on the same lane and
+immutable PCM allocation, resets stretch/FIFO and DSP history, and retains pause
+and loop markers. Its first paused render reinstalls the unchanged physical loop
+domain without advancing the cursor; the complete expected playback state is
+checked across this transition. Resume preserves that new generation and advances from the
+adopted position with real PCM. It establishes explicit playback target PAD 0
+while editor selection remains PAD 1.
+
+Full resident source hashes, allocations, Loader acknowledgements, content identity,
+bindings and loop markers remain checked. Final stop, actual cold-worker join with
+zero jobs and observed callback retirement precede temporary source destruction.
+This bounded software callback history does not establish device timing, latency,
+hearing, quality, neural or full-matrix acceptance. No production DSP/API change is
+implied; existing controller, source-replacement, Hold and Piano proofs remain
+separate scoped evidence.
