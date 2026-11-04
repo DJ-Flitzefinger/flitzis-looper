@@ -1,5 +1,7 @@
 import hashlib
+import json
 import math
+import os
 import shutil
 import struct
 import wave
@@ -117,6 +119,54 @@ def _source(path: Path, frames: int) -> Tensor:
     )
     path.write_bytes(b"".join(struct.pack("<ff", *frame) for frame in values.tolist()))
     return values.transpose(0, 1)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_model_call_diagnostic_is_opt_in_and_emitted_once_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    enabled: bool,
+) -> None:
+    decoded = tmp_path / "source.f32"
+    _source(decoded, 317)
+    model = CopySources()
+    monkeypatch.setenv("FLITZIS_BS_MODEL_CALL_DIAGNOSTICS", "1" if enabled else "0")
+    separate_pcm(model, decoded, tmp_path / "stems", 317, "cpu", ChunkPlan(64, 1))
+    assert len(model.batches) > 1
+    lines = capsys.readouterr().out.splitlines()
+    if not enabled:
+        assert not lines
+        return
+    assert len(lines) == 1
+    assert len(lines[0]) < 512
+    assert lines[0].startswith("FLITZIS_BS_MODEL_CALL_V1:")
+    call = json.loads(lines[0].split(":", 1)[1])
+    assert call["pid"] == os.getpid()
+    assert call["device"] == "cpu"
+    assert 0 < call["entered_ns"] < call["returned_ns"]
+    assert 0 <= call["cpu_before_ns"] <= call["cpu_after_ns"]
+
+
+def test_failed_model_call_emits_no_success_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    decoded = tmp_path / "source.f32"
+    _source(decoded, 31)
+    model = CopySources()
+
+    def fail(_data: Tensor) -> Tensor:
+        message = "model call failed"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(model, "forward", fail)
+    monkeypatch.setenv("FLITZIS_BS_MODEL_CALL_DIAGNOSTICS", "1")
+    with pytest.raises(RuntimeError, match="model call failed"):
+        separate_pcm(model, decoded, tmp_path / "stems", 31, "cpu", ChunkPlan(64, 1))
+    assert "FLITZIS_BS_MODEL_CALL_V1:" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])

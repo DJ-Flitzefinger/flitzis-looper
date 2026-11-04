@@ -10,7 +10,10 @@ use crate::audio_engine::source_playback::SourcePlayback;
 type ConversionCall = (u64, u64, u64, u64, usize, usize);
 type ConversionSnapshot = (u64, usize, u64, usize);
 
-fn sources<const N: usize>(f: &mut Fixture, pads: &[usize; N]) -> [(usize, usize, String); N] {
+pub(super) fn sources<const N: usize>(
+    f: &mut Fixture,
+    pads: &[usize; N],
+) -> [(usize, usize, String); N] {
     pads.map(|id| {
         let source = f.state().mixer.bank_for_measurement()[id].as_ref().unwrap();
         assert_eq!(source.frame_count(), 3 * RATE as usize);
@@ -32,7 +35,7 @@ fn sources<const N: usize>(f: &mut Fixture, pads: &[usize; N]) -> [(usize, usize
     })
 }
 
-fn voices<const N: usize>(
+pub(super) fn voices<const N: usize>(
     f: &mut Fixture,
     pads: &[usize; N],
 ) -> [(u64, usize, usize, SourcePlayback); N] {
@@ -59,7 +62,7 @@ fn poll(f: &Fixture) {
     f.script("probe.transport.on_frame_render()\nprobe.input_mapping.on_frame_render()");
 }
 
-fn stop(f: &mut Fixture, pads: &[usize]) {
+pub(super) fn stop(f: &mut Fixture, pads: &[usize]) {
     // MultiLoop ON retains this original in _pending, not _fenced_batches.
     f.script("probe.transport.playback.stop_global_start_stop()\nprobe.conversion_stop = probe.transport.playback._global_playback._pending.ticket\nassert probe.conversion_stop.publication_status() == 'pending'");
     f.drain();

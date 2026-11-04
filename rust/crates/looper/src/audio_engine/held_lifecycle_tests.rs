@@ -51,6 +51,10 @@ mod pause_seek_bridge;
 #[path = "held_lifecycle_tests/six_pad_conversion.rs"]
 mod six_pad_conversion;
 
+#[cfg(windows)]
+#[path = "held_lifecycle_tests/inference_overlap.rs"]
+mod inference_overlap;
+
 fn write_input(root: &Path) -> PathBuf {
     let input = root.join("input");
     fs::create_dir(&input).unwrap();

@@ -170,19 +170,26 @@ gates or the retained 32 Rust failures, watchdog and registry uncertainty.
 
 - [x] Implement and verify a coordinated child/native thread budget and audio
       headroom, retaining owned-tree cancellation and actual CPU fallback.
-- [ ] Measure CPU-only and available CUDA overlap separately from conversion and
+- [x] Measure CPU-only and available CUDA overlap separately from conversion and
       loading; defer/gate generation if concurrent deadlines remain unreliable.
 - [x] Cover effective settings, concurrent jobs, fallback, cancellation and
       truthful pending state; review Portable/runtime effects when applicable.
 
 STEP16 delivers the permitted playback gate instead of claiming reliable live
-inference overlap. Heavy generation waits while PADs play, and playback beginning
-during generation requests owned-tree retirement with a visible retry outcome.
+inference overlap. Heavy generation waits while its current requested PADs play;
+starting one of those PADs during generation requests owned-tree retirement with
+a visible retry outcome. Unrelated PAD playback retains independent admission.
 Serial CPU model observations, effective numerical pools, kernel commit limits,
 shared Native accounting and cold control correctness are recorded in the design.
-The unchecked CPU/CUDA overlap measurement remains explicit: CUDA availability
-alone is no execution, failure-to-CPU or deadline evidence. Mandatory actual CUDA,
-same-model fallback and combined live acceptance continue through STEP17-19.
+One stock BS CPU run and one independently admitted available-CUDA run now bind
+the first actual model call to same-child PID/birth CPU growth beside six paced
+complete-source PADs. All five full outputs, eight original producer witnesses,
+fresh source/selection ACKs and post-EXE/Job exclusive original-file readers pass.
+The CUDA bracket measures host return, with asynchronous completion qualifications.
+These bounded software runs do not establish reliable device deadlines, a complete
+model-memory bound or overall STEP16 acceptance. Mandatory CUDA distribution,
+same-model fallback, full original gates and combined live acceptance continue
+through STEP17-19.
 
 ## 17. PCM, multicore and offline GPU refinements
 

@@ -40,7 +40,7 @@ interest; it cannot erase another subscriber's job or active source readers.
 [offline_stem_source.rs](../../rust/crates/looper/src/audio_engine/offline_stem_source.rs)
 captures an `OfflineStemSourceLease` for the actual immutable complete source,
 cache marker/generation and target geometry. Generation may run while playing or
-paused, but new heavy inference waits for playback to stop under the resource
+paused, but new heavy inference waits for its current subscriber PADs to stop under the resource
 policy below. This lease grants no assignment, accepted timing, resident-window or live
 publication authority. Worker completion and borrowed reader retirement are both
 required before cleanup, including cancelled/obsolete results.
@@ -76,6 +76,29 @@ lane; heavy pair preparation participates in the common permission. If a current
 requested subscriber starts during generation, the control poll requests an
 explicit playback-headroom failure; the user can retry after that PAD stops.
 Provider calibration separately excludes playback. This never stops an active PAD.
+The explicit `FLITZIS_BS_MODEL_CALL_DIAGNOSTICS=1` diagnostic emits at most one
+fixed scalar line after the first successful stock BS model call. Its process
+CPU and monotonic boundaries exclude model loading, decoding and output conversion.
+The line is separate from execution/provenance receipts and grants no admission.
+CUDA host return can precede kernel completion; these boundaries are not GPU
+occupancy, kernel duration or device deadline evidence. Normal execution emits
+no model-call diagnostic and adds no synchronization or observer worker.
+The explicit six-PAD software profile retains its original complete sources,
+outputs and saved selection files after fixture teardown. Its in-process output
+verification and child-scope closure remain separate from the later exclusive
+parent reader proof, which follows the exact test EXE and owning WindowsJob END.
+The measured stock BS fixture uses one stopped target and six complete three-second
+stereo sources at 48 kHz. The CPU call took 57.0733 s with 56.84375 process-CPU
+seconds; 7,574 paced 512-frame periods retained all six contributions and 3,698
+adjacent same-child CPU-growth witness pairs inside the call. The separately
+admitted RTX 5090 Laptop CUDA case recorded a 16.1917 s host-call bracket,
+3,896 complete periods and 1,045 contained witness pairs. Overlapping pairs are
+observations from one run per device, not independent trials. CUDA host return
+can precede kernel completion. Each run verified all five complete 144,000-frame
+stereo outputs, eight current producer modules, current source/selection ACKs,
+owned process settlement and a later exclusive same-handle reader of all 68
+original fixture files. These software observations grant no physical deadline,
+hearing/quality, complete-model memory bound or Native replacement acceptance.
 Observation and cooperative
 abort/forced tree retirement have a finite tail: this is not zero-overlap or
 device-deadline proof. A waiting job reports **Waiting for background

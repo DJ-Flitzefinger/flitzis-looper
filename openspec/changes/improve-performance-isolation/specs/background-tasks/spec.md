@@ -262,10 +262,10 @@ model-memory estimate, physical working-set bound or whole-system guarantee.
 
 #### Scenario: Generation competes with playback or analysis
 - **GIVEN** an original source-owned generation remains current
-- **WHEN** playback is active before inference admission
+- **WHEN** a current requested subscriber's playback is active before inference admission
 - **THEN** inference waits visibly without stopping any PAD or changing its original request
 - **AND** saved-set lookup and component preparation retain independent admission
-- **WHEN** playback becomes active during an admitted generation
+- **WHEN** a current requested subscriber's playback becomes active during an admitted generation
 - **THEN** that attempt reports a distinct playback-headroom failure and retains custody until actual cleanup
 - **AND** a waiting precise analysis retains its original quality and cancellation authority
 
@@ -603,6 +603,14 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 - **AND** currentness is checked against the existing complete source, content, placement and intent authority without releasing the obsolete reader's custody
 - **AND** an active interested subscriber in an unsettled Pair mirror continues to fence work until that mirror settles
 - **AND** heavy admission, memory pressure, cancellation and final publication checks retain their existing authority
+
+#### Scenario: Explicit stock BS model-call diagnostics
+- **GIVEN** an ordinary admitted stock BS child has the explicit model-call diagnostic enabled
+- **WHEN** its first actual model call returns successfully
+- **THEN** it may emit one fixed scalar record of its PID, actual device and monotonic/process-CPU boundaries around that call
+- **AND** output emission occurs outside the measured call and no additional worker, model route or CUDA synchronization is introduced
+- **AND** a failed call emits no successful-call record, and execution/provenance/admission still require their original independent guards
+- **AND** CUDA host return is not presented as completed kernel timing or device-deadline evidence
 
 ### Requirement: Automatic Acceleration Selection Includes Integrated GPUs
 Hardware-aware offline execution SHALL consider supported NVIDIA/AMD discrete

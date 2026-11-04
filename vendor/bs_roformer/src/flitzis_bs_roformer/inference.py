@@ -1,7 +1,10 @@
 """Bounded adaptation of the release's reflection, batching and overlap-add."""
 
 import ctypes
+import json
+import os
 import sys
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import partial
@@ -208,6 +211,7 @@ class _OverlapAdd:
 
 def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, device: str) -> None:
     position = 0
+    diagnose = os.environ.get("FLITZIS_BS_MODEL_CALL_DIAGNOSTICS") == "1"
     with torch.inference_mode(), torch.autocast("cuda", enabled=device == "cuda"):
         while position < writer.total_frames:
             check_cancelled(writer.checkpoint, "before_model_batch")
@@ -221,7 +225,34 @@ def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, devi
                 writer.checkpoint,
             )
             with cuda_operation(device):
+                if diagnose:
+                    cpu_before = time.process_time_ns()
+                    entered = time.perf_counter_ns()
                 prediction = model(batch.to(device))
+                if diagnose:
+                    returned = time.perf_counter_ns()
+                    cpu_after = time.process_time_ns()
+            if diagnose:
+                # One fixed scalar diagnostic after the first successful call.
+                # CUDA return can precede device completion; this measures the
+                # host call, without adding a device fence or execution receipt.
+                sys.stdout.write(
+                    "FLITZIS_BS_MODEL_CALL_V1:"
+                    + json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "device": device,
+                            "entered_ns": entered,
+                            "returned_ns": returned,
+                            "cpu_before_ns": cpu_before,
+                            "cpu_after_ns": cpu_after,
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+                sys.stdout.flush()
+                diagnose = False
             check_cancelled(writer.checkpoint, "after_model_batch")
             writer.add(prediction, locations)
             del prediction, batch
