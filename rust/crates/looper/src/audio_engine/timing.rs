@@ -6,7 +6,7 @@
 
 use crate::audio_engine::transport::{GRID_64THS_PER_BEAT, QuantizeGrid};
 use cpal::{OutputCallbackInfo, StreamInstant};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 const NS_PER_SECOND: f64 = 1_000_000_000.0;
@@ -14,7 +14,7 @@ const MAX_DEVICE_DELAY_NS: u64 = 2_000_000_000;
 const MAX_EXTRAPOLATION_NS: u64 = 2_000_000_000;
 const MIN_FRESHNESS_NS: u64 = 100_000_000;
 const MIN_DISCONTINUITY_TOLERANCE_NS: u64 = 20_000_000;
-const SNAPSHOT_FIELDS: usize = 9;
+const SNAPSHOT_FIELDS: usize = 10;
 const GRID_ROUNDING_EPSILON_FRAMES: f64 = 1.0e-6;
 
 /// One origin shared by UI capture, native MIDI and the output callback.
@@ -194,6 +194,17 @@ impl OutputClockMapper {
         self.observe(snapshot, delay_ns, callback_frames)
     }
 
+    pub(super) fn observe_external_callback(
+        &mut self,
+        mut snapshot: OutputClockSnapshot,
+        delay_ns: Option<u64>,
+        callback_frames: usize,
+        progress_valid: bool,
+    ) -> OutputClockSnapshot {
+        snapshot.valid &= progress_valid;
+        self.observe(snapshot, delay_ns, callback_frames)
+    }
+
     fn observe(
         &mut self,
         mut snapshot: OutputClockSnapshot,
@@ -245,6 +256,8 @@ impl OutputClockMapper {
 pub(crate) struct SharedOutputClock {
     sequence: AtomicU64,
     fields: [AtomicU64; SNAPSHOT_FIELDS],
+    invalidated: AtomicBool,
+    required_revision: AtomicU32,
 }
 
 impl SharedOutputClock {
@@ -252,10 +265,25 @@ impl SharedOutputClock {
         Self {
             sequence: AtomicU64::new(0),
             fields: std::array::from_fn(|_| AtomicU64::new(0)),
+            invalidated: AtomicBool::new(false),
+            required_revision: AtomicU32::new(0),
         }
     }
 
     pub(crate) fn publish(&self, snapshot: OutputClockSnapshot) {
+        self.publish_qualified(snapshot, 0);
+    }
+
+    /// Notification writers touch separate atomics, never the callback seqlock.
+    pub(crate) fn invalidate(&self) {
+        self.invalidated.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn require_external_revision(&self, revision: u32) {
+        self.required_revision.fetch_max(revision, Ordering::SeqCst);
+    }
+
+    pub(crate) fn publish_qualified(&self, snapshot: OutputClockSnapshot, revision: u32) {
         let sequence = self.sequence.load(Ordering::SeqCst).wrapping_add(1) | 1;
         self.sequence.store(sequence, Ordering::SeqCst);
         let fields = [
@@ -268,6 +296,7 @@ impl SharedOutputClock {
             snapshot.downbeat_frame,
             snapshot.freshness_ns,
             snapshot.master_beat.to_bits(),
+            u64::from(revision),
         ];
         for (field, value) in self.fields.iter().zip(fields) {
             field.store(value, Ordering::SeqCst);
@@ -290,7 +319,9 @@ impl SharedOutputClock {
         }
         let period_seconds = f64::from_bits(fields[5]);
         Some(OutputClockSnapshot {
-            valid: fields[0] != 0,
+            valid: fields[0] != 0
+                && !self.invalidated.load(Ordering::SeqCst)
+                && fields[9] == u64::from(self.required_revision.load(Ordering::SeqCst)),
             observed_at_ns: fields[1],
             audible_at_ns: fields[2],
             output_frame: fields[3],
@@ -307,6 +338,24 @@ impl SharedOutputClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_notifications_invalidate_old_clock_without_a_second_snapshot_writer() {
+        let shared = SharedOutputClock::new();
+        let current = snapshot(0, 1_000_000_000);
+        shared.publish_qualified(current, 0);
+        assert!(shared.read().unwrap().valid);
+        shared.require_external_revision(2);
+        shared.require_external_revision(1); // Later delivery of an older notice.
+        assert!(!shared.read().unwrap().valid);
+        shared.publish_qualified(current, 1);
+        assert!(!shared.read().unwrap().valid);
+        shared.publish_qualified(current, 2);
+        assert!(shared.read().unwrap().valid);
+        shared.invalidate();
+        shared.publish_qualified(current, 2);
+        assert!(!shared.read().unwrap().valid);
+    }
 
     #[test]
     fn nearest_diagnostic_retains_exact_fractional_signed_grid_origin() {

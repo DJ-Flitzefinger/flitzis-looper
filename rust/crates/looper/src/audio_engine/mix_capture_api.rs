@@ -171,6 +171,13 @@ impl AudioEngine {
     }
 
     pub(super) fn ensure_mix_capture_settled_before_run(&self) -> PyResult<()> {
+        self.with_mix_capture_settled(|| Ok(()))
+    }
+
+    pub(super) fn with_mix_capture_settled<T>(
+        &self,
+        operation: impl FnOnce() -> PyResult<T>,
+    ) -> PyResult<T> {
         let mut slot = self.mix_capture_lock()?;
         if let Some(capture) = slot.as_mut() {
             capture.poll(self.mix_capture_stream_failed());
@@ -180,7 +187,7 @@ impl AudioEngine {
                 ));
             }
         }
-        Ok(())
+        operation()
     }
 
     pub(super) fn prepare_mix_capture_internal(
@@ -198,6 +205,11 @@ impl AudioEngine {
         // geometry seam. Never derive a device format from source material.
         let (sample_rate_hz, channels) = self.ordinary_start_render_format()?;
         let mut slot = self.mix_capture_lock()?;
+        if !self.input_runtime_ownership.output_admission_open() {
+            return Err(PyRuntimeError::new_err(
+                "audio output change is in progress",
+            ));
+        }
         if let Some(previous) = slot.as_mut() {
             previous.poll(false);
             if !previous.settled() {
@@ -265,6 +277,15 @@ impl AudioEngine {
             .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("control producer lock poisoned"))?;
+        if !self.input_runtime_ownership.output_admission_open()
+            || !self
+                .input_runtime_ownership
+                .output_publication_live(&producer)
+        {
+            return Err(PyRuntimeError::new_err(
+                "audio output is unavailable for recording start",
+            ));
+        }
         if producer
             .push(ControlMessage::StartMixCapture {
                 publication: capture.publication.clone(),
@@ -308,6 +329,12 @@ impl AudioEngine {
             .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("control producer lock poisoned"))?;
+        if !self
+            .input_runtime_ownership
+            .output_publication_live(&producer)
+        {
+            return Ok(false);
+        }
         if producer
             .push(ControlMessage::StopMixCapture {
                 session_id: status.session_id,

@@ -346,6 +346,9 @@ class InputMappingController(BaseController):
         Returns:
             Whether the action has an accepted controller handler.
         """
+        output = getattr(self._app, "audio_output", None)
+        if output is not None and not output.can_perform:
+            return False
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
         key = action.key
         if key.startswith("pitch."):

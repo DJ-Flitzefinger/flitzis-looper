@@ -84,7 +84,13 @@ class _Pair:
 class PairArrangementController:
     """Retain original participants and exact retry images until every lane settles."""
 
-    def __init__(self, app: AppController, *, can_admit: Callable[[], bool] | None = None) -> None:
+    def __init__(
+        self,
+        app: AppController,
+        *,
+        can_admit: Callable[[], bool] | None = None,
+        defer_startup: bool = False,
+    ) -> None:
         self._app = app
         self._thread = threading.get_ident()
         self._pair: _Pair | None = None
@@ -93,18 +99,26 @@ class PairArrangementController:
         self._can_admit = can_admit or (lambda: True)
         self.status = "idle"
         self.error: str | None = None
-        self._startup = PairArrangementStartup(app)
+        self._startup: PairArrangementStartup | None = None
+        if not defer_startup:
+            self.bind_startup()
+
+    def bind_startup(self) -> None:
+        """Acquire original startup readers once, after a usable output exists."""
+        self._require_thread()
+        if self._startup is None:
+            self._startup = PairArrangementStartup(self._app)
 
     @property
     def active(self) -> bool:
         """Whether this owner still holds any live or durable obligation."""
-        return self._pair is not None or self._startup.active
+        return self._pair is not None or (self._startup is not None and self._startup.active)
 
     @property
     def fenced_sample_ids(self) -> frozenset[int]:
         """Participants remain fenced even when a partial mirror is recognized."""
         if self._pair is None:
-            return self._startup.fenced_sample_ids
+            return frozenset() if self._startup is None else self._startup.fenced_sample_ids
         data = self._pair.snapshot.projected()
         return frozenset((data.source_id, data.target_id))
 
@@ -113,7 +127,7 @@ class PairArrangementController:
         """Allow genuine fresh restore before startup captures its current Native owners."""
         if self._pair is not None:
             return self.fenced_sample_ids
-        return self._startup.observer_fenced_sample_ids
+        return frozenset() if self._startup is None else self._startup.observer_fenced_sample_ids
 
     def ensure_global_key_lock_edit_allowed(self) -> None:
         """Retain inherited intent while an original Pair or recovery owns it."""
@@ -198,6 +212,8 @@ class PairArrangementController:
         self._collect()
         pair = self._pair
         if pair is None:
+            if self._startup is None:
+                return
             handoff = self._startup.poll()
             self._set_observer_fence(self.observer_fenced_sample_ids)
             if handoff is None:
@@ -486,6 +502,7 @@ class PairArrangementController:
 
     def _settle(self, pair: _Pair, status: str) -> None:
         if pair.recovery_handoff is not None:
+            assert self._startup is not None
             self._startup.complete_original(pair.recovery_handoff)
         if not pair.writer_released:
             self._app.persistence.release_migration(pair.owner)

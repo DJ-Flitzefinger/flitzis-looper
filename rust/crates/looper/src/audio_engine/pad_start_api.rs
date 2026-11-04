@@ -139,6 +139,14 @@ impl AudioEngine {
             .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        if !self
+            .input_runtime_ownership
+            .output_publication_live(&producer)
+        {
+            return Err(PyRuntimeError::new_err(
+                "audio output closed before start publication",
+            ));
+        }
         if producer.is_full() {
             return Err(PyRuntimeError::new_err(
                 "ordinary start capture queue is full",
@@ -244,6 +252,14 @@ impl AudioEngine {
             .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        if !self
+            .input_runtime_ownership
+            .output_publication_live(&producer)
+        {
+            return Err(PyRuntimeError::new_err(
+                "audio output closed before prepared start publication",
+            ));
+        }
         if producer.is_full() {
             // The exact owner and its Work remain intact for the same bounded retry.
             return Err(PyRuntimeError::new_err("ordinary start queue is full"));

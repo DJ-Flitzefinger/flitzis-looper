@@ -488,7 +488,7 @@ impl Fixture {
 
     fn take_feedback(&self) -> Vec<AudioMessage> {
         Python::attach(|py| {
-            let mut engine = self.engine.borrow_mut(py);
+            let engine = self.engine.borrow_mut(py);
             let mut messages = Vec::new();
             while let Some(message) = engine.receive_msg().unwrap() {
                 messages.push(message);

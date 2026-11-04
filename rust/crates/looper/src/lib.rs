@@ -21,6 +21,16 @@ fn native_build_profile() -> &'static str {
 /// The Python module implemented in Rust.
 #[pymodule]
 mod flitzis_looper_audio {
+    /// Keep every embedded Python type/function on this executable's actual
+    /// Native identity and shared resource ledgers, without importing a donor DLL.
+    #[cfg(test)]
+    pub(crate) fn embedded_test_module(
+        py: pyo3::Python<'_>,
+    ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::types::PyModule>> {
+        let module = pyo3::types::PyModule::new(py, "flitzis_looper_audio.flitzis_looper_audio")?;
+        __pyo3_pymodule(&module)?;
+        Ok(module)
+    }
     #[pymodule_export]
     use super::audio_engine::SealedProcessingFiles;
     #[pymodule_export]
@@ -114,7 +124,13 @@ mod flitzis_looper_audio {
     use super::audio_engine::OfflineStemSourceLease;
 
     #[pymodule_export]
+    use super::audio_engine::ExistingLegacyStemWork;
+    #[pymodule_export]
     use super::audio_engine::InstrumentalStemReader;
+    #[pymodule_export]
+    use super::audio_engine::LegacyStemRestoreReceipt;
+    #[pymodule_export]
+    use super::audio_engine::PreparedExistingLegacyStems;
     #[pymodule_export]
     use super::audio_engine::PreparedSourceTicket;
     #[pymodule_export]

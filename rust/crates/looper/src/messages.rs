@@ -587,6 +587,7 @@ impl MixCaptureTarget {
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
+    ObserveLegacyStemRestore(Arc<crate::audio_engine::audio_output_legacy::LegacyStemObservation>),
     /// The same control-prepared owner is claimed once on the output scheduler.
     StartMixCapture {
         publication: Arc<crate::audio_engine::mix_capture::publication::CapturePublication>,
@@ -912,6 +913,7 @@ impl ControlMessage {
             #[cfg(test)]
             ControlMessage::SetBpmLock(_) => ControlMessageClass::OrderedState,
             ControlMessage::SetBpmLockTarget(_)
+            | ControlMessage::ObserveLegacyStemRestore(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }
             | ControlMessage::SetPadKeyLockSavedIntent { .. }

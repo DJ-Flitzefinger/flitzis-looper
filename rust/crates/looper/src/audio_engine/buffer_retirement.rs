@@ -17,6 +17,7 @@ const RETIRED_AUDIO_BUFFER_BACKLOG_CAPACITY: usize = 128;
 // ownership across the thread boundary.
 #[allow(dead_code)]
 pub(crate) enum RetiredAudioBuffer {
+    LegacyStemObservation(Arc<super::audio_output_legacy::LegacyStemObservation>),
     MixCapture(Box<super::mix_capture::CaptureRt>),
     CapturePublication(Arc<super::mix_capture::publication::CapturePublication>),
     Sample(SampleBuffer),
@@ -46,6 +47,18 @@ pub(crate) enum RetiredAudioBuffer {
 }
 
 pub(crate) trait AudioBufferRetirement {
+    #[cfg(test)]
+    fn retire_legacy_stem_observation(
+        &mut self,
+        observation: Arc<super::audio_output_legacy::LegacyStemObservation>,
+    ) {
+        drop(observation);
+    }
+    #[cfg(not(test))]
+    fn retire_legacy_stem_observation(
+        &mut self,
+        observation: Arc<super::audio_output_legacy::LegacyStemObservation>,
+    );
     #[cfg(test)]
     fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
         drop(work);
@@ -319,6 +332,12 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_legacy_stem_observation(
+        &mut self,
+        observation: Arc<super::audio_output_legacy::LegacyStemObservation>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::LegacyStemObservation(observation));
+    }
     fn retire_mix_capture(&mut self, work: Box<super::mix_capture::CaptureRt>) {
         self.retire_buffer(RetiredAudioBuffer::MixCapture(work));
     }
@@ -444,15 +463,22 @@ impl AudioBufferRetirement for RtAudioBufferRetirement {
 pub(crate) struct AudioBufferRetirementWorker {
     running: Arc<AtomicBool>,
     join_handle: Option<JoinHandle<()>>,
+    join_failed: bool,
 }
 
 impl AudioBufferRetirementWorker {
     fn join(&mut self) -> std::io::Result<()> {
+        if self.join_failed {
+            return Err(std::io::Error::other(
+                "audio retirement worker previously failed; callback quiescence is unverified",
+            ));
+        }
         self.running.store(false, Ordering::Release);
         let Some(join_handle) = self.join_handle.take() else {
             return Ok(());
         };
         join_handle.join().map_err(|_| {
+            self.join_failed = true;
             std::io::Error::other(
                 "audio retirement worker panicked; callback quiescence is unverified",
             )
@@ -461,7 +487,7 @@ impl AudioBufferRetirementWorker {
 
     /// Only a successful join verifies the close queue and complete callback image.
     /// The caller has already closed its actual stream/callback owner off realtime.
-    pub(crate) fn join_checked(mut self) -> std::io::Result<()> {
+    pub(crate) fn join_checked(&mut self) -> std::io::Result<()> {
         self.join()
     }
 
@@ -509,6 +535,7 @@ impl AudioBufferRetirementWorker {
         Ok(Self {
             running,
             join_handle: Some(join_handle),
+            join_failed: false,
         })
     }
 }
@@ -600,9 +627,10 @@ impl Drop for AudioBufferRetirementWorker {
 /// The productive stream and hardware-free callback owner use the same close barrier.
 /// Returning successfully verifies actual close handoff and off-RT image destruction;
 /// it does not join the independent capture file writer.
+#[cfg(test)]
 pub(crate) fn close_callback_and_join<T>(
     callback_owner: T,
-    worker: AudioBufferRetirementWorker,
+    mut worker: AudioBufferRetirementWorker,
 ) -> std::io::Result<()> {
     drop(callback_owner);
     worker.join_checked()
@@ -623,6 +651,20 @@ pub(crate) fn create_audio_buffer_retirement()
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn failed_worker_join_cannot_become_verified_on_retry() {
+        let (_producer, consumer) = RingBuffer::new(1);
+        let mut worker =
+            AudioBufferRetirementWorker::spawn(consumer, None::<Consumer<Box<()>>>, None, || {
+                panic!("injected retirement-worker failure")
+            })
+            .unwrap();
+        assert!(worker.join_checked().is_err());
+        assert!(worker.join_checked().is_err());
+        assert!(worker.join_handle.is_none());
+        assert!(worker.join_failed);
+    }
 
     fn sample_with_weak() -> (SampleBuffer, std::sync::Weak<[f32]>) {
         let samples: Arc<[f32]> = Arc::from(vec![0.0_f32; 16].into_boxed_slice());

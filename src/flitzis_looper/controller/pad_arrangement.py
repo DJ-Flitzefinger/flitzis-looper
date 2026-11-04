@@ -287,7 +287,8 @@ class PadArrangementController:
 
     def bind_startup(self, app: AppController) -> None:
         """Inspect and pin durable evidence before ordinary Loader restore/cleanup."""
-        self._startup = CopyArrangementStartup(app)
+        if self._startup is None:
+            self._startup = CopyArrangementStartup(app)
 
     @property
     def active(self) -> bool:

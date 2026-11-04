@@ -19,6 +19,9 @@ mod hold_action;
 mod key_lock_tuple;
 mod ordinary_global;
 mod ordinary_start;
+mod output_restore;
+#[path = "mixer/output_retirement.rs"]
+mod output_retirement;
 #[path = "mixer/pad_copy.rs"]
 mod pad_copy;
 #[path = "mixer/pad_pair.rs"]
@@ -3465,6 +3468,20 @@ impl RtMixer {
             return false;
         }
         self.retain_current_stem_selection_claimed(id, previous, next);
+        let metadata_changed = self.stem_mix_mode[id] != mode
+            || self.stem_mix_source_version_hash[id]
+                != if mode == StemMixMode::FullMix {
+                    0
+                } else {
+                    source_version_hash
+                };
+        if metadata_changed
+            && previous == next
+            && let Some(cell) = self.input_runtime_ownership.callback_cell(id)
+        {
+            self.input_runtime_ownership
+                .advance_source_observation_revision(cell.index());
+        }
         match mode {
             StemMixMode::FullMix => {
                 self.stem_mix_mode[id] = StemMixMode::FullMix;
@@ -3600,6 +3617,13 @@ impl RtMixer {
         self.stem_enabled_mask[id] = enabled_stem_mask;
         let next = self.stem_render_selection(id);
         self.arm_stem_transition(id, previous, next);
+        if mask_changed
+            && previous == next
+            && let Some(cell) = self.input_runtime_ownership.callback_cell(id)
+        {
+            self.input_runtime_ownership
+                .advance_source_observation_revision(cell.index());
+        }
         self.withdraw_committed_stem_effect_for_ordinary_selection(id, mask_changed);
         true
     }
@@ -4796,6 +4820,8 @@ impl RtMixer {
 
     fn advance_source_control_revision(&mut self, id: usize) {
         if let Some(cell) = self.input_runtime_ownership.callback_cell(id) {
+            self.input_runtime_ownership
+                .advance_source_observation_revision(cell.index());
             let revision = &mut self.source_control_revisions[cell.index()];
             *revision = revision.saturating_add(1);
         }
@@ -4819,7 +4845,9 @@ impl RtMixer {
     }
 
     fn invalidate_source_for_all(&mut self) {
-        for revision in &mut self.source_control_revisions {
+        for (cell, revision) in self.source_control_revisions.iter_mut().enumerate() {
+            self.input_runtime_ownership
+                .advance_source_observation_revision(cell);
             *revision = revision.saturating_add(1);
         }
         for voice in &mut self.voices {

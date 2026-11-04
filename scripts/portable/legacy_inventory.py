@@ -94,10 +94,40 @@ def read_builder(git: GitSource) -> dict:
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id in {"DLL_NAMES", "LICENSE_NAMES", "STARTER"}
+        and node.targets[0].id in {"DLL_NAMES", "LICENSE_NAMES", "STARTER", "TRACKED_LICENSES"}
     }
-    if set(constants) != {"DLL_NAMES", "LICENSE_NAMES", "STARTER"}:
+    if not {"DLL_NAMES", "LICENSE_NAMES", "STARTER"}.issubset(constants):
         message = "Unrecognized legacy builder ownership contract"
+        raise ValueError(message)
+    # The absent mapping describes exactly the historical builder above, never
+    # the current candidate's expanded license collection.
+    tracked = constants.setdefault(
+        "TRACKED_LICENSES",
+        {
+            "flitzis-looper.txt": "LICENSE.txt",
+            "bs-roformer-NOTICE.md": "vendor/bs_roformer/NOTICE.md",
+        },
+    )
+    if (
+        not isinstance(tracked, dict)
+        or not tracked
+        or not all(
+            isinstance(name, str)
+            and bool(name)
+            and Path(name).name == name
+            and ":" not in name
+            and "\\" not in name
+            and isinstance(relative, str)
+            and bool(relative)
+            and not Path(relative).is_absolute()
+            and ".." not in Path(relative).parts
+            and ":" not in relative
+            and "\\" not in relative
+            for name, relative in tracked.items()
+        )
+        or len({name.casefold() for name in tracked}) != len(tracked)
+    ):
+        message = "Unrecognized legacy tracked-license ownership contract"
         raise ValueError(message)
     return constants
 
@@ -184,10 +214,7 @@ def prove_builder_outputs(
     for name in constants["LICENSE_NAMES"]:
         checksum = candidate_digest(candidate / "licenses" / name, legacy / "licenses" / name)
         add_proof(expected, "licenses/" + name, checksum)
-    for name, relative in [
-        ("flitzis-looper.txt", "LICENSE.txt"),
-        ("bs-roformer-NOTICE.md", "vendor/bs_roformer/NOTICE.md"),
-    ]:
+    for name, relative in constants["TRACKED_LICENSES"].items():
         add_proof(expected, "licenses/" + name, hashlib.sha256(git.blob(relative)).hexdigest())
 
 

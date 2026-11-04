@@ -2564,6 +2564,93 @@ assets.release_saved_assignments()
 }
 
 #[test]
+fn accepted_pair_rate_preflight_refuses_changes_before_reset_and_checks_retained_plan() {
+    use crate::audio_engine::{audio_output_change, resident_relocation};
+
+    let mut harness = Harness::new();
+    let source_ticket = harness.ticket(0);
+    let pair = harness.prepare(0, &source_ticket, true, None);
+    let _saved = harness.save(&pair);
+    harness
+        .engine
+        .publish_stem_pair_with_producer(&pair, &source_ticket, &harness.producer)
+        .unwrap();
+    let _queued = queued_stems(&mut harness.consumer);
+    assert_eq!(harness.callback.drain(&mut harness.consumer), 1);
+    assert_eq!(source_ticket.publication_status(), "accepted");
+    resident_relocation::reconcile(&harness.engine).unwrap();
+    // Queue/publication ACKs do not prove a fully stopped callback turn. Use
+    // the production render kernel that publishes the actual idle observation.
+    {
+        let callback = &mut *harness.callback;
+        let frame = callback.transport.output_frame();
+        let mut output = [0.0_f32; 2];
+        let mut peaks = [0.0_f32; crate::audio_engine::NUM_SAMPLES];
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut peaks,
+            frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+    }
+    assert!(harness.engine.can_change_key_lock_start_behavior());
+    let generation = harness.engine.loaded_source_generations.lock().unwrap()[0];
+    let request = harness.engine.pad_request_ids.lock().unwrap()[0];
+    let original = harness.engine.cold_leases.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .original_path
+        .clone();
+    let identity = harness.engine.resident_stem_cache.lock().unwrap()[0]
+        .accepted
+        .as_ref()
+        .unwrap()
+        .set
+        .complete_set_identity
+        .clone();
+    let epoch = audio_output_change::begin(&harness.engine).unwrap();
+    for target in [Some(96_000), None] {
+        let error = audio_output_change::prepare_plan(&harness.engine, epoch, target).unwrap_err();
+        assert!(error.to_string().contains("paired stems"));
+        assert!(harness.engine.output_restore.lock().unwrap().is_none());
+    }
+    audio_output_change::prepare_plan(&harness.engine, epoch, Some(RATE)).unwrap();
+    audio_output_change::prepare_plan(&harness.engine, epoch, Some(RATE)).unwrap();
+    for target in [Some(96_000), None] {
+        assert!(audio_output_change::prepare_plan(&harness.engine, epoch, target).is_err());
+    }
+    assert_eq!(
+        harness.engine.loaded_source_generations.lock().unwrap()[0],
+        generation
+    );
+    assert_eq!(harness.engine.pad_request_ids.lock().unwrap()[0], request);
+    assert_eq!(
+        harness.engine.cold_leases.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .original_path,
+        original
+    );
+    assert!(Arc::ptr_eq(
+        &harness.engine.resident_stem_cache.lock().unwrap()[0]
+            .accepted
+            .as_ref()
+            .unwrap()
+            .set
+            .complete_set_identity,
+        &identity
+    ));
+    assert!(harness.consumer.is_empty());
+    drop(harness.engine.output_restore.lock().unwrap().take());
+    harness.engine.shut_down().unwrap();
+}
+
+#[test]
 fn accepted_pair_reprepares_finite_window_and_relocation_with_own_callback_acks() {
     use crate::audio_engine::resident_relocation::{
         WindowRequest, prepare_window_with_producer, reconcile, relocate_with_producer,

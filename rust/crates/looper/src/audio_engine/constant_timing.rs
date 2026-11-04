@@ -1582,6 +1582,11 @@ pub(super) fn publish_record(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !ticket.ownership.output_publication_live(&producer) {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before timing publication",
+        ));
+    }
     let next = next_epoch(&ticket.epoch).map_err(PyRuntimeError::new_err)?;
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
@@ -1629,7 +1634,8 @@ pub(super) fn publish_record(
         .commit_slot_write_fixed(
             &prepared,
             || {
-                ownership.slot_snapshot_fields_current(placement)
+                !ownership.output_unavailable.load(Ordering::Acquire)
+                    && ownership.slot_snapshot_fields_current(placement)
                     && ownership.control_slot_for_cell(placement.cell()) == id
                     && validate_intrinsic_timing_identity(engine, ticket).is_ok()
             },

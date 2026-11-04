@@ -242,6 +242,9 @@ pub(super) fn enqueue_explicit_stop(engine: &AudioEngine) -> PyResult<GlobalPlay
         .control_producer()?
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if producer.is_abandoned() {
+        return Err(PyRuntimeError::new_err("audio output is closed"));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("explicit stop queue is full"));
     }
@@ -291,6 +294,26 @@ impl PartialEq for GlobalPlaybackBatch {
 }
 
 impl GlobalPlaybackBatch {
+    pub(crate) fn retire_untransferred_after_callback_close(&self) {
+        if self.prepared_transferred() {
+            return;
+        }
+        if let Some(starts) = self.take_prepared_starts() {
+            for work in starts.iter().flatten() {
+                work.retire_after_callback_close();
+            }
+        }
+        self.retire_group_after_callback_close();
+    }
+
+    /// Called by its actual retained group, or after the untransferred work claim.
+    /// Negative settlement preserves an already accepted group and applied origins.
+    pub(crate) fn retire_group_after_callback_close(&self) {
+        if let Some(captured) = &self.captured_start {
+            captured.reject(super::pitch_actions::PitchActionReject::LaunchCancelled);
+        }
+        self.finish(false);
+    }
     /// Transfer the complete control-allocated group exactly once. Runtime must
     /// reserve every participant before capture and retain one atomic batch effect.
     pub(crate) fn take_prepared_starts(&self) -> Option<Box<[Option<Box<OrdinaryStartWork>>]>> {
@@ -446,6 +469,14 @@ fn enqueue_before_commit(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before global playback publication",
+        ));
+    }
     if entries.iter().any(|(binding, _, _)| !binding.current()) {
         return Err(PyRuntimeError::new_err(
             "global playback binding changed during admission",
@@ -584,6 +615,14 @@ fn enqueue_captured_ready(
         .control_producer()?
         .lock()
         .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before global start publication",
+        ));
+    }
     // Capacity is checked before any exact Work is transferred from its owner.
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("global start queue is full"));

@@ -34,9 +34,9 @@ This guide describes the current constant-BPM application. Start with
 
 ## First session
 
-1. Choose your output device in the operating system. Start the installed app;
-   for a prepared Windows source checkout, use `start.bat`. A Portable install
-   has its own `START-LOOPER.bat`.
+1. Start the installed app; for a prepared Windows source checkout, use
+   `start.bat`. A Portable install has its own `START-LOOPER.bat`. Open
+   **Settings > Audio output** to check or select the output.
 2. Middle-click an empty PAD to select it. In the left sidebar, choose **Load
    Audio**, then a file. Wait for loading; BPM and Key analysis have their own
    progress and can finish later.
@@ -99,11 +99,21 @@ and can be deferred by resource pressure.
 
 ## Audio output and startup
 
-The app opens the operating system's **default output device** and its default
-channel/sample-rate configuration at startup. There is no in-app audio-device
-selector. Select the desired interface in the operating system before launching;
-restart the app after changing the intended output. MIDI and model processing
-device selection are separate from audio output.
+**Settings > Audio output** selects the backend, device or driver, physical
+stereo outputs, sample rate and buffer/period. Auto backend uses the normal
+platform backend. An unavailable explicit backend does not silently fall back.
+
+Stop playback and let recording, loading and arrangement work finish before
+Apply. Output changes restore through checked ownership and do not start
+playback automatically.
+
+Once source startup restoration is complete, existing paired-stem assignments
+require the installed sample rate to be selected explicitly. Auto or a
+different rate is refused before the current output is stopped. Failed or
+partially restored startup keeps Settings available for a corrective Apply.
+Wait for restoration to finish before playing.
+
+MIDI and model-processing device selection remain separate from audio output.
 
 For a Windows source installation:
 
@@ -808,7 +818,7 @@ the analysis preparation budget are different controls.
 
 | Symptom or status | What to check |
 | --- | --- |
-| No sound | OS default output chosen before launch; master/PAD gain; momentary mute released; PAD actually loaded and started; stem mask; pending/error captions. |
+| No sound | Audio output Settings: installed backend/device, physical routing and status/error; master/PAD gain; momentary mute released; PAD actually loaded and started; stem mask; pending/error captions. |
 | `start.bat` refuses launch | Prepare the matching Release using the development instructions; do not treat launch-only start as a builder. Close the app before replacing Native. |
 | Worker/model missing | Run the documented setup/check path for your installation. Portable rerun repairs its own resources; source uses setup-runtime. Installed files alone do not prove successful inference. |
 | Wrong BPM or audible drift | Check half/double, manual/Tap value, loop length and Grid Offset separately. Mean estimates are approximate; changing-tempo material is not phase-followed. |

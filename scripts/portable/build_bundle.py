@@ -47,6 +47,15 @@ LICENSE_NAMES = {
     "source-urls.json",
 }
 OWNER = {"app": "flitzis-looper", "schema_version": 1}
+TRACKED_LICENSES = {
+    "flitzis-looper.txt": "LICENSE.txt",
+    "bs-roformer-NOTICE.md": "vendor/bs_roformer/NOTICE.md",
+    "asio-sdk-LICENSE.txt": "rust/crates/looper/vendor/asio-sdk/LICENSE.txt",
+    "asio-sdk-README.md": "rust/crates/looper/vendor/asio-sdk/README.md",
+    "asio-sdk-provenance.json": "rust/crates/looper/vendor/asio-sdk/provenance.json",
+    "cpal-LICENSE.txt": "rust/vendor/cpal/LICENSE",
+    "cpal-provenance.json": "rust/vendor/cpal/looper-provenance.json",
+}
 STARTER = (
     "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n"
     'set "PORTABLE_CHECK="\r\nif /i "%~1"=="--check" set "PORTABLE_CHECK=-Check"\r\n'
@@ -263,11 +272,15 @@ def copy_external_runtime(staging: Path, checkout: Path, args: argparse.Namespac
 def copy_licenses(staging: Path, values: list[str]) -> None:
     licenses = staging / "licenses"
     licenses.mkdir()
-    shutil.copyfile(REPO / "LICENSE.txt", licenses / "flitzis-looper.txt")
-    shutil.copyfile(REPO / "vendor/bs_roformer/NOTICE.md", licenses / "bs-roformer-NOTICE.md")
+    for name, relative in TRACKED_LICENSES.items():
+        shutil.copyfile(REPO / relative, licenses / name)
     for value in values:
         name, path = value.split("=", 1)
         require(Path(name).name == name, "License names must be plain filenames")
+        require(
+            name.casefold() not in {name.casefold() for name in TRACKED_LICENSES},
+            "External license must not overwrite a tracked license or provenance file",
+        )
         shutil.copyfile(path, licenses / name)
     require(
         not LICENSE_NAMES - {path.name for path in licenses.iterdir()},

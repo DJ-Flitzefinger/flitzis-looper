@@ -9,6 +9,8 @@ from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.control_diagnostics import ConsoleDiagnostics, poll_control_diagnostics
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
+from flitzis_looper.controller.audio_output import AudioOutputController
+from flitzis_looper.controller.audio_output_restore import OutputRestoreRuntime
 from flitzis_looper.controller.audio_workload import AudioWorkloadCapture
 from flitzis_looper.controller.bank_arrangement import BankArrangementController
 from flitzis_looper.controller.loader import LoaderController
@@ -31,6 +33,8 @@ from flitzis_looper.recording_paths import hold_live_recording_spool
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
+    from flitzis_looper.controller.audio_output_legacy import ExistingLegacyRestore
+    from flitzis_looper.controller.audio_output_restore import OutputRestoreSnapshot
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
     from flitzis_looper.copy_snapshot import CopySnapshot
@@ -89,6 +93,7 @@ class AppController:
         self._shutdown_preparing = False
         self._shutdown_running = False
         self._shutdown_complete = False
+        self._init_audio_output_state()
         self._gui_native_selection: tuple[int, int] | None = None
         self._pair_waveform_views: list[WaveformEditorActions] = []
         self._init_audio_runtime()
@@ -96,9 +101,7 @@ class AppController:
         if not self._audio.set_key_lock_start_behavior(self._project.key_lock_start_behavior):
             message = "Key Lock start behavior could not be restored before audio startup"
             raise RuntimeError(message)
-        self._audio.run()
         self._assets = ProjectAssetLifecycle(self._project, self._audio)
-        self._assets.sync_assignments()
         self._persistence.bind_audio(self._audio, self._report_timing_save_error)
 
         self.settings = SettingsController(
@@ -165,6 +168,7 @@ class AppController:
             self._assets,
             self.loader,
             stem_task_runner=self.stems._stem_task_runner,
+            defer_startup=True,
         )
         self.metering = MeteringController(self._project, self._session, self._audio)
         self.performance_confirmation = PerformanceConfirmationController(self)
@@ -183,8 +187,16 @@ class AppController:
         }
         self._bind_playback_feedback()
 
-        self._restore_initial_runtime_state()
+        self._init_diagnostics()
+        self.audio_output = AudioOutputController(self)
         self._discover_recordings()
+        self.audio_output.start_saved()
+
+    def _init_audio_output_state(self) -> None:
+        self._runtime_activated = False
+        self._output_restore_snapshot: OutputRestoreSnapshot | None = None
+        self._output_legacy_restores: dict[int, ExistingLegacyRestore] = {}
+        self.audio_output_runtime = OutputRestoreRuntime(self)
 
     def _init_audio_runtime(self) -> None:
         self._init_audio_feedback()
@@ -234,8 +246,11 @@ class AppController:
             self._record_root,
             live_spool_witness=hold_live_recording_spool,
             stream_failed=self._audio.audio_stream_failed,
-            quiesce_failed_stream=self._audio.quiesce_failed_audio_stream,
+            quiesce_failed_stream=self._request_failed_audio_output_close,
         )
+
+    def _request_failed_audio_output_close(self) -> bool:
+        return self.audio_output.request_failed_close()
 
     def _discover_recordings(self) -> None:
         """Observe an existing recording namespace without creating one at startup."""
@@ -269,8 +284,8 @@ class AppController:
             writer_blocked=self._persistence.stem_selection_write_blocked,
         )
 
-    def _restore_initial_runtime_state(self) -> None:
-        """Restore source/control state in order, then initialize one configured GUI selection."""
+    def _init_diagnostics(self) -> None:
+        """Keep configuration and startup errors observable without an audio device."""
         self.diagnostics = ConsoleDiagnostics(
             lambda: (
                 path
@@ -286,6 +301,43 @@ class AppController:
         self.transport.waveform.bind_diagnostics(self.diagnostics)
         self.loader._bind_diagnostics(self.diagnostics)
         self.stems._bind_diagnostics(self.diagnostics)
+
+    def _activate_startup_owners(self) -> None:
+        """Bind historical recovery once, retaining partial restoration for settlement."""
+        if self._runtime_activated:
+            return
+        self._assets.sync_assignments()
+        self.material_migration.activate_startup()
+        self.arrangement.bind_startup(self)
+        self.pairs.bind_startup()
+        self.banks.bind_startup()
+        self._arrangement_recovery_pending = (
+            self.arrangement.active or self.pairs.active or self.banks.active
+        )
+        self._runtime_activated = True
+        self._sync_arrangement_observers()
+
+    def _poll_audio_output_restore_events(self) -> None:
+        """Advance only existing model-free restore owners inside Native's scope."""
+        self.loader.poll_loader_events()
+        self._poll_audio_messages()
+        self.accepted_timing.poll()
+        self.transport.residency.poll()
+        self.transport.pitch.poll()
+        self.transport.global_params._poll_global_rate_status()
+        self.transport.global_params.poll_bpm_lock_application()
+        self.stems._poll_pair_preparations()
+        self.stems._poll_disk_selection_settlements()
+        self.stems._poll_stem_publications()
+        self.stems._poll_committed_residency()
+        if self.loader._output_restore_cancelling:
+            return
+        self.stems._poll_publication_retries()
+        self.stems._poll_residency_demands()
+        self.stems._poll_stem_admissions()
+
+    def _restore_initial_runtime_state(self) -> None:
+        """Restore source/control state in order, then initialize one configured GUI selection."""
         restored_paths = self.loader._validate_restored_sample_paths()
         # Initial timing/loop edits must finish before Cold captures their epoch
         # and residency guards. Mixing also travels with that original source ACK.
@@ -293,18 +345,23 @@ class AppController:
         self.loader.restore_samples_from_project_state(validated_paths=restored_paths)
         self.stems.restore_stem_cache_from_project_state()
         self.material_migration.schedule_after_restore()
-        self.input_mapping.apply_project_state_to_input_runtime()
-        self._initialize_native_gui_selection()
+
+    def _poll_cancelled_startup_events(self) -> None:
+        """Settle original journal recovery and admitted readers during withdrawal."""
+        self.pairs.poll()
+        self.banks.poll()
+        self.arrangement.poll()
+        self._sync_arrangement_observers()
+        self.material_migration.poll()
+        self._poll_audio_output_restore_events()
 
     def _prepare_arrangement_recovery(self) -> None:
         """Acquire complete arrangement ownership before ordinary Loader restoration."""
         self.banks = BankArrangementController(self)
-        self.arrangement.bind_startup(self)
-        self.pairs = PairArrangementController(self, can_admit=lambda: not self.banks.active)
-        self.banks.bind_startup()
-        self._arrangement_recovery_pending = (
-            self.arrangement.active or self.pairs.active or self.banks.active
+        self.pairs = PairArrangementController(
+            self, can_admit=lambda: not self.banks.active, defer_startup=True
         )
+        self._arrangement_recovery_pending = False
         self.material_migration.bind_arrangement_recovery_guard(
             lambda: not (self.arrangement.active or self.pairs.active or self.banks.active)
         )
@@ -432,6 +489,10 @@ class AppController:
     ) -> bool:
         """Settle recording and arrangement while their callback ownership remains alive."""
         self.audio_workload.cancel("application closing")
+        self.audio_output.poll()
+        if self.audio_output.busy:
+            self.audio_output.cancel()
+            return False
         if self._shutdown_complete:
             return True
         if self._shutdown_preparing:
@@ -448,7 +509,8 @@ class AppController:
             if not holds_polled:
                 self.transport.waveform.poll_holds()
             if not self._close_requested:
-                self._audio.set_input_mapping_enabled(False)
+                if self._runtime_activated:
+                    self._audio.set_input_mapping_enabled(False)
                 self._close_requested = True
                 self.stem_batch.cancel()
             if not deletion_polled:
@@ -486,9 +548,11 @@ class AppController:
             with suppress(OSError):
                 self._persistence.flush()
 
-            self._audio.stop_all()
+            if self._runtime_activated and self.audio_output.available:
+                self._audio.stop_all()
             self._assets.release_saved_assignments()
             self._audio.shut_down()
+            self.audio_output_runtime.release_completed_restore()
             self._shutdown_complete = True
         finally:
             self._shutdown_running = False
@@ -497,6 +561,17 @@ class AppController:
         self._session.sample_analysis_errors[sample_id] = message
 
     def on_frame_render(self) -> None:
+        self.audio_output.poll()
+        if self.audio_output.exclusive_native_access:
+            return
+        if not self._runtime_activated:
+            self.recording.poll()
+            self.diagnostics.observe("recording", self.recording.status().error)
+            poll_control_diagnostics(self)
+            return
+        self.audio_output.poll_restore_events(self._on_runtime_frame_render)
+
+    def _on_runtime_frame_render(self) -> None:
         self.pairs.poll()
         self._sync_arrangement_observers()
         self.banks.poll()
@@ -513,6 +588,17 @@ class AppController:
 
     def poll_runtime_events(self) -> None:
         """Poll runtime event sources and update controller-owned state projections."""
+        self.audio_output.poll()
+        if self.audio_output.exclusive_native_access:
+            return
+        if not self._runtime_activated:
+            self.recording.poll()
+            self.diagnostics.observe("recording", self.recording.status().error)
+            poll_control_diagnostics(self)
+            return
+        self.audio_output.poll_restore_events(self._poll_active_runtime_events)
+
+    def _poll_active_runtime_events(self) -> None:
         self.recording.poll()
         self.diagnostics.observe("recording", self.recording.status().error)
         self.transport.waveform.poll_holds()
@@ -624,6 +710,9 @@ class AppController:
     def _on_restored_sample_loaded(self, sample_id: int) -> bool:
         """Resolve configured selection after actual restore readiness, then refresh stems."""
         self._refresh_native_gui_selection(sample_id)
+        entry = self._project.stem_cache[sample_id]
+        if self.loader._output_restore and entry is not None and entry.pair is None:
+            return True
         return self.stems.publish_restored_stem_cache_if_available(sample_id)
 
     def _on_incoming_sample_loaded(self, sample_id: int) -> None:
@@ -772,6 +861,11 @@ class AppController:
     @property
     def project(self) -> ProjectState:
         return self._project
+
+    @property
+    def audio(self) -> AudioEngine:
+        """The original Engine identity, retained through output replacement."""
+        return self._audio
 
     @property
     def pending_pad_error(self) -> str | None:

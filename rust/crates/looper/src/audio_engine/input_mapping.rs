@@ -214,6 +214,7 @@ pub(crate) struct InputRuntime {
     stop_admission_revision: Arc<AtomicU64>,
     input_tx: SyncSender<NormalizedMidiEvent>,
     event_rx: Mutex<Receiver<InputRuntimeEvent>>,
+    pending_event: Mutex<Option<InputRuntimeEvent>>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
     runtime_state: Arc<Mutex<RuntimeState>>,
     ownership: Arc<InputRuntimeOwnership>,
@@ -222,6 +223,7 @@ pub(crate) struct InputRuntime {
     midi_connections: Mutex<Vec<MidiInputConnection<()>>>,
     running: Arc<AtomicBool>,
     dispatcher: Mutex<Option<JoinHandle<()>>>,
+    dispatcher_join_failed: AtomicBool,
 }
 
 impl InputRuntime {
@@ -239,7 +241,10 @@ impl InputRuntime {
         let learn_capture_active = Arc::new(AtomicBool::new(false));
         let stop_admission_revision = Arc::new(AtomicU64::new(0));
         let mappings = Arc::new(Mutex::new(Vec::new()));
-        let runtime_state = Arc::new(Mutex::new(RuntimeState::default()));
+        let runtime_state = Arc::new(Mutex::new(RuntimeState {
+            selection_revision: ownership.selection_revision_high_water(),
+            ..RuntimeState::default()
+        }));
         let running = Arc::new(AtomicBool::new(true));
         let (input_tx, input_rx) = sync_channel(INPUT_QUEUE_CAPACITY);
         let (event_tx, event_rx) = sync_channel(INPUT_QUEUE_CAPACITY);
@@ -268,6 +273,7 @@ impl InputRuntime {
             stop_admission_revision,
             input_tx,
             event_rx: Mutex::new(event_rx),
+            pending_event: Mutex::new(None),
             mappings,
             runtime_state,
             ownership,
@@ -276,6 +282,7 @@ impl InputRuntime {
             midi_connections: Mutex::new(Vec::new()),
             running,
             dispatcher: Mutex::new(Some(dispatcher)),
+            dispatcher_join_failed: AtomicBool::new(false),
         }
     }
 
@@ -652,6 +659,9 @@ impl InputRuntime {
                 .audio_producer
                 .lock()
                 .map_err(|_| "producer lock poisoned")?;
+            if producer.is_abandoned() {
+                return Err("audio output is closed".into());
+            }
             if producer.is_full() {
                 return Err("multi-loop transition queue is full".into());
             }
@@ -893,6 +903,7 @@ impl InputRuntime {
             };
 
             let input_tx = self.input_tx.clone();
+            let output_admission = self.ownership.clone();
             let clock = self.clock;
             let mut normalizer = MidiNormalizer::default();
             let connection = midi_in
@@ -900,6 +911,11 @@ impl InputRuntime {
                     port,
                     &format!("flitzis-looper-input-{index}"),
                     move |_backend_stamp, message, _| {
+                        // Do not enqueue a held press during configuration and
+                        // replay it after the odd output epoch reopens.
+                        if !output_admission.output_admission_open() {
+                            return;
+                        }
                         let received_at_ns = clock.capture_ns();
                         if let Some(event) = normalizer.normalize(message, received_at_ns) {
                             let _ = input_tx.try_send(event);
@@ -920,7 +936,35 @@ impl InputRuntime {
         }
     }
 
+    /// Retire physical MIDI connections and the original dispatcher before a new
+    /// output epoch can accept events. A consumed failed join remains failed.
+    pub(super) fn shutdown_checked(&self) -> Result<(), String> {
+        self.set_enabled(false);
+        self.running.store(false, Ordering::Release);
+        self.midi_connections
+            .lock()
+            .map_err(|_| "MIDI connection lock poisoned")?
+            .clear();
+        let mut dispatcher = self
+            .dispatcher
+            .lock()
+            .map_err(|_| "input dispatcher lock poisoned")?;
+        if let Some(thread) = dispatcher.take()
+            && thread.join().is_err()
+        {
+            self.dispatcher_join_failed.store(true, Ordering::Release);
+        }
+        if self.dispatcher_join_failed.load(Ordering::Acquire) {
+            Err("input dispatcher join failed; event retirement is unverified".into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn inject_midi_message(&self, message: &[u8]) -> bool {
+        if !self.ownership.output_admission_open() {
+            return false;
+        }
         let received_at_ns = self.clock.capture_ns();
         let Ok(mut normalizer) = self.test_normalizer.lock() else {
             return false;
@@ -935,21 +979,55 @@ impl InputRuntime {
         let Ok(rx) = self.event_rx.lock() else {
             return None;
         };
+        let Ok(mut pending) = self.pending_event.lock() else {
+            return None;
+        };
+        if let Some(event) = pending.take() {
+            return Some(event);
+        }
         rx.try_recv().ok()
+    }
+
+    /// Caller already owns Engine requests. Share the dispatcher capture mutex
+    /// through the stopped latch, retaining any undelivered original receipt.
+    pub(super) fn with_output_change_idle<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let state = self
+            .runtime_state
+            .try_lock()
+            .map_err(|_| "original input capture still owns its runtime state")?;
+        if state.pitch_shadow.has_pending() || self.dispatcher_join_failed.load(Ordering::Acquire) {
+            return Err("original input actions have not settled".into());
+        }
+        let receiver = self
+            .event_rx
+            .lock()
+            .map_err(|_| "input receipt receiver lock poisoned")?;
+        let mut pending = self
+            .pending_event
+            .lock()
+            .map_err(|_| "pending input receipt lock poisoned")?;
+        if pending.is_none() {
+            match receiver.try_recv() {
+                Ok(event) => *pending = Some(event),
+                Err(
+                    std::sync::mpsc::TryRecvError::Empty
+                    | std::sync::mpsc::TryRecvError::Disconnected,
+                ) => {}
+            }
+        }
+        if pending.is_some() {
+            return Err("original input receipt has not reached its Controller".into());
+        }
+        operation()
     }
 }
 
 impl Drop for InputRuntime {
     fn drop(&mut self) {
-        self.running.store(false, Ordering::Release);
-        if let Ok(mut connections) = self.midi_connections.lock() {
-            connections.clear();
-        }
-        if let Ok(mut guard) = self.dispatcher.lock()
-            && let Some(dispatcher) = guard.take()
-        {
-            let _ = dispatcher.join();
-        }
+        let _ = self.shutdown_checked();
     }
 }
 

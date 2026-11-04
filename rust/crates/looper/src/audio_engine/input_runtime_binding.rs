@@ -238,6 +238,9 @@ impl Default for CurrentSourceFence {
 /// Control publishes revocation before queued callback work. Preparation requests
 /// deliberately do not change these source/authority epochs.
 pub(crate) struct InputRuntimeOwnership {
+    pub(super) output_unavailable: Arc<AtomicBool>,
+    pub(super) output_change_epoch: AtomicU64,
+    pub(super) output_restore_allowed: AtomicBool,
     // Desired Native runtime projection only; never an audio/rate clock. Zero is
     // sticky exhaustion. The existing runtime mutex serializes its control writers.
     pub(super) key_lock_start_policy: Arc<super::key_lock_start_policy::KeyLockStartPolicy>,
@@ -278,6 +281,8 @@ pub(crate) struct InputRuntimeOwnership {
     copy_parameter_epochs: [AtomicU64; NUM_SAMPLES],
     key_lock: [KeyLockStatusSlot; NUM_SAMPLES],
     endpoint_selection_revision: AtomicU64,
+    endpoint_selection_high_water: AtomicU64,
+    source_observation_revisions: [AtomicU64; NUM_SAMPLES],
     endpoint_selection_cell: AtomicUsize,
     endpoint_selection_lifetime: AtomicU64,
     placement: ContentPlacement,
@@ -286,6 +291,9 @@ pub(crate) struct InputRuntimeOwnership {
 impl Default for InputRuntimeOwnership {
     fn default() -> Self {
         Self {
+            output_unavailable: Arc::new(AtomicBool::new(false)),
+            output_change_epoch: AtomicU64::new(2),
+            output_restore_allowed: AtomicBool::new(false),
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
@@ -317,6 +325,8 @@ impl Default for InputRuntimeOwnership {
             copy_parameter_epochs: std::array::from_fn(|_| AtomicU64::new(0)),
             key_lock: std::array::from_fn(|_| KeyLockStatusSlot::default()),
             endpoint_selection_revision: AtomicU64::new(0),
+            endpoint_selection_high_water: AtomicU64::new(0),
+            source_observation_revisions: std::array::from_fn(|_| AtomicU64::new(1)),
             endpoint_selection_cell: AtomicUsize::new(NUM_SAMPLES),
             endpoint_selection_lifetime: AtomicU64::new(0),
             placement: ContentPlacement::new(),
@@ -325,6 +335,61 @@ impl Default for InputRuntimeOwnership {
 }
 
 impl InputRuntimeOwnership {
+    /// Call under the sole producer mutex BEFORE publication intent mutates.
+    /// This is output liveness, separate from source/current/ACK identity truth.
+    pub(super) fn output_publication_live(
+        &self,
+        producer: &rtrb::Producer<crate::messages::ControlMessage>,
+    ) -> bool {
+        !self.output_unavailable.load(Ordering::Acquire) && !producer.is_abandoned()
+    }
+    pub(super) fn output_admission_open(&self) -> bool {
+        let epoch = self.output_change_epoch.load(Ordering::Acquire);
+        epoch != u64::MAX && epoch & 1 == 0 && !self.output_unavailable.load(Ordering::Acquire)
+    }
+
+    pub(super) fn output_source_admission_open(&self) -> bool {
+        let epoch = self.output_change_epoch.load(Ordering::Acquire);
+        // Device failure closes audible publication immediately, not immutable
+        // source reads or metadata completion. Those original owners must finish
+        // before a configuration transaction may freeze/replace their epoch.
+        if epoch != u64::MAX && epoch & 1 == 0 {
+            return true;
+        }
+        epoch & 1 != 0
+            && epoch != u64::MAX
+            && !self.output_unavailable.load(Ordering::Acquire)
+            && self.output_restore_allowed.load(Ordering::Acquire)
+            && super::audio_output_change::RestoreScope::current().is_some_and(|scope| {
+                scope.owner == self.owner_identity().diagnostic() && scope.epoch == epoch
+            })
+    }
+
+    pub(super) fn output_owners_idle(&self) -> bool {
+        self.output_non_playback_owners_idle()
+            && self
+                .admitted_launches
+                .iter()
+                .all(|owner| !owner.load(Ordering::Acquire))
+    }
+
+    pub(super) fn output_non_playback_owners_idle(&self) -> bool {
+        self.copy_reservations
+            .iter()
+            .all(|owner| owner.load(Ordering::Acquire) == 0)
+            && self
+                .pair_reservations
+                .iter()
+                .all(|owner| owner.load(Ordering::Acquire) == 0)
+            && self
+                .migration_holds
+                .iter()
+                .all(|owner| owner.load(Ordering::Acquire) == 0)
+            && self
+                .resident_controls
+                .iter()
+                .all(|owner| owner.load(Ordering::Acquire) == 0)
+    }
     pub(crate) fn source_request_for_cell(&self, cell: ContentCell) -> u64 {
         self.source_requests[cell.index()].load(Ordering::Acquire)
     }
@@ -395,11 +460,13 @@ impl InputRuntimeOwnership {
         self.commit_slot_write_fixed(
             &write,
             || {
-                captured.iter().all(|snapshot| {
-                    self.slot_snapshot_fields_current(*snapshot)
-                        && self.copy_reservation(snapshot.slot()) == 0
-                        && self.pair_reservation(snapshot.slot()) == 0
-                }) && claim()
+                self.output_admission_open()
+                    && captured.iter().all(|snapshot| {
+                        self.slot_snapshot_fields_current(*snapshot)
+                            && self.copy_reservation(snapshot.slot()) == 0
+                            && self.pair_reservation(snapshot.slot()) == 0
+                    })
+                    && claim()
             },
             |_| {
                 for snapshot in captured {
@@ -454,6 +521,8 @@ impl InputRuntimeOwnership {
     /// Existing serialized selection writers publish preparation interest only.
     /// Zero marks an in-progress projection; the callback never waits for it.
     pub(crate) fn publish_endpoint_selection(&self, revision: u64, key: Option<ContentKey>) {
+        self.endpoint_selection_high_water
+            .fetch_max(revision, Ordering::SeqCst);
         self.endpoint_selection_revision.store(0, Ordering::SeqCst);
         self.endpoint_selection_cell.store(
             key.map_or(NUM_SAMPLES, |key| key.cell().index()),
@@ -463,6 +532,60 @@ impl InputRuntimeOwnership {
             .store(key.map_or(0, ContentKey::lifetime), Ordering::SeqCst);
         self.endpoint_selection_revision
             .store(revision, Ordering::SeqCst);
+    }
+
+    pub(super) fn selection_revision_high_water(&self) -> u64 {
+        self.endpoint_selection_high_water.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn preflight_output_retirement(&self) -> Result<u64, String> {
+        for cell in 0..NUM_SAMPLES {
+            for counter in [
+                &self.sources[cell].ordinary_epoch,
+                &self.source_requests[cell],
+                &self.authority[cell],
+                &self.runtime[cell],
+                &self.source_observation_revisions[cell],
+            ] {
+                if counter.load(Ordering::Acquire).checked_add(4).is_none() {
+                    return Err("source authority exhausted before output retirement".into());
+                }
+            }
+        }
+        self.selection_revision_high_water()
+            .checked_add(1)
+            .filter(|revision| *revision != u64::MAX)
+            .ok_or_else(|| "input selection revision exhausted".into())
+    }
+
+    /// Called only after actual callback/dispatcher END under request custody.
+    /// Musical content/placement and every allocator remain the same owners.
+    pub(super) fn retire_output_sources(&self, selection_revision: u64) {
+        self.global_rate_status.retire_output_effects();
+        self.revoke_all_sources();
+        for cell in 0..NUM_SAMPLES {
+            self.callback_source_lifetimes[cell].store(0, Ordering::Release);
+            self.cold_adoptions[cell].store(0, Ordering::Release);
+            self.runtime[cell].fetch_add(1, Ordering::AcqRel);
+            self.source_requests[cell].fetch_add(1, Ordering::AcqRel);
+            self.authority[cell].fetch_add(1, Ordering::AcqRel);
+            self.source_observation_revisions[cell].fetch_add(1, Ordering::AcqRel);
+        }
+        self.publish_endpoint_selection(selection_revision, None);
+    }
+
+    pub(crate) fn source_observation_revision(&self, cell: ContentCell) -> u64 {
+        self.source_observation_revisions[cell.index()].load(Ordering::Acquire)
+    }
+
+    /// Sole callback writer while open; reset advances only after verified END.
+    pub(crate) fn advance_source_observation_revision(&self, cell: usize) {
+        if let Some(counter) = self.source_observation_revisions.get(cell) {
+            counter.store(
+                counter.load(Ordering::Acquire).saturating_add(1),
+                Ordering::Release,
+            );
+        }
     }
 
     /// Owner identity is implicit in this live table. Scalar equality grants no permission.
@@ -1248,7 +1371,8 @@ impl InputRuntimeOwnership {
             .checked_add(1)
             .ok_or(PlacementError::ObservationGenerationExhausted)?;
         if kind == LaunchWriteKind::Admit
-            && (previous_revision == u64::MAX
+            && (!self.output_admission_open()
+                || previous_revision == u64::MAX
                 || original_hold != 0
                 || original_resident != 0
                 || self.copy_reservation(placement.slot()) != 0
@@ -1288,7 +1412,8 @@ impl InputRuntimeOwnership {
             && self.resident_controls[cell].load(Ordering::Acquire) == prepared.original_resident
             && self.transport_intents[cell].load(Ordering::Acquire) == prepared.original_transport
             && (prepared.kind != LaunchWriteKind::Admit
-                || self.copy_reservation(prepared.placement.slot()) == 0)
+                || (self.output_admission_open()
+                    && self.copy_reservation(prepared.placement.slot()) == 0))
     }
 
     pub(crate) fn apply_launch_write(&self, prepared: PreparedLaunchWrite) {
@@ -1431,7 +1556,7 @@ impl InputRuntimeOwnership {
         }
         self.commit_launch_set(
             &prepared,
-            || true,
+            || !acquire || self.output_admission_open(),
             || {
                 for entry in &prepared {
                     self.migration_holds[entry.placement.cell().index()]
@@ -1575,10 +1700,20 @@ impl InputRuntimeOwnership {
         if owner == 0 || !self.slot_snapshot_current(captured) {
             return Err(PyValueError::new_err("copy target placement changed"));
         }
-        self.copy_reservations[id]
-            .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| PyRuntimeError::new_err("pad content copy is pending"))?;
-        Ok(())
+        let write = self
+            .prepare_slot_write_fixed(captured, captured.lifetime())
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        self.commit_slot_write_fixed(
+            &write,
+            || {
+                self.output_admission_open()
+                    && self.copy_reservation(id) == 0
+                    && self.pair_reservation(id) == 0
+            },
+            |_| self.copy_reservations[id].store(owner, Ordering::Release),
+        )
+        .map(|_| ())
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))
     }
 
     pub(super) fn release_copy(&self, id: usize, owner: u64) -> PyResult<()> {
@@ -2443,6 +2578,12 @@ pub struct InputRuntimePadBinding {
 }
 
 impl InputRuntimePadBinding {
+    pub(super) fn source_digest(&self) -> &str {
+        &self.source_digest
+    }
+    pub(super) fn sample_rate_hz(&self) -> u32 {
+        self.sample_rate_hz
+    }
     pub(crate) fn launch_revision(&self) -> u64 {
         self.launch_revision
     }

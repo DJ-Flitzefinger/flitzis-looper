@@ -125,6 +125,76 @@ impl KeyLockStartLease {
 }
 
 impl InputRuntimeOwnership {
+    /// The existing placement marker serializes this latch with real callback
+    /// idle publication, launch captures and transport admission.
+    /// `callback_retired` comes only from the original successful backend AND
+    /// retirement join. A failure bit, missing handle or weak probe cannot grant it.
+    pub(super) fn begin_output_change_after_close(
+        &self,
+        callback_retired: bool,
+    ) -> Result<u64, PlacementError> {
+        let anchor = self.slot_snapshot(0).ok_or(PlacementError::Pending)?;
+        let write = self.prepare_slot_write_fixed(anchor, anchor.lifetime())?;
+        let previous = self.output_change_epoch.load(Ordering::Acquire);
+        let next = previous
+            .checked_add(1)
+            .filter(|epoch| *epoch != u64::MAX)
+            .ok_or(PlacementError::ObservationGenerationExhausted)?;
+        self.commit_slot_write_fixed(
+            &write,
+            || {
+                previous & 1 == 0
+                    && previous != u64::MAX
+                    && (self.output_owners_idle() && self.key_lock_start_policy.stopped()
+                        || callback_retired
+                            && self.output_non_playback_owners_idle()
+                            && self
+                                .key_lock_start_policy
+                                .pending_owners
+                                .load(Ordering::Acquire)
+                                == 0
+                            && self
+                                .key_lock_start_policy
+                                .admission_revision
+                                .load(Ordering::Acquire)
+                                != u64::MAX)
+                    && self.output_change_epoch.load(Ordering::Acquire) == previous
+            },
+            |_| {
+                self.output_restore_allowed.store(false, Ordering::Release);
+                self.output_change_epoch.store(next, Ordering::Release);
+            },
+        )?;
+        Ok(next)
+    }
+
+    pub(super) fn finish_output_change_if(
+        &self,
+        epoch: u64,
+        claim: impl FnOnce() -> bool,
+    ) -> Result<(), PlacementError> {
+        let anchor = self.slot_snapshot(0).ok_or(PlacementError::Pending)?;
+        let write = self.prepare_slot_write_fixed(anchor, anchor.lifetime())?;
+        let next = epoch
+            .checked_add(1)
+            .filter(|next| *next != u64::MAX)
+            .ok_or(PlacementError::ObservationGenerationExhausted)?;
+        self.commit_slot_write_fixed(
+            &write,
+            || {
+                epoch & 1 != 0
+                    && self.output_change_epoch.load(Ordering::Acquire) == epoch
+                    && self.output_owners_idle()
+                    && self.key_lock_start_policy.stopped()
+                    && claim()
+            },
+            |_| {
+                self.output_restore_allowed.store(false, Ordering::Release);
+                self.output_change_epoch.store(next, Ordering::Release);
+            },
+        )
+        .map(|_| ())
+    }
     pub(crate) fn key_lock_start_behavior(&self) -> KeyLockStartBehavior {
         self.key_lock_start_policy.behavior()
     }
@@ -172,10 +242,12 @@ impl InputRuntimeOwnership {
         self.commit_slot_write_fixed(
             &write,
             || {
-                self.key_lock_start_policy
-                    .pending_owners
-                    .load(Ordering::Acquire)
-                    != u64::MAX
+                self.output_admission_open()
+                    && self
+                        .key_lock_start_policy
+                        .pending_owners
+                        .load(Ordering::Acquire)
+                        != u64::MAX
             },
             |_| {
                 self.key_lock_start_policy

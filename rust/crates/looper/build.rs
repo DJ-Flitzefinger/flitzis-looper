@@ -17,6 +17,7 @@ const RERUN_ENV_VARS: &[&str] = &[
 ];
 
 fn main() {
+    build_asio_output();
     build_signalsmith_probe();
     for var in RERUN_ENV_VARS {
         println!("cargo:rerun-if-env-changed={var}");
@@ -51,6 +52,43 @@ fn main() {
                  configure PKG_CONFIG_PATH, or set RUBBERBAND_LIB_DIR and RUBBERBAND_INCLUDE_DIR."
             );
         }
+    }
+}
+
+fn build_asio_output() {
+    let files = [
+        "native/asio_output.cpp",
+        "native/asio_output.h",
+        "native/asio_output_contract.h",
+        "vendor/asio-sdk/common/asio.h",
+        "vendor/asio-sdk/common/asiosys.h",
+        "vendor/asio-sdk/common/iasiodrv.h",
+        "vendor/asio-sdk/provenance.json",
+    ];
+    for file in files {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .std("c++17")
+        .opt_level(2)
+        .include("vendor/asio-sdk/common")
+        .file("native/asio_output.cpp");
+    if env::var_os("CARGO_FEATURE_ASIO_CONTRACT_TESTS").is_some() {
+        build.define("FLITZIS_ASIO_CONTRACT_TESTS", None);
+    }
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flag("/EHsc").flag("/fp:precise");
+    } else {
+        build.flag("-fno-fast-math");
+    }
+    build.compile("flitzis_asio_output");
+    for library in ["ole32", "advapi32", "user32"] {
+        println!("cargo:rustc-link-lib={library}");
     }
 }
 

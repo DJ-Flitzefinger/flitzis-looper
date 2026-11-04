@@ -22,6 +22,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from flitzis_looper.audio_output_options import AudioOutputOptions
+from flitzis_looper.controller.audio_output_persistence import (
+    OutputRecovery,
+    recover_audio_output_json,
+)
 from flitzis_looper.controller.key_metadata_persistence import recover_project_key_intent
 from flitzis_looper.controller.recording_settings_persistence import recover_recording_settings_json
 from flitzis_looper.controller.stem_intent_persistence import recover_project_stem_intent
@@ -91,6 +96,7 @@ class ProjectPersistence:
         self._dirty = False
         self.load_error: str | None = None
         self.recording_settings_warning: str | None = None
+        self.audio_output_recovery: OutputRecovery | None = None
         self.save_error: str | None = None
         self.invalid_stem_pair_ids: set[int] = set()
         self._last_write_monotonic = None
@@ -326,6 +332,28 @@ class ProjectPersistence:
             revision = self._revision
             self._write_snapshot(self.project, revision, now)
 
+    def commit_audio_output(self, options: AudioOutputOptions) -> None:
+        """Persist one successfully restored output request, with atomic recovery."""
+        self.restore_audio_output_intent(options, None)
+
+    def restore_audio_output_intent(
+        self, options: AudioOutputOptions, recovery: OutputRecovery | None
+    ) -> None:
+        """Write an exact prior output field during a checked rollback transaction."""
+        validated = AudioOutputOptions.model_validate(options)
+        with self._writer:
+            previous = self.project.audio_output
+            previous_recovery = self.audio_output_recovery
+            self.project.audio_output = validated
+            self.audio_output_recovery = recovery
+            self.mark_dirty()
+            try:
+                self.flush()
+            except OSError:
+                self.project.audio_output = previous
+                self.audio_output_recovery = previous_recovery
+                raise
+
     def _write_snapshot(
         self,
         project: ProjectState,
@@ -352,6 +380,10 @@ class ProjectPersistence:
             message = "project intent changed during timing verification"
             raise PersistenceFenceError(message)
         data = snapshot.model_dump(mode="json")
+        if self.audio_output_recovery is not None:
+            # Other valid project edits cannot acknowledge or silently replace
+            # malformed backend intent before an explicit successful Apply.
+            data["audio_output"] = self.audio_output_recovery.original
         data["config_revision"] = revision
         sample_paths = data.get("sample_paths")
         if isinstance(sample_paths, list):
@@ -422,12 +454,14 @@ class ProjectPersistence:
             Loaded `ProjectState`, or defaults when missing/invalid.
         """
         recording_warning: str | None = None
+        output_recovery: OutputRecovery | None = None
         try:
             raw = config_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             state = ProjectState()
         else:
             raw, recording_warning = recover_recording_settings_json(raw)
+            raw, output_recovery = recover_audio_output_json(raw)
             try:
                 state = ProjectState.model_validate_json(raw)
             except json.JSONDecodeError:
@@ -436,6 +470,7 @@ class ProjectPersistence:
                 state = ProjectPersistence._recover_project_metadata(raw, error)
                 persistence = ProjectPersistence(state)
                 persistence.recording_settings_warning = recording_warning
+                persistence.audio_output_recovery = output_recovery
                 if any(
                     item["loc"][0] in {"material_migrations", "config_revision"}
                     for item in error.errors()
@@ -462,6 +497,7 @@ class ProjectPersistence:
 
         persistence = ProjectPersistence(state)
         persistence.recording_settings_warning = recording_warning
+        persistence.audio_output_recovery = output_recovery
         return persistence
 
     @staticmethod

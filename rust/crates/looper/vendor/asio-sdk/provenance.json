@@ -1,0 +1,18 @@
+{
+  "package": "Steinberg ASIO SDK",
+  "version": "2.3.4",
+  "archive_date": "2025-10-15",
+  "source_url": "https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip",
+  "archive_sha256": "d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca",
+  "archive_bytes": 8910208,
+  "license_choice": "GPL version 3 option in the exact upstream LICENSE.txt",
+  "retained_files": {
+    "LICENSE.txt": "61e56814f24b32216884b2db0b4dcc317111a5ab354d54d19dd9fc13d71b1c7a",
+    "common/LICENSE.txt": "61e56814f24b32216884b2db0b4dcc317111a5ab354d54d19dd9fc13d71b1c7a",
+    "common/asio.h": "93d2f80d49b4ac9c963514e7c1307ab5111d8104246192233745beb058534ea1",
+    "common/asiosys.h": "f44a1ed0fd7c056ff047aeebc4c05a8c185f0585a24d8debc55c70107777dbef",
+    "common/iasiodrv.h": "86ad4788452c74823653cf57d4bd557c48bb6542d7e6eb7fff80102c705a066d"
+  },
+  "upstream_bytes_unchanged": true,
+  "integration": "Interface headers only; no upstream host globals, driver binaries, SDK download, bindgen or Clang at build/runtime. Own bridge uses the checked existing C++ compiler."
+}

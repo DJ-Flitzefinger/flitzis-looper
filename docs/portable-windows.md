@@ -47,6 +47,40 @@ starts perform no build, dependency installation, update or model preflight.
 `START-LOOPER.bat --check` runs the isolated runtime import/DLL/FFmpeg/offline-worker
 checks without opening the GUI or an audio device.
 
+Audio output Settings support WASAPI and native Windows ASIO in the same Release
+build. WASAPI needs no ASIO driver. ASIO uses the selected vendor driver already
+registered on the computer; the installer does not acquire or install one. Choose
+the backend, device, physical stereo outputs, rate and buffer/period, or use Auto.
+Stop playback and let recording, loading and arrangement owners finish before
+Apply. A failed request keeps Settings accessible and attempts to restore the
+previous output and original musical/source selections without starting playback.
+Invalid saved output preferences require an explicit corrected Apply.
+
+Once source startup restoration is complete, existing paired-stem assignments
+require the installed sample rate to be selected explicitly. Auto or a
+different rate is refused before the current output is stopped. Failed or
+partially restored startup still permits a corrective Apply; wait for
+restoration to finish before playing.
+
+WASAPI uses the endpoint's `IAudioClient3` shared-mode period capabilities for the
+exact initialized format. Auto uses its reported default; unsupported fixed
+periods are rejected without rounding. The initialized period, initialization-time
+shared-engine snapshot, stream capacity, observed callback sizes and reported
+latency remain separate values. ASIO similarly reports its selected driver's
+legal buffer pattern, physical channel names/formats, latency and notifications.
+A nominal 96-frame interval at 96 kHz is 1 ms; it does not establish total audible
+latency, deadline reliability or six-PAD listening quality.
+
+The ordinary source build compiles the ASIO bridge with the existing MSVC C++17
+and Windows SDK tools. Its compiler probe only compiles and links; it never runs
+the probe. No Clang, SDK download during compilation or additional runtime DLL is
+required. The tracked ASIO SDK interface headers retain their exact upstream
+license and provenance, and the project selects their GPLv3 option. The runtime
+license collection includes those notices and the CPAL license and downstream
+provenance as exact tracked bytes. Runtime preflight reflects the matching output
+and original-source restoration interfaces before App activation, without
+constructing an Engine or discovering a device.
+
 The piano-control revision requires Native's immutable
 `CapturedPitchAction.resets_key_correction` receipt field. The installer preflight
 rejects an older incompatible binary before activation. Saved schema-1 key intent

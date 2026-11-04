@@ -89,12 +89,15 @@ impl Fixture {
                         trigger_quantization: TriggerQuantization::Immediate,
                         callback_clock: Arc::new(SharedOutputClock::new()),
                         clock_mapper: OutputClockMapper::new(),
+                        external_clock_revision: 0,
                         loop_acceptance: Arc::default(),
                         pad_peaks: [0.0; NUM_SAMPLES],
                         pad_activity: RtRenderPadActivity::default(),
                         last_pad_emit_frame: 0,
                         last_master_emit_frame: 0,
                         retired_buffers,
+                        close_producer: None,
+                        close_parameter_producer: None,
                     },
                     _drop_probe: DropProbe(destroyed_tx),
                 })
@@ -120,7 +123,7 @@ impl Fixture {
         &mut self.callback.as_mut().unwrap().state_mut().callback
     }
 
-    fn defer_cold(&mut self) -> Pins {
+    fn queue_cold(&mut self) -> Pins {
         let ownership = self.ownership.as_ref().unwrap().clone();
         let sample = SampleBuffer {
             residency: None,
@@ -159,6 +162,12 @@ impl Fixture {
                 initial_pitch: crate::audio_engine::SourcePitchInitialization::FreshNeutral,
             })
             .unwrap();
+        pins
+    }
+
+    fn defer_cold(&mut self) -> Pins {
+        let pins = self.queue_cold();
+        let ownership = self.ownership.as_ref().unwrap().clone();
         let popped = self.state().consumer_in.pop().unwrap();
         self.producer.push(ControlMessage::Ping()).unwrap();
         let unrelated = ownership.slot_snapshot(215).unwrap();
@@ -270,6 +279,7 @@ impl Fixture {
     fn join_worker(&mut self) -> DropThread {
         assert!(self.callback.is_none());
         self.start_worker();
+        self.worker.as_mut().unwrap().join_checked().unwrap();
         drop(self.worker.take());
         self.destroyed.recv_timeout(Duration::from_secs(5)).unwrap()
     }
@@ -282,6 +292,36 @@ impl Drop for Fixture {
         self.start_worker();
         drop(self.worker.take());
     }
+}
+
+#[test]
+fn unread_large_payload_retires_while_original_producer_remains_alive() {
+    let mut fixture = Fixture::new();
+    let pins = fixture.queue_cold();
+    assert_eq!(pins.pcm.strong_count(), 1);
+    assert!(fixture.state().consumer_in.peek().is_ok());
+    let callback_thread = fixture.close_from_callback_thread();
+    // Only the queued message owns this PCM, and the off-RT worker is paused.
+    assert_eq!(pins.pcm.strong_count(), 1);
+    assert!(!fixture.producer.is_abandoned());
+    let destroyed = fixture.join_worker();
+    assert_ne!(destroyed.id, callback_thread);
+    assert_eq!(
+        destroyed.name.as_deref(),
+        Some("flitzis-audio-buffer-retirement")
+    );
+    assert_eq!(pins.pcm.strong_count(), 0);
+    assert_eq!(pins.adoption.strong_count(), 0);
+    assert_eq!(pins.cancellation.strong_count(), 0);
+    assert_eq!(pins.ownership.strong_count(), 0);
+    // The original producer is STILL retained here. No command was executed and
+    // checked late publication cannot recreate an unread orphan-ring payload.
+    assert!(fixture.producer.is_abandoned());
+    assert!(
+        super::super::push_control_message(&mut fixture.producer, ControlMessage::Ping(), "Ping")
+            .is_err()
+    );
+    assert!(fixture.feedback.pop().is_err());
 }
 
 #[test]

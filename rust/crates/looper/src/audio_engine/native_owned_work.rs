@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub(super) struct CompleteSampleWork {
     reference: SampleBuffer,
     lease: Option<CommittedColdLease>,
+    clock: Option<super::stem_cache::rate_reader::SourceClock>,
     assets: Arc<ProjectAssets>,
 }
 
@@ -16,34 +17,85 @@ impl CompleteSampleWork {
         id: usize,
         reference: &SampleBuffer,
     ) -> Result<Self, String> {
-        let lease = if reference.resident_start() == 0
-            && reference.resident_end() == reference.frame_count()
+        Self::capture_inner(engine, id, reference, false)
+    }
+
+    pub(super) fn capture_for_legacy(
+        engine: &AudioEngine,
+        id: usize,
+        reference: &SampleBuffer,
+    ) -> Result<Self, String> {
+        Self::capture_inner(engine, id, reference, true)
+    }
+
+    fn capture_inner(
+        engine: &AudioEngine,
+        id: usize,
+        reference: &SampleBuffer,
+        original_clock: bool,
+    ) -> Result<Self, String> {
+        if !engine
+            .input_runtime_ownership
+            .output_source_admission_open()
         {
+            return Err("audio output change fences new source work".into());
+        }
+        let complete_resident =
+            reference.resident_start() == 0 && reference.resident_end() == reference.frame_count();
+        let assigned = if original_clock || !complete_resident {
+            engine
+                .cold_leases
+                .lock()
+                .map_err(|_| "cold lease lock poisoned")?
+                .get(id)
+                .and_then(Clone::clone)
+        } else {
+            None
+        };
+        let clock = if original_clock && reference.residency.is_some() {
+            assigned
+                .as_ref()
+                .map(|lease| {
+                    super::stem_cache::rate_reader::SourceClock::from_lease(lease, reference)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let lease = if complete_resident {
             None
         } else {
-            Some(
-                engine
-                    .cold_leases
-                    .lock()
-                    .map_err(|_| "cold lease lock poisoned")?
-                    .get(id)
-                    .and_then(Clone::clone)
-                    .ok_or("complete source lease unavailable")?,
-            )
+            Some(assigned.ok_or("complete source lease unavailable")?)
         };
         Ok(Self {
             reference: reference.clone(),
             lease,
+            clock,
             assets: engine.project_assets.clone(),
         })
     }
 
     pub(super) fn materialize(&self, maximum: usize) -> Result<SampleBuffer, String> {
+        self.materialize_cancellable(maximum, &|| false)
+    }
+
+    pub(super) fn source_clock(&self) -> Option<super::stem_cache::rate_reader::SourceClock> {
+        self.clock
+    }
+
+    pub(super) fn materialize_cancellable(
+        &self,
+        maximum: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<SampleBuffer, String> {
+        if cancelled() {
+            return Err("complete source work cancelled".into());
+        }
         let Some(lease) = &self.lease else {
             return Ok(self.reference.clone());
         };
         let complete = lease
-            .read_complete(&self.reference, maximum)
+            .read_complete_cancellable(&self.reference, maximum, cancelled)
             .map_err(|error| error.to_string())?;
         self.assets
             .retain_cold_reader(lease, &complete)

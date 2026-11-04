@@ -10,7 +10,11 @@ class ApplyProjectState:
     """Apply project state to audio engine and session state."""
 
     def __init__(
-        self, transport: TransportController, *, restored_sample_ids: frozenset[int] | None = None
+        self,
+        transport: TransportController,
+        *,
+        restored_sample_ids: frozenset[int] | None = None,
+        source_initializers_in_loader: bool = False,
     ) -> None:
         self._transport = transport
         self._project = transport._project
@@ -19,6 +23,7 @@ class ApplyProjectState:
         self._global_modes = transport.global_params
         self._audio = transport._audio
         self._restored_sample_ids = restored_sample_ids
+        self._source_initializers_in_loader = source_initializers_in_loader
 
     def _has_assignment(self, sample_id: int) -> bool:
         return self._project.sample_paths[sample_id] is not None and (
@@ -29,7 +34,8 @@ class ApplyProjectState:
         defaults = ProjectState()
 
         self._apply_global_audio_settings(defaults)
-        self._apply_per_pad_mixing(defaults)
+        if not self._source_initializers_in_loader:
+            self._apply_per_pad_mixing(defaults)
         self._apply_pad_loop_regions(defaults)
         self._apply_pad_bpm_settings()
         self._apply_bpm_lock_settings()
@@ -41,7 +47,11 @@ class ApplyProjectState:
         if self._project.speed != defaults.speed:
             self._audio.set_speed(self._project.speed)
 
-        self._apply_key_lock_settings(defaults)
+        # Output reset preserves musical placement while retiring its source.
+        # Loader publishes key-lock, pitch and mixing with the original new
+        # source adoption; a loaded-source edit cannot target the retired one.
+        if not self._source_initializers_in_loader:
+            self._apply_key_lock_settings(defaults)
 
         if self._project.trigger_quantization_enabled != defaults.trigger_quantization_enabled:
             mode = (

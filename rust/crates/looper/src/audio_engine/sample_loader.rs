@@ -13,6 +13,9 @@ use crate::audio_engine::errors::SampleLoadError;
 use crate::messages::SampleBuffer;
 
 mod cold;
+pub(crate) use cold::fft_stream;
+#[cfg(test)]
+pub(crate) use cold::padded_reference;
 pub(crate) use cold::stream::{decode_audio_snapshot_streamed, prepare_playback_streamed};
 pub(crate) use cold::validate_decoder_cache_provenance;
 #[cfg(test)]

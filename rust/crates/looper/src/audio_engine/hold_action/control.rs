@@ -54,6 +54,11 @@ pub(crate) fn pause_for_producer(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("hold producer lock poisoned"))?;
+    if !ownership.output_admission_open() || !ownership.output_publication_live(&producer) {
+        return Err(PyRuntimeError::new_err(
+            "audio output is unavailable for a new Hold action",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "Hold pause queue is full; no action admitted",
@@ -64,6 +69,7 @@ pub(crate) fn pause_for_producer(
             prepared,
             || {
                 requests[id] == original_request
+                    && ownership.output_admission_open()
                     && ownership.copy_reservation(id) == 0
                     && ownership.pair_reservation(id) == 0
                     && action.state() == HoldActionState::Prepared
@@ -115,6 +121,9 @@ pub(crate) fn release_for_producer(
         .map_err(|_| PyRuntimeError::new_err("hold producer lock poisoned"))?;
     if action.state().terminal() || action.release_admitted() {
         return Ok(true);
+    }
+    if producer.is_abandoned() {
+        return Ok(false);
     }
     if producer.is_full() {
         return Ok(false);

@@ -65,6 +65,7 @@ impl Fixture {
             0,
             self.sample.clone(),
             LoadedSourcePublication {
+                output_restore: None,
                 initial_mix: None,
                 placement: self
                     .engine

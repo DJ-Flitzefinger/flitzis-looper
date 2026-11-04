@@ -366,6 +366,14 @@ pub(crate) fn publish(engine: &AudioEngine, ticket: &PadPairTicket) -> PyResult<
         .control_producer()?
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before pair publication",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("pair publication queue is full"));
     }

@@ -1165,7 +1165,7 @@ pub(super) fn prepare_complete_pair_with_reader(
         .lease
         .verify_reference(&reader.reference)
         .map_err(error)?;
-    let complete = AlignedStemStream::prepare(
+    let complete = AlignedStemStream::prepare_exact(
         reader,
         &wav_set._files[..5],
         current.sample_rate_hz,

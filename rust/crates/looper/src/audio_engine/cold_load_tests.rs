@@ -513,6 +513,9 @@ impl Retirement {
             // This optional fixture uses the same bounded owner transfer as CPAL.
             // The original collecting fixture remains unchanged when absent.
             match value {
+                RetiredAudioBuffer::LegacyStemObservation(value) => {
+                    actual.retire_legacy_stem_observation(value)
+                }
                 RetiredAudioBuffer::MixCapture(value) => actual.retire_mix_capture(value),
                 RetiredAudioBuffer::CapturePublication(value) => {
                     actual.retire_capture_publication(value)

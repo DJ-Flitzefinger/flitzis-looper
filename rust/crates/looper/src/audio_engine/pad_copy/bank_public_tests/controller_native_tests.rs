@@ -743,6 +743,7 @@ fn real_controller_rejects_same_pcm_native_target_aba_after_original_logical_cap
                     36,
                     sample.clone(),
                     LoadedSourcePublication {
+                        output_restore: None,
                         initial_mix: None,
                         ownership: &engine.input_runtime_ownership,
                         placement: before,

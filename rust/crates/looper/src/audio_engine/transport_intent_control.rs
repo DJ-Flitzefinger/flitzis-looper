@@ -49,7 +49,8 @@ pub(super) fn publish_under_request_lock(
         .commit_ordinary_transport_intent(
             prepared,
             || {
-                engine.input_runtime_ownership.copy_reservation(id) == 0
+                engine.input_runtime_ownership.output_admission_open()
+                    && engine.input_runtime_ownership.copy_reservation(id) == 0
                     && engine.input_runtime_ownership.pair_reservation(id) == 0
                     && engine
                         .input_runtime_ownership

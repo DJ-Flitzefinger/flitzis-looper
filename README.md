@@ -82,7 +82,8 @@ developer resource overrides are separate. See [BeatThis setup](docs/beat-this-s
 
 ## First loop
 
-1. Choose the operating system's default output before launching.
+1. Start the app, then open **Settings > Audio output** to check or select
+   the output. Apply changes only while stopped.
 2. Middle-click a PAD to select it, then choose **Load Audio** in the left sidebar.
 3. Left-click a loaded PAD to play/restart; right-click to stop.
 4. Open **Adjust Loop** to set BPM, Grid Offset and loop boundaries.

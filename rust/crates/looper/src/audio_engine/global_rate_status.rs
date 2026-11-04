@@ -2,7 +2,7 @@
 //! Neither record grants source authority. Each record has exactly one writer.
 
 use super::master_provenance::MasterProvenance;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RateTuple {
@@ -245,6 +245,8 @@ pub(crate) struct GlobalRateStatus {
 }
 
 pub(crate) struct GlobalRateStatusSlot {
+    output_effect_valid: AtomicBool,
+    output_bpm_valid: AtomicBool,
     requested: RateRecord,
     effect: RateRecord,
     bpm_requested: BpmRecord,
@@ -278,6 +280,8 @@ impl Default for GlobalRateStatusSlot {
         bpm_requested.publish(initial_bpm);
         bpm_effect.publish(initial_bpm);
         Self {
+            output_effect_valid: AtomicBool::new(true),
+            output_bpm_valid: AtomicBool::new(true),
             requested,
             effect,
             bpm_requested,
@@ -287,6 +291,12 @@ impl Default for GlobalRateStatusSlot {
 }
 
 impl GlobalRateStatusSlot {
+    /// Original output is verified ended. Requested musical intent and all
+    /// monotone record revisions survive; its execution receipts do not.
+    pub(super) fn retire_output_effects(&self) {
+        self.output_effect_valid.store(false, Ordering::Release);
+        self.output_bpm_valid.store(false, Ordering::Release);
+    }
     /// Control only, serialized by the existing parameter producer lock.
     pub(crate) fn publish_requested(&self, revision: u64, speed: Option<f64>, period: Option<f64>) {
         let Some((_, previous, _)) = self.requested.read() else {
@@ -297,7 +307,8 @@ impl GlobalRateStatusSlot {
             .read()
             .map(|(_, effect, _)| effect)
             .filter(|effect| {
-                effect.revision == previous.revision
+                self.output_effect_valid.load(Ordering::Acquire)
+                    && effect.revision == previous.revision
                     && matches!(effect.state, RateState::Applied | RateState::Rejected)
             })
             .map_or(previous.effective, |effect| effect.effective);
@@ -331,7 +342,13 @@ impl GlobalRateStatusSlot {
         replacement: Option<MasterProvenance>,
     ) {
         if let Some((_, _, previous)) = self.effect.read() {
+            let previous = if self.output_effect_valid.load(Ordering::Acquire) {
+                previous
+            } else {
+                MasterProvenance::Absent
+            };
             self.effect.publish(effect, replacement.unwrap_or(previous));
+            self.output_effect_valid.store(true, Ordering::Release);
         }
     }
 
@@ -347,6 +364,9 @@ impl GlobalRateStatusSlot {
         effective: RateTuple,
         replacement: Option<MasterProvenance>,
     ) {
+        if !self.output_effect_valid.load(Ordering::Acquire) {
+            return;
+        }
         if let Some((_, previous, provenance)) = self.effect.read()
             && (previous.effective != effective
                 || replacement.is_some_and(|value| value != provenance))
@@ -367,9 +387,13 @@ impl GlobalRateStatusSlot {
 
     /// Readers do one bounded snapshot and reject overlapping writers.
     pub(crate) fn read(&self) -> Option<GlobalRateStatus> {
+        if !self.output_effect_valid.load(Ordering::Acquire) {
+            return None;
+        }
         let (sequence, requested, _) = self.requested.read()?;
         let (_, effect, master_provenance) = self.effect.read()?;
         (effect.revision <= requested.revision
+            && self.output_effect_valid.load(Ordering::Acquire)
             && self.requested.sequence.load(Ordering::SeqCst) == sequence)
             .then_some(GlobalRateStatus {
                 request_revision: requested.revision,
@@ -484,11 +508,16 @@ impl GlobalRateStatusSlot {
     /// Sole callback writer; no allocation, queue or new counter.
     pub(crate) fn publish_bpm_effect(&self, effect: BpmEffect) {
         self.bpm_effect.publish(effect);
+        self.output_bpm_valid.store(true, Ordering::Release);
     }
     pub(crate) fn read_bpm(&self) -> Option<(u64, BpmEffect)> {
+        if !self.output_bpm_valid.load(Ordering::Acquire) {
+            return None;
+        }
         let (sequence, requested) = self.bpm_requested.read()?;
         let (_, effect) = self.bpm_effect.read()?;
         if effect.revision > requested.revision
+            || !self.output_bpm_valid.load(Ordering::Acquire)
             || self.bpm_requested.sequence.load(Ordering::SeqCst) != sequence
         {
             return None;

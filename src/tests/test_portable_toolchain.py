@@ -12,6 +12,55 @@ import pytest
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell toolchain bootstrap")
 REPO = Path(__file__).resolve().parents[2]
 RESULT_PREFIX = "PORTABLE_TOOLCHAIN_RESULT:"
+
+
+def test_msvc_probe_links_cpp17_windows_bridge_inputs_without_execution(tmp_path: Path) -> None:
+    result = _run_toolchain(
+        tmp_path,
+        r"""
+$script:compiles = @()
+$compiler = Join-Path $root 'existing compiler/cl.exe'
+function Import-PortableMsvcEnvironment([string] $InstallationPath) { return $compiler }
+function Invoke-Checked([string] $Executable, [string[]] $Arguments) {
+    if ($Executable -ne $compiler) { throw 'The compiled probe must never execute' }
+    $source = @($Arguments | Where-Object { $_.EndsWith('probe.cpp') })
+    if ($source.Count -ne 1) { throw 'Expected one C++ source' }
+    $output = @($Arguments | Where-Object { $_.StartsWith('/Fe') })
+    if ($output.Count -ne 1) { throw 'Expected one executable output' }
+    [IO.File]::WriteAllBytes($output[0].Substring(3), [byte[]]@(77, 90))
+    $script:compiles += @{ arguments=$Arguments; source=[IO.File]::ReadAllText($source[0]) }
+}
+Test-PortableMsvc $root 'existing Visual Studio'
+Write-ToolchainResult @{ compiles=$script:compiles }
+""",
+    )
+    compiles = result["compiles"]
+    assert isinstance(compiles, list)
+    assert len(compiles) == 1
+    compile_ = compiles[0]
+    arguments = compile_["arguments"]
+    for value in (
+        "/std:c++17",
+        "/EHsc",
+        "/fp:precise",
+        "/MACHINE:X64",
+        "kernel32.lib",
+        "ole32.lib",
+        "advapi32.lib",
+        "user32.lib",
+    ):
+        assert value in arguments
+    for value in (
+        "std::atomic",
+        "is_always_lock_free",
+        "sizeof(long) == 4",
+        "CoInitializeEx",
+        "RegOpenKeyExW",
+        "CreateWindowExW",
+    ):
+        assert value in compile_["source"]
+
+
 BOOTSTRAP_URL = "https://aka.ms/vs/17/release/vs_buildtools.exe"
 MSVC_COMPONENTS = (
     "Microsoft.VisualStudio.Workload.VCTools",

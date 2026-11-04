@@ -281,6 +281,14 @@ pub(super) fn capture(
         .control_producer()?
         .lock()
         .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before global target capture",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "global start capture queue is full",

@@ -24,7 +24,7 @@ fn decoded(samples: Vec<f32>, channels: usize, rate_hz: u32) -> DecodedAudio {
 
 /// Independent fully padded raw-FFT oracle: no partial-input calls, finite-tail
 /// helper, in-place movement, progress trim or production frame calculations.
-pub(super) fn padded_reference(
+pub(crate) fn padded_reference(
     samples: &[f32],
     channels: usize,
     source_rate: u32,

@@ -199,6 +199,7 @@ fn completed_same_pcm_digest_and_generation_replacement_rejects_original_bank_vi
                     0,
                     sample.clone(),
                     LoadedSourcePublication {
+                        output_restore: None,
                         initial_mix: None,
                         ownership: &engine.input_runtime_ownership,
                         placement: before,

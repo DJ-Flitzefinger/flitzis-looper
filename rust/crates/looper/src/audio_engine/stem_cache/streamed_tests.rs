@@ -5,7 +5,7 @@ use super::*;
 use crate::audio_engine::complete_context::CompleteSourceReader;
 use std::sync::Arc;
 
-fn write_words(path: &Path, rate: u32, channels: usize, values: &[i16], rf64: bool) {
+pub(super) fn write_words(path: &Path, rate: u32, channels: usize, values: &[i16], rf64: bool) {
     let data = (values.len() as u64) * 2;
     let mut file = File::create(path).unwrap();
     if rf64 {

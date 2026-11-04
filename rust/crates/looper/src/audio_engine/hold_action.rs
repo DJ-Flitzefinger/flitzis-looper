@@ -294,6 +294,13 @@ impl NativeHoldAction {
         self.state.store(state as u8, Ordering::Release);
     }
 
+    /// Only the unique callback-image destructor calls this after that receiver
+    /// irreversibly ends. It rejects an impossible future effect; it does NOT
+    /// report that an unread pause/release executed or resumed any voice.
+    pub(super) fn settle_after_callback_retirement(&self, output_frame: u64) {
+        self.settle(HoldActionState::Retired, output_frame);
+    }
+
     pub(crate) fn projection(&self) -> NativeHoldProjection {
         let mut state = self.state();
         let mut effect = self.effect();

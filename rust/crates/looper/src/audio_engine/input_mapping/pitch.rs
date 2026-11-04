@@ -180,6 +180,9 @@ impl Default for RequestedPitchJournal {
 }
 
 impl RequestedPitchJournal {
+    pub(super) fn has_pending(&self) -> bool {
+        self.records.iter().any(Option::is_some)
+    }
     fn has_capacity(&self) -> bool {
         self.records.iter().any(Option::is_none)
     }
@@ -515,6 +518,9 @@ pub(super) fn select_pad(
     let mut state = runtime
         .lock()
         .map_err(|_| PitchActionReject::PlacementPending)?;
+    if !ownership.output_source_admission_open() {
+        return Err(PitchActionReject::InputDisabled);
+    }
     if id >= state.pads.len() {
         return Err(PitchActionReject::InvalidAction);
     }
@@ -547,6 +553,10 @@ pub(super) fn select_pad_with_delivery(
             return;
         }
     };
+    if !ownership.output_admission_open() {
+        deliver(Err(PitchActionReject::InputDisabled));
+        return;
+    }
     let selected = match selection_for_pad(id, &state, ownership) {
         Ok(selected) => selected,
         Err(reason) => {
@@ -605,6 +615,9 @@ fn capture_row(
     ownership: &Arc<InputRuntimeOwnership>,
     input_owners: InputOwners<'_>,
 ) -> Result<CapturedPitchAction, PitchActionReject> {
+    if !ownership.output_admission_open() {
+        return Err(PitchActionReject::InputDisabled);
+    }
     if input_owners.is_some_and(|(mapping, enabled, learn)| {
         !mapping.load(Ordering::Acquire)
             || !enabled.load(Ordering::Acquire)

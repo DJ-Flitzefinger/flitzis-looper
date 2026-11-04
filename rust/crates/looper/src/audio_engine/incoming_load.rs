@@ -253,6 +253,9 @@ pub(super) struct IncomingLoad {
 }
 
 impl IncomingLoad {
+    pub(super) fn settled_after_job_end(&self) -> bool {
+        matches!(self.adoption.load(Ordering::Acquire), 2 | 3)
+    }
     pub(super) fn new(request: u64, intent: IncomingIntent, adoption: Arc<AtomicU8>) -> Self {
         Self {
             request,

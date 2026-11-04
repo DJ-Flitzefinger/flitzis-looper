@@ -566,10 +566,11 @@ independent discontinuity oracle. Rust FIFO counters do not expose Native intern
 fallback. One fixed-order reference workload at one ratio does not establish
 selected-stem, device, musical quality or Human acceptance.
 
-The application uses the default output device's rate and channel count and
-requests 512 frames; actual callback frames come from the supplied buffer. A
-practical crackle report therefore still requires the actual build, device
-format, effective wet ratios and stem selections to be bound to its workload.
+Default-output selection and a 512-frame request describe the earlier reference
+configuration. Current output requests are configurable in Settings; actual
+callback frames still come from the supplied buffer. A practical crackle report
+requires the actual build, installed device format, observed callback geometry,
+effective wet ratios and stem selections to be bound to its workload.
 The productive target remains six PADs.
 
 Observed release reference run (2026-11-03), AMD Ryzen 9 9955HX3D, 768 active

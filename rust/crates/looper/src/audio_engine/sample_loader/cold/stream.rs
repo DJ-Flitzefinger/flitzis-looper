@@ -197,7 +197,7 @@ fn decode_probed_audio_streamed(
     })
 }
 
-fn zeroed(count: usize) -> Result<Vec<f32>, SampleLoadError> {
+pub(super) fn zeroed(count: usize) -> Result<Vec<f32>, SampleLoadError> {
     let mut samples = Vec::new();
     samples
         .try_reserve_exact(count)
@@ -310,111 +310,49 @@ pub(crate) fn prepare_playback_streamed(
         }
         delay = 0;
     } else {
-        let (fft_input, fft_output) = fft_dimensions(decoded.rate_hz, output_rate);
-        let workspace = fft_input
-            .checked_add(fft_output)
-            .and_then(|n| n.checked_mul(decoded.channels))
-            .and_then(|n| n.checked_mul(64 * 4))
-            .and_then(|n| n.checked_add(128 * 1024))
-            .and_then(|n| n.checked_add(COPY_FRAMES * (decoded.channels + output_channels) * 8))
+        let workspace = fft_stream::working_bytes(decoded.rate_hz, output_rate, decoded.channels)?
+            .checked_add(COPY_FRAMES * (decoded.channels + output_channels) * 8)
             .ok_or(SampleLoadError::Limit("streaming FFT workspace"))?;
         check_bytes(workspace, maximum)?;
         decoded.scratch_reserved_bytes = decoded.scratch_reserved_bytes.max(workspace);
-        let mut converter = Fft::<f32>::new(
-            decoded.rate_hz as usize,
-            output_rate as usize,
-            RESAMPLE_CHUNK_FRAMES,
-            1,
+        let mut converter = fft_stream::FftPcmStream::new(
+            decoded.frames,
             decoded.channels,
-            FixedSync::Input,
+            decoded.rate_hz,
+            output_rate,
+            maximum,
         )?;
-        delay = converter.output_delay();
-        let required = expected
-            .checked_add(delay)
-            .ok_or(SampleLoadError::Limit("delayed playback extent"))?;
-        let input_frames = converter.input_frames_max();
-        let output_frames = converter.output_frames_max();
-        let mut input = zeroed(input_frames * decoded.channels)?;
-        let mut output = zeroed(output_frames * decoded.channels)?;
-        let mut left = decoded.frames;
-        let mut produced_total = 0_usize;
-        let mut written = 0_usize;
-        let mut tail_left = None;
+        delay = converter.delay();
+        let mut output = zeroed(COPY_FRAMES * decoded.channels)?;
         progress(SampleLoadProgress {
             subtask: SampleLoadSubtask::Resampling,
             resampling_required: true,
             percent: 0.0,
         });
-        while left > 0 || produced_total < required {
-            check_cancelled(cancelled)?;
-            let needed = converter.input_frames_next();
-            let available = needed.min(left);
-            if available == 0 {
-                let budget = match tail_left {
-                    Some(n) => n,
-                    None => {
-                        tail_call_budget(required - produced_total, decoded.rate_hz, output_rate)
-                            .map_err(|_| SampleLoadError::Limit("finite streaming tail budget"))?
-                    }
-                };
-                if budget == 0 {
-                    return Err(SampleLoadError::InvalidInput(
-                        "streaming resampler tail exceeded finite budget",
-                    ));
-                }
-                tail_left = Some(budget - 1);
-            }
-            read_samples(
-                &mut reader,
-                &mut input[..available * decoded.channels],
+        for first in (0..expected).step_by(COPY_FRAMES) {
+            let count = (expected - first).min(COPY_FRAMES);
+            converter.read(
+                first,
+                &mut output[..count * decoded.channels],
                 cancelled,
+                |_, input| read_samples(&mut reader, input, cancelled),
             )?;
-            let source = InterleavedOwned::new_from(input, decoded.channels, input_frames)
-                .map_err(|_| SampleLoadError::InvalidInput("streaming FFT input dimensions"))?;
-            let mut destination =
-                InterleavedOwned::new_from(output, decoded.channels, output_frames).map_err(
-                    |_| SampleLoadError::InvalidInput("streaming FFT output dimensions"),
-                )?;
-            let indexing = Indexing {
-                input_offset: 0,
-                output_offset: 0,
-                partial_len: (available < needed).then_some(available),
-                active_channels_mask: None,
-            };
-            let (consumed, produced) =
-                converter.process_into_buffer(&source, &mut destination, Some(&indexing))?;
-            input = source.take_data();
-            output = destination.take_data();
-            if available == needed && consumed == 0 {
-                return Err(SampleLoadError::InvalidInput(
-                    "streaming FFT made no progress",
-                ));
-            }
-            left -= available;
-            let start = delay.saturating_sub(produced_total).min(produced);
-            let count = (produced - start).min(expected - written);
             append_mapped(
                 &mut writer,
-                &output[start * decoded.channels..(start + count) * decoded.channels],
+                &output[..count * decoded.channels],
                 decoded.channels,
                 output_channels,
                 cancelled,
             )?;
-            written += count;
-            produced_total = produced_total
-                .checked_add(produced)
-                .ok_or(SampleLoadError::Limit("streaming output extent"))?;
             progress(SampleLoadProgress {
                 subtask: SampleLoadSubtask::Resampling,
                 resampling_required: true,
-                percent: clamp_progress((decoded.frames - left) as f32 / decoded.frames as f32),
+                percent: clamp_progress((first + count) as f32 / expected as f32),
             });
         }
-        if written != expected {
-            return Err(SampleLoadError::InvalidInput(
-                "streaming playback length mismatch",
-            ));
-        }
+        converter.finish(cancelled, |_, input| {
+            read_samples(&mut reader, input, cancelled)
+        })?;
     }
     check_cancelled(cancelled)?;
     if reader.read(&mut [0_u8; 1])? != 0 {

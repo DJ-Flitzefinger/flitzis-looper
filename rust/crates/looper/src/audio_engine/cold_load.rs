@@ -357,6 +357,7 @@ struct ColdLoad {
     run_analysis: bool,
     restore_automatic: bool,
     replace_assignment: bool,
+    output_restore: Option<super::audio_output_change::SourceRestoreProof>,
     resident_hint: Option<ResidentLoadHint>,
     resident_guard: Option<Arc<ResidentLoadGuard>>,
     refine_tempo_only: bool,
@@ -863,6 +864,21 @@ fn admit_selected_material_incoming(
         .input_runtime_ownership
         .slot_snapshot(id)
         .ok_or_else(|| PyRuntimeError::new_err("content placement is pending"))?;
+    let output_restore = super::audio_output_change::capture_restore_proof(
+        engine,
+        id,
+        &source_path,
+        source_intent,
+        replace_assignment,
+    )
+    .map_err(PyRuntimeError::new_err)?;
+    if super::audio_output_change::RestoreScope::current().is_some()
+        && (run_analysis || refine_tempo_only)
+    {
+        return Err(PyRuntimeError::new_err(
+            "output restoration must not start neural analysis",
+        ));
+    }
     let epoch = engine
         .prepared_source_epoch(id)
         .map_err(PyRuntimeError::new_err)?
@@ -984,6 +1000,7 @@ fn admit_selected_material_incoming(
         restore_automatic,
         replace_assignment,
         resident_hint,
+        output_restore,
         resident_guard: resident_guard.clone(),
         refine_tempo_only,
         analysis_installation: engine
@@ -2020,6 +2037,7 @@ impl ColdLoad {
             .lock()
             .map_err(|_| "cold publication lock poisoned")?;
         if self.flags_cancelled()
+            || self.ownership.output_unavailable.load(Ordering::Acquire)
             || incoming_cancelled
                 .as_ref()
                 .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
@@ -2074,6 +2092,7 @@ impl ColdLoad {
             self.id,
             sample.clone(),
             LoadedSourcePublication {
+                output_restore: self.output_restore.clone(),
                 placement: self.placement,
                 ownership: &self.ownership,
                 generation: self.request_id,

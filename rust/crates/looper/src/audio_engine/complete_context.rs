@@ -185,6 +185,9 @@ impl CompleteSourceGuard {
         rate: u32,
     ) -> Result<Self, String> {
         let ownership = &engine.input_runtime_ownership;
+        if !ownership.output_source_admission_open() {
+            return Err("audio output change is in progress".into());
+        }
         ownership
             .ensure_no_copy_reservation(id)
             .map_err(|error| error.to_string())?;

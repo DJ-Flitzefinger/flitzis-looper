@@ -113,6 +113,7 @@ fn same_pcm_digest_and_generation_replacement_cannot_retarget_original_pair_gest
             0,
             sample.clone(),
             LoadedSourcePublication {
+                output_restore: None,
                 initial_mix: None,
                 ownership,
                 placement: original,

@@ -155,6 +155,10 @@ def _finish_ui_shutdown(controller: AppController, on_exit: Callable[[], None] |
 
 def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
     """Deliver global release/cancel before the existing always-reachable runtime tick."""
+    output = context.ui.settings.audio_output
+    if output.exclusive_native_access or not output.has_runtime:
+        context.audio.poll.poll()
+        return
     io = imgui.get_io()
     if io.app_focus_lost:
         context.ui.waveform.pause_selected_pad_hold_on_release("focus_cancel")
@@ -171,7 +175,10 @@ def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
     context.ui.arrangement.poll(
         left_down=imgui.is_mouse_down(imgui.MouseButton_.left),
         right_down=imgui.is_mouse_down(imgui.MouseButton_.right),
-        cancelled=io.app_focus_lost or closing or context.state.session.settings_open,
+        cancelled=io.app_focus_lost
+        or closing
+        or context.state.session.settings_open
+        or not output.can_perform,
     )
     context.audio.poll.poll()
 

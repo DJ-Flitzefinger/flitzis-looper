@@ -218,12 +218,20 @@ def _poll_keyboard_input(ctx: UiContext) -> None:
 def render_ui(ctx: UiContext) -> None:
     """Main application render entrypoint."""
     ctx.on_frame_render()
-    _poll_keyboard_input(ctx)
+    if ctx.ui.settings.audio_output.can_perform:
+        _poll_keyboard_input(ctx)
+    else:
+        ctx.ui.settings.open()
 
     with default_style():
-        _main(ctx)
-        if not ctx.state.session.settings_open:
-            _file_dialog(ctx)
-        performance_confirmation(ctx)
+        if ctx.ui.settings.audio_output.can_perform:
+            _main(ctx)
+            if not ctx.state.session.settings_open:
+                _file_dialog(ctx)
+            performance_confirmation(ctx)
+        else:
+            settings_overlay(ctx)
 
-    ctx.persistence.maybe_flush()
+    output = ctx.ui.settings.audio_output
+    if not output.busy and not output.transaction_active:
+        ctx.persistence.maybe_flush()

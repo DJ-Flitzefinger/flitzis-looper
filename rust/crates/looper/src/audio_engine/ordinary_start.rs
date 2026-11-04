@@ -459,6 +459,15 @@ impl OrdinaryStartWork {
         self.origin().reject(reason);
         self.epoch.store(0, Ordering::Release);
     }
+
+    /// Negative settlement after the sole callback receiver ends. Keep applying
+    /// and applied receipts/epochs intact; they are historical actual effects.
+    pub(crate) fn retire_after_callback_close(&self) {
+        let origin = self.origin();
+        if origin.reject(PitchActionReject::LaunchCancelled) || origin.state() == "rejected" {
+            self.epoch.store(0, Ordering::Release);
+        }
+    }
     pub(crate) fn capture_history_permit(
         &self,
         sample: &SampleBuffer,

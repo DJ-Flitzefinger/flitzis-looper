@@ -512,6 +512,7 @@ fn original_final_occupied_and_empty_aba_foreign_and_source_bank_views_reject_wi
                     71,
                     sample.clone(),
                     LoadedSourcePublication {
+                        output_restore: None,
                         initial_mix: None,
                         ownership: &engine.input_runtime_ownership,
                         placement: before,

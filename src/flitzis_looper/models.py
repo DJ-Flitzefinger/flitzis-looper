@@ -23,6 +23,7 @@ from flitzis_looper import stem_intent
 from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.analysis.app_tempo_models import AppTempoMethod
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
+from flitzis_looper.audio_output_options import AudioOutputOptions
 from flitzis_looper.bpm_range_options import BpmRangeOptions
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
@@ -675,6 +676,8 @@ class ProjectState(BaseModel):
     """Per-pad source grid base in seconds, or None for the legacy analysis anchor."""
 
     # Global Audio Settings
+    audio_output: AudioOutputOptions = Field(default_factory=AudioOutputOptions)
+    """Requested output configuration; current device observations remain independent."""
     multi_loop: bool = False
     """Allow to play multiple loops at the same time."""
     key_lock: bool = False

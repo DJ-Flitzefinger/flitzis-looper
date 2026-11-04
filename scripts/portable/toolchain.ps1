@@ -226,13 +226,40 @@ function Import-PortableMsvcEnvironment([string] $InstallationPath) {
 function Test-PortableMsvc([string] $Root, [string] $InstallationPath) {
     $compiler = Import-PortableMsvcEnvironment $InstallationPath
     $probe = New-PortableToolDirectory $Root ("cache\toolchain\msvc-probe-$([Guid]::NewGuid().ToString('N'))")
-    $source = Join-Path $probe 'probe.c'
+    $source = Join-Path $probe 'probe.cpp'
     $object = Join-Path $probe 'probe.obj'
     $executable = Join-Path $probe 'probe.exe'
-    $content = "#include <windows.h>`r`n#ifndef _WIN64`r`n#error Expected Windows x64`r`n#endif`r`nint main(void) { return GetCurrentProcessId() == 0; }`r`n"
+    # Compile/link only. This tests the bridge's C++ and Windows SDK inputs;
+    # the probe is never executed and does not discover or load an audio driver.
+    $content = @'
+#include <windows.h>
+#include <objbase.h>
+#include <atomic>
+#include <cstdint>
+#ifndef _WIN64
+#error Expected Windows x64
+#endif
+static_assert(sizeof(void*) == 8 && sizeof(long) == 4, "Windows x64 ABI");
+static_assert(std::atomic<void*>::is_always_lock_free, "Callback pointer atomic");
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free, "Callback counter atomic");
+int main() {
+    std::atomic<std::uint64_t> count{0};
+    count.fetch_add(1, std::memory_order_seq_cst);
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    HKEY key = nullptr;
+    const LSTATUS registry = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software", 0, KEY_READ, &key);
+    if (key) RegCloseKey(key);
+    HWND window = CreateWindowExW(0, L"STATIC", L"compile-only", 0, 0, 0, 0, 0,
+                                  HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (window) DestroyWindow(window);
+    if (SUCCEEDED(initialized)) CoUninitialize();
+    return GetCurrentProcessId() == 0 || registry == ERROR_INVALID_PARAMETER || count.load() != 1;
+}
+'@
     [IO.File]::WriteAllText($source, $content, [Text.UTF8Encoding]::new($false))
-    Invoke-Checked $compiler @('/nologo', '/W4', '/WX', '/MD', "/Fo$object", "/Fe$executable",
-        $source, '/link', '/MACHINE:X64', 'kernel32.lib') | Out-Host
+    Invoke-Checked $compiler @('/nologo', '/W4', '/WX', '/MD', '/std:c++17', '/EHsc', '/fp:precise',
+        "/Fo$object", "/Fe$executable", $source, '/link', '/MACHINE:X64',
+        'kernel32.lib', 'ole32.lib', 'advapi32.lib', 'user32.lib') | Out-Host
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'MSVC compile/link test did not produce an EXE.' }
 }
 

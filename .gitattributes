@@ -5,3 +5,10 @@ rust/crates/looper/vendor/signalsmith/signalsmith-linear/fft.h -text -whitespace
 rust/crates/looper/vendor/signalsmith/STRETCH-LICENSE.txt -text
 rust/crates/looper/vendor/signalsmith/LINEAR-LICENSE.txt -text
 rust/crates/looper/vendor/signalsmith/provenance.json text eol=lf
+rust/crates/looper/vendor/asio-sdk/common/*.h -text -whitespace
+rust/crates/looper/vendor/asio-sdk/LICENSE.txt -text -whitespace
+rust/crates/looper/vendor/asio-sdk/common/LICENSE.txt -text -whitespace
+rust/crates/looper/vendor/asio-sdk/README.md text eol=lf
+rust/crates/looper/vendor/asio-sdk/provenance.json text eol=lf
+rust/vendor/cpal/** -text -whitespace
+rust/vendor/cpal/looper-provenance.json text eol=lf

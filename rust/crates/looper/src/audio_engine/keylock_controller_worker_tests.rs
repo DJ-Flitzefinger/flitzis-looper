@@ -1806,6 +1806,7 @@ impl Harness {
                 0,
                 sample,
                 super::super::LoadedSourcePublication {
+                    output_restore: None,
                     initial_mix: None,
                     placement: engine.input_runtime_ownership.slot_snapshot(0).unwrap(),
                     ownership: &engine.input_runtime_ownership,

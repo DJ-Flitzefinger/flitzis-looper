@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.audio_output import AudioOutputController
     from flitzis_looper.controller.audio_workload import AudioWorkloadCapture
     from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.controller.current_timing import CurrentPadTiming
@@ -1633,10 +1634,20 @@ class SettingsActions:
         self._controller.session.settings_open = True
 
     def close(self) -> None:
+        if not self._controller.audio_output.can_perform:
+            return
         self._controller.session.settings_open = False
 
     def toggle(self) -> None:
+        if not self._controller.audio_output.can_perform:
+            self.open()
+            return
         self._controller.session.settings_open = not self._controller.session.settings_open
+
+    @property
+    def audio_output(self) -> AudioOutputController:
+        """Expose cached output control state without opening a second device."""
+        return self._controller.audio_output
 
     @property
     def audio_workload(self) -> AudioWorkloadCapture:

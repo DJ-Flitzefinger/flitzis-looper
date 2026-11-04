@@ -106,13 +106,14 @@ struct StemDescriptor {
 impl StemOwner {
     fn prepare_window(
         &self,
-        complete: &SampleBuffer,
+        source: (&SampleBuffer, &CommittedColdLease),
         window: &SampleBuffer,
         rate: u32,
         resident: &super::resident_proposal::ResidentReadContext,
         cancelled: &impl Fn() -> bool,
         preallocated: Option<super::resident_accounting::ResidentReservation>,
     ) -> Result<PreparedStemSet, String> {
+        let (complete, source_lease) = source;
         let assets = &resident.assets;
         if let Some(owner) = &self.pair {
             owner
@@ -232,11 +233,15 @@ impl StemOwner {
                 .map_err(|error| error.to_string())?;
             token
         };
-        let mut set = super::stem_cache::prepare_stem_buffers_from_cache(
+        let clock =
+            super::stem_cache::rate_reader::SourceClock::from_lease(source_lease, complete)?;
+        let mut set = super::stem_cache::prepare_stem_buffers_from_cache_cancellable(
             &self.source_version,
             complete,
             rate,
             path,
+            Some(clock),
+            cancelled,
         )?;
         if *set.complete_set_identity != *self.set.complete_set_identity {
             return Err("complete accepted stem set changed".into());
@@ -301,6 +306,29 @@ impl WindowPredecessor {
 }
 
 impl ResidentStemCache {
+    pub(super) fn preflight_output_reset(&self) -> Result<(u64, [u64; 5]), String> {
+        if !self.recovered_custody_settled() {
+            return Err("original resident window collectors are not settled".into());
+        }
+        Ok((
+            super::prepared_source::next_epoch(&self.intent_epoch)?,
+            self.committed.preflight_output_reset()?,
+        ))
+    }
+
+    pub(super) fn take_output_owners(
+        &mut self,
+        next: (u64, [u64; 5]),
+    ) -> impl Send + 'static + use<> {
+        self.intent_epoch.store(next.0, Ordering::Release);
+        self.start_readiness = None;
+        // History holds weak PCM plus exact descriptor/file readers. Keep those
+        // readers through restoration without carrying old-rate PreparedStemSet.
+        (
+            self.accepted.take(),
+            self.committed.take_output_owner(next.1),
+        )
+    }
     pub(super) fn prepare_window_supersession(&self) -> PyResult<Option<WindowPredecessor>> {
         let Some(previous) = self.relocation.as_ref() else {
             return Ok(None);
@@ -981,6 +1009,14 @@ pub(super) fn launch_captured_with_producer(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before resident trigger publication",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("resident command queue is full"));
     }
@@ -1065,6 +1101,14 @@ fn launch_with_producer_before_commit(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before resident launch publication",
+        ));
+    }
     if producer.slots() < 2 {
         return Err(PyRuntimeError::new_err(
             "resident command queue requires timing and prepared start capacity",
@@ -1376,6 +1420,14 @@ pub(super) fn set_stem_pair_full_mix_with_producer(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("control queue lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before full-mix publication",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err("stem full-mix queue is full"));
     }
@@ -2367,7 +2419,7 @@ impl WindowWork {
                 &self.source_lease,
             )
             .map_err(|error| error.to_string())?;
-        let peak = admitted_window_peak_with_readers(
+        let mut peak = admitted_window_peak_with_readers(
             &self.old,
             self.start,
             self.end,
@@ -2441,24 +2493,63 @@ impl WindowWork {
         // Legacy conversion additionally owns a complete reference and complete
         // converter/alignment buffers before cropping. Promise that whole envelope
         // before even the selected source read; the existing legacy cap stays above.
-        let transient = self
+        drop(preparation_owners);
+        if !self.current() {
+            return Err("resident source/window superseded before legacy preflight".into());
+        }
+        let legacy_preparation = self
             .stem_owner
             .as_ref()
             .filter(|owner| owner.pair.is_none())
-            .map(|_| {
-                self.resident
-                    .account
-                    .reserve_transient(super::stem_cache::admitted_stem_pcm_bytes(
+            .map(|owner| {
+                let files = super::project_assets::stem_readers::seal_stem_artifacts(
+                    &owner.generation_path,
+                )
+                .map_err(|error| error.to_string())?;
+                let bytes = super::stem_cache::legacy_preparation_peak(
+                    self.old.frame_count(),
+                    self.old.channels,
+                    self.binding.binding.sample_rate_hz,
+                    &owner.generation_path,
+                    &|| !self.current(),
+                )?;
+                Ok::<_, String>((files, bytes))
+            })
+            .transpose()?;
+        let extra = legacy_preparation
+            .as_ref()
+            .map(|(_, bytes)| {
+                bytes
+                    .checked_sub(super::stem_cache::admitted_stem_pcm_bytes(
                         self.old.frame_count(),
                         self.old.channels,
                     )?)
+                    .ok_or_else(|| {
+                        "legacy transient envelope smaller than existing admission".to_string()
+                    })
+            })
+            .transpose()?
+            .unwrap_or(0);
+        peak = peak
+            .checked_add(extra)
+            .ok_or("resident and legacy FFT peak overflow")?;
+        if legacy_preparation.is_some() && peak > super::cold_jobs::PCM_LIMIT_BYTES {
+            return Err(
+                "resident preparation with legacy FFT exceeds transient PCM admission".into(),
+            );
+        }
+        let transient = legacy_preparation
+            .as_ref()
+            .map(|(_, bytes)| {
+                self.resident
+                    .account
+                    .reserve_transient(*bytes)
                     .map_err(|error| error.to_string())
             })
             .transpose()?;
         if !self.current() {
             return Err("resident source/window superseded before allocation".into());
         }
-        drop(preparation_owners);
         #[cfg(test)]
         {
             super::cold_store::reset_window_read_observation_for_test();
@@ -2506,7 +2597,10 @@ impl WindowWork {
                     None
                 };
                 let mut set = owner.prepare_window(
-                    legacy_complete.as_ref().unwrap_or(&sample),
+                    (
+                        legacy_complete.as_ref().unwrap_or(&sample),
+                        &self.source_lease,
+                    ),
                     &sample,
                     self.binding.binding.sample_rate_hz,
                     &resident,
@@ -2566,7 +2660,13 @@ impl WindowWork {
         let mut pending = None;
         let mut queue_attempts = 0;
         loop {
-            if !self.current() {
+            if self
+                .binding
+                .ownership
+                .output_unavailable
+                .load(Ordering::Acquire)
+                || !self.current()
+            {
                 return Err("resident preparation superseded before publication".into());
             }
             // Physical request rows stay physical. The original source epoch/generation
@@ -2667,12 +2767,19 @@ impl WindowWork {
             let mut proposal_owner = None;
             let mut predecessor_cancelled = false;
             pending.as_mut().expect("held window payload").admitted = Instant::now();
+            let producer_live = !producer.is_abandoned();
             let outcome = self.control.commit_at(
                 &self.binding,
                 &self.intent_epoch,
                 resolved,
                 || {
-                    !self.cancelled.load(Ordering::Acquire)
+                    producer_live
+                        && !self
+                            .binding
+                            .ownership
+                            .output_unavailable
+                            .load(Ordering::Acquire)
+                        && !self.cancelled.load(Ordering::Acquire)
                         && self.proposal.current()
                         && self.publication.status() == "pending"
                         && self.control.claim_predecessor(&mut predecessor_cancelled)
@@ -3127,6 +3234,14 @@ fn prepare_window_with_producer_and_trigger(
     let mut admission_producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&admission_producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before resident publication",
+        ));
+    }
     if admission_producer.is_full() {
         return Err(PyRuntimeError::new_err("resident command queue is full"));
     }

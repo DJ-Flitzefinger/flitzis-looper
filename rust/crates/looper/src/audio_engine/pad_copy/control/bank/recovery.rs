@@ -448,6 +448,14 @@ pub(in crate::audio_engine) fn capture(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before recovered Bank verification",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "recovered Bank command queue is full",
@@ -519,6 +527,14 @@ pub(in crate::audio_engine) fn retry(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before recovered Bank retry",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "recovered Bank command queue is full",

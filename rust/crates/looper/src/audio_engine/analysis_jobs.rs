@@ -43,6 +43,20 @@ pub(super) struct OfflineJobs {
 }
 
 impl OfflineJobs {
+    /// Serialize output-change admission with actual analysis/reader retirement.
+    pub(super) fn with_all_idle<T>(
+        &self,
+        apply: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _slot = self
+            .current
+            .lock()
+            .map_err(|_| "offline job lock poisoned")?;
+        if self.busy.load(Ordering::Acquire) {
+            return Err("offline analysis is running or retiring".into());
+        }
+        apply()
+    }
     pub fn cancel(&self, pad: Option<usize>) {
         if let Ok(slot) = self.current.lock()
             && let Some(job) = slot.upgrade()
@@ -135,6 +149,13 @@ impl OfflineJobs {
             .current
             .lock()
             .map_err(|_| "offline job lock poisoned")?;
+        if reader
+            .as_ref()
+            .and_then(|reader| reader.guard.as_ref())
+            .is_some_and(|guard| !guard.ownership.output_admission_open())
+        {
+            return Err("audio output change is in progress".into());
+        }
         if self.busy.load(Ordering::Acquire) {
             return Err("offline analysis busy (running or retiring)".into());
         }

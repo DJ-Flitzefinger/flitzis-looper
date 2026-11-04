@@ -6,7 +6,9 @@
 //! - Real-time message processing
 //! - Error handling for audio stream operations
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(test)]
+use cpal::traits::HostTrait;
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
 use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -39,8 +41,15 @@ pub(crate) const MAX_PARAMETER_MESSAGES_PER_CALLBACK: usize = 64;
 pub struct AudioStreamHandle {
     // Declaration order is intentional: stream closure hands its box to the still-live
     // worker before the control thread requests worker drain/join.
-    pub stream: Stream,
-    _retirement_worker: AudioBufferRetirementWorker,
+    backend: Mutex<OutputBackendHandle>,
+    retirement_worker: Mutex<Option<AudioBufferRetirementWorker>>,
+    closed_verified: AtomicBool,
+    close_attempted: AtomicBool,
+    backend_released: AtomicBool,
+    admission_unavailable: Arc<AtomicBool>,
+    candidate_epoch: Option<u64>,
+    #[cfg(windows)]
+    asio_observation: Option<Arc<Mutex<super::asio_output::OwnerObservation>>>,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
     pub(crate) parameter_producer: Arc<Mutex<Producer<ControlParameterMessage>>>,
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
@@ -52,16 +61,150 @@ pub struct AudioStreamHandle {
     pub(crate) device_descriptor: OutputDeviceDescriptor,
 }
 
+enum OutputBackendHandle {
+    Cpal(Option<Stream>),
+    #[cfg(windows)]
+    Asio(super::asio_output::Control),
+}
+
 impl AudioStreamHandle {
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    pub(super) fn test_tick(
+        &self,
+    ) -> Result<super::asio_output::test_driver::TickObservation, String> {
+        let mut backend = self
+            .backend
+            .lock()
+            .map_err(|_| "original backend lock poisoned")?;
+        match &mut *backend {
+            OutputBackendHandle::Asio(control) => control.tick(),
+            OutputBackendHandle::Cpal(_) => {
+                Err("private Tick refuses physical CPAL backends".into())
+            }
+        }
+    }
+
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    pub(super) fn test_owner_observer(&self) -> Arc<Mutex<super::asio_output::OwnerObservation>> {
+        self.asio_observation
+            .as_ref()
+            .expect("original injected ASIO owner")
+            .clone()
+    }
+    pub(super) fn configuration(&self) -> serde_json::Value {
+        let mut configuration = self.device_descriptor.configuration.clone();
+        configuration["backend_released"] = self.backend_released.load(Ordering::Acquire).into();
+        configuration["close_verified"] = self.closed_verified.load(Ordering::Acquire).into();
+        #[cfg(windows)]
+        if let Some(observation) = &self.asio_observation {
+            let seen = observation
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            configuration["backend_released"] = seen.backend_released.into();
+            configuration["device_id"] = seen.device_id.clone().into();
+            configuration["endpoint_name"] = seen.device_name.clone().into();
+            configuration["asio_control"] = serde_json::json!(seen);
+        }
+        configuration
+    }
     /// Close the real CPAL stream before joining its existing retirement worker.
     /// No capture owner may be taken over on the strength of an unsuccessful join.
-    pub(super) fn close_checked(self) -> std::io::Result<()> {
-        let Self {
-            stream,
-            _retirement_worker: retirement_worker,
-            ..
-        } = self;
-        super::buffer_retirement::close_callback_and_join(stream, retirement_worker)
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed_verified.load(Ordering::Acquire)
+    }
+
+    pub(super) fn original_output_untouched(&self, epoch: u64) -> bool {
+        self.candidate_epoch != Some(epoch)
+            && !self.close_attempted.load(Ordering::Acquire)
+            && !self.is_closed()
+            && !self.stream_failed.load(Ordering::Acquire)
+    }
+
+    pub(super) fn commit_configuration(&self) -> Result<(), String> {
+        if self.is_closed() || self.stream_failed.load(Ordering::Acquire) {
+            return Err("audio output is unavailable for configuration commit".into());
+        }
+        let mut backend = self
+            .backend
+            .lock()
+            .map_err(|_| "output owner lock poisoned")?;
+        match &mut *backend {
+            OutputBackendHandle::Cpal(Some(_)) => Ok(()),
+            OutputBackendHandle::Cpal(None) => Err("original output is closed".into()),
+            #[cfg(windows)]
+            OutputBackendHandle::Asio(control) => control.commit(),
+        }
+    }
+
+    pub(super) fn abort_unfinished_candidate(&self, active_epoch: u64) -> std::io::Result<()> {
+        if active_epoch & 1 == 0 || self.candidate_epoch != Some(active_epoch) || self.is_closed() {
+            return Ok(());
+        }
+        let mut backend = self
+            .backend
+            .lock()
+            .map_err(|_| std::io::Error::other("output owner lock poisoned"))?;
+        match &mut *backend {
+            OutputBackendHandle::Cpal(_) => Ok(()),
+            #[cfg(windows)]
+            OutputBackendHandle::Asio(control) => {
+                control.abort_candidate().map_err(std::io::Error::other)
+            }
+        }
+    }
+
+    pub(super) fn try_close(&self) -> std::io::Result<()> {
+        self.close_attempted.store(true, Ordering::Release);
+        self.admission_unavailable.store(true, Ordering::Release);
+        self.output_clock.invalidate();
+        // Publications check liveness UNDER these same producer locks. Wait for
+        // a publisher already past its check before the backend can disappear.
+        let result = (|| {
+            drop(
+                self.producer
+                    .lock()
+                    .map_err(|_| std::io::Error::other("control producer lock poisoned"))?,
+            );
+            drop(
+                self.parameter_producer
+                    .lock()
+                    .map_err(|_| std::io::Error::other("parameter producer lock poisoned"))?,
+            );
+            self.close_control_owner()
+        })();
+        if result.is_err() {
+            self.stream_failed.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    fn close_control_owner(&self) -> std::io::Result<()> {
+        if self.is_closed() {
+            return Ok(());
+        }
+        let mut backend = self
+            .backend
+            .lock()
+            .map_err(|_| std::io::Error::other("output owner lock poisoned"))?;
+        match &mut *backend {
+            OutputBackendHandle::Cpal(stream) => {
+                drop(stream.take());
+            }
+            #[cfg(windows)]
+            OutputBackendHandle::Asio(control) => control.try_close()?,
+        }
+        self.backend_released.store(true, Ordering::Release);
+        let mut retirement = self
+            .retirement_worker
+            .lock()
+            .map_err(|_| std::io::Error::other("retirement owner lock poisoned"))?;
+        if let Some(worker) = retirement.as_mut() {
+            worker.join_checked()?;
+        }
+        *retirement = None;
+        self.closed_verified.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -98,7 +241,7 @@ impl std::error::Error for UncertainStreamStartup {
 /// returning an ordinary startup error. Headless proofs reuse this exact seam.
 fn finish_stream_build<T>(
     result: Result<T, Box<dyn std::error::Error>>,
-    retirement_worker: AudioBufferRetirementWorker,
+    mut retirement_worker: AudioBufferRetirementWorker,
     failed: Arc<AtomicBool>,
 ) -> Result<(T, AudioBufferRetirementWorker), Box<dyn std::error::Error>> {
     match result {
@@ -120,6 +263,7 @@ pub(crate) struct OutputDeviceDescriptor {
     pub(crate) endpoint_name: Option<String>,
     pub(crate) endpoint_description_error: Option<String>,
     pub(crate) default_sample_format: String,
+    pub(crate) configuration: serde_json::Value,
 }
 
 /// Setup and configure the logger for audio operations
@@ -1626,6 +1770,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::PreparedStart(_) => 2,
         ControlMessage::CapturePadStartTarget(_) => 1,
         ControlMessage::CaptureGlobalStartTarget(_) => 1,
+        ControlMessage::ObserveLegacyStemRestore(_) => 1,
         ControlMessage::TransportForPlacement { .. } => 1,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
@@ -3047,6 +3192,10 @@ pub(super) fn process_control_message<
                 mixer.clear_constant_timing_for_placement(id, through_epoch, placement);
             }
         }
+        ControlMessage::ObserveLegacyStemRestore(observation) => {
+            mixer.observe_legacy_stem_restore(&observation);
+            retirement.retire_legacy_stem_observation(observation);
+        }
         ControlMessage::SetStemMixMode {
             id,
             mode,
@@ -3384,13 +3533,526 @@ struct AudioCallbackState {
     trigger_quantization: TriggerQuantization,
     callback_clock: Arc<SharedOutputClock>,
     clock_mapper: OutputClockMapper,
+    external_clock_revision: u32,
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
     pad_peaks: [f32; NUM_SAMPLES],
     pad_activity: RtRenderPadActivity,
     last_pad_emit_frame: u64,
     last_master_emit_frame: u64,
     retired_buffers: RtAudioBufferRetirement,
+    close_producer: Option<Arc<Mutex<Producer<ControlMessage>>>>,
+    close_parameter_producer: Option<Arc<Mutex<Producer<ControlParameterMessage>>>>,
 }
+
+/// Runs only when the complete callback image is destroyed off realtime.
+/// Dropping a rtrb Consumer alone leaves unread payloads in a retained producer's
+/// shared ring. Detach and drain under its original producer fence, then destroy
+/// payloads after releasing the lock. No queued command is applied or ACKed.
+fn drain_closed_callback_queue<T>(
+    consumer: &mut Consumer<T>,
+    producer: Option<&Arc<Mutex<Producer<T>>>>,
+    mut retire_obligation: impl FnMut(&T),
+) {
+    let (_, replacement) = RingBuffer::new(0);
+    let mut closed = std::mem::replace(consumer, replacement);
+    let guard = producer.map(|producer| producer.lock().unwrap_or_else(|error| error.into_inner()));
+    let mut unread = Vec::with_capacity(closed.slots());
+    while let Ok(message) = closed.pop() {
+        unread.push(message);
+    }
+    // Future checked publishers observe abandonment before this fence opens.
+    drop(closed);
+    drop(guard);
+    for message in &unread {
+        retire_obligation(message);
+    }
+    drop(unread);
+}
+
+impl Drop for AudioCallbackState {
+    fn drop(&mut self) {
+        let frame = self.transport.output_frame();
+        drain_closed_callback_queue(
+            &mut self.consumer_in,
+            self.close_producer.as_ref(),
+            |message| retire_control_after_callback_end(message, frame),
+        );
+        drain_closed_callback_queue(
+            &mut self.parameter_consumer_in,
+            self.close_parameter_producer.as_ref(),
+            |_| {},
+        );
+        self.mixer.retire_output_obligations(frame);
+    }
+}
+
+/// Actual receiver-END settlement, exclusively from off-RT image destruction.
+/// Each original guard preserves its applying/applied ACK. No command executes.
+pub(super) fn retire_control_after_callback_end(message: &ControlMessage, frame: u64) {
+    use super::pitch_actions::PitchActionReject;
+    match message {
+        ControlMessage::ObserveLegacyStemRestore(observation) => observation.reject(),
+        ControlMessage::HoldAction(work) => work.action.settle_after_callback_retirement(frame),
+        ControlMessage::PadCopy(work) => work.guard.reject(),
+        ControlMessage::PadPair(work) => {
+            let _ = work.guard.reject();
+        }
+        ControlMessage::BankMutation(publication) => {
+            if let Some(work) = publication.take() {
+                work.guard.reject();
+            }
+        }
+        ControlMessage::PreparedStart(publication) => {
+            if let Some(work) = publication.take() {
+                work.retire_after_callback_close();
+            }
+        }
+        ControlMessage::PitchAction(publication) => {
+            if let Some(work) = publication.take() {
+                let _ = work.action.reject(PitchActionReject::LaunchCancelled);
+            }
+        }
+        ControlMessage::CapturePadStartTarget(owner) => {
+            let _ = owner.reject(PitchActionReject::LaunchCancelled);
+        }
+        ControlMessage::CaptureGlobalStartTarget(owner) => {
+            owner.reject(PitchActionReject::LaunchCancelled)
+        }
+        ControlMessage::GlobalPlaybackBatch(batch) => {
+            batch.retire_untransferred_after_callback_close()
+        }
+        _ => {}
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RenderFormat {
+    channels: usize,
+    sample_rate_hz: u32,
+}
+
+/// One renderer for every output backend. Clock adapters only qualify the
+/// observation; transport, source ACKs, scheduling and DSP retain their authority.
+fn render_output_block(
+    state: &mut AudioCallbackState,
+    data: &mut [f32],
+    format: RenderFormat,
+    observed_at_ns: u64,
+    failed: &AtomicBool,
+    map_clock: impl FnOnce(&mut OutputClockMapper, OutputClockSnapshot, usize) -> OutputClockSnapshot,
+) {
+    let RenderFormat {
+        channels,
+        sample_rate_hz,
+    } = format;
+    state
+        .loop_acceptance
+        .observe_callback_geometry(data.len() / channels);
+    let emit_interval_frames = (u64::from(sample_rate_hz) / 10).max(1);
+    let buffer_start_frame = state.transport.output_frame();
+    if failed.load(Ordering::Acquire) {
+        state.mixer.fail_mix_capture_stream();
+    }
+    let snapshot = map_clock(
+        &mut state.clock_mapper,
+        OutputClockSnapshot {
+            valid: true,
+            observed_at_ns,
+            audible_at_ns: observed_at_ns,
+            output_frame: buffer_start_frame,
+            sample_rate_hz,
+            master_period_seconds: state.transport.master_period_seconds(),
+            downbeat_frame: state.transport.downbeat_frame(),
+            master_beat: state
+                .transport
+                .beat_position_at_frame(buffer_start_frame)
+                .unwrap_or(0.0),
+            freshness_ns: 0,
+        },
+        data.len() / channels,
+    );
+    drain_control_messages(
+        &mut state.consumer_in,
+        &mut state.scheduler,
+        buffer_start_frame,
+        &mut state.trigger_quantization,
+        &mut state.transport,
+        &mut state.mixer,
+        &mut state.producer_out,
+        &mut state.retired_buffers,
+    );
+    if failed.load(Ordering::Acquire) {
+        state.mixer.fail_mix_capture_stream();
+        state
+            .mixer
+            .service_mix_capture(&mut state.scheduler, &mut state.retired_buffers);
+    }
+    drain_parameter_messages(
+        &mut state.parameter_consumer_in,
+        &mut state.mixer,
+        &mut state.transport,
+    );
+    try_bootstrap_transport_from_reference(
+        &mut state.mixer,
+        &mut state.transport,
+        buffer_start_frame,
+    );
+    state.callback_clock.publish_qualified(
+        OutputClockSnapshot {
+            master_period_seconds: state.transport.master_period_seconds(),
+            downbeat_frame: state.transport.downbeat_frame(),
+            master_beat: state
+                .transport
+                .beat_position_at_frame(buffer_start_frame)
+                .unwrap_or(0.0),
+            ..snapshot
+        },
+        state.external_clock_revision,
+    );
+    render_scheduled_audio_tracking_pads(
+        &mut state.mixer,
+        &mut state.scheduler,
+        data,
+        &mut state.pad_peaks,
+        &mut state.pad_activity,
+        buffer_start_frame,
+        channels,
+        &mut state.transport,
+        &mut state.producer_out,
+        &mut state.retired_buffers,
+    );
+    let master_peak = master_output_peak(data);
+    let frames = data.len() / channels;
+    state.transport.advance_by_rendered_frames(frames);
+    let frame_clock = state.transport.output_frame();
+    state
+        .loop_acceptance
+        .observe(&state.mixer, observed_at_ns, frame_clock, frames);
+    publish_pad_telemetry(
+        &mut state.producer_out,
+        &state.mixer,
+        &state.pad_peaks,
+        &state.pad_activity,
+        frame_clock,
+        emit_interval_frames,
+        &mut state.last_pad_emit_frame,
+    );
+    publish_master_peak_telemetry(
+        &mut state.producer_out,
+        master_peak,
+        frame_clock,
+        emit_interval_frames,
+        &mut state.last_master_emit_frame,
+    );
+}
+
+#[cfg(windows)]
+struct AsioRenderState {
+    owner: CallbackCloseOwner<AudioCallbackState>,
+    scratch: Box<[f32]>,
+    progress: super::asio_clock::DriverClockProgress,
+}
+
+#[cfg(windows)]
+pub(super) struct AsioRenderContext {
+    // The C++ entry/reentry gate grants unique callback access. Control owns the
+    // box but never borrows this cell until detached callbacks have all returned.
+    state: std::cell::UnsafeCell<AsioRenderState>,
+    input_clock: InputClock,
+    sample_rate_hz: u32,
+    failed: Arc<AtomicBool>,
+    latency: Arc<std::sync::atomic::AtomicU64>,
+    clock: Arc<SharedOutputClock>,
+    admission_unavailable: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl AsioRenderContext {
+    pub(super) fn invalidate_clock(&self) {
+        self.failed.store(true, Ordering::Release);
+        self.admission_unavailable.store(true, Ordering::Release);
+        self.clock.invalidate();
+    }
+    pub(super) fn callback_pointer(&self) -> *mut std::ffi::c_void {
+        std::ptr::from_ref(self).cast_mut().cast()
+    }
+
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    pub(super) fn test_clock_ns(&self) -> u64 {
+        self.input_clock.capture_ns()
+    }
+
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    pub(super) fn test_observation(
+        &self,
+        callback: super::asio_output::test_driver::CallbackMeasurement,
+        native: super::native_render_observation::Observation,
+    ) -> super::asio_output::test_driver::TickObservation {
+        use super::asio_output::test_driver::{PadObservation, TickObservation};
+        // Only the private owner's serialized Tick calls this AFTER the full
+        // fake-driver callback/Entry has returned. No foreign callback exists.
+        let state = unsafe { &mut *self.state.get() }.owner.state_mut();
+        let pads = std::array::from_fn(|id| {
+            let (stem_mode, stem_mask, _) = state.mixer.stem_demand_for_measurement(id);
+            let stem_mode = match stem_mode {
+                crate::messages::StemMixMode::FullMix => 0,
+                crate::messages::StemMixMode::AllStems => 1,
+            };
+            let bank = state.mixer.bank_for_measurement()[id].as_ref();
+            let Some(voice) = state
+                .mixer
+                .voices
+                .iter()
+                .find(|voice| voice.is_playing_sample(id))
+            else {
+                return PadObservation {
+                    key_lock: state.mixer.key_lock_for_measurement(id),
+                    stem_mode,
+                    stem_mask,
+                    source_pcm: bank.map_or(0, |sample| sample.source_address()),
+                    source_samples: bank.map_or(0, |sample| sample.source_sample_count()),
+                    ..PadObservation::default()
+                };
+            };
+            let position = voice.source_playback.position();
+            PadObservation {
+                active: voice.active && !voice.paused,
+                generation: voice.generation,
+                frame: position.frame,
+                fraction: position.fraction,
+                post_dsp_peak: state.pad_peaks[id],
+                key_lock: state.mixer.key_lock_for_measurement(id),
+                stem_mode,
+                stem_mask,
+                source_pcm: voice
+                    .sample
+                    .as_ref()
+                    .map_or(0, |sample| sample.source_address()),
+                source_samples: voice
+                    .sample
+                    .as_ref()
+                    .map_or(0, |sample| sample.source_sample_count()),
+                native_state: voice.stretch.native_state_address(),
+                native_block_size: voice.stretch.rubberband_block_size(),
+                native_start_delay: voice.stretch.rubberband_start_delay(),
+                input_fifo_capacity: voice.stretch.rubberband_input_fifo_capacity(),
+                output_fifo_capacity: voice.stretch.rubberband_output_fifo_capacity(),
+                productive_fed_frames: voice
+                    .stretch
+                    .productive_history()
+                    .map_or(0, |history| history.fed_output_frames),
+                wet_current_source_output: voice.stretch.wet_current_source_output_ready(),
+                wet_failed: voice.stretch.wet_mode_failed(),
+            }
+        });
+        TickObservation {
+            callback,
+            native,
+            output_frame: state.transport.output_frame(),
+            pads,
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(super) unsafe extern "C" fn asio_invalidate(
+    context: *mut std::ffi::c_void,
+    reason: u32,
+    revision: u32,
+) {
+    let context = unsafe { &*context.cast::<AsioRenderContext>() };
+    if reason == 8 {
+        context.clock.require_external_revision(revision);
+    } else {
+        context.invalidate_clock();
+    }
+}
+
+#[cfg(windows)]
+pub(super) unsafe extern "C" fn asio_render(
+    context: *mut std::ffi::c_void,
+    left: *mut std::ffi::c_void,
+    right: *mut std::ffi::c_void,
+    frames: i32,
+    left_type: i32,
+    right_type: i32,
+    time: *const super::asio_output::DriverTime,
+) {
+    // All pointers/extent are registered before Start; C++ rejects invalid plane
+    // indices and reentry BEFORE granting access to the Rust callback image.
+    let context = unsafe { &*context.cast::<AsioRenderContext>() };
+    let state = unsafe { &mut *context.state.get() };
+    let time = unsafe { &*time };
+    if context.failed.load(Ordering::Acquire) {
+        return;
+    }
+    let (Some(left_layout), Some(right_layout)) = (
+        super::asio_sample_format::SampleLayout::from_asio(left_type),
+        super::asio_sample_format::SampleLayout::from_asio(right_type),
+    ) else {
+        context.invalidate_clock();
+        return;
+    };
+    if frames <= 0 || frames as usize != state.scratch.len() / 2 {
+        context.invalidate_clock();
+        return;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let sample_rate_hz = context.sample_rate_hz;
+        let progressed = state.progress.observe(
+            super::asio_clock::DriverClockObservation {
+                system_ns: time.system_ns,
+                sample_position: time.sample_position,
+                sample_rate: time.sample_rate,
+                flags: time.flags,
+            },
+            sample_rate_hz,
+            frames as usize,
+        );
+        let latency = context.latency.load(Ordering::Acquire);
+        let delay =
+            super::asio_clock::latency_delay_ns(latency, time.latency_revision, sample_rate_hz);
+        state.owner.state_mut().external_clock_revision = time.latency_revision;
+        render_output_block(
+            state.owner.state_mut(),
+            &mut state.scratch,
+            RenderFormat {
+                channels: 2,
+                sample_rate_hz,
+            },
+            context.input_clock.capture_ns(),
+            &context.failed,
+            |mapper, snapshot, frames| {
+                mapper.observe_external_callback(snapshot, delay, frames, progressed)
+            },
+        );
+        unsafe {
+            left_layout.write_channel(&state.scratch, 0, left.cast());
+            right_layout.write_channel(&state.scratch, 1, right.cast());
+        }
+    }));
+    if result.is_err() {
+        context.invalidate_clock();
+    }
+}
+
+#[cfg(windows)]
+fn create_asio_audio_stream(
+    options: &super::audio_output::OutputOptions,
+    pending: &mut Option<super::asio_output::Control>,
+    input_clock: InputClock,
+    current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
+    if pending.is_some() {
+        return Err("Original pending ASIO owner must be closed first".into());
+    }
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    let control = match options.test_driver.as_ref() {
+        Some(factory) => super::asio_output::Control::spawn_injected(factory.clone())?,
+        None => super::asio_output::Control::spawn()?,
+    };
+    #[cfg(not(all(test, feature = "asio-contract-tests")))]
+    let control = super::asio_output::Control::spawn()?;
+    *pending = Some(control);
+    let control = pending.as_mut().unwrap();
+    let info = control.open(options.clone())?;
+    let sample_rate_hz = info.sample_rate as u32;
+    let (left, right) = options.physical_pair(info.output_channels as usize)?;
+    let frames = options
+        .buffer_frames
+        .unwrap_or(info.preferred_frames as u32);
+    if frames == 0 || frames > MAX_OUTPUT_CALLBACK_FRAMES as u32 {
+        return Err("ASIO buffer exceeds the application's supported callback extent".into());
+    }
+    let (producer_in, consumer_in) = RingBuffer::new(1024);
+    let (parameter_producer_in, parameter_consumer_in) = RingBuffer::new(1024);
+    let producer_in = Arc::new(Mutex::new(producer_in));
+    let parameter_producer_in = Arc::new(Mutex::new(parameter_producer_in));
+    let (producer_out, consumer_out) = RingBuffer::new(1024);
+    let mixer = create_stream_mixer(
+        2,
+        sample_rate_hz,
+        current_timing_acknowledgements,
+        input_runtime_ownership.clone(),
+        prepared_source_epochs,
+    )?;
+    let output_clock = Arc::new(SharedOutputClock::new());
+    let (mut owner, worker) = create_stream_callback_owner(
+        consumer_in,
+        parameter_consumer_in,
+        producer_out,
+        mixer,
+        sample_rate_hz,
+        output_clock.clone(),
+        loop_acceptance,
+    )?;
+    owner.state_mut().close_producer = Some(producer_in.clone());
+    owner.state_mut().close_parameter_producer = Some(parameter_producer_in.clone());
+    let context = Box::new(AsioRenderContext {
+        state: std::cell::UnsafeCell::new(AsioRenderState {
+            owner,
+            scratch: vec![0.0; frames as usize * 2].into_boxed_slice(),
+            progress: super::asio_clock::DriverClockProgress::default(),
+        }),
+        input_clock,
+        sample_rate_hz,
+        failed: control.failed.clone(),
+        latency: control.latency.clone(),
+        clock: output_clock.clone(),
+        admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
+    });
+    control.install(super::asio_output::Installation {
+        context,
+        worker,
+        frames: frames as i32,
+        left: left as i32,
+        right: right as i32,
+    })?;
+    let stream_failed = control.failed.clone();
+    let observation = control.observation_handle();
+    let device_descriptor = OutputDeviceDescriptor {
+        host: "ASIO".into(),
+        endpoint_name: options.device_id.clone(),
+        endpoint_description_error: None,
+        default_sample_format: "per-channel native ASIO PCM".into(),
+        configuration: serde_json::json!({
+            "requested": options, "requested_buffer_frames": options.buffer_frames,
+            "buffer_policy": "driver-validated ASIO double buffer",
+            "initialized_buffer_frames": frames,
+            "physical_output_channels": info.output_channels,
+            "left_channel": left, "right_channel": right,
+            "stream_sample_format": "float32 renderer; per-channel native ASIO PCM",
+        }),
+    };
+    Ok(AudioStreamHandle {
+        backend: Mutex::new(OutputBackendHandle::Asio(pending.take().unwrap())),
+        retirement_worker: Mutex::new(None),
+        closed_verified: AtomicBool::new(false),
+        close_attempted: AtomicBool::new(false),
+        backend_released: AtomicBool::new(false),
+        admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
+        asio_observation: Some(observation),
+        candidate_epoch: {
+            let epoch = input_runtime_ownership
+                .output_change_epoch
+                .load(Ordering::Acquire);
+            (epoch & 1 != 0).then_some(epoch)
+        },
+        producer: producer_in,
+        parameter_producer: parameter_producer_in,
+        consumer: Arc::new(Mutex::new(consumer_out)),
+        output_channels: 2,
+        output_sample_rate: sample_rate_hz,
+        stream_failed,
+        output_clock,
+        device_descriptor,
+    })
+}
+
+const MAX_OUTPUT_CALLBACK_FRAMES: usize = 131_072;
 
 /// Build the same complete boxed callback owner before any device registration. The
 /// device-free startup regression uses this exact path on its fixed two-MiB stack.
@@ -3445,12 +4107,15 @@ fn boxed_stream_callback_state(
         trigger_quantization: TriggerQuantization::Immediate,
         callback_clock,
         clock_mapper: OutputClockMapper::new(),
+        external_clock_revision: 0,
         loop_acceptance,
         pad_peaks: [0.0; NUM_SAMPLES],
         pad_activity: RtRenderPadActivity::default(),
         last_pad_emit_frame: 0,
         last_master_emit_frame: 0,
         retired_buffers,
+        close_producer: None,
+        close_parameter_producer: None,
     })
 }
 
@@ -3499,17 +4164,29 @@ pub fn create_audio_stream(
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
+    options: &super::audio_output::OutputOptions,
+    #[cfg(windows)] pending: &mut Option<super::asio_output::Control>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
-
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or("No audio device found")?;
+    if options.backend == "asio" {
+        #[cfg(windows)]
+        return create_asio_audio_stream(
+            options,
+            pending,
+            input_clock,
+            current_timing_acknowledgements,
+            input_runtime_ownership,
+            prepared_source_epochs,
+            loop_acceptance,
+        );
+        #[cfg(not(windows))]
+        return Err("Native ASIO output is available on Windows only".into());
+    }
+    let (host, device) = options.cpal_device()?;
 
     let config = device.default_output_config()?;
     let description = device.description();
-    let device_descriptor = OutputDeviceDescriptor {
+    let mut device_descriptor = OutputDeviceDescriptor {
         host: host.id().name().to_owned(),
         endpoint_name: description
             .as_ref()
@@ -3517,10 +4194,25 @@ pub fn create_audio_stream(
             .map(|value| value.name().to_owned()),
         endpoint_description_error: description.err().map(|error| error.to_string()),
         default_sample_format: config.sample_format().to_string(),
+        configuration: serde_json::json!({
+            "requested": options, "requested_buffer_frames": options.buffer_frames,
+            "physical_output_channels": config.channels(),
+            "device_id": device.id()?.to_string(),
+            "stream_sample_format": "f32",
+        }),
     };
-    let sample_rate = config.sample_rate();
+    let sample_rate = options.sample_rate_hz.unwrap_or(config.sample_rate());
     let sample_rate_hz = sample_rate;
     let channels = config.channels();
+    let (left, right) = options.physical_pair(channels as usize)?;
+    device_descriptor.configuration["left_channel"] = left.into();
+    device_descriptor.configuration["right_channel"] = right.into();
+    if options
+        .buffer_frames
+        .is_some_and(|frames| frames > MAX_OUTPUT_CALLBACK_FRAMES as u32)
+    {
+        return Err("Output buffer exceeds the application's supported callback extent".into());
+    }
 
     log::info!(
         "Starting AudioEngine... ({} ch@{} Hz)",
@@ -3533,24 +4225,29 @@ pub fn create_audio_stream(
 
     // Create ring buffer for fast parameter updates (Python->Rust)
     let (parameter_producer_in, parameter_consumer_in) = RingBuffer::new(1024);
+    let producer_in = Arc::new(Mutex::new(producer_in));
+    let parameter_producer_in = Arc::new(Mutex::new(parameter_producer_in));
 
     // Create ring buffer for outgoing messages (Rust->Python)
     let (producer_out, consumer_out) = RingBuffer::new(1024);
 
     let mixer = create_stream_mixer(
-        channels as usize,
+        2,
         sample_rate_hz,
         current_timing_acknowledgements,
-        input_runtime_ownership,
+        input_runtime_ownership.clone(),
         prepared_source_epochs,
     )?;
     let output_clock = Arc::new(SharedOutputClock::new());
     let callback_clock = output_clock.clone();
     let stream_failed = Arc::new(AtomicBool::new(false));
     let callback_stream_failed = stream_failed.clone();
+    let callback_admission_unavailable = input_runtime_ownership.output_unavailable.clone();
+    let callback_fault_clock = output_clock.clone();
     let error_stream_failed = stream_failed.clone();
+    let error_admission_unavailable = input_runtime_ownership.output_unavailable.clone();
+    let error_clock = output_clock.clone();
 
-    let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let (mut callback_owner, retirement_worker) = create_stream_callback_owner(
         consumer_in,
         parameter_consumer_in,
@@ -3560,143 +4257,115 @@ pub fn create_audio_stream(
         callback_clock,
         loop_acceptance,
     )?;
+    callback_owner.state_mut().close_producer = Some(producer_in.clone());
+    callback_owner.state_mut().close_parameter_producer = Some(parameter_producer_in.clone());
 
     // Create stream config
     let stream_config = StreamConfig {
         channels,
         sample_rate,
-        buffer_size: BufferSize::Fixed(512),
+        buffer_size: options
+            .buffer_frames
+            .map_or(BufferSize::Default, BufferSize::Fixed),
     };
 
-    // Create audio stream with callback
-    let stream = device
-        .build_output_stream(
-            &stream_config,
-            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                let state = callback_owner.state_mut();
-                let observed_at_ns = input_clock.capture_ns();
-                let buffer_start_frame = state.transport.output_frame();
-                if callback_stream_failed.load(Ordering::Acquire) {
-                    state.mixer.fail_mix_capture_stream();
+    let direct_stereo = channels == 2 && left == 0 && right == 1;
+    let mut scratch =
+        (!direct_stereo).then(|| vec![0.0; MAX_OUTPUT_CALLBACK_FRAMES * 2].into_boxed_slice());
+    let data_callback = move |data: &mut cpal::Data, info: &cpal::OutputCallbackInfo| {
+        let Some(data) = data.as_slice_mut::<f32>() else {
+            callback_stream_failed.store(true, Ordering::Release);
+            callback_admission_unavailable.store(true, Ordering::Release);
+            callback_fault_clock.invalidate();
+            return;
+        };
+        let frames = data.len() / channels as usize;
+        if data.len() % channels as usize != 0 || frames > MAX_OUTPUT_CALLBACK_FRAMES {
+            data.fill(0.0);
+            callback_stream_failed.store(true, Ordering::Release);
+            callback_admission_unavailable.store(true, Ordering::Release);
+            callback_fault_clock.invalidate();
+            return;
+        }
+        if let Some(scratch) = scratch.as_mut() {
+            let stereo = &mut scratch[..frames * 2];
+            render_output_block(
+                callback_owner.state_mut(),
+                stereo,
+                RenderFormat {
+                    channels: 2,
+                    sample_rate_hz,
+                },
+                input_clock.capture_ns(),
+                &callback_stream_failed,
+                |mapper, snapshot, frames| mapper.observe_callback(info, snapshot, frames),
+            );
+            data.fill(0.0);
+            for (output, stereo) in data
+                .chunks_exact_mut(channels as usize)
+                .zip(stereo.chunks_exact(2))
+            {
+                if left == right {
+                    output[left] = (stereo[0] + stereo[1]) * 0.5;
+                } else {
+                    output[left] = stereo[0];
+                    output[right] = stereo[1];
                 }
-
-                let snapshot = state.clock_mapper.observe_callback(
-                    info,
-                    OutputClockSnapshot {
-                        valid: true,
-                        observed_at_ns,
-                        audible_at_ns: observed_at_ns,
-                        output_frame: buffer_start_frame,
-                        sample_rate_hz,
-                        master_period_seconds: state.transport.master_period_seconds(),
-                        downbeat_frame: state.transport.downbeat_frame(),
-                        master_beat: state
-                            .transport
-                            .beat_position_at_frame(buffer_start_frame)
-                            .unwrap_or(0.0),
-                        freshness_ns: 0,
-                    },
-                    data.len() / channels as usize,
-                );
-
-                drain_control_messages(
-                    &mut state.consumer_in,
-                    &mut state.scheduler,
-                    buffer_start_frame,
-                    &mut state.trigger_quantization,
-                    &mut state.transport,
-                    &mut state.mixer,
-                    &mut state.producer_out,
-                    &mut state.retired_buffers,
-                );
-                if callback_stream_failed.load(Ordering::Acquire) {
-                    state.mixer.fail_mix_capture_stream();
-                    state
-                        .mixer
-                        .service_mix_capture(&mut state.scheduler, &mut state.retired_buffers);
-                }
-
-                drain_parameter_messages(
-                    &mut state.parameter_consumer_in,
-                    &mut state.mixer,
-                    &mut state.transport,
-                );
-
-                try_bootstrap_transport_from_reference(
-                    &mut state.mixer,
-                    &mut state.transport,
-                    buffer_start_frame,
-                );
-
-                // Publish the same clock estimate with the accepted current grid.
-                state.callback_clock.publish(OutputClockSnapshot {
-                    master_period_seconds: state.transport.master_period_seconds(),
-                    downbeat_frame: state.transport.downbeat_frame(),
-                    master_beat: state
-                        .transport
-                        .beat_position_at_frame(buffer_start_frame)
-                        .unwrap_or(0.0),
-                    ..snapshot
-                });
-
-                // Freeze a demand for this callback only. No demand leaves the
-                // renderer's diagnostic scalar copies disabled.
-                // Render audio + compute per-pad peaks.
-                render_scheduled_audio_tracking_pads(
-                    &mut state.mixer,
-                    &mut state.scheduler,
-                    data,
-                    &mut state.pad_peaks,
-                    &mut state.pad_activity,
-                    buffer_start_frame,
-                    channels as usize,
-                    &mut state.transport,
-                    &mut state.producer_out,
-                    &mut state.retired_buffers,
-                );
-                let master_peak = master_output_peak(data);
-
-                let frames = data.len() / channels as usize;
-                state.transport.advance_by_rendered_frames(frames);
-                let frame_clock = state.transport.output_frame();
-                state
-                    .loop_acceptance
-                    .observe(&state.mixer, observed_at_ns, frame_clock, frames);
-                publish_pad_telemetry(
-                    &mut state.producer_out,
-                    &state.mixer,
-                    &state.pad_peaks,
-                    &state.pad_activity,
-                    frame_clock,
-                    emit_interval_frames,
-                    &mut state.last_pad_emit_frame,
-                );
-
-                publish_master_peak_telemetry(
-                    &mut state.producer_out,
-                    master_peak,
-                    frame_clock,
-                    emit_interval_frames,
-                    &mut state.last_master_emit_frame,
-                );
-            },
-            move |err| {
-                error_stream_failed.store(true, Ordering::Release);
-                log::error!("Audio stream error: {}", err);
-            },
-            None,
-        )
-        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
-    let (stream, retirement_worker) =
+            }
+        } else {
+            render_output_block(
+                callback_owner.state_mut(),
+                data,
+                RenderFormat {
+                    channels: 2,
+                    sample_rate_hz,
+                },
+                input_clock.capture_ns(),
+                &callback_stream_failed,
+                |mapper, snapshot, frames| mapper.observe_callback(info, snapshot, frames),
+            );
+        }
+    };
+    let error_callback = move |_err| {
+        error_stream_failed.store(true, Ordering::Release);
+        error_admission_unavailable.store(true, Ordering::Release);
+        error_clock.invalidate();
+    };
+    let stream = build_cpal_output(
+        &device,
+        &stream_config,
+        options,
+        data_callback,
+        error_callback,
+    )
+    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
+    let ((stream, initialized), retirement_worker) =
         finish_stream_build(stream, retirement_worker, stream_failed.clone())?;
+    device_descriptor
+        .configuration
+        .as_object_mut()
+        .unwrap()
+        .extend(initialized.as_object().unwrap().clone());
 
     Ok(AudioStreamHandle {
-        stream,
-        _retirement_worker: retirement_worker,
-        producer: Arc::new(Mutex::new(producer_in)),
-        parameter_producer: Arc::new(Mutex::new(parameter_producer_in)),
+        backend: Mutex::new(OutputBackendHandle::Cpal(Some(stream))),
+        retirement_worker: Mutex::new(Some(retirement_worker)),
+        closed_verified: AtomicBool::new(false),
+        close_attempted: AtomicBool::new(false),
+        backend_released: AtomicBool::new(false),
+        admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
+        candidate_epoch: {
+            let epoch = input_runtime_ownership
+                .output_change_epoch
+                .load(Ordering::Acquire);
+            (epoch & 1 != 0).then_some(epoch)
+        },
+        #[cfg(windows)]
+        asio_observation: None,
+        producer: producer_in,
+        parameter_producer: parameter_producer_in,
         consumer: Arc::new(Mutex::new(consumer_out)),
-        output_channels: channels as usize,
+        output_channels: 2,
         output_sample_rate: sample_rate_hz,
         stream_failed,
         output_clock,
@@ -3704,9 +4373,74 @@ pub fn create_audio_stream(
     })
 }
 
+fn build_cpal_output<D, E>(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    _options: &super::audio_output::OutputOptions,
+    data: D,
+    error: E,
+) -> Result<(Stream, serde_json::Value), cpal::BuildStreamError>
+where
+    D: FnMut(&mut cpal::Data, &cpal::OutputCallbackInfo) + Send + 'static,
+    E: FnMut(cpal::StreamError) + Send + 'static,
+{
+    #[cfg(windows)]
+    {
+        let cpal::platform::DeviceInner::Wasapi(device) = device.as_inner();
+        let match_format = _options
+            .wasapi_match_engine_format
+            .unwrap_or(_options.sample_rate_hz.is_some());
+        let (stream, info) = device.build_output_stream_raw_with_shared_period(
+            config,
+            cpal::SampleFormat::F32,
+            _options.buffer_frames,
+            match_format,
+            data,
+            error,
+        )?;
+        Ok((
+            stream.into(),
+            serde_json::json!({
+                "buffer_policy": "WASAPI IAudioClient3 shared engine period",
+                "match_engine_format": match_format,
+                "engine_format_policy": if match_format { "exact engine format requested (MATCH_FORMAT)" } else { "current engine format policy (no MATCH_FORMAT)" },
+                "accepted_initialization_period_frames": info.initialized_period_frames,
+                "initialized_engine_period_frames": info.initialized_period_frames,
+                "engine_periods": {"default": info.periods.default_frames,
+                    "fundamental": info.periods.fundamental_frames,
+                    "min": info.periods.min_frames, "max": info.periods.max_frames},
+                "buffer_capacity_frames": info.buffer_capacity_frames,
+                "reported_stream_latency_100ns": info.reported_latency_100ns,
+                "shared_engine_initialization_snapshot": {
+                    "period_frames": info.current_period_frames,
+                    "sample_rate_hz": info.current_sample_rate_hz,
+                    "channels": info.current_channels,
+                    "sample_format": info.current_sample_format.map(|format| format.to_string()),
+                    "error": info.current_period_error,
+                },
+            }),
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        device.build_output_stream_raw(config, cpal::SampleFormat::F32, data, error, None)
+            .map(|stream| (stream, serde_json::json!({"buffer_policy": "CPAL host request; actual callback size is observed separately"})))
+    }
+}
+
 /// Start playing the audio stream
-pub fn start_stream(stream: &Stream) -> Result<(), Box<dyn std::error::Error>> {
-    stream.play()?;
+pub fn start_stream(handle: &mut AudioStreamHandle) -> Result<(), Box<dyn std::error::Error>> {
+    match handle
+        .backend
+        .get_mut()
+        .map_err(|_| "output owner lock poisoned")?
+    {
+        OutputBackendHandle::Cpal(stream) => {
+            stream.as_ref().ok_or("Output stream is closed")?.play()?
+        }
+        #[cfg(windows)]
+        OutputBackendHandle::Asio(control) => control.start()?,
+    }
     Ok(())
 }
 
@@ -4784,6 +5518,9 @@ mod tests {
             Arc::default(),
             (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
             Arc::default(),
+            &super::super::audio_output::OutputOptions::default(),
+            #[cfg(windows)]
+            &mut None,
         );
         // We expect this to potentially fail in test environments,
         // but we want to ensure the function exists and has the right signature

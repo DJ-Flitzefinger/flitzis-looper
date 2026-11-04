@@ -6,6 +6,41 @@ import pytest
 from flitzis_looper.controller.transport.state import ApplyProjectState
 from flitzis_looper.models import ProjectState
 
+
+def test_output_restore_carries_source_controls_with_loader_before_own_ack(
+    transport_controller: TransportController,
+    audio_engine_mock: Mock,
+) -> None:
+    """Retired source controls cannot become edits against preserved placement."""
+    project = transport_controller._project
+    project.sample_paths[0] = "samples/original.wav"
+    project.key_lock = True
+    project.pad_gain_db[0] = -3.0
+    project.pad_eq_low_db[0] = 2.0
+    project.volume = 0.8
+    project.speed = 1.1
+    project.manual_bpm[0] = 123.0
+    project.pad_loop_start_s[0] = 0.25
+    project.pad_loop_end_s[0] = 2.75
+    project.pad_loop_auto[0] = False
+    with (
+        patch.object(
+            transport_controller.loop, "_apply_effective_pad_loop_region_to_audio"
+        ) as loop,
+        patch.object(transport_controller.bpm, "on_pad_bpm_changed") as bpm,
+    ):
+        transport_controller.apply_project_state_to_audio(
+            restored_sample_ids=frozenset({0}), source_initializers_in_loader=True
+        )
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+    audio_engine_mock.set_pad_gain.assert_not_called()
+    audio_engine_mock.set_pad_eq.assert_not_called()
+    audio_engine_mock.set_volume.assert_called_once_with(0.8)
+    audio_engine_mock.set_speed.assert_called_once_with(1.1)
+    loop.assert_called_once()
+    bpm.assert_called_once_with(0)
+
+
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
 

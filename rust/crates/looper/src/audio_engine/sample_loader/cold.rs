@@ -30,8 +30,11 @@ use symphonia::core::{
 };
 use symphonia::default::{get_codecs, register_enabled_formats};
 
+pub(crate) mod fft_stream;
 mod rf64;
 pub(crate) mod stream;
+#[cfg(test)]
+pub(crate) use tests::padded_reference;
 
 fn complete_probe() -> &'static symphonia::core::probe::Probe {
     static PROBE: std::sync::OnceLock<symphonia::core::probe::Probe> = std::sync::OnceLock::new();
@@ -265,7 +268,7 @@ impl PlaybackTransform {
     }
 }
 
-fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), SampleLoadError> {
+fn check_cancelled(cancelled: &(impl Fn() -> bool + ?Sized)) -> Result<(), SampleLoadError> {
     if cancelled() {
         return Err(SampleLoadError::Cancelled);
     }

@@ -4241,8 +4241,11 @@ class StemController(BaseController):  # noqa: PLR0904
                     active=sample_id in self._session.active_sample_ids,
                 )
         except (OSError, RuntimeError, TypeError, ValueError) as error:
+            message = str(error)
             self._session.stem_generation_errors[sample_id] = (
-                f"Restored stem registration deferred: {error}"
+                message
+                if resident_stem_admission_pressure(message)
+                else f"Restored stem registration failed: {message}"
             )
             return
         self._disk_selection_settlements.pop(sample_id, None)
@@ -4254,6 +4257,25 @@ class StemController(BaseController):  # noqa: PLR0904
         self._remember_verified_selection(sample_id, settlement.entry)
         self._restored_stem_candidates.pop(sample_id, None)
         self._settled_residency_demand(sample_id, settlement.entry)
+
+    def cancel_verified_output_restore(self, sample_id: int) -> None:
+        """Withdraw unchanged saved verification without retiring its assignment."""
+        settlement = self._disk_selection_settlements.get(sample_id)
+        if settlement is None or not settlement.verified_restore:
+            return
+        prepared = settlement.request.prepared
+        if prepared is None:
+            return
+        self._committed_residency.cancel(sample_id)
+        with settlement.retirement.activate():
+            prepared.select()
+            self._discard_pair(sample_id, prepared)
+            if not settlement.assignment_adopted:
+                settlement.lease.release()
+            settlement.request.close()
+            settlement.retirement.close()
+        if self._disk_selection_settlements.get(sample_id) is settlement:
+            self._disk_selection_settlements.pop(sample_id)
 
     def _require_restored_pair_current(self, settlement: _DiskSelectionSettlement) -> None:
         if not self._pair_disk_commit_current(settlement.request, settlement.ticket):

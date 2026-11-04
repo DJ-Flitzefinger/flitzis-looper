@@ -541,6 +541,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
+        self._output_restore = False
+        self._output_restore_cancelling = False
+        self._output_restore_requests: dict[int, int] = {}
+        self._output_restore_acknowledged: set[int] = set()
         self._pair_held_loader_events: list[dict[str, object]] = []
         self._migration_event_handler: Callable[[dict[str, object]], bool] | None = None
         self._load_retirements: dict[tuple[int, int | None], AssetRetirementReservation] = {}
@@ -664,7 +668,10 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         return valid
 
     def restore_samples_from_project_state(
-        self, *, validated_paths: dict[int, Path] | None = None
+        self,
+        *,
+        validated_paths: dict[int, Path] | None = None,
+        preserve_output_identity: bool = False,
     ) -> None:
         """Admit validated originals, deferring native queue pressure to UI polling.
 
@@ -673,6 +680,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         """
         if self._output_sample_rate_hz() is None:
             return
+        self._output_restore = preserve_output_identity
         paths = (
             self._validate_restored_sample_paths() if validated_paths is None else validated_paths
         )
@@ -1197,10 +1205,15 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
                 restored_assignment=restored_assignment,
                 timing_stale=timing_stale,
             )
+            self._acknowledge_output_restore_load(sample_id)
         except (RuntimeError, ValueError) as error:
             self._session.sample_load_errors[sample_id] = (
                 f"Loaded source control refresh failed: {error}"
             )
+
+    def _acknowledge_output_restore_load(self, sample_id: int) -> None:
+        if self._output_restore and sample_id not in self._session.sample_load_errors:
+            self._output_restore_acknowledged.add(sample_id)
 
     @staticmethod
     def _validate_incoming_receipt(
@@ -1416,6 +1429,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         timing_stale: bool,
     ) -> None:
         """Refresh derived intent after the complete matching assignment is recorded."""
+        if self._output_restore_cancelling:
+            return
         if self._on_loaded_key_lock is not None:
             self._on_loaded_key_lock(sample_id)
         if self._begin_accepted_restore(
@@ -2056,7 +2071,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             key_intent = self._project.pad_key_intent[sample_id]
             options: _RestoredLoadOptions = {
                 "run_analysis": run_analysis,
-                "replace_assignment": True,
+                "replace_assignment": not self._output_restore,
                 "source_intent": "restore",
                 "initial_base_shift": key_intent.base_shift,
                 "initial_extra_shift": key_intent.extra_shift,
@@ -2073,6 +2088,7 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
             if (
                 self._primary_beat_analysis_configured
                 and not run_analysis
+                and not self._output_restore
                 and self._needs_tempo_refinement(sample_id)
             ):
                 options["refine_tempo_only"] = True
@@ -2108,6 +2124,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.discard(sample_id)
         self._record_load_request_id(sample_id, request_id)
+        if self._output_restore:
+            self._output_restore_requests[sample_id] = request_id
         self._record_load_retirement(sample_id, reservation)
         return True
 
@@ -2148,6 +2166,8 @@ class LoaderController(_IncomingIntentControl, _MaterialCreationOwnership):
         self._session.sample_load_stage.pop(sample_id, None)
 
     def _retry_deferred_restores(self) -> None:
+        if self._output_restore_cancelling:
+            return
         pending = list(self._deferred_restores.items())
         attempts = 0
         for sample_id, rel in pending:

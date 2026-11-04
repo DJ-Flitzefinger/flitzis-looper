@@ -98,6 +98,7 @@ class MaterialMigrationController:
         loader: LoaderController,
         *,
         stem_task_runner: StemTaskRunner | None = None,
+        defer_startup: bool = False,
     ) -> None:
         self._persistence = persistence
         self._project = persistence.project
@@ -138,6 +139,15 @@ class MaterialMigrationController:
         )
         self._init_material_custody()
         self._loader._set_migration_event_handler(self.handle_loader_event)
+        self._startup_activated = False
+        if not defer_startup:
+            self.activate_startup()
+
+    def activate_startup(self) -> None:
+        """Acquire historical recovery custody once a usable output exists."""
+        if self._startup_activated:
+            return
+        self._startup_activated = True
         self._recover_interrupted()
         if self._ledger_enabled and not self._arrangement_recovery_deferred:
             try:
@@ -783,6 +793,11 @@ class MaterialMigrationController:
 
     def poll(self) -> None:
         """Advance bounded control work; never synthesize source/timing acceptance."""
+        if not self._startup_activated:
+            return
+        self._poll_active()
+
+    def _poll_active(self) -> None:
         self._poll_material_creation_restore()
         self._poll_cleanup()
         self._poll_history_transfer()

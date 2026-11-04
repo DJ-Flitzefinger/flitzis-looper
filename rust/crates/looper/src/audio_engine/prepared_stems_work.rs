@@ -35,6 +35,8 @@ struct LegacyPreparation {
 }
 
 pub(super) struct PreparedStemsWork {
+    restore_scope: Option<super::audio_output_change::RestoreScope>,
+    local_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     source_version: String,
     cache_dir: String,
     preparation: Preparation,
@@ -147,6 +149,31 @@ impl PreparedStemsWork {
         cache_dir: String,
         ticket: &PreparedSourceTicket,
     ) -> PyResult<Self> {
+        Self::capture_with_mode(engine, id, source_version, cache_dir, ticket, false)
+    }
+
+    pub(super) fn capture_read_existing(
+        engine: &AudioEngine,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+        ticket: &PreparedSourceTicket,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> PyResult<Self> {
+        let mut work =
+            Self::capture_with_mode(engine, id, source_version, cache_dir, ticket, true)?;
+        work.local_cancelled = Some(cancelled);
+        Ok(work)
+    }
+
+    fn capture_with_mode(
+        engine: &AudioEngine,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+        ticket: &PreparedSourceTicket,
+        read_existing: bool,
+    ) -> PyResult<Self> {
         if id >= super::constants::NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -207,7 +234,7 @@ impl PreparedStemsWork {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
             .is_some();
-        let preparation = if paired {
+        let preparation = if paired && !read_existing {
             Preparation::Pair(Box::new(
                 engine
                     .capture_stem_pair_work(
@@ -225,8 +252,8 @@ impl PreparedStemsWork {
             )
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
             let lease = engine.acquire_project_asset_lease(cache_dir.clone())?;
-            let source =
-                CompleteSampleWork::capture(engine, id, &sample).map_err(PyValueError::new_err)?;
+            let source = CompleteSampleWork::capture_for_legacy(engine, id, &sample)
+                .map_err(PyValueError::new_err)?;
             Preparation::Legacy(Box::new(LegacyPreparation {
                 sample,
                 rate: ticket.sample_rate_hz,
@@ -242,6 +269,8 @@ impl PreparedStemsWork {
             }))
         };
         Ok(Self {
+            restore_scope: super::audio_output_change::RestoreScope::current(),
+            local_cancelled: None,
             source_version,
             cache_dir,
             preparation,
@@ -255,10 +284,19 @@ impl PreparedStemsWork {
         let lane = self.lane.clone();
         let shutdown = self.cancelled.clone();
         let publication = self.publication.clone();
-        lane.execute_heavy_owned_until_terminal(
-            || shutdown.load(std::sync::atomic::Ordering::Acquire) || !publication.current(),
-            move || self.prepare_inner(),
-        )
+        let local = self.local_cancelled.clone();
+        super::audio_output_change::RestoreScope::run(self.restore_scope, || {
+            lane.execute_heavy_owned_until_terminal(
+                || {
+                    shutdown.load(std::sync::atomic::Ordering::Acquire)
+                        || !publication.current()
+                        || local.as_ref().is_some_and(|cancelled| {
+                            cancelled.load(std::sync::atomic::Ordering::Acquire)
+                        })
+                },
+                move || self.prepare_inner(),
+            )
+        })
     }
 
     fn prepare_inner(self) -> Result<PreparedStemsPublication, String> {
@@ -266,8 +304,18 @@ impl PreparedStemsWork {
             source_version,
             cache_dir,
             preparation,
+            cancelled: shutdown,
+            local_cancelled,
+            publication: source_publication,
             ..
         } = self;
+        let cancelled = || {
+            shutdown.load(std::sync::atomic::Ordering::Acquire)
+                || !source_publication.current()
+                || local_cancelled
+                    .as_ref()
+                    .is_some_and(|local| local.load(std::sync::atomic::Ordering::Acquire))
+        };
         let publication = match preparation {
             Preparation::Pair(work) => {
                 PreparedPublication::Pair(Box::new(work.prepare(&cache_dir, true, None, None)?))
@@ -305,6 +353,7 @@ impl PreparedStemsWork {
                 reservation
                     .reserve_reader_slots(usize::from(shared.is_none()))
                     .map_err(|error| error.to_string())?;
+                let mut transient = None;
                 let (mut stems, files) = if let Some(shared) = shared {
                     (shared, None)
                 } else {
@@ -314,29 +363,46 @@ impl PreparedStemsWork {
                     super::native_owned_work::observe(
                         super::native_owned_work::WorkPoint::LegacyStemFiles,
                     );
-                    let peak =
-                        stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
-                            .checked_add(
-                                sample
-                                    .samples
-                                    .len()
-                                    .checked_mul(4)
-                                    .ok_or("resident stem budget overflow")?,
-                            )
-                            .ok_or("resident stem budget overflow")?;
+                    let peak = stem_cache::legacy_preparation_peak(
+                        sample.frame_count(),
+                        sample.channels,
+                        rate,
+                        &path,
+                        &cancelled,
+                    )?
+                    .checked_add(
+                        sample
+                            .samples
+                            .len()
+                            .checked_mul(4)
+                            .ok_or("resident stem budget overflow")?,
+                    )
+                    .ok_or("resident stem budget overflow")?;
                     if peak > cold_jobs::PCM_LIMIT_BYTES {
                         return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
                     }
-                    let complete = source.materialize(cold_jobs::PCM_LIMIT_BYTES)?;
-                    let stems = stem_cache::prepare_stem_buffers_from_cache(
+                    transient = Some(
+                        resident
+                            .account
+                            .reserve_transient(peak)
+                            .map_err(|error| error.to_string())?,
+                    );
+                    let complete =
+                        source.materialize_cancellable(cold_jobs::PCM_LIMIT_BYTES, &cancelled)?;
+                    let stems = stem_cache::prepare_stem_buffers_from_cache_cancellable(
                         &source_version,
                         &complete,
                         rate,
                         &cache_dir,
+                        source.source_clock(),
+                        &cancelled,
                     )?;
                     (stems, Some(files))
                 };
                 stems = stems.window_for(&sample)?;
+                if cancelled() {
+                    return Err("legacy stem preparation cancelled before publication".into());
+                }
                 stems.publication = publication.clone();
                 stems.accepted_timing = publication.accepted_projection();
                 let mut views = vec![&sample];
@@ -356,6 +422,7 @@ impl PreparedStemsWork {
                         )
                         .map_err(|error| error.to_string())?;
                 }
+                drop(transient);
                 PreparedPublication::Legacy(Box::new(LegacyPublication {
                     stems,
                     path,

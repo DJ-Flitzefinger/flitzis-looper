@@ -19,6 +19,106 @@ REPO = Path(__file__).resolve().parents[2]
 SOURCE = Path("cache/s-01234567")
 
 
+@pytest.fixture
+def tracked_legacy_proof(
+    legacy_proof: tuple[ModuleType, Path], monkeypatch: pytest.MonkeyPatch
+) -> tuple[ModuleType, Path]:
+    """Describe extra notices only in the exact historical builder and blobs."""
+    module, root = legacy_proof
+    mapping = {
+        "flitzis-looper.txt": "LICENSE.txt",
+        "bs-roformer-NOTICE.md": "vendor/bs_roformer/NOTICE.md",
+        "asio-sdk-LICENSE.txt": "historical/sdk/LICENSE.txt",
+        "asio-sdk-provenance.json": "historical/sdk/provenance.json",
+        "cpal-LICENSE.txt": "historical/cpal/LICENSE",
+    }
+    historical = {
+        relative: b"historical bytes\r\n\xff" + name.encode()
+        for name, relative in mapping.items()
+        if relative.startswith("historical/")
+    }
+    read_git = module.subprocess.check_output
+
+    def historical_git(arguments: list[str]) -> bytes:
+        if arguments[3] == "show":
+            relative = arguments[4].split(":", 1)[1]
+            if relative == "scripts/portable/build_bundle.py":
+                return read_git(arguments) + f"TRACKED_LICENSES = {mapping!r}\n".encode()
+            if relative in historical:
+                return historical[relative]
+        return read_git(arguments)
+
+    monkeypatch.setattr(module.subprocess, "check_output", historical_git)
+    for name, relative in mapping.items():
+        if relative in historical:
+            _write(root / "legacy/licenses", name, historical[relative])
+            _write(root / "candidate/licenses", name, b"different candidate bytes")
+    return module, root
+
+
+def test_historical_tracked_notices_use_original_git_blobs(
+    tracked_legacy_proof: tuple[ModuleType, Path],
+) -> None:
+    module, root = tracked_legacy_proof
+    result = module.inventory("git", root / SOURCE, root / "candidate", root / "legacy", "a" * 40)
+    for name in ("asio-sdk-LICENSE.txt", "asio-sdk-provenance.json", "cpal-LICENSE.txt"):
+        assert (
+            result["licenses/" + name]
+            == hashlib.sha256((root / "legacy/licenses" / name).read_bytes()).hexdigest()
+        )
+
+
+def test_changed_historical_sdk_notice_is_preserved_and_stops_activation(
+    tracked_legacy_proof: tuple[ModuleType, Path],
+) -> None:
+    module, root = tracked_legacy_proof
+    notice = root / "legacy/licenses/asio-sdk-LICENSE.txt"
+    notice.write_bytes(b"Human bytes")
+    with pytest.raises(ValueError, match="Changed legacy file"):
+        module.inventory("git", root / SOURCE, root / "candidate", root / "legacy", "a" * 40)
+    assert notice.read_bytes() == b"Human bytes"
+
+
+def test_old_builder_cannot_claim_new_sdk_notices_from_candidate(
+    legacy_proof: tuple[ModuleType, Path],
+) -> None:
+    module, root = legacy_proof
+    for location in ("candidate", "legacy"):
+        _write(root / location / "licenses", "asio-sdk-LICENSE.txt", b"unclaimed notice")
+    with pytest.raises(ValueError, match="Unknown legacy file"):
+        module.inventory("git", root / SOURCE, root / "candidate", root / "legacy", "a" * 40)
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        None,
+        {},
+        [],
+        {"../notice": "LICENSE.txt"},
+        {"notice": "../private"},
+        {"notice": "C:/private"},
+        {"notice": 7},
+        {"NOTICE": "LICENSE.txt", "notice": "LICENSE.txt"},
+    ],
+)
+def test_present_malformed_historical_license_mapping_fails_closed(
+    legacy_proof: tuple[ModuleType, Path], monkeypatch: pytest.MonkeyPatch, mapping: object
+) -> None:
+    module, root = legacy_proof
+    read_git = module.subprocess.check_output
+
+    def malformed_git(arguments: list[str]) -> bytes:
+        content = read_git(arguments)
+        if arguments[3] == "show" and arguments[4].endswith(":scripts/portable/build_bundle.py"):
+            return content + f"TRACKED_LICENSES = {mapping!r}\n".encode()
+        return content
+
+    monkeypatch.setattr(module.subprocess, "check_output", malformed_git)
+    with pytest.raises(ValueError, match="tracked-license ownership contract"):
+        module.read_builder(module.GitSource("git", root / SOURCE, "a" * 40))
+
+
 def _write(root: Path, relative: str, content: bytes) -> None:
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)

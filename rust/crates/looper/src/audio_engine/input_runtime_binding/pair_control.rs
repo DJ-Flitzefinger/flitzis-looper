@@ -305,11 +305,12 @@ impl InputRuntimeOwnership {
         self.commit_slot_write_fixed(
             &write,
             || {
-                captured.iter().all(|snapshot| {
-                    self.slot_snapshot_fields_current(*snapshot)
-                        && self.pair_reservation(snapshot.slot()) == 0
-                        && self.copy_reservation(snapshot.slot()) == 0
-                })
+                self.output_admission_open()
+                    && captured.iter().all(|snapshot| {
+                        self.slot_snapshot_fields_current(*snapshot)
+                            && self.pair_reservation(snapshot.slot()) == 0
+                            && self.copy_reservation(snapshot.slot()) == 0
+                    })
             },
             |_| {
                 for snapshot in captured {

@@ -47,7 +47,7 @@ class StemWorkerReservation:
             except RuntimeError:
                 self._target = None
                 self._released = True
-                self._pool._slots.release()
+                self._pool._release_slot()
                 raise
 
     def close(self) -> None:
@@ -56,7 +56,7 @@ class StemWorkerReservation:
             if self._submitted or self._released:
                 return
             self._released = True
-        self._pool._slots.release()
+        self._pool._release_slot()
 
     def _run(self) -> None:
         with self._lock:
@@ -68,6 +68,9 @@ class StemWorkerReservation:
         try:
             target()
         finally:
+            # The target may own the last Native/file reader after publishing
+            # its result. End that closure before exposing pool idle.
+            target = None
             self._release()
 
     def _release(self) -> None:
@@ -75,7 +78,7 @@ class StemWorkerReservation:
             if self._released:
                 return
             self._released = True
-        self._pool._slots.release()
+        self._pool._release_slot()
 
 
 class StemWorkerPool:
@@ -84,6 +87,8 @@ class StemWorkerPool:
     def __init__(self) -> None:
         self._slots = threading.BoundedSemaphore(STEM_WORKERS + STEM_QUEUED_JOBS)
         self._executor = ThreadPoolExecutor(max_workers=STEM_WORKERS, thread_name_prefix="stems")
+        self._state_lock = threading.Lock()
+        self._reservations = 0
 
     def __call__(self, target: Callable[[], None]) -> None:
         """Admit one job or fail immediately with existing playback intact."""
@@ -93,9 +98,30 @@ class StemWorkerPool:
 
     def try_reserve(self) -> StemWorkerReservation | None:
         """Reserve existing capacity nonblockingly, returning None under backpressure."""
-        if not self._slots.acquire(blocking=False):
-            return None
-        return StemWorkerReservation(self)
+        with self._state_lock:
+            if not self._slots.acquire(blocking=False):
+                return None
+            self._reservations += 1
+            return StemWorkerReservation(self)
+
+    def _release_slot(self) -> None:
+        with self._state_lock:
+            self._slots.release()
+            self._reservations -= 1
+
+    def with_idle[T](self, operation: Callable[[], T]) -> T:
+        """Fence new reservations while claiming a stopped output transaction."""
+        with self._state_lock:
+            if self._reservations:
+                message = "Original stem/migration workers have not returned their readers"
+                raise RuntimeError(message)
+            return operation()
+
+    @property
+    def idle(self) -> bool:
+        """Observe actual reservation/closure return without implying executor shutdown."""
+        with self._state_lock:
+            return self._reservations == 0
 
     def try_submit(self, target: Callable[[], None]) -> bool:
         """Keep full capacity nonterminal for incremental feeders of this same pool."""

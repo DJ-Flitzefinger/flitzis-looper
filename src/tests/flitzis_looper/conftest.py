@@ -666,6 +666,39 @@ def _configure_recording_control_mock(audio: Mock) -> None:
     audio.quiesce_failed_audio_stream = Mock(return_value=False)
 
 
+def _configure_output_control_mock(audio: Mock) -> None:
+    """Provide routing-only output capabilities even with an older Native autospec."""
+    audio.run_with_output_options = Mock()
+    audio.commit_audio_output_configuration = Mock()
+    audio.ensure_audio_output_startup_sources_settled = Mock()
+    audio.output_device_descriptor = Mock(
+        return_value={
+            "host": "WASAPI",
+            "device_id": "controller-only-fixture",
+            "sample_rate_hz": 44_100,
+            "accepted_initialization_period_frames": 512,
+            "match_engine_format": False,
+            "left_channel": 0,
+            "right_channel": 1,
+        }
+    )
+
+
+def _settle_output_control_mock(app: AppController) -> None:
+    """Join each actual controller thread; mocks grant no Native or device proof."""
+    for _ in range(4):
+        operation = app.audio_output._operation
+        if operation is not None:
+            assert operation.thread is not None
+            operation.thread.join(2)
+            assert not operation.thread.is_alive()
+        app.audio_output.poll()
+        if app.audio_output.can_perform:
+            return
+    message = f"Controller-only output fixture did not settle: {app.audio_output.phase}"
+    raise AssertionError(message)
+
+
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
@@ -701,6 +734,7 @@ def audio_engine_mock() -> Iterator[Mock]:
         # Routing-only defaults, also for an older loaded Native autospec.
         # Neither absence of failure nor False grants callback quiescence.
         _configure_recording_control_mock(audio_engine.return_value)
+        _configure_output_control_mock(audio_engine.return_value)
         # Controller-only accounting double; this does not claim actual Native PCM/RSS.
         audio_engine.return_value.set_resident_pcm_budget_mib = Mock()
         audio_engine.return_value.get_resident_pcm_budget_status = Mock(
@@ -780,6 +814,10 @@ def controller(
     monkeypatch.chdir(tmp_path)
 
     app = AppController(stem_backend=stem_backend, stem_task_runner=lambda target: target())
+    # This synchronous routing-only fixture has no physical stem worker pool.
+    # Its explicit readiness double grants no Native/source/device acceptance.
+    with patch.object(app.audio_output_runtime, "startup_restored", return_value=True):
+        _settle_output_control_mock(app)
     configured_paths = stem_provenance.processing_paths
     if configured_paths is _default_processing_paths:
         # This backend writes tiny synthetic WAVs and executes no installed model.

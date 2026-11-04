@@ -121,6 +121,62 @@ def check_resident_api(engine_type: type) -> None:
     ), "Native residency API missing independent preload interest"
 
 
+def check_audio_output_api(native_module: object) -> None:
+    """Reflect stopped output restoration before any App or device activation."""
+    engine_type = getattr(native_module, "AudioEngine", None)
+    assert isinstance(engine_type, type), "Native AudioEngine type missing"
+    for method in (
+        "run_with_output_options",
+        "audio_output_inventory_json",
+        "output_device_descriptor",
+        "audio_stream_failed",
+        "begin_audio_output_change",
+        "audio_output_change_epoch",
+        "prepare_audio_output_restore_plan",
+        "cancel_audio_output_change_before_close",
+        "retire_audio_output_for_change",
+        "last_audio_output_close_receipt_json",
+        "reset_after_audio_output_retirement",
+        "enable_audio_output_restore",
+        "with_audio_output_restore",
+        "ensure_audio_output_change_sources_settled",
+        "ensure_audio_output_startup_sources_settled",
+        "finish_audio_output_change",
+        "finish_empty_audio_output_startup",
+        "commit_audio_output_configuration",
+        "close_failed_audio_output_owner",
+        "capture_existing_legacy_stems_for_output",
+        "publish_existing_legacy_stems_for_output",
+        "restore_legacy_stem_output_selection",
+    ):
+        assert callable(inspect.getattr_static(engine_type, method, None)), (
+            f"Native audio output API missing: AudioEngine.{method}"
+        )
+    parameter = inspect.signature(
+        inspect.getattr_static(engine_type, "run_with_output_options")
+    ).parameters.get("match_engine_format")
+    assert parameter is not None, (
+        "Native audio output API missing optional keyword-only match_engine_format rollback policy"
+    )
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "Native audio output API missing optional keyword-only match_engine_format rollback policy"
+    )
+    assert parameter.default is None, (
+        "Native audio output API missing optional keyword-only match_engine_format rollback policy"
+    )
+    for name, methods in (
+        ("ExistingLegacyStemWork", ("prepare", "cancel")),
+        ("PreparedExistingLegacyStems", ()),
+        ("LegacyStemRestoreReceipt", ("status", "is_current", "cancel")),
+    ):
+        capability = getattr(native_module, name, None)
+        assert isinstance(capability, type), f"Native audio output type missing: {name}"
+        for method in methods:
+            assert callable(inspect.getattr_static(capability, method, None)), (
+                f"Native audio output API missing: {name}.{method}"
+            )
+
+
 def check_stem_conversion_api(native_module: object) -> None:
     """Reject an older Native before the Python worker uses numeric conversion."""
     converter = getattr(native_module, "StemConversionReservation", None)
@@ -790,6 +846,7 @@ def check_runtime(
             native_module.AudioEngine, root / "analysis-runtime" / "beat-this"
         )
     check_ordinary_transport_api(native_module)
+    check_audio_output_api(native_module)
     check_stem_conversion_api(native_module)
     assert physical_path(Path(sys.executable)).is_relative_to(physical_path(runtime / "python"))
     customization = importlib.import_module("sitecustomize")

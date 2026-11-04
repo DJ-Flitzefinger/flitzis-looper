@@ -187,6 +187,14 @@ pub(super) fn enqueue(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before accepted timing publication",
+        ));
+    }
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "Failed to send accepted timing refresh - buffer may be full",

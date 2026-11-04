@@ -79,6 +79,30 @@ pub(crate) struct PitchRuntime {
     endpoint: OrdinaryEndpointReserve,
 }
 
+impl PitchRuntime {
+    pub(super) fn retire_after_callback_close(&self) {
+        for slot in &self.slots {
+            if let Some(owner) = &slot.owner {
+                owner.reject(PitchActionReject::LaunchCancelled);
+            }
+            if let Some(work) = &slot.work {
+                match work {
+                    PreparedActionWork::Ordinary(work) => work.retire_after_callback_close(),
+                    PreparedActionWork::Pitch(work) => {
+                        let _ = work.action.reject(PitchActionReject::LaunchCancelled);
+                    }
+                }
+            }
+            if let Some(group) = &slot.group {
+                for work in group.work.iter().flatten() {
+                    work.retire_after_callback_close();
+                }
+                group.batch.retire_group_after_callback_close();
+            }
+        }
+    }
+}
+
 fn retire(work: PreparedActionWork, retirement: &mut impl AudioBufferRetirement) {
     match work {
         PreparedActionWork::Pitch(work) => retirement.retire_pitch_action(work),

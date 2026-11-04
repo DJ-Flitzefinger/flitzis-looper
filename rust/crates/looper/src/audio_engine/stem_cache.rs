@@ -12,6 +12,9 @@ use std::io::{self, Write};
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+pub(crate) mod rate_reader;
+#[cfg(test)]
+mod rate_tests;
 pub(crate) mod streamed;
 #[cfg(test)]
 mod streamed_tests;
@@ -113,6 +116,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_stem_buffers_from_cache(
     source_version: &str,
     reference: &SampleBuffer,
@@ -128,12 +132,73 @@ pub(crate) fn prepare_stem_buffers_from_cache(
     )
 }
 
+pub(crate) fn prepare_stem_buffers_from_cache_cancellable(
+    source_version: &str,
+    reference: &SampleBuffer,
+    rate: u32,
+    cache_dir: &str,
+    clock: Option<rate_reader::SourceClock>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PreparedStemSet, String> {
+    prepare_stem_buffers_from_cache_inner(
+        source_version,
+        reference,
+        rate,
+        cache_dir,
+        Path::new("."),
+        clock,
+        cancelled,
+    )
+}
+
+pub(super) fn legacy_preparation_peak(
+    frames: usize,
+    channels: usize,
+    rate: u32,
+    directory: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<usize, String> {
+    // Retention vectors also contain directory guards. Open the explicitly named
+    // WAV while those guards stay held, rather than treating a guard as PCM.
+    let file =
+        super::cold_store::sealed_reader(&directory.join(format!("{}.wav", STEM_FILE_NAMES[0])))
+            .map_err(|e| e.to_string())?;
+    let layout = wav::Pcm16Wav::inspect(&file, cancelled).map_err(|e| e.to_string())?;
+    let scratch = rate_reader::scratch(rate, layout)?;
+    admitted_stem_pcm_bytes(frames, channels)?
+        .checked_add(streamed::alignment_scratch_upper_bound(rate, frames)?)
+        .and_then(|n| n.checked_add(40 * 1024))
+        .and_then(|n| n.checked_add(scratch))
+        .ok_or_else(|| "legacy resident/FFT transient peak overflow or invalid rate".into())
+}
+
+#[cfg(test)]
 pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
     source_version: &str,
     reference: &SampleBuffer,
     output_sample_rate: u32,
     cache_dir: &str,
     project_root: &Path,
+) -> Result<PreparedStemSet, String> {
+    prepare_stem_buffers_from_cache_inner(
+        source_version,
+        reference,
+        output_sample_rate,
+        cache_dir,
+        project_root,
+        None,
+        &|| false,
+    )
+}
+
+fn prepare_stem_buffers_from_cache_inner(
+    source_version: &str,
+    reference: &SampleBuffer,
+    output_sample_rate: u32,
+    cache_dir: &str,
+    project_root: &Path,
+    clock: Option<rate_reader::SourceClock>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<PreparedStemSet, String> {
     if source_version.trim().is_empty() {
         return Err("source_version must not be empty".to_string());
@@ -158,13 +223,32 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
                 .map_err(|e| e.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let complete =
-        streamed::AlignedStemStream::prepare(&reader, &files, output_sample_rate, &|| false)?;
+    if cancelled() {
+        return Err("legacy stem preparation cancelled".into());
+    }
+    if legacy_preparation_peak(
+        expected_frames,
+        reference.channels,
+        output_sample_rate,
+        &path,
+        cancelled,
+    )? > super::cold_jobs::PCM_LIMIT_BYTES
+    {
+        return Err("complete legacy resident/FFT views exceed transient PCM admission".into());
+    }
+    let complete = streamed::AlignedStemStream::prepare_with_clock(
+        &reader,
+        &files,
+        output_sample_rate,
+        clock,
+        cancelled,
+    )?;
     let mut identity = Sha256::new();
     identity.update(b"aligned-complete-stem-set-v1");
     identity.update(source_version.as_bytes());
     identity.update(output_sample_rate.to_le_bytes());
     identity.update((expected_frames as u64).to_le_bytes());
+    complete.transform_identity(&mut identity);
     struct IdentityWriter<'a>(&'a mut Sha256);
     impl std::io::Write for IdentityWriter<'_> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -177,7 +261,7 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
     }
     for index in 0..5 {
         complete
-            .convert(index, &mut IdentityWriter(&mut identity), &|| false)
+            .convert(index, &mut IdentityWriter(&mut identity), cancelled)
             .map_err(|e| e.to_string())?;
     }
     struct SamplesWriter(Vec<f32>);
@@ -208,7 +292,7 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
             .map_err(|e| e.to_string())?;
         let mut output = SamplesWriter(values);
         complete
-            .convert(index, &mut output, &|| false)
+            .convert(index, &mut output, cancelled)
             .map_err(|e| e.to_string())?;
         buffers.push(SampleBuffer {
             residency: None,

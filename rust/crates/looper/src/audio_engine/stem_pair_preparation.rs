@@ -189,6 +189,9 @@ impl AudioEngine {
                 .pad_request_ids
                 .lock()
                 .map_err(|_| "request lock poisoned")?;
+            if !self.input_runtime_ownership.output_source_admission_open() {
+                return Err("audio output change fences new stem source captures".into());
+            }
             let source_epoch = self.prepared_source_epoch(id)?;
             let cache = self
                 .sample_cache

@@ -19,6 +19,7 @@ from flitzis_looper.models import (
 from flitzis_looper.recording_options import RecordingOptions
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
 from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
+from flitzis_looper.ui.render.audio_output import audio_output_controls
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.stem_batch import StemBatchSummary
@@ -61,6 +62,10 @@ def settings_overlay(ctx: UiContext) -> None:
     """Render the Settings page in place of the main Looper surface."""
     with style_var(imgui.StyleVar_.item_spacing, (SPACING, SPACING)):
         imgui.text_unformatted("Settings")
+        imgui.separator()
+        audio_output_controls(ctx.ui.settings.audio_output)
+        if not ctx.ui.settings.audio_output.can_perform:
+            return
         imgui.separator()
         _audio_workload_controls(ctx)
         imgui.separator()

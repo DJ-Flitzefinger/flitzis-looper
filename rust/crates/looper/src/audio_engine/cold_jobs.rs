@@ -75,11 +75,13 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     ready: Condvar,
+    output_fence: std::sync::OnceLock<Arc<super::input_runtime_binding::InputRuntimeOwnership>>,
 }
 
 pub(super) struct ColdJobs {
     shared: Arc<Shared>,
     workers: Vec<JoinHandle<()>>,
+    join_failed: bool,
 }
 
 /// Clone only lane admission, never worker ownership or an additional pool.
@@ -156,8 +158,11 @@ impl ColdJobsHandle {
         cancelled: Option<Cancellation>,
         queued_retirement: Option<QueuedRetirement>,
     ) -> Result<(), String> {
+        let restore_scope = super::audio_output_change::RestoreScope::current();
         let mut admitted = AdmittedJob {
-            job: Some(Box::new(job)),
+            job: Some(Box::new(move || {
+                super::audio_output_change::RestoreScope::run(restore_scope, job)
+            })),
             queued_retirement: None,
             cancelled,
             reservation: Some(reservation),
@@ -422,6 +427,13 @@ fn reserve_shared(shared: &Arc<Shared>) -> Result<Reservation, String> {
     if state.stopped {
         return Err("cold source lane stopped".into());
     }
+    if shared
+        .output_fence
+        .get()
+        .is_some_and(|ownership| !ownership.output_source_admission_open())
+    {
+        return Err("audio output change is in progress".into());
+    }
     if state.admitted - state.active >= QUEUED_JOBS {
         return Err("cold source queue full (2 workers, 32 queued jobs)".into());
     }
@@ -495,11 +507,21 @@ impl Drop for ReservationOwner {
 }
 
 impl ColdJobs {
+    pub(super) fn bind_output_admission(
+        &self,
+        ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    ) -> Result<(), String> {
+        self.shared
+            .output_fence
+            .set(ownership)
+            .map_err(|_| "cold lane output fence is already bound".into())
+    }
     pub(super) fn new() -> io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let mut lane = Self {
             shared,
             workers: Vec::new(),
+            join_failed: false,
         };
         for index in 0..WORKERS {
             let shared = lane.shared.clone();
@@ -705,10 +727,34 @@ impl ColdJobs {
         (state.active, state.jobs.len(), state.admitted)
     }
 
+    /// Includes queued reservations and retiring callable owners, not just CPU work.
+    pub(super) fn with_idle<T>(
+        &self,
+        apply: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| "cold lane lock poisoned")?;
+        if self.join_failed || state.active != 0 || !state.jobs.is_empty() || state.admitted != 0 {
+            return Err("cold source work is active, queued or retiring".into());
+        }
+        apply()
+    }
+
     pub(super) fn shutdown(&mut self) {
+        let _ = self.shutdown_checked();
+    }
+
+    pub(super) fn shutdown_checked(&mut self) -> Result<(), String> {
         self.close_admission();
         if self.workers.is_empty() {
-            return;
+            return if self.join_failed {
+                Err("cold worker join previously failed".into())
+            } else {
+                Ok(())
+            };
         }
         // Joined cold work may still need Python for bridge cancellation and
         // reader/process retirement. Never wait while retaining its caller's
@@ -719,16 +765,24 @@ impl ColdJobs {
         let caller_holds_gil =
             unsafe { pyo3::ffi::Py_IsInitialized() != 0 && pyo3::ffi::PyGILState_Check() != 0 };
         if caller_holds_gil
-            && pyo3::Python::try_attach(|py| py.detach(|| self.join_workers())).is_some()
+            && let Some(result) =
+                pyo3::Python::try_attach(|py| py.detach(|| self.join_workers_checked()))
         {
-            return;
+            return result;
         }
-        self.join_workers();
+        self.join_workers_checked()
     }
 
-    fn join_workers(&mut self) {
+    fn join_workers_checked(&mut self) -> Result<(), String> {
         for worker in self.workers.drain(..) {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                self.join_failed = true;
+            }
+        }
+        if self.join_failed {
+            Err("cold worker join failed; retirement is unverified".into())
+        } else {
+            Ok(())
         }
     }
 }

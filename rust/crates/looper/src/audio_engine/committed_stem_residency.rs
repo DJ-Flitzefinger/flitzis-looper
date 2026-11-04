@@ -492,6 +492,45 @@ pub(super) struct CommittedStemState {
     policy_epoch: Arc<AtomicU64>,
 }
 impl CommittedStemState {
+    pub(super) fn preflight_output_reset(&self) -> Result<[u64; 5], String> {
+        if self.registration.is_some()
+            || self.pending.is_some()
+            || self.proposal.is_some()
+            || self.policy_pending.is_some()
+            || self.policy_proposal.is_some()
+        {
+            return Err("original committed stem collectors are not settled".into());
+        }
+        let mut next = [0; 5];
+        for (result, epoch) in next.iter_mut().zip([
+            &self.registration_epoch,
+            &self.selection_epoch,
+            &self.candidate_epoch,
+            &self.policy_operation_epoch,
+            &self.policy_epoch,
+        ]) {
+            *result = next_epoch(epoch)?;
+        }
+        Ok(next)
+    }
+
+    pub(super) fn take_output_owner(&mut self, next: [u64; 5]) -> Option<Arc<SelectionOwner>> {
+        for (epoch, value) in [
+            &self.registration_epoch,
+            &self.selection_epoch,
+            &self.candidate_epoch,
+            &self.policy_operation_epoch,
+            &self.policy_epoch,
+        ]
+        .into_iter()
+        .zip(next)
+        {
+            epoch.store(value, Ordering::Release);
+        }
+        self.policy_interest = false;
+        self.explicit_interest = false;
+        self.accepted.take()
+    }
     fn proposal_slot(&mut self, policy: bool) -> &mut Option<PendingResidency> {
         if policy {
             &mut self.policy_proposal
@@ -863,6 +902,27 @@ pub(crate) struct StemModeReceipt {
     pub(crate) launch_revision: u64,
     pub(crate) candidate: Option<Arc<CandidateAuthority>>,
 }
+
+impl ResidencyStatus {
+    /// Receiver END is not preparation failure and never revokes accepted source
+    /// metadata or a demonstrated effective2 receipt. Only unproved modes retire.
+    pub(super) fn retire_unproved_output_mode(&self) {
+        let state = self.effective.load(Ordering::Acquire);
+        if !matches!(state, 1 | 4) {
+            return;
+        }
+        let mut error = self.error.lock().unwrap_or_else(|error| error.into_inner());
+        if self
+            .effective
+            .compare_exchange(state, 3, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && error.is_none()
+        {
+            *error =
+                Some("Audio output retired before the effective stem mode was observed".into());
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub(crate) enum CommittedStemRtWork {
     Register {
@@ -1088,6 +1148,14 @@ impl CommittedStemResidencyAdmission {
         let mut producer_guard = producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+        if !self
+            .input_runtime_ownership
+            .output_publication_live(&producer_guard)
+        {
+            return Err(PyRuntimeError::new_err(
+                "audio output closed before committed stem capture",
+            ));
+        }
         if producer_guard.is_full() {
             return Err(PyRuntimeError::new_err("committed residency queue is full"));
         }
@@ -1687,6 +1755,9 @@ impl ResidencyWork {
                 return Err("Committed stem adoption superseded".into());
             }
             let mut producer = self.producer.lock().map_err(|_| "producer lock poisoned")?;
+            if !self.selection.ownership.output_publication_live(&producer) {
+                return Err("audio output closed before committed stem adoption".into());
+            }
             if !producer.is_full() {
                 let mut owners = self
                     .owners
@@ -1801,7 +1872,12 @@ impl ResidencyWork {
                         &self.intent_epoch,
                         resolved,
                         || {
-                            !self.cancelled.load(Ordering::Acquire)
+                            !self
+                                .selection
+                                .ownership
+                                .output_unavailable
+                                .load(Ordering::Acquire)
+                                && !self.cancelled.load(Ordering::Acquire)
                                 && !self.status.failure_pending.load(Ordering::Acquire)
                                 && self.status.publication.status() == "pending"
                                 && self.proposal.current()
@@ -2079,6 +2155,14 @@ impl super::resident_control_context::CommittedControlContext {
                 publication: PreparedSourcePermit::accepted_fixed(),
                 candidate: None,
             });
+        }
+        if !self
+            .input_runtime_ownership
+            .output_publication_live(&producer)
+        {
+            return Err(PyRuntimeError::new_err(
+                "audio output closed before committed stem registration",
+            ));
         }
         if producer.is_full() {
             return Err(PyRuntimeError::new_err(

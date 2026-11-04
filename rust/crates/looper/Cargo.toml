@@ -9,7 +9,8 @@ name = "flitzis_looper_audio"
 crate-type = ["cdylib"]
 
 [features]
-signalsmith-probe = ["dep:cc"]
+asio-contract-tests = []
+signalsmith-probe = []
 
 [dependencies]
 flitzis-looper-analysis = { path = "../analysis" }
@@ -36,4 +37,4 @@ bnum = { version = "=0.14.4", default-features = false }
 
 [build-dependencies]
 pkg-config = "0.3"
-cc = { version = "=1.2.63", optional = true }
+cc = { version = "=1.2.63" }

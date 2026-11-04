@@ -67,6 +67,11 @@ impl LoopAcceptanceSnapshot {
 
 /// One outstanding pad request; a newer request supersedes an older observation.
 pub(crate) struct SharedLoopAcceptance {
+    callback_sequence: AtomicU64,
+    callback_count: AtomicU64,
+    callback_last_frames: AtomicU64,
+    callback_min_frames: AtomicU64,
+    callback_max_frames: AtomicU64,
     demand: AtomicU64,
     serviced: AtomicU64,
     sequence: AtomicU64,
@@ -76,6 +81,11 @@ pub(crate) struct SharedLoopAcceptance {
 impl Default for SharedLoopAcceptance {
     fn default() -> Self {
         Self {
+            callback_sequence: AtomicU64::new(0),
+            callback_count: AtomicU64::new(0),
+            callback_last_frames: AtomicU64::new(0),
+            callback_min_frames: AtomicU64::new(0),
+            callback_max_frames: AtomicU64::new(0),
             demand: AtomicU64::new(0),
             serviced: AtomicU64::new(0),
             sequence: AtomicU64::new(0),
@@ -101,9 +111,56 @@ impl SharedLoopAcceptance {
     }
 
     pub(crate) fn reset(&self) {
+        // Reset only after verified old callback END, before its replacement.
+        self.callback_sequence.store(0, Ordering::SeqCst);
+        self.callback_count.store(0, Ordering::SeqCst);
         self.serviced
             .store(self.demand.load(Ordering::SeqCst), Ordering::SeqCst);
         self.sequence.store(0, Ordering::SeqCst);
+    }
+
+    /// One callback writer, fixed scalar cost, no allocation/CAS loop/clock read.
+    pub(crate) fn observe_callback_geometry(&self, frames: usize) {
+        let count = self.callback_count.load(Ordering::SeqCst);
+        let sequence = self
+            .callback_sequence
+            .load(Ordering::SeqCst)
+            .wrapping_add(1)
+            | 1;
+        self.callback_sequence.store(sequence, Ordering::SeqCst);
+        let frames = frames as u64;
+        self.callback_last_frames.store(frames, Ordering::SeqCst);
+        let min = self.callback_min_frames.load(Ordering::SeqCst);
+        let max = self.callback_max_frames.load(Ordering::SeqCst);
+        self.callback_min_frames.store(
+            if count == 0 { frames } else { min.min(frames) },
+            Ordering::SeqCst,
+        );
+        self.callback_max_frames.store(
+            if count == 0 { frames } else { max.max(frames) },
+            Ordering::SeqCst,
+        );
+        self.callback_count
+            .store(count.saturating_add(1), Ordering::SeqCst);
+        self.callback_sequence
+            .store(sequence.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    pub(super) fn callback_geometry(&self) -> Option<serde_json::Value> {
+        let sequence = self.callback_sequence.load(Ordering::SeqCst);
+        if sequence == 0 || sequence & 1 != 0 {
+            return None;
+        }
+        let count = self.callback_count.load(Ordering::SeqCst);
+        let last = self.callback_last_frames.load(Ordering::SeqCst);
+        let min = self.callback_min_frames.load(Ordering::SeqCst);
+        let max = self.callback_max_frames.load(Ordering::SeqCst);
+        (count > 0 && self.callback_sequence.load(Ordering::SeqCst) == sequence).then(|| {
+            serde_json::json!({
+                "callback_count": count, "last_frames": last, "min_frames": min, "max_frames": max,
+                "scope": "callbacks entering this output's renderer since initialization",
+            })
+        })
     }
 
     /// Constant inactive cost; active work scans only the existing bounded voice array.

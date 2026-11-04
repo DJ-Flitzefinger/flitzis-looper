@@ -1,4 +1,5 @@
 //! Complete alignment and conversion with duration-independent scratch.
+use super::rate_reader::{self, SourceClock, StemPcmReader};
 use super::wav::Pcm16Wav;
 use super::{
     STEM_ALIGNMENT_ANALYSIS_SECONDS, STEM_ALIGNMENT_ONSET_THRESHOLD_RATIO,
@@ -93,21 +94,54 @@ pub(crate) struct AlignedStemStream<'a> {
     wavs: [Pcm16Wav; 5],
     frames: usize,
     channels: usize,
+    rate: u32,
+    clock: Option<SourceClock>,
     block_samples: usize,
     pub(crate) offset_frames: isize,
 }
 
 impl<'a> AlignedStemStream<'a> {
+    /// Pair policy v1 promises exact raw geometry. Crossrate Legacy reads have
+    /// their own explicit clock proof and must not silently change that schema.
+    pub(crate) fn prepare_exact(
+        reader: &CompleteSourceReader,
+        files: &'a [File],
+        rate: u32,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, String> {
+        for file in files {
+            Pcm16Wav::inspect(file, cancelled)
+                .map_err(|e| e.to_string())?
+                .validate_geometry(
+                    rate,
+                    reader.reference.channels,
+                    reader.reference.frame_count(),
+                )?;
+        }
+        Self::prepare_with_clock(reader, files, rate, None, cancelled)
+    }
+
     /// The first pass establishes both global onset maxima and full source/mono
     /// integrity. The second finds the globally thresholded first attack. The
     /// third retains only the unchanged four-second correlation window.
+    #[cfg(test)]
     pub(crate) fn prepare(
         reader: &CompleteSourceReader,
         files: &'a [File],
         rate: u32,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, String> {
-        Self::prepare_blocks(reader, files, rate, cancelled, BLOCK_SAMPLES)
+        Self::prepare_with_clock(reader, files, rate, None, cancelled)
+    }
+
+    pub(crate) fn prepare_with_clock(
+        reader: &CompleteSourceReader,
+        files: &'a [File],
+        rate: u32,
+        clock: Option<SourceClock>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::prepare_blocks(reader, files, rate, clock, cancelled, BLOCK_SAMPLES)
     }
 
     #[cfg(test)]
@@ -124,13 +158,14 @@ impl<'a> AlignedStemStream<'a> {
         if samples == 0 || samples > BLOCK_SAMPLES {
             return Err("test block outside bounded streaming partition".into());
         }
-        Self::prepare_blocks(reader, files, rate, cancelled, samples)
+        Self::prepare_blocks(reader, files, rate, None, cancelled, samples)
     }
 
     fn prepare_blocks(
         reader: &CompleteSourceReader,
         files: &'a [File],
         rate: u32,
+        clock: Option<SourceClock>,
         cancelled: &dyn Fn() -> bool,
         block_samples: usize,
     ) -> Result<Self, String> {
@@ -142,14 +177,40 @@ impl<'a> AlignedStemStream<'a> {
         let mut layouts = Vec::with_capacity(5);
         for file in files {
             let layout = Pcm16Wav::inspect(file, cancelled).map_err(|e| e.to_string())?;
-            layout.validate_geometry(rate, channels, frames)?;
             layouts.push(layout);
         }
-        let wavs = layouts.try_into().map_err(|_| "incomplete stem set")?;
+        let wavs: [Pcm16Wav; 5] = layouts.try_into().map_err(|_| "incomplete stem set")?;
+        let raw = wavs[0];
+        for layout in &wavs {
+            layout.validate_geometry(raw.format.sample_rate_hz, channels, raw.frames)?;
+        }
+        let converted_frames = crate::audio_engine::sample_loader::fft_stream::output_frames(
+            raw.frames,
+            raw.format.sample_rate_hz,
+            rate,
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some(clock) = clock {
+            // A second ceiling can add a rounding-only tail. The original clock
+            // proves both file and reference extents; conversion still consumes
+            // and flushes the complete WAV, emitting only this canonical prefix.
+            if clock.frames_at(raw.format.sample_rate_hz)? != raw.frames
+                || clock.frames_at(rate)? != frames
+                || converted_frames < frames
+            {
+                return Err("legacy stem clocks disagree with original decoder extent".into());
+            }
+        } else if converted_frames != frames {
+            return Err("legacy stem target extent disagrees with complete reference".into());
+        }
         let analysis_frames = (rate as f32 * STEM_ALIGNMENT_ANALYSIS_SECONDS).round() as usize;
         // Two onset windows plus their two worst-case coarse windows. Neither
         // complete disk extent nor already-owned live backing is scratch here.
-        let peak = alignment_scratch_upper_bound(rate, frames)?;
+        let peak = alignment_scratch_upper_bound(rate, frames)?
+            .checked_add(40 * 1024)
+            .ok_or("legacy alignment scratch overflow")?
+            .checked_add(rate_reader::scratch(rate, raw)?)
+            .ok_or("legacy complete resident and FFT scratch overflow")?;
         if peak > crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES {
             return Err("stem alignment analysis scratch exceeds transient PCM admission".into());
         }
@@ -158,6 +219,8 @@ impl<'a> AlignedStemStream<'a> {
             wavs,
             frames,
             channels,
+            rate,
+            clock,
             block_samples,
             offset_frames: 0,
         };
@@ -231,6 +294,24 @@ impl<'a> AlignedStemStream<'a> {
         Ok(stream)
     }
 
+    pub(crate) fn transform_identity(&self, identity: &mut Sha256) {
+        let raw = self.wavs[0];
+        if raw.format.sample_rate_hz == self.rate {
+            return;
+        }
+        identity.update(b"legacy-pcm16-rubato-fft-single-delay-trim-original-clock-prefix-v1");
+        identity.update(raw.format.sample_rate_hz.to_le_bytes());
+        identity.update((raw.frames as u64).to_le_bytes());
+        identity.update((self.channels as u64).to_le_bytes());
+        identity.update(self.rate.to_le_bytes());
+        identity.update((self.frames as u64).to_le_bytes());
+        identity.update([u8::from(self.clock.is_some())]);
+        if let Some(clock) = self.clock {
+            identity.update((clock.frames as u64).to_le_bytes());
+            identity.update(clock.rate.to_le_bytes());
+        }
+    }
+
     fn visit_onsets(
         &self,
         reader: &CompleteSourceReader,
@@ -242,6 +323,9 @@ impl<'a> AlignedStemStream<'a> {
         let mut component = floats(self.block_samples)?;
         let mut previous_reference = 0.0_f32;
         let mut previous_candidate = 0.0_f32;
+        let mut components = (0..4)
+            .map(|index| StemPcmReader::new(&self.files[index], self.wavs[index], self.rate))
+            .collect::<io::Result<Vec<_>>>()?;
         reader.visit_region(region, cancelled, |first, source| {
             check(cancelled)?;
             #[cfg(test)]
@@ -255,15 +339,8 @@ impl<'a> AlignedStemStream<'a> {
                 mixed[..source.len()].fill(0.0);
                 // Preserve f32 component accumulation in vocals, melody, bass,
                 // drums order, including its rounding after each addition.
-                for index in 0..4 {
-                    self.wavs[index].read_frames(
-                        self.files
-                            .get(index)
-                            .ok_or_else(|| invalid("missing stem"))?,
-                        first,
-                        &mut component[..source.len()],
-                        cancelled,
-                    )?;
+                for component_reader in &mut components {
+                    component_reader.read(first, &mut component[..source.len()], cancelled)?;
                     for (target, value) in mixed[..source.len()]
                         .iter_mut()
                         .zip(&component[..source.len()])
@@ -308,6 +385,7 @@ impl<'a> AlignedStemStream<'a> {
             .wavs
             .get(index)
             .ok_or_else(|| invalid("stem index out of range"))?;
+        let mut reader = StemPcmReader::new(&self.files[index], *layout, self.rate)?;
         let mut values = floats(BLOCK_SAMPLES)?;
         let mut encoded = [0_u8; BLOCK_SAMPLES * 4];
         let frames_per_block = self.block_samples / self.channels;
@@ -329,8 +407,7 @@ impl<'a> AlignedStemStream<'a> {
             if let Some(source_first) = (first + skip).checked_add_signed(self.offset_frames) {
                 let available = self.frames.saturating_sub(source_first).min(count - skip);
                 if available != 0 {
-                    layout.read_frames(
-                        &self.files[index],
+                    reader.read(
                         source_first,
                         &mut values[skip * self.channels..(skip + available) * self.channels],
                         cancelled,
@@ -353,6 +430,7 @@ impl<'a> AlignedStemStream<'a> {
                 .ok_or_else(|| invalid("stem PCM extent overflow"))?;
             check(cancelled)?;
         }
+        reader.finish(cancelled)?;
         Ok((format!("{:x}", digest.finalize()), bytes))
     }
 }

@@ -117,8 +117,7 @@ class BankArrangementController:
         """Retain durable readers and writer ownership before ordinary restore."""
         self._require_thread()
         if self._startup is not None:
-            message = "Bank startup ownership is already bound"
-            raise RuntimeError(message)
+            return
         self._startup = BankArrangementStartup(self._app)
 
     @property

@@ -33,6 +33,10 @@ pub struct PreparedSourceTicket {
 
 #[pymethods]
 impl PreparedSourceTicket {
+    /// Current source/preparation observation, separate from callback adoption ACK.
+    pub fn is_current(&self) -> bool {
+        self.admission.current() && self.admission.available() && self.publication.current()
+    }
     /// Bounded callback adoption feedback; polling never drives audio timing.
     pub fn publication_status(&self) -> &'static str {
         self.publication.status()
@@ -791,6 +795,14 @@ pub(super) fn try_enqueue_prepared_stems(
     let mut producer = producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+    if !engine
+        .input_runtime_ownership
+        .output_publication_live(&producer)
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output closed before stem publication",
+        ));
+    }
     if producer.is_full() {
         return Ok(false);
     }
@@ -834,6 +846,14 @@ pub(super) fn capture_prepared_source_under_request_lock(
     source_version: String,
     request_id: u64,
 ) -> PyResult<PreparedSourceTicket> {
+    if !engine
+        .input_runtime_ownership
+        .output_source_admission_open()
+    {
+        return Err(PyRuntimeError::new_err(
+            "audio output change is in progress",
+        ));
+    }
     // Reconciliation may adopt an ACKed resident window into the control cache.
     // Capture that window after reconciliation, under the same request guard.
     let timing = input_runtime_binding::capture_under_request_lock(engine, id)?;
