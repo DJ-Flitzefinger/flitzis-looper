@@ -2,6 +2,9 @@
 use super::*;
 use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
 
+#[path = "p5b_registry_context_tests.rs"]
+mod registry_context_tests;
+
 fn policy(p: &mut Productive, interest: &str) -> ResidentStemTicket {
     p.h.engine
         .request_committed_stem_residency_with_interest_and_producer(

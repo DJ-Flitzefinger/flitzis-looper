@@ -210,6 +210,16 @@ moves large callback owners to a non-audio consumer.
 [cold_store/lifecycle.rs](../../rust/crates/looper/src/audio_engine/cold_store/lifecycle.rs)
 processes bounded fair cleanup; unknown/changed ownership is preserved.
 
+The ignored `p5b_registry_context_tests` regression retains a genuine saved
+original after its old engine and PCM readers end, then runs the complete
+three-round 216-bank source/window/preload and retirement checks in the same
+shared registry. It checks the saved file identities and bytes before a fresh
+warm restore consumes its own source ACK, and explicitly retires only that
+fixture after its restored readers end. This protects the saved-restore interaction;
+it does not attribute the historical full-phase registry failure whose captured
+assertion was lost when a later test aborted with a stack overflow. Bounded
+current predecessor runs and isolated passes do not resolve that historical cause.
+
 Existing [material_migration.rs](../../rust/crates/looper/src/audio_engine/material_migration.rs)
 and [material_migration.py](../../src/flitzis_looper/controller/material_migration.py)
 provide implemented reference/recovery machinery. Durable receipts still need
