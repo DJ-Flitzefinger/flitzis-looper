@@ -149,7 +149,6 @@ class AudioOutputController:
             return False
         self.draft = AudioOutputOptions.model_validate(options)
         try:
-            self._require_compatible_pair_rate(self.draft)
             if self._epoch is None:
                 self._previous = self._resolved_previous() if self.available else None
                 self._epoch = self._app.audio_output_runtime.prepare_change()
@@ -172,27 +171,6 @@ class AudioOutputController:
             self.error = str(error)
             return False
         return True
-
-    def _require_compatible_pair_rate(self, options: AudioOutputOptions) -> None:
-        """Preserve established exact-rate pairs before claiming the old output."""
-        if not self._source_startup_completed or not any(
-            path is not None and entry is not None and entry.pair is not None
-            for path, entry in zip(
-                self._app.project.sample_paths, self._app.project.stem_cache, strict=True
-            )
-        ):
-            return
-        rate = (
-            self._previous.options.sample_rate_hz
-            if self._epoch is not None and self._previous is not None
-            else (self.observed or {}).get("sample_rate_hz")
-        )
-        if type(rate) is not int or rate <= 0:
-            message = "The existing paired-stem output rate is unavailable"
-            raise RuntimeError(message)
-        if options.sample_rate_hz != rate:
-            message = f"Assigned paired stems require a fixed output rate of {rate} Hz"
-            raise RuntimeError(message)
 
     def _resolved_previous(self) -> OutputRollbackPlan:
         if self.observed is None:

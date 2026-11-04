@@ -56,10 +56,9 @@ Apply. A failed request keeps Settings accessible and attempts to restore the
 previous output and original musical/source selections without starting playback.
 Invalid saved output preferences require an explicit corrected Apply.
 
-Once source startup restoration is complete, existing paired-stem assignments
-require the installed sample rate to be selected explicitly. Auto or a
-different rate is refused before the current output is stopped. Failed or
-partially restored startup still permits a corrective Apply; wait for
+Existing paired-stem assignments support explicit output-rate changes and Auto
+through complete Original-clock-qualified conversion and atomic selection.
+Failed or partially restored startup still permits a corrective Apply; wait for
 restoration to finish before playing.
 
 WASAPI uses the endpoint's `IAudioClient3` shared-mode period capabilities for the

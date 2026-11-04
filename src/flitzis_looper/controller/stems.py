@@ -338,6 +338,9 @@ class StemController(BaseController):  # noqa: PLR0904
         self._pending_stem_publications: dict[int, _PendingStemPublication] = {}
         self._delete_logical_interests: Callable[[], Mapping[int, StemGenerationInterest]] = dict
         self._restored_stem_candidates: dict[int, StemCacheEntry] = {}
+        self._output_pair_replacements: dict[
+            int, tuple[StemCacheEntry | None, StemCacheEntry | None]
+        ] = {}
         self._pair_preparations = StemPairPreparationQueue(
             audio, self._assets, self._stem_task_runner, self._stem_resources
         )
@@ -557,6 +560,11 @@ class StemController(BaseController):  # noqa: PLR0904
         demand = self._remember_demand(sample_id, current)
         demand.explicit = self._project.pad_stem_mix_mode[sample_id] == "all_stems"
         demand.policy = self._project.preload_stem_loops_on_startup
+        if demand.state == "verified" and (
+            demand.explicit or demand.policy or demand.withdraw_policy
+        ):
+            demand.state = "queued"
+            demand.error = None
         if not self._committed_residency.contains(sample_id):
             if not self._entry_files_available(current):
                 self._session.stem_generation_errors[sample_id] = (
@@ -4095,11 +4103,12 @@ class StemController(BaseController):  # noqa: PLR0904
             if demand is not None:
                 demand.state = self._admission_wait_state(str(error))
                 demand.error = str(error)
-            self._session.stem_generation_errors[request.sample_id] = (
-                str(error)
-                if resident_stem_admission_pressure(str(error))
-                else f"Complete stem preparation failed: {error}"
-            )
+            if resident_stem_admission_pressure(str(error)):
+                self._report_residency_error(request.sample_id, str(error))
+            else:
+                self._session.stem_generation_errors[request.sample_id] = (
+                    f"Complete stem preparation failed: {error}"
+                )
         finally:
             if not retained:
                 try:
@@ -4154,11 +4163,17 @@ class StemController(BaseController):  # noqa: PLR0904
         if not request.ticket.same_source_request(ticket):
             message = "Stem source request changed during complete pair preparation"
             raise RuntimeError(message)
-        if request.verify_saved_selection:
+        changed_restore = request.verify_saved_selection and (
+            request.previous_entry is not None
+            and selected.model_dump(exclude={"available"})
+            != request.previous_entry.model_dump(exclude={"available"})
+        )
+        if request.verify_saved_selection and not changed_restore:
             self._retain_verified_restored_pair(request, selected, ticket)
             return False
         publish_components = (
             not request.residency_only
+            and not changed_restore
             and prepared.has_components()
             and self._project.pad_stem_mix_mode[sample_id] == "all_stems"
         )
@@ -4184,6 +4199,11 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
             else:
                 self._select_prepared_disk_pair(request, selected, ticket)
+                if changed_restore:
+                    self._output_pair_replacements[sample_id] = (
+                        request.previous_entry,
+                        self._project.stem_cache[sample_id],
+                    )
         return False
 
     def _retain_verified_restored_pair(
@@ -4439,11 +4459,16 @@ class StemController(BaseController):  # noqa: PLR0904
     def _settled_residency_demand(self, sample_id: int, entry: StemCacheEntry) -> None:
         demand = self._demands.get(sample_id)
         if demand is not None:
+            previous_error = demand.error
             demand.selection_identity = (
                 entry.pair.stem_set_identity if entry.pair is not None else None
             )
             demand.verify_disk = False
             demand.state = "queued" if demand.explicit or demand.policy else "verified"
+            if resident_stem_admission_pressure(previous_error):
+                demand.error = None
+                if self._residency_errors.get(sample_id) == previous_error:
+                    self._report_residency_error(sample_id, None)
 
     def _retire_disk_selection_predecessor(self, settlement: _DiskSelectionSettlement) -> None:
         previous = settlement.request.previous_entry

@@ -668,6 +668,8 @@ def _configure_recording_control_mock(audio: Mock) -> None:
 
 def _configure_output_control_mock(audio: Mock) -> None:
     """Provide routing-only output capabilities even with an older Native autospec."""
+    # Ordinary controller tests carry no opaque Native restoration authority.
+    audio.capture_audio_output_restore_job = Mock(return_value=None)
     audio.run_with_output_options = Mock()
     audio.commit_audio_output_configuration = Mock()
     audio.ensure_audio_output_startup_sources_settled = Mock()

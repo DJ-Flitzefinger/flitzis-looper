@@ -141,12 +141,37 @@ and a usable Settings retry path. Uncertain retirement forbids replacement.
 Startup with an unavailable saved request likewise preserves project data and
 provides usable Settings without claiming a silent backend fallback.
 
-This bounded delivery covers backend selection, stopped Legacy restoration,
-same-rate assigned-Pair restoration and fault/rollback handling. After source
-startup completes, assigned paired stems require the installed rate explicitly;
-Auto or another rate is refused before output retirement. Full cross-rate
-assigned-Pair conversion-v2 restoration with actual OriginalClockProof and
-recovery remains required. The fixed-rate refusal does not complete that work.
+Assigned Pair restoration supports another negotiated rate, including Auto.
+Schema1 exact conversion retains its canonical identity and rejects resampling
+metadata. Schema2 records the executed Original decoder clock, coherent raw
+five-WAV geometry, target geometry, actual FFT delay and exact nested-ceiling
+tail. A private Original witness binds completed decoding to sealed file/root/
+material identities and full bytes; JSON cannot supply that witness. Decoder
+and FFT/alignment scratch use actual host promises before their allocations.
+
+Recovery enters the existing Engine Cold lane under the same output-epoch
+linearization as output admission, including without an installed stream.
+Qualified leases acquire their Original witness before inventory locking and
+retain it through fresh resealing and physical retirement. Ordinary source
+publication still requires the actual current source, epoch and OwnACK.
+
+When a saved Pair needs another target clock, Native verifies the old complete
+Pair and derives the replacement from its original WAV generation. The existing
+atomic selection writer commits the new identity before owner transfer. Output
+rollback retains the original Pair readers and restores its saved selection
+through that writer before fresh original-rate source/component admission.
+
+Queued Pair workers capture an opaque restore scope from the genuine scoped
+control call. Execution revalidates the same Engine, epoch, restoration permission
+and healthy output, releasing the Engine borrow before invoking worker code.
+An ended or foreign transaction cannot admit work through that scope.
+
+Accepted stopped mode receipts remain owned state after control adoption. The
+verified output reset retires those exact owners outside cache locks; their
+audible-effect state does not certify output or retirement. Actual pending
+placement publication uses the declared admission-pressure protocol and the
+existing bounded retry queue. Fresh component interest requeues a previously
+disk-only verified demand and still requires its own current Native ACK.
 
 ## Verification
 

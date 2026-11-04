@@ -955,6 +955,10 @@ impl Drop for CacheReaders {
 
 impl Drop for OriginalReader {
     fn drop(&mut self) {
+        self.clock_proof
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         self.reader.take();
         self._binding_reader.take();
         self.directories.clear();

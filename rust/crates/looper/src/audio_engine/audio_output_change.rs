@@ -25,7 +25,7 @@ pub(super) struct SourceRestoreProof {
 
 pub(super) struct OutputRestorePlan {
     epoch: u64,
-    paired_rate: Option<u32>,
+    _paired_readers: Vec<std::sync::Arc<super::stem_pair::VerifiedStemPair>>,
     sources: Vec<Option<SourceRestoreProof>>,
     legacy_paths: Vec<Option<std::path::PathBuf>>,
     legacy_selections:
@@ -121,6 +121,51 @@ impl RestoreScope {
     pub fn run<T>(scope: Option<Self>, operation: impl FnOnce() -> T) -> T {
         let _guard = RestoreGuard(RESTORE_SCOPE.replace(scope));
         operation()
+    }
+}
+
+/// A genuine scoped control call may hand its exact restore authority to one
+/// queued worker. JSON, an odd epoch, or a saved-selection flag cannot create it.
+#[pyclass(frozen)]
+pub struct OutputRestoreJobScope {
+    engine: Py<AudioEngine>,
+    scope: RestoreScope,
+}
+
+impl OutputRestoreJobScope {
+    pub(super) fn capture(slf: &Bound<'_, AudioEngine>) -> PyResult<Option<Self>> {
+        let Some(scope) = RestoreScope::current() else {
+            return Ok(None);
+        };
+        {
+            let engine = slf.try_borrow()?;
+            if restore_scope(&engine, scope.epoch)? != scope {
+                return Err(PyRuntimeError::new_err(
+                    "output restoration owner is foreign",
+                ));
+            }
+        }
+        Ok(Some(Self {
+            engine: slf.clone().unbind(),
+            scope,
+        }))
+    }
+}
+
+#[pymethods]
+impl OutputRestoreJobScope {
+    pub fn run(&self, py: Python<'_>, callback: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        {
+            let engine = self.engine.bind(py).try_borrow()?;
+            if restore_scope(&engine, self.scope.epoch)? != self.scope {
+                return Err(PyRuntimeError::new_err(
+                    "output restoration owner is foreign",
+                ));
+            }
+        }
+        // The callback may borrow/detach the Engine itself. Only its Python
+        // owner is retained here; no Engine PyRef or lock crosses the callback.
+        RestoreScope::run(Some(self.scope), || callback.call0(py))
     }
 }
 
@@ -389,7 +434,7 @@ pub(super) fn finish_empty_startup(engine: &AudioEngine, epoch: u64) -> PyResult
 pub(super) fn prepare_plan(
     engine: &AudioEngine,
     epoch: u64,
-    requested_rate: Option<u32>,
+    _requested_rate: Option<u32>,
 ) -> PyResult<()> {
     validate_epoch(engine, epoch)?;
     super::resident_relocation::reconcile(engine)?;
@@ -400,7 +445,7 @@ pub(super) fn prepare_plan(
             .map_err(|_| "output restoration lock poisoned")?;
         if let Some(plan) = plan.as_ref() {
             return if plan.epoch == epoch {
-                require_paired_rate(plan.paired_rate, requested_rate)
+                Ok(())
             } else {
                 Err("another output plan remains owned".into())
             };
@@ -428,7 +473,7 @@ pub(super) fn prepare_plan(
         let mut sources = Vec::with_capacity(NUM_SAMPLES);
         let mut legacy_readers = Vec::new();
         let mut legacy_paths = vec![None; NUM_SAMPLES];
-        let mut paired_rate = None;
+        let mut paired_readers = Vec::new();
         for id in 0..NUM_SAMPLES {
             let Some(sample) = cache[id].as_ref() else {
                 sources.push(None);
@@ -440,11 +485,17 @@ pub(super) fn prepare_plan(
                 .as_ref()
                 .filter(|owner| owner.pair.is_some())
             {
-                if owner.set.sample_rate_hz != rate || paired_rate.is_some_and(|old| old != rate) {
+                if owner.set.sample_rate_hz != rate {
                     return Err("accepted paired-stem source rate is inconsistent".into());
                 }
-                require_paired_rate(Some(rate), requested_rate)?;
-                paired_rate = Some(rate);
+                paired_readers.push(
+                    owner
+                        .pair
+                        .as_ref()
+                        .ok_or("Pair reader missing")?
+                        .reader
+                        .clone(),
+                );
             }
             let placement = engine
                 .input_runtime_ownership
@@ -513,7 +564,7 @@ pub(super) fn prepare_plan(
         }
         *plan = Some(OutputRestorePlan {
             epoch,
-            paired_rate,
+            _paired_readers: paired_readers,
             sources,
             legacy_paths,
             legacy_selections: vec![None; NUM_SAMPLES],
@@ -521,17 +572,6 @@ pub(super) fn prepare_plan(
         });
         Ok(())
     })
-}
-
-fn require_paired_rate(original: Option<u32>, requested: Option<u32>) -> Result<(), String> {
-    if let Some(rate) = original
-        && requested != Some(rate)
-    {
-        return Err(format!(
-            "assigned paired stems require a fixed output rate of {rate} Hz"
-        ));
-    }
-    Ok(())
 }
 
 pub(super) fn cancel_before_close(engine: &AudioEngine, epoch: u64) -> PyResult<bool> {

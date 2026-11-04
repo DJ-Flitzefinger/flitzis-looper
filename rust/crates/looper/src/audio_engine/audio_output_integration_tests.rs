@@ -17,6 +17,93 @@ const SCRIPT: &str = include_str!(concat!(
 const SLOTS: usize = 1024;
 const PERIOD: Duration = Duration::from_millis(1);
 
+#[test]
+#[ignore = "fresh-process actual assigned Pair Apply/Auto/rollback; no device/model or WET profile"]
+fn pair_crossrate_actual_assigned_app_apply_auto_and_rollback() {
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_AUDIO_OUTPUT_PROFILE_ROOT").expect("owned root required"),
+    );
+    assert!(!root.exists());
+    fs::create_dir(&root).unwrap();
+    let readers_ended = Arc::new(AtomicBool::new(false));
+    let _cwd = DirectoryGuard {
+        original: std::env::current_dir().unwrap(),
+        readers_ended,
+    };
+    std::env::set_current_dir(&root).unwrap();
+    let factory = Factory::new().unwrap();
+    let mut fixture = Fixture::new(&root, factory.clone());
+    fixture.ready();
+    fixture.seed_leases.clear();
+    fixture.call("install_legacy_intent");
+    fixture.ready();
+    fixture.call("install_assigned_pair");
+    fixture.settle("assigned-pair", |f, _| f.predicate("assigned_pair_ready"));
+    fixture.call("_save_assigned_pair_baseline");
+    let identity = |f: &Fixture| {
+        Python::attach(|py| {
+            f.probe()
+                .call_method0(py, "verify_assigned_pair")
+                .unwrap()
+                .extract::<String>(py)
+                .unwrap()
+        })
+    };
+    let initial = identity(&fixture);
+    let before = fixture.sources();
+    fixture.call("_arm_restore_scope_capture");
+    fixture.apply(96_000);
+    assert!(
+        fixture.predicate("output_change_succeeded"),
+        "{}",
+        fixture.status()
+    );
+    assert_eq!(fixture.sources()[0].rate, 96_000, "{}", fixture.status());
+    let converted = identity(&fixture);
+    assert_ne!(initial, converted);
+    fresh_sources(&before, &fixture.sources(), 96_000);
+    fixture.call("_verify_stale_restore_scope");
+    fixture.call("apply_auto");
+    fixture.ready();
+    assert!(
+        fixture.predicate("output_change_succeeded"),
+        "{}",
+        fixture.status()
+    );
+    assert_eq!(fixture.sources()[0].rate, 96_000, "{}", fixture.status());
+    assert_eq!(identity(&fixture), converted);
+    fixture.call("arm_pair_commit_failure");
+    fixture.apply(48_000);
+    assert_eq!(identity(&fixture), converted);
+    assert!(
+        fixture
+            .status()
+            .contains("Injected failure after actual Pair selection commit")
+    );
+    assert_eq!(fixture.sources()[0].rate, 96_000);
+    fixture.apply(48_000);
+    assert!(
+        fixture.predicate("output_change_succeeded"),
+        "{}",
+        fixture.status()
+    );
+    assert_eq!(fixture.sources()[0].rate, 48_000, "{}", fixture.status());
+    assert_eq!(identity(&fixture), initial);
+    fixture.settle("pair-owner-close", |f, _| f.predicate("close"));
+    fixture.closed.set(true);
+    fixture.release_owners().unwrap();
+    fs::write(
+        root.join("pair-crossrate-app.provisional.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "initial":initial,"converted":converted,"rates":[48000,96000,96000,96000,48000],
+            "actual_assigned_pair_apply_auto_rollback":true,"all_five_hashes":true,
+            "reader_end":"pending exact original EXE and owning Job END then parent sealed proof"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 struct SourceImage {
     generation: u64,

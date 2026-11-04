@@ -54,6 +54,10 @@ class _PreparedPair:
     def selection_json(self) -> str:
         return json.dumps(self.selection)
 
+    def replaces_saved_selection(self, descriptor_reference: str) -> bool:
+        """This ordinary reuse double supplies no Native clock-replacement authority."""
+        return False
+
     def has_components(self) -> bool:
         return self.components
 
@@ -102,6 +106,47 @@ def _queued(
     )
     assert controller.project.stem_cache[0] is entry
     return jobs, prepared, ticket, entry
+
+
+def test_queued_restore_scope_wraps_worker_capture_without_control_execution(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Routing double only; actual Native authority is verified by the App leaf."""
+    scope = Mock()
+    scope.run.side_effect = lambda operation: operation()
+    audio_engine_mock.capture_audio_output_restore_job.return_value = scope
+    jobs, prepared, _, _ = _queued(controller, audio_engine_mock, monkeypatch, tmp_path)
+    scope.run.assert_not_called()
+    jobs[0]()
+    scope.run.assert_called_once()
+    (result,) = controller.stems._pair_preparations.collect()
+    assert result.prepared is prepared
+    assert result.restore_scope is None
+    result.close()
+    assert controller._assets._reserved == 0
+
+
+def test_stale_restore_scope_returns_worker_error_without_source_capture(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed scoped entry must return ownership without invoking Native preparation."""
+    scope = Mock()
+    scope.run.side_effect = RuntimeError("captured output restore scope is stale")
+    audio_engine_mock.capture_audio_output_restore_job.return_value = scope
+    jobs, _, _, _ = _queued(controller, audio_engine_mock, monkeypatch, tmp_path)
+    jobs[0]()
+    (result,) = controller.stems._pair_preparations.collect()
+    assert result.error == "captured output restore scope is stale"
+    audio_engine_mock.prepare_stem_pair.assert_not_called()
+    assert result.restore_scope is None
+    result.close()
+    assert controller._assets._reserved == 0
 
 
 def test_queued_all_then_full_mix_selects_disk_pair_without_component_publication(
@@ -968,7 +1013,7 @@ def test_unavailable_restored_pair_retry_requires_current_loaded_source(
 
 
 @pytest.mark.parametrize("saved_all", [False, True])
-def test_restore_verifies_complete_pair_without_component_demand_with_preload_off(
+def test_restore_verifies_disk_before_demanding_fresh_recovery_components(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
@@ -1021,8 +1066,15 @@ def test_restore_verifies_complete_pair_without_component_demand_with_preload_of
             "is_current.return_value": True,
         })
         residency.return_value = receipt
-        assert controller.stems.set_stem_mix_mode(0, "all_stems")
+        assert controller.stems._demands[0].state == "verified"
+        assert not controller.stems.recovered_copy_selection_ready(0, saved)
+        assert controller.stems._demands[0].state == "queued"
+        controller.stems._poll_residency_demands()
         residency.assert_called_once_with(registration, mode="all_stems", enabled_mask=15)
+        assert not controller.stems.recovered_copy_selection_ready(0, saved)
+        receipt.residency_status.return_value = "accepted"
+        receipt.effective_failure_reason.return_value = None
+        assert controller.stems.recovered_copy_selection_ready(0, saved)
 
 
 def test_policy_toggle_preserves_direct_interest_and_uses_only_policy_withdrawal(
@@ -1112,6 +1164,12 @@ def test_all216_demand_scheduling_is_bounded_fair_and_direct_request_is_not_star
     ("message", "recoverable", "waiting_state"),
     [
         ("cold source queue full (2 workers, 32 queued jobs)", True, "queued"),
+        (
+            "[resident_stem_placement_pending] prepared source control placement is pending",
+            True,
+            "queued",
+        ),
+        ("prepared source control placement is pending", False, "error"),
         ("[resident_memory_pressure] insufficient host allocation headroom", True, "deferred"),
         ("[resident_memory_unavailable] OS memory query failed", True, "deferred"),
         ("cold source lane stopped", False, "error"),
@@ -1159,6 +1217,8 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
         assert prepared.selected
         assert controller.stems.stems_available(0)
         assert demand.state == "verified"
+        assert demand.error is None
+        assert 0 not in controller.session.stem_generation_errors
         assert audio_engine_mock.prepare_stem_pair.call_count == 2
         assert all(
             call.args[4] is False for call in audio_engine_mock.prepare_stem_pair.call_args_list
@@ -1167,6 +1227,32 @@ def test_async_metadata_native_capacity_retries_complete_verification_without_as
         assert audio_engine_mock.prepare_stem_pair.call_count == 1
     audio_engine_mock.publish_stem_pair.assert_not_called()
     regenerate.assert_not_called()
+
+
+def test_successful_pressure_retry_preserves_newer_terminal_feedback(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    jobs, _, _, previous = _queued(
+        controller, audio_engine_mock, monkeypatch, tmp_path, components=False
+    )
+    demand = controller.stems._remember_demand(0, previous)
+    demand.verify_disk = True
+    message = "[resident_stem_placement_pending] prepared source control placement is pending"
+    audio_engine_mock.prepare_stem_pair.side_effect = RuntimeError(message)
+    jobs[0]()
+    controller.stems._poll_pair_preparations()
+    newer = "Newer complete source data failure"
+    controller.session.stem_generation_errors[0] = newer
+    audio_engine_mock.prepare_stem_pair.side_effect = None
+    controller.stems._poll_residency_demands()
+    jobs[1]()
+    controller.stems._poll_pair_preparations()
+    assert controller.session.stem_generation_errors[0] == newer
+    assert demand.error is None
+    assert controller._assets._reserved == 0
 
 
 def _registered_metadata_pair(

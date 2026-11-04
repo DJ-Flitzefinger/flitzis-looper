@@ -33,6 +33,12 @@ pub(super) use warm::{
 };
 mod staging;
 mod streaming;
+#[cfg(all(test, windows))]
+pub(super) use streaming::cancel_temporary_for_test;
+#[cfg(all(test, windows))]
+pub(super) use streaming::fail_temporary_io_for_test;
+#[cfg(all(test, windows))]
+pub(super) use streaming::take_temporary_paths_for_test;
 pub(super) use streaming::{CompletedPcmArtifact, PcmArtifactWriter};
 mod warm;
 pub(super) use lifecycle::PreparedMaterialCreationOwnership;
@@ -124,6 +130,7 @@ struct CacheAssignment {
 }
 
 struct OriginalReader {
+    clock_proof: Mutex<Option<Arc<super::original_clock::OriginalClockProof>>>,
     path: PathBuf,
     root: PathBuf,
     reader: Option<File>,
@@ -1251,6 +1258,7 @@ impl ColdTransaction {
                 .and_then(Weak::upgrade)
                 .unwrap_or_else(|| {
                     let reader = Arc::new(OriginalReader {
+                        clock_proof: Mutex::new(None),
                         path: original_path.clone(),
                         root: self.original_root.clone(),
                         reader: Some(original),
@@ -1303,6 +1311,68 @@ impl ColdTransaction {
             created_original: self.owned_original,
             created_cache,
         }
+    }
+}
+
+impl CommittedColdLease {
+    pub(super) fn original_clock(
+        &self,
+        account: &super::resident_accounting::ResidentAccount,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Arc<super::original_clock::OriginalClockProof>, String> {
+        let keeper = self
+            ._original
+            .reader
+            .as_ref()
+            .ok_or("Original keeper reader ended")?;
+        if file_identity(keeper).map_err(|e| e.to_string())? != self._original.identity {
+            return Err("Original keeper FileID changed".into());
+        }
+        let mut proof = self
+            ._original
+            .clock_proof
+            .lock()
+            .map_err(|_| "Original clock lock poisoned")?;
+        let material = self
+            .material_id
+            .as_deref()
+            .ok_or("Original clock material missing")?;
+        let original = &self.manifest.descriptor["decoder"]["original"];
+        let sha256 = original["sha256"]
+            .as_str()
+            .ok_or("Original digest missing")?;
+        let bytes = original["bytes"]
+            .as_u64()
+            .ok_or("Original extent missing")?;
+        if let Some(held) = proof.as_ref() {
+            held.verify_keeper(&self._original.identity)?;
+            held.verify(
+                &self.samples_root,
+                &self.original_path,
+                material,
+                sha256,
+                bytes,
+                cancelled,
+            )?;
+            return Ok(held.clone());
+        }
+        let acquired = super::original_clock::OriginalClockProof::acquire(
+            &self.samples_root,
+            &self.original_path,
+            account,
+            cancelled,
+        )?;
+        acquired.verify_keeper(&self._original.identity)?;
+        acquired.verify(
+            &self.samples_root,
+            &self.original_path,
+            material,
+            sha256,
+            bytes,
+            cancelled,
+        )?;
+        *proof = Some(acquired.clone());
+        Ok(acquired)
     }
 }
 

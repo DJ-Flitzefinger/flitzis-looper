@@ -634,6 +634,7 @@ pub(in crate::audio_engine) fn restore_material_creation_after_original_retired(
     let root = material_paths::material_root(&path)
         .ok_or_else(|| invalid("retired creation root missing"))?;
     let protection = Arc::new(crate::audio_engine::project_assets::RetirementProtection {
+        _clock: protection._clock.clone(),
         _inventory: protection._inventory.clone(),
         outcome: Arc::new(crate::audio_engine::project_assets::RetirementOutcome::default()),
     });
@@ -690,6 +691,7 @@ pub(in crate::audio_engine) fn prepare_retained_material_retirement(
     let root = material_paths::material_root(&checked.path)
         .ok_or_else(|| invalid("retained creation root missing"))?;
     let protection = Arc::new(crate::audio_engine::project_assets::RetirementProtection {
+        _clock: protection._clock.clone(),
         _inventory: protection._inventory.clone(),
         outcome: Arc::new(crate::audio_engine::project_assets::RetirementOutcome::default()),
     });

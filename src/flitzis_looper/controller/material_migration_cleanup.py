@@ -456,7 +456,7 @@ class MigrationArtifactReconciler:
         try:
             for request in requests:
                 try:
-                    lease = MigrationArtifactLease.capture(str(self._samples), request.reference)
+                    lease = self._capture_artifact(request.reference)
                 except (OSError, RuntimeError, ValueError) as error:
                     if request.required:
                         raise
@@ -515,6 +515,18 @@ class MigrationArtifactReconciler:
         result.records = tuple(records)
         result.errors = tuple(errors)
         return result
+
+    def _capture_artifact(self, reference: str) -> MigrationArtifactLease:
+        """Qualify immutable recovery on this Engine's existing bounded Cold lane."""
+        if self._audio is not None:
+            return self._audio.capture_migration_artifact(reference)
+        return MigrationArtifactLease.capture(str(self._samples), reference)
+
+    def _reopen_artifact(self, encoded: str) -> MigrationArtifactLease:
+        """Reacquire executed Original evidence before taking an inventory lock."""
+        if self._audio is not None:
+            return self._audio.reopen_migration_artifact(encoded)
+        return MigrationArtifactLease.reopen(str(self._samples), encoded)
 
     def _capture_material_evidence(
         self, request: ArtifactRequest, lease: MigrationArtifactLease, result: ArtifactCapture
@@ -744,17 +756,45 @@ class MigrationArtifactReconciler:
             store.append(journal.model_dump_json())
         return journal
 
+    def _qualify_retirement_pairs(
+        self, journal: MaterialMigrationJournal
+    ) -> tuple[dict[str, MigrationArtifactLease], dict[str, str]]:
+        """Heavy Original qualification precedes the fresh inventory transaction."""
+        qualified: dict[str, MigrationArtifactLease] = {}
+        qualification_errors: dict[str, str] = {}
+        for record in journal.artifacts:
+            evidence = record.evidence
+            if evidence.kind not in {"stem_pcm_directory", "stem_pair_descriptor"} or (
+                record.role != "rollback" and not (journal.phase == "failed" and record.created)
+            ):
+                continue
+            if not (self._samples.parent / evidence.reference).exists():
+                continue
+            try:
+                qualified[evidence.reference] = self._reopen_artifact(evidence.model_dump_json())
+            except (OSError, RuntimeError, ValueError) as error:
+                qualification_errors[evidence.reference] = str(error)
+        return qualified, qualification_errors
+
+    @staticmethod
+    def _release_qualified(qualified: dict[str, MigrationArtifactLease]) -> None:
+        for lease in qualified.values():
+            lease.release()
+
     def _retire(self, journal: MaterialMigrationJournal, current: ProjectState) -> CleanupResult:
         journal = self._retirement_journal(journal, current)
+        qualified, qualification_errors = self._qualify_retirement_pairs(journal)
         inventory: MigrationInventoryLease | None = None
         try:
             inventory = self._guard.lock_inventory()
             paths, legacy_digests, errors = self._references(current, inventory.records())
         except (OSError, RuntimeError, ValueError) as error:
+            self._release_qualified(qualified)
             if inventory is not None:
                 inventory.release()
             return CleanupResult(errors=(str(error),), journal=journal)
         if errors:
+            self._release_qualified(qualified)
             inventory.release()
             return CleanupResult(errors=tuple(errors), journal=journal)
         queued: list[str] = []
@@ -764,7 +804,14 @@ class MigrationArtifactReconciler:
         for record in journal.artifacts:
             try:
                 status, lease = self._retire_record(
-                    record, journal, current, paths, legacy_digests, inventory
+                    record,
+                    journal,
+                    current,
+                    paths,
+                    legacy_digests,
+                    inventory,
+                    qualified=qualified,
+                    qualification_errors=qualification_errors,
                 )
                 if status == "protected":
                     protected.append(record.evidence.reference)
@@ -783,6 +830,7 @@ class MigrationArtifactReconciler:
         # Every actual queue entry owns the native lock until its physical terminal.
         # Dropping Python state or shutting down cannot open registration early.
         inventory.release()
+        self._release_qualified(qualified)
         return CleanupResult(
             tuple(queued),
             tuple(protected),
@@ -801,6 +849,9 @@ class MigrationArtifactReconciler:
         paths: set[Path],
         legacy_digests: set[str],
         inventory: MigrationInventoryLease,
+        *,
+        qualified: dict[str, MigrationArtifactLease] | None = None,
+        qualification_errors: dict[str, str] | None = None,
     ) -> tuple[Literal["queued", "protected", "skip"], MigrationArtifactLease | None]:
         evidence = record.evidence
         if record.role != "rollback" and not (journal.phase == "failed" and record.created):
@@ -836,12 +887,25 @@ class MigrationArtifactReconciler:
             return "skip", None
         if evidence.kind == "pcm_directory" and legacy_digests:
             return "protected", None
-        lease = MigrationArtifactLease.reopen(str(self._samples), evidence.model_dump_json())
+        lease = self._retirement_lease(evidence, qualified, qualification_errors)
         try:
             lease.retire(inventory)
         finally:
             lease.release()
         return "queued", lease
+
+    def _retirement_lease(
+        self,
+        evidence: MigrationArtifactEvidence,
+        qualified: dict[str, MigrationArtifactLease] | None,
+        errors: dict[str, str] | None,
+    ) -> MigrationArtifactLease:
+        if errors is not None and evidence.reference in errors:
+            raise ValueError(errors[evidence.reference])
+        lease = qualified.pop(evidence.reference, None) if qualified is not None else None
+        if lease is None:
+            lease = MigrationArtifactLease.reopen(str(self._samples), evidence.model_dump_json())
+        return lease
 
     def settled(self, result: CleanupResult) -> bool:
         """Observe actual queue outcomes; changed objects settle as preserved errors."""

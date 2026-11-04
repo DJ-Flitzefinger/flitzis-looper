@@ -111,6 +111,32 @@ class MaterialCreationReceipt(BaseModel):
         return self
 
 
+class MigrationOriginalClockEvidence(BaseModel):
+    """Comparison data; only fresh Native decoding can create clock authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    original_reference: str = Field(strict=True, min_length=1, max_length=8192)
+    material_id: MigrationID
+    original_identity: ArtifactIdentity
+    sha256: MigrationDigest
+    bytes: int = Field(strict=True, gt=0, le=2**64 - 1)
+    frames: int = Field(strict=True, gt=0, le=2**64 - 1)
+    rate_hz: int = Field(strict=True, gt=0, le=768_000)
+    channels: int = Field(strict=True, ge=1, le=32)
+    decoder_policy: Literal["symphonia-0.5.5-gapless-disabled-packet-silence-v1"]
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> Self:
+        parts = self.original_reference.split("/")
+        if not self.original_reference.startswith("samples/") or (
+            any(part in {"", ".", ".."} for part in parts)
+            or any(character in self.original_reference for character in "\\:")
+        ):
+            message = "Original clock evidence requires a contained canonical reference"
+            raise ValueError(message)
+        return self
+
+
 class MigrationArtifactEvidence(BaseModel):
     """A bounded complete native receipt that must be freshly reverified after restart."""
 
@@ -124,9 +150,18 @@ class MigrationArtifactEvidence(BaseModel):
     samples_identity: ArtifactIdentity
     files: tuple[MigrationFileEvidence, ...] = Field(min_length=1, max_length=6)
     material_creation: MaterialCreationReceipt | None = None
+    original_clock: MigrationOriginalClockEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_files(self) -> Self:
+        if self.original_clock is not None and self.kind not in {
+            "stem_pcm_directory",
+            "stem_pair_descriptor",
+        }:
+            message = "Original clock evidence belongs only to a qualified Pair area"
+            raise ValueError(message)
         if (
             not self.reference.startswith("samples/")
             or any(character in self.reference for character in "\\:")

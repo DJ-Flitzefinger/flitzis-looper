@@ -203,6 +203,7 @@ impl Retirement {
 
 /// Non-realtime queue ownership lasts through physical deletion, including PCM handoff.
 pub(super) struct RetirementProtection {
+    pub _clock: Option<Arc<super::original_clock::OriginalClockProof>>,
     pub _inventory: Arc<super::material_migration_recovery::InventoryHandle>,
     pub outcome: Arc<RetirementOutcome>,
 }

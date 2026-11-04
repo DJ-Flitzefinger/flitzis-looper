@@ -10,6 +10,103 @@ pub(crate) struct DecodedDiskAudio {
     pub(crate) scratch_reserved_bytes: usize,
 }
 
+/// A single sealed probe and its checked allocation promise. It cannot be
+/// reconstructed from persisted decoder metadata or reused for a second decode.
+pub(crate) struct StreamDecodePlan {
+    probed: (Box<dyn FormatReader>, CodecParameters, DecoderDescriptor),
+    peak: usize,
+}
+
+impl StreamDecodePlan {
+    pub(crate) fn probe(file: File, hint: &Path) -> Result<Self, SampleLoadError> {
+        let probed = probe_snapshot(file, hint)?;
+        let (frames, channels) = decoder_dimensions(&probed.1)?;
+        if channels > MAX_CHANNELS {
+            return Err(SampleLoadError::InvalidInput(
+                "decoder declared channels exceed bound",
+            ));
+        }
+        let workspace = decoder_workspace(frames, channels)?;
+        let packet = frames
+            .checked_mul(channels)
+            .and_then(|n| n.checked_mul(12))
+            .ok_or(SampleLoadError::Limit("packet workspace"))?;
+        Ok(Self {
+            probed,
+            peak: sum_bytes(workspace, packet)?,
+        })
+    }
+
+    pub(crate) fn working_peak_bytes(&self) -> usize {
+        self.peak
+    }
+
+    pub(in crate::audio_engine) fn reserve(
+        self,
+        account: &crate::audio_engine::resident_accounting::ResidentAccount,
+    ) -> Result<ReservedStreamDecodePlan, SampleLoadError> {
+        let promise = account
+            .reserve_transient(self.peak)
+            .map_err(|e| SampleLoadError::Io(e.into_io_error()))?;
+        Ok(ReservedStreamDecodePlan {
+            plan: self,
+            promise: std::sync::Arc::new(promise),
+        })
+    }
+}
+
+pub(in crate::audio_engine) struct ReservedStreamDecodePlan {
+    plan: StreamDecodePlan,
+    promise: std::sync::Arc<crate::audio_engine::resident_host_memory::HostReservation>,
+}
+
+impl ReservedStreamDecodePlan {
+    pub(in crate::audio_engine) fn retain_promise(
+        &self,
+    ) -> std::sync::Arc<crate::audio_engine::resident_host_memory::HostReservation> {
+        self.promise.clone()
+    }
+
+    pub(crate) fn execute(
+        self,
+        decoder_path: &Path,
+        output_rate_hz: u32,
+        maximum: usize,
+        cancelled: &impl Fn() -> bool,
+        progress: impl FnMut(SampleLoadProgress),
+    ) -> Result<DecodedDiskAudio, SampleLoadError> {
+        check_bytes(self.plan.peak, maximum)?;
+        let _promise = self.promise;
+        decode_probed_audio_streamed(
+            self.plan.probed,
+            decoder_path,
+            output_rate_hz,
+            maximum,
+            cancelled,
+            progress,
+        )
+    }
+
+    pub(in crate::audio_engine) fn execute_temporary(
+        self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DecodedDiskAudio, SampleLoadError> {
+        let _promise = self.promise;
+        let peak = self.plan.peak;
+        check_bytes(peak, crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES)?;
+        decode_probed_audio_streamed_to(self.plan.probed, None, 44_100, peak, cancelled, |_| {})
+    }
+}
+
+fn decoder_workspace(frames: usize, channels: usize) -> Result<usize, SampleLoadError> {
+    frames
+        .checked_mul(channels)
+        .and_then(|n| n.checked_mul(DECODER_WORKING_PLANES + 3))
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| n.checked_add(64 * 1024 + COPY_FRAMES * MAX_CHANNELS * 4))
+        .ok_or(SampleLoadError::Limit("streaming decoder workspace"))
+}
+
 /// Read the captured original once, preserving decoder packet chronology. The
 /// complete decoder PCM is durable on disk; only one packet is owned at a time.
 pub(crate) fn decode_audio_snapshot_streamed(
@@ -22,9 +119,23 @@ pub(crate) fn decode_audio_snapshot_streamed(
     progress: impl FnMut(SampleLoadProgress),
 ) -> Result<DecodedDiskAudio, SampleLoadError> {
     check_cancelled(cancelled)?;
-    decode_probed_audio_streamed(
-        probe_snapshot(file, hint_path)?,
-        decoder_path,
+    let plan = StreamDecodePlan::probe(file, hint_path)?;
+    check_bytes(plan.working_peak_bytes(), maximum)?;
+    plan.reserve(&crate::audio_engine::resident_accounting::ResidentAccount::new())?
+        .execute(decoder_path, output_rate_hz, maximum, cancelled, progress)
+}
+
+fn decode_probed_audio_streamed(
+    probed: (Box<dyn FormatReader>, CodecParameters, DecoderDescriptor),
+    decoder_path: &Path,
+    output_rate_hz: u32,
+    maximum: usize,
+    cancelled: &impl Fn() -> bool,
+    progress: impl FnMut(SampleLoadProgress),
+) -> Result<DecodedDiskAudio, SampleLoadError> {
+    decode_probed_audio_streamed_to(
+        probed,
+        Some(decoder_path),
         output_rate_hz,
         maximum,
         cancelled,
@@ -32,13 +143,13 @@ pub(crate) fn decode_audio_snapshot_streamed(
     )
 }
 
-fn decode_probed_audio_streamed(
+fn decode_probed_audio_streamed_to(
     (mut format, params, mut descriptor): (
         Box<dyn FormatReader>,
         CodecParameters,
         DecoderDescriptor,
     ),
-    decoder_path: &Path,
+    decoder_path: Option<&Path>,
     output_rate_hz: u32,
     maximum: usize,
     cancelled: &impl Fn() -> bool,
@@ -51,12 +162,7 @@ fn decode_probed_audio_streamed(
             "decoder declared channels exceed bound",
         ));
     }
-    let workspace = max_packet_frames
-        .checked_mul(max_packet_channels)
-        .and_then(|n| n.checked_mul(DECODER_WORKING_PLANES + 3))
-        .and_then(|n| n.checked_mul(4))
-        .and_then(|n| n.checked_add(64 * 1024 + COPY_FRAMES * MAX_CHANNELS * 4))
-        .ok_or(SampleLoadError::Limit("streaming decoder workspace"))?;
+    let workspace = decoder_workspace(max_packet_frames, max_packet_channels)?;
     check_bytes(workspace, maximum)?;
     let mut decoder = get_codecs().make(&params, &DecoderOptions { verify: false })?;
     let mut rate = None;
@@ -95,11 +201,15 @@ fn decode_probed_audio_streamed(
         if packet.track_id() != track_id {
             continue;
         }
-        if let Some(packet_channels) =
-            channels.or_else(|| params.channels.map(|value| value.count()))
         {
+            let packet_channels = max_packet_channels;
             let packet_frames =
                 usize::try_from(packet.dur).map_err(|_| SampleLoadError::Limit("packet frames"))?;
+            if packet_frames > max_packet_frames {
+                return Err(SampleLoadError::Limit(
+                    "packet duration exceeds decode plan",
+                ));
+            }
             let packet_bytes = packet_frames
                 .checked_mul(packet_channels)
                 .and_then(|n| n.checked_mul(12))
@@ -150,11 +260,10 @@ fn decode_probed_audio_streamed(
             ));
         }
         if writer.is_none() {
-            writer = Some(PcmArtifactWriter::create(
-                decoder_path,
-                spec.rate,
-                channel_count,
-            )?);
+            writer = Some(match decoder_path {
+                Some(path) => PcmArtifactWriter::create(path, spec.rate, channel_count)?,
+                None => PcmArtifactWriter::create_temporary(spec.rate, channel_count)?,
+            });
         }
         let count = audio.frames();
         let mut buffer = DecoderBuffer::<f32>::new(audio.capacity() as u64, spec);
@@ -193,7 +302,13 @@ fn decode_probed_audio_streamed(
         channels,
         rate_hz,
         frames,
-        scratch_reserved_bytes: workspace,
+        scratch_reserved_bytes: sum_bytes(
+            workspace,
+            max_packet_frames
+                .checked_mul(max_packet_channels)
+                .and_then(|n| n.checked_mul(12))
+                .ok_or(SampleLoadError::Limit("packet workspace"))?,
+        )?,
     })
 }
 

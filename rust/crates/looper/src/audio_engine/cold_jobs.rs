@@ -191,7 +191,7 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        self.execute_owned_delivery(cancelled, operation, false, false)
+        self.execute_owned_delivery(cancelled, operation, false, false, None)
     }
 
     /// After admission, cancellation is sticky but never certifies an outstanding kernel as
@@ -202,7 +202,7 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        self.execute_owned_delivery(cancelled, operation, true, false)
+        self.execute_owned_delivery(cancelled, operation, true, false, None)
     }
 
     pub(super) fn execute_heavy_owned_until_terminal<T: Send + 'static>(
@@ -210,7 +210,21 @@ impl ColdJobsHandle {
         cancelled: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        self.execute_owned_delivery(cancelled, operation, true, true)
+        self.execute_owned_delivery(cancelled, operation, true, true, None)
+    }
+
+    /// External read-only recovery always occupies THIS lane. Borrowed heavy
+    /// work from another lane cannot hide a decoder from output with_idle.
+    pub(super) fn execute_recovery_owned_until_terminal<T: Send + 'static>(
+        &self,
+        epoch: u64,
+        cancelled: impl Fn() -> bool,
+        operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        if ON_WORKER.with(Cell::get) != 0 || super::heavy_work::current().is_some() {
+            return Err("nested recovery admission is unsupported".into());
+        }
+        self.execute_owned_delivery(cancelled, operation, true, true, Some(epoch))
     }
 
     fn waiting_error(
@@ -309,6 +323,7 @@ impl ColdJobsHandle {
         operation: impl FnOnce() -> Result<T, String> + Send + 'static,
         await_terminal: bool,
         heavy: bool,
+        recovery_epoch: Option<u64>,
     ) -> Result<T, String> {
         if cancelled() {
             return Err("cold preparation proposal cancelled before admission".into());
@@ -330,7 +345,7 @@ impl ColdJobsHandle {
             }
             return result;
         }
-        let reservation = reserve_shared(&self.shared)?;
+        let reservation = reserve_shared_kind(&self.shared, recovery_epoch)?;
         // This unique receipt retains neither admission nor captured owners.
         let mut queued_owner = await_terminal.then(|| reservation.owner.retired.clone());
         let heavy = if heavy {
@@ -420,6 +435,13 @@ impl ColdJobsHandle {
 }
 
 fn reserve_shared(shared: &Arc<Shared>) -> Result<Reservation, String> {
+    reserve_shared_kind(shared, None)
+}
+
+fn reserve_shared_kind(
+    shared: &Arc<Shared>,
+    recovery_epoch: Option<u64>,
+) -> Result<Reservation, String> {
     let mut state = shared
         .state
         .lock()
@@ -427,11 +449,21 @@ fn reserve_shared(shared: &Arc<Shared>) -> Result<Reservation, String> {
     if state.stopped {
         return Err("cold source lane stopped".into());
     }
-    if shared
-        .output_fence
-        .get()
-        .is_some_and(|ownership| !ownership.output_source_admission_open())
-    {
+    if let Some(expected) = recovery_epoch {
+        let ownership = shared
+            .output_fence
+            .get()
+            .ok_or("Recovery output fence unavailable")?;
+        if expected == u64::MAX
+            || expected & 1 != 0
+            || ownership.output_change_epoch.load(Ordering::Acquire) != expected
+        {
+            return Err("Recovery output epoch is stale or changing".into());
+        }
+    }
+    if shared.output_fence.get().is_some_and(|ownership| {
+        recovery_epoch.is_none() && !ownership.output_source_admission_open()
+    }) {
         return Err("audio output change is in progress".into());
     }
     if state.admitted - state.active >= QUEUED_JOBS {

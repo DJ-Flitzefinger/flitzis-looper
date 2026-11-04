@@ -475,6 +475,23 @@ struct PendingResidency {
     preload: bool,
 }
 
+impl PendingResidency {
+    fn output_reset_owned(&self) -> bool {
+        self.status.publication_status() == "accepted"
+            && self.status.publication.current()
+            && self.owner.current()
+            && self
+                .candidate
+                .as_ref()
+                .is_none_or(|candidate| candidate.adopted() && candidate.receipt_current())
+            && self
+                .status
+                .failed_settlement
+                .lock()
+                .is_ok_and(|pending| !*pending)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct CommittedStemState {
     accepted: Option<Arc<SelectionOwner>>,
@@ -494,7 +511,10 @@ pub(super) struct CommittedStemState {
 impl CommittedStemState {
     pub(super) fn preflight_output_reset(&self) -> Result<[u64; 5], String> {
         if self.registration.is_some()
-            || self.pending.is_some()
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| !pending.output_reset_owned())
             || self.proposal.is_some()
             || self.policy_pending.is_some()
             || self.policy_proposal.is_some()
@@ -514,7 +534,7 @@ impl CommittedStemState {
         Ok(next)
     }
 
-    pub(super) fn take_output_owner(&mut self, next: [u64; 5]) -> Option<Arc<SelectionOwner>> {
+    pub(super) fn take_output_owner(&mut self, next: [u64; 5]) -> impl Send + 'static + use<> {
         for (epoch, value) in [
             &self.registration_epoch,
             &self.selection_epoch,
@@ -529,7 +549,10 @@ impl CommittedStemState {
         }
         self.policy_interest = false;
         self.explicit_interest = false;
-        self.accepted.take()
+        // Accepted explicit receipts remain owned after their control work ends.
+        // The verified stopped output reset retires them outside all cache locks.
+        // Their audible-effect status is independent of this ownership boundary.
+        (self.accepted.take(), self.pending.take())
     }
     fn proposal_slot(&mut self, policy: bool) -> &mut Option<PendingResidency> {
         if policy {

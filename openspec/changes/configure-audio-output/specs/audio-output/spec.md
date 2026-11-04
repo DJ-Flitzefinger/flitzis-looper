@@ -84,3 +84,42 @@ operation SHALL not require an ASIO SDK or driver installation.
 - **WHEN** the Windows Native extension is built
 - **THEN** the existing checked compiler builds the bridge without mutable SDK downloads or global configuration changes
 - **AND** normal source fingerprints and Portable inclusion checks cover the actual compiled inputs
+
+### Requirement: Assigned Pairs Follow the Negotiated Output Clock
+Assigned paired stems SHALL support explicit rate changes and Auto through complete
+Original-clock-qualified conversion without changing the exact schema1 policy.
+Schema2 SHALL retain all five complete outputs, channel order and source origin.
+
+#### Scenario: Nested clock rounding produces a tail
+- **GIVEN** an actual executed Original decoder clock and five coherent sealed PCM16 WAVs
+- **WHEN** their natural converted extent exceeds the Original-derived target extent
+- **THEN** complete conversion consumes all raw frames and finite FFT tail
+- **AND** the descriptor records the actual single delay and exactly derived tail trim
+- **AND** all five prepublication and write completions agree before full reopening
+
+#### Scenario: Recovery qualifies a saved cross-rate Pair
+- **GIVEN** a saved schema2 Pair and an Engine with no installed audio stream
+- **WHEN** the existing recovery worker acquires a bounded read-only Cold reservation
+- **THEN** actual sealed Original decoding and memory admission qualify its private clock proof
+- **AND** capture, fresh receipt reopening and retirement resealing require that held proof
+- **AND** metadata alone grants no lease, receipt, source ACK or cleanup authority
+
+#### Scenario: Pair restoration fails after committing a new selection
+- **GIVEN** the original Pair readers and saved selection remain held by an output transaction
+- **WHEN** a new target-rate selection commits but subsequent restoration fails
+- **THEN** rollback atomically restores the original saved selection
+- **AND** fresh original-rate source and component ACKs precede resumed control admission
+
+#### Scenario: A queued Pair worker restores inside the current output transaction
+- **GIVEN** a genuine current restoration call captured an opaque worker scope
+- **WHEN** the bounded worker prepares an existing assigned Pair
+- **THEN** the scope revalidates the same Engine, epoch, restoration permission and healthy output
+- **AND** a stale scope is refused before the worker callback runs
+- **AND** the scope grants no source-admission authority to another Engine
+- **AND** pending placement remains unaccepted and retries only through declared bounded admission
+
+#### Scenario: Auto reuses an unchanged verified Pair
+- **GIVEN** disk verification completed before component interest was requested
+- **WHEN** the restored selection requires components or preload
+- **THEN** the verified demand re-enters the existing bounded scheduler
+- **AND** readiness waits for its exact current registration and component acknowledgements

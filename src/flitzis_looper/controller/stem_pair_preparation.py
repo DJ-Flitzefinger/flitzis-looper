@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import (
         AudioEngine,
         OfflineWorkTicket,
+        OutputRestoreJobScope,
         PreparedSourceTicket,
         PreparedStemPair,
         ProjectAssetLease,
@@ -95,6 +96,7 @@ class PairPreparation:
     interest_owner: StemGenerationInterests | None = None
     heavy_work: OfflineWorkTicket | None = None
     started: Event = field(default_factory=Event, init=False, repr=False)
+    restore_scope: OutputRestoreJobScope | None = None
     _artifact_version_explicit: bool = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -109,6 +111,7 @@ class PairPreparation:
         """Release this job after actual worker return, preserving any saved assignment."""
         self.lease.release()
         self.retirement.close()
+        self.restore_scope = None
         if self.heavy_work is not None:
             self.heavy_work.close()
             self.heavy_work = None
@@ -217,6 +220,7 @@ class StemPairPreparationQueue:
         if any(owner == spec.sample_id for owner, _ in self._discard_retries.values()):
             message = "Stem pair cleanup admission is still pending"
             raise RuntimeError(message)
+        restore_scope = self._audio.capture_audio_output_restore_job()
         retirement = self._assets.reserve_pending(16)
         try:
             lease = self._assets.acquire(Path(spec.entry.cache_dir))
@@ -242,6 +246,7 @@ class StemPairPreparationQueue:
             source_path=captured.source_path,
             interest_owner=captured.interest_owner,
             heavy_work=captured.heavy_work.borrow() if captured.heavy_work is not None else None,
+            restore_scope=restore_scope,
         )
         self.pending[spec.sample_id] = request
         try:
@@ -252,6 +257,20 @@ class StemPairPreparationQueue:
             raise
 
     def _run(self, request: PairPreparation, *, components: bool) -> None:
+        scope = request.restore_scope
+        if scope is None:
+            self._run_scoped(request, components=components)
+            return
+        try:
+            scope.run(lambda: self._run_scoped(request, components=components))
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            request.error = str(error)
+            request.close()
+            self._results.put(request)
+        finally:
+            request.restore_scope = None
+
+    def _run_scoped(self, request: PairPreparation, *, components: bool) -> None:
         work = request.heavy_work
         if work is None:
             self._run_owned(request, components=components)
@@ -479,14 +498,25 @@ class StemPairPreparationQueue:
         if selection.provenance != expected_provenance:
             message = "Prepared pair provenance differs from captured generation metadata"
             raise RuntimeError(message)
+        clock_replacement = (
+            request.verify_saved_selection
+            and request.entry.pair is not None
+            and request.prepared.replaces_saved_selection(request.entry.pair.descriptor_reference)
+            is True
+        )
+        reuse_rejected = (
+            not request._artifact_version_explicit
+            or request.own_source_version == request.artifact_source_version
+            or (
+                request.entry.pair is not None
+                and selection.provenance != request.entry.pair.provenance
+            )
+        )
         if (
             request.entry.pair is not None
             and selection != request.entry.pair
-            and (
-                not request._artifact_version_explicit
-                or request.own_source_version == request.artifact_source_version
-                or selection.provenance != request.entry.pair.provenance
-            )
+            and not clock_replacement
+            and reuse_rejected
         ):
             message = "Prepared pair selection changed during reuse"
             raise RuntimeError(message)

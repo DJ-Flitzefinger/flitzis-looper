@@ -31,6 +31,26 @@ pub(crate) fn working_bytes(
         .ok_or(SampleLoadError::Limit("streaming FFT workspace"))
 }
 
+/// Executed counters, available only after complete input and finite tail flush.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FftCompletion {
+    source_frames: usize,
+    generated_frames: usize,
+    delay_frames: usize,
+}
+
+impl FftCompletion {
+    pub(crate) fn source_frames(self) -> usize {
+        self.source_frames
+    }
+    pub(crate) fn generated_frames(self) -> usize {
+        self.generated_frames
+    }
+    pub(crate) fn delay_frames(self) -> usize {
+        self.delay_frames
+    }
+}
+
 pub(crate) struct FftPcmStream {
     converter: Fft<f32>,
     input: Vec<f32>,
@@ -243,5 +263,18 @@ impl FftPcmStream {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn finish_completed(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+        read: impl FnMut(usize, &mut [f32]) -> Result<(), SampleLoadError>,
+    ) -> Result<FftCompletion, SampleLoadError> {
+        self.finish(cancelled, read)?;
+        Ok(FftCompletion {
+            source_frames: self.source_position,
+            generated_frames: self.generated,
+            delay_frames: self.delay,
+        })
     }
 }

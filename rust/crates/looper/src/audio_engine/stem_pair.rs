@@ -3,7 +3,7 @@
 use super::cold_store::sealed_reader;
 use super::complete_context::CompleteSourceReader;
 use super::material_migration::PreparedMigrationMaterial;
-use super::material_migration_stems::{generation_provenance, verify_complete_wav_set};
+use super::material_migration_stems::{generation_provenance, verify_complete_wav_set_preflight};
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity};
 use super::stem_cache::streamed::AlignedStemStream;
@@ -246,6 +246,53 @@ fn source(material: &PreparedMigrationMaterial) -> Result<StemPairSource, String
 }
 fn hex(value: &[u8; 32]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn raw_geometry(
+    files: &[File],
+    cancelled: &impl Fn() -> bool,
+) -> Result<super::stem_cache::wav::Pcm16Wav, String> {
+    if files.len() != 5 {
+        return Err("Pair requires five sealed WAV headers".into());
+    }
+    let raw = super::stem_cache::wav::Pcm16Wav::inspect(&files[0], cancelled).map_err(error)?;
+    for file in files {
+        super::stem_cache::wav::Pcm16Wav::inspect(file, cancelled)
+            .map_err(error)?
+            .validate_geometry(raw.format.sample_rate_hz, raw.format.channels, raw.frames)?;
+    }
+    Ok(raw)
+}
+
+fn raw_bound(raw: super::stem_cache::wav::Pcm16Wav) -> Result<u64, String> {
+    (raw.frames as u64)
+        .checked_mul(raw.format.channels as u64)
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| n.checked_add(1024 * 1024))
+        .ok_or("Pair raw WAV bound overflow".into())
+}
+
+fn validate_clock(
+    content: &StemPairContent,
+    proof: Option<&super::original_clock::OriginalClockProof>,
+) -> Result<(), String> {
+    if let Some(data) = &content.conversion.resampling {
+        let proof = proof.ok_or("Pair v2 requires executed Original clock proof")?;
+        let clock = proof.clock();
+        if data.original_frames != clock.frames as u64
+            || data.original_rate_hz != clock.rate
+            || data.original_channels != proof.channels() as u32
+            || data.delay_frames
+                != (super::analysis_pcm::fft::fft_dimensions(data.raw_rate_hz, data.target_rate_hz)
+                    .1
+                    / 2) as u64
+        {
+            return Err(
+                "Pair v2 disagrees with executed Original clock or pinned FFT delay".into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// These sealed files remain off-thread; component buffers alone enter callbacks.
@@ -589,6 +636,15 @@ pub(super) fn open_verified_pair(
         root,
         &descriptor.content,
         &descriptor.wav_generation,
+        if descriptor.content.conversion.resampling.is_some() {
+            Some(material.lease.original_clock(
+                &super::resident_accounting::ResidentAccount::new(),
+                cancelled,
+            )?)
+        } else {
+            None
+        }
+        .as_deref(),
         cancelled,
     )?;
     let (marker_hash, _) = full_hash(&mut set._files[5], cancelled)?;
@@ -626,6 +682,7 @@ fn verified_wavs(
     root: &Path,
     content: &StemPairContent,
     wav_reference: &str,
+    proof: Option<&super::original_clock::OriginalClockProof>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<super::material_migration_stems::SealedSet, String> {
     let path = material_paths::resolve(root, Path::new(wav_reference)).map_err(error)?;
@@ -642,16 +699,31 @@ fn verified_wavs(
     {
         return Err("pair WAV generation is not committed in its material".into());
     }
-    let frames = usize::try_from(content.source.frame_count).map_err(error)?;
+    validate_clock(content, proof)?;
+    let frames = usize::try_from(
+        content
+            .conversion
+            .resampling
+            .as_ref()
+            .map_or(content.source.frame_count, |v| v.raw_frames),
+    )
+    .map_err(error)?;
     let channels = usize::try_from(content.source.channels).map_err(error)?;
-    let maximum = content
-        .source
-        .frame_count
-        .checked_mul(u64::from(content.source.channels))
-        .and_then(|n| n.checked_mul(2))
-        .and_then(|n| n.checked_add(1024 * 1024))
-        .ok_or("stem WAV bound overflow")?;
-    let mut set = verify_complete_wav_set(&path.path, &content.source_version, maximum, cancelled)?;
+    let rate = content
+        .conversion
+        .resampling
+        .as_ref()
+        .map_or(content.source.sample_rate_hz, |v| v.raw_rate_hz);
+    let mut set = verify_complete_wav_set_preflight(
+        &path.path,
+        &content.source_version,
+        cancelled,
+        |files| {
+            let raw = raw_geometry(files, cancelled)?;
+            raw.validate_geometry(rate, channels, frames)?;
+            raw_bound(raw)
+        },
+    )?;
     if generation_provenance(&set.marker)? != content.provenance {
         return Err("WAV marker/common effective stem provenance mismatch".into());
     }
@@ -664,7 +736,7 @@ fn verified_wavs(
         check_cancelled(cancelled)?;
         verify_pcm16_wav_geometry_cancellable(
             &mut set._files[index],
-            content.source.sample_rate_hz,
+            rate,
             channels,
             frames,
             cancelled,
@@ -751,14 +823,16 @@ fn verify_pcm(
     Ok(())
 }
 
-/// Fresh complete disk proof for migration/history; no pad or callback authority.
+/// Exercise the unqualified recovery boundary without pad or callback authority.
+#[cfg(test)]
 pub(super) fn verify_recovery_area(root: &Path, reference: &Path) -> Result<Vec<File>, String> {
-    verify_recovery_area_cancellable(root, reference, &|| false)
+    verify_recovery_area_with_proof(root, reference, None, &|| false)
 }
 
-fn verify_recovery_area_cancellable(
+pub(super) fn verify_recovery_area_with_proof(
     root: &Path,
     reference: &Path,
+    proof: Option<&super::original_clock::OriginalClockProof>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<File>, String> {
     check_cancelled(cancelled)?;
@@ -840,7 +914,19 @@ fn verify_recovery_area_cancellable(
     if digest != content.source.original_sha256 || extent != content.source.original_bytes {
         return Err("pair recovery original changed".into());
     }
-    let wavs = verified_wavs(root, &content, &wav_reference, cancelled)?;
+    if content.conversion.resampling.is_some() {
+        proof
+            .ok_or("Pair v2 recovery needs executed Original clock proof")?
+            .verify(
+                root,
+                &original.path,
+                &content.material_id,
+                &content.source.original_sha256,
+                content.source.original_bytes,
+                cancelled,
+            )?;
+    }
+    let wavs = verified_wavs(root, &content, &wav_reference, proof, cancelled)?;
     let pcm = verified_pcm_directory(&pcm_path, &content, cancelled)?;
     if pcm.manifest.wav_generation != wav_reference {
         return Err("pair recovery direct WAV manifest binding mismatch".into());
@@ -879,6 +965,62 @@ fn verify_recovery_area_cancellable(
 
 /// Verify a foreign complete pair before copying its WAVs into an equal owned source.
 /// The returned sealed readers grant artifact custody, never subscriber publication.
+pub(super) struct VerifiedPairRebind {
+    _files: Vec<File>,
+    root: PathBuf,
+    wav_path: PathBuf,
+    content: StemPairContent,
+    clock: Option<Arc<super::original_clock::OriginalClockProof>>,
+}
+
+impl VerifiedPairRebind {
+    pub(super) fn original_wavs(&self) -> (&Path, &str) {
+        (&self.wav_path, &self.content.source_version)
+    }
+    pub(super) fn copy_bound(
+        &self,
+        material: &PreparedMigrationMaterial,
+        files: &[File],
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<u64, String> {
+        if fs::canonicalize(material.lease.samples_root()).map_err(error)? != self.root
+            || source(material)? != self.content.source
+        {
+            return Err("Pair rebind target root/source changed".into());
+        }
+        validate_clock(&self.content, self.clock.as_deref())?;
+        if let Some(proof) = &self.clock {
+            let (original, _) = self
+                .content
+                .source_version
+                .rsplit_once("|sha256-v1:")
+                .ok_or("Pair Original missing")?;
+            proof.verify(
+                &self.root,
+                Path::new(original),
+                &self.content.material_id,
+                &self.content.source.original_sha256,
+                self.content.source.original_bytes,
+                cancelled,
+            )?;
+        }
+        let raw = raw_geometry(files, cancelled)?;
+        let (rate, frames) = self.content.conversion.resampling.as_ref().map_or(
+            (
+                self.content.source.sample_rate_hz,
+                self.content.source.frame_count,
+            ),
+            |data| (data.raw_rate_hz, data.raw_frames),
+        );
+        raw.validate_geometry(
+            rate,
+            self.content.source.channels as usize,
+            usize::try_from(frames).map_err(error)?,
+        )?;
+        raw_bound(raw)
+    }
+}
+
 pub(super) fn verify_pair_rebind(
     root: &Path,
     descriptor_reference: &str,
@@ -886,9 +1028,19 @@ pub(super) fn verify_pair_rebind(
     artifact_source_version: &str,
     material: &PreparedMigrationMaterial,
     cancelled: &impl Fn() -> bool,
-) -> Result<Vec<File>, String> {
-    let mut guards =
-        verify_recovery_area_cancellable(root, Path::new(descriptor_reference), cancelled)?;
+) -> Result<VerifiedPairRebind, String> {
+    let proof = acquire_recovery_clock(
+        root,
+        Path::new(descriptor_reference),
+        &super::resident_accounting::ResidentAccount::new(),
+        cancelled,
+    )?;
+    let mut guards = verify_recovery_area_with_proof(
+        root,
+        Path::new(descriptor_reference),
+        proof.as_deref(),
+        cancelled,
+    )?;
     let typed = material_paths::resolve(root, Path::new(descriptor_reference)).map_err(error)?;
     if !matches!(typed.kind, AssetKind::StemPairDescriptor { .. }) {
         return Err("pair rebind requires a typed common descriptor".into());
@@ -908,7 +1060,121 @@ pub(super) fn verify_pair_rebind(
     }
     guards.push(file);
     check_cancelled(cancelled)?;
-    Ok(guards)
+    Ok(VerifiedPairRebind {
+        _files: guards,
+        root: fs::canonicalize(root).map_err(error)?,
+        wav_path: wav.path,
+        content: descriptor.content,
+        clock: proof,
+    })
+}
+
+/// This metadata selects an Original locator only; acquisition independently
+/// resolves, seals, hashes and executes it before any verifier accepts v2.
+pub(super) fn acquire_recovery_clock(
+    root: &Path,
+    reference: &Path,
+    account: &super::resident_accounting::ResidentAccount,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Arc<super::original_clock::OriginalClockProof>>, String> {
+    let typed = material_paths::resolve(root, reference).map_err(error)?;
+    let (path, descriptor) = match typed.kind {
+        AssetKind::StemPairDescriptor { .. } => (typed.path, true),
+        AssetKind::StemPcmDirectory {
+            generation: true, ..
+        } => (typed.path.join("manifest.json"), false),
+        _ => return Ok(None),
+    };
+    let _guards =
+        project_assets::directory_guards(path.parent().ok_or("Pair metadata parent missing")?)
+            .map_err(error)?;
+    let mut file = sealed_reader(&path).map_err(error)?;
+    let encoded = bytes(&mut file, JSON_LIMIT)?;
+    let content = if descriptor {
+        let data: StemPairDescriptor = serde_json::from_slice(&encoded).map_err(error)?;
+        data.validate()?;
+        data.content
+    } else {
+        let data: StemPcmManifest = serde_json::from_slice(&encoded).map_err(error)?;
+        data.validate()?;
+        data.content
+    };
+    if content.conversion.resampling.is_none() {
+        return Ok(None);
+    }
+    let (original, _) = content
+        .source_version
+        .rsplit_once("|sha256-v1:")
+        .ok_or("Pair Original missing")?;
+    let proof = super::original_clock::OriginalClockProof::acquire(
+        root,
+        Path::new(original),
+        account,
+        cancelled,
+    )?;
+    proof.verify(
+        root,
+        Path::new(original),
+        &content.material_id,
+        &content.source.original_sha256,
+        content.source.original_bytes,
+        cancelled,
+    )?;
+    validate_clock(&content, Some(&proof))?;
+    Ok(Some(proof))
+}
+
+/// Verify the old immutable selection before deriving a new target-clock Pair.
+/// Its Original identity stays exact; only the target PCM identity may change.
+pub(super) fn restore_pair_at_current_rate(
+    root: &Path,
+    reference: &str,
+    material: &PreparedMigrationMaterial,
+    reader: &CompleteSourceReader,
+    account: &super::resident_accounting::ResidentAccount,
+    cancelled: &impl Fn() -> bool,
+) -> Result<VerifiedStemPair, String> {
+    let typed = material_paths::resolve(root, Path::new(reference)).map_err(error)?;
+    if !matches!(typed.kind, AssetKind::StemPairDescriptor { .. }) {
+        return Err("Pair restore needs common descriptor".into());
+    }
+    let mut file = sealed_reader(&typed.path).map_err(error)?;
+    let descriptor: StemPairDescriptor =
+        serde_json::from_slice(&bytes(&mut file, JSON_LIMIT)?).map_err(error)?;
+    descriptor.validate()?;
+    if descriptor.content.source == source(material)? {
+        return open_verified_pair(root, reference, material, cancelled);
+    }
+    let current = source(material)?;
+    let expected_version = format!(
+        "{}|sha256-v1:{}",
+        self::reference(root, &material.lease.original_path)?,
+        current.original_sha256
+    );
+    if descriptor.content.source_version != expected_version
+        || descriptor.content.material_id
+            != *material
+                .lease
+                .material_id
+                .as_ref()
+                .ok_or("Pair material missing")?
+        || descriptor.content.source.original_bytes != current.original_bytes
+        || descriptor.content.source.original_sha256 != current.original_sha256
+    {
+        return Err("Pair restore Original identity changed".into());
+    }
+    let proof = material.lease.original_clock(account, cancelled)?;
+    let _verified =
+        verify_recovery_area_with_proof(root, Path::new(reference), Some(&proof), cancelled)?;
+    prepare_complete_pair_with_reader(
+        root,
+        material,
+        &expected_version,
+        &descriptor.wav_generation,
+        cancelled,
+        reader,
+        account,
+    )
 }
 
 fn recovery_common_readers(
@@ -1067,6 +1333,7 @@ pub(super) fn prepare_complete_pair(
         wav_reference,
         cancelled,
         &CompleteSourceReader::new(material.sample.clone(), Some(material.lease.clone()))?,
+        &super::resident_accounting::ResidentAccount::new(),
     )
 }
 
@@ -1088,6 +1355,7 @@ pub(super) fn prepare_complete_pair_with_reader(
     wav_reference: &str,
     cancelled: &impl Fn() -> bool,
     reader: &CompleteSourceReader,
+    account: &super::resident_accounting::ResidentAccount,
 ) -> Result<VerifiedStemPair, String> {
     let (root, _root_guards) = guarded_root(root, material)?;
     let root = root.as_path();
@@ -1116,13 +1384,31 @@ pub(super) fn prepare_complete_pair_with_reader(
         .stem_preparation_gate(cancelled)
         .map_err(error)?;
     check_cancelled(cancelled)?;
-    let maximum = current
-        .frame_count
-        .checked_mul(u64::from(current.channels))
-        .and_then(|n| n.checked_mul(2))
-        .and_then(|n| n.checked_add(1024 * 1024))
-        .ok_or("stem WAV bound overflow")?;
-    let wav_set = verify_complete_wav_set(&wav.path, source_version, maximum, cancelled)?;
+    let mut clock_proof = None;
+    let wav_set =
+        verify_complete_wav_set_preflight(&wav.path, source_version, cancelled, |files| {
+            let raw = raw_geometry(files, cancelled)?;
+            if raw.format.channels != current.channels as usize {
+                return Err("Pair raw channel remix is unsupported".into());
+            }
+            if raw.format.sample_rate_hz == current.sample_rate_hz {
+                raw.validate_geometry(
+                    current.sample_rate_hz,
+                    current.channels as usize,
+                    current.frame_count as usize,
+                )?;
+            } else {
+                let proof = material.lease.original_clock(account, cancelled)?;
+                if proof.clock().frames_at(raw.format.sample_rate_hz)? != raw.frames
+                    || proof.clock().frames_at(current.sample_rate_hz)?
+                        != current.frame_count as usize
+                {
+                    return Err("Pair raw and target disagree with executed Original clock".into());
+                }
+                clock_proof = Some(proof);
+            }
+            raw_bound(raw)
+        })?;
     let provenance = generation_provenance(&wav_set.marker)?;
     let material_root =
         material_paths::material_root_for_original(root, &material.lease.original_path)
@@ -1165,17 +1451,43 @@ pub(super) fn prepare_complete_pair_with_reader(
         .lease
         .verify_reference(&reader.reference)
         .map_err(error)?;
-    let complete = AlignedStemStream::prepare_exact(
-        reader,
-        &wav_set._files[..5],
+    let raw = raw_geometry(&wav_set._files[..5], cancelled)?;
+    let scratch = super::stem_cache::streamed::alignment_scratch_upper_bound(
         current.sample_rate_hz,
-        cancelled,
-    )?;
+        current.frame_count as usize,
+    )?
+    .checked_add(40 * 1024)
+    .and_then(|n| {
+        n.checked_add(super::stem_cache::rate_reader::scratch(current.sample_rate_hz, raw).ok()?)
+    })
+    .ok_or("Pair conversion scratch overflow")?;
+    if scratch > super::cold_jobs::PCM_LIMIT_BYTES {
+        return Err("Pair conversion scratch exceeds admission".into());
+    }
+    let _conversion_promise = account.reserve_transient(scratch).map_err(error)?;
+    let complete = if let Some(proof) = clock_proof.as_ref() {
+        AlignedStemStream::prepare_with_clock(
+            reader,
+            &wav_set._files[..5],
+            current.sample_rate_hz,
+            Some(proof.clock()),
+            cancelled,
+        )?
+    } else {
+        AlignedStemStream::prepare_exact(
+            reader,
+            &wav_set._files[..5],
+            current.sample_rate_hz,
+            cancelled,
+        )?
+    };
     let mut artifacts = Vec::with_capacity(5);
+    let mut completions = Vec::with_capacity(5);
     for index in 0..5 {
-        let (pcm_sha256, pcm_bytes) = complete
-            .convert(index, &mut std::io::sink(), cancelled)
+        let (pcm_sha256, pcm_bytes, completion) = complete
+            .convert_with_completion(index, &mut std::io::sink(), cancelled)
             .map_err(error)?;
+        completions.push(completion);
         artifacts.push(StemPairArtifact {
             name: STEM_FILE_NAMES[index].into(),
             wav_sha256: wav_set.marker["stems"][STEM_FILE_NAMES[index]]
@@ -1190,14 +1502,52 @@ pub(super) fn prepare_complete_pair_with_reader(
     let artifacts = artifacts
         .try_into()
         .map_err(|_| "complete artifact set missing")?;
+    let conversion = if let Some(proof) = &clock_proof {
+        let done = completions[0].ok_or("Pair resampling has no executed completion")?;
+        let raw = raw_geometry(&wav_set._files[..5], cancelled)?;
+        let natural = super::sample_loader::fft_stream::output_frames(
+            raw.frames,
+            raw.format.sample_rate_hz,
+            current.sample_rate_hz,
+        )
+        .map_err(error)?;
+        if completions.iter().any(|v| *v != Some(done))
+            || done.source_frames() != raw.frames
+            || done.generated_frames() != natural
+        {
+            return Err("Pair five executed resampling completions disagree".into());
+        }
+        StemPairConversion {
+            schema_version: 2,
+            policy: RESAMPLING_POLICY.into(),
+            resampling: Some(StemPairResampling {
+                original_frames: proof.clock().frames as u64,
+                original_rate_hz: proof.clock().rate,
+                original_channels: proof.channels() as u32,
+                raw_frames: raw.frames as u64,
+                raw_rate_hz: raw.format.sample_rate_hz,
+                channels: current.channels,
+                target_frames: current.frame_count,
+                target_rate_hz: current.sample_rate_hz,
+                natural_frames: natural as u64,
+                trimmed_tail_frames: (natural as u64)
+                    .checked_sub(current.frame_count)
+                    .ok_or("Pair trim underflow")?,
+                delay_frames: done.delay_frames() as u64,
+            }),
+        }
+    } else {
+        StemPairConversion {
+            schema_version: 1,
+            policy: "pcm16-exact-geometry-v1".into(),
+            resampling: None,
+        }
+    };
     let content = StemPairContent {
         material_id: material_id.clone(),
         source_version: source_version.into(),
         source: current,
-        conversion: StemPairConversion {
-            schema_version: 1,
-            policy: "pcm16-exact-geometry-v1".into(),
-        },
+        conversion,
         alignment: StemPairAlignment {
             schema_version: 1,
             policy: "shared-onset-v1".into(),
@@ -1253,11 +1603,12 @@ pub(super) fn prepare_complete_pair_with_reader(
                     self.0.flush()
                 }
             }
-            let (digest, bytes) = complete
-                .convert(index, &mut PcmWriter(&mut file), cancelled)
+            let (digest, bytes, completion) = complete
+                .convert_with_completion(index, &mut PcmWriter(&mut file), cancelled)
                 .map_err(error)?;
             if digest != content.artifacts[index].pcm_sha256
                 || bytes != content.artifacts[index].pcm_bytes
+                || completion != completions[index]
             {
                 return Err("aligned PCM write differs from complete prepublication digest".into());
             }
@@ -1311,6 +1662,7 @@ pub(super) fn prepare_complete_pair_with_reader(
         root,
         &content,
         &complete_pcm.manifest.wav_generation,
+        clock_proof.as_deref(),
         cancelled,
     )?;
     let (wav_manifest_sha256, _) = full_hash(&mut committed_wav._files[5], cancelled)?;

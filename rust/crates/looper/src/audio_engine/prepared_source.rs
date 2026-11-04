@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub(super) const STEM_PLACEMENT_PENDING: &str =
+    "[resident_stem_placement_pending] prepared source control placement is pending";
+
 /// Opaque engine-owned admission snapshot. Never constructed from Python numbers.
 #[pyclass(frozen)]
 #[derive(Clone)]
@@ -573,7 +576,7 @@ pub(super) fn validate_prepared_ticket(
     ) {
         PlacementObservation::Current(resolved) => resolved,
         PlacementObservation::Pending => {
-            return Err("prepared source control placement is pending".into());
+            return Err(STEM_PLACEMENT_PENDING.into());
         }
         _ => return Err("stale prepared source content key".into()),
     };

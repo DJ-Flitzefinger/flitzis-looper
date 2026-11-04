@@ -1,13 +1,68 @@
 //! Bounded complete PCM writing. Total file extent is never a RAM reservation.
 use super::*;
 
+#[cfg(all(test, windows))]
+thread_local! { static TEMPORARY_PATHS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) }; }
+#[cfg(all(test, windows))]
+thread_local! { static TEMPORARY_CANCEL: std::cell::RefCell<Option<Arc<AtomicBool>>> = const { std::cell::RefCell::new(None) }; }
+#[cfg(all(test, windows))]
+thread_local! { static TEMPORARY_IO_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(all(test, windows))]
+pub(in crate::audio_engine) fn fail_temporary_io_for_test(fail: bool) {
+    TEMPORARY_IO_FAILURE.with(|slot| slot.set(fail));
+}
+
+#[cfg(all(test, windows))]
+pub(in crate::audio_engine) fn cancel_temporary_for_test(cancelled: Option<Arc<AtomicBool>>) {
+    TEMPORARY_CANCEL.with(|slot| *slot.borrow_mut() = cancelled);
+}
+
+#[cfg(all(test, windows))]
+pub(in crate::audio_engine) fn take_temporary_paths_for_test() -> Vec<PathBuf> {
+    TEMPORARY_PATHS.with(|paths| std::mem::take(&mut *paths.borrow_mut()))
+}
+
+#[cfg(all(test, windows))]
+fn observe_temporary(file: &File) {
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFinalPathNameByHandleW(
+            handle: *mut std::ffi::c_void,
+            path: *mut u16,
+            size: u32,
+            flags: u32,
+        ) -> u32;
+    }
+    let mut buffer = [0_u16; 4096];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            0,
+        )
+    };
+    assert!(length > 0 && (length as usize) < buffer.len());
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+    assert!(path.exists());
+    assert!(super::super::resident_host_memory::promised_bytes_for_test() > 0);
+    TEMPORARY_PATHS.with(|paths| paths.borrow_mut().push(path));
+    TEMPORARY_CANCEL.with(|slot| {
+        if let Some(cancelled) = slot.borrow().as_ref() {
+            cancelled.store(true, Ordering::Release)
+        }
+    });
+}
+
 pub(in crate::audio_engine) struct CompletedPcmArtifact {
     pub descriptor: Value,
     pub reader: File,
 }
 
 pub(in crate::audio_engine) struct PcmArtifactWriter {
-    path: PathBuf,
+    path: Option<PathBuf>,
     file: File,
     rate_hz: u32,
     channels: usize,
@@ -26,8 +81,31 @@ impl PcmArtifactWriter {
             return Err(invalid("streamed PCM geometry"));
         }
         Ok(Self {
-            path: path.to_owned(),
+            path: Some(path.to_owned()),
             file: OpenOptions::new().write(true).create_new(true).open(path)?,
+            rate_hz,
+            channels,
+            frames: 0,
+            interleaved: Sha256::new(),
+            mono: Sha256::new(),
+        })
+    }
+
+    /// Private clock-only scratch. The pinned Windows tempfile implementation
+    /// denies sharing and sets DELETE_ON_CLOSE; no persistent leaf is published.
+    pub(in crate::audio_engine) fn create_temporary(
+        rate_hz: u32,
+        channels: usize,
+    ) -> io::Result<Self> {
+        if rate_hz == 0 || !(1..=32).contains(&channels) {
+            return Err(invalid("temporary PCM geometry"));
+        }
+        let file = tempfile::tempfile()?;
+        #[cfg(all(test, windows))]
+        observe_temporary(&file);
+        Ok(Self {
+            path: None,
+            file,
             rate_hz,
             channels,
             frames: 0,
@@ -41,6 +119,12 @@ impl PcmArtifactWriter {
         samples: &[f32],
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<()> {
+        #[cfg(all(test, windows))]
+        if self.path.is_none() && TEMPORARY_IO_FAILURE.with(std::cell::Cell::get) {
+            return Err(io::Error::other(
+                "injected actual temporary PCM write refusal",
+            ));
+        }
         if !samples.len().is_multiple_of(self.channels) {
             return Err(invalid("streamed PCM incomplete frame"));
         }
@@ -80,7 +164,6 @@ impl PcmArtifactWriter {
         }
         check_cancelled(cancelled)?;
         self.file.sync_all()?;
-        drop(self.file);
         let length = self
             .frames
             .checked_mul(self.channels as u64)
@@ -90,7 +173,12 @@ impl PcmArtifactWriter {
             "rate_hz":self.rate_hz,"channels":self.channels,"full_frames":self.frames,"full_bytes":length,
             "interleaved_sha256":format!("{:x}",self.interleaved.finalize()),"mono_sha256":format!("{:x}",self.mono.finalize()),
             "mono_revision":MONO_RULE,"source_zero_bits":"0000000000000000","provenance":provenance});
-        let mut reader = sealed_reader(&self.path)?;
+        let mut reader = if let Some(path) = self.path {
+            drop(self.file);
+            sealed_reader(&path)?
+        } else {
+            self.file
+        };
         // Re-read every frame, signed-f64 mono, hash, finite value and exact EOF
         // from the immutable handle; writer counters alone grant no publication.
         warm::verify_pcm(&mut reader, &descriptor, CHUNK_BYTES, cancelled, &mut 0)?;

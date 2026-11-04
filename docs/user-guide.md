@@ -107,10 +107,10 @@ Stop playback and let recording, loading and arrangement work finish before
 Apply. Output changes restore through checked ownership and do not start
 playback automatically.
 
-Once source startup restoration is complete, existing paired-stem assignments
-require the installed sample rate to be selected explicitly. Auto or a
-different rate is refused before the current output is stopped. Failed or
-partially restored startup keeps Settings available for a corrective Apply.
+Existing paired stems can follow an explicit output-rate change or Auto. Apply
+verifies the complete Original and all five WAVs, prepares a new target-rate
+Pair when necessary, and saves that selection before fresh component admission.
+Failed or partially restored startup keeps Settings available for a corrective Apply.
 Wait for restoration to finish before playing.
 
 MIDI and model-processing device selection remain separate from audio output.

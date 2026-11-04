@@ -194,7 +194,7 @@ impl PreparedStemsWork {
             super::content_placement::PlacementObservation::Current(current) => current.slot(),
             super::content_placement::PlacementObservation::Pending => {
                 return Err(PyRuntimeError::new_err(
-                    "prepared source control placement is pending",
+                    super::prepared_source::STEM_PLACEMENT_PENDING,
                 ));
             }
             _ => {

@@ -271,6 +271,11 @@ pub(super) fn host_headroom() -> Result<HostHeadroom, String> {
 }
 
 #[cfg(test)]
+pub(super) fn promised_bytes_for_test() -> u64 {
+    promises().lock().unwrap().bytes
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

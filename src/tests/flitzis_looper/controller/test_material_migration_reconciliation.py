@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, get_ident
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -42,7 +42,7 @@ from flitzis_looper_audio import (
     MigrationProjectGuard,
 )
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import write_test_stem_marker
+from tests.flitzis_looper.conftest import _settle_output_control_mock, write_test_stem_marker
 from tests.flitzis_looper.controller.test_material_migration import (
     _IDS,
     _MATERIAL,
@@ -230,6 +230,12 @@ class _RecoveryRig:
         self.audio.poll_loader_events.side_effect = None
         self.controller = AppController(project_config_path=config)
         self.controllers.append(self.controller)
+        # Match the ordinary routing fixture's deferred owner activation. This
+        # explicit control-only readiness double grants no Native/source ACK.
+        with patch.object(
+            self.controller.audio_output_runtime, "startup_restored", return_value=True
+        ):
+            _settle_output_control_mock(self.controller)
         # Settle ordinary startup requests through their actual event-routing path.
         # These are control fakes, not native source ACKs.
         events = [

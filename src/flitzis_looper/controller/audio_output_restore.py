@@ -1,6 +1,7 @@
 """Stopped output restoration preserves musical intent and requires fresh own ACKs."""
 
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 from flitzis_looper.audio_output_options import AudioOutputOptions
@@ -243,6 +244,10 @@ def retire_runtime_projections(app: AppController) -> None:
     _reset_output_activity_projections(app)
 
 
+def _selection_current(app: AppController, sample_id: int, previous: StemCacheEntry | None) -> bool:
+    return app.project.stem_cache[sample_id] is previous
+
+
 def restore_sources(app: AppController, snapshot: OutputRestoreSnapshot, *, rollback: bool) -> None:
     """Restore original controls first and existing complete sources without inference."""
     if not app._runtime_activated:
@@ -273,8 +278,30 @@ def restore_sources(app: AppController, snapshot: OutputRestoreSnapshot, *, roll
         if current is None or current.model_dump(exclude={"available"}) != expected.model_dump(
             exclude={"available"}
         ):
-            message = "Original stem selection changed while output restoration was fenced"
-            raise RuntimeError(message)
+            replacement = app.stems._output_pair_replacements.get(sample_id)
+            if (
+                not rollback
+                or replacement is None
+                or replacement[0] is None
+                or (
+                    replacement[0].model_dump(exclude={"available"})
+                    != expected.model_dump(exclude={"available"})
+                    or current is not replacement[1]
+                )
+            ):
+                message = "Original stem selection changed while output restoration was fenced"
+                raise RuntimeError(message)
+            previous = current
+
+            app.persistence.commit_stem_selection(
+                sample_id,
+                previous,
+                expected,
+                partial(_selection_current, app, sample_id, previous),
+            )
+            current = expected.model_copy(deep=True)
+            app.project.stem_cache[sample_id] = current
+            app.stems._output_pair_replacements.pop(sample_id, None)
         current = current.model_copy(update={"available": False})
         app.project.stem_cache[sample_id] = current
         app.stems._restored_stem_candidates[sample_id] = current
@@ -318,6 +345,17 @@ def sources_restored(app: AppController, snapshot: OutputRestoreSnapshot) -> boo
                 raise RuntimeError(message)
             ready &= legacy_restore_ready(app, epoch, sample_id, entry)
         else:
+            replacement = app.stems._output_pair_replacements.get(sample_id)
+            if (
+                entry is not None
+                and replacement is not None
+                and replacement[0] is not None
+                and (
+                    replacement[0].model_dump(exclude={"available"})
+                    == entry.model_dump(exclude={"available"})
+                )
+            ):
+                entry = replacement[1]
             ready &= app.stems.recovered_copy_selection_ready(sample_id, entry)
     pool = app.stems._stem_worker_pool
     return ready and pool is not None and pool.idle
@@ -391,6 +429,7 @@ class OutputRestoreRuntime:
     def release_completed_restore(self) -> None:
         """Release consumed transaction observers after its real idle/finish barriers."""
         self._app._output_legacy_restores.clear()
+        self._app.stems._output_pair_replacements.clear()
         self._app._output_restore_snapshot = None
         self._app.loader._output_restore = False
         self._app.loader._output_restore_cancelling = False

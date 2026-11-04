@@ -39,6 +39,63 @@ pub(super) struct StemPairArtifact {
 pub(super) struct StemPairConversion {
     pub(super) schema_version: u32,
     pub(super) policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) resampling: Option<StemPairResampling>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StemPairResampling {
+    pub(super) original_frames: u64,
+    pub(super) original_rate_hz: u32,
+    pub(super) original_channels: u32,
+    pub(super) raw_frames: u64,
+    pub(super) raw_rate_hz: u32,
+    pub(super) channels: u32,
+    pub(super) target_frames: u64,
+    pub(super) target_rate_hz: u32,
+    pub(super) natural_frames: u64,
+    pub(super) trimmed_tail_frames: u64,
+    pub(super) delay_frames: u64,
+}
+
+pub(super) const RESAMPLING_POLICY: &str =
+    "pcm16-rubato-fft-single-delay-trim-original-clock-prefix-v2";
+
+fn converted_frames(frames: u64, source: u32, target: u32) -> Result<u64, String> {
+    if frames == 0 || source == 0 || target == 0 || source > 768_000 || target > 768_000 {
+        return Err("invalid Pair conversion clock".into());
+    }
+    u64::try_from((u128::from(frames) * u128::from(target)).div_ceil(u128::from(source)))
+        .map_err(|_| "Pair conversion extent overflow".into())
+}
+
+impl StemPairResampling {
+    fn validate(&self, source: &StemPairSource) -> Result<(), String> {
+        if !(1..=32).contains(&self.original_channels)
+            || self.channels != source.channels
+            || self.target_frames != source.frame_count
+            || self.target_rate_hz != source.sample_rate_hz
+            || self.raw_rate_hz == self.target_rate_hz
+            || converted_frames(
+                self.original_frames,
+                self.original_rate_hz,
+                self.raw_rate_hz,
+            )? != self.raw_frames
+            || converted_frames(
+                self.original_frames,
+                self.original_rate_hz,
+                self.target_rate_hz,
+            )? != self.target_frames
+            || converted_frames(self.raw_frames, self.raw_rate_hz, self.target_rate_hz)?
+                != self.natural_frames
+            || self.natural_frames.checked_sub(self.target_frames) != Some(self.trimmed_tail_frames)
+            || self.delay_frames == 0
+        {
+            return Err("Pair resampling clock, channel or exact trim mismatch".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,10 +270,14 @@ impl StemPairContent {
         // The executed WAV reader only converts PCM16 to f32: MIN becomes -1,
         // other samples divide by MAX. It requires exact loaded rate/channels/
         // complete frame extent and performs no resampling or channel remix.
-        if self.conversion.schema_version != 1
-            || self.conversion.policy != "pcm16-exact-geometry-v1"
-        {
-            return Err("unsupported stem pair conversion policy or revision".into());
+        match (
+            &self.conversion.schema_version,
+            self.conversion.policy.as_str(),
+            &self.conversion.resampling,
+        ) {
+            (1, "pcm16-exact-geometry-v1", None) => (),
+            (2, RESAMPLING_POLICY, Some(resampling)) => resampling.validate(source)?,
+            _ => return Err("unsupported stem pair conversion policy or revision".into()),
         }
         if self.alignment.schema_version != 1
             || self.alignment.policy != "shared-onset-v1"
@@ -334,6 +395,7 @@ mod tests {
             conversion: StemPairConversion {
                 schema_version: 1,
                 policy: "pcm16-exact-geometry-v1".into(),
+                resampling: None,
             },
             alignment: StemPairAlignment {
                 schema_version: 1,

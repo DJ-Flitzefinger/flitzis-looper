@@ -13,6 +13,7 @@ from flitzis_looper.audio_output_options import AudioOutputOptions
 from flitzis_looper.controller import app as app_module
 from flitzis_looper.controller.audio_output_restore import require_frontend_idle
 from flitzis_looper.controller.stem_cache import cache_dir_for_sample_id, expected_stem_files
+from flitzis_looper.material_migration_model import MigrationArtifactEvidence
 from flitzis_looper.models import ProjectState, StemCacheEntry
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import AudioEngine
@@ -119,6 +120,10 @@ class OutputProbe:
         """Read actual controller completion, rather than deriving it from Tick success."""
         return self.app.audio_output.can_perform
 
+    def output_change_succeeded(self) -> bool:
+        """Distinguish a successful transaction from a ready rollback or abort."""
+        return self.ready() and self.app.audio_output.error is None
+
     def status(self) -> str:
         """Keep a finite original failure report for an unsuccessful profile."""
         control = self.app.audio_output
@@ -193,6 +198,131 @@ class OutputProbe:
         assert self.ready()
         options = self.app.project.audio_output.model_copy(update={"sample_rate_hz": rate})
         assert self.app.audio_output.apply(options), self.status()
+
+    def install_assigned_pair(self) -> None:
+        """Convert the existing five WAVs through the actual controller worker."""
+        entry = self.app.project.stem_cache[0]
+        assert entry is not None
+        assert entry.pair is None
+        path = self.root / entry.cache_dir
+        marker = path / ".complete.json"
+        assert not marker.exists()
+        marker.write_text(
+            json.dumps({
+                "schema": "stem-set-sha256-v1",
+                "source_version": entry.source_version,
+                "stems": {
+                    name: _sha(path / f"{name}.wav")
+                    for name in ("vocals", "melody", "bass", "drums", "instrumental")
+                },
+            }),
+            encoding="utf-8",
+        )
+        ticket = self.app.audio.capture_prepared_source(0, entry.source_version)
+        assert self.app.stems._prepare_pair(0, entry, ticket)
+        self.legacy_selection = None
+
+    def assigned_pair_ready(self) -> bool:
+        """Require the durable Pair and its own current component admission."""
+        entry = self.app.project.stem_cache[0]
+        return (
+            entry is not None
+            and entry.pair is not None
+            and self.app.stems.stems_available(0)
+            and self.app.stems.recovered_copy_selection_ready(0, entry)
+            and self.configuration_idle()
+        )
+
+    def _save_assigned_pair_baseline(self) -> None:
+        """Save the newly created initial Pair before exercising a saved selection."""
+        assert self.assigned_pair_ready(), self.status()
+        self.app.persistence.flush()
+        self.verify_assigned_pair()
+
+    def _arm_restore_scope_capture(self) -> None:
+        """Retain a genuine token from the original scoped restoration callback."""
+        original = self.app.audio_output_runtime.sources_restored
+        patcher = patch.object(self.app.audio_output_runtime, "sources_restored")
+        mocked = patcher.start()
+
+        def capture_scoped() -> bool:
+            self.restore_job_scope = self.app.audio.capture_audio_output_restore_job()
+            assert self.restore_job_scope is not None
+            patcher.stop()
+            return original()
+
+        mocked.side_effect = capture_scoped
+
+    def _verify_stale_restore_scope(self) -> None:
+        """An ended transaction must refuse its genuine token before the callback."""
+        scope = self.restore_job_scope
+        assert scope is not None
+        called = []
+        try:
+            scope.run(lambda: called.append(True))
+        except RuntimeError:
+            pass
+        else:
+            message = "An ended output transaction admitted its stale worker scope"
+            raise AssertionError(message)
+        assert not called
+        self.restore_job_scope = None
+        assert self.app.audio.capture_audio_output_restore_job() is None
+
+    def arm_pair_commit_failure(self) -> None:
+        """Fail exactly after real new Pair disk/current admission, then permit rollback."""
+        previous = self.verify_assigned_pair()
+        original = self.app.audio_output_runtime.sources_restored
+        patcher = patch.object(self.app.audio_output_runtime, "sources_restored")
+        mocked = patcher.start()
+
+        def after_actual_pair() -> bool:
+            ready = original()
+            entry = self.app.project.stem_cache[0]
+            if ready and entry is not None and entry.pair is not None:
+                assert entry.pair.stem_set_identity != previous
+                saved = ProjectState.model_validate_json(self.config.read_bytes())
+                assert saved.stem_cache[0] is not None
+                assert saved.stem_cache[0].pair == entry.pair
+                patcher.stop()
+                self.late_pair_failure_seen = True
+                message = "Injected failure after actual Pair selection commit"
+                raise RuntimeError(message)
+            return ready
+
+        mocked.side_effect = after_actual_pair
+
+    def verify_assigned_pair(self) -> str:
+        """Bind current five-output target geometry to actual source and disk state."""
+        assert self.assigned_pair_ready(), self.status()
+        entry = self.app.project.stem_cache[0]
+        assert entry is not None
+        assert entry.pair is not None
+        descriptor = json.loads((self.root / entry.pair.descriptor_reference).read_text())
+        lease = self.app.audio.capture_migration_artifact(entry.pair.descriptor_reference)
+        evidence = MigrationArtifactEvidence.model_validate_json(lease.receipt_json())
+        encoded = evidence.model_dump_json()
+        assert ("original_clock" in json.loads(encoded)) == (
+            descriptor["content"]["conversion"]["schema_version"] == 2
+        )
+        lease.release()
+        reopened = self.app.audio.reopen_migration_artifact(encoded)
+        reopened.release()
+        assert (
+            descriptor["content"]["source"]["sample_rate_hz"] == self.app.audio.output_sample_rate()
+        )
+        saved = ProjectState.model_validate_json(self.config.read_bytes())
+        assert saved.stem_cache[0] is not None
+        assert saved.stem_cache[0].pair == entry.pair, {
+            "saved": saved.stem_cache[0].pair,
+            "current": entry.pair,
+            "status": self.status(),
+        }
+        for artifact in descriptor["content"]["artifacts"]:
+            path = self.root / entry.pair.pcm_generation / (artifact["name"] + ".f32le")
+            assert path.stat().st_size == artifact["pcm_bytes"]
+            assert _sha(path) == artifact["pcm_sha256"]
+        return entry.pair.stem_set_identity
 
     def make_grid_offset_odd(self) -> None:
         """Distinguish exact original96k rollback from rounded48k roundtripping."""

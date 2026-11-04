@@ -537,6 +537,7 @@ fn partial_retirement_fixture(mode: &str) {
     let marker = cold_store::sealed_reader(&material_root.join(".material.json")).unwrap();
     let mut inventory = inventory_gate(&root).unwrap();
     let protection = Arc::new(project_assets::RetirementProtection {
+        _clock: None,
         _inventory: inventory.handle.as_ref().unwrap().clone(),
         outcome: Arc::new(project_assets::RetirementOutcome::default()),
     });

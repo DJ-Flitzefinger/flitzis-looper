@@ -172,11 +172,11 @@ pub(super) fn generation_provenance(marker: &Value) -> Result<Option<StemPairPro
     }
 }
 
-fn verify_set(
+fn verify_set_preflight(
     directory: &Path,
     source_version: &str,
-    maximum_wav_bytes: u64,
     cancelled: &impl Fn() -> bool,
+    preflight: impl FnOnce(&[File]) -> Result<u64, String>,
 ) -> Result<SealedSet, String> {
     let guards = project_assets::directory_guards(directory).map_err(|error| error.to_string())?;
     let (marker_reader, marker) = read_marker(directory)?;
@@ -187,14 +187,18 @@ fn verify_set(
         check_cancelled(cancelled)?;
         let path = directory.join(format!("{name}.wav"));
         project_assets::reject_links(&path).map_err(|error| error.to_string())?;
-        let mut reader = sealed_reader(&path).map_err(|error| error.to_string())?;
+        let reader = sealed_reader(&path).map_err(|error| error.to_string())?;
+        files.push(reader);
+    }
+    // Every header is inspected under the exact seals retained for hashing.
+    let maximum_wav_bytes = preflight(&files)?;
+    for (name, reader) in STEM_FILE_NAMES.into_iter().zip(&mut files) {
         if reader.metadata().map_err(|error| error.to_string())?.len() > maximum_wav_bytes {
             return Err("stem WAV exceeds complete geometry input bound".into());
         }
-        let (hash, _) = digest(&mut reader, cancelled)?;
+        let (hash, _) = digest(reader, cancelled)?;
         hashes.insert(name.into(), json!(hash));
-        identities.push(file_identity(&reader).map_err(|error| error.to_string())?);
-        files.push(reader);
+        identities.push(file_identity(reader).map_err(|error| error.to_string())?);
     }
     let mut expected =
         json!({"schema":"stem-set-sha256-v1", "source_version":source_version, "stems":hashes});
@@ -221,15 +225,14 @@ fn verify_set(
     })
 }
 
-/// Reuse the same complete five-SHA/marker verifier for aligned pair preparation.
-pub(super) fn verify_complete_wav_set(
+pub(super) fn verify_complete_wav_set_preflight(
     directory: &Path,
     source_version: &str,
-    maximum_wav_bytes: u64,
     cancelled: &impl Fn() -> bool,
+    preflight: impl FnOnce(&[File]) -> Result<u64, String>,
 ) -> Result<SealedSet, String> {
     exact_ready_files(directory)?;
-    verify_set(directory, source_version, maximum_wav_bytes, cancelled)
+    verify_set_preflight(directory, source_version, cancelled, preflight)
 }
 
 struct OwnedGeneration {
@@ -275,10 +278,8 @@ impl Drop for OwnedGeneration {
 }
 
 fn validate_geometry(
-    _root: &Path,
     directory: &Path,
     material: &PreparedMigrationMaterial,
-    _version: &str,
     rate: u32,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
@@ -331,6 +332,78 @@ pub(super) fn copy_stem_generation(
     generation_id: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<CopiedStemGeneration, String> {
+    copy_stem_generation_bound(
+        samples_root,
+        material,
+        CopySource {
+            path: old_cache,
+            version: old_source_version,
+            pair: None,
+        },
+        new_source_version,
+        generation_id,
+        cancelled,
+    )
+}
+
+pub(super) fn copy_pair_generation(
+    samples_root: &Path,
+    material: &PreparedMigrationMaterial,
+    pair: &super::stem_pair::VerifiedPairRebind,
+    new_source_version: &str,
+    generation_id: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<CopiedStemGeneration, String> {
+    let (path, version) = pair.original_wavs();
+    copy_stem_generation_bound(
+        samples_root,
+        material,
+        CopySource {
+            path,
+            version,
+            pair: Some(pair),
+        },
+        new_source_version,
+        generation_id,
+        cancelled,
+    )
+}
+
+struct CopySource<'a> {
+    path: &'a Path,
+    version: &'a str,
+    pair: Option<&'a super::stem_pair::VerifiedPairRebind>,
+}
+
+fn verify_copy_set(
+    directory: &Path,
+    source_version: &str,
+    material: &PreparedMigrationMaterial,
+    rate: u32,
+    maximum: u64,
+    pair: Option<&super::stem_pair::VerifiedPairRebind>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<SealedSet, String> {
+    let set = verify_set_preflight(directory, source_version, cancelled, |files| match pair {
+        Some(pair) => pair.copy_bound(material, files, cancelled),
+        None => Ok(maximum),
+    })?;
+    if pair.is_none() {
+        validate_geometry(directory, material, rate, cancelled)?;
+    }
+    Ok(set)
+}
+
+fn copy_stem_generation_bound(
+    samples_root: &Path,
+    material: &PreparedMigrationMaterial,
+    origin: CopySource<'_>,
+    new_source_version: &str,
+    generation_id: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<CopiedStemGeneration, String> {
+    let old_cache = origin.path;
+    let old_source_version = origin.version;
     check_cancelled(cancelled)?;
     if !material_paths::valid_id(generation_id) {
         return Err("stem generation ID must be 32 lowercase hex characters".into());
@@ -418,13 +491,13 @@ pub(super) fn copy_stem_generation(
         .and_then(|count| count.checked_mul(2))
         .and_then(|bytes| bytes.checked_add(1024 * 1024))
         .ok_or("stem migration input geometry overflow")? as u64;
-    let old_set = verify_set(&old.path, old_source_version, maximum_wav_bytes, cancelled)?;
-    validate_geometry(
-        &root,
+    let old_set = verify_copy_set(
         &old.path,
-        material,
         old_source_version,
+        material,
         rate,
+        maximum_wav_bytes,
+        origin.pair,
         cancelled,
     )?;
     check_cancelled(cancelled)?;
@@ -456,11 +529,18 @@ pub(super) fn copy_stem_generation(
     let ready = stems.join(format!(".ready-{generation_id}"));
     if ready.try_exists().map_err(|error| error.to_string())? {
         exact_ready_files(&ready)?;
-        let existing = verify_set(&ready, new_source_version, maximum_wav_bytes, cancelled)?;
+        let existing = verify_copy_set(
+            &ready,
+            new_source_version,
+            material,
+            rate,
+            maximum_wav_bytes,
+            origin.pair,
+            cancelled,
+        )?;
         if existing.marker != marker {
             return Err("canonical stem generation lineage collision".into());
         }
-        validate_geometry(&root, &ready, material, new_source_version, rate, cancelled)?;
         check_cancelled(cancelled)?;
         return Ok(CopiedStemGeneration {
             cache_reference: persisted(&root, &ready)?,
@@ -504,23 +584,18 @@ pub(super) fn copy_stem_generation(
             if candidate_marker != marker {
                 return Ok(None);
             }
-            let existing = verify_set(
+            let existing = verify_copy_set(
                 &resolved.path,
                 new_source_version,
+                material,
+                rate,
                 maximum_wav_bytes,
+                origin.pair,
                 cancelled,
             )?;
             if existing.marker != marker {
                 return Ok(None);
             }
-            validate_geometry(
-                &root,
-                &resolved.path,
-                material,
-                new_source_version,
-                rate,
-                cancelled,
-            )?;
             check_cancelled(cancelled)?;
             Ok(Some(existing))
         })();
@@ -626,10 +701,13 @@ pub(super) fn copy_stem_generation(
     {
         return Err("stem generation directory replaced during rename".into());
     }
-    let reopened = verify_set(
+    let reopened = verify_copy_set(
         &owned.path,
         new_source_version,
+        material,
+        rate,
         maximum_wav_bytes,
+        origin.pair,
         cancelled,
     )?;
     if reopened.marker != marker
@@ -642,14 +720,6 @@ pub(super) fn copy_stem_generation(
         return Err("committed stem generation identity changed".into());
     }
     exact_ready_files(&owned.path)?;
-    validate_geometry(
-        &root,
-        &owned.path,
-        material,
-        new_source_version,
-        rate,
-        cancelled,
-    )?;
     check_cancelled(cancelled)?;
     let reference = persisted(&root, &owned.path)?;
     owned.accepted = true;

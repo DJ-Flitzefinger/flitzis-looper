@@ -35,6 +35,7 @@ mod app_analysis;
 mod app_tempo;
 mod audio_output;
 mod audio_output_change;
+pub use audio_output_change::OutputRestoreJobScope;
 pub(crate) mod audio_output_legacy;
 mod audio_stream;
 pub use audio_output_legacy::{
@@ -190,6 +191,9 @@ mod material_migration;
 mod material_migration_control;
 mod material_migration_journal;
 mod material_migration_recovery;
+mod original_clock;
+#[cfg(test)]
+mod pair_crossrate_tests;
 pub use material_migration_recovery::{
     MigrationArtifactLease, MigrationInventoryLease, MigrationProjectGuard, portable_relocate_data,
     resolve_migration_config_reference,
@@ -2344,6 +2348,13 @@ impl AudioEngine {
         py.detach(|| audio_output_change::reset_after_retirement(self, epoch))
     }
 
+    /// Capture genuine current restoration authority for a queued worker.
+    pub fn capture_audio_output_restore_job(
+        slf: &Bound<'_, Self>,
+    ) -> PyResult<Option<OutputRestoreJobScope>> {
+        OutputRestoreJobScope::capture(slf)
+    }
+
     /// Only this bounded explicit call and its already-owned Cold jobs inherit
     /// restoration authority. Unrelated GUI/MIDI/new work stays refused.
     pub fn with_audio_output_restore(
@@ -2989,6 +3000,34 @@ impl AudioEngine {
 
     pub fn migration_artifact_ledger_supported(&self) -> bool {
         true
+    }
+
+    pub fn capture_migration_artifact(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        reference: String,
+    ) -> PyResult<MigrationArtifactLease> {
+        let work = {
+            let engine = slf.try_borrow()?;
+            material_migration_recovery::ArtifactRecoveryWork::capture(&engine, reference, false)
+                .map_err(PyValueError::new_err)?
+        };
+        py.detach(move || work.prepare())
+            .map_err(PyValueError::new_err)
+    }
+
+    pub fn reopen_migration_artifact(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        receipt_json: String,
+    ) -> PyResult<MigrationArtifactLease> {
+        let work = {
+            let engine = slf.try_borrow()?;
+            material_migration_recovery::ArtifactRecoveryWork::capture(&engine, receipt_json, true)
+                .map_err(PyValueError::new_err)?
+        };
+        py.detach(move || work.prepare())
+            .map_err(PyValueError::new_err)
     }
 
     #[pyo3(signature = (sample_id, material_creation_json, config_reference, instance_id, inventory, journal_json=None))]

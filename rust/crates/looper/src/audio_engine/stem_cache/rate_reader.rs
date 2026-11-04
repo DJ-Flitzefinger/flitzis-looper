@@ -115,26 +115,30 @@ impl<'a> StemPcmReader<'a> {
         }
     }
 
-    pub(super) fn finish(&mut self, cancelled: &dyn Fn() -> bool) -> io::Result<()> {
+    pub(super) fn finish(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<Option<fft_stream::FftCompletion>> {
         let Self {
             file,
             layout,
             converter,
         } = self;
         if let Some(converter) = converter {
-            converter
-                .finish(cancelled, |frame, samples| {
+            return converter
+                .finish_completed(cancelled, |frame, samples| {
                     layout
                         .read_frames(file, frame, samples, cancelled)
                         .map_err(Into::into)
                 })
-                .map_err(io_error)?;
+                .map(Some)
+                .map_err(io_error);
         }
-        Ok(())
+        Ok(None)
     }
 }
 
-pub(super) fn scratch(rate: u32, layout: Pcm16Wav) -> Result<usize, String> {
+pub(crate) fn scratch(rate: u32, layout: Pcm16Wav) -> Result<usize, String> {
     if rate == layout.format.sample_rate_hz {
         return Ok(0);
     }

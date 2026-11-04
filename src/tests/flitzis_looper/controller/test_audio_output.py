@@ -213,7 +213,7 @@ def _assigned_pair(app: Mock) -> None:
 
 @pytest.mark.parametrize("requested_rate", [None, 96_000])
 @pytest.mark.parametrize("phase", ["ready", "device_failed"])
-def test_assigned_pair_rate_refusal_precedes_any_output_claim_or_stop(
+def test_assigned_pair_crossrate_and_auto_enter_original_stopped_transaction(
     requested_rate: int | None, phase: str
 ) -> None:
     owner, app = control()
@@ -222,14 +222,15 @@ def test_assigned_pair_rate_refusal_precedes_any_output_claim_or_stop(
     owner.observed = {"sample_rate_hz": 48_000}
     owner.phase, owner.available = phase, phase == "ready"
     before = app.project.model_dump_json()
-    assert not owner.apply(AudioOutputOptions(sample_rate_hz=requested_rate))
+    with patch.object(owner, "_submit") as submit:
+        assert owner.apply(AudioOutputOptions(sample_rate_hz=requested_rate))
+    submit.assert_called_once()
     assert app.project.model_dump_json() == before
-    assert owner.phase == phase
-    assert owner._epoch is None
+    assert owner.phase == "applying"
+    assert owner._epoch is not None
     assert owner._operation is None
-    assert owner.error is not None
-    assert "48000" in owner.error
-    app.audio_output_runtime.prepare_change.assert_not_called()
+    assert owner.error is None
+    app.audio_output_runtime.prepare_change.assert_called_once()
     app.audio.prepare_audio_output_restore_plan.assert_not_called()
     app.audio.retire_audio_output_for_change.assert_not_called()
     app.audio.reset_after_audio_output_retirement.assert_not_called()
@@ -237,21 +238,17 @@ def test_assigned_pair_rate_refusal_precedes_any_output_claim_or_stop(
     app.persistence.commit_audio_output.assert_not_called()
 
 
-def test_pair_rate_guard_keeps_same_rate_partial_startup_and_legacy_paths() -> None:
+def test_pair_crossrate_partial_startup_uses_same_original_admission() -> None:
     owner, app = control()
     _assigned_pair(app)
     owner.observed = {"sample_rate_hz": 96_000}
     # Activated controllers do not mean the original Source startup completed.
     app._runtime_activated = True
     owner.phase = "startup_failed"
-    owner._require_compatible_pair_rate(AudioOutputOptions(sample_rate_hz=48_000))
-    owner._source_startup_completed = True
-    owner._require_compatible_pair_rate(AudioOutputOptions(sample_rate_hz=96_000))
-    app.project.sample_paths[0] = None
-    owner._require_compatible_pair_rate(AudioOutputOptions(sample_rate_hz=48_000))
-    app.project.sample_paths[0] = "samples/legacy.wav"
-    app.project.stem_cache[0] = StemCacheEntry(source_version="legacy", cache_dir="samples/stems")
-    owner._require_compatible_pair_rate(AudioOutputOptions(sample_rate_hz=48_000))
+    with patch.object(owner, "_submit") as submit:
+        assert owner.apply(AudioOutputOptions(sample_rate_hz=48_000))
+    submit.assert_called_once()
+    app.audio_output_runtime.prepare_change.assert_called_once()
 
 
 def test_successful_partial_startup_repair_marks_pair_guard_completion() -> None:

@@ -130,6 +130,8 @@ mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::LegacyStemRestoreReceipt;
     #[pymodule_export]
+    use super::audio_engine::OutputRestoreJobScope;
+    #[pymodule_export]
     use super::audio_engine::PreparedExistingLegacyStems;
     #[pymodule_export]
     use super::audio_engine::PreparedSourceTicket;

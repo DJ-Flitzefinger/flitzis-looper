@@ -43,6 +43,7 @@ pub struct PreparedStemPair {
     pub(super) source_lease: super::cold_store::CommittedColdLease,
     pub(super) descriptor_reference: String,
     pub(super) pair_reader: Arc<VerifiedStemPair>,
+    previous_descriptor: Option<String>,
 }
 
 #[cfg(test)]
@@ -61,6 +62,10 @@ impl PreparedStemPair {
 
 #[pymethods]
 impl PreparedStemPair {
+    /// Only a fully verified Original-preserving target-clock replacement.
+    pub fn replaces_saved_selection(&self, descriptor_reference: &str) -> bool {
+        self.previous_descriptor.as_deref() == Some(descriptor_reference)
+    }
     /// Durable references only, without source, timing, request or ACK rights.
     pub fn selection_json(&self) -> &str {
         &self.selection
@@ -180,7 +185,7 @@ impl AudioEngine {
         let id = match ticket.publication.control_placement(self)? {
             super::content_placement::PlacementObservation::Current(current) => current.slot(),
             super::content_placement::PlacementObservation::Pending => {
-                return Err("prepared source control placement is pending".into());
+                return Err(super::prepared_source::STEM_PLACEMENT_PENDING.into());
             }
             _ => return Err("prepared source content key is stale".into()),
         };
@@ -365,7 +370,7 @@ impl StemPairPreparationWork {
         };
         let canonical_source = canonical_version(&material)?;
         let artifact_version = artifact_source_version.unwrap_or(source_version);
-        let mut origin_readers = Vec::new();
+        let mut origin_readers = None;
         let descriptor_reference = if let Some(reference) = descriptor_reference {
             let typed = material_paths::resolve(&root, Path::new(reference))
                 .map_err(|error| error.to_string())?;
@@ -373,14 +378,14 @@ impl StemPairPreparationWork {
                 material_paths::material_root_for_original(&root, &material.lease.original_path)
                     .map_err(|error| error.to_string())?;
             if !typed.path.starts_with(&own_root) && artifact_source_version.is_some() {
-                origin_readers = verify_pair_rebind(
+                origin_readers = Some(verify_pair_rebind(
                     root,
                     reference,
                     cache_dir,
                     artifact_version,
                     &material,
                     &cancelled,
-                )?;
+                )?);
                 None
             } else {
                 Some(reference)
@@ -403,15 +408,26 @@ impl StemPairPreparationWork {
             } else {
                 // Existing verified copy/gate handles legacy layouts and set deduplication.
                 let generation = format!("{:x}", Sha256::digest(cache_dir.as_bytes()));
-                let copied = copy_stem_generation(
-                    &root,
-                    &material,
-                    Path::new(cache_dir),
-                    artifact_version,
-                    &canonical_source,
-                    &generation[..32],
-                    &cancelled,
-                )?;
+                let copied = if let Some(origin) = &origin_readers {
+                    super::material_migration_stems::copy_pair_generation(
+                        root,
+                        &material,
+                        origin,
+                        &canonical_source,
+                        &generation[..32],
+                        &cancelled,
+                    )?
+                } else {
+                    copy_stem_generation(
+                        root,
+                        &material,
+                        Path::new(cache_dir),
+                        artifact_version,
+                        &canonical_source,
+                        &generation[..32],
+                        &cancelled,
+                    )?
+                };
                 created_wav = copied.created;
                 if copied.created {
                     let created_path =
@@ -429,8 +445,16 @@ impl StemPairPreparationWork {
                 copied.cache_reference
             }
         };
+        let previous_descriptor = descriptor_reference.map(str::to_owned);
         let pair = if let Some(reference) = descriptor_reference {
-            open_verified_pair(&root, reference, &material, &cancelled)?
+            super::stem_pair::restore_pair_at_current_rate(
+                root,
+                reference,
+                &material,
+                &reader,
+                &resident.account,
+                &cancelled,
+            )?
         } else {
             prepare_complete_pair_with_reader(
                 &root,
@@ -439,6 +463,7 @@ impl StemPairPreparationWork {
                 &wav_reference,
                 &cancelled,
                 &reader,
+                &resident.account,
             )?
         };
         let identity_bytes: [u8; 32] = hex_identity(&pair.descriptor.stem_set_identity)?;
@@ -564,6 +589,8 @@ impl StemPairPreparationWork {
                 .map_err(|error| error.to_string())?;
         }
         Ok(PreparedStemPair {
+            previous_descriptor: previous_descriptor
+                .filter(|old| old != &pair.descriptor_reference),
             selection,
             wav_path,
             source_version: source_version.into(),

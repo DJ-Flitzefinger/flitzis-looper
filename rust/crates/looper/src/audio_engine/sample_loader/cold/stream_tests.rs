@@ -154,11 +154,8 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
     let temp = tempfile::tempdir().unwrap();
     let original = temp.path().join("source.wav");
     source(&original, 100_003, 2, 44_100, false);
-    let calls = Cell::new(0);
-    let cancelled = || {
-        calls.set(calls.get() + 1);
-        calls.get() > 20
-    };
+    let cancellation = Cell::new(false);
+    let cancelled = || cancellation.get();
     assert!(matches!(
         decode_audio_snapshot_streamed(
             File::open(&original).unwrap(),
@@ -167,7 +164,14 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
             48_000,
             1024 * 1024 * 1024,
             &cancelled,
-            |_| {}
+            |progress| {
+                if progress.subtask == SampleLoadSubtask::Decoding
+                    && progress.percent > 0.0
+                    && progress.percent < 1.0
+                {
+                    cancellation.set(true);
+                }
+            }
         ),
         Err(SampleLoadError::Cancelled) | Err(SampleLoadError::Io(_))
     ));
@@ -179,6 +183,15 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
             .len()
             > 0
     );
+    assert!(cancellation.get());
+    assert!(
+        temp.path()
+            .join("cancel-decoder.f32le")
+            .metadata()
+            .unwrap()
+            .len()
+            < 100_003 * 2 * 4
+    );
     let mut decoded = decode_audio_snapshot_streamed(
         File::open(&original).unwrap(),
         &original,
@@ -189,7 +202,7 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
         |_| {},
     )
     .unwrap();
-    calls.set(0);
+    cancellation.set(false);
     assert!(
         prepare_playback_streamed(
             &mut decoded,
@@ -198,7 +211,14 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
             48_000,
             1024 * 1024 * 1024,
             &cancelled,
-            |_| {}
+            |progress| {
+                if progress.subtask == SampleLoadSubtask::Resampling
+                    && progress.percent > 0.0
+                    && progress.percent < 1.0
+                {
+                    cancellation.set(true);
+                }
+            }
         )
         .is_err()
     );
@@ -209,6 +229,16 @@ fn streamed_decoder_and_resampler_cancel_during_actual_complete_work() {
             .unwrap()
             .len()
             > 0
+    );
+    assert!(cancellation.get());
+    let complete = fft_stream::output_frames(100_003, 44_100, 48_000).unwrap() * 2 * 4;
+    assert!(
+        temp.path()
+            .join("cancel-playback.f32le")
+            .metadata()
+            .unwrap()
+            .len()
+            < complete as u64
     );
 }
 

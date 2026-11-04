@@ -2564,7 +2564,7 @@ assets.release_saved_assignments()
 }
 
 #[test]
-fn accepted_pair_rate_preflight_refuses_changes_before_reset_and_checks_retained_plan() {
+fn accepted_pair_rate_preflight_retains_original_readers_without_changing_sources() {
     use crate::audio_engine::{audio_output_change, resident_relocation};
 
     let mut harness = Harness::new();
@@ -2613,16 +2613,12 @@ fn accepted_pair_rate_preflight_refuses_changes_before_reset_and_checks_retained
         .set
         .complete_set_identity
         .clone();
+    let readers = Arc::strong_count(&pair.pair_reader);
     let epoch = audio_output_change::begin(&harness.engine).unwrap();
-    for target in [Some(96_000), None] {
-        let error = audio_output_change::prepare_plan(&harness.engine, epoch, target).unwrap_err();
-        assert!(error.to_string().contains("paired stems"));
-        assert!(harness.engine.output_restore.lock().unwrap().is_none());
-    }
-    audio_output_change::prepare_plan(&harness.engine, epoch, Some(RATE)).unwrap();
-    audio_output_change::prepare_plan(&harness.engine, epoch, Some(RATE)).unwrap();
-    for target in [Some(96_000), None] {
-        assert!(audio_output_change::prepare_plan(&harness.engine, epoch, target).is_err());
+    for target in [Some(96_000), None, Some(RATE), Some(RATE)] {
+        audio_output_change::prepare_plan(&harness.engine, epoch, target).unwrap();
+        assert!(harness.engine.output_restore.lock().unwrap().is_some());
+        assert_eq!(Arc::strong_count(&pair.pair_reader), readers + 1);
     }
     assert_eq!(
         harness.engine.loaded_source_generations.lock().unwrap()[0],
@@ -2647,6 +2643,7 @@ fn accepted_pair_rate_preflight_refuses_changes_before_reset_and_checks_retained
     ));
     assert!(harness.consumer.is_empty());
     drop(harness.engine.output_restore.lock().unwrap().take());
+    assert_eq!(Arc::strong_count(&pair.pair_reader), readers);
     harness.engine.shut_down().unwrap();
 }
 

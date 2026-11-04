@@ -38,6 +38,97 @@ const STEM_PCM_NAMES: [&str; 6] = [
     "manifest.json",
 ];
 
+/// Only owned lane/fence/account values cross the Python detach boundary.
+pub(super) struct ArtifactRecoveryWork {
+    root: PathBuf,
+    locator: String,
+    receipt: bool,
+    lane: super::cold_jobs::ColdJobsHandle,
+    account: Arc<super::resident_accounting::ResidentAccount>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    epoch: u64,
+}
+
+impl ArtifactRecoveryWork {
+    pub(super) fn capture(
+        engine: &super::AudioEngine,
+        locator: String,
+        receipt: bool,
+    ) -> Result<Self, String> {
+        use std::sync::atomic::Ordering;
+        let root = engine.project_assets_root().map_err(|e| e.to_string())?;
+        let epoch = engine
+            .input_runtime_ownership
+            .output_change_epoch
+            .load(Ordering::Acquire);
+        if locator.len() > JSON_LIMIT
+            || engine.cold_cancelled.load(Ordering::Acquire)
+            || epoch & 1 != 0
+            || epoch == u64::MAX
+        {
+            return Err("Recovery is shutting down, changing output or unbounded".into());
+        }
+        Ok(Self {
+            root,
+            locator,
+            receipt,
+            lane: engine.cold_jobs.handle(),
+            account: engine.resident_account.clone(),
+            shutdown: engine.cold_cancelled.clone(),
+            ownership: engine.input_runtime_ownership.clone(),
+            epoch,
+        })
+    }
+
+    pub(super) fn prepare(self) -> Result<MigrationArtifactLease, String> {
+        use std::sync::atomic::Ordering;
+        let lane = self.lane.clone();
+        let shutdown = self.shutdown.clone();
+        let ownership = self.ownership.clone();
+        let epoch = self.epoch;
+        lane.execute_recovery_owned_until_terminal(
+            epoch,
+            || {
+                shutdown.load(Ordering::Acquire)
+                    || ownership.output_change_epoch.load(Ordering::Acquire) != epoch
+            },
+            move || {
+                let cancelled = || {
+                    self.shutdown.load(Ordering::Acquire)
+                        || self.ownership.output_change_epoch.load(Ordering::Acquire) != epoch
+                };
+                let reference = if self.receipt {
+                    parse_receipt(&self.locator)
+                        .map_err(|e| e.to_string())?
+                        .reference
+                } else {
+                    self.locator.clone()
+                };
+                let clock = super::stem_pair::acquire_recovery_clock(
+                    &self.root,
+                    Path::new(&reference),
+                    &self.account,
+                    &cancelled,
+                )?;
+                if cancelled() {
+                    return Err("Recovery cancelled before sealing".into());
+                }
+                if self.receipt {
+                    MigrationArtifactLease::reopen_qualified(&self.root, &self.locator, clock)
+                } else {
+                    MigrationArtifactLease::capture_qualified(
+                        &self.root,
+                        Path::new(&reference),
+                        clock,
+                    )
+                }
+                .map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
 }
@@ -72,6 +163,8 @@ struct Receipt {
     files: Vec<VerifiedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     material_creation: Option<super::cold_store::MaterialCreationReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_clock: Option<super::original_clock::OriginalClockBinding>,
 }
 
 struct SealedArtifact {
@@ -80,6 +173,7 @@ struct SealedArtifact {
     path: PathBuf,
     _files: Vec<File>,
     _guards: Vec<File>,
+    clock: Option<Arc<super::original_clock::OriginalClockProof>>,
 }
 
 fn samples_root(path: &Path) -> io::Result<(PathBuf, Vec<File>)> {
@@ -384,6 +478,14 @@ fn verify_stem_metadata(files: &mut [File], proof: &[VerifiedFile]) -> io::Resul
 }
 
 fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
+    seal_artifact_with_proof(root, reference, None)
+}
+
+fn seal_artifact_with_proof(
+    root: &Path,
+    reference: &Path,
+    clock: Option<Arc<super::original_clock::OriginalClockProof>>,
+) -> io::Result<SealedArtifact> {
     let (root, mut guards) = samples_root(root)?;
     let samples_identity = project_assets::capture_identity(&root)?
         .ok_or_else(|| invalid("samples identity missing"))?;
@@ -483,7 +585,15 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         ArtifactKind::PcmDirectory => verify_pcm_metadata(&path, &mut files, &proof)?,
         ArtifactKind::StemDirectory => verify_stem_metadata(&mut files, &proof)?,
         ArtifactKind::StemPcmDirectory | ArtifactKind::StemPairDescriptor => {
-            files.extend(super::stem_pair::verify_recovery_area(&root, &path).map_err(invalid)?);
+            files.extend(
+                super::stem_pair::verify_recovery_area_with_proof(
+                    &root,
+                    &path,
+                    clock.as_deref(),
+                    &|| false,
+                )
+                .map_err(invalid)?,
+            );
         }
         ArtifactKind::Original => (),
     }
@@ -495,6 +605,10 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         identity,
         files: proof,
         material_creation: None,
+        original_clock: clock
+            .as_ref()
+            .map(|proof| proof.binding().map_err(invalid))
+            .transpose()?,
     };
     Ok(SealedArtifact {
         receipt,
@@ -502,6 +616,7 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         path,
         _files: files,
         _guards: guards,
+        clock,
     })
 }
 
@@ -528,6 +643,16 @@ fn parse_receipt(encoded: &str) -> io::Result<Receipt> {
     if receipt.material_creation.is_some() && receipt.kind != ArtifactKind::Original {
         return Err(invalid(
             "material birth evidence belongs only to its original",
+        ));
+    }
+    if receipt.original_clock.is_some()
+        && !matches!(
+            receipt.kind,
+            ArtifactKind::StemPcmDirectory | ArtifactKind::StemPairDescriptor
+        )
+    {
+        return Err(invalid(
+            "Original clock comparison data belongs only to Pair areas",
         ));
     }
     Ok(receipt)
@@ -807,6 +932,7 @@ impl MigrationArtifactLease {
             return Err(invalid("root recovery has no actual current config owner"));
         }
         let protection = Arc::new(project_assets::RetirementProtection {
+            _clock: None,
             _inventory: handle.clone(),
             outcome: Arc::new(project_assets::RetirementOutcome::default()),
         });
@@ -825,7 +951,14 @@ impl MigrationArtifactLease {
         })
     }
     fn capture_native(root: &Path, reference: &Path) -> io::Result<Self> {
-        let mut sealed = seal_artifact(root, reference)?;
+        Self::capture_qualified(root, reference, None)
+    }
+    fn capture_qualified(
+        root: &Path,
+        reference: &Path,
+        clock: Option<Arc<super::original_clock::OriginalClockProof>>,
+    ) -> io::Result<Self> {
+        let mut sealed = seal_artifact_with_proof(root, reference, clock)?;
         if sealed.receipt.kind == ArtifactKind::Original {
             let creation =
                 super::cold_store::material_creation_receipt(&sealed.root, &sealed.path)?;
@@ -844,8 +977,15 @@ impl MigrationArtifactLease {
         })
     }
     fn reopen_native(root: &Path, encoded: &str) -> io::Result<Self> {
+        Self::reopen_qualified(root, encoded, None)
+    }
+    fn reopen_qualified(
+        root: &Path,
+        encoded: &str,
+        clock: Option<Arc<super::original_clock::OriginalClockProof>>,
+    ) -> io::Result<Self> {
         let receipt = parse_receipt(encoded)?;
-        let mut sealed = seal_artifact(root, Path::new(&receipt.reference))?;
+        let mut sealed = seal_artifact_with_proof(root, Path::new(&receipt.reference), clock)?;
         attach_material_creation(&mut sealed, receipt.material_creation.clone())?;
         if sealed.receipt != receipt {
             return Err(invalid(
@@ -882,12 +1022,14 @@ impl MigrationArtifactLease {
             ));
         }
         handle.validate()?;
-        let mut current = seal_artifact(&sealed.root, &sealed.path)?;
+        let mut current =
+            seal_artifact_with_proof(&sealed.root, &sealed.path, sealed.clock.clone())?;
         attach_material_creation(&mut current, sealed.receipt.material_creation.clone())?;
         if current.receipt != sealed.receipt {
             return Err(invalid("retirement evidence changed; preserved"));
         }
         let protection = Arc::new(project_assets::RetirementProtection {
+            _clock: sealed.clock.clone(),
             _inventory: handle.clone(),
             outcome: Arc::new(project_assets::RetirementOutcome::default()),
         });

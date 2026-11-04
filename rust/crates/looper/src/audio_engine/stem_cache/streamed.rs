@@ -381,6 +381,20 @@ impl<'a> AlignedStemStream<'a> {
         output: &mut impl Write,
         cancelled: &dyn Fn() -> bool,
     ) -> io::Result<(String, u64)> {
+        self.convert_with_completion(index, output, cancelled)
+            .map(|(hash, bytes, _)| (hash, bytes))
+    }
+
+    pub(crate) fn convert_with_completion(
+        &self,
+        index: usize,
+        output: &mut impl Write,
+        cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<(
+        String,
+        u64,
+        Option<crate::audio_engine::sample_loader::fft_stream::FftCompletion>,
+    )> {
         let layout = self
             .wavs
             .get(index)
@@ -430,7 +444,7 @@ impl<'a> AlignedStemStream<'a> {
                 .ok_or_else(|| invalid("stem PCM extent overflow"))?;
             check(cancelled)?;
         }
-        reader.finish(cancelled)?;
-        Ok((format!("{:x}", digest.finalize()), bytes))
+        let completion = reader.finish(cancelled)?;
+        Ok((format!("{:x}", digest.finalize()), bytes, completion))
     }
 }
