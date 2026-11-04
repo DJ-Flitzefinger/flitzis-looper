@@ -213,7 +213,38 @@ pub(super) struct ResidentLedger {
     scopes: Vec<ResidentScope>,
 }
 
+#[cfg(test)]
+#[derive(Debug, serde::Serialize)]
+pub(super) struct ResidentLedgerObservation {
+    scopes: usize,
+    externally_held_accounts: usize,
+    owner_witnesses: usize,
+    live_owner_witnesses: usize,
+    pending_reservations: usize,
+}
+
 impl ResidentLedger {
+    #[cfg(test)]
+    pub(super) fn observe_for_test(&self) -> ResidentLedgerObservation {
+        ResidentLedgerObservation {
+            scopes: self.scopes.len(),
+            // An external account reference is not proof of a live engine.
+            externally_held_accounts: self
+                .scopes
+                .iter()
+                .filter(|scope| Arc::strong_count(&scope.account) > 1)
+                .count(),
+            owner_witnesses: self.scopes.iter().map(|scope| scope.owners.len()).sum(),
+            live_owner_witnesses: self
+                .scopes
+                .iter()
+                .flat_map(|scope| &scope.owners)
+                .filter(|owner| owner.view.strong_count() > 0 && owner.pcm.strong_count() > 0)
+                .count(),
+            pending_reservations: self.scopes.iter().map(|scope| scope.pending.len()).sum(),
+        }
+    }
+
     pub(super) fn prune(&mut self) {
         for scope in &mut self.scopes {
             scope

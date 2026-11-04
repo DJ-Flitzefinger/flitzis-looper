@@ -562,6 +562,34 @@ fn two_stopped_subscribers_admit_shared_components_with_own_ack_even_when_headro
     assert!(admitted.publication.current());
 }
 
+struct RegistryContextTrace;
+
+impl RegistryContextTrace {
+    fn log(phase: &str) {
+        use std::io::Write as _;
+        let observation = crate::audio_engine::project_assets::ProjectAssets::shared()
+            .observe_registry_for_test();
+        // The asset gate has been released. Busy/poisoned observations remain
+        // explicit; no retry or collector changes the state being diagnosed.
+        // Write directly so a later unrelated libtest abort cannot discard the
+        // buffered census. A diagnostic I/O failure must not replace a panic.
+        let _ = writeln!(
+            &mut std::io::stderr().lock(),
+            "P5b registry {phase}: {observation:?}"
+        );
+    }
+}
+
+impl Drop for RegistryContextTrace {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // This guard drops after later locals: this is unwind-tail state,
+            // not the state at the failing assertion before owners were dropped.
+            Self::log("unwind tail after later locals drop");
+        }
+    }
+}
+
 fn actual_bank_pcm(h: &Harness) -> (usize, usize) {
     let mut actual = std::collections::HashMap::new();
     for id in 0..NUM_SAMPLES {
@@ -613,6 +641,8 @@ fn actual_bank_reader_probes(h: &Harness) -> Vec<std::sync::Weak<[f32]>> {
 
 #[test]
 fn all_216_stopped_pads_ack_real_preload_and_repeat_window_registry_retirement() {
+    let _registry_trace = RegistryContextTrace;
+    RegistryContextTrace::log("before harness");
     // One genuine verified source and component set, retained by all 216 final
     // banks. The real 2/32 lane and callback consume each subscriber's own ACK;
     // no voice or RubberBand pool limit is raised for this stopped-pad case.
@@ -666,6 +696,8 @@ fn all_216_stopped_pads_ack_real_preload_and_repeat_window_registry_retirement()
     }
     preparation.release_preparation().unwrap();
     drop(preparation);
+
+    RegistryContextTrace::log("after source ACKs");
 
     let mut previous_receipts: Vec<ResidentStemTicket> = Vec::new();
     let mut previous_selections: Vec<Option<CommittedStemSetTicket>> =
@@ -869,6 +901,7 @@ fn all_216_stopped_pads_ack_real_preload_and_repeat_window_registry_retirement()
             );
         }
         previous_selections = selections.into_iter().map(Some).collect();
+        RegistryContextTrace::log(&format!("after round {round}"));
     }
     let status = h
         .engine
@@ -957,4 +990,5 @@ fn all_216_stopped_pads_ack_real_preload_and_repeat_window_registry_retirement()
     );
     h.callback.retirement.actual.take();
     drop(retirement_worker);
+    RegistryContextTrace::log("after final reader retirement");
 }

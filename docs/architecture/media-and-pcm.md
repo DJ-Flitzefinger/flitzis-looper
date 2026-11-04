@@ -220,6 +220,21 @@ it does not attribute the historical full-phase registry failure whose captured
 assertion was lost when a later test aborted with a stack overflow. Bounded
 current predecessor runs and isolated passes do not resolve that historical cause.
 
+The original 216-bank test also reports a scalar registry census before its
+fixture, after source ACKs, after each complete round and after final retirement.
+On panic it attempts one further census after later locals unwind; this is not
+the ownership state at the failing assertion. This test-only observer uses a nonblocking
+asset-gate read and reports contention or poisoning explicitly. It never collects,
+prunes, creates a ledger scope, upgrades weak witnesses or retains PCM/file owners.
+Saved cold file-only records, live native witnesses, pending assignments, engine
+witnesses, reservations and ledger scopes remain distinct. The residual category
+does not imply dead ownership: shared files can still have a legitimate owner.
+Weak witness counts can change concurrently; the census grants no new ownership.
+Diagnostics go directly to stderr after releasing the asset gate, so a later
+unrelated libtest abort cannot discard the buffered census; diagnostic write errors
+do not replace the original panic. These counts do not prove a memory plateau or
+permit erasing saved assignments after engine shutdown.
+
 Existing [material_migration.rs](../../rust/crates/looper/src/audio_engine/material_migration.rs)
 and [material_migration.py](../../src/flitzis_looper/controller/material_migration.py)
 provide implemented reference/recovery machinery. Durable receipts still need

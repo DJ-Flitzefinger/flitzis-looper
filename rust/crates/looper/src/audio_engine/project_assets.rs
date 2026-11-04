@@ -25,6 +25,10 @@ use stem_readers::SharedStemReaders;
 #[path = "project_asset_collection_tests.rs"]
 mod collection_tests;
 
+#[cfg(test)]
+#[path = "project_asset_observation.rs"]
+mod observation;
+
 const MAX_RETIREMENTS: usize = 1024;
 const MAX_REPORTED_ERRORS: usize = 16;
 const RETIREMENTS_PER_POLL: usize = 8;

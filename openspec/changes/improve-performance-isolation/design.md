@@ -7067,3 +7067,30 @@ T and own E, source/content identity, full stereo PCM, actual feedback and retir
 The [architecture evidence](../../../docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
 records its functional scope; no production, timing, device or whole-quality claim
 is added. Existing Piano, pause/Hold/seek and neural gates remain separate.
+## Original parent registry context diagnostics
+
+The original affected invocation selected 440 tests with one libtest thread.
+Before the failed registry leaf, its 150 records comprise 69 tests that perform
+work in the parent process, 79 synchronous child-process wrappers and two ignored
+tests. A returned child wrapper cannot contribute its child's registry to the
+later parent. Parent engine/PCM shutdown alone does not revoke saved file claims.
+
+Contextual reproduction retains the original order of those 69 parent tests and
+the complete three-round 216-bank leaf. It must retain raw assertions, without
+collecting/pruning state for the observation, increasing admission capacity or
+discarding legitimate saved assignments. Test-only immutable scalar censuses
+distinguish native readers, saved cold file-only records, pending assignments,
+engine witnesses, reserved reader slots and raw ledger scopes. A busy or poisoned
+gate is reported as such, not as an empty registry. Scalar output occurs only
+after releasing the gate and survives later unrelated libtest buffered-output
+loss; diagnostic write failures cannot cause a second panic. The panic census
+runs at the unwind tail after later locals drop, not at the failing assertion.
+Weak witness counts can change concurrently; they grant no new ownership.
+
+Current selected fixture flows remain compatible with the surviving original
+source stage, with five window-control tests qualified for formatting, an added
+inactive optional argument and an extra clock read. Delivered production fixes
+mean the current binary is not an identical historical executable. A contextual
+pass cannot recover the original lost assertion or establish its historical cause.
+Valid capacity refusal while saved assignments remain is not itself a defect.
+The distinct 216-batch watchdog and all other original failures remain open.
