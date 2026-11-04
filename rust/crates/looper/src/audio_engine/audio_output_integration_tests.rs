@@ -176,6 +176,10 @@ fn import_sources(root: &Path, inputs: &[String]) -> Vec<cold_store::CommittedCo
 
 impl Fixture {
     fn new(root: &Path, factory: Arc<Factory>) -> Self {
+        Self::new_source_layout(root, factory, false)
+    }
+
+    fn new_source_layout(root: &Path, factory: Arc<Factory>, flat: bool) -> Self {
         Python::initialize();
         Python::attach(|py| {
             let modules = py
@@ -235,28 +239,34 @@ impl Fixture {
                 c"audio_output_probe",
             )
             .unwrap();
-            let inputs = module
-                .getattr("write_sources")
-                .unwrap()
-                .call1((root.to_string_lossy().as_ref(),))
-                .unwrap()
-                .extract::<Vec<String>>()
-                .unwrap();
-            let seed_leases = py.detach(|| import_sources(root, &inputs));
+            let seed_leases = if flat {
+                Vec::new()
+            } else {
+                let inputs = module
+                    .getattr("write_sources")
+                    .unwrap()
+                    .call1((root.to_string_lossy().as_ref(),))
+                    .unwrap()
+                    .extract::<Vec<String>>()
+                    .unwrap();
+                py.detach(|| import_sources(root, &inputs))
+            };
             let source_paths: Vec<String> = seed_leases
                 .iter()
                 .map(|lease| material_paths::ordinary_windows_path(&lease.original_path))
                 .collect();
-            let probe = module
-                .getattr("OutputProbe")
-                .unwrap()
-                .call1((
+            let constructor = module.getattr("OutputProbe").unwrap();
+            let probe = if flat {
+                constructor.call1((engine.bind(py), root.to_string_lossy().as_ref()))
+            } else {
+                constructor.call1((
                     engine.bind(py),
                     root.to_string_lossy().as_ref(),
                     source_paths,
                 ))
-                .unwrap()
-                .unbind();
+            }
+            .unwrap()
+            .unbind();
             Self {
                 engine: Some(engine),
                 probe: Some(probe),
@@ -506,6 +516,52 @@ impl Drop for Fixture {
             eprintln!("original owner release failed: {error}");
         }
     }
+}
+
+#[test]
+#[ignore = "fresh-process original six-flat saved-project startup; no device/model or WET profile"]
+fn actual_six_flat_saved_project_startup() {
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_AUDIO_OUTPUT_PROFILE_ROOT").expect("owned root required"),
+    );
+    assert!(root.is_absolute() && !root.exists());
+    fs::create_dir(&root).unwrap();
+    let _cwd = DirectoryGuard {
+        original: std::env::current_dir().unwrap(),
+        readers_ended: Arc::new(AtomicBool::new(false)),
+    };
+    std::env::set_current_dir(&root).unwrap();
+    let factory = Factory::new().unwrap();
+    let mut fixture = Fixture::new_source_layout(&root, factory, true);
+    assert!(fixture.seed_leases.is_empty());
+    fixture.ready();
+    let sources = fixture.sources();
+    let restored: serde_json::Value = Python::attach(|py| {
+        let result = fixture
+            .probe()
+            .call_method1(py, "verify", (48_000, (7..13).collect::<Vec<i32>>()))
+            .unwrap();
+        let encoded: String = py
+            .import("json")
+            .unwrap()
+            .call_method1("dumps", (result,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        serde_json::from_str(&encoded).unwrap()
+    });
+    fixture.settle("flat-startup-owner-close", |f, _| f.predicate("close"));
+    fixture.closed.set(true);
+    fixture.release_owners().unwrap();
+    fs::write(
+        root.join("flat-startup.provisional.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "sources":sources,"restored":restored,"unseeded":true,
+            "reader_end":"pending exact original EXE and owning Job END then parent sealed proof"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn fresh_sources(before: &[SourceImage; 6], after: &[SourceImage; 6], rate: u32) {

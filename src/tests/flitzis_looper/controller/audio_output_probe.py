@@ -59,8 +59,11 @@ def write_sources(root: str) -> list[str]:
 class OutputProbe:
     """Only the Engine constructor binding is replaced; all operations remain real."""
 
-    def __init__(self, engine: AudioEngine, root: str, source_paths: list[str]) -> None:
+    def __init__(
+        self, engine: AudioEngine, root: str, source_paths: list[str] | None = None
+    ) -> None:
         self.root = Path(root)
+        self._flat_startup = source_paths is None
         project = ProjectState(
             audio_output=AudioOutputOptions(
                 backend="asio",
@@ -76,6 +79,16 @@ class OutputProbe:
             multi_loop=True,
             trigger_quantization_enabled=False,
         )
+        if source_paths is None:
+            # The original saved-project startup input: six ordinary flat files,
+            # without a prior material import or pre-existing PCM cache.
+            samples = self.root / "samples"
+            samples.mkdir()
+            source_paths = []
+            for pad in range(PADS):
+                path = samples / f"output-{pad}.wav"
+                _wave(path, pad)
+                source_paths.append(str(path))
         assert len(source_paths) == PADS
         for pad, reference in enumerate(source_paths):
             path = Path(reference)
@@ -91,6 +104,7 @@ class OutputProbe:
         }
         self.config = self.root / "project.json"
         self.config.write_text(project.model_dump_json(), encoding="utf-8")
+        self.initial_project_json = self.config.read_text(encoding="utf-8")
         with patch.object(app_module, "AudioEngine", return_value=engine):
             self.app: AppController = app_module.AppController(project_config_path=self.config)
         assert self.app.audio is engine
@@ -347,7 +361,7 @@ class OutputProbe:
             return False
         return True
 
-    def verify(self, rate: int, offsets: list[int]) -> None:
+    def verify(self, rate: int, offsets: list[int]) -> dict[str, object] | None:
         """Validate current persisted intent, exact old files, and stopped output state."""
         assert self.ready(), self.status()
         actual_rate = self.app.audio.output_sample_rate()
@@ -372,6 +386,9 @@ class OutputProbe:
             assert len(list((self.root / entry.cache_dir).iterdir())) == 5
         saved = json.loads(self.config.read_text(encoding="utf-8"))
         assert saved["audio_output"] == self.app.project.audio_output.model_dump(mode="json")
+        if self._flat_startup:
+            return _flat_startup_snapshot(self)
+        return None
 
     def start(self, cohort: str) -> None:
         """Start all six through the same public, source-bound PAD launch path."""
@@ -403,3 +420,35 @@ class OutputProbe:
         if pool is not None:
             pool._executor.shutdown(wait=True, cancel_futures=True)
         return True
+
+
+def _flat_startup_snapshot(probe: OutputProbe) -> dict[str, object]:
+    """Validate only the original flat-startup layout after ordinary verification."""
+    initial = json.loads(probe.initial_project_json)
+    expected = [f"samples/output-{pad}.wav" for pad in range(PADS)]
+    assert initial["sample_paths"][:PADS] == expected
+    assert sorted(probe.original_hashes) == expected
+    assert not probe.app.session.sample_load_errors, probe.status()
+    assert not probe.app.session.stem_generation_errors, probe.status()
+    assert not probe.app.session.loading_sample_ids, probe.status()
+    assert probe.app.project.manual_bpm[:PADS] == [120.0] * PADS
+    assert probe.app.project.pad_loop_auto[:PADS] == [False] * PADS
+    assert probe.app.project.key_lock
+    assert probe.app.project.multi_loop
+    assert probe.app.project.speed == 1.1
+    assert not probe.app.project.trigger_quantization_enabled
+    assert probe.app.material_migration.status == "config_committed", probe.status()
+    assert not probe.app.material_migration._startup_scheduled, probe.status()
+    references = probe.app.project.sample_paths[:PADS]
+    for pad, reference in enumerate(references):
+        assert reference is not None
+        assert reference != expected[pad]
+        assert _sha(probe.root / reference) == probe.original_hashes[expected[pad]]
+    saved = json.loads(probe.config.read_text(encoding="utf-8"))
+    assert saved["sample_paths"][:PADS] == references
+    return {
+        "initial_project": initial,
+        "flat_sha256": probe.original_hashes,
+        "restored_references": references,
+        "status": probe.status(),
+    }

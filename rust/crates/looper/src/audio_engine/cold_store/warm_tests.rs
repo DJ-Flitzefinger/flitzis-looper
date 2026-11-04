@@ -5,7 +5,7 @@ use crate::audio_engine::sample_loader::{decode_audio_snapshot, prepare_playback
 use std::sync::atomic::AtomicBool;
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    directory: Option<tempfile::TempDir>,
     samples: PathBuf,
     source: PathBuf,
 }
@@ -44,8 +44,31 @@ impl Fixture {
         Self {
             samples: temp.path().join("samples"),
             source,
-            _temp: temp,
+            directory: Some(temp),
         }
+    }
+
+    fn preserve_for_reader_probe(&mut self, role: &str) {
+        let Some(report) = std::env::var_os("FLITZI_COLD_RECOVERY_ARTIFACTS") else {
+            return;
+        };
+        let report = PathBuf::from(report);
+        assert!(report.is_absolute());
+        fs::create_dir_all(&report).unwrap();
+        let root = self.directory.take().unwrap().keep();
+        let original = fs::read(self.samples.join("startup.wav")).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(report.join(format!("{role}.json")))
+            .unwrap();
+        file.write_all(
+            &serde_json::to_vec_pretty(&json!({"root":root,"pid":std::process::id(),
+                "role":role,"original_sha256":format!("{:x}",Sha256::digest(&original)),
+                "reader_end":"pending original EXE AND owning Job END then parent exclusive proof"}))
+            .unwrap(),
+        )
+        .unwrap();
     }
 
     fn cold(&self, rate: u32, channels: usize) -> (SampleBuffer, CommittedColdLease) {
@@ -144,6 +167,174 @@ fn wait_absent(path: &Path) {
         "deferred retirement did not drain: {}",
         path.display()
     );
+}
+
+#[test]
+fn cold_commit_waits_for_live_recovery_scan() {
+    recovery_overlap(false);
+}
+
+#[test]
+fn cold_commit_cancelled_during_recovery_wait_keeps_original_and_no_lease() {
+    recovery_overlap(true);
+}
+
+fn recovery_overlap(cancel_during_wait: bool) {
+    use std::sync::mpsc::{self, RecvTimeoutError};
+
+    struct ReleaseRecovery(mpsc::Sender<()>);
+    impl Drop for ReleaseRecovery {
+        fn drop(&mut self) {
+            // Unbounded send never waits for the scanner. Also release during
+            // unwinding before thread::scope starts joining either actor.
+            let _ = self.0.send(());
+        }
+    }
+
+    let mut fixture = Fixture::new(48_000, 2);
+    fs::create_dir(&fixture.samples).unwrap();
+    let flat = fixture.samples.join("startup.wav");
+    fs::copy(&fixture.source, &flat).unwrap();
+    let original = fs::read(&flat).unwrap();
+    fixture.preserve_for_reader_probe(if cancel_during_wait {
+        "cancel"
+    } else {
+        "success"
+    });
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &flat, false, &|| false).unwrap();
+    let preparation = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+    let sample = crate::audio_engine::material_migration::prepare_pcm(
+        &mut transaction,
+        &flat,
+        48_000,
+        2,
+        PCM_LIMIT_BYTES,
+        None,
+        &|| false,
+        &mut |_| {},
+    )
+    .unwrap();
+    let root = transaction.cache_root.clone();
+    let stage = transaction.staging.as_ref().unwrap().clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (arrived_tx, arrived_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let (mut transaction, committed, held, arrived, early) = std::thread::scope(|scope| {
+        let release = ReleaseRecovery(release_tx);
+        let scanner = scope.spawn(move || {
+            staging::recover_observed(&root, |path, directory, marker| {
+                if path == stage {
+                    eprintln!(
+                        "actual_recovery_readers {}",
+                        json!({"path":path,
+                            "directory_identity":file_identity(directory).unwrap(),
+                            "owner_identity":file_identity(marker).unwrap()})
+                    );
+                    let _ = held_tx.send(());
+                    let _ = release_rx.recv();
+                }
+            })
+            .unwrap();
+        });
+        let held = held_rx.recv_timeout(Duration::from_secs(5));
+        let committer = scope.spawn(move || {
+            let committed =
+                transaction.commit_observed(&|| worker_cancelled.load(Ordering::Acquire), || {
+                    let _ = arrived_tx.send(());
+                });
+            let observation = committed
+                .as_ref()
+                .cloned()
+                .map_err(|error| (error.raw_os_error(), error.to_string()));
+            finished_tx.send(observation).unwrap();
+            (transaction, committed)
+        });
+        let arrived = arrived_rx.recv_timeout(Duration::from_secs(5));
+        // This is a bounded synchronization observation while real recovery
+        // readers remain held, not an audio or filesystem latency requirement.
+        let early = finished_rx.recv_timeout(Duration::from_millis(100));
+        if cancel_during_wait {
+            cancelled.store(true, Ordering::Release);
+        }
+        // Always release/join both real actors before asserting, including the
+        // original ungated error, so a red regression cannot strand its reader.
+        drop(release);
+        scanner.join().unwrap();
+        let (transaction, committed) = committer.join().unwrap();
+        (transaction, committed, held, arrived, early)
+    });
+    assert!(
+        held.is_ok(),
+        "actual scanner did not arrive: {held:?}; commit: {committed:?}"
+    );
+    assert!(
+        arrived.is_ok(),
+        "actual commit did not arrive: {arrived:?}; commit: {committed:?}"
+    );
+    assert!(
+        matches!(early, Err(RecvTimeoutError::Timeout)),
+        "commit finished while actual recovery readers were held: {early:?}"
+    );
+    if cancel_during_wait {
+        assert_eq!(committed.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(!transaction.verified && !transaction.adopted);
+        let cache = transaction.committed_cache.clone().unwrap();
+        drop(preparation);
+        drop(transaction);
+        wait_absent(&cache);
+        assert_eq!(fs::read(&flat).unwrap(), original);
+        return;
+    }
+    let cache = committed.unwrap();
+    transaction.bind_sample(&sample).unwrap();
+    let lease = transaction.into_lease();
+    lease.verify_reference(&sample).unwrap();
+    assert_eq!(fs::read(&flat).unwrap(), original);
+    drop(preparation);
+    lease.retire_cache();
+    drop((lease, sample));
+    wait_absent(&cache);
+}
+
+#[test]
+fn cold_commit_preserves_uncoordinated_owner_reader_error() {
+    let mut fixture = Fixture::new(48_000, 2);
+    fs::create_dir(&fixture.samples).unwrap();
+    let flat = fixture.samples.join("startup.wav");
+    fs::copy(&fixture.source, &flat).unwrap();
+    let original = fs::read(&flat).unwrap();
+    fixture.preserve_for_reader_probe("uncoordinated");
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &flat, false, &|| false).unwrap();
+    let preparation = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+    crate::audio_engine::material_migration::prepare_disk_pcm(
+        &mut transaction,
+        &flat,
+        48_000,
+        2,
+        PCM_LIMIT_BYTES,
+        &|| false,
+        &mut |_| {},
+    )
+    .unwrap();
+    let stage = transaction.staging.as_ref().unwrap().clone();
+    // This independently held reader does not participate in store admission.
+    // Its genuine sharing failure must still propagate, without a retry.
+    let reader = sealed_reader(&stage.join("owner.json")).unwrap();
+    let error = transaction.commit(&|| false).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(32));
+    assert!(!transaction.verified && !transaction.adopted);
+    assert_eq!(fs::read(&flat).unwrap(), original);
+    drop(preparation);
+    drop(transaction);
+    assert!(stage.join("owner.json").exists());
+    drop(reader);
+    wait_absent(&stage);
+    assert_eq!(fs::read(&flat).unwrap(), original);
 }
 
 fn rewrite_manifest(path: &Path, mutate: impl FnOnce(&mut Value)) -> PathBuf {

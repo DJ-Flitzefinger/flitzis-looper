@@ -230,6 +230,36 @@ fn check_cancelled(cancelled: &impl Fn() -> bool) -> io::Result<()> {
     }
 }
 
+fn observe_io<T>(
+    operation: &str,
+    path: &Path,
+    destination: Option<&Path>,
+    result: io::Result<T>,
+) -> io::Result<T> {
+    #[cfg(all(test, windows))]
+    if let Err(error) = &result
+        && matches!(error.raw_os_error(), Some(32 | 33))
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThreadId() -> u32;
+        }
+        // SAFETY: query the calling worker's numeric thread identity only.
+        let native_thread = unsafe { GetCurrentThreadId() };
+        eprintln!(
+            "cold_io_failure {}",
+            json!({"operation":operation,"path":path,"destination":destination,
+                "pid":std::process::id(),"native_thread":native_thread,
+                "rust_thread":format!("{:?}",std::thread::current().id()),
+                "thread_name":std::thread::current().name(),
+                "raw_os_error":error.raw_os_error(),"error":error.to_string()})
+        );
+    }
+    #[cfg(not(all(test, windows)))]
+    let _ = (operation, path, destination);
+    result
+}
+
 /// Portable metadata/open protocols cannot exclude a writer or pathname ABA.
 /// Until a platform-specific protocol exists, other platforms fail safely.
 pub(super) fn sealed_reader(path: &Path) -> io::Result<File> {
@@ -240,11 +270,16 @@ pub(super) fn sealed_reader(path: &Path) -> io::Result<File> {
         // FILE_SHARE_READ only: another reader may coexist, writes/deletes may not.
         // OPEN_REPARSE_POINT verifies the opened leaf itself instead of following
         // a replacement link between path inspection and handle acquisition.
-        let reader = OpenOptions::new()
-            .read(true)
-            .share_mode(1)
-            .custom_flags(0x0020_0000)
-            .open(path)?;
+        let reader = observe_io(
+            "sealed_reader.open",
+            path,
+            None,
+            OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .custom_flags(0x0020_0000)
+                .open(path),
+        )?;
         if reader.metadata()?.file_attributes() & 0x400 != 0 {
             return Err(invalid("immutable reader is a reparse point"));
         }
@@ -294,11 +329,16 @@ fn directory_guard(path: &Path) -> io::Result<File> {
         use std::os::windows::fs::MetadataExt;
         use std::os::windows::fs::OpenOptionsExt;
         // FILE_FLAG_BACKUP_SEMANTICS opens a directory; sharing excludes rename/delete.
-        let guard = OpenOptions::new()
-            .read(true)
-            .share_mode(3)
-            .custom_flags(0x0200_0000 | 0x0020_0000)
-            .open(path)?;
+        let guard = observe_io(
+            "directory_guard.open",
+            path,
+            None,
+            OpenOptions::new()
+                .read(true)
+                .share_mode(3)
+                .custom_flags(0x0200_0000 | 0x0020_0000)
+                .open(path),
+        )?;
         let metadata = guard.metadata()?;
         if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
             return Err(invalid(
@@ -1017,6 +1057,14 @@ impl ColdTransaction {
     }
 
     pub(super) fn commit(&mut self, cancelled: &impl Fn() -> bool) -> io::Result<PathBuf> {
+        self.commit_observed(cancelled, || {})
+    }
+
+    fn commit_observed(
+        &mut self,
+        cancelled: &impl Fn() -> bool,
+        before_publication: impl FnOnce(),
+    ) -> io::Result<PathBuf> {
         check_cancelled(cancelled)?;
         let manifest = self
             .manifest
@@ -1073,12 +1121,7 @@ impl ColdTransaction {
             .staging
             .as_ref()
             .ok_or_else(|| invalid("missing exclusive staging"))?;
-        // Windows prohibits renaming a directory with descendants opened without
-        // FILE_SHARE_DELETE. Close only after verification, immediately before rename;
-        // reopen and verify committed artifacts before allowing pad publication.
-        self.artifact_readers.clear();
-        self.staging_directory.take();
-        fs::remove_file(staging.join("owner.json"))?;
+        let marker = staging.join("owner.json");
         let generation = staging
             .file_name()
             .ok_or_else(|| invalid("missing staging generation"))?
@@ -1105,7 +1148,32 @@ impl ColdTransaction {
                 "cold destination already exists",
             ));
         }
-        fs::rename(staging, &destination)?;
+        before_publication();
+        {
+            // Recovery pins live staging directories and owner markers under
+            // this same admission lock. Let its actual readers end before
+            // unsealing our files and performing the final delete/rename.
+            // Cancellation/request checks, verification and lifecycle calls
+            // remain outside: they may acquire other owners or this lock again.
+            let _publication = lifecycle::store()
+                .state
+                .lock()
+                .map_err(|_| invalid("staging publication admission poisoned"))?;
+            self.artifact_readers.clear();
+            self.staging_directory.take();
+            observe_io(
+                "commit.remove_owner",
+                &marker,
+                None,
+                fs::remove_file(&marker),
+            )?;
+            observe_io(
+                "commit.rename",
+                staging,
+                Some(&destination),
+                fs::rename(staging, &destination),
+            )?;
+        }
         self.committed_cache = Some(destination.clone());
         self.staging = None;
         self.verify_committed(cancelled)?;

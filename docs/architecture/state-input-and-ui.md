@@ -133,6 +133,23 @@ ownership or Native acceptance. Existing field-recovery paths preserve valid
 intent without restoring runtime tickets; they do not authorize a new migration/
 compatibility program.
 
+The fresh-process `actual_six_flat_saved_project_startup` regression starts from
+six saved flat `samples/output-*.wav` references, without importing materials or
+seeding PCM first. It exercises ordinary output startup, asynchronous loading and
+the existing material migration, then checks current source adoption, complete
+three-second stereo sources, unchanged original hashes, persisted references and
+musical intent before normal shutdown. It uses the software ASIO owner and makes
+no physical-device or timing claim. Cold publication uses the existing store
+admission lock for final file-handle release, owner-marker deletion and staging
+rename, coordinating with recovery's actual directory and marker readers.
+Cancellation, complete committed verification and lifecycle publication remain
+outside that short critical section. A real-reader overlap regression covers the
+demonstrated Win32 sharing failure, cancellation while waiting and a separate
+uncoordinated reader whose original error still propagates. Earlier untraced
+startup failures retain their exact-operation and holder qualification; passing
+starts do not retrospectively identify their cause. File-reader closure is
+verified separately after the original test process and its owning job end.
+
 ## Copy, Pair, Bank and shared custody
 
 [copy_snapshot.py](../../src/flitzis_looper/copy_snapshot.py),

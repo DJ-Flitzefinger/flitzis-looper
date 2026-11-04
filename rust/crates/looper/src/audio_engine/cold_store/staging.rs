@@ -160,6 +160,13 @@ pub(super) fn remove_generation(
 }
 
 pub(super) fn recover(root: &Path) -> io::Result<()> {
+    recover_observed(root, |_, _, _| {})
+}
+
+pub(super) fn recover_observed(
+    root: &Path,
+    mut opened: impl FnMut(&Path, &File, &File),
+) -> io::Result<()> {
     let mut admission = lifecycle::store()
         .state
         .lock()
@@ -201,6 +208,9 @@ pub(super) fn recover(root: &Path) -> io::Result<()> {
                 .as_u64()
                 .filter(|v| *v > 0)
                 .ok_or_else(|| invalid("staging start"))?;
+            // The observer sees the actual verified recovery readers. The
+            // ordinary caller is a no-op; tests can control this exact overlap.
+            opened(&path, &_directory, &reader);
             if creator_alive(pid, start) {
                 return Ok(());
             }

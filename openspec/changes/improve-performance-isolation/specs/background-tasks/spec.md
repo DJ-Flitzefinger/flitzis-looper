@@ -1030,3 +1030,20 @@ defaults SHALL remain unsupported. Native C/image provenance SHALL remain separa
 - **AND** explicit injected clocks retain their original behavior
 - **AND** replacing the constructor default itself refuses guarded identity
 - **AND** component binding proof does not establish complete-host, native-image or model acceptance
+
+### Requirement: Cold Publication Coordinates With Staging Recovery Readers
+Cold PCM publication SHALL coordinate its final owned-handle release, owner-marker
+deletion and staging rename with the store's actual staging recovery readers.
+It SHALL retain immutable sharing, file/directory identity checks, unknown-file
+preservation and off-realtime execution. Cancellation predicates, committed
+verification and lifecycle publication SHALL execute outside that exclusion.
+Independent sharing failures SHALL retain their original error and cleanup custody.
+
+#### Scenario: Recovery observes a live generation during ordinary source restore
+- **GIVEN** an ordinary flat source has complete verified cold artifacts
+- **AND** recovery holds the actual live generation's directory and owner marker
+- **WHEN** its current cold transaction reaches final publication
+- **THEN** publication waits for those recovery readers before deleting or renaming
+- **AND** complete committed verification and source-own acknowledgement remain required
+- **AND** cancellation during that wait refuses adoption and retires only owned artifacts
+- **AND** an uncoordinated reader still produces its original sharing error
