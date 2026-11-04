@@ -7094,3 +7094,28 @@ mean the current binary is not an identical historical executable. A contextual
 pass cannot recover the original lost assertion or establish its historical cause.
 Valid capacity refusal while saved assignments remain is not itself a defect.
 The distinct 216-batch watchdog and all other original failures remain open.
+
+## Explicit original fixture lifetime context
+
+One ignored Windows context exercises the original ordered-legacy operation body
+with both actual Productive source generations captured before field replacement.
+The generic Harness and ordinary original test keep their existing teardown.
+The context retains TempDir/root/original/cache/WAV file identities, complete
+inventories and actual source ACK assignment IDs, rather than deriving disposal
+rights from containment, registry counts or engine/PCM absence.
+
+Only the context declares its original generated fixture finished. It checks the
+existing cold-worker shutdown and productive callback/reference close barrier,
+all recorded PCM Weak counts and completed Native C deletion lifetime IDs before
+requesting existing identity-guarded paired and original/cache retirement. The
+original TempDir closes only after that retirement. An independent saved source
+must preserve file identities and bytes throughout, then restore warm through its
+own fresh ACK with exact prior PCM. No generic Drop/sweep, registry replacement,
+collector call, limit change, saturation fitting or 216-bank replay is introduced.
+
+Complete callback image destruction includes synchronous nested preparation
+worker joins. Their ignored panic results stay unobserved; the checked outer
+close receipt is not a claim that every nested join returned Ok. This new bounded
+context does not resolve the genuine cumulative capacity refusal or reconstruct
+the original lost assertion. Whole-process/resource, NativeWHOLE, numerical,
+realtime, device, hearing and Human gates retain their existing limits.

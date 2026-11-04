@@ -263,3 +263,21 @@ real disk-exhaustion, device or listening acceptance. RF64 parser/source support
 does not establish five-RF64 stem inference. Optional historical producer lineage
 can remain UNKNOWN. Historical wider programs/statuses are provenance, not new
 work authorization or evidence that delivered foundations are absent.
+
+## Original fixture lifetime boundary
+
+The ignored original ordered-legacy fixture context captures both actual source
+generations at construction, including source ACK assignment IDs and original,
+cache, WAV, root and TempDir file identities. It runs the original operations and
+assertions, then explicitly ends only that generated fixture's assignments. A
+separately saved source retains its own directory and immutable files across
+checked cold-worker shutdown, callback/reference image closure, actual Native
+deletion completion, PCM reader END and the owned fixture's retirement. It then
+requires a fresh warm restore with its own source ACK and exact prior PCM.
+
+This is a fixture-specific protocol test. The ordinary Harness destructor and
+production admission/collection remain unchanged. Nested Native preparation
+workers join during mixer destruction; their discarded panic results are not
+independent successful-join receipts. Saved descriptors surviving an engine or
+PCM owner are intentional and cannot be pruned to make a later test fit. The
+negative cumulative registry context and lost historical assertion remain open.

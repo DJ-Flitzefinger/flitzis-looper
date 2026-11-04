@@ -2,6 +2,9 @@
 use super::*;
 use crate::audio_engine::project_assets::{FileIdentity, ProjectAssets, capture_identity};
 
+#[path = "p5b_fixture_lifetime_tests.rs"]
+mod fixture_lifetime_tests;
+
 struct FileWitness {
     path: PathBuf,
     identity: FileIdentity,
@@ -79,7 +82,7 @@ impl SavedSource {
         let Harness {
             _temp,
             root,
-            engine,
+            mut engine,
             callback,
             producer,
             consumer,
@@ -87,6 +90,8 @@ impl SavedSource {
             _original_owner,
             ..
         } = h;
+        engine.cold_jobs.shutdown_checked().unwrap();
+        assert_eq!(engine.cold_jobs.counts_for_test(), (0, 0, 0));
         drop((
             callback,
             consumer,
@@ -221,7 +226,7 @@ impl SavedSource {
         reconcile(&h.engine).unwrap();
         let Harness {
             _temp: auxiliary_temp,
-            engine,
+            mut engine,
             callback,
             producer,
             consumer,
@@ -229,6 +234,8 @@ impl SavedSource {
             _original_owner,
             ..
         } = h;
+        engine.cold_jobs.shutdown_checked().unwrap();
+        assert_eq!(engine.cold_jobs.counts_for_test(), (0, 0, 0));
         drop((
             callback,
             consumer,

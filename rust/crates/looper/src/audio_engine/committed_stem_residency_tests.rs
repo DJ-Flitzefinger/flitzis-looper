@@ -115,7 +115,10 @@ fn long_harness() -> Harness {
 }
 
 fn long_harness_frames(frames: usize) -> Harness {
-    let mut h = Harness::new();
+    long_harness_from(Harness::new(), frames)
+}
+
+fn long_harness_from(mut h: Harness, frames: usize) -> Harness {
     let original = h.root.join("committed-residency.wav");
     // The real complete-pair alignment compares the source with the sum of
     // vocals/melody/bass/drums. Supply actual matching mix content, rather than
@@ -2180,7 +2183,10 @@ fn distinct_verified_descriptor_registration_has_own_revocation_and_preserves_ex
 
 #[test]
 fn ordered_legacy_full_mix_and_selection_cancel_never_repromote_accepted_typed_components() {
-    let mut p = Productive::new(false, 0.75);
+    drop(ordered_legacy_fixture(Productive::new(false, 0.75)));
+}
+
+fn ordered_legacy_fixture(mut p: Productive) -> Productive {
     let all = p.request("all_stems", 0b1010);
     p.capture_then_wait(&all);
     assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
@@ -2255,6 +2261,7 @@ fn ordered_legacy_full_mix_and_selection_cancel_never_repromote_accepted_typed_c
             .is_err()
     );
     p.render(257, false);
+    p
 }
 
 #[test]
