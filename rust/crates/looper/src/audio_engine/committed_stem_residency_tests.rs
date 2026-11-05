@@ -1713,7 +1713,10 @@ fn empty_mask_mid_ramp_mask_change_and_full_mix_supersession_preserve_real_rate_
 
 #[test]
 fn accepted_component_residency_native_worker_failure_rejects_only_unproved_effective_receipt() {
+    begin_ordinary_fixture();
     let mut p = Productive::new(true, 0.75);
+    let before_source = p.h.ticket(0);
+    let verify_pair_source = capture_window_ack_source(&p);
     let all = p.request("all_stems", 0b1010);
     p.capture_then_wait(&all);
     assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
@@ -1797,6 +1800,54 @@ fn accepted_component_residency_native_worker_failure_rejects_only_unproved_effe
         all.error().as_deref(),
         Some("Committed stem effective mode Native preparation failed")
     );
+
+    // The failed effective receipt and cancelled launch do not revoke the source.
+    let verify_paired = capture_paired_currentness(&p);
+    let verify_current = move |p: &Productive| {
+        verify_pair_source(p);
+        verify_paired(p);
+        let after = p.h.ticket(0);
+        assert!(before_source.is_current() && after.is_current());
+        assert!(before_source.same_source_request(&after));
+        assert!(before_source.same_preparation_context(&after));
+        assert!(
+            before_source
+                .admission
+                .binding
+                .same_projection(&after.admission.binding)
+        );
+        let owners = p.h.engine.resident_stem_cache.lock().unwrap();
+        let accepted = owners[0].accepted.as_ref().unwrap();
+        let callback = p.h.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &accepted.set.complete_set_identity,
+            &callback.complete_set_identity
+        ));
+        assert!(Arc::ptr_eq(
+            &accepted.set.reference_samples,
+            &callback.reference_samples
+        ));
+        for (accepted, callback) in accepted.set.stems.iter().zip(&callback.stems) {
+            assert!(Arc::ptr_eq(&accepted.samples, &callback.samples));
+            assert_eq!(accepted.samples.as_ref(), callback.samples.as_ref());
+        }
+    };
+    assert_current_complete_source(&p, &verify_current);
+    assert_eq!(all.residency_status(), "accepted");
+    assert_eq!(all.effective_mode_status(), "rejected");
+    assert!(!all.is_current());
+    assert_eq!(
+        all.effective_failure_reason(),
+        Some("native-preparation-failed")
+    );
+    assert_eq!(
+        all.error().as_deref(),
+        Some("Committed stem effective mode Native preparation failed")
+    );
+    drop((sample, components, identity, all, verify_current));
+    finish_cancelled_source_fixture(p);
 }
 
 #[test]
