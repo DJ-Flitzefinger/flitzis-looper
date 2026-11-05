@@ -1256,7 +1256,10 @@ fn paused_same_selection_residency_waits_for_real_source_frames_after_resume() {
 
 #[test]
 fn active_full_mix_release_then_all_requires_fresh_residency_ack_for_same_selection() {
+    begin_ordinary_fixture();
     let mut p = Productive::new(false, 0.73);
+    let before_source = p.h.ticket(0);
+    let verify_pair_source = capture_window_ack_source(&p);
     let source = p.h.callback.mixer.bank_for_measurement()[0]
         .clone()
         .unwrap();
@@ -1313,6 +1316,46 @@ fn active_full_mix_release_then_all_requires_fresh_residency_ack_for_same_select
     p.render(257, false);
     assert_eq!(next.effective_mode_status(), "effective");
     assert!(p.selected.is_current());
+
+    // Only components changed: the original source and preparation stay current.
+    assert!(old.iter().all(|reader| reader.strong_count() == 0));
+    assert_eq!(next.residency_status(), "accepted");
+    let verify_paired = capture_paired_currentness(&p);
+    let verify_current = move |p: &Productive| {
+        verify_pair_source(p);
+        verify_paired(p);
+        let after = p.h.ticket(0);
+        assert!(before_source.is_current() && after.is_current());
+        assert!(before_source.same_source_request(&after));
+        assert!(before_source.same_preparation_context(&after));
+        assert!(
+            before_source
+                .admission
+                .binding
+                .same_projection(&after.admission.binding)
+        );
+        let owners = p.h.engine.resident_stem_cache.lock().unwrap();
+        let accepted = owners[0].accepted.as_ref().unwrap();
+        let callback = p.h.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &accepted.set.complete_set_identity,
+            &callback.complete_set_identity
+        ));
+        assert!(Arc::ptr_eq(
+            &accepted.set.reference_samples,
+            &callback.reference_samples
+        ));
+        for (accepted, callback) in accepted.set.stems.iter().zip(&callback.stems) {
+            assert!(Arc::ptr_eq(&accepted.samples, &callback.samples));
+            assert_eq!(accepted.samples.as_ref(), callback.samples.as_ref());
+        }
+    };
+    assert_current_complete_source(&p, &verify_current);
+    // All original receipts and probe aliases end before the SAME saved restore.
+    drop((source, first, full_mix, next, old, verify_current));
+    finish_cancelled_source_fixture(p);
 }
 
 #[test]
