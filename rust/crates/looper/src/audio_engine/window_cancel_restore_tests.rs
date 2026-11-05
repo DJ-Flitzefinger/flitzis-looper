@@ -1,7 +1,7 @@
 //! Continue the original cancelled reader with its SAME saved source, not a proxy.
 use super::*;
 
-fn verify_saved_sources(sources: &[AssignmentWitness; 2]) {
+pub(super) fn verify_saved_sources(sources: &[AssignmentWitness; 2]) {
     for source in sources {
         source.verify();
     }

@@ -40,9 +40,10 @@ mod p5b_resident_admission_tests;
 pub(super) use p5b_resident_admission_tests::observe_ordinary_harness;
 use p5b_resident_admission_tests::{
     assert_current_complete_source, begin_ordinary_fixture, capture_component_cancel_currentness,
-    capture_legacy_currentness, capture_paired_currentness, finish_cancelled_source_fixture,
-    finish_copied_source_fixture, finish_legacy_source_fixture, finish_moved_source_fixture,
-    finish_ordinary_fixture, observe_ordinary_productive,
+    capture_legacy_currentness, capture_paired_currentness, capture_window_ack_currentness,
+    capture_window_ack_source, finish_cancelled_source_fixture, finish_copied_source_fixture,
+    finish_legacy_source_fixture, finish_moved_source_fixture, finish_ordinary_fixture,
+    finish_window_ack_source_fixture, observe_ordinary_productive,
 };
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;
@@ -2358,7 +2359,9 @@ fn changed_source_or_timing_rejects_captured_component_return_and_keeps_full_mix
 
 #[test]
 fn actual_new_window_ack_fences_old_capture_but_same_committed_selection_can_retry() {
+    begin_ordinary_fixture();
     let mut p = Productive::new(false, 0.73);
+    let verify_source = capture_window_ack_source(&p);
     let initial = p.h.callback.mixer.bank_for_measurement()[0]
         .clone()
         .unwrap();
@@ -2405,6 +2408,16 @@ fn actual_new_window_ack_fences_old_capture_but_same_committed_selection_can_ret
     p.render(257, false);
     assert_eq!(fresh.effective_mode_status(), "effective");
     assert!(p.selected.is_current());
+    // The new window has its own current authority after every original assertion.
+    let verify_current = capture_window_ack_currentness(&p, verify_source);
+    assert_current_complete_source(&p, &verify_current);
+    eprintln!(
+        "window ACK retry continuing source {}",
+        json!({"complete_exact_frames":4096,"complete_reader_end":true,"resident_range":[LOOP_START-1,LOOP_END+1],"resident_frames":1502,"prepared_selected_accepted_pair_current":true,"fresh_components_effective":true})
+    );
+    // End the old and new window/ticket/oracle aliases before the original engine.
+    drop((initial, current, pending, refresh, fresh, verify_current));
+    finish_window_ack_source_fixture(p);
 }
 
 #[test]
