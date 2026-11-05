@@ -1070,7 +1070,35 @@ fn committed_selection_uses_own_callback_ack_and_keeps_full_mix_components_absen
 fn active_first_committed_residency_keeps_source_native_fifos_and_real_128_frame_ramp() {
     for key_lock in [false, true] {
         for ratio in [0.73, 1.371_234_567_890_123] {
+            begin_ordinary_fixture();
             let mut p = Productive::new(key_lock, ratio);
+            let before_source = p.h.ticket(0);
+            let verify_pair_source = capture_window_ack_source(&p);
+            {
+                let finite = p.h.callback.mixer.bank_for_measurement()[0]
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(
+                    (
+                        finite.resident_start(),
+                        finite.resident_end(),
+                        finite.frame_count(),
+                        finite.samples.len() / finite.channels,
+                        finite.channels
+                    ),
+                    (LOOP_START, LOOP_END, 4096, 1500, 2)
+                );
+                assert_eq!(
+                    finite.samples.as_ref(),
+                    &p.h.material.sample.samples[LOOP_START * 2..LOOP_END * 2]
+                );
+                let reader = Arc::downgrade(&finite.samples);
+                assert!(
+                    p.h.engine.cold_pcm_history.lock().unwrap()[0]
+                        .iter()
+                        .any(|pcm| pcm.ptr_eq(&reader))
+                );
+            }
             let sample = p.h.callback.mixer.bank_for_measurement()[0]
                 .clone()
                 .unwrap();
@@ -1146,6 +1174,49 @@ fn active_first_committed_residency_keeps_source_native_fifos_and_real_128_frame
                 p.adopt_native();
                 assert_eq!(pending.effective_mode_status(), "effective");
             }
+
+            assert_eq!(pending.residency_status(), "accepted");
+            assert_eq!(pending.effective_mode_status(), "effective");
+            assert!(pending.is_current());
+            assert!(p.selected.is_current());
+            let verify_paired = capture_paired_currentness(&p);
+            let verify_current = move |p: &Productive| {
+                verify_pair_source(p);
+                verify_paired(p);
+                let after = p.h.ticket(0);
+                assert!(before_source.is_current() && after.is_current());
+                assert!(before_source.same_source_request(&after));
+                assert!(before_source.same_preparation_context(&after));
+                assert!(
+                    before_source
+                        .admission
+                        .binding
+                        .same_projection(&after.admission.binding)
+                );
+                let owners = p.h.engine.resident_stem_cache.lock().unwrap();
+                let accepted = owners[0].accepted.as_ref().unwrap();
+                let callback = p.h.callback.mixer.stems_for_measurement()[0]
+                    .as_ref()
+                    .unwrap();
+                assert!(Arc::ptr_eq(
+                    &accepted.set.complete_set_identity,
+                    &callback.complete_set_identity
+                ));
+                assert!(Arc::ptr_eq(
+                    &accepted.set.reference_samples,
+                    &callback.reference_samples
+                ));
+                for (accepted, callback) in accepted.set.stems.iter().zip(&callback.stems) {
+                    assert!(Arc::ptr_eq(&accepted.samples, &callback.samples));
+                    assert_eq!(accepted.samples.as_ref(), callback.samples.as_ref());
+                }
+            };
+            assert_current_complete_source(&p, &verify_current);
+            assert_eq!(pending.residency_status(), "accepted");
+            assert_eq!(pending.effective_mode_status(), "effective");
+            assert!(pending.is_current());
+            drop((sample, pending, verify_current));
+            finish_cancelled_source_fixture(p);
         }
     }
 }
