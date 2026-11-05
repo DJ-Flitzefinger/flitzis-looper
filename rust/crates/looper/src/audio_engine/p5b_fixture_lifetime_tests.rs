@@ -11,7 +11,7 @@ use std::os::windows::fs::MetadataExt;
 #[path = "p5b_ordinary_drop_tests.rs"]
 mod ordinary_drop;
 pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests) use ordinary_drop::observe_ordinary_harness;
-pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use ordinary_drop::{begin_ordinary_fixture, assert_current_complete_source, capture_legacy_currentness, capture_paired_currentness, finish_legacy_source_fixture, finish_cancelled_source_fixture, finish_copied_source_fixture, finish_moved_source_fixture, finish_ordinary_fixture, observe_ordinary_productive};
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use ordinary_drop::{begin_ordinary_fixture, assert_current_complete_source, capture_component_cancel_currentness, capture_legacy_currentness, capture_paired_currentness, finish_legacy_source_fixture, finish_cancelled_source_fixture, finish_copied_source_fixture, finish_moved_source_fixture, finish_ordinary_fixture, observe_ordinary_productive};
 
 #[derive(Debug, PartialEq)]
 struct ObjectWitness {

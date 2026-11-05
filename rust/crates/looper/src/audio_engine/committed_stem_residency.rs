@@ -165,6 +165,13 @@ pub struct CommittedStemSetTicket {
     publication: PreparedSourcePermit,
     candidate: Option<Arc<CandidateAuthority>>,
 }
+#[cfg(test)]
+impl CommittedStemSetTicket {
+    pub(super) fn pair_for_test(&self) -> &StemPairOwner {
+        &self.owner.pair
+    }
+}
+
 #[pymethods]
 impl CommittedStemSetTicket {
     pub fn publication_status(&self) -> &'static str {

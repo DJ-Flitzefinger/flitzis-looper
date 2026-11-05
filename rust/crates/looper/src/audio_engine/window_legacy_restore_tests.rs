@@ -2,7 +2,7 @@
 use super::*;
 use crate::audio_engine::native_owned_work::CompleteSampleWork;
 
-fn capture_current_source(p: &Productive) -> impl Fn(&Productive) + use<> {
+fn capture_source_authority(p: &Productive) -> impl Fn(&Productive) + use<> {
     let source = p.h.ticket(0);
     let key = source
         .admission
@@ -24,14 +24,6 @@ fn capture_current_source(p: &Productive) -> impl Fn(&Productive) + use<> {
         .unwrap();
     let finite_reader = Arc::downgrade(&finite.samples);
     let finite_pcm = finite.samples.to_vec();
-    let set = p.h.callback.mixer.stems_for_measurement()[0]
-        .as_ref()
-        .unwrap();
-    let set_identity = Arc::downgrade(&set.complete_set_identity);
-    let components = set
-        .stems
-        .each_ref()
-        .map(|stem| (Arc::downgrade(&stem.samples), stem.samples.to_vec()));
     move |p: &Productive| {
         let after = p.h.ticket(0);
         assert!(source.is_current() && after.is_current());
@@ -85,6 +77,21 @@ fn capture_current_source(p: &Productive) -> impl Fn(&Productive) + use<> {
             finite_pcm,
             p.h.material.sample.samples[LOOP_START * 2..LOOP_END * 2]
         );
+    }
+}
+
+fn capture_current_source(p: &Productive) -> impl Fn(&Productive) + use<> {
+    let verify_source = capture_source_authority(p);
+    let set = p.h.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    let set_identity = Arc::downgrade(&set.complete_set_identity);
+    let components = set
+        .stems
+        .each_ref()
+        .map(|stem| (Arc::downgrade(&stem.samples), stem.samples.to_vec()));
+    move |p: &Productive| {
+        verify_source(p);
         let set = p.h.callback.mixer.stems_for_measurement()[0]
             .as_ref()
             .unwrap();
@@ -167,6 +174,83 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
         assert_eq!(leases[0].as_ref().unwrap().assignment_id(), assignment);
         drop((leases, owners));
         root_identity.verify();
+        original.verify();
+        cache.verify();
+        for files in &pair_files {
+            assert_eq!(tree(&files[0].path), *files);
+        }
+    };
+    verify(p);
+    verify
+}
+
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn capture_component_cancel_currentness(
+    p: &Productive,
+) -> impl Fn(&Productive) + use<> {
+    let verify_source = capture_source_authority(p);
+    let pair = &p.pair;
+    let reader = Arc::downgrade(&pair.pair_reader);
+    let descriptor = pair.pair_reader.descriptor.clone();
+    let root = ObjectWitness::capture(&pair.root);
+    let reference = pair.descriptor_reference.clone();
+    let assignment = pair.source_lease.assignment_id();
+    let original = ObjectWitness::capture(&pair.source_lease.original_path);
+    let cache = ObjectWitness::capture(&pair.source_lease.cache_path);
+    let descriptor_path =
+        crate::audio_engine::material_paths::resolve(&pair.root, Path::new(&reference))
+            .unwrap()
+            .path;
+    let pcm_path = crate::audio_engine::material_paths::resolve(
+        &pair.root,
+        Path::new(&descriptor.pcm_generation),
+    )
+    .unwrap()
+    .path;
+    let pair_files = [tree(&descriptor_path), tree(&pcm_path)];
+    let verify = move |p: &Productive| {
+        verify_source(p);
+        // A selected disk pair is genuine authority without accepted components.
+        assert!(p.selected.is_current());
+        assert_eq!(p.selected.publication_status(), "accepted");
+        assert!(!p.pair.has_components());
+        assert!(p.h.callback.mixer.stems_for_measurement()[0].is_none());
+        assert!(
+            p.h.engine.resident_stem_cache.lock().unwrap()[0]
+                .accepted
+                .is_none()
+        );
+        let prepared = &p.pair;
+        let selected = p.selected.pair_for_test();
+        assert!(reader.ptr_eq(&Arc::downgrade(&prepared.pair_reader)));
+        assert!(reader.ptr_eq(&Arc::downgrade(&selected.reader)));
+        assert_eq!(prepared.source_version, p.h.version);
+        assert_eq!(prepared.pair_reader.descriptor, descriptor);
+        assert_eq!(selected.reader.descriptor, descriptor);
+        assert_eq!(prepared.root, root.path);
+        assert_eq!(selected.root, root.path);
+        assert_eq!(prepared.descriptor_reference, reference);
+        assert_eq!(selected.descriptor_reference, reference);
+        assert_eq!(prepared.pair_reader.descriptor_reference, reference);
+        assert_eq!(selected.reader.descriptor_reference, reference);
+        for lease in [&prepared.source_lease, &selected.source_lease] {
+            assert_eq!(
+                capture_identity(lease.samples_root()).unwrap().unwrap(),
+                root.identity
+            );
+            assert_eq!(lease.assignment_id(), assignment);
+            assert!(!lease.assignment_retired());
+            assert_eq!(lease.original_path, original.path);
+            assert_eq!(lease.cache_path, cache.path);
+            assert!(lease.original_identity_matches(&original.identity));
+        }
+        assert_eq!(
+            p.h.engine.cold_leases.lock().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .assignment_id(),
+            assignment
+        );
+        root.verify();
         original.verify();
         cache.verify();
         for files in &pair_files {

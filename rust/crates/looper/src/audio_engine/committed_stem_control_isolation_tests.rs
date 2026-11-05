@@ -147,12 +147,15 @@ fn cancelled_component_gate_waiter_retires_before_slow_reader_returns() {
 #[test]
 fn cancelled_or_stopped_component_read_never_publishes_and_keeps_full_mix_pcm() {
     for stop in [false, true] {
+        begin_ordinary_fixture();
         let mut f = Productive::new(true, 0.8);
+        let verify_current = capture_component_cancel_currentness(&f);
         let hold = ReadHold::new(&f.pair.pair_reader);
         let before = voice(&f.h.callback.mixer).stretch.native_state_address();
         let ticket = f.request("all_stems", 15);
         assert_eq!(f.h.callback.drain(&mut f.h.consumer), 1);
         hold.wait();
+        let launch_before = f.h.engine.input_runtime_ownership.launch_revision(0);
         if stop {
             f.h.engine.stop_sample(0).unwrap();
             assert_eq!(f.h.callback.drain(&mut f.h.consumer), 1);
@@ -192,6 +195,18 @@ fn cancelled_or_stopped_component_read_never_publishes_and_keeps_full_mix_pcm() 
             ),
             (0, 0)
         );
+        // STOP advances playback intent while preserving this source's authority.
+        assert_eq!(
+            f.h.engine.input_runtime_ownership.launch_revision(0),
+            launch_before + u64::from(stop)
+        );
+        assert_current_complete_source(&f, &verify_current);
+        eprintln!(
+            "component in-flight continuing source {}",
+            json!({"stop":stop,"complete_exact_frames":4096,"complete_reader_end":true,"resident_frames":1500,"prepared_selected_pair_current":true,"accepted_components":false})
+        );
+        drop((ticket, hold, verify_current));
+        finish_cancelled_source_fixture(f);
     }
 }
 
