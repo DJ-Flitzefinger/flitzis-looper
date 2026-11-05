@@ -11,7 +11,7 @@ use std::os::windows::fs::MetadataExt;
 #[path = "p5b_ordinary_drop_tests.rs"]
 mod ordinary_drop;
 pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests) use ordinary_drop::observe_ordinary_harness;
-pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use ordinary_drop::{begin_ordinary_fixture, finish_ordinary_fixture, observe_ordinary_productive};
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use ordinary_drop::{begin_ordinary_fixture, finish_cancelled_source_fixture, finish_ordinary_fixture, observe_ordinary_productive};
 
 #[derive(Debug, PartialEq)]
 struct ObjectWitness {
@@ -177,15 +177,21 @@ fn native_end() -> usize {
     created.len()
 }
 
-fn retire_original_fixture(
-    p: Productive,
-    sources: &[AssignmentWitness; 2],
-    saved: Option<&SavedSource>,
-    after_reader_end: impl FnOnce() -> Option<usize>,
-) {
-    if let Some(saved) = saved {
-        assert_ne!(p.h._temp.path(), saved._temp.path());
-    }
+struct ClosedFixture {
+    temp: KeepOnFailure,
+    root: PathBuf,
+    assets: Arc<ProjectAssets>,
+    directory: ObjectWitness,
+    inventory: Vec<ObjectWitness>,
+    paired: [PathBuf; 3],
+    saved_owner: crate::audio_engine::project_assets::ProjectAssetLease,
+    original_owner: crate::audio_engine::project_assets::ProjectAssetLease,
+    reader_count: usize,
+}
+
+// Separate checked reader END from explicit file retirement so this SAME saved
+// source can outlive its original engine and be restored before its declared end.
+fn close_productive_readers(p: Productive, sources: &[AssignmentWitness; 2]) -> ClosedFixture {
     for source in sources {
         source.verify();
     }
@@ -222,7 +228,7 @@ fn retire_original_fixture(
         _original_owner,
         ..
     } = h;
-    let mut temp = KeepOnFailure(Some(_temp));
+    let temp = KeepOnFailure(Some(_temp));
     // This test explicitly ends its TWO witnessed ephemeral source assignments.
     // The independently saved TempDir/assignments have a longer declared lifetime.
     engine.shut_down().unwrap();
@@ -249,7 +255,50 @@ fn retire_original_fixture(
     wait_phase("original ordered fixture actual PCM reader END", 0, || {
         readers.iter().all(|reader| reader.strong_count() == 0)
     });
+    ClosedFixture {
+        temp,
+        root,
+        assets,
+        directory,
+        inventory,
+        paired,
+        saved_owner: _saved,
+        original_owner: _original_owner,
+        reader_count: readers.len(),
+    }
+}
+
+fn retire_original_fixture(
+    p: Productive,
+    sources: &[AssignmentWitness; 2],
+    saved: Option<&SavedSource>,
+    after_reader_end: impl FnOnce() -> Option<usize>,
+) {
+    if let Some(saved) = saved {
+        assert_ne!(p.h._temp.path(), saved._temp.path());
+    }
+    let closed = close_productive_readers(p, sources);
     let native_lifetimes = after_reader_end();
+    retire_closed_fixture(closed, sources, saved, native_lifetimes);
+}
+
+fn retire_closed_fixture(
+    closed: ClosedFixture,
+    sources: &[AssignmentWitness; 2],
+    saved: Option<&SavedSource>,
+    native_lifetimes: Option<usize>,
+) {
+    let ClosedFixture {
+        mut temp,
+        root,
+        assets,
+        directory,
+        inventory,
+        paired,
+        saved_owner: _saved,
+        original_owner: _original_owner,
+        reader_count,
+    } = closed;
     directory.verify();
     assert_eq!(tree(temp.0.as_ref().unwrap().path()), inventory);
     for source in sources {
@@ -265,7 +314,7 @@ fn retire_original_fixture(
             "inventory": inventory.iter().map(ObjectWitness::evidence).collect::<Vec<_>>(),
             "sources": sources.iter().map(AssignmentWitness::evidence).collect::<Vec<_>>(),
             "cold_workers_checked_end": true, "callback_and_reference_close_join": true,
-            "nested_native_worker_panic_results": "unobserved", "pcm_weak_end": readers.len(),
+            "nested_native_worker_panic_results": "unobserved", "pcm_weak_end": reader_count,
             "native_delete_completed_lifetimes": native_lifetimes,
             "authority": "ONLY this original generated fixture's explicit assignment end",
             "independent_saved_context_verified": saved.is_some(),

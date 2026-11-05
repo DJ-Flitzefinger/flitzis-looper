@@ -5,7 +5,7 @@ use crate::audio_engine::project_assets::{FileIdentity, ProjectAssets, capture_i
 #[path = "p5b_fixture_lifetime_tests.rs"]
 mod fixture_lifetime_tests;
 pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests) use fixture_lifetime_tests::observe_ordinary_harness;
-pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use fixture_lifetime_tests::{begin_ordinary_fixture, finish_ordinary_fixture, observe_ordinary_productive};
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use fixture_lifetime_tests::{begin_ordinary_fixture, finish_cancelled_source_fixture, finish_ordinary_fixture, observe_ordinary_productive};
 
 struct FileWitness {
     path: PathBuf,

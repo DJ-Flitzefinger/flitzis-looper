@@ -905,6 +905,15 @@ publication and actual reader-lifetime checks.
 - **THEN** that member loses its own launch authority while the shared preparation remains eligible
 - **AND** the surviving owner still requires its original independent acknowledgement
 
+#### Scenario: A claimed cancelled source remains saved for a fresh restore
+- **GIVEN** a real source reader is held inside its claimed window preparation and its exact original/cache assignments remain saved
+- **WHEN** the window is cancelled
+- **THEN** its reservation remains held until the actual reader returns, after which the cancelled publication leaves no queued message or pending reservation
+- **AND** ending the old engine, PCM readers and actual workers preserves those same saved file identities and bytes
+- **AND** a fresh warm preparation of those files requires its own current ordinary source acknowledgement and exact full-source PCM
+- **AND** restoring the earlier finite view separately requires its original range, a current ordinary window acknowledgement and exact finite PCM
+- **AND** only explicit own assignment end after restored readers and workers end authorizes selective retirement
+
 ### Requirement: Definitive Launch Revocation Retires Queued Committed Captures
 A queued committed-residency capture SHALL retire through its existing ordinary
 cold lane and serviced loader pump when its original content lifetime has a

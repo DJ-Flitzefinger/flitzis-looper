@@ -591,6 +591,7 @@ fn complete_component_budget_refusal_precedes_source_allocation_and_unwinds() {
 
 #[test]
 fn cancelled_real_source_reader_releases_promises_only_after_worker_return() {
+    begin_ordinary_fixture();
     let f = Productive::new(false, 1.0);
     let hold = SourceHold::new(WorkPoint::WindowSourceChunk);
     let window = fresh_window(&f.h);
@@ -617,6 +618,8 @@ fn cancelled_real_source_reader_releases_promises_only_after_worker_return() {
             .pending_reservation_count,
         0
     );
+    drop((window, hold));
+    finish_cancelled_source_fixture(f);
 }
 
 #[test]

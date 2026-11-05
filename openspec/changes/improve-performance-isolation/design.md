@@ -7119,3 +7119,29 @@ close receipt is not a claim that every nested join returned Ok. This new bounde
 context does not resolve the genuine cumulative capacity refusal or reconstruct
 the original lost assertion. Whole-process/resource, NativeWHOLE, numerical,
 realtime, device, hearing and Human gates retain their existing limits.
+
+## Same saved source after the original claimed-reader cancellation
+
+The original `cancelled_real_source_reader_releases_promises_only_after_worker_return`
+retains its held `WindowSourceChunk`, cancellation, occupied-reservation and actual
+return assertions. Its continuation captures the two real construction generations
+and restores the current one after checked old-engine, PCM and six kernel-worker
+END. A narrow test-only factor separates the existing productive reader-close
+barrier from selective file retirement, retaining the exact saved source custody.
+
+The current material contains 4096 full frames; its accepted bank contains only
+frames [17,1517), or 1500 frames. A fresh consumer with the existing in-memory
+previous-source fixture adopts warm material from
+the same original/cache FileIDs through the ordinary source path and requires its
+own current ACK plus exact full PCM. A separate ordinary window request then
+requires the original finite range, its own accepted current ACK, exact geometry
+and all 1500 original PCM frames. The cancellation probe's guarded [16,1518) read
+is not used as the finite restore oracle. No unrelated saved fixture supplies the
+acceptance source.
+
+Restored PCM and four actual consumer workers must end before existing selective
+paired/source retirement and the gated identity/residual/checked TempDir close.
+Exact assignment IDs or original/cache tuples must leave no own claim. Discarded
+nested worker panic results remain UNKNOWN. This adds no production Drop,
+collector, registry, limit or model/device behavior; cumulative parent capacity,
+historical failures and whole-system acceptance remain separate gates.

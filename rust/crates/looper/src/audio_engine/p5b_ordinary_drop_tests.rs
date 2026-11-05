@@ -4,6 +4,10 @@ use std::cell::RefCell;
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, OwnedHandle};
 use std::rc::Rc;
 
+#[path = "window_cancel_restore_tests.rs"]
+mod window_cancel_restore;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use window_cancel_restore::finish_cancelled_source_fixture;
+
 #[repr(C)]
 #[derive(Default)]
 struct FileTime {
