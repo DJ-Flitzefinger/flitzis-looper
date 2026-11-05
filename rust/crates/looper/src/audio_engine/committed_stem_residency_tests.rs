@@ -39,8 +39,8 @@ mod offline_stem_productive_tests;
 mod p5b_resident_admission_tests;
 pub(super) use p5b_resident_admission_tests::observe_ordinary_harness;
 use p5b_resident_admission_tests::{
-    begin_ordinary_fixture, finish_cancelled_source_fixture, finish_ordinary_fixture,
-    observe_ordinary_productive,
+    begin_ordinary_fixture, finish_cancelled_source_fixture, finish_copied_source_fixture,
+    finish_ordinary_fixture, observe_ordinary_productive,
 };
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;

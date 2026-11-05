@@ -662,6 +662,7 @@ fn detached_registration_refuses_shutdown_and_discard_before_mutation() {
 #[test]
 fn copy_during_real_window_read_keeps_independent_history_and_original_custody() {
     use crate::audio_engine::{input_runtime_binding, pad_copy};
+    begin_ordinary_fixture();
     let mut f = Productive::new(false, 1.0);
     let old = f.h.engine.sample_cache.lock().unwrap()[0].clone().unwrap();
     let row = f.h.engine.cold_pcm_history.lock().unwrap()[0]
@@ -748,6 +749,9 @@ fn copy_during_real_window_read_keeps_independent_history_and_original_custody()
             .pending_reservation_count,
         0
     );
+    // All original assertions finish before releasing their temporary owners.
+    drop((old, row, target, binding, captured, copy, window, hold));
+    finish_copied_source_fixture(f);
 }
 
 #[test]

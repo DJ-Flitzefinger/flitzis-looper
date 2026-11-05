@@ -8,6 +8,10 @@ use std::rc::Rc;
 mod window_cancel_restore;
 pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use window_cancel_restore::finish_cancelled_source_fixture;
 
+#[path = "window_copy_restore_tests.rs"]
+mod window_copy_restore;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use window_copy_restore::finish_copied_source_fixture;
+
 #[repr(C)]
 #[derive(Default)]
 struct FileTime {

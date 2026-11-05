@@ -24,7 +24,7 @@ fn verify_saved_sources(sources: &[AssignmentWitness; 2]) {
     );
 }
 
-fn workers_end(workers: Vec<WorkerWitness>, expected: usize, phase: &str) {
+pub(super) fn workers_end(workers: Vec<WorkerWitness>, expected: usize, phase: &str) {
     assert_eq!(workers.len(), expected);
     assert_eq!(
         workers
@@ -111,6 +111,26 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
     workers_end(observed.workers, 6, "original engine and both mixer images");
     verify_saved_sources(&sources);
 
+    restore_closed_source_fixture(closed, sources, full_pcm, finite_pcm, verify_saved_sources);
+}
+
+// The warm Source/Window acceptance is identical after either original leaf's
+// own readers end. Their different live-bank oracles stay in their wrappers.
+pub(super) fn restore_closed_source_fixture(
+    closed: ClosedFixture,
+    sources: [AssignmentWitness; 2],
+    full_pcm: Vec<f32>,
+    finite_pcm: Vec<f32>,
+    verify_saved: fn(&[AssignmentWitness; 2]),
+) {
+    let current = &sources[1];
+    let (full_frames, channels) = (4096, 2);
+    assert_eq!(full_pcm.len(), full_frames * channels);
+    assert_eq!(
+        finite_pcm,
+        full_pcm[LOOP_START * channels..LOOP_END * channels]
+    );
+    verify_saved(&sources);
     let restored =
         prepare_material(&closed.root, &current.original.path, RATE, 2, &|| false).unwrap();
     assert!(restored.lease.integrity.warm);
@@ -180,7 +200,7 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
         assert!(!current.assignments.contains(&lease.assignment_id()));
         lease.assignment_id()
     };
-    verify_saved_sources(&sources);
+    verify_saved(&sources);
     preparation.release_preparation().unwrap();
     drop((preparation, request));
 
@@ -228,9 +248,9 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
     );
     assert_eq!(finite.samples.as_ref(), finite_pcm);
     let finite_reader = Arc::downgrade(&finite.samples);
-    verify_saved_sources(&sources);
+    verify_saved(&sources);
     eprintln!(
-        "cancel SAME source RESTORED {}",
+        "SAME saved source RESTORED {}",
         json!({
             "source_request_id": engine.pad_request_ids.lock().unwrap()[0],
             "fresh_assignment_id": fresh_assignment, "source_own_ack_current": true,
@@ -256,7 +276,7 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
             .all(|pcm| pcm.strong_count() == 0)
     });
     workers_end(workers, 4, "restored engine and callback");
-    verify_saved_sources(&sources);
+    verify_saved(&sources);
     // Only now has this saved source reached its explicitly declared OWN end.
     retire_closed_fixture(closed, &sources, None, None);
     wait_phase(
@@ -265,6 +285,6 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
         || assignment_rows(&sources).is_empty(),
     );
     eprintln!(
-        "cancel SAME source FINAL: full4096/finite1500 exact, own current ACKs; original6/restored4 workers END, own claims0 and checked close"
+        "SAME saved source FINAL: full4096/finite1500 exact, own current ACKs; original6/restored4 workers END, own claims0 and checked close"
     );
 }
