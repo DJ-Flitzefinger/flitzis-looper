@@ -123,12 +123,34 @@ pub(super) fn restore_closed_source_fixture(
     finite_pcm: Vec<f32>,
     verify_saved: fn(&[AssignmentWitness; 2]),
 ) {
+    restore_closed_source_fixture_with_storage(
+        closed,
+        sources,
+        full_pcm,
+        finite_pcm,
+        verify_saved,
+        None,
+    );
+}
+
+// The guarded Move restores its storage extent; ordinary Cancel/Copy keep their
+// exact loop request. A loop_region would take precedence over storage_range.
+pub(super) fn restore_closed_source_fixture_with_storage(
+    closed: ClosedFixture,
+    sources: [AssignmentWitness; 2],
+    full_pcm: Vec<f32>,
+    finite_pcm: Vec<f32>,
+    verify_saved: fn(&[AssignmentWitness; 2]),
+    storage_range: Option<(usize, usize)>,
+) {
+    let (finite_start, finite_end) = storage_range.unwrap_or((LOOP_START, LOOP_END));
+    assert!(finite_start < finite_end && finite_end <= 4096);
     let current = &sources[1];
     let (full_frames, channels) = (4096, 2);
     assert_eq!(full_pcm.len(), full_frames * channels);
     assert_eq!(
         finite_pcm,
-        full_pcm[LOOP_START * channels..LOOP_END * channels]
+        full_pcm[finite_start * channels..finite_end * channels]
     );
     verify_saved(&sources);
     let restored =
@@ -204,17 +226,54 @@ pub(super) fn restore_closed_source_fixture(
     preparation.release_preparation().unwrap();
     drop((preparation, request));
 
-    // The original finite bank has no fresh_window guard band. Request its
-    // exact original range and require this new window's own current ACK.
+    // A fresh full source has the full logical loop. Recreate the original
+    // finite loop through its own ordinary ACK before widening its storage.
+    let loop_reader = storage_range.map(|_| {
+        let loop_window = prepare_window_with_producer(
+            &engine,
+            0,
+            WindowRequest {
+                key_lock: Some(false),
+                loop_region: Some((
+                    LOOP_START as f64 / f64::from(RATE),
+                    Some(LOOP_END as f64 / f64::from(RATE)),
+                )),
+                ..WindowRequest::default()
+            },
+            producer.clone(),
+        )
+        .unwrap();
+        wait_until(|| {
+            (consumer.peek().is_ok() || loop_window.error().unwrap().is_some())
+                && producer.try_lock().is_ok()
+        });
+        assert_eq!(loop_window.publication_status(), "pending", "{:?}", loop_window.error());
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert_eq!(loop_window.publication_status(), "accepted", "{:?}", loop_window.error());
+        assert!(loop_window.is_current());
+        reconcile(&engine).unwrap();
+        assert_eq!(callback.mixer.loop_region_frames(0), (LOOP_START, Some(LOOP_END)));
+        let finite = callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+        assert_eq!((finite.resident_start(), finite.resident_end(), finite.frame_count(), finite.samples.len() / finite.channels, finite.channels), (LOOP_START, LOOP_END, full_frames, 1500, channels));
+        assert_eq!(finite.samples.as_ref(), &full_pcm[LOOP_START * channels..LOOP_END * channels]);
+        let reader = Arc::downgrade(&finite.samples);
+        eprintln!("SAME saved source LOGICAL LOOP RESTORED {}", json!({"range":[LOOP_START,LOOP_END],"source_frames":full_frames,"resident_frames":1500,"loop_own_ack_current":loop_window.is_current()}));
+        drop(loop_window);
+        reader
+    });
+    // Request this original finite extent through its ordinary request kind,
+    // and require this new window's own current ACK.
     let window = prepare_window_with_producer(
         &engine,
         0,
         WindowRequest {
             key_lock: Some(false),
-            loop_region: Some((
+            loop_region: storage_range.is_none().then_some((
                 LOOP_START as f64 / f64::from(RATE),
                 Some(LOOP_END as f64 / f64::from(RATE)),
             )),
+            storage_range: storage_range
+                .map(|(start, end)| (start as f64 / f64::from(RATE), end as f64 / f64::from(RATE))),
             ..WindowRequest::default()
         },
         producer.clone(),
@@ -234,6 +293,10 @@ pub(super) fn restore_closed_source_fixture(
     assert_eq!(window.publication_status(), "accepted");
     assert!(window.is_current());
     reconcile(&engine).unwrap();
+    assert_eq!(
+        callback.mixer.loop_region_frames(0),
+        (LOOP_START, Some(LOOP_END))
+    );
     let finite = callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
     // frame_count() is the complete source, independent of resident PCM length.
     assert_eq!(finite.frame_count(), full_frames);
@@ -244,7 +307,12 @@ pub(super) fn restore_closed_source_fixture(
             finite.samples.len() / finite.channels,
             finite.channels
         ),
-        (LOOP_START, LOOP_END, LOOP_END - LOOP_START, channels)
+        (
+            finite_start,
+            finite_end,
+            finite_end - finite_start,
+            channels
+        )
     );
     assert_eq!(finite.samples.as_ref(), finite_pcm);
     let finite_reader = Arc::downgrade(&finite.samples);
@@ -255,8 +323,8 @@ pub(super) fn restore_closed_source_fixture(
             "source_request_id": engine.pad_request_ids.lock().unwrap()[0],
             "fresh_assignment_id": fresh_assignment, "source_own_ack_current": true,
             "window_own_ack_current": window.is_current(), "full_pcm_exact_frames": full_frames,
-            "finite_pcm_exact_frames": LOOP_END - LOOP_START,
-            "finite_range": [LOOP_START, LOOP_END], "workers_before": restore_before
+            "finite_pcm_exact_frames": finite_end - finite_start,
+            "finite_range": [finite_start, finite_end], "workers_before": restore_before
         })
     );
     drop(window);
@@ -274,6 +342,9 @@ pub(super) fn restore_closed_source_fixture(
         [&previous_pcm, &restored_pcm, &admitted_pcm, &finite_reader]
             .iter()
             .all(|pcm| pcm.strong_count() == 0)
+            && loop_reader
+                .as_ref()
+                .is_none_or(|pcm| pcm.strong_count() == 0)
     });
     workers_end(workers, 4, "restored engine and callback");
     verify_saved(&sources);
@@ -285,6 +356,7 @@ pub(super) fn restore_closed_source_fixture(
         || assignment_rows(&sources).is_empty(),
     );
     eprintln!(
-        "SAME saved source FINAL: full4096/finite1500 exact, own current ACKs; original6/restored4 workers END, own claims0 and checked close"
+        "SAME saved source FINAL: full4096/finite{} exact, own current ACKs; original6/restored4 workers END, own claims0 and checked close",
+        finite_end - finite_start
     );
 }

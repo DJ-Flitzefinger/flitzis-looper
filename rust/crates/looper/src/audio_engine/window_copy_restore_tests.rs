@@ -3,7 +3,7 @@ use super::window_cancel_restore::{restore_closed_source_fixture, workers_end};
 use super::*;
 use crate::audio_engine::native_owned_work::CompleteSampleWork;
 
-fn verify_copy_saved_sources(sources: &[AssignmentWitness; 2]) {
+pub(super) fn verify_copy_saved_sources(sources: &[AssignmentWitness; 2]) {
     let rows = assignment_rows(sources);
     for source in sources {
         source.verify();

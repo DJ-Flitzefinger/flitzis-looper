@@ -449,6 +449,7 @@ fn public_preflight_binding_and_both_registrations_release_engine_borrow() {
 fn source_read_history_follows_original_move_through_pending_mirror() {
     use crate::audio_engine::{content_placement::PlacementObservation, pad_pair};
     for mirror_while_held in [false, true] {
+        begin_ordinary_fixture();
         let mut f = Productive::new(false, 1.0);
         let key =
             f.h.engine
@@ -525,6 +526,9 @@ fn source_read_history_follows_original_move_through_pending_mirror() {
                 .pending_reservation_count,
             0
         );
+        // End the temporary aliases only after every original Move assertion.
+        drop((pair, captured, ack, window, hold, original_row));
+        finish_moved_source_fixture(f, mirror_while_held);
     }
 }
 
