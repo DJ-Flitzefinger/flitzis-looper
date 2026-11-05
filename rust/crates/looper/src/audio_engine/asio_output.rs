@@ -465,6 +465,9 @@ impl Owner {
         let result = unsafe { fl_asio_new(&mut self.raw) };
         checked("create session", result)?;
         let endpoints = inventory();
+        if let Some(error) = endpoints.discovery_error {
+            return Err(error);
+        }
         let endpoint = match options.device_id.as_ref() {
             Some(id) => endpoints.devices.iter().find(|endpoint| &endpoint.id == id),
             None => endpoints.devices.first(),

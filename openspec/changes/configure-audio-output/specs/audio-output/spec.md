@@ -13,11 +13,38 @@ configuration without silently replacing an explicit backend request.
 - **AND** internal rendering remains stereo with the existing DSP and scheduler authority
 - **AND** WASAPI is not silently substituted after ASIO failure
 
+#### Scenario: Windows automatic output prefers ASIO and driver geometry
+- **GIVEN** automatic backend/device selection and a successful non-acquiring ASIO inventory with at least one registered identity
+- **WHEN** output starts on Windows
+- **THEN** acquisition selects the lowest canonical ASIO identity in deterministic order
+- **AND** automatic rate and buffer retain that driver's current sample rate and preferred legal buffer frames
+- **AND** requested Auto intent stays distinct from the resolved identity and actual geometry
+- **AND** explicit supported backend/device/rate/buffer/channel preferences remain authoritative
+
 #### Scenario: A user has no ASIO driver
-- **GIVEN** Windows has a usable WASAPI output and no installed ASIO driver
-- **WHEN** the user selects WASAPI or the normal automatic backend
+- **GIVEN** Windows has a usable WASAPI output and complete successful ASIO discovery returns no identities
+- **WHEN** the user selects the automatic backend without a selected endpoint
 - **THEN** output configuration and playback remain usable without ASIO activation or installation
 - **AND** existing Linux and macOS platform backends remain available on their platforms
+
+#### Scenario: ASIO discovery or driver activation fails
+- **GIVEN** automatic Windows output selection
+- **WHEN** ASIO discovery is incomplete or fails, or the selected driver's activation or format fails
+- **THEN** the real error remains visible rather than being treated as an empty inventory
+- **AND** no second backend takes over an unverified original owner
+
+#### Scenario: A saved automatic preference includes a platform endpoint
+- **GIVEN** a saved Auto request contains an existing WASAPI endpoint ID
+- **WHEN** startup restores the preference
+- **THEN** the endpoint retains its WASAPI interpretation rather than being treated as an ASIO CLSID
+- **AND** all explicit saved geometry and routing remain intact
+
+#### Scenario: Startup initially shows PADs
+- **GIVEN** ordinary asynchronous audio startup and saved-source restoration
+- **WHEN** the first UI frames render before performance admission
+- **THEN** the inactive PAD grid remains visible without Native-dependent selectors or input/playback admission
+- **AND** readiness reveals the ordinary PAD view without latching Settings open
+- **AND** manual Settings navigation persists, while actual startup errors expose corrective Settings and their reason
 
 #### Scenario: A requested low-latency buffer is unsupported
 - **GIVEN** exact driver or engine-period support has been queried for the selected format

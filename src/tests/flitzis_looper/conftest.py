@@ -686,7 +686,7 @@ def _configure_output_control_mock(audio: Mock) -> None:
     )
 
 
-def _settle_output_control_mock(app: AppController) -> None:
+def _settle_output_control_mock(app: AppController, *, activation_only: bool = False) -> None:
     """Join each actual controller thread; mocks grant no Native or device proof."""
     for _ in range(4):
         operation = app.audio_output._operation
@@ -695,7 +695,8 @@ def _settle_output_control_mock(app: AppController) -> None:
             operation.thread.join(2)
             assert not operation.thread.is_alive()
         app.audio_output.poll()
-        if app.audio_output.can_perform:
+        settled = app._runtime_activated if activation_only else app.audio_output.can_perform
+        if settled and app.audio_output._operation is None:
             return
     message = f"Controller-only output fixture did not settle: {app.audio_output.phase}"
     raise AssertionError(message)

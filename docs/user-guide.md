@@ -67,6 +67,9 @@ Key Lock, MultiLoop and BPM Lock. The bottom bar holds recording, START/STOP,
 Learn, quantization, stem choices, master volume and Settings. Piano and the loop
 editor appear when opened.
 
+Startup shows the PADs. They stay inactive while audio and saved sources restore;
+Settings remains available, and startup errors show their reason there.
+
 Fresh projects use these values. Valid saved settings are restored instead.
 
 | Setting | Fresh value |
@@ -100,8 +103,18 @@ and can be deferred by resource pressure.
 ## Audio output and startup
 
 **Settings > Audio output** selects the backend, device or driver, physical
-stereo outputs, sample rate and buffer/period. Auto backend uses the normal
-platform backend. An unavailable explicit backend does not silently fall back.
+stereo outputs, sample rate and buffer/period. On Windows, Auto prefers native
+ASIO. With multiple registered drivers it selects the lowest canonical driver
+identity deterministically; this is not a Windows default-soundcard mapping.
+Auto sample rate and buffer use that driver's current rate and preferred buffer.
+You can choose another supported driver, rate or buffer in Settings.
+
+WASAPI is the fallback when complete ASIO discovery finds no driver. Discovery
+errors and errors opening a registered driver remain visible. An installed
+driver identity does not guarantee connected, usable hardware. An unavailable
+explicit backend does not silently fall back. Saved Auto preferences that include
+a WASAPI endpoint keep that endpoint; other valid saved choices are restored.
+Linux and macOS Auto retain their normal platform backends.
 
 Stop playback and let recording, loading and arrangement work finish before
 Apply. Output changes restore through checked ownership and do not start

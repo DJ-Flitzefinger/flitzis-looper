@@ -92,6 +92,35 @@ impl OutputOptions {
         Ok((left, right))
     }
 
+    /// Resolve acquisition without changing the persisted/requested preference.
+    #[cfg(windows)]
+    pub fn resolve_windows_backend(
+        &self,
+        discover: impl FnOnce() -> OutputBackend,
+    ) -> Result<Self, String> {
+        if self.backend != "auto" {
+            return Ok(self.clone());
+        }
+        let mut resolved = self.clone();
+        // Auto IDs saved by the former platform-default policy are WASAPI IDs,
+        // not ASIO CLSIDs. An explicit endpoint remains on its original backend.
+        resolved.backend = "wasapi".into();
+        if self.device_id.is_some() {
+            return Ok(resolved);
+        }
+        let inventory = discover();
+        if let Some(error) = inventory.discovery_error {
+            return Err(error);
+        }
+        // Registry order has no default-device authority. Canonical identity
+        // ordering is deterministic, and does not claim physical availability.
+        if let Some(endpoint) = inventory.devices.into_iter().min_by(|a, b| a.id.cmp(&b.id)) {
+            resolved.backend = "asio".into();
+            resolved.device_id = Some(endpoint.id);
+        }
+        Ok(resolved)
+    }
+
     pub fn cpal_device(&self) -> Result<(cpal::Host, cpal::Device), String> {
         let host = if self.backend == "auto" {
             cpal::default_host()
@@ -192,5 +221,150 @@ mod tests {
         .unwrap();
         assert_eq!(options.physical_pair(12).unwrap(), (4, 5));
         assert!(options.physical_pair(4).is_err());
+    }
+
+    #[cfg(windows)]
+    fn inventory(ids: &[&str], error: Option<&str>) -> OutputBackend {
+        OutputBackend {
+            id: "asio".into(),
+            name: "ASIO".into(),
+            devices: ids
+                .iter()
+                .map(|id| OutputEndpoint {
+                    id: (*id).into(),
+                    name: (*id).into(),
+                })
+                .collect(),
+            discovery_error: error.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_auto_prefers_deterministic_asio_without_replacing_intent() {
+        let requested = OutputOptions::parse(Some(
+            r#"{"sample_rate_hz":96000,"buffer_frames":256,"left_channel":4,"right_channel":5}"#,
+        ))
+        .unwrap();
+        let resolved = requested
+            .resolve_windows_backend(|| inventory(&["{B}", "{A}"], None))
+            .unwrap();
+        assert_eq!(resolved.backend, "asio");
+        assert_eq!(resolved.device_id.as_deref(), Some("{A}"));
+        let mut expected = serde_json::to_value(&requested).unwrap();
+        expected["backend"] = "asio".into();
+        expected["device_id"] = "{A}".into();
+        assert_eq!(serde_json::to_value(resolved).unwrap(), expected);
+        assert_eq!(requested.backend, "auto");
+        assert!(requested.device_id.is_none());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_auto_falls_back_only_after_successful_empty_discovery() {
+        let requested = OutputOptions::default();
+        let resolved = requested
+            .resolve_windows_backend(|| inventory(&[], None))
+            .unwrap();
+        assert_eq!(resolved.backend, "wasapi");
+        assert!(resolved.device_id.is_none());
+        assert!(resolved.sample_rate_hz.is_none());
+        assert!(resolved.buffer_frames.is_none());
+        for ids in [vec![], vec!["{A}"]] {
+            assert_eq!(
+                requested
+                    .resolve_windows_backend(|| inventory(&ids, Some("registry access denied")))
+                    .unwrap_err(),
+                "registry access denied"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn explicit_backends_and_saved_platform_ids_do_not_discover_or_change_identity() {
+        for backend in ["asio", "wasapi", "unavailable"] {
+            let requested = OutputOptions {
+                backend: backend.into(),
+                device_id: Some("chosen".into()),
+                ..Default::default()
+            };
+            let resolved = requested
+                .resolve_windows_backend(|| panic!("explicit backend must not discover"))
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(resolved).unwrap(),
+                serde_json::to_value(requested).unwrap()
+            );
+        }
+        let requested = OutputOptions::parse(Some(r#"{"device_id":"WASAPI opaque endpoint","sample_rate_hz":44100,"buffer_frames":128,"left_channel":2,"right_channel":3}"#)).unwrap();
+        let resolved = requested
+            .resolve_windows_backend(|| panic!("saved platform endpoint must not become ASIO"))
+            .unwrap();
+        let mut expected = serde_json::to_value(&requested).unwrap();
+        expected["backend"] = "wasapi".into();
+        assert_eq!(serde_json::to_value(resolved).unwrap(), expected);
+    }
+
+    #[test]
+    #[cfg(all(windows, feature = "asio-contract-tests"))]
+    fn automatic_private_owner_uses_current_geometry_and_checked_close_without_fallback() {
+        use crate::audio_engine::{AudioEngine, asio_output::test_driver::Factory};
+        pyo3::Python::initialize();
+        let factory = Factory::new().unwrap();
+        let original_rate = factory.info().unwrap().rate;
+        let mut engine = AudioEngine::new().unwrap();
+        engine.test_asio_driver = Some(factory.clone());
+        for geometry in [None, Some((96_000, 256))] {
+            let mut options = OutputOptions::default();
+            if let Some((rate, frames)) = geometry {
+                options.sample_rate_hz = Some(rate);
+                options.buffer_frames = Some(frames);
+            }
+            engine.start_audio_output(options.clone()).unwrap();
+            let handle = engine.stream_handle.as_ref().unwrap();
+            assert_eq!(handle.device_descriptor.host, "ASIO");
+            let config = handle.configuration();
+            assert_eq!(config["requested"], serde_json::to_value(options).unwrap());
+            assert_eq!(config["device_id"], "private-asio-fixture");
+            let observer = handle.test_owner_observer();
+            let driver = observer.lock().unwrap().driver;
+            assert_eq!(
+                handle.output_sample_rate,
+                geometry.map_or(original_rate as u32, |(rate, _)| rate)
+            );
+            assert_eq!(
+                config["initialized_buffer_frames"],
+                geometry.map_or(driver.preferred_frames as u32, |(_, frames)| frames)
+            );
+            handle.test_tick().unwrap();
+            engine.shut_down().unwrap();
+            let ended = observer.lock().unwrap();
+            assert!(
+                ended.owner_ended
+                    && ended.owner_join_verified
+                    && ended.retirement_verified
+                    && ended.backend_released
+            );
+            assert_eq!(
+                factory.info().unwrap().rate,
+                original_rate,
+                "unfinished candidate restores its original driver rate"
+            );
+        }
+        // The selected private driver opens, but refuses this illegal buffer.
+        // The original error and checked pending-owner close survive; no CPAL open.
+        let options = OutputOptions {
+            buffer_frames: Some(95),
+            ..Default::default()
+        };
+        let error = engine.start_audio_output(options).unwrap_err().to_string();
+        assert!(error.contains("ASIO"), "{error}");
+        assert!(engine.stream_handle.is_none() && engine.pending_output.is_none());
+        engine.shut_down().unwrap();
+        let info = factory.info().unwrap();
+        assert_eq!(info.active, 0);
+        assert_eq!(info.created, info.released);
+        assert_eq!(info.created, 3);
     }
 }

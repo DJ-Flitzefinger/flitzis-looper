@@ -5408,7 +5408,10 @@ impl AudioEngine {
     fn start_audio_output(&mut self, options: audio_output::OutputOptions) -> PyResult<()> {
         #[cfg(all(windows, test, feature = "asio-contract-tests"))]
         let options = {
-            if self.test_asio_driver.is_some() && options.backend != "asio" {
+            if self.test_asio_driver.is_some()
+                && options.backend != "asio"
+                && !(options.backend == "auto" && options.device_id.is_none())
+            {
                 return Err(PyRuntimeError::new_err(
                     "private ASIO acquisition refuses all physical backends",
                 ));

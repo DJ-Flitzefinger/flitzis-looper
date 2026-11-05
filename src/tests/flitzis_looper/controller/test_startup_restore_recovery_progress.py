@@ -6,6 +6,8 @@ actual audio loading, callback effects or device acceptance.
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from flitzis_looper.bank_snapshot import capture_bank_snapshot
 from flitzis_looper.controller.app import AppController
 from flitzis_looper.controller.bank_arrangement_journal import (
@@ -14,12 +16,35 @@ from flitzis_looper.controller.bank_arrangement_journal import (
 )
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.models import PadContentIdentity, ProjectState
+from tests.flitzis_looper.conftest import _settle_output_control_mock
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
     from pathlib import Path
     from unittest.mock import Mock
 
-    import pytest
+
+@pytest.fixture
+def start_app() -> Iterator[Callable[[Path], AppController]]:
+    """Join real output workers up to activation, retaining pending recovery."""
+    apps: list[AppController] = []
+
+    def start(config: Path) -> AppController:
+        app = AppController(project_config_path=config)
+        apps.append(app)
+        _settle_output_control_mock(app, activation_only=True)
+        return app
+
+    try:
+        yield start
+    finally:
+        for app in apps:
+            operation = app.audio_output._operation
+            if operation is not None:
+                assert operation.thread is not None
+                operation.thread.join(2)
+                assert not operation.thread.is_alive()
+            app.stems.shut_down()
 
 
 def _captured_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -60,13 +85,16 @@ def _captured_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_real_recovery_missing_originals_allow_bounded_outside_restore_progress(
-    audio_engine_mock: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    start_app: Callable[[Path], AppController],
 ) -> None:
     config = _captured_startup(tmp_path, monkeypatch)
     original_config = config.read_bytes()
     audio_engine_mock.load_sample_async.side_effect = lambda sample_id, *_args, **_kw: sample_id + 1
     audio_engine_mock.poll_loader_events.return_value = None
-    app = AppController(project_config_path=config)
+    app = start_app(config)
 
     assert app.banks.status == "recovery_pending"
     startup = app.banks._startup
@@ -122,14 +150,17 @@ def test_real_recovery_missing_originals_allow_bounded_outside_restore_progress(
 
 
 def test_recovery_restore_budget_counts_failed_native_admission_attempts(
-    audio_engine_mock: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    start_app: Callable[[Path], AppController],
 ) -> None:
     config = _captured_startup(tmp_path, monkeypatch)
     audio_engine_mock.load_sample_async.side_effect = RuntimeError(
         "[resident_memory_pressure] insufficient host allocation headroom"
     )
     audio_engine_mock.poll_loader_events.return_value = None
-    app = AppController(project_config_path=config)
+    app = start_app(config)
     before = app.project.model_dump()
     assert audio_engine_mock.load_sample_async.call_count == 8
     audio_engine_mock.load_sample_async.reset_mock()

@@ -4168,17 +4168,44 @@ pub fn create_audio_stream(
     #[cfg(windows)] pending: &mut Option<super::asio_output::Control>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
+    #[cfg(windows)]
+    let resolved = options.resolve_windows_backend(|| {
+        #[cfg(all(test, feature = "asio-contract-tests"))]
+        if options.test_driver.is_some() {
+            return super::audio_output::OutputBackend {
+                id: "asio".into(),
+                name: "ASIO".into(),
+                devices: vec![super::audio_output::OutputEndpoint {
+                    id: "private-asio-fixture".into(),
+                    name: "Private hardware-free ASIO fixture".into(),
+                }],
+                discovery_error: None,
+            };
+        }
+        super::asio_output::inventory()
+    })?;
+    let requested = options;
+    #[cfg(windows)]
+    let options = &resolved;
     if options.backend == "asio" {
         #[cfg(windows)]
-        return create_asio_audio_stream(
-            options,
-            pending,
-            input_clock,
-            current_timing_acknowledgements,
-            input_runtime_ownership,
-            prepared_source_epochs,
-            loop_acceptance,
-        );
+        {
+            let mut handle = create_asio_audio_stream(
+                options,
+                pending,
+                input_clock,
+                current_timing_acknowledgements,
+                input_runtime_ownership,
+                prepared_source_epochs,
+                loop_acceptance,
+            )?;
+            // The owner acquired resolved options, but its unpublished receipt
+            // must retain the original preference before activation/publication.
+            handle.device_descriptor.configuration["requested"] = serde_json::json!(requested);
+            handle.device_descriptor.configuration["requested_buffer_frames"] =
+                serde_json::json!(requested.buffer_frames);
+            return Ok(handle);
+        }
         #[cfg(not(windows))]
         return Err("Native ASIO output is available on Windows only".into());
     }
@@ -4195,7 +4222,7 @@ pub fn create_audio_stream(
         endpoint_description_error: description.err().map(|error| error.to_string()),
         default_sample_format: config.sample_format().to_string(),
         configuration: serde_json::json!({
-            "requested": options, "requested_buffer_frames": options.buffer_frames,
+            "requested": requested, "requested_buffer_frames": requested.buffer_frames,
             "physical_output_channels": config.channels(),
             "device_id": device.id()?.to_string(),
             "stream_sample_format": "f32",

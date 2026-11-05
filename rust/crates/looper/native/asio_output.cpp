@@ -343,13 +343,16 @@ extern "C" int32_t fl_asio_enumerate(void* context, FlAsioEnumerate emit) noexce
         wchar_t clsid[64]{};
         DWORD bytes = sizeof(clsid);
         auto read = RegGetValueW(root, name, L"CLSID", RRF_RT_REG_SZ, nullptr, clsid, &bytes);
+        if (read != ERROR_SUCCESS) { error = read; break; }
         CLSID parsed{};
-        if (read == ERROR_SUCCESS && SUCCEEDED(CLSIDFromString(clsid, &parsed))) {
-            wchar_t canonical[40]{};
-            if (StringFromGUID2(parsed, canonical, 40) != 0)
-                emit(context, reinterpret_cast<const uint16_t*>(canonical),
-                     reinterpret_cast<const uint16_t*>(name));
+        wchar_t canonical[40]{};
+        if (FAILED(CLSIDFromString(clsid, &parsed)) ||
+            StringFromGUID2(parsed, canonical, 40) == 0) {
+            error = ERROR_INVALID_DATA;
+            break;
         }
+        emit(context, reinterpret_cast<const uint16_t*>(canonical),
+             reinterpret_cast<const uint16_t*>(name));
     }
     RegCloseKey(root);
     return error;

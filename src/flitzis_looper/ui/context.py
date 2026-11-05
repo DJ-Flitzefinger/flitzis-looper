@@ -1634,15 +1634,16 @@ class SettingsActions:
         self._controller.session.settings_open = True
 
     def close(self) -> None:
-        if not self._controller.audio_output.can_perform:
+        output = self._controller.audio_output
+        if not output.can_perform and output.phase not in {"starting", "startup_restoring"}:
             return
         self._controller.session.settings_open = False
 
     def toggle(self) -> None:
-        if not self._controller.audio_output.can_perform:
+        if not self._controller.session.settings_open:
             self.open()
-            return
-        self._controller.session.settings_open = not self._controller.session.settings_open
+        else:
+            self.close()
 
     @property
     def audio_output(self) -> AudioOutputController:

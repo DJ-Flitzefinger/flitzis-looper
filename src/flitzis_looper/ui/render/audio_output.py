@@ -275,7 +275,7 @@ def _asio_channels(channels: list[object]) -> None:
 def _backend_device_controls(control: AudioOutputController) -> None:
     if imgui.button("Refresh output devices"):
         control.refresh_inventory()
-    backends = [("auto", "Auto (system backend)")]
+    backends = [("auto", "Auto (ASIO first on Windows)")]
     backends.extend((str(item["id"]), str(item["name"])) for item in control.inventory)
     changed, backend = _choice("Backend", control.draft.backend, backends)
     if changed:

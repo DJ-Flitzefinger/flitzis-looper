@@ -17,6 +17,7 @@ from flitzis_looper.ui.render.performance_view import performance_view
 from flitzis_looper.ui.render.settings import settings_overlay, settings_surface_child_id
 from flitzis_looper.ui.render.sidebar_left import sidebar_left
 from flitzis_looper.ui.render.sidebar_right import sidebar_right
+from flitzis_looper.ui.render.startup_performance import startup_performance
 from flitzis_looper.ui.render.waveform_editor import waveform_editor
 
 if TYPE_CHECKING:
@@ -218,20 +219,25 @@ def _poll_keyboard_input(ctx: UiContext) -> None:
 def render_ui(ctx: UiContext) -> None:
     """Main application render entrypoint."""
     ctx.on_frame_render()
-    if ctx.ui.settings.audio_output.can_perform:
+    output = ctx.ui.settings.audio_output
+    runtime_ready = output.can_perform and output.has_runtime and not output.exclusive_native_access
+    if runtime_ready:
         _poll_keyboard_input(ctx)
-    else:
+    elif output.phase not in {"starting", "startup_restoring"}:
         ctx.ui.settings.open()
 
     with default_style():
-        if ctx.ui.settings.audio_output.can_perform:
+        if runtime_ready:
             _main(ctx)
             if not ctx.state.session.settings_open:
                 _file_dialog(ctx)
             performance_confirmation(ctx)
-        else:
+        elif ctx.state.session.settings_open:
+            if output.phase in {"starting", "startup_restoring"} and imgui.button("Back to PADs"):
+                ctx.ui.settings.close()
             settings_overlay(ctx)
+        else:
+            startup_performance(ctx)
 
-    output = ctx.ui.settings.audio_output
     if not output.busy and not output.transaction_active:
         ctx.persistence.maybe_flush()

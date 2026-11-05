@@ -10,15 +10,25 @@ state, transport, scheduler, source identities and sample-frame clock remain the
 render authority.
 
 The backend owner supports platform CPAL, Windows WASAPI shared mode and native
-Windows ASIO. Automatic backend selection retains the normal platform backend;
-it never means the first installed ASIO driver. An explicit backend request is
-not silently replaced after failure.
+Windows ASIO. On Windows, automatic backend selection without a selected endpoint
+first reads the installed ASIO identities without loading drivers. Complete,
+successful discovery chooses the lowest canonical CLSID in identity order, or
+WASAPI if the list is empty. Registry order is not a system-default soundcard
+authority, and an installed identity does not prove usable physical hardware.
+Incomplete, unreadable or malformed discovery fails visibly, as does a selected
+driver's open/format/start/close failure; these failures do not permit fallback.
+An explicit backend request is not silently replaced after failure. Existing
+Auto preferences containing a platform endpoint ID retain their WASAPI meaning;
+they are never reinterpreted as ASIO identities. Linux/macOS Auto is unchanged.
 
 ## Preferences and observations
 
 Store one validated output preference containing backend/device identity, optional
 rate, optional buffer frames and selected physical left/right channels. Automatic
 rate and buffer choices have backend-defined meanings that are shown explicitly.
+Native ASIO Auto rate retains the driver's current sample rate, and Auto buffer
+uses its preferred legal frame count. Acquisition uses a resolved preference
+without replacing the requested Auto intent in observations or persistence.
 Malformed output preferences recover locally without discarding other project
 fields. Persist a successful Apply, retaining the previous known working request
 until the replacement and its source restoration complete.
@@ -36,6 +46,12 @@ Refreshing an ASIO driver list reads installed identities only. It does not load
 each driver. Capability queries that require activating a selected driver occur
 only under stopped admission, with exclusive ownership of that driver instance.
 Capabilities and channel pairs are requalified after changing its actual rate.
+
+Startup presents the PAD grid first. Until audio and saved-source restoration
+are ready, its inactive presentation reads only saved project state, with no
+Native selectors, playback or keyboard admission. Manual Settings navigation is
+retained across readiness; actual startup/recovery failures expose Settings and
+their error without bypassing the original control worker or close obligations.
 
 ## ASIO boundary
 
