@@ -292,7 +292,7 @@ impl Harness {
             .acquire(&root, &material.lease.original_path)
             .unwrap();
         preparation.release_preparation().unwrap();
-        Self {
+        let h = Self {
             _temp: temp,
             root,
             engine,
@@ -304,7 +304,9 @@ impl Harness {
             wav_reference,
             wav_path,
             _original_owner: original_owner,
-        }
+        };
+        committed_stem_residency_tests::observe_ordinary_harness(&h);
+        h
     }
 
     fn ticket(&self, id: usize) -> PreparedSourceTicket {

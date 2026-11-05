@@ -759,6 +759,15 @@ impl ColdJobs {
         (state.active, state.jobs.len(), state.admitted)
     }
 
+    #[cfg(all(test, windows))]
+    pub(super) fn thread_handles_for_test(&self) -> Vec<std::os::windows::io::OwnedHandle> {
+        use std::os::windows::io::AsHandle;
+        self.workers
+            .iter()
+            .map(|worker| worker.as_handle().try_clone_to_owned().unwrap())
+            .collect()
+    }
+
     /// Includes queued reservations and retiring callable owners, not just CPU work.
     pub(super) fn with_idle<T>(
         &self,

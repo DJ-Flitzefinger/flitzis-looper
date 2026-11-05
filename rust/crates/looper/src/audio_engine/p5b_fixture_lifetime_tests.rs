@@ -8,6 +8,11 @@ use crate::audio_engine::native_lifecycle_observation::{self as native, NativeEv
 use std::collections::BTreeMap;
 use std::os::windows::fs::MetadataExt;
 
+#[path = "p5b_ordinary_drop_tests.rs"]
+mod ordinary_drop;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests) use ordinary_drop::observe_ordinary_harness;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use ordinary_drop::{begin_ordinary_fixture, finish_ordinary_fixture, observe_ordinary_productive};
+
 #[derive(Debug, PartialEq)]
 struct ObjectWitness {
     path: PathBuf,
@@ -172,8 +177,15 @@ fn native_end() -> usize {
     created.len()
 }
 
-fn retire_original_fixture(p: Productive, sources: &[AssignmentWitness; 2], saved: &SavedSource) {
-    assert_ne!(p.h._temp.path(), saved._temp.path());
+fn retire_original_fixture(
+    p: Productive,
+    sources: &[AssignmentWitness; 2],
+    saved: Option<&SavedSource>,
+    after_reader_end: impl FnOnce() -> Option<usize>,
+) {
+    if let Some(saved) = saved {
+        assert_ne!(p.h._temp.path(), saved._temp.path());
+    }
     for source in sources {
         source.verify();
     }
@@ -237,13 +249,15 @@ fn retire_original_fixture(p: Productive, sources: &[AssignmentWitness; 2], save
     wait_phase("original ordered fixture actual PCM reader END", 0, || {
         readers.iter().all(|reader| reader.strong_count() == 0)
     });
-    let native_lifetimes = native_end();
+    let native_lifetimes = after_reader_end();
     directory.verify();
     assert_eq!(tree(temp.0.as_ref().unwrap().path()), inventory);
     for source in sources {
         source.verify();
     }
-    saved.verify_saved_descriptor();
+    if let Some(saved) = saved {
+        saved.verify_saved_descriptor();
+    }
     eprintln!(
         "original fixture lifetime BEFORE RETIRE {}",
         json!({
@@ -253,7 +267,8 @@ fn retire_original_fixture(p: Productive, sources: &[AssignmentWitness; 2], save
             "cold_workers_checked_end": true, "callback_and_reference_close_join": true,
             "nested_native_worker_panic_results": "unobserved", "pcm_weak_end": readers.len(),
             "native_delete_completed_lifetimes": native_lifetimes,
-            "authority": "ONLY this original generated fixture's explicit assignment end; independent SavedSource continues",
+            "authority": "ONLY this original generated fixture's explicit assignment end",
+            "independent_saved_context_verified": saved.is_some(),
         })
     );
     // Existing sealed paired retirement resolves only this accepted selection.
@@ -274,9 +289,15 @@ fn retire_original_fixture(p: Productive, sources: &[AssignmentWitness; 2], save
                     .all(|source| !source.original.path.exists() && !source.cache[0].path.exists())
         },
     );
-    saved.verify_saved_descriptor();
+    if let Some(saved) = saved {
+        saved.verify_saved_descriptor();
+    }
     // Physical cleanup is confined to this original TempDir after witnessed END
     // and exact identity-gated retirement; its normal checked close is explicit.
+    // Both existing parent-pruners use this admission gate. Keep the final
+    // custody snapshot and close serialized with them; queue/path absence alone
+    // does not prove that their later empty-parent pass has finished.
+    let cleanup_gate = assets.state.lock().unwrap();
     let path = temp.0.as_ref().unwrap().path().to_owned();
     inventory[0].verify();
     directory.verify();
@@ -297,9 +318,14 @@ fn retire_original_fixture(p: Productive, sources: &[AssignmentWitness; 2], save
     );
     temp.0.take().unwrap().close().unwrap();
     assert!(!path.exists());
-    saved.verify_saved_descriptor();
+    drop(cleanup_gate);
+    eprintln!("original fixture final residual and close serialized with asset admission gate");
+    if let Some(saved) = saved {
+        saved.verify_saved_descriptor();
+    }
     eprintln!(
-        "original fixture lifetime AFTER CLOSE: exact own TempDir ended; independent saved source preserved"
+        "original fixture lifetime AFTER CLOSE: exact own TempDir ended; independent saved context verified={}",
+        saved.is_some()
     );
 }
 
@@ -319,7 +345,7 @@ fn original_ordered_fixture_ends_only_its_own_assignments_before_saved_restore()
     assert_ne!(first.cache[0].path, second.cache[0].path);
     let p = Productive::with_harness(h, false, 0.75, false);
     let p = ordered_legacy_fixture(p);
-    retire_original_fixture(p, &[first, second], &saved);
+    retire_original_fixture(p, &[first, second], Some(&saved), || Some(native_end()));
     saved_temp.verify();
     saved_root.verify();
     saved.verify_saved_descriptor();

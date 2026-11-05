@@ -4,6 +4,8 @@ use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
 
 #[path = "p5b_registry_context_tests.rs"]
 mod registry_context_tests;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests) use registry_context_tests::observe_ordinary_harness;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use registry_context_tests::{begin_ordinary_fixture, finish_ordinary_fixture, observe_ordinary_productive};
 
 fn policy(p: &mut Productive, interest: &str) -> ResidentStemTicket {
     p.h.engine

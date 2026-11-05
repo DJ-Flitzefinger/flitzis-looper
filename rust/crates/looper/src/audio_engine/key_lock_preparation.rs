@@ -816,6 +816,17 @@ pub(crate) struct KeyLockPreparationWorker {
 }
 
 impl KeyLockPreparationWorker {
+    #[cfg(all(test, windows))]
+    pub(crate) fn thread_handle_for_test(&self) -> std::os::windows::io::OwnedHandle {
+        use std::os::windows::io::AsHandle;
+        self.join_handle
+            .as_ref()
+            .unwrap()
+            .as_handle()
+            .try_clone_to_owned()
+            .unwrap()
+    }
+
     fn spawn(
         mut lanes: Vec<WorkerLane>,
         worker_failed: Arc<AtomicBool>,

@@ -37,6 +37,10 @@ mod l3_native_tests;
 mod offline_stem_productive_tests;
 #[path = "p5b_resident_admission_tests.rs"]
 mod p5b_resident_admission_tests;
+pub(super) use p5b_resident_admission_tests::observe_ordinary_harness;
+use p5b_resident_admission_tests::{
+    begin_ordinary_fixture, finish_ordinary_fixture, observe_ordinary_productive,
+};
 #[path = "public_key_lock_off_tests.rs"]
 mod public_key_lock_off_tests;
 #[path = "retained_committed_stem_tests.rs"]
@@ -168,6 +172,7 @@ fn long_harness_from(mut h: Harness, frames: usize) -> Harness {
     h.version = version;
     h.wav_reference = wav_reference;
     h.wav_path = wav_path;
+    observe_ordinary_harness(&h);
     h
 }
 
@@ -454,6 +459,7 @@ impl Productive {
         } else {
             fixture.render(137, false);
         }
+        observe_ordinary_productive(&fixture);
         fixture
     }
 
@@ -2183,7 +2189,9 @@ fn distinct_verified_descriptor_registration_has_own_revocation_and_preserves_ex
 
 #[test]
 fn ordered_legacy_full_mix_and_selection_cancel_never_repromote_accepted_typed_components() {
-    drop(ordered_legacy_fixture(Productive::new(false, 0.75)));
+    begin_ordinary_fixture();
+    let p = ordered_legacy_fixture(Productive::new(false, 0.75));
+    finish_ordinary_fixture(p);
 }
 
 fn ordered_legacy_fixture(mut p: Productive) -> Productive {

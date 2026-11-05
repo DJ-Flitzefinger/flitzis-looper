@@ -278,6 +278,19 @@ impl PitchActionPreparation {
     }
 }
 
+#[cfg(all(test, windows))]
+impl PitchActionPreparationWorker {
+    pub(crate) fn thread_handle_for_test(&self) -> std::os::windows::io::OwnedHandle {
+        use std::os::windows::io::AsHandle;
+        self.join
+            .as_ref()
+            .unwrap()
+            .as_handle()
+            .try_clone_to_owned()
+            .unwrap()
+    }
+}
+
 impl Drop for PitchActionPreparationWorker {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);

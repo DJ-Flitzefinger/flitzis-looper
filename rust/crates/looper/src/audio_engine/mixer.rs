@@ -872,6 +872,14 @@ impl RtMixer {
         &self.sample_bank
     }
 
+    #[cfg(all(test, windows))]
+    pub(super) fn thread_handles_for_test(&self) -> Vec<std::os::windows::io::OwnedHandle> {
+        vec![
+            self._key_lock_preparation_worker.thread_handle_for_test(),
+            self._pitch_preparation_worker.thread_handle_for_test(),
+        ]
+    }
+
     #[cfg(test)]
     pub(super) fn stems_for_measurement(&self) -> &[Option<PreparedStemSet>; NUM_SAMPLES] {
         &self.prepared_stems
