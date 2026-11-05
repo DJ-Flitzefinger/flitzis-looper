@@ -534,12 +534,14 @@ fn source_read_history_follows_original_move_through_pending_mirror() {
 
 #[test]
 fn complete_component_budget_refusal_precedes_source_allocation_and_unwinds() {
+    begin_ordinary_fixture();
     let mut f = Productive::new(false, 1.0);
     let all = f.request("all_stems", 15);
     f.capture_then_wait(&all);
     f.h.callback.drain(&mut f.h.consumer);
     reconcile(&f.h.engine).unwrap();
     wait_until(|| f.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+    let verify_current = capture_paired_currentness(&f);
     let assets = &f.h.engine.project_assets;
     let account = &f.h.engine.resident_account;
     assets.set_resident_budget_mib(account, 128).unwrap();
@@ -591,6 +593,10 @@ fn complete_component_budget_refusal_precedes_source_allocation_and_unwinds() {
             .pending_reservation_count,
         0
     );
+    // Every original refusal and unwind assertion precedes this current read.
+    assert_current_complete_source(&f, &verify_current);
+    drop((verify_current, original, all, window, observed));
+    finish_cancelled_source_fixture(f);
 }
 
 #[test]

@@ -1,10 +1,8 @@
-//! Retain this legacy probe's current source before its SAME saved-source restore.
+//! Retain current source authority across the original legacy and paired refusals.
 use super::*;
 use crate::audio_engine::native_owned_work::CompleteSampleWork;
 
-pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn capture_legacy_currentness(
-    p: &Productive,
-) -> impl Fn(&Productive) + use<> {
+fn capture_current_source(p: &Productive) -> impl Fn(&Productive) + use<> {
     let source = p.h.ticket(0);
     let key = source
         .admission
@@ -34,7 +32,7 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
         .stems
         .each_ref()
         .map(|stem| (Arc::downgrade(&stem.samples), stem.samples.to_vec()));
-    let verify = move |p: &Productive| {
+    move |p: &Productive| {
         let after = p.h.ticket(0);
         assert!(source.is_current() && after.is_current());
         assert!(source.same_preparation_context(&after));
@@ -95,6 +93,15 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
             assert!(reader.ptr_eq(&Arc::downgrade(&stem.samples)));
             assert_eq!(stem.samples.as_ref(), pcm);
         }
+    }
+}
+
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn capture_legacy_currentness(
+    p: &Productive,
+) -> impl Fn(&Productive) + use<> {
+    let verify_source = capture_current_source(p);
+    let verify = move |p: &Productive| {
+        verify_source(p);
         let owners = p.h.engine.resident_stem_cache.lock().unwrap();
         assert!(owners[0].accepted.as_ref().unwrap().pair.is_none());
     };
@@ -102,12 +109,79 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
     verify
 }
 
-pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn finish_legacy_source_fixture(
-    p: Productive,
-    refuse: bool,
-    verify: impl Fn(&Productive),
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn capture_paired_currentness(
+    p: &Productive,
+) -> impl Fn(&Productive) + use<> {
+    let verify_source = capture_current_source(p);
+    let (reader, descriptor, root, reference, assignment, original, cache, pair_files) = {
+        let owners = p.h.engine.resident_stem_cache.lock().unwrap();
+        let pair = owners[0].accepted.as_ref().unwrap().pair.as_ref().unwrap();
+        let descriptor_path = crate::audio_engine::material_paths::resolve(
+            &pair.root,
+            Path::new(&pair.descriptor_reference),
+        )
+        .unwrap()
+        .path;
+        let pcm_path = crate::audio_engine::material_paths::resolve(
+            &pair.root,
+            Path::new(&pair.reader.descriptor.pcm_generation),
+        )
+        .unwrap()
+        .path;
+        (
+            Arc::downgrade(&pair.reader),
+            pair.reader.descriptor.clone(),
+            pair.root.clone(),
+            pair.descriptor_reference.clone(),
+            pair.source_lease.assignment_id(),
+            ObjectWitness::capture(&pair.source_lease.original_path),
+            ObjectWitness::capture(&pair.source_lease.cache_path),
+            [tree(&descriptor_path), tree(&pcm_path)],
+        )
+    };
+    let root_identity = ObjectWitness::capture(&root);
+    let verify = move |p: &Productive| {
+        verify_source(p);
+        let owners = p.h.engine.resident_stem_cache.lock().unwrap();
+        let pair = owners[0].accepted.as_ref().unwrap().pair.as_ref().unwrap();
+        assert!(reader.ptr_eq(&Arc::downgrade(&pair.reader)));
+        assert_eq!(pair.reader.descriptor, descriptor);
+        assert_eq!(pair.root, root);
+        assert_eq!(pair.descriptor_reference, reference);
+        assert_eq!(pair.reader.descriptor_reference, reference);
+        assert_eq!(
+            capture_identity(pair.source_lease.samples_root())
+                .unwrap()
+                .unwrap(),
+            root_identity.identity
+        );
+        assert_eq!(pair.source_lease.assignment_id(), assignment);
+        assert!(!pair.source_lease.assignment_retired());
+        assert_eq!(pair.source_lease.original_path, original.path);
+        assert_eq!(pair.source_lease.cache_path, cache.path);
+        assert!(
+            pair.source_lease
+                .original_identity_matches(&original.identity)
+        );
+        let leases = p.h.engine.cold_leases.lock().unwrap();
+        assert_eq!(leases[0].as_ref().unwrap().assignment_id(), assignment);
+        drop((leases, owners));
+        root_identity.verify();
+        original.verify();
+        cache.verify();
+        for files in &pair_files {
+            assert_eq!(tree(&files[0].path), *files);
+        }
+    };
+    verify(p);
+    verify
+}
+
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn assert_current_complete_source(
+    p: &Productive,
+    verify: &impl Fn(&Productive),
 ) {
-    verify(&p);
+    verify(p);
     // File custody alone does not authorize a complete read for this current owner.
     let complete_reader = {
         let work = {
@@ -134,7 +208,15 @@ pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::commi
         Arc::downgrade(&complete.samples)
     };
     assert_eq!(complete_reader.strong_count(), 0);
-    verify(&p);
+    verify(p);
+}
+
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) fn finish_legacy_source_fixture(
+    p: Productive,
+    refuse: bool,
+    verify: impl Fn(&Productive),
+) {
+    assert_current_complete_source(&p, &verify);
     let current = p.h.ticket(0);
     eprintln!(
         "legacy TRANSIENT continuing source {}",
