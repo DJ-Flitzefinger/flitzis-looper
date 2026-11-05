@@ -887,6 +887,7 @@ fn public_preflight_retains_original_order_across_successful_or_failed_newer_req
 fn legacy_complete_transient_is_promised_before_source_io_and_kept_until_return() {
     use crate::audio_engine::resident_host_memory::{HostHeadroom, pending_bytes};
     for refuse in [false, true] {
+        begin_ordinary_fixture();
         let mut f = Productive::new(false, 1.0);
         let all = f.request("all_stems", 15);
         f.capture_then_wait(&all);
@@ -901,6 +902,7 @@ fn legacy_complete_transient_is_promised_before_source_io_and_kept_until_return(
             owners[0].committed = Default::default();
             owners[0].accepted.as_mut().unwrap().pair = None;
         }
+        let verify_current = capture_legacy_currentness(&f);
         let transient = crate::audio_engine::stem_cache::admitted_stem_pcm_bytes(
             f.h.material.sample.frame_count(),
             2,
@@ -964,5 +966,9 @@ fn legacy_complete_transient_is_promised_before_source_io_and_kept_until_return(
                 .pending_reservation_count,
             0
         );
+        // Every original promise/refusal assertion precedes the current-source oracle.
+        verify_current(&f);
+        drop((all, window, observed));
+        finish_legacy_source_fixture(f, refuse, verify_current);
     }
 }

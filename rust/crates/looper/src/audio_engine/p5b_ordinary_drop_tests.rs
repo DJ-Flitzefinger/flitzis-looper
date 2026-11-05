@@ -4,6 +4,10 @@ use std::cell::RefCell;
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, OwnedHandle};
 use std::rc::Rc;
 
+#[path = "window_legacy_restore_tests.rs"]
+mod window_legacy_restore;
+pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use window_legacy_restore::{capture_legacy_currentness, finish_legacy_source_fixture};
+
 #[path = "window_cancel_restore_tests.rs"]
 mod window_cancel_restore;
 pub(in crate::audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests) use window_cancel_restore::finish_cancelled_source_fixture;
