@@ -40,6 +40,8 @@ class AudioOutputController:
         self.draft = app.project.audio_output
         self.inventory: list[dict[str, object]] = []
         self.observed: dict[str, object] | None = None
+        # Unfinished manual numeric edits are UI state, never output requests.
+        self.numeric_edits: dict[str, str] = {}
         self.error: str | None = None
         self.previous_errors: dict[tuple[int, str], str] = {}
         self.phase = "unavailable"

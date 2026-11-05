@@ -108,6 +108,18 @@ ASIO. With multiple registered drivers it selects the lowest canonical driver
 identity deterministically; this is not a Windows default-soundcard mapping.
 Auto sample rate and buffer use that driver's current rate and preferred buffer.
 You can choose another supported driver, rate or buffer in Settings.
+For a selected ASIO driver, Settings may offer previous rate probes and buffer
+sizes derived from reported driver geometry. These are snapshots, not necessarily
+all choices in the driver's own control panel. A rate change may change which
+buffers are supported. You can enter a value manually; the driver checks it on
+Apply.
+
+Choose the lowest supported buffer that plays without crackles on your audio
+interface, backend and computer under your usual workload. If audio crackles,
+try a larger buffer; more simultaneous PADs or Key Lock at a changed speed can
+increase processing load. A smaller buffer reduces the nominal buffer interval,
+but no single buffer size or one-millisecond processing deadline is guaranteed
+to be stable on every system.
 
 WASAPI is the fallback when complete ASIO discovery finds no driver. Discovery
 errors and errors opening a registered driver remain visible. An installed

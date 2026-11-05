@@ -1,6 +1,7 @@
 """Output preferences and cached observations; rendering never queries a driver."""
 
-from typing import TYPE_CHECKING
+import math
+from typing import TYPE_CHECKING, cast
 
 from imgui_bundle import imgui
 
@@ -60,6 +61,155 @@ def _installed_channels(control: AudioOutputController) -> list[dict[str, object
     return [row for row in channels if isinstance(row, dict)] if isinstance(channels, list) else []
 
 
+def _current_asio_snapshot(control: AudioOutputController) -> dict[str, object] | None:
+    info = control.observed
+    if (
+        not control.available
+        or control.busy
+        or control.phase != "ready"
+        or control.draft.backend != "asio"
+        or control.draft.device_id is None
+    ):
+        return None
+    if not isinstance(info, dict):
+        return None
+    asio = info.get("asio_control")
+    if not isinstance(asio, dict):
+        return None
+    return asio if _healthy_asio_snapshot(asio, control.draft.device_id) else None
+
+
+def _healthy_asio_snapshot(asio: dict[str, object], device_id: str) -> bool:
+    if asio.get("device_id") != device_id or asio.get("backend_released") is not False:
+        return False
+    if (
+        "failure" not in asio
+        or "info_query_error" not in asio
+        or asio.get("failure") is not None
+        or asio.get("info_query_error") is not None
+    ):
+        return False
+    status = asio.get("status")
+    if not isinstance(status, dict):
+        return False
+    flags = status.get("notifications")
+    error = status.get("callback_error")
+    return type(flags) is int and not flags & (1 | 2 | 4 | 32) and type(error) is int and error == 0
+
+
+def _integral_rate(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value <= 0 or value > 0xFFFF_FFFF or not math.isfinite(value):
+        return None
+    result = int(value)
+    return result if result == value and result <= 0xFFFF_FFFF else None
+
+
+def _reported_rates(asio: dict[str, object]) -> list[int]:
+    rates = set[int]()
+    initialized = _integral_rate(asio.get("initialized_sample_rate_hz"))
+    if initialized is not None:
+        rates.add(initialized)
+    probes = asio.get("common_rate_probes")
+    if isinstance(probes, list):
+        for probe in probes:
+            if not isinstance(probe, dict):
+                continue
+            rate = probe.get("sample_rate_hz")
+            if (
+                type(rate) is int
+                and 0 < rate <= 0xFFFF_FFFF
+                and probe.get("supported") is True
+                and type(probe.get("driver_status")) is int
+                and probe.get("driver_status") == 0
+            ):
+                rates.add(rate)
+    return sorted(rates)
+
+
+def _reported_buffers(
+    control: AudioOutputController, asio: dict[str, object]
+) -> tuple[list[int], bool]:
+    driver = asio.get("driver")
+    rate = _integral_rate(asio.get("initialized_sample_rate_hz"))
+    if not isinstance(driver, dict) or rate is None:
+        return [], False
+    if (
+        _integral_rate(asio.get("last_control_query_rate_hz")) != rate
+        or _integral_rate(driver.get("sample_rate")) != rate
+        or "sample_rate_hz" in control.numeric_edits
+        or control.draft.sample_rate_hz not in {None, rate}
+    ):
+        return [], False
+    return _buffer_geometry(driver)
+
+
+def _buffer_geometry(driver: dict[str, object]) -> tuple[list[int], bool]:
+    """Bound suggestions to the observed ASIO geometry without enumerating huge ranges."""
+    values = [
+        driver.get(key) for key in ("min_frames", "max_frames", "preferred_frames", "granularity")
+    ]
+    if any(type(value) is not int for value in values):
+        return [], False
+    minimum, maximum, preferred, granularity = cast("list[int]", values)
+    if not (1 <= minimum <= preferred <= maximum <= 0x7FFF_FFFF) or granularity < -1:
+        return [], False
+    if granularity == 0:
+        return [preferred], False
+    if granularity == -1:
+        result = []
+        value = minimum
+        while value <= maximum:
+            result.append(value)
+            value *= 2
+        return (result, False) if preferred in result else ([], False)
+    if (preferred - minimum) % granularity:
+        return [], False
+    return _linear_buffer_choices(minimum, maximum, preferred, granularity)
+
+
+def _linear_buffer_choices(
+    minimum: int, maximum: int, preferred: int, granularity: int
+) -> tuple[list[int], bool]:
+    count = (maximum - minimum) // granularity + 1
+    if count <= 128:
+        return [minimum + index * granularity for index in range(count)], False
+    return sorted({minimum, preferred, minimum + (count - 1) * granularity}), True
+
+
+def _reported_choice(
+    control: AudioOutputController, field: str, label: str, values: list[int]
+) -> None:
+    if not values:
+        return
+    current = getattr(control.draft, field)
+    selected = str(current) if current is not None and field not in control.numeric_edits else None
+    choices: list[tuple[str | None, str]] = [(None, "Select a suggested value")]
+    choices.extend((str(value), str(value)) for value in values)
+    changed, value = _choice(label, selected, choices)
+    if changed and value is not None:
+        _replace(control, **{field: int(value)})
+        control.numeric_edits.pop(field, None)
+
+
+def _reported_geometry(control: AudioOutputController) -> None:
+    asio = _current_asio_snapshot(control)
+    if asio is None:
+        return
+    rates = _reported_rates(asio)
+    imgui.text_wrapped(
+        "These ASIO suggestions use previous rate probes and reported buffer geometry; "
+        "they are snapshots, not a complete device control-panel list. A rate change may "
+        "change the supported buffers. The driver validates your request again when applied."
+    )
+    _reported_choice(control, "sample_rate_hz", "Initialized and probed rates (Hz)", rates)
+    buffers, incomplete = _reported_buffers(control, asio)
+    _reported_choice(control, "buffer_frames", "Suggested buffer sizes (frames)", buffers)
+    if incomplete:
+        imgui.text_wrapped("Only representative buffer sizes are shown; manual entry is available.")
+
+
 def _replace(control: AudioOutputController, **changes: object) -> None:
     control.draft = AudioOutputOptions.model_validate(control.draft.model_dump() | changes)
 
@@ -80,21 +230,41 @@ def _choice(
     return False, current
 
 
-def _automatic_number(control: AudioOutputController, label: str, field: str, default: int) -> None:
+def _automatic_number(control: AudioOutputController, label: str, field: str, maximum: int) -> None:
     value = getattr(control.draft, field)
-    changed, automatic = imgui.checkbox(f"Auto##{field}", value is None)
+    editing = field in control.numeric_edits
+    changed, automatic = imgui.checkbox(f"Auto##{field}", value is None and not editing)
     if changed:
-        _replace(control, **{field: None if automatic else default})
+        if automatic:
+            control.numeric_edits.pop(field, None)
+        else:
+            control.numeric_edits[field] = ""
+        _replace(control, **{field: None})
         value = getattr(control.draft, field)
+        editing = field in control.numeric_edits
     imgui.same_line()
-    imgui.begin_disabled(value is None)
+    imgui.begin_disabled(value is None and not editing)
     try:
         with item_width(220):
-            changed, number = imgui.input_int(label, default if value is None else value)
-        if changed and value is not None and 0 < number <= 0x7FFF_FFFF:
-            _replace(control, **{field: number})
+            changed, text = imgui.input_text(
+                label, control.numeric_edits.get(field, str(value) if value is not None else "")
+            )
+        if changed:
+            digits = text.lstrip("0")
+            number = (
+                int(digits)
+                if digits and len(digits) <= 10 and digits.isascii() and digits.isdecimal()
+                else 0
+            )
+            if 0 < number <= maximum:
+                _replace(control, **{field: number})
+                control.numeric_edits.pop(field, None)
+            else:
+                control.numeric_edits[field] = text
     finally:
         imgui.end_disabled()
+    if field in control.numeric_edits:
+        imgui.text_wrapped(f"Enter a valid positive value for {label} before applying.")
 
 
 def _routing(control: AudioOutputController) -> None:
@@ -278,7 +448,8 @@ def _backend_device_controls(control: AudioOutputController) -> None:
     backends = [("auto", "Auto (ASIO first on Windows)")]
     backends.extend((str(item["id"]), str(item["name"])) for item in control.inventory)
     changed, backend = _choice("Backend", control.draft.backend, backends)
-    if changed:
+    if changed and backend != control.draft.backend:
+        control.numeric_edits.clear()
         _replace(
             control,
             backend=backend,
@@ -286,6 +457,7 @@ def _backend_device_controls(control: AudioOutputController) -> None:
             left_channel=None,
             right_channel=None,
             buffer_frames=None,
+            sample_rate_hz=None,
         )
     selected = next(
         (item for item in control.inventory if item.get("id") == control.draft.backend), None
@@ -298,8 +470,16 @@ def _backend_device_controls(control: AudioOutputController) -> None:
         if selected.get("discovery_error"):
             imgui.text_wrapped(str(selected["discovery_error"]))
     changed, device_id = _choice("Device / driver", control.draft.device_id, devices)
-    if changed:
-        _replace(control, device_id=device_id)
+    if changed and device_id != control.draft.device_id:
+        control.numeric_edits.clear()
+        _replace(
+            control,
+            device_id=device_id,
+            sample_rate_hz=None,
+            buffer_frames=None,
+            left_channel=None,
+            right_channel=None,
+        )
 
 
 def _apply_controls(control: AudioOutputController) -> None:
@@ -312,8 +492,12 @@ def _apply_controls(control: AudioOutputController) -> None:
         "installed sample rate explicitly. Auto or another rate is refused "
         "before stopping the current output."
     )
-    if imgui.button("Apply audio output"):
-        control.apply(control.draft)
+    imgui.begin_disabled(bool(control.numeric_edits))
+    try:
+        if imgui.button("Apply audio output") and not control.numeric_edits:
+            control.apply(control.draft)
+    finally:
+        imgui.end_disabled()
     if control.phase == "device_failed" and imgui.button("Retry device close"):
         control.retry_failed_close()
 
@@ -328,8 +512,9 @@ def audio_output_controls(control: AudioOutputController) -> None:
     try:
         _backend_device_controls(control)
         _routing(control)
-        _automatic_number(control, "Sample rate (Hz)", "sample_rate_hz", 48000)
-        _automatic_number(control, "Buffer / period (frames)", "buffer_frames", 512)
+        _automatic_number(control, "Sample rate (Hz)", "sample_rate_hz", 0xFFFF_FFFF)
+        _automatic_number(control, "Buffer / period (frames)", "buffer_frames", 0x7FFF_FFFF)
+        _reported_geometry(control)
         _apply_controls(control)
     finally:
         imgui.end_disabled()

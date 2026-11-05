@@ -52,6 +52,28 @@ configuration without silently replacing an explicit backend request.
 - **THEN** the request fails visibly without being reported as an accepted rounded value
 - **AND** the previous known working configuration is retained or restored through checked ownership
 
+#### Scenario: Manual audio geometry requires explicit values
+- **GIVEN** the selected output uses automatic sample rate or buffer geometry
+- **WHEN** the user changes either field to manual entry
+- **THEN** the application requires an explicit positive value before applying
+- **AND** it does not substitute a device-independent example as a request
+- **AND** unfinished or invalid numeric edits cannot be applied as an older value or Auto
+
+#### Scenario: A different output is selected
+- **GIVEN** a draft contains device-specific sample rate, buffer or physical routing
+- **WHEN** the user selects a different backend or device
+- **THEN** that geometry, routing and unfinished numeric edits reset to Auto
+- **AND** changing only physical routing does not cancel a numeric edit
+
+#### Scenario: ASIO reports output capabilities
+- **GIVEN** the selected explicit ASIO driver has a healthy installed observation
+- **WHEN** Settings offers values from its previous capability queries
+- **THEN** it distinguishes the snapshot from an exhaustive device control-panel list
+- **AND** rate suggestions contain only the initialized rate and successful individual probes
+- **AND** buffer suggestions follow that driver's reported geometry at the observed rate
+- **AND** a planned different or incomplete rate does not reuse the old buffer geometry
+- **AND** selection is explicit, manual entry remains available and Apply revalidates support
+
 #### Scenario: Output observations differ from a request
 - **GIVEN** an output stream has actually been initialized
 - **WHEN** Settings displays its state

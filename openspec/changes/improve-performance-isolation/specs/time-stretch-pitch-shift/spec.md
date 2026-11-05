@@ -10,6 +10,13 @@ presented as proof of audible attack or device latency.
 The suggested 30 ms reference SHALL be advisory rather than a mandatory
 acceptance gate. Optimization SHALL seek the shortest practical latency while
 preserving quality and functions, without disproportionate complexity.
+One millisecond per block or a particular device buffer size SHALL NOT be a
+universal acceptance threshold for Key Lock. Architectural and engine work SHALL
+continue to reduce avoidable processing bottlenecks while preserving quality,
+functionality and realtime safety. The user selects the lowest supported buffer
+that remains free of audible crackles for their device, backend, computer and
+workload; the application SHALL NOT silently change device or system settings to
+claim that threshold.
 
 #### Scenario: Slowed non-master PAD is compared with controls
 - **GIVEN** the declared ready 2/4/6-PAD reference workload
