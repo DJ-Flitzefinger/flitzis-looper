@@ -42,6 +42,8 @@ pub(crate) struct ProspectiveSourceHistory<'a> {
 struct SourceHistoryWork {
     snapshot: SourceFeedSnapshot,
     future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
+    #[cfg(test)]
+    render_wet_probe: bool,
 }
 
 impl SourceHistoryWork {
@@ -49,12 +51,18 @@ impl SourceHistoryWork {
         Self {
             snapshot: SourceFeedSnapshot::new(),
             future: None,
+            #[cfg(test)]
+            render_wet_probe: false,
         }
     }
 
     fn clear_for_reuse(&mut self) {
         self.snapshot.clear_for_reuse();
         self.future = None;
+        #[cfg(test)]
+        {
+            self.render_wet_probe = false;
+        }
     }
 }
 
@@ -147,6 +155,8 @@ pub(crate) struct KeyLockPreparationLane {
     worker_failed: Arc<AtomicBool>,
     #[cfg(test)]
     reserve_withheld: bool,
+    #[cfg(test)]
+    pub(super) render_wet_probe: bool,
 }
 
 pub(crate) enum SourceExchange {
@@ -353,6 +363,10 @@ impl KeyLockPreparationLane {
             .source_history
             .take()
             .expect("preflighted reusable source-history owner");
+        #[cfg(test)]
+        {
+            history.render_wet_probe = std::mem::take(&mut self.render_wet_probe);
+        }
         let request = if context.history.capture_into(&mut history.snapshot) {
             let actual = context.actual_feed.unwrap_or(SourceReadCheckpoint {
                 playback: *feed.playback,
@@ -738,6 +752,21 @@ impl WorkerLane {
             drop(request);
             Ok(false)
         };
+        #[cfg(test)]
+        let result = if matches!(&result, Ok(true))
+            && history.as_ref().is_some_and(|work| work.render_wet_probe)
+        {
+            state.wet_probe = super::wet_continuation_probe::WetSpan::render(&mut state);
+            if state.wet_probe.is_some() {
+                result
+            } else {
+                state.source = None;
+                state.reset_adapter();
+                Ok(false)
+            }
+        } else {
+            result
+        };
         if let Some(history) = history {
             self.return_source_history(history);
         }
@@ -945,6 +974,8 @@ pub(crate) fn create_key_lock_preparation(
             worker_failed: worker_failed.clone(),
             #[cfg(test)]
             reserve_withheld: false,
+            #[cfg(test)]
+            render_wet_probe: false,
         });
         worker_lanes.push(WorkerLane {
             ready: ready_producer,
@@ -1040,6 +1071,7 @@ mod tests {
                 completed_request: completed_request.clone(),
                 worker_failed: Arc::new(AtomicBool::new(false)),
                 reserve_withheld: false,
+                render_wet_probe: false,
             },
             WorkerLane {
                 ready,

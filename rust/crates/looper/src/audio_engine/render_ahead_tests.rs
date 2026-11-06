@@ -117,12 +117,16 @@ impl Stream {
     }
 
     fn change_rate(&mut self) {
+        self.set_rate(1.3);
+    }
+
+    fn set_rate(&mut self, ratio: f64) {
         super::super::push_global_rate_message(
             &self.ownership.global_timing_revision,
             &self.ownership.global_timing_publishing,
             &self.ownership.global_rate_status,
             &mut self.parameters,
-            Some(1.3),
+            Some(ratio),
             Some(0.4),
             "render-ahead probe rate",
         )
@@ -211,17 +215,26 @@ impl Take {
     }
 
     fn assert_recording(&mut self, block: &Block) {
+        self.assert_recording_span(block, 17, 83);
+    }
+
+    fn assert_recording_span(&mut self, block: &Block, first: usize, end: usize) {
         let status = self.joined();
+        let frames = end - first;
         assert!(status.successful_spool(), "{status:?}");
-        assert_eq!(status.first_frame, Some(block.first + 17));
-        assert_eq!(status.end_frame, Some(block.first + 83));
-        assert_eq!(status.written_frames, 66);
+        assert_eq!(status.first_frame, Some(block.first + first as u64));
+        assert_eq!(status.end_frame, Some(block.first + end as u64));
+        assert_eq!(status.written_frames, frames as u64);
         let spool = std::fs::read(&self.path).unwrap();
-        assert_eq!(spool.len(), SPOOL_HEADER_BYTES as usize + 66 * 2 * 4);
+        assert_eq!(spool.len(), SPOOL_HEADER_BYTES as usize + frames * 2 * 4);
         let actual = spool[SPOOL_HEADER_BYTES as usize..]
             .chunks_exact(4)
             .map(|bits| u32::from_le_bytes(bits.try_into().unwrap()));
-        assert!(actual.eq(block.pcm[34..166].iter().map(|value| value.to_bits())));
+        assert!(
+            actual.eq(block.pcm[first * 2..end * 2]
+                .iter()
+                .map(|value| value.to_bits()))
+        );
     }
 }
 
@@ -408,6 +421,177 @@ fn wet_fifo_prefix_survives_same_owner_rate_but_cannot_cover_due_native_shift() 
     eprintln!(
         "Wet FIFO cut at {CUT}: 31 retained frames, 65 from one due Native shift, capture [17,83) relative to cut"
     );
+}
+
+#[test]
+fn wet_source_continuation_transfers_a_worker_shift_after_due_controls() {
+    use crate::audio_engine::source_feed_history::SourceFeedSnapshot;
+
+    const E: u64 = 6624;
+    const F: u64 = E - FRAMES as u64;
+    let samples = sources(2);
+    let readers: Vec<_> = samples
+        .iter()
+        .map(|sample| Arc::downgrade(&sample.samples))
+        .collect();
+
+    for stale in [false, true] {
+        let mut inline = Stream::with_source_preparation(&samples, true, true);
+        let mut ahead = Stream::with_source_preparation(&samples, true, true);
+        let mut owners = [[0; 2]; 2];
+        let mut slots = [[0; 2]; 2];
+        for (side, stream) in [&mut inline, &mut ahead].into_iter().enumerate() {
+            stream.render();
+            let deadline = Instant::now() + WAIT;
+            for voice in stream.owner.state_mut().mixer.voices.iter_mut().take(2) {
+                while !voice.stretch.source_preparation_ready() {
+                    assert!(Instant::now() < deadline, "initial source preparation");
+                    std::thread::sleep(PERIOD);
+                }
+            }
+            while stream.frame() < F - FRAMES as u64 {
+                stream.render();
+            }
+            stream.change_rate();
+            stream.render();
+            assert_eq!(stream.frame(), F);
+            let mixer = &mut stream.owner.state_mut().mixer;
+            for id in 0..2 {
+                let index = mixer
+                    .voices
+                    .iter()
+                    .position(|voice| voice.is_playing_sample(id))
+                    .unwrap();
+                slots[side][id] = index;
+                owners[side][id] = mixer.voices[index].stretch.native_identity();
+                let probe = if stale { side == 1 } else { id == 1 };
+                if !probe {
+                    continue;
+                }
+                mixer
+                    .arm_wet_continuation_probe(index, F, E, side == 1)
+                    .unwrap();
+                let stretch = &mut mixer.voices[index].stretch;
+                let deadline = Instant::now() + WAIT;
+                while !stretch.prospective_work_ready() {
+                    assert!(
+                        !stretch.prospective_work_finished(),
+                        "worker refused E for PAD {id}"
+                    );
+                    assert!(
+                        Instant::now() < deadline,
+                        "worker continuation at E for PAD {id}"
+                    );
+                    std::thread::sleep(PERIOD);
+                }
+                assert_eq!(stretch.prepared_target_output_frame(), Some(E));
+            }
+            stream.render();
+            assert_eq!(stream.frame(), E);
+        }
+
+        let stopped_key = ahead.ownership.callback_content_key(0).unwrap();
+        let stopped_source = ahead
+            .ownership
+            .ordinary_snapshot(stopped_key)
+            .unwrap()
+            .source;
+        let stopped_generation = ahead.owner.state_mut().mixer.voices[slots[1][0]].generation;
+        let prepared = ahead.owner.state_mut().mixer.voices[slots[1][1]]
+            .stretch
+            .prepared_native_address();
+        assert_ne!(prepared, owners[1][1]);
+        assert_ne!(prepared, 0);
+        let mut take = ahead.record(E, E + FRAMES as u64);
+        let [reference, candidate] = [&mut inline, &mut ahead].map(|stream| {
+            stream.stop_pad(0);
+            if stale {
+                stream.set_rate(1.4);
+            }
+            let scope = Scope::begin();
+            let block = stream.render();
+            let observation = scope.finish();
+            assert_eq!(observation.source_refusals, 0);
+            assert_eq!(observation.adapter_shortfall_channel_frames, 0);
+            if stale {
+                let effect = stream.ownership.global_rate_status.read().unwrap();
+                assert_eq!(effect.request_revision, effect.effect.revision);
+                assert_eq!(effect.effect.state, RateState::Applied);
+                assert_eq!(effect.effect.execution_frame, Some(E));
+            }
+            (block, observation)
+        });
+        assert_eq!(
+            reference.0.pcm.map(f32::to_bits),
+            candidate.0.pcm.map(f32::to_bits)
+        );
+        assert_eq!(reference.1.shifts, 1);
+        assert_eq!(candidate.1.shifts, u64::from(stale));
+        // The first new shift of this finite replay emits a quiet onset.
+        // Require real signal in both channels without an arbitrary amplitude floor.
+        let fresh = &candidate.0.pcm[62..];
+        assert!(fresh.iter().all(|value| value.is_finite()));
+        assert!((0..2).all(|channel| fresh.iter().skip(channel).step_by(2).any(|v| *v != 0.0)));
+        let fresh_peak = fresh
+            .iter()
+            .fold(0.0_f32, |peak, value| peak.max(value.abs()));
+        let state = ahead.owner.state_mut();
+        let stopped = &mut state.mixer.voices[slots[1][0]];
+        assert!(!stopped.active);
+        assert_ne!(stopped.generation, stopped_generation);
+        assert_eq!(stopped.stretch.pending_fifo_frames(), (0, 0));
+        assert!(!stopped.stretch.prospective_work_ready());
+        let stop = ahead.ownership.ordinary_snapshot(stopped_key).unwrap();
+        assert_eq!(stop.kind, super::super::ordinary_transport::STOPPED);
+        assert_eq!(stop.source, stopped_source);
+        let voice = &mut state.mixer.voices[slots[1][1]];
+        assert!(voice.stretch.wet_current_source_output_ready());
+        assert_eq!(voice.stretch.pending_fifo_frames(), (64, 447));
+        if stale {
+            assert_eq!(voice.source_playback.rate_target(), 1.4);
+            assert_eq!(voice.stretch.native_identity(), owners[1][1]);
+            assert!(voice.stretch.accepted_wet_probe().is_none());
+            assert!(!voice.stretch.prospective_work_ready());
+        } else {
+            assert_eq!(voice.stretch.native_identity(), prepared);
+            let span = voice.stretch.accepted_wet_probe().unwrap();
+            assert_eq!(span.shifts, 1);
+            assert_eq!(span.before, (480, 31));
+            assert_eq!(span.after, (64, 447));
+            let mut history = SourceFeedSnapshot::new();
+            assert!(voice.source_feed_history.capture_into(&mut history));
+            assert_eq!(history.active_frames(), E + FRAMES as u64);
+            let last = history.spans().next_back().unwrap();
+            let recorded = last
+                .slice((E - last.active_start) as usize, FRAMES)
+                .unwrap();
+            assert!(recorded.playback.matches_exact(&span.receipt.playback));
+            assert!(recorded.plan.matches_exact(span.receipt.plan));
+            assert_eq!(recorded.context, span.receipt.context);
+        }
+
+        let scope = Scope::begin();
+        for _ in 0..5 {
+            assert_eq!(
+                inline.render().pcm.map(f32::to_bits),
+                ahead.render().pcm.map(f32::to_bits)
+            );
+        }
+        assert_eq!(
+            scope.finish().shifts,
+            2,
+            "both owners must reach the next shift"
+        );
+        take.assert_recording_span(&candidate.0, 0, FRAMES);
+        close_callback_and_join(inline.owner, inline.retirement).unwrap();
+        close_callback_and_join(ahead.owner, ahead.retirement).unwrap();
+        eprintln!(
+            "Wet continuation E={E} stale={stale}: inline shifts={}, callback shifts={}, fresh peak={fresh_peak}",
+            reference.1.shifts, candidate.1.shifts,
+        );
+    }
+    drop(samples);
+    assert!(readers.iter().all(|reader| reader.upgrade().is_none()));
 }
 
 #[test]

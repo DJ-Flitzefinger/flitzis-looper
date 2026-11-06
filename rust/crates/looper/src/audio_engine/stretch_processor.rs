@@ -71,8 +71,20 @@ pub struct StretchProcessor {
     wet_output_emitted: bool,
     wet_source_rendered: bool,
     wet_source_output_emitted: bool,
+    #[cfg(test)]
+    wet_probe: Option<WetProbeClaim>,
     // Standalone processors retain their worker. Mixer processors share an engine worker.
     _preparation_worker: Option<KeyLockPreparationWorker>,
+}
+
+#[cfg(test)]
+struct WetProbeClaim {
+    execution: u64,
+    epoch: u64,
+    request_id: u64,
+    incumbent: usize,
+    incumbent_request: u64,
+    render_on_worker: bool,
 }
 
 unsafe impl Send for StretchProcessor {}
@@ -636,11 +648,17 @@ impl StretchProcessor {
             wet_output_emitted: false,
             wet_source_rendered: false,
             wet_source_output_emitted: false,
+            #[cfg(test)]
+            wet_probe: None,
             _preparation_worker: None,
         }
     }
 
     pub fn reset(&mut self) {
+        #[cfg(test)]
+        {
+            self.wet_probe = None;
+        }
         self.wet_rendered = false;
         self.wet_render_failed = false;
         self.wet_output_emitted = false;
@@ -718,6 +736,127 @@ impl StretchProcessor {
         self.request_pending = true;
         self.prospective_request = Some(request_id);
         Some((self.preparation_epoch, request_id))
+    }
+
+    /// The test arms a same-tuple optional adoption. The live Wet owner stays here
+    /// until the due callback accepts the independently prepared continuation.
+    #[cfg(test)]
+    pub(super) fn arm_wet_probe(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        history: ProspectiveSourceHistory<'_>,
+        render_on_worker: bool,
+    ) -> bool {
+        if self.source_lane_busy() || !self.wet_current_source_output_ready() {
+            return false;
+        }
+        let Some(incumbent_request) = self.adopted_request_id else {
+            return false;
+        };
+        let execution = history.execution_frame;
+        self.hold_prospective_tuple();
+        self.preparation.render_wet_probe = render_on_worker;
+        let request = self.request_prospective_tuple_with_history(feed, history);
+        self.preparation.render_wet_probe = false;
+        let Some((epoch, request_id)) = request else {
+            self.invalidate_prepared();
+            return false;
+        };
+        self.wet_probe = Some(WetProbeClaim {
+            execution,
+            epoch,
+            request_id,
+            incumbent: self.native_identity(),
+            incumbent_request,
+            render_on_worker,
+        });
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_preemptible_wet_probe(&self, pitch: PitchIntent, key_lock: bool) -> bool {
+        self.wet_probe.as_ref().is_some_and(|claim| {
+            self.prospective_request == Some(claim.request_id)
+                && self.preparation_epoch == claim.epoch
+                && self.native_identity() == claim.incumbent
+                && self.adopted_request_id == Some(claim.incumbent_request)
+                && self.productive_history.is_some()
+                && !self.native.has_retained_feed()
+                && self.owns_pitch_contract(pitch, key_lock)
+        })
+    }
+
+    #[cfg(test)]
+    fn claim_wet_probe(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        frames: usize,
+    ) -> Option<SourceReadReceipt> {
+        if self.wet_probe.as_ref().is_some_and(|claim| {
+            feed.output_frame
+                .is_some_and(|frame| frame < claim.execution)
+        }) {
+            return None;
+        }
+        let claim = self.wet_probe.take()?;
+        let next_position = feed.playback.position_at(frames);
+        let accepted = feed.output_frame == Some(claim.execution)
+            && frames == super::wet_continuation_probe::WET_PROBE_FRAMES
+            && next_position.is_some()
+            && self.native_identity() == claim.incumbent
+            && self.adopted_request_id == Some(claim.incumbent_request)
+            && !self.native.has_retained_feed()
+            && self
+                .native
+                .has_productive_continuity(feed, self.productive_history)
+            && self.native.matches_effective_source(
+                feed,
+                self.preparation_epoch,
+                self.productive_history,
+            )
+            && self.prospective_tuple_matches(feed, claim.epoch, claim.request_id)
+            && self.preparation.prepared_state().is_some_and(|candidate| {
+                candidate
+                    .source
+                    .as_ref()
+                    .zip(feed.permit)
+                    .is_some_and(|(source, live)| {
+                        live.current(feed.sample, feed.sample_rate_hz)
+                            && source.permit.same_endpoint_authority(live)
+                    })
+                    && if claim.render_on_worker {
+                        candidate
+                            .wet_probe
+                            .as_ref()
+                            .is_some_and(|span| span.matches(feed, frames))
+                    } else {
+                        candidate.wet_probe.is_none()
+                    }
+            });
+        if !accepted {
+            self.cancel_source_request_if_owned(claim.epoch, claim.request_id);
+            return None;
+        }
+        self.adopt_prospective_tuple_claimed(feed, claim.request_id);
+        let span = self.native.wet_probe.as_ref()?;
+        for (output, pcm) in self.output.iter_mut().zip(&span.pcm) {
+            output[..frames].copy_from_slice(pcm);
+        }
+        let receipt = span.receipt;
+        self.wet_rendered = true;
+        self.wet_source_rendered = true;
+        self.productive_history = Some(ProductiveSourceHistory {
+            binding: receipt.context.binding,
+            next_position: next_position.expect("validated next position"),
+            domain: Some(receipt.plan.domain()),
+            fed_output_frames: self.native.primed_output_frames as u64 + frames as u64,
+        });
+        Some(receipt)
+    }
+
+    #[cfg(test)]
+    pub(super) fn accepted_wet_probe(&self) -> Option<&super::wet_continuation_probe::WetSpan> {
+        self.native.wet_probe.as_ref()
     }
 
     pub(crate) fn prospective_tuple_matches(
@@ -814,6 +953,10 @@ impl StretchProcessor {
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 || self.channels == 0 {
             return None;
+        }
+        #[cfg(test)]
+        if let Some(receipt) = self.claim_wet_probe(&feed, frames) {
+            return Some(receipt);
         }
         let retained_feed = match self.native.retained_start_feed(feed.playback, feed.plan) {
             Ok(actual) => actual,

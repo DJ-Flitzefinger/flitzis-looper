@@ -503,6 +503,13 @@ impl RtMixer {
                 enabled,
             );
             let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
+            // Optional probe work yields to a scalar control while the incumbent
+            // Wet owner can continue. The rate commit fences the probe through
+            // invalidate_source_for_all.
+            #[cfg(test)]
+            if voice.stretch.has_preemptible_wet_probe(pitch, key_lock) {
+                continue;
+            }
             if voice.stretch.has_retained_source_input() {
                 let snapshot = self
                     .capture_pitch_voice_snapshot(index)

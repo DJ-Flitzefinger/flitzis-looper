@@ -725,6 +725,8 @@ pub(crate) struct NativeAdapterState {
     /// Only genuine active-E preparation seeds this. Some(inactive) fences later restarts.
     pub(crate) source_transition: Option<StemTransition>,
     pub(crate) primed_output_frames: usize,
+    #[cfg(test)]
+    pub(crate) wet_probe: Option<super::wet_continuation_probe::WetSpan>,
     input_history_context: Option<NativeStartHistoryContext>,
     retained_start_timeline: Option<RetainedNativeStartTimeline>,
 }
@@ -754,6 +756,8 @@ impl NativeAdapterState {
             effective_stem_read_context: None,
             source_transition: None,
             primed_output_frames: 0,
+            #[cfg(test)]
+            wet_probe: None,
             input_history_context: None,
             retained_start_timeline: None,
         }
@@ -771,6 +775,10 @@ impl NativeAdapterState {
         self.active = false;
         self.pitch_scale = 1.0;
         self.primed_output_frames = 0;
+        #[cfg(test)]
+        {
+            self.wet_probe = None;
+        }
         self.source_transition = None;
         self.effective_mode = None;
         self.effective_stem_read_context = None;

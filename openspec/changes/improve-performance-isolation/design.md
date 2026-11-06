@@ -7184,3 +7184,36 @@ no Wet output. Device time, scheduling, final mix and capture remain callback
 owned. The bounded shared-renderer probe exercises the retained prefix, STOP,
 scalar tempo, and final capture. Product worker ownership, underrun handling,
 backend submission and device acceptance require separate evidence.
+
+### Source-only continuation at a prepared E
+
+The test uses the existing Key Lock preparation lane to replay one optional
+same-tuple candidate from actual source history at F=6528 to its original
+E=6624. A rate revision before F keeps the source on a real glide step, so
+the replay preserves the input lattice rather than choosing a new constant
+endpoint. The ordinary E=4096 preparation used to establish the incumbent has
+511 output frames and no pending input at E. It cannot move a shift in its
+first 96 frames.
+
+At E=6624 the worker-owned candidate has 480 input and 31 output frames.
+Its worker reads the next exact 96 frames and runs the shared Native adapter
+once. The result carries stereo Wet PCM, the actual Native-input receipt,
+and the same Native owner with its post-span FIFO. The callback can claim it
+after due controls and before live gain, EQ, final mix, and capture. The live
+voice keeps its incumbent until the claim checks the exact interval, source
+permit, birth, read trajectory and readers, and productive Native continuity.
+A stopped birth releases its result. A stale rate candidate leaves the
+incumbent on the ordinary inline path. The ordinary prospective lane protects
+required effects against a conflicting scalar rate claim. The optional test
+candidate has lower priority. While its valid incumbent can still render, it
+does not block the scalar claim. The committed rate revision fences it through
+the existing source invalidation.
+
+The paired test compares an independently prepared E owner rendered inline
+with the worker continuation. The stale comparison uses a genuine incumbent
+with no optional adoption. The probe also checks the next Native shift and
+the final 96-frame capture. The replay cost and worker wait in this fixture
+provide no deadline or throughput measurement. A productive source worker
+still needs a control admission boundary, bounded misses, and a submission
+failure when required Wet has no valid owner. A real device's submission
+receipt and OwnACK remain separate.

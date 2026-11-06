@@ -579,6 +579,54 @@ impl RtMixer {
         self.capture_voice_snapshot(index)
     }
 
+    #[cfg(test)]
+    pub(super) fn arm_wet_continuation_probe(
+        &mut self,
+        index: usize,
+        capture_frame: u64,
+        execution_frame: u64,
+        render_on_worker: bool,
+    ) -> Option<()> {
+        use super::key_lock_preparation::ProspectiveSourceHistory;
+
+        let snapshot = self.capture_voice_snapshot(index)?;
+        let (pitch_intent, key_lock) = self.effective_voice_tuple(index);
+        let permit = self.capture_voice_history_permit(index, &snapshot)?;
+        let readers = snapshot.readers()?;
+        if snapshot.paused || snapshot.actual_feed.is_some() || !key_lock {
+            return None;
+        }
+        let voice = &mut self.voices[index];
+        voice
+            .stretch
+            .arm_wet_probe(
+                &ProductiveSourceFeed {
+                    pitch_intent,
+                    key_lock,
+                    sample: &snapshot.sample,
+                    stems: readers.current,
+                    outgoing_stems: readers.outgoing,
+                    sample_rate_hz: snapshot.sample_rate_hz,
+                    accepted: snapshot.accepted,
+                    plan: snapshot.plan,
+                    playback: &snapshot.playback,
+                    permit: Some(&permit),
+                    output_frame: Some(capture_frame),
+                },
+                ProspectiveSourceHistory {
+                    history: &voice.source_feed_history,
+                    voice_lifetime: &voice.history_lifetime,
+                    voice_generation: voice.generation,
+                    execution_frame,
+                    paused: false,
+                    actual_feed: None,
+                    source_feed_context: snapshot.source_feed_context,
+                },
+                render_on_worker,
+            )
+            .then_some(())
+    }
+
     /// The global dry-rate claim alone may capture an existing mapped trajectory.
     /// Generic pitch/Key-Lock/history callers keep their established mapped refusal.
     #[cfg(test)]
