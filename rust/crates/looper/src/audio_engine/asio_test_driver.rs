@@ -64,6 +64,8 @@ pub(in crate::audio_engine) struct TickObservation {
     pub native: crate::audio_engine::native_render_observation::Observation,
     pub output_frame: u64,
     pub bound_rate_frame: Option<u64>,
+    pub deferred_refresh: Option<(u64, usize)>,
+    pub capture_stop: Option<u64>,
     pub pads: [PadObservation; 6],
 }
 

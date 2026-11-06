@@ -170,6 +170,14 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the ordinary execution checks SHALL govern the coupled effect and acknowledgement at the assigned frame
 - **AND** already assigned frames and independent STOP, source acknowledgements and recording SHALL keep their existing timing
 
+#### Scenario: A bound master refresh still lacks a dry peer's Key Lock history
+- **GIVEN** an accepted master refresh has reached its original assigned Wet-end frame but a live dry Key Lock peer cannot support the requested nonunity target
+- **WHEN** ordinary execution retains that same refresh pending and the final mix continues through a later already admitted STOP for an active recording
+- **THEN** the refresh SHALL retain its original identity and assigned frame without a partial loop or master effect
+- **AND** the final-mix capture tap SHALL stop the original session at its own admitted STOP and copy no later frames, even while the unrelated event remains deferred
+- **AND** pending capture starts and uncommitted recording groups SHALL retain their ordinary guards, and equality with the segment end SHALL remain eligible for the next ordinary due pass
+- **AND** output submission SHALL still gate capture success, while source acknowledgement, original Native ownership and last-reader retirement keep their existing paths
+
 #### Scenario: A terminal member proves its exact old atomic group impossible
 - **GIVEN** a retained atomic group has a member conclusively marked rejected
 - **WHEN** the runtime polls its exact reserved member owners before readiness acceleration

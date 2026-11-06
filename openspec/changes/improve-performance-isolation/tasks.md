@@ -1077,6 +1077,12 @@ matrix from the distinct successful-case union or weaken their original assertio
 
 ## Capacity and continuity
 
+- [x] Reproduce a bound accepted master refresh retaining a dry Key Lock peer
+      at its original Wet-end frame, and preserve an independent active recording's
+      admitted STOP through the deferred final-mix tap without reordering effects;
+      compare original Native, complete request PCM and recording to a no-refresh
+      reference, retaining output-submission and pending-group guards.
+
 Capacity errors alone never stop, pause, narrow or complete this assignment.
 Retry the same permissible step after interruptible waits of about 20, then 40,
 then at most 60 seconds, without a chosen retry/total limit. Inspect uncertain

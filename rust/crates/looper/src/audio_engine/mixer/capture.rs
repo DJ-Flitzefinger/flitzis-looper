@@ -307,13 +307,45 @@ impl RtMixer {
     }
 
     /// Only the real final-mix segment calls this; there is no second render or clock.
-    pub(crate) fn append_mix_capture(&mut self, first_frame: u64, final_mix: &[f32]) {
+    pub(crate) fn append_mix_capture<const CAPACITY: usize>(
+        &mut self,
+        scheduler: &FixedCapacityScheduler<CAPACITY>,
+        first_frame: u64,
+        final_mix: &[f32],
+    ) {
         if self.mix_capture_pending_start.is_some() {
             return;
         }
         if let Some(work) = self.mix_capture.as_mut() {
+            // A deferred effect can hide later due commands while the mixer
+            // renders the whole remaining interval. The original admitted
+            // STOP remains this active take's authority, without advancing
+            // any other queued effect or creating a second endpoint.
+            if scheduler.deferred_due().is_some()
+                && self.mix_capture_pending_group.is_none()
+                && self.channels != 0
+                && let Some(stop) = scheduler.capture_stop_target_frame(work.session_id())
+                && let Some(end) = first_frame.checked_add((final_mix.len() / self.channels) as u64)
+                && stop < end
+            {
+                if let Some(frames) = stop.checked_sub(first_frame) {
+                    work.append_segment(first_frame, &final_mix[..frames as usize * self.channels]);
+                }
+                // Existing continuity checks reject an already missed STOP.
+                // Equality with the segment end stays in the ordinary due pass.
+                work.stop(work.session_id(), stop);
+                return;
+            }
             work.append_segment(first_frame, final_mix);
         }
+    }
+
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    pub(crate) fn capture_stop_for_test<const CAPACITY: usize>(
+        &self,
+        scheduler: &FixedCapacityScheduler<CAPACITY>,
+    ) -> Option<u64> {
+        scheduler.capture_stop_target_frame(self.mix_capture.as_ref()?.session_id())
     }
 
     pub(crate) fn fail_mix_capture_stream(&mut self) {

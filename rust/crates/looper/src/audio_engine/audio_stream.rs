@@ -1636,6 +1636,7 @@ fn render_scheduled_audio_tracking_pads<
         if next_target_frame >= callback_end_frame {
             if !render_mixer_segment(
                 mixer,
+                scheduler,
                 output,
                 pad_peaks,
                 &mut segment_peaks,
@@ -1655,6 +1656,7 @@ fn render_scheduled_audio_tracking_pads<
         if next_target_frame > rendered_until_frame {
             if !render_mixer_segment(
                 mixer,
+                scheduler,
                 output,
                 pad_peaks,
                 &mut segment_peaks,
@@ -1690,6 +1692,7 @@ fn render_scheduled_audio_tracking_pads<
             mixer.cancel_bpm_history();
             if !render_mixer_segment(
                 mixer,
+                scheduler,
                 output,
                 pad_peaks,
                 &mut segment_peaks,
@@ -1719,8 +1722,9 @@ fn render_scheduled_audio_tracking_pads<
 
 // Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
 #[allow(clippy::too_many_arguments)]
-fn render_mixer_segment<R: AudioBufferRetirement>(
+fn render_mixer_segment<const CAPACITY: usize, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
+    scheduler: &FixedCapacityScheduler<CAPACITY>,
     output: &mut [f32],
     pad_peaks: &mut [f32; NUM_SAMPLES],
     segment_peaks: &mut [f32; NUM_SAMPLES],
@@ -1749,7 +1753,7 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     ) {
         return false;
     }
-    mixer.append_mix_capture(segment_start_frame, &output[start..end]);
+    mixer.append_mix_capture(scheduler, segment_start_frame, &output[start..end]);
 
     for id in pad_activity.iter() {
         pad_peaks[id] = pad_peaks[id].max(segment_peaks[id]);
@@ -4057,6 +4061,13 @@ impl AsioRenderContext {
             native,
             output_frame: state.transport.output_frame(),
             bound_rate_frame: state.mixer.next_global_rate_frame(),
+            deferred_refresh: state.scheduler.deferred_due().and_then(|event| {
+                let ScheduledCommand::RefreshAcceptedTiming(refresh) = &event.command else {
+                    return None;
+                };
+                Some((event.target_frame, refresh.execution_identity()))
+            }),
+            capture_stop: state.mixer.capture_stop_for_test(&state.scheduler),
             pads,
         }
     }

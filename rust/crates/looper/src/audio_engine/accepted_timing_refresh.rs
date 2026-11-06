@@ -83,6 +83,11 @@ impl AcceptedTimingRefresh {
         self.execution.native.store(native, Ordering::Relaxed);
         self.execution.frame.store(frame, Ordering::Release);
     }
+
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    pub(super) fn execution_identity(&self) -> usize {
+        Arc::as_ptr(&self.execution) as usize
+    }
 }
 
 impl Drop for AcceptedTimingRefresh {
@@ -110,6 +115,10 @@ pub struct AcceptedTimingRefreshTicket {
 
 #[cfg(all(test, windows, feature = "asio-contract-tests"))]
 impl AcceptedTimingRefreshTicket {
+    pub(super) fn execution_identity(&self) -> usize {
+        Arc::as_ptr(&self.execution) as usize
+    }
+
     pub(super) fn execution(&self) -> Option<(u64, usize)> {
         let frame = self.execution.frame.load(Ordering::Acquire);
         (frame != u64::MAX).then(|| (frame, self.execution.native.load(Ordering::Relaxed)))
