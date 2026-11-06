@@ -616,14 +616,29 @@ fn asio_preserves_claimed_wet_while_new_bank_awaits_own_ack() {
 
 #[test]
 fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
+    ordinary_first_due_shift(None);
+}
+
+#[test]
+fn asio_ordinary_first_shift_uses_tempo_at_the_actual_request() {
+    let (steady, steady_input) = ordinary_first_due_shift(Some(false));
+    let (changed, changed_input) = ordinary_first_due_shift(Some(true));
+    let prefix_bytes = steady.len() - 2 * size_of::<f32>();
+    assert_eq!(&steady[..prefix_bytes], &changed[..prefix_bytes]);
+    assert_ne!(steady_input, changed_input);
+}
+
+fn ordinary_first_due_shift(paced_tempo_edit: Option<bool>) -> (Vec<u8>, [u32; 2]) {
     use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
     use crate::audio_engine::pitch_intent::PitchIntent;
 
     const FRAMES: u64 = 96;
     const E: u64 = 4096;
+    const EARLY: u64 = 4128;
     const C: u64 = 4320;
     const DUE: u64 = 4512;
     const END: u64 = DUE + FRAMES;
+    const PERIOD: Duration = Duration::from_millis(1);
     Python::initialize();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("ordinary.capture");
@@ -686,8 +701,26 @@ fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
     assert!(engine.start_mix_capture_internal(&ticket, C).unwrap());
     assert!(engine.stop_mix_capture_internal(&ticket, END).unwrap());
 
+    let mut deadline = None;
+    let mut early_entry = None;
+    let mut skipped_slots = 0;
+    let mut pace = |first| {
+        if paced_tempo_edit.is_none() || first < EARLY {
+            return;
+        }
+        let target = deadline.unwrap_or_else(Instant::now);
+        if let Some(delay) = target.checked_duration_since(Instant::now()) {
+            std::thread::sleep(delay);
+        }
+        let now = Instant::now();
+        early_entry.get_or_insert(now);
+        let elapsed_slots = now.saturating_duration_since(target).as_millis() as u32;
+        skipped_slots += elapsed_slots;
+        deadline = Some(target + PERIOD * (elapsed_slots + 1));
+    };
     let mut fed_before_shift = 0;
     for end in (4 * FRAMES..=DUE).step_by(FRAMES as usize) {
+        pace(end - FRAMES);
         let tick = stream.test_tick().unwrap();
         assert_eq!(tick.output_frame, end);
         assert_eq!(submission.prefix(), (end, false));
@@ -708,19 +741,51 @@ fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
     }
     assert_eq!(start.execution_frame(), Some(E));
     assert_eq!(start.effective_frame(), Some(E));
-    let (tick, submitted_pcm) = std::thread::scope(|scope| {
-        factory.arm_output_ready();
-        let callback = scope.spawn(|| stream.test_tick().unwrap());
-        let submitted = until(|| factory.gated_output_pcm());
-        let prefix = submission.prefix();
-        factory.release_output_ready(false);
-        let tick = callback.join().unwrap();
-        assert_eq!(prefix, (DUE, false));
-        (tick, submitted)
-    });
+    let ownership = &engine.input_runtime_ownership;
+    if paced_tempo_edit == Some(true) {
+        push_global_rate_message(
+            &ownership.global_timing_revision,
+            &ownership.global_timing_publishing,
+            &ownership.global_rate_status,
+            &mut stream.parameter_producer.lock().unwrap(),
+            Some(1.2),
+            None,
+            "ordinary ASIO first shift tempo",
+        )
+        .unwrap();
+    }
+    pace(DUE);
+    let (tick, submitted_pcm) = if paced_tempo_edit.is_some() {
+        let measured_lead = early_entry.unwrap().elapsed();
+        let tick = stream.test_tick().unwrap();
+        eprintln!(
+            "Ordinary paced ASIO tempo={paced_tempo_edit:?} lead={measured_lead:?} skipped_slots={skipped_slots} shift={:?} callback={:?}",
+            tick.native, tick.callback
+        );
+        (tick, None)
+    } else {
+        std::thread::scope(|scope| {
+            factory.arm_output_ready();
+            let callback = scope.spawn(|| stream.test_tick().unwrap());
+            let submitted = until(|| factory.gated_output_pcm());
+            let prefix = submission.prefix();
+            factory.release_output_ready(false);
+            let tick = callback.join().unwrap();
+            assert_eq!(prefix, (DUE, false));
+            (tick, Some(submitted))
+        })
+    };
+    if paced_tempo_edit == Some(true) {
+        let status = ownership.global_rate_status.read().unwrap();
+        assert_eq!(status.effect.execution_frame, Some(DUE));
+        assert_eq!(status.request_revision, status.effect.revision);
+        assert!(tick.pads[0].frame as u64 > END - E || tick.pads[0].fraction > 0.0);
+    }
     assert_eq!(tick.output_frame, END);
     assert_eq!(submission.prefix(), (END, false));
     assert_eq!(tick.native.shifts, 1);
+    let dependency = tick.native.first_shift_dependency.unwrap();
+    assert_eq!(dependency.ready_prefix, 95);
     assert_eq!(tick.pads[0].native_state, native);
     assert_eq!(tick.pads[0].pending_fifo_frames, (0, 511));
     assert_eq!(
@@ -731,7 +796,6 @@ fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
         "Ordinary PAD T=E={E} S=0 C={C} FIFO=(224,287) first shift=[{DUE},{END}) Native={native:#x}",
     );
 
-    let ownership = &engine.input_runtime_ownership;
     assert!(enqueue_stop_with_producer(
         ownership,
         &mut stream.producer.lock().unwrap(),
@@ -752,21 +816,23 @@ fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
     assert!(status.successful_spool());
     assert_eq!((status.first_frame, status.end_frame), (Some(C), Some(END)));
     assert_eq!(status.written_frames, END - C);
-    let captured = fs::read(&path).unwrap();
-    let submitted_bytes = submitted_pcm
-        .iter()
-        .flat_map(|sample| sample.to_le_bytes())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        &captured[SPOOL_HEADER_BYTES as usize + (DUE - C) as usize * 8..],
-        submitted_bytes
-    );
+    let captured = fs::read(&path)
+        .unwrap()
+        .split_off(SPOOL_HEADER_BYTES as usize);
+    if let Some(submitted_pcm) = submitted_pcm {
+        let submitted_bytes = submitted_pcm
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(&captured[(DUE - C) as usize * 8..], submitted_bytes);
+    }
     let ended = owner.lock().unwrap();
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
     assert_eq!(factory.info().unwrap().active, 0);
     drop(start);
     drop(engine);
     assert!(source.reader.upgrade().is_none());
+    (captured, dependency.final_input_bits)
 }
 
 #[test]

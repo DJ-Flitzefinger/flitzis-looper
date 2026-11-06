@@ -1269,6 +1269,17 @@ impl NativeAdapterState {
                 .as_mut()
                 .expect("active adapter owns native state")
                 .shift(&self.input, &mut self.output)?;
+            #[cfg(test)]
+            if frames == 96
+                && self.block_size == 512
+                && self.input.len() == 2
+                && self.output_fifo[0].len() == 95
+            {
+                super::native_render_observation::shifted_before_mix(
+                    95,
+                    [self.input[0][511].to_bits(), self.input[1][511].to_bits()],
+                );
+            }
             self.used = true;
             for (fifo, channel) in self.output_fifo.iter_mut().zip(&self.output) {
                 if fifo.push_slice(&channel[..self.block_size]) != self.block_size {

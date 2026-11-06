@@ -6121,6 +6121,9 @@ impl RtMixer {
                     };
                     #[cfg(test)]
                     super::native_render_observation::source_result(source_read.is_some());
+                    #[cfg(test)]
+                    let shift_dependency =
+                        super::native_render_observation::take_pending_dependency();
                     if let Some(receipt) = source_read {
                         if let Some(cell) = ownership.callback_cell(voice.sample_id) {
                             voice.source_control_epoch.record(
@@ -6178,6 +6181,12 @@ impl RtMixer {
                     let capture_source = (sample.source_address(), sample.source_sample_count());
                     let output_buffers = voice.stretch.output_buffers();
                     for frame in 0..chunk_frames {
+                        #[cfg(test)]
+                        if let Some(dependency) = shift_dependency
+                            && frame == dependency.ready_prefix
+                        {
+                            dependency.mixed();
+                        }
                         let out_base = (rendered + frame) * channels;
                         let trim_gain = pad_gain_smoother.next();
                         pad_dsp_chain.begin_frame();
