@@ -7311,8 +7311,27 @@ This rule changes only initial target selection. The drain continues through
 its ordinary bounded FIFO, including subsequent independent source OwnACKs.
 Already scheduled events retain their frame. The refresh publishes acceptance
 only after its existing source, launch, geometry and effect checks succeed.
-Immediate loop controls, coupled master refreshes and BPM Lock have separate
-admission rules.
+Immediate loop controls and BPM Lock have separate admission rules.
+
+### First admission of a coupled accepted master refresh
+
+A current accepted-timing refresh may also carry a master period derived
+from the accepted source period and the effective speed. A refresh for an
+idle anchor can change another voice's rate even with unchanged anchor
+geometry. Applying it while that voice still owes Wet would alter the
+trajectory that the original Native already processed.
+
+For an unbound refresh during the qualified request, the mixer uses the
+current enabled BPM state and exact accepted-period calculation, with no
+competing pending global rate. It compares the prospective clamped scalar
+target against each live voice with an actual claimed Wet slice and includes
+any effective loop-region change for the refreshed voice. The scheduler
+first binds the refresh at the later of the usual next frame and the last
+affected slice's exclusive end. An unchanged target and loop region impose
+no Wet delay. The execution path still qualifies the completed drains and
+claims the current global and source effects together. The new admission
+boundary preserves already assigned frames, continued FIFO draining,
+independent source acknowledgements and normal submission and recording.
 
 ### Missing Work at an interior in-place SET
 

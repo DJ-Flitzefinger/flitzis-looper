@@ -130,6 +130,14 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the refresh SHALL leave the control drain available for independent source acknowledgements and preserve already assigned STOP and recording frames
 - **AND** already scheduled effects and refreshes without an affected Wet obligation SHALL keep their existing timing
 
+#### Scenario: An accepted master refresh reaches admission after an aligned ASIO Wet claim
+- **GIVEN** a qualified stereo 96 kHz ASIO request of 96 frames owes an already claimed Wet slice
+- **WHEN** the control drain first admits an unbound accepted-timing refresh whose qualified master would change a voice's exact scalar target or whose coupled loop edit would change the refreshed voice's effective loop region
+- **THEN** the scheduler SHALL bind it at the later of the usual next frame and the exclusive end of the last affected claimed Wet slice
+- **AND** voices whose exact scalar target and effective loop region are preserved SHALL impose no additional delay
+- **AND** the ordinary execution checks SHALL govern the coupled effect and acknowledgement at the assigned frame
+- **AND** already assigned frames and independent STOP, source acknowledgements and recording SHALL keep their existing timing
+
 #### Scenario: A terminal member proves its exact old atomic group impossible
 - **GIVEN** a retained atomic group has a member conclusively marked rejected
 - **WHEN** the runtime polls its exact reserved member owners before readiness acceleration

@@ -240,13 +240,16 @@ and full identity. A selected BPMLOCK anchor supplies `period / speed` directly.
 admits those derived values as one guarded native effect. It never replays Legacy
 BPM or origin, refits evidence, or treats historical ticket metadata as current.
 
-The callback schedules refresh at its start frame plus one, after the existing
-bounded parameter drain. Older parameter backlog rejects the whole effect; later
-speed/master/BPMLOCK admission invalidates its global control revision. Current
-source/authority/full accepted projection and retirement/scheduler capacity are
-checked before effects. Loop and optional master/bootstrap commit together;
-failure leaves both previous derived values available. This one-frame boundary
-orders control lanes and does not introduce a second musical clock.
+The callback normally schedules refresh at its start frame plus one, after the
+existing bounded parameter drain. In a qualified ASIO request at 96 kHz with
+96 stereo frames, a still-unbound refresh that would change an already claimed
+Wet voice's effective loop region or exact scalar target can first bind at the
+exclusive end of the last affected slice. An older parameter backlog rejects a
+coupled master effect. Later speed, master or BPMLOCK admission invalidates its
+global control revision. Current source, authority, full accepted projection
+and retirement and scheduler capacity are checked before effects. The loop and
+optional master/bootstrap commit together. Failure preserves the previous
+derived values.
 The coupled master effect replaces an older pending bootstrap reference with its
 selected current pad; an already completed one-time bootstrap keeps its epoch.
 An older foreign reference becoming ready afterward cannot anchor the beat phase

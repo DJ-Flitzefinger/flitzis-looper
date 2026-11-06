@@ -974,20 +974,37 @@ fn asio_wet_set_uses_exact_scalar_tempo_ingress() {
 
 #[test]
 fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
-    aligned_wet_set_with_ordered_control(None);
+    aligned_wet_set_with_ordered_control(OrderedWetControl::Loop);
 }
 
 #[test]
 fn asio_refuses_wet_set_for_a_staged_bpm_lock_that_changes_its_rate() {
-    aligned_wet_set_with_ordered_control(Some(0.75));
+    aligned_wet_set_with_ordered_control(OrderedWetControl::StagedBpm(0.75));
 }
 
 #[test]
 fn asio_admits_wet_set_when_staged_bpm_lock_preserves_its_rate() {
-    aligned_wet_set_with_ordered_control(Some(0.5));
+    aligned_wet_set_with_ordered_control(OrderedWetControl::StagedBpm(0.5));
 }
 
-fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
+#[test]
+fn asio_admits_coupled_master_refresh_after_affected_wet() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::MasterRefresh(0.75));
+}
+
+#[test]
+fn asio_admits_same_rate_master_refresh_at_the_first_eligible_frame() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::MasterRefresh(0.7));
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OrderedWetControl {
+    Loop,
+    StagedBpm(f64),
+    MasterRefresh(f64),
+}
+
+fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
     use crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing;
     use crate::audio_engine::constants::NUM_SAMPLES;
     use crate::audio_engine::global_rate_status::BpmReason;
@@ -1005,14 +1022,18 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     const OLD_END: f64 = 90.0;
     const NEW_START: f64 = 8.0;
     let seconds = |frame| frame / f64::from(RATE);
+    let anchor_period = match control {
+        OrderedWetControl::Loop => None,
+        OrderedWetControl::StagedBpm(period) => Some(period),
+        OrderedWetControl::MasterRefresh(_) => Some(0.7),
+    };
+    let master_refresh = matches!(control, OrderedWetControl::MasterRefresh(_));
+    let capture_frame = if master_refresh { 23_040 } else { F };
 
     Python::initialize();
     let directory = tempfile::tempdir().unwrap().keep();
     let path = directory.join("take.capture");
-    eprintln!(
-        "ASIO ordered Wet {anchor_period:?} spool: {}",
-        path.display()
-    );
+    eprintln!("ASIO ordered Wet {control:?} spool: {}", path.display());
     let factory = Factory::new().unwrap();
     let mut engine = AudioEngine::new().unwrap();
     engine.test_asio_driver = Some(factory.clone());
@@ -1042,7 +1063,7 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
             "c",
             SourcePitchInitialization::FreshNeutral,
             48_000,
-            None,
+            master_refresh.then_some((0, OLD_END as usize)),
         )
     });
     let stream = engine.stream_handle.as_ref().unwrap();
@@ -1075,7 +1096,13 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
         engine.set_pad_timing_intent(2, "automatic").unwrap();
     }
     engine.set_pad_timing_intent(0, "automatic").unwrap();
-    let timing = publish_synthetic_loaded_timing(&engine, &stream.producer, 0, 0.5);
+    let timing = publish_synthetic_loaded_timing(
+        &engine,
+        &stream.producer,
+        0,
+        if master_refresh { 0.7 } else { 0.5 },
+    );
+    let ownership = &engine.input_runtime_ownership;
     assert_eq!(timing.publication_status().unwrap(), "pending");
     let anchor_timing = anchor_period.map(|period| {
         let timing = publish_synthetic_loaded_timing(&engine, &stream.producer, 2, period);
@@ -1087,12 +1114,87 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     let runtime = engine.input_runtime.as_ref().unwrap();
     let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
     assert!(binding.current() && binding.available() && binding.binding.accepted.is_some());
-    let anchor = anchor_timing.as_ref().map(|timing| {
+    let mut anchor = anchor_timing.as_ref().map(|timing| {
         assert_eq!(timing.publication_status().unwrap(), "accepted");
         let binding = input_runtime_binding::capture(&engine, 2).unwrap().unwrap();
         assert!(binding.current() && binding.available() && binding.binding.accepted.is_some());
         binding
     });
+    let mut next_tick = 3 * FRAMES;
+    let master = if let OrderedWetControl::MasterRefresh(period) = control {
+        // Keep the real varispeed glide in the worker's replay history, but
+        // settle A before selecting C and capturing the aligned SET.
+        for end in (next_tick..=capture_frame - 3 * FRAMES).step_by(FRAMES as usize) {
+            if end == capture_frame - 41 * FRAMES {
+                push_global_rate_message(
+                    &ownership.global_timing_revision,
+                    &ownership.global_timing_publishing,
+                    &ownership.global_rate_status,
+                    &mut stream.parameter_producer.lock().unwrap(),
+                    Some(1.4),
+                    None,
+                    "ASIO coupled accepted refresh",
+                )
+                .unwrap();
+            }
+            assert_eq!(stream.test_tick().unwrap().output_frame, end);
+        }
+        next_tick = capture_frame - 2 * FRAMES;
+        let previous = anchor.as_ref().unwrap();
+        let original_source = master_provenance::source_identity(previous).unwrap();
+        let previous_timing = previous.binding.accepted.unwrap();
+        engine
+            .set_bpm_lock_with_binding(true, Some(previous))
+            .unwrap();
+        assert_eq!(stream.test_tick().unwrap().output_frame, next_tick);
+        next_tick += FRAMES;
+        let (revision, bpm) = ownership.global_rate_status.read_bpm().unwrap();
+        assert_eq!(bpm.revision, revision);
+        assert!(bpm.requested && bpm.effective && bpm.applied);
+        let before = ownership.global_rate_status.read().unwrap();
+        assert_eq!(before.effect.effective.speed, 1.4);
+        assert!((before.effect.effective.period.unwrap() - 0.5).abs() < 1e-12);
+        assert_eq!(
+            before.master_provenance,
+            MasterProvenance::qualified(original_source, previous.binding)
+        );
+        let newer = publish_synthetic_loaded_timing(&engine, &stream.producer, 2, period);
+        assert_eq!(newer.publication_status().unwrap(), "pending");
+        assert_eq!(stream.test_tick().unwrap().output_frame, next_tick);
+        next_tick += FRAMES;
+        assert_eq!(newer.publication_status().unwrap(), "accepted");
+        let current = input_runtime_binding::capture(&engine, 2).unwrap().unwrap();
+        assert!(current.current() && current.available());
+        assert_eq!(
+            master_provenance::source_identity(&current),
+            Some(original_source)
+        );
+        let accepted = current.binding.accepted.unwrap();
+        assert_ne!(
+            accepted.publication_epoch,
+            previous_timing.publication_epoch
+        );
+        assert!((accepted.period_seconds - period).abs() < 1e-12);
+        let after = ownership.global_rate_status.read().unwrap();
+        assert_eq!(
+            after.effect.effective.period,
+            before.effect.effective.period
+        );
+        assert_eq!(after.master_provenance, before.master_provenance);
+        let (still_requested, still_applied) = ownership.global_rate_status.read_bpm().unwrap();
+        assert_eq!(
+            (still_requested, still_applied.revision),
+            (revision, bpm.revision)
+        );
+        assert!(still_applied.applied && still_applied.effective);
+        anchor = Some(current);
+        Some((
+            accepted.period_seconds / after.effect.effective.speed,
+            revision,
+        ))
+    } else {
+        None
+    };
     let mut loaded = vec![false; NUM_SAMPLES];
     loaded[0] = true;
     let mut bindings = vec![None; NUM_SAMPLES];
@@ -1132,9 +1234,8 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
             .stop_mix_capture_internal(&capture, CAPTURE_END)
             .unwrap()
     );
-    let ownership = &engine.input_runtime_ownership;
-    for end in (3 * FRAMES..=F).step_by(FRAMES as usize) {
-        if end == F {
+    for end in (next_tick..=capture_frame).step_by(FRAMES as usize) {
+        if end == capture_frame && !master_refresh {
             push_global_rate_message(
                 &ownership.global_timing_revision,
                 &ownership.global_timing_publishing,
@@ -1149,20 +1250,23 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
         assert_eq!(stream.test_tick().unwrap().output_frame, end);
     }
     let clock = stream.output_clock.read().unwrap();
-    assert!(clock.valid && clock.output_frame == F - FRAMES);
+    assert!(clock.valid && clock.output_frame == capture_frame - FRAMES);
     let action = runtime
         .capture_gui_pitch(&binding, "pitch.extra:3:set", clock.observed_at_ns)
         .unwrap();
     assert_eq!(action.original_due_frame(), E);
     let worker = WorkerGate::for_pitch_return(&action);
     assert!(engine.publish_pitch_action(&action).unwrap());
-    assert_eq!(stream.test_tick().unwrap().output_frame, F + FRAMES);
+    assert_eq!(
+        stream.test_tick().unwrap().output_frame,
+        capture_frame + FRAMES
+    );
     assert!(worker.wait_for(true).is_none());
     worker.release();
     assert_eq!(worker.prepared_wet(), (64, 1));
     let original_native = worker.prepared_native();
     let mut before = playing;
-    for end in (F + 2 * FRAMES..=E).step_by(FRAMES as usize) {
+    for end in (capture_frame + 2 * FRAMES..=E).step_by(FRAMES as usize) {
         before = stream.test_tick().unwrap();
         assert_eq!(before.output_frame, end);
         std::thread::sleep(Duration::from_millis(1));
@@ -1175,8 +1279,10 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
         pad.frame as f64 + pad.fraction
     };
     let at_e = position(before.pads[0]);
-    assert!((at_e - 65.6).abs() < 1e-8, "actual cursor at E: {at_e}");
-    let bpm_revision = anchor.as_ref().map(|anchor| {
+    if !master_refresh {
+        assert!((at_e - 65.6).abs() < 1e-8, "actual cursor at E: {at_e}");
+    }
+    let bpm_revision = anchor.as_ref().filter(|_| !master_refresh).map(|anchor| {
         // The real request is ahead of STOP in the control FIFO. Nothing
         // publishes a timing revision from the after-effect observation.
         engine
@@ -1346,8 +1452,14 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
 
     // The first taps at E+1 coincide. At E+18 the old loop reads near zero
     // and the refreshed loop would read eight source frames later.
-    assert!(at_e + 1.4 + 1.0 < OLD_END && at_e + 1.4 > NEW_START);
-    assert!((at_e + 18.0 * 1.4 - OLD_END - 0.8).abs() < 1e-8);
+    if !master_refresh {
+        assert!(at_e + 1.4 + 1.0 < OLD_END && at_e + 1.4 > NEW_START);
+        assert!((at_e + 18.0 * 1.4 - OLD_END - 0.8).abs() < 1e-8);
+    }
+    let (refresh_binding, start, master_period, next_id) = match (master, &anchor) {
+        (Some((period, _)), Some(anchor)) => (anchor, 0.0, Some(period), 3),
+        _ => (&binding, NEW_START, None, 2),
+    };
     factory.arm_output_ready();
     let (tick, pcm, refresh, next, gated_prefix, gated_ack) = std::thread::scope(|scope| {
         let (claimed, wait_claim) = sync_channel(1);
@@ -1363,14 +1475,20 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
         assert!(action.effective());
         let refresh = engine
             .refresh_current_constant_timing(
-                &binding,
-                seconds(NEW_START),
+                refresh_binding,
+                seconds(start),
                 Some(seconds(OLD_END)),
-                None,
+                master_period,
             )
             .unwrap();
         assert_eq!(refresh.publication_status(), "pending");
-        let next = ColdPcm::publish_at(&engine, 2, 1, "c", SourcePitchInitialization::FreshNeutral);
+        let next = ColdPcm::publish_at(
+            &engine,
+            next_id,
+            1,
+            "next",
+            SourcePitchInitialization::FreshNeutral,
+        );
         next.assert_ack(&engine, false);
         published.send(()).unwrap();
         let pcm = until(|| {
@@ -1380,7 +1498,7 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
                 .or_else(|| callback.is_finished().then_some(None))
         });
         let gated_prefix = submission.prefix();
-        let gated_ack = ownership.binding_source_adoption_accepted(2, next.binding);
+        let gated_ack = ownership.binding_source_adoption_accepted(next_id, next.binding);
         if pcm.is_some() {
             factory.release_output_ready(false);
         }
@@ -1397,9 +1515,21 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     let confirmed = submission.prefix();
     let current = refresh.is_current();
     let actual_end_position = position(tick.pads[0]);
-    assert_eq!(refresh.publication_status(), "accepted");
+    let publication = refresh.publication_status();
+    let rate = ownership.global_rate_status.read().unwrap();
+    let bpm = ownership.global_rate_status.read_bpm();
+    let failed = engine.mix_capture_stream_failed();
+    let provenance = anchor.as_ref().map(|anchor| {
+        MasterProvenance::qualified(
+            master_provenance::source_identity(anchor).unwrap(),
+            anchor.binding,
+        )
+    });
     a.assert_ack(&engine, true);
     b.assert_ack(&engine, true);
+    if let Some(source) = &anchor_source {
+        source.assert_ack(&engine, true);
+    }
     next.assert_ack(&engine, true);
     engine.shut_down().unwrap();
     let status = until(|| {
@@ -1411,18 +1541,27 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
     assert_eq!(factory.info().unwrap().active, 0);
     drop(refresh);
+    drop(anchor);
+    drop(anchor_timing);
     drop(timing);
     drop(binding);
+    let action_effective = action.effective();
     drop(action);
     drop(engine);
     assert!(
         a.reader.upgrade().is_none()
             && b.reader.upgrade().is_none()
+            && anchor_source
+                .as_ref()
+                .is_none_or(|c| c.reader.upgrade().is_none())
             && next.reader.upgrade().is_none()
     );
     eprintln!(
-        "ASIO ordered Wet refresh E={E} effect_frame_and_native={execution:?} original_native={original_native} current={current} output={} cursor={actual_end_position} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
+        "ASIO ordered Wet {control:?} E={E} refresh={publication} effect_frame_and_native={execution:?} original_native={original_native:#x} A_native={:#x} current={current} output={} cursor={at_e}->{actual_end_position} master={:?} provenance={:?} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
+        tick.pads[0].native_state,
         tick.output_frame,
+        rate.effect.effective.period,
+        rate.master_provenance,
         status.first_frame,
         status.end_frame,
         status.written_frames,
@@ -1430,12 +1569,34 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
         tick.pads[0].wet_failed,
     );
 
+    assert_eq!(publication, "accepted");
+    assert!(current);
+    if let Some((period, revision)) = master {
+        assert_eq!(rate.effect.effective.period, Some(period));
+        assert_eq!(Some(rate.master_provenance), provenance);
+        let (requested, applied) = bpm.unwrap();
+        assert_eq!((requested, applied.revision), (revision, revision));
+        assert!(applied.applied && applied.effective);
+        assert!(action_effective);
+        assert_eq!(tick.pads[0].native_state, original_native);
+        assert!(!tick.pads[2].active);
+        let same_rate = matches!(control, OrderedWetControl::MasterRefresh(0.7));
+        assert_eq!(execution, Some((if same_rate { E + 1 } else { E + 64 }, 0)));
+        let advance = if same_rate {
+            FRAMES as f64 * 1.4
+        } else {
+            64.0 * 1.4 + (FRAMES - 64) as f64 * 1.35
+        };
+        assert!((actual_end_position - (at_e + advance).rem_euclid(OLD_END)).abs() < 1e-8);
+    } else {
+        assert_eq!(execution, Some((E + 64, original_native)));
+        assert!((actual_end_position - 28.0).abs() < 1e-8);
+    }
+    assert!(!failed && !tick.pads[0].wet_failed);
     assert_eq!(gated_prefix, (E, false));
     assert!(gated_ack);
     assert_eq!(tick.output_frame, E + FRAMES);
     assert_eq!(confirmed, (E + FRAMES, false));
-    assert!(current);
-    assert_eq!(execution, Some((E + 64, original_native)));
     assert_eq!(tick.callback.frames, FRAMES as u32);
     assert_eq!(
         tick.callback.output_ready_calls,
@@ -1445,7 +1606,6 @@ fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     assert!(tick.pads[0].active && !tick.pads[1].active);
     assert_eq!(tick.pads[0].source_pcm, a.binding.source_address);
     assert_eq!(tick.pads[0].generation, playing.pads[0].generation);
-    assert!((actual_end_position - 28.0).abs() < 1e-8);
     assert_eq!(
         (status.first_frame, status.end_frame),
         (Some(E - FRAMES), Some(CAPTURE_END))

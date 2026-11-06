@@ -399,17 +399,54 @@ impl RtMixer {
             .any(|voice| voice.active && voice.stretch.wet_continuation_due(end))
     }
 
-    /// Only an already claimed Wet slice of the refreshed bank constrains admission.
-    pub(super) fn loop_refresh_wet_end(
+    /// The loop can affect the refreshed bank; the master can affect other voices.
+    pub(super) fn accepted_refresh_wet_end(
+        &self,
+        refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
+        callback_start: u64,
+    ) -> Option<u64> {
+        if !self.wet_request_at(callback_start) {
+            return None;
+        }
+        if let Some(period) = refresh.master_period_seconds
+            && (self.has_pending_global_rate()
+                || !self.accepted_refresh_master_period_matches(refresh.binding, period))
+        {
+            return None;
+        }
+        let loop_end =
+            self.loop_refresh_wet_end(refresh.id, refresh.start_s, refresh.end_s, callback_start);
+        let Some(period) = refresh
+            .master_period_seconds
+            .filter(|period| Some(*period) != self.master_period_seconds)
+        else {
+            return loop_end;
+        };
+        let master_end = self
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .filter_map(|voice| {
+                let end = voice.stretch.claimed_wet_end_at(callback_start)?;
+                let ratio = Self::scalar_tempo_ratio(
+                    self.timing_for_voice(voice).period_seconds(),
+                    self.speed,
+                    Some(period),
+                    self.bpm_lock_enabled,
+                );
+                (ratio.to_bits() != voice.source_playback.rate_target().to_bits()).then_some(end)
+            })
+            .max();
+        loop_end.max(master_end)
+    }
+
+    fn loop_refresh_wet_end(
         &self,
         id: usize,
         start_s: f64,
         end_s: Option<f64>,
         callback_start: u64,
     ) -> Option<u64> {
-        if !self.wet_request_at(callback_start) {
-            return None;
-        }
         let bank = self.sample_bank.get(id)?.as_ref()?;
         let wet_end = self
             .voices
@@ -1286,7 +1323,15 @@ impl RtMixer {
         period: f64,
     ) -> bool {
         self.global_parameters_drained
-            && self.bpm_lock_enabled
+            && self.accepted_refresh_master_period_matches(binding, period)
+    }
+
+    fn accepted_refresh_master_period_matches(
+        &self,
+        binding: super::input_runtime_binding::InputPadBinding,
+        period: f64,
+    ) -> bool {
+        self.bpm_lock_enabled
             && binding.accepted.is_some_and(|accepted| {
                 period.to_bits() == (accepted.period_seconds / self.speed).to_bits()
             })

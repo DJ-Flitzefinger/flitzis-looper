@@ -2759,15 +2759,10 @@ pub(super) fn process_control_message<
                     && mixer.refresh_binding_current(refresh.id, refresh.binding)
             });
             if let Some(mut target) = target {
-                // The raw loop-only refresh has no frame yet. Its new region can
-                // first feed Native after the already committed input is consumed.
-                if refresh.master_period_seconds.is_none()
-                    && let Some(wet_end) = mixer.loop_refresh_wet_end(
-                        refresh.id,
-                        refresh.start_s,
-                        refresh.end_s,
-                        callback_start_frame,
-                    )
+                // This refresh has no frame yet. Preserve the input already
+                // committed by the original Wet Native.
+                if let Some(wet_end) =
+                    mixer.accepted_refresh_wet_end(&refresh, callback_start_frame)
                 {
                     target = target.max(wet_end);
                 }
