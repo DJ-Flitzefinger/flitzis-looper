@@ -1588,11 +1588,12 @@ fn render_scheduled_audio_tracking_pads<
     mixer.settle_group_capture_stop_through(callback_start_frame);
     mixer.service_mix_capture(scheduler, retirement);
 
-    if scheduler.deferred_due().is_none() {
-        mixer.service_global_rate(callback_start_frame, transport, retirement);
+    let mut bpm_wet_end = if scheduler.deferred_due().is_none() {
+        mixer.service_global_rate(callback_start_frame, transport, retirement)
     } else {
         mixer.cancel_bpm_history();
-    }
+        None
+    };
 
     if channels == 0 {
         return true;
@@ -1612,7 +1613,8 @@ fn render_scheduled_audio_tracking_pads<
         let next_target_frame = scheduler
             .peek_next_target_frame()
             .unwrap_or(callback_end_frame)
-            .min(mixer.next_global_rate_frame().unwrap_or(callback_end_frame));
+            .min(mixer.next_global_rate_frame().unwrap_or(callback_end_frame))
+            .min(bpm_wet_end.unwrap_or(callback_end_frame));
 
         if next_target_frame >= callback_end_frame {
             if !render_mixer_segment(
@@ -1689,7 +1691,7 @@ fn render_scheduled_audio_tracking_pads<
             mixer.service_mix_capture(scheduler, retirement);
             break;
         }
-        mixer.service_global_rate(rendered_until_frame, transport, retirement);
+        bpm_wet_end = mixer.service_global_rate(rendered_until_frame, transport, retirement);
     }
     mixer.finish_key_lock_start_callback(
         scheduler.peek_next_target_frame().is_none() && scheduler.deferred_due().is_none(),

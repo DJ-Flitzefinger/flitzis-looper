@@ -988,6 +988,16 @@ fn asio_admits_wet_set_when_staged_bpm_lock_preserves_its_rate() {
 }
 
 #[test]
+fn asio_applies_bpm_behind_stop_after_affected_wet() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::BpmBehindStop(0.75));
+}
+
+#[test]
+fn asio_applies_same_rate_bpm_behind_stop_at_callback_start() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::BpmBehindStop(0.5));
+}
+
+#[test]
 fn asio_admits_coupled_master_refresh_after_affected_wet() {
     aligned_wet_set_with_ordered_control(OrderedWetControl::MasterRefresh(0.75));
 }
@@ -1001,6 +1011,7 @@ fn asio_admits_same_rate_master_refresh_at_the_first_eligible_frame() {
 enum OrderedWetControl {
     Loop,
     StagedBpm(f64),
+    BpmBehindStop(f64),
     MasterRefresh(f64),
 }
 
@@ -1024,7 +1035,9 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
     let seconds = |frame| frame / f64::from(RATE);
     let anchor_period = match control {
         OrderedWetControl::Loop => None,
-        OrderedWetControl::StagedBpm(period) => Some(period),
+        OrderedWetControl::StagedBpm(period) | OrderedWetControl::BpmBehindStop(period) => {
+            Some(period)
+        }
         OrderedWetControl::MasterRefresh(_) => Some(0.7),
     };
     let master_refresh = matches!(control, OrderedWetControl::MasterRefresh(_));
@@ -1282,36 +1295,56 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
     if !master_refresh {
         assert!((at_e - 65.6).abs() < 1e-8, "actual cursor at E: {at_e}");
     }
-    let bpm_revision = anchor.as_ref().filter(|_| !master_refresh).map(|anchor| {
-        // The real request is ahead of STOP in the control FIFO. Nothing
-        // publishes a timing revision from the after-effect observation.
+    let bpm_behind_stop = matches!(control, OrderedWetControl::BpmBehindStop(_));
+    let stop = || {
+        assert!(enqueue_stop_with_producer(
+            ownership,
+            &mut stream.producer.lock().unwrap(),
+            Some(1)
+        ));
+    };
+    if bpm_behind_stop {
+        stop();
+    }
+    let bpm_request = anchor.as_ref().filter(|_| !master_refresh).map(|anchor| {
+        // Both commands are in the FIFO before the callback observes the revision.
         engine
             .set_bpm_lock_with_binding(true, Some(anchor))
             .unwrap();
         let (revision, effect) = ownership.global_rate_status.read_bpm().unwrap();
         assert!(effect.revision < revision);
-        revision
+        (
+            revision,
+            effect,
+            ownership
+                .global_timing_revision
+                .load(std::sync::atomic::Ordering::Acquire),
+        )
     });
-    assert!(enqueue_stop_with_producer(
-        ownership,
-        &mut stream.producer.lock().unwrap(),
-        Some(1)
-    ));
+    if !bpm_behind_stop {
+        stop();
+    }
 
-    if let (Some(anchor_binding), Some(period), Some(revision)) =
-        (&anchor, anchor_period, bpm_revision)
+    if let (Some(anchor_binding), Some(period), Some((revision, previous, drain_revision))) =
+        (&anchor, anchor_period, bpm_request)
     {
         let next = ColdPcm::publish_at(&engine, 3, 1, "d", SourcePitchInitialization::FreshNeutral);
         next.assert_ack(&engine, false);
         factory.arm_output_ready();
-        let (tick, pcm, gated_prefix, gated_ack, staged, (requested, bpm)) =
+        let (tick, pcm, gated_prefix, gated_ack, gated_capture, staged, (requested, bpm)) =
             std::thread::scope(|scope| {
                 let (record_stage, staged) = sync_channel(1);
                 let callback_ownership = ownership.clone();
+                let observed_action = action.clone();
                 let callback = scope.spawn(|| {
                     stream.test_tick_with_effect(Some(Box::new(move || {
-                        let _ =
-                            record_stage.try_send(callback_ownership.global_rate_status.read_bpm());
+                        let _ = record_stage.try_send((
+                            callback_ownership.global_rate_status.read_bpm(),
+                            callback_ownership
+                                .global_timing_revision
+                                .load(std::sync::atomic::Ordering::Acquire),
+                            observed_action.effective(),
+                        ));
                     })))
                 });
                 let pcm = until(|| {
@@ -1322,6 +1355,13 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
                 });
                 let gated_prefix = submission.prefix();
                 let gated_ack = ownership.binding_source_adoption_accepted(3, next.binding);
+                let gated_capture = engine
+                    .mix_capture_lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .control
+                    .status();
                 let bpm = ownership.global_rate_status.read_bpm();
                 if pcm.is_some() {
                     factory.release_output_ready(false);
@@ -1331,13 +1371,17 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
                     pcm,
                     gated_prefix,
                     gated_ack,
-                    staged.try_recv().ok().flatten(),
+                    gated_capture,
+                    staged.try_recv().unwrap(),
                     bpm.unwrap(),
                 )
             });
         let rate = ownership.global_rate_status.read().unwrap();
         let confirmed = submission.prefix();
         let actual_end = position(tick.pads[0]);
+        let timing_revision = ownership
+            .global_timing_revision
+            .load(std::sync::atomic::Ordering::Acquire);
         let failed = engine.mix_capture_stream_failed();
         a.assert_ack(&engine, true);
         b.assert_ack(&engine, true);
@@ -1350,19 +1394,37 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
                 .then_some(status)
         });
-        let ended = owner.lock().unwrap();
-        assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
+        {
+            let ended = owner.lock().unwrap();
+            assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
+        }
         assert_eq!(factory.info().unwrap().active, 0);
         let provenance = MasterProvenance::qualified(
             master_provenance::source_identity(anchor_binding).unwrap(),
             anchor_binding.binding,
         );
+        let action_state = action.state();
+        let action_reason = action.reason();
+        let action_effective = action.effective();
+        drop(anchor);
+        drop(anchor_timing);
+        drop(timing);
+        drop(binding);
+        drop(action);
+        drop(engine);
+        assert!(
+            a.reader.upgrade().is_none()
+                && b.reader.upgrade().is_none()
+                && anchor_pcm.reader.upgrade().is_none()
+                && next.reader.upgrade().is_none()
+        );
+        let (observed, observed_drain, observed_set) = staged;
+        let (observed_revision, observed_effect) = observed.unwrap();
         eprintln!(
-            "ASIO staged BPM period={period} revision={revision} executed={:?} provenance={:?} SET={} effective={} worker={original_native:#x} actual_native={:#x} output={} cursor={actual_end} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
+            "ASIO staged BPM {control:?} period={period} revision={revision} executed={:?} provenance={:?} hook={observed_revision}/{} SET={observed_set}->{action_effective}/{action_state} worker={original_native:#x} actual_native={:#x} output={} cursor={at_e}->{actual_end} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
             bpm.execution_frame,
             rate.master_provenance,
-            action.state(),
-            action.effective(),
+            observed_effect.revision,
             tick.pads[0].native_state,
             tick.output_frame,
             status.first_frame,
@@ -1373,41 +1435,60 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         );
         assert_eq!((requested, bpm.revision), (revision, revision));
         assert!(bpm.requested && bpm.effective && bpm.applied);
-        assert_eq!(
-            (bpm.execution_frame, bpm.reason),
-            (Some(E), BpmReason::None)
-        );
         assert_eq!(rate.effect.effective.period, Some(period / 1.4));
         assert_eq!(rate.master_provenance, provenance);
         assert!(gated_ack);
         assert!(tick.pads[0].active && !tick.pads[1].active && !tick.pads[2].active);
         assert_eq!(tick.pads[0].generation, playing.pads[0].generation);
         assert_eq!(tick.pads[0].source_pcm, a.binding.source_address);
-        let (staged_revision, staged) = staged.expect("BPM staged before the first due effect");
-        assert_eq!((staged_revision, staged.revision), (revision, revision));
-        assert_eq!(staged.reason, BpmReason::DrainPending);
-        assert!(!staged.applied);
+        assert_eq!(observed_revision, revision);
+        if bpm_behind_stop {
+            assert!(observed_set);
+            assert_eq!(observed_effect.revision, previous.revision);
+            assert_eq!(observed_effect.execution_frame, previous.execution_frame);
+            assert_eq!(
+                (observed_drain, timing_revision),
+                (drain_revision, drain_revision)
+            );
+        } else {
+            assert_eq!(observed_effect.revision, revision);
+            assert_eq!(observed_effect.reason, BpmReason::DrainPending);
+            assert!(!observed_effect.applied);
+        }
         let conflict = period != 0.5;
-        if conflict {
-            assert_eq!(action.state(), "rejected");
-            assert_eq!(action.reason(), Some("timing_changed"));
-            assert!(!action.effective());
+        if conflict && !bpm_behind_stop {
+            assert_eq!(action_state, "rejected");
+            assert_eq!(action_reason, Some("timing_changed"));
+            assert!(!action_effective);
             assert_eq!(tick.pads[0].native_state, before.pads[0].native_state);
             assert!(
                 (actual_end - 15.2).abs() < 1e-8,
                 "glide cursor {actual_end}"
             );
         } else {
-            assert!(action.effective());
+            assert!(action_effective);
             assert_eq!(tick.pads[0].native_state, original_native);
+        }
+        let execution = if bpm_behind_stop && conflict {
+            E + 64
+        } else {
+            E
+        };
+        assert_eq!(
+            (bpm.execution_frame, bpm.reason),
+            (Some(execution), BpmReason::None)
+        );
+        if action_effective {
             assert!(tick.pads[0].wet_current_source_output);
+            let expected_end = if conflict { 18.4 } else { 20.0 };
             assert!(
-                (actual_end - 20.0).abs() < 1e-8,
-                "stable cursor {actual_end}"
+                (actual_end - expected_end).abs() < 1e-8,
+                "cursor {actual_end} after BPM execution at {execution}"
             );
         }
         assert!(!failed && !tick.pads[0].wet_failed);
         assert_eq!(gated_prefix, (E, false));
+        assert!(!gated_capture.terminal_decided && gated_capture.payload_sha256.is_none());
         assert_eq!(confirmed, (E + FRAMES, false));
         assert_eq!(tick.output_frame, E + FRAMES);
         assert_eq!(tick.callback.frames, FRAMES as u32);
@@ -1432,18 +1513,6 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
                 .iter()
                 .flat_map(|sample| sample.to_le_bytes())
                 .collect::<Vec<_>>()
-        );
-        drop(anchor);
-        drop(anchor_timing);
-        drop(timing);
-        drop(binding);
-        drop(action);
-        drop(engine);
-        assert!(
-            a.reader.upgrade().is_none()
-                && b.reader.upgrade().is_none()
-                && anchor_pcm.reader.upgrade().is_none()
-                && next.reader.upgrade().is_none()
         );
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&directory).unwrap();

@@ -969,26 +969,24 @@ impl RtMixer {
         coordinator.requested_master_publication = false;
     }
 
-    /// Services only the existing exact render boundary; it creates no scheduled event.
+    /// Services the current render boundary and returns any new BPM retry boundary.
     pub(crate) fn service_global_rate(
         &mut self,
         frame: u64,
         transport: &mut TransportTimeline,
         _retirement: &mut impl AudioBufferRetirement,
-    ) {
+    ) -> Option<u64> {
         let Some(mut coordinator) = self.global_rate.take() else {
-            return;
+            return None;
         };
         let Some(mut pending) = coordinator.pending.take() else {
             self.global_rate = Some(coordinator);
-            self.service_bpm_lock(frame, transport);
-            return;
+            return self.service_bpm_lock(frame, transport);
         };
         if let Some(error) = pending.terminal_error {
             self.finish_terminal_global_rate(&mut coordinator, pending, error);
             self.global_rate = Some(coordinator);
-            self.service_bpm_lock(frame, transport);
-            return;
+            return self.service_bpm_lock(frame, transport);
         }
         let qualified = pending.anchor.is_some();
         // Only this attempt's drain/claim pressure can retain uncaptured work.
@@ -1060,7 +1058,7 @@ impl RtMixer {
             coordinator.requested_master_publication = false;
         }
         self.global_rate = Some(coordinator);
-        self.service_bpm_lock(frame, transport);
+        self.service_bpm_lock(frame, transport)
     }
 
     pub(crate) fn next_global_rate_frame(&self) -> Option<u64> {

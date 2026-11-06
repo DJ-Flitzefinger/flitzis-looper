@@ -422,22 +422,34 @@ impl RtMixer {
         else {
             return loop_end;
         };
-        let master_end = self
-            .voices
+        loop_end.max(self.claimed_wet_scalar_end(
+            callback_start,
+            Some(period),
+            self.bpm_lock_enabled,
+        ))
+    }
+
+    fn claimed_wet_scalar_end(
+        &self,
+        frame: u64,
+        period: Option<f64>,
+        enabled: bool,
+    ) -> Option<u64> {
+        self.wet_callback_frame?;
+        self.voices
             .iter()
             .filter(|voice| voice.active)
             .filter_map(|voice| {
-                let end = voice.stretch.claimed_wet_end_at(callback_start)?;
+                let end = voice.stretch.claimed_wet_end_at(frame)?;
                 let ratio = Self::scalar_tempo_ratio(
                     self.timing_for_voice(voice).period_seconds(),
                     self.speed,
-                    Some(period),
-                    self.bpm_lock_enabled,
+                    period,
+                    enabled,
                 );
                 (ratio.to_bits() != voice.source_playback.rate_target().to_bits()).then_some(end)
             })
-            .max();
-        loop_end.max(master_end)
+            .max()
     }
 
     fn loop_refresh_wet_end(

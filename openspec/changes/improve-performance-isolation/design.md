@@ -7313,6 +7313,17 @@ Already scheduled events retain their frame. The refresh publishes acceptance
 only after its existing source, launch, geometry and effect checks succeed.
 Immediate loop controls and BPM Lock have separate admission rules.
 
+### BPM Lock service after an aligned Wet transfer
+
+An independent STOP can pull a due Wet SET before the control drain stages an
+already published BPM Lock ON behind it. The ordinary rate service checks the
+current anchored request and its immediate targets. If an exact scalar change
+would affect an outstanding claimed Wet slice, the render loop includes the
+last affected slice's exclusive end alongside its existing boundaries. At
+each intervening boundary the service can reconsider the remaining slices and
+the same request. Actual application still requires the existing authority
+checks. Equal scalar targets and already bound history retain their timing.
+
 ### First admission of a coupled accepted master refresh
 
 A current accepted-timing refresh may also carry a master period derived

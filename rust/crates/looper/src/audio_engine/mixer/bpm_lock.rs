@@ -650,21 +650,26 @@ impl RtMixer {
         self.prospective_scalar_targets(target.enabled, self.speed, period, frame)
     }
 
-    pub(crate) fn service_bpm_lock(&mut self, frame: u64, transport: &mut TransportTimeline) {
+    /// Returns the next render boundary for an immediate BPM apply held by claimed Wet.
+    pub(crate) fn service_bpm_lock(
+        &mut self,
+        frame: u64,
+        transport: &mut TransportTimeline,
+    ) -> Option<u64> {
         let Some(target) = self.pending_bpm_lock else {
-            return;
+            return None;
         };
         if !self.global_rate_drains_settled() {
             self.cancel_bpm_history();
             self.publish_bpm_target(target, BpmReason::DrainPending, None);
-            return;
+            return None;
         }
         let (period, anchor_id) = match self.bpm_target_tuple(target) {
             Ok(prepared) => prepared,
             Err(reason) => {
                 self.cancel_bpm_history();
                 self.publish_bpm_target(target, reason, None);
-                return;
+                return None;
             }
         };
         if let Some(history) = self
@@ -675,10 +680,10 @@ impl RtMixer {
             if !self.bpm_history_current(history, period) || frame > history.capture.execution {
                 self.cancel_bpm_history();
                 self.publish_bpm_target(target, BpmReason::HistoryPending, None);
-                return;
+                return None;
             }
             if frame < history.capture.execution {
-                return;
+                return None;
             }
         }
         let history = self.take_bpm_history();
@@ -687,12 +692,29 @@ impl RtMixer {
             {
                 self.cancel_rate_capture(&history.capture);
                 self.publish_bpm_target(target, BpmReason::HistoryPending, None);
-                return;
+                return None;
             }
             BpmRateChange::Prepared(history)
         } else {
             match self.bpm_immediate_targets(target, period, frame) {
-                Ok(targets) => BpmRateChange::Immediate(targets),
+                Ok(targets) => {
+                    if target.enabled
+                        && anchor_id.is_some()
+                        && target.source_identity.is_some()
+                        && let Some(end) = self.claimed_wet_scalar_end(frame, period, true)
+                        && end > frame
+                        && self
+                            .input_runtime_ownership
+                            .global_rate_status
+                            .read_bpm()
+                            .is_some_and(|(requested, _)| requested == target.revision)
+                    {
+                        // STOP may have transferred the SET before this request was staged.
+                        // Requalify the same pending request after rendering the owed slice.
+                        return Some(end);
+                    }
+                    BpmRateChange::Immediate(targets)
+                }
                 Err(reason) => {
                     if reason == BpmReason::HistoryPending && target.enabled && anchor_id.is_some()
                     {
@@ -705,7 +727,7 @@ impl RtMixer {
                         );
                     }
                     self.publish_bpm_target(target, reason, None);
-                    return;
+                    return None;
                 }
             }
         };
@@ -717,6 +739,7 @@ impl RtMixer {
             }
             self.publish_bpm_target(target, reason, None);
         }
+        None
     }
 
     fn commit_bpm_target(

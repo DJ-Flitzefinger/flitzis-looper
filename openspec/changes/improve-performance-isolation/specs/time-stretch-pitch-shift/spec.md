@@ -121,6 +121,13 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the ordinary BPM service SHALL own application and acknowledgement, with independent STOP, source acknowledgements and recording retaining their timing
 - **AND** a BPM tuple that preserves the voice's exact scalar target SHALL leave the SET eligible for its existing exact Wet checks
 
+#### Scenario: An anchored BPM Lock follows STOP that transferred an aligned ASIO Wet SET
+- **GIVEN** an independent STOP has already pulled the due SET into its original Native during a qualified stereo 96 kHz ASIO request of 96 frames
+- **WHEN** the ordinary rate service can immediately apply the current source-qualified BPM Lock ON and its exact scalar target would change a voice that still owes a claimed Wet slice
+- **THEN** the service SHALL retry the same request at the exclusive end of the last affected Wet slice and recheck ordinary application authority there
+- **AND** an unchanged scalar target or already bound BPM history SHALL keep its ordinary timing
+- **AND** independent STOP, source acknowledgements, output submission and recording SHALL keep their existing timing
+
 #### Scenario: A derived loop-only refresh reaches admission after an aligned ASIO Wet claim
 - **GIVEN** a qualified stereo 96 kHz ASIO request of 96 frames owes an already claimed Wet slice for the live normal-loop voice of the current source
 - **WHEN** the control drain first admits a still-unbound accepted-timing refresh that changes that source's effective loop region without a master effect
