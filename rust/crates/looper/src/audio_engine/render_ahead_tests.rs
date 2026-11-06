@@ -8,13 +8,18 @@ use crate::audio_engine::input_runtime_binding::{
 };
 use crate::audio_engine::mix_capture::publication::CapturePublication;
 use crate::audio_engine::mix_capture::{
-    CaptureConfig, CaptureControl, CaptureFailure, CaptureStatus, SPOOL_HEADER_BYTES, prepare,
+    CaptureConfig, CaptureControl, CaptureFailure, CaptureStatus, SPOOL_HEADER_BYTES,
+    prepare_for_output,
 };
 use crate::audio_engine::native_render_observation::Scope;
 use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::messages::{MixCaptureTarget, SampleBuffer};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+#[path = "wasapi_submission_tests.rs"]
+mod wasapi_submission_tests;
 
 const RATE: u32 = 96_000;
 const FRAMES: usize = 96;
@@ -134,9 +139,18 @@ impl Stream {
     }
 
     fn record(&mut self, first: u64, end: u64) -> Take {
+        self.record_for_output(first, end, None)
+    }
+
+    fn record_for_output(
+        &mut self,
+        first: u64,
+        end: u64,
+        submission: Option<Arc<OutputSubmission>>,
+    ) -> Take {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("take.capture");
-        let (control, work) = prepare(
+        let (control, work) = prepare_for_output(
             &path,
             CaptureConfig {
                 sample_rate_hz: RATE,
@@ -145,6 +159,7 @@ impl Stream {
                 block_count: 4,
                 max_pool_pcm_bytes: 128 * 1024,
             },
+            submission,
         )
         .unwrap();
         let take = Take {

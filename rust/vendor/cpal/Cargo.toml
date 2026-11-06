@@ -66,6 +66,7 @@ audioworklet = [
 ]
 custom = []
 jack = ["dep:jack"]
+looper-wasapi-tests = []
 wasm-bindgen = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",

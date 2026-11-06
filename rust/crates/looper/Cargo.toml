@@ -35,6 +35,9 @@ sha2 = "0.10"
 tempfile = "3"
 bnum = { version = "=0.14.4", default-features = false }
 
+[target.'cfg(windows)'.dev-dependencies]
+cpal = { version = "0.17.0", features = ["looper-wasapi-tests"] }
+
 [build-dependencies]
 pkg-config = "0.3"
 cc = { version = "=1.2.63" }

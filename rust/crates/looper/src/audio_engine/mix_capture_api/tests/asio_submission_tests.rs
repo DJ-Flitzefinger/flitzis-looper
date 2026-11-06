@@ -219,7 +219,7 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         .unwrap();
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
-    let submission = stream.asio_submission.as_ref().unwrap().clone();
+    let submission = stream.output_submission.as_ref().unwrap().clone();
     let ownership = &engine.input_runtime_ownership;
     let accepted = matches!(mode, WetAdmission::Retained | WetAdmission::PendingBank)
         .then(|| ColdPcm::publish(&engine, 1, "a"));
@@ -659,7 +659,7 @@ fn ordinary_first_due_shift(paced_tempo_edit: Option<bool>) -> (Vec<u8>, [u32; 2
         .unwrap();
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
-    let submission = stream.asio_submission.as_ref().unwrap().clone();
+    let submission = stream.output_submission.as_ref().unwrap().clone();
     let source = ColdPcm::publish_with_pitch(
         &engine,
         1,
@@ -981,7 +981,7 @@ fn asio_inline_admission_refuses_a_committed_device_interval_before_controls() {
         .unwrap();
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
-    let submission = stream.asio_submission.as_ref().unwrap().clone();
+    let submission = stream.output_submission.as_ref().unwrap().clone();
     let ownership = &engine.input_runtime_ownership;
     queue_pcm(&engine);
     for end in [FRAMES, 2 * FRAMES, 3 * FRAMES] {

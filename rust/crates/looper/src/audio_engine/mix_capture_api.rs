@@ -228,7 +228,7 @@ impl AudioEngine {
             },
             self.stream_handle
                 .as_ref()
-                .and_then(|stream| stream.asio_submission.clone()),
+                .and_then(|stream| stream.output_submission.clone()),
         )
         .map_err(|error| {
             PyRuntimeError::new_err(format!("mix capture preparation failed: {error}"))

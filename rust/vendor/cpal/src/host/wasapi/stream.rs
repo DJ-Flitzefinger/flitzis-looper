@@ -29,6 +29,7 @@ pub struct Stream {
     // This event is signalled after a new entry is added to `commands`, so that the `run()`
     // method can be notified.
     pending_scheduled_event: Foundation::HANDLE,
+    close_error: Option<BackendSpecificError>,
 }
 
 // SAFETY: Windows Event HANDLEs are safe to send between threads - they are designed for
@@ -100,6 +101,30 @@ pub struct StreamInner {
 }
 
 impl Stream {
+    #[cfg(feature = "looper-wasapi-tests")]
+    #[doc(hidden)]
+    pub fn test_render_and_release<T, E>(
+        data: &mut Data,
+        info: &OutputCallbackInfo,
+        frames_available: u32,
+        render: impl FnOnce(&mut Data, &OutputCallbackInfo, u32) -> Option<T>,
+        release: impl FnOnce(u32) -> Result<(), E>,
+        submitted: impl FnOnce(T) -> bool,
+    ) -> Result<bool, E> {
+        render_and_release(data, info, frames_available, render, release, submitted)
+    }
+
+    #[cfg(feature = "looper-wasapi-tests")]
+    #[doc(hidden)]
+    pub fn test_spawn_disconnected(reader: impl FnOnce() + Send + 'static) -> Self {
+        Self::spawn_output(|commands, _| {
+            move || {
+                drop(commands);
+                reader();
+            }
+        })
+    }
+
     pub(crate) fn new_input<D, E>(
         stream_inner: StreamInner,
         mut data_callback: D,
@@ -130,17 +155,61 @@ impl Stream {
             thread: Some(thread),
             commands: tx,
             pending_scheduled_event,
+            close_error: None,
         }
     }
 
     pub(crate) fn new_output<D, E>(
         stream_inner: StreamInner,
         mut data_callback: D,
-        mut error_callback: E,
+        error_callback: E,
     ) -> Stream
     where
         D: FnMut(&mut Data, &OutputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
+    {
+        Self::new_output_with_submission(
+            stream_inner,
+            move |data, info, _| {
+                data_callback(data, info);
+                Some(())
+            },
+            error_callback,
+            |()| true,
+        )
+    }
+
+    pub(crate) fn new_output_with_submission<D, E, S, T>(
+        stream_inner: StreamInner,
+        mut data_callback: D,
+        mut error_callback: E,
+        mut submitted: S,
+    ) -> Stream
+    where
+        D: FnMut(&mut Data, &OutputCallbackInfo, u32) -> Option<T> + Send + 'static,
+        E: FnMut(StreamError) + Send + 'static,
+        S: FnMut(T) -> bool + Send + 'static,
+    {
+        Self::spawn_output(move |commands, pending_scheduled_event| {
+            let run_context = RunContext {
+                handles: vec![pending_scheduled_event, stream_inner.event],
+                stream: stream_inner,
+                commands,
+            };
+            move || {
+                run_output(
+                    run_context,
+                    &mut data_callback,
+                    &mut error_callback,
+                    &mut submitted,
+                )
+            }
+        })
+    }
+
+    fn spawn_output<F>(prepare: impl FnOnce(Receiver<Command>, Foundation::HANDLE) -> F) -> Stream
+    where
+        F: FnOnce() + Send + 'static,
     {
         let pending_scheduled_event = unsafe {
             Threading::CreateEventA(None, false, false, windows::core::PCSTR(ptr::null()))
@@ -148,22 +217,44 @@ impl Stream {
         .expect("cpal: could not create output stream event");
         let (tx, rx) = channel();
 
-        let run_context = RunContext {
-            handles: vec![pending_scheduled_event, stream_inner.event],
-            stream: stream_inner,
-            commands: rx,
-        };
-
         let thread = thread::Builder::new()
             .name("cpal_wasapi_out".to_owned())
-            .spawn(move || run_output(run_context, &mut data_callback, &mut error_callback))
+            .spawn(prepare(rx, pending_scheduled_event))
             .unwrap();
 
         Stream {
             thread: Some(thread),
             commands: tx,
             pending_scheduled_event,
+            close_error: None,
         }
+    }
+
+    /// Join the original callback owner and release its command event.
+    pub fn close_checked(&mut self) -> Result<(), BackendSpecificError> {
+        if self.thread.is_some() {
+            // A disconnected receiver does not establish callback destruction.
+            // The reader may still be unwinding and handing off its state.
+            if self.commands.send(Command::Terminate).is_ok() {
+                unsafe { Threading::SetEvent(self.pending_scheduled_event) }
+                    .map_err(BackendSpecificError::from)?;
+            }
+            let panicked = self.thread.take().unwrap().join().is_err();
+            let closed = unsafe { Foundation::CloseHandle(self.pending_scheduled_event) };
+            self.close_error = match (panicked, closed) {
+                (false, Ok(())) => None,
+                (false, Err(error)) => Some(error.into()),
+                (true, result) => Some(BackendSpecificError {
+                    description: match result {
+                        Ok(()) => "WASAPI callback thread panicked".into(),
+                        Err(error) => {
+                            format!("WASAPI callback thread panicked. CloseHandle also failed ({error})")
+                        }
+                    },
+                }),
+            };
+        }
+        self.close_error.clone().map_or(Ok(()), Err)
     }
 
     fn push_command(&self, command: Command) -> Result<(), SendError<Command>> {
@@ -177,12 +268,7 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
-        if self.push_command(Command::Terminate).is_ok() {
-            self.thread.take().unwrap().join().unwrap();
-            unsafe {
-                let _ = Foundation::CloseHandle(self.pending_scheduled_event);
-            }
-        }
+        let _ = self.close_checked();
     }
 }
 
@@ -314,10 +400,11 @@ fn run_input(
     }
 }
 
-fn run_output(
+fn run_output<T>(
     mut run_ctxt: RunContext,
-    data_callback: &mut dyn FnMut(&mut Data, &OutputCallbackInfo),
+    data_callback: &mut impl FnMut(&mut Data, &OutputCallbackInfo, u32) -> Option<T>,
     error_callback: &mut dyn FnMut(StreamError),
+    submitted: &mut impl FnMut(T) -> bool,
 ) {
     boost_current_thread_priority(
         run_ctxt.stream.config.buffer_size,
@@ -339,6 +426,7 @@ fn run_output(
             render_client,
             data_callback,
             error_callback,
+            submitted,
         ) {
             ControlFlow::Break => break,
             ControlFlow::Continue => continue,
@@ -479,11 +567,12 @@ fn process_input(
 }
 
 // The loop for writing output data.
-fn process_output(
+fn process_output<T>(
     stream: &StreamInner,
     render_client: Audio::IAudioRenderClient,
-    data_callback: &mut dyn FnMut(&mut Data, &OutputCallbackInfo),
+    data_callback: &mut impl FnMut(&mut Data, &OutputCallbackInfo, u32) -> Option<T>,
     error_callback: &mut dyn FnMut(StreamError),
+    submitted: &mut impl FnMut(T) -> bool,
 ) -> ControlFlow {
     // The number of frames available for writing.
     let frames_available = match get_available_frames(stream) {
@@ -514,20 +603,48 @@ fn process_output(
         let timestamp = match output_timestamp(stream, frames_available, sample_rate) {
             Ok(ts) => ts,
             Err(err) => {
+                // No PCM was written. Preserve the original timestamp failure.
+                let _ = render_client.ReleaseBuffer(0, 0);
                 error_callback(err);
                 return ControlFlow::Break;
             }
         };
         let info = OutputCallbackInfo { timestamp };
-        data_callback(&mut data, &info);
-
-        if let Err(err) = render_client.ReleaseBuffer(frames_available, 0) {
-            error_callback(windows_err_to_cpal_err(err));
-            return ControlFlow::Break;
+        match render_and_release(
+            &mut data,
+            &info,
+            frames_available,
+            data_callback,
+            |frames| render_client.ReleaseBuffer(frames, 0),
+            submitted,
+        ) {
+            Ok(true) => ControlFlow::Continue,
+            Ok(false) => ControlFlow::Break,
+            Err(err) => {
+                error_callback(windows_err_to_cpal_err(err));
+                ControlFlow::Break
+            }
         }
     }
+}
 
-    ControlFlow::Continue
+// A receipt lives only inside this GetBuffer/ReleaseBuffer invocation.
+fn render_and_release<T, E>(
+    data: &mut Data,
+    info: &OutputCallbackInfo,
+    frames_available: u32,
+    render: impl FnOnce(&mut Data, &OutputCallbackInfo, u32) -> Option<T>,
+    release: impl FnOnce(u32) -> Result<(), E>,
+    submitted: impl FnOnce(T) -> bool,
+) -> Result<bool, E> {
+    let receipt = render(data, info, frames_available);
+    // A zero-frame release relinquishes a shared-mode packet with no PCM submitted.
+    release(if receipt.is_some() {
+        frames_available
+    } else {
+        0
+    })?;
+    Ok(receipt.is_some_and(submitted))
 }
 
 /// Convert the given duration in frames at the given sample rate to a `std::time::Duration`.

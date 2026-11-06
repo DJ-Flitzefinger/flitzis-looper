@@ -70,19 +70,37 @@
     "src/samples_formats.rs": "2e042d64c68755c077b1d6798998e68a9e85618982bfe80e45d17735da82375b",
     "src/traits.rs": "1f1eba1c5431127b07cf77af232233dea3a2b29e540f24bd2715664d137ef19c"
   },
-  "purpose": "Narrow explicit WASAPI3 period query/build extension; other backend paths unchanged. Native ASIO uses the separately checked SDK bridge.",
+  "purpose": "Explicit WASAPI3 shared-period query and build, optional output submission receipt, and checked WASAPI close. Native ASIO uses the separately checked SDK bridge.",
   "patch_files": [
     {
       "path": "src/host/wasapi/device.rs",
       "upstream_sha256": "fc0982efd8cebdab34c24400a51a01113df03ec99387d27174db258c44b1d450",
-      "patched_sha256": "f6c30dfecce954d4fbb0e7c3dcbb95d1410c8762d2a3fbd296bb486f53bd65e3",
-      "change": "Explicit exact-format IAudioClient3 shared periods, preserved original HRESULT, owned event/format cleanup and hardware-free exact-period/format contract tests. Legacy/backend paths retained."
+      "patched_sha256": "003d5d16f554f8fbe024183aac37866b105157443bd0cead8dd8037e96233f06",
+      "change": "Exact-format IAudioClient3 shared periods and an opt-in post-release receipt. Preserves existing generic callbacks, HRESULT, and owned event and format cleanup."
     },
     {
       "path": "src/host/wasapi/mod.rs",
       "upstream_sha256": "2363c08f6814f616e71aeb40030ee1c582a394d8c741bf79cd0ddc8c5a2f5120",
       "patched_sha256": "aead7482892c315790331c5e66747e6f1c32e98a8c4e74db7c5327104933f854",
       "change": "Export explicit shared-period capability and initialization observations."
+    },
+    {
+      "path": "src/host/wasapi/stream.rs",
+      "upstream_sha256": "481e6ee95aa0d5018b7ffc654f7586ab8dbf5a2500ea27e5ad21a70ebe829e7f",
+      "patched_sha256": "5095d5aec9b78229274cdb304317d8d6302bf4d020013a1437ddafa4e2083aec",
+      "change": "Couple the render receipt and actual frame count to successful ReleaseBuffer. Join the reader and close the command event even after command-channel disconnection. Includes device-free test seams."
+    },
+    {
+      "path": "src/platform/mod.rs",
+      "upstream_sha256": "5fc62d3b5cae5585f3b0ab503e7d2dad1d170a84edbcb2547d9bd83f93160c8a",
+      "patched_sha256": "2092f3346ed9a9fa5122c432a8704d02f86da9fcf356b73a4427eaed40b0c71b",
+      "change": "Expose the device-free WASAPI test seams only with the downstream test feature."
+    },
+    {
+      "path": "Cargo.toml",
+      "upstream_sha256": "7c3f71ae390e67d387871cbe82b8b8b530715ab44104396ccfe3c3a037e50da9",
+      "patched_sha256": "c9dbbff410f6c8e9cdeb2379c453db591356acb140d10f4db29e04b7c0c88da4",
+      "change": "Declare the downstream device-free WASAPI test feature."
     }
   ],
   "upstream_license": "Apache-2.0; original LICENSE retained"

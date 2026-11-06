@@ -813,6 +813,9 @@ mod platform_impl {
     pub use crate::host::jack::Host as JackHost;
     #[cfg_attr(docsrs, doc(cfg(windows)))]
     pub use crate::host::wasapi::Host as WasapiHost;
+    #[cfg(feature = "looper-wasapi-tests")]
+    #[doc(hidden)]
+    pub use crate::host::wasapi::Stream as WasapiStream;
 
     impl_platform_host!(
         #[cfg(feature = "asio")] Asio => AsioHost,

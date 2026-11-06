@@ -136,6 +136,27 @@ driver operations. Notifications SHALL defer recovery to the control path.
 - **THEN** only those selected output descriptors are activated and converted from stereo float DSP
 - **AND** silence clears every owned plane without touching unleased physical channels
 
+### Requirement: WASAPI Recording Requires Output Submission
+
+WASAPI mix capture SHALL mark a nonempty spool as a sealed candidate only after
+the original output stream submits the complete capture interval to the shared
+audio engine. Submission uses actual packet frame counts and the real Looper
+render interval.
+
+#### Scenario: The recording seals during a WASAPI render callback
+- **GIVEN** a take belongs to the original stream and ends inside its current output packet
+- **WHEN** the Looper renders the packet and its writer spools the final stereo mix
+- **THEN** the confirmed prefix advances only after successful `IAudioRenderClient::ReleaseBuffer` of the actual packet from that callback
+- **AND** direct and mapped output use the same pre-routing stereo capture
+- **AND** failed render, failed release, a discontinuity or an ended stream cannot extend the confirmed prefix
+- **AND** a later stream failure preserves a take already covered by the confirmed prefix
+
+#### Scenario: WASAPI exits before output is closed
+- **GIVEN** the original WASAPI callback owner is exiting or its command channel has disconnected
+- **WHEN** the application checks output close
+- **THEN** it joins the original callback thread and releases its command event before verifying close
+- **AND** uncertain cleanup prevents a verified close
+
 ### Requirement: Audio Output Build Inputs Are Reproducible
 The Windows audio bridge SHALL use pinned, licensed SDK source and checked build
 inputs included in normal Native and Portable source custody. Runtime WASAPI

@@ -259,7 +259,7 @@ impl Writer {
             gate.wait();
         }
         if written > 0
-            && let Some(submission) = &shared.asio_submission
+            && let Some(submission) = &shared.output_submission
         {
             let stop = shared.end_frame.load(Ordering::Acquire);
             while shared.failure_code() == 0 {

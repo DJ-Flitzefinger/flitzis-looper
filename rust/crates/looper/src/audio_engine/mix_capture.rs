@@ -33,13 +33,13 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 const SUBMISSION_ENDED: u64 = 1 << 63;
 
-/// The allocation identifies one ASIO stream, starting at engine frame zero.
+/// The allocation identifies one output stream, starting at engine frame zero.
 /// End and terminal share a word so a fault preserves the accepted prefix and
 /// no concurrent receipt can extend it after the fault.
 #[derive(Default)]
-pub(super) struct AsioSubmission(AtomicU64);
+pub(super) struct OutputSubmission(AtomicU64);
 
-impl AsioSubmission {
+impl OutputSubmission {
     #[cfg(windows)]
     pub(super) fn confirm(&self, first: u64, end: u64) -> bool {
         let confirmed = first < end
@@ -215,7 +215,7 @@ impl CaptureStatus {
 struct Shared {
     session_id: u64,
     config: CaptureConfig,
-    asio_submission: Option<Arc<AsioSubmission>>,
+    output_submission: Option<Arc<OutputSubmission>>,
     #[cfg(all(windows, test, feature = "asio-contract-tests"))]
     waiting_for_submission: AtomicBool,
     pool_pcm_bytes: usize,
@@ -363,11 +363,11 @@ impl CaptureControl {
     }
 
     pub(super) fn backend_submission_required(&self) -> bool {
-        self.shared.asio_submission.is_some()
+        self.shared.output_submission.is_some()
     }
 
     pub(super) fn request_stream_failure(&self, status: &CaptureStatus) {
-        // The writer decides from this take's original ASIO prefix. A later
+        // The writer decides from this take's original backend prefix. A later
         // stream fault cannot invalidate a sealed extent that was submitted.
         if !self.backend_submission_required() || !status.rt_sealed || status.submitted_frames == 0 {
             self.request_failure(status.session_id, CaptureFailure::Stream);
@@ -738,15 +738,15 @@ pub(crate) fn prepare(
 pub(super) fn prepare_for_output(
     spool_path: &Path,
     config: CaptureConfig,
-    asio_submission: Option<Arc<AsioSubmission>>,
+    output_submission: Option<Arc<OutputSubmission>>,
 ) -> io::Result<(CaptureControl, Box<CaptureRt>)> {
-    prepare_inner(spool_path, config, asio_submission, writer::Hooks::default())
+    prepare_inner(spool_path, config, output_submission, writer::Hooks::default())
 }
 
 fn prepare_inner(
     spool_path: &Path,
     config: CaptureConfig,
-    asio_submission: Option<Arc<AsioSubmission>>,
+    output_submission: Option<Arc<OutputSubmission>>,
     hooks: writer::Hooks,
 ) -> io::Result<(CaptureControl, Box<CaptureRt>)> {
     let (samples, pool_pcm_bytes) = config.sizes()?;
@@ -800,7 +800,7 @@ fn prepare_inner(
     let shared = Arc::new(Shared {
         session_id,
         config,
-        asio_submission,
+        output_submission,
         #[cfg(all(windows, test, feature = "asio-contract-tests"))]
         waiting_for_submission: AtomicBool::new(false),
         pool_pcm_bytes,

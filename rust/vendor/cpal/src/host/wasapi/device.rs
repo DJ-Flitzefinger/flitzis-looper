@@ -971,12 +971,45 @@ impl Device {
         sample_format: SampleFormat,
         period_frames: Option<u32>,
         match_engine_format: bool,
-        data_callback: D,
+        mut data_callback: D,
         error_callback: E,
     ) -> Result<(Stream, SharedOutputStreamInfo), BuildStreamError>
     where
         D: FnMut(&mut Data, &OutputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
+    {
+        self.build_output_stream_raw_with_shared_period_and_submission(
+            config,
+            sample_format,
+            period_frames,
+            match_engine_format,
+            move |data, info, _| {
+                data_callback(data, info);
+                Some(())
+            },
+            error_callback,
+            |()| true,
+        )
+    }
+
+    /// Pass the actual packet size to the renderer and consume its receipt only after
+    /// successful WASAPI submission. A missing receipt discards the packet and ends
+    /// the stream loop. Returning false from `submitted` also ends the loop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_output_stream_raw_with_shared_period_and_submission<D, E, S, T>(
+        &self,
+        config: &StreamConfig,
+        sample_format: SampleFormat,
+        period_frames: Option<u32>,
+        match_engine_format: bool,
+        data_callback: D,
+        error_callback: E,
+        submitted: S,
+    ) -> Result<(Stream, SharedOutputStreamInfo), BuildStreamError>
+    where
+        D: FnMut(&mut Data, &OutputCallbackInfo, u32) -> Option<T> + Send + 'static,
+        E: FnMut(StreamError) + Send + 'static,
+        S: FnMut(T) -> bool + Send + 'static,
     {
         let (inner, info) = self.build_output_stream_initialized(
             config,
@@ -987,7 +1020,7 @@ impl Device {
             },
         )?;
         Ok((
-            Stream::new_output(inner, data_callback, error_callback),
+            Stream::new_output_with_submission(inner, data_callback, error_callback, submitted),
             info.unwrap(),
         ))
     }

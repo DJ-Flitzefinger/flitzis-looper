@@ -23,6 +23,7 @@ use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
 use crate::audio_engine::constants::{MAX_VOICES, NUM_SAMPLES};
 use crate::audio_engine::content_placement::PlacementError;
 use crate::audio_engine::content_placement::SlotSnapshot;
+use crate::audio_engine::mix_capture::OutputSubmission;
 use crate::audio_engine::mixer::{RtMixer, RtRenderPadActivity};
 use crate::audio_engine::scheduler::{
     DueEvent, FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
@@ -33,6 +34,7 @@ use crate::audio_engine::timing::{
 use crate::audio_engine::transport::{QuantizeGrid, TransportTimeline};
 use crate::messages::{AudioMessage, ControlMessage, ControlParameterMessage, TriggerQuantization};
 use std::cell::RefCell;
+use std::ops::Range;
 
 pub(crate) const MAX_CONTROL_MESSAGES_PER_CALLBACK: usize = 64;
 pub(crate) const MAX_PARAMETER_MESSAGES_PER_CALLBACK: usize = 64;
@@ -50,7 +52,7 @@ pub struct AudioStreamHandle {
     candidate_epoch: Option<u64>,
     #[cfg(windows)]
     asio_observation: Option<Arc<Mutex<super::asio_output::OwnerObservation>>>,
-    pub(super) asio_submission: Option<Arc<super::mix_capture::AsioSubmission>>,
+    pub(super) output_submission: Option<Arc<OutputSubmission>>,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
     pub(crate) parameter_producer: Arc<Mutex<Producer<ControlParameterMessage>>>,
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
@@ -193,7 +195,7 @@ impl AudioStreamHandle {
         })();
         if result.is_err() {
             #[cfg(windows)]
-            if let Some(submission) = &self.asio_submission {
+            if let Some(submission) = &self.output_submission {
                 submission.terminate();
             }
             self.stream_failed.store(true, Ordering::Release);
@@ -211,6 +213,11 @@ impl AudioStreamHandle {
             .map_err(|_| std::io::Error::other("output owner lock poisoned"))?;
         match &mut *backend {
             OutputBackendHandle::Cpal(stream) => {
+                #[cfg(windows)]
+                if let Some(stream) = stream.as_mut() {
+                    let cpal::platform::StreamInner::Wasapi(stream) = stream.as_inner_mut();
+                    stream.close_checked().map_err(std::io::Error::other)?;
+                }
                 drop(stream.take());
             }
             #[cfg(windows)]
@@ -3821,7 +3828,7 @@ pub(super) struct AsioRenderContext {
     latency: Arc<std::sync::atomic::AtomicU64>,
     clock: Arc<SharedOutputClock>,
     admission_unavailable: Arc<AtomicBool>,
-    submission: Arc<super::mix_capture::AsioSubmission>,
+    submission: Arc<OutputSubmission>,
     output_ready: AtomicBool,
     #[cfg(all(test, feature = "asio-contract-tests"))]
     inline_wet: bool,
@@ -4125,7 +4132,7 @@ fn create_asio_audio_stream(
     )?;
     owner.state_mut().close_producer = Some(producer_in.clone());
     owner.state_mut().close_parameter_producer = Some(parameter_producer_in.clone());
-    let submission = Arc::new(super::mix_capture::AsioSubmission::default());
+    let submission = Arc::new(OutputSubmission::default());
     let context = Box::new(AsioRenderContext {
         state: std::cell::UnsafeCell::new(AsioRenderState {
             owner,
@@ -4179,7 +4186,7 @@ fn create_asio_audio_stream(
         backend_released: AtomicBool::new(false),
         admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
         asio_observation: Some(observation),
-        asio_submission: Some(submission),
+        output_submission: Some(submission),
         candidate_epoch: {
             let epoch = input_runtime_ownership
                 .output_change_epoch
@@ -4411,12 +4418,14 @@ pub fn create_audio_stream(
     let output_clock = Arc::new(SharedOutputClock::new());
     let callback_clock = output_clock.clone();
     let stream_failed = Arc::new(AtomicBool::new(false));
-    let callback_stream_failed = stream_failed.clone();
-    let callback_admission_unavailable = input_runtime_ownership.output_unavailable.clone();
-    let callback_fault_clock = output_clock.clone();
-    let error_stream_failed = stream_failed.clone();
-    let error_admission_unavailable = input_runtime_ownership.output_unavailable.clone();
-    let error_clock = output_clock.clone();
+    let output_submission = cfg!(windows).then(|| Arc::new(OutputSubmission::default()));
+    let fault = CpalOutputFault {
+        stream_failed: stream_failed.clone(),
+        admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
+        clock: output_clock.clone(),
+        #[cfg(windows)]
+        submission: output_submission.clone(),
+    };
 
     let (mut callback_owner, retirement_worker) = create_stream_callback_owner(
         consumer_in,
@@ -4439,87 +4448,17 @@ pub fn create_audio_stream(
             .map_or(BufferSize::Default, BufferSize::Fixed),
     };
 
-    let direct_stereo = channels == 2 && left == 0 && right == 1;
-    let mut scratch =
-        (!direct_stereo).then(|| vec![0.0; MAX_OUTPUT_CALLBACK_FRAMES * 2].into_boxed_slice());
-    let mut clock_mapper = OutputClockMapper::new();
-    let data_callback = move |data: &mut cpal::Data, info: &cpal::OutputCallbackInfo| {
-        let Some(data) = data.as_slice_mut::<f32>() else {
-            callback_stream_failed.store(true, Ordering::Release);
-            callback_admission_unavailable.store(true, Ordering::Release);
-            callback_fault_clock.invalidate();
-            return;
-        };
-        let frames = data.len() / channels as usize;
-        if data.len() % channels as usize != 0 || frames > MAX_OUTPUT_CALLBACK_FRAMES {
-            data.fill(0.0);
-            callback_stream_failed.store(true, Ordering::Release);
-            callback_admission_unavailable.store(true, Ordering::Release);
-            callback_fault_clock.invalidate();
-            return;
-        }
-        let renderer = callback_owner.state_mut();
-        let observed_at_ns = input_clock.capture_ns();
-        let snapshot = clock_mapper.observe_callback(
-            info,
-            output_clock_snapshot(
-                &renderer.transport,
-                renderer.transport.output_frame(),
-                observed_at_ns,
-                sample_rate_hz,
-            ),
-            frames,
-        );
-        if let Some(scratch) = scratch.as_mut() {
-            let stereo = &mut scratch[..frames * 2];
-            render_output_block(
-                renderer,
-                stereo,
-                RenderFormat {
-                    channels: 2,
-                    sample_rate_hz,
-                },
-                &callback_stream_failed,
-                Some((snapshot, 0)),
-            );
-            data.fill(0.0);
-            for (output, stereo) in data
-                .chunks_exact_mut(channels as usize)
-                .zip(stereo.chunks_exact(2))
-            {
-                if left == right {
-                    output[left] = (stereo[0] + stereo[1]) * 0.5;
-                } else {
-                    output[left] = stereo[0];
-                    output[right] = stereo[1];
-                }
-            }
-        } else {
-            render_output_block(
-                renderer,
-                data,
-                RenderFormat {
-                    channels: 2,
-                    sample_rate_hz,
-                },
-                &callback_stream_failed,
-                Some((snapshot, 0)),
-            );
-        }
-    };
-    let error_callback = move |_err| {
-        error_stream_failed.store(true, Ordering::Release);
-        error_admission_unavailable.store(true, Ordering::Release);
-        error_clock.invalidate();
-    };
-    let stream = build_cpal_output(
-        &device,
-        &stream_config,
-        options,
-        data_callback,
-        error_callback,
-    )
-    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
+    let renderer = CpalOutputRenderer::new(
+        callback_owner,
+        input_clock,
+        channels as usize,
+        left,
+        right,
+        sample_rate_hz,
+        fault,
+    );
+    let stream = build_cpal_output(&device, &stream_config, options, renderer)
+        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
     let ((stream, initialized), retirement_worker) =
         finish_stream_build(stream, retirement_worker, stream_failed.clone())?;
     device_descriptor
@@ -4543,7 +4482,7 @@ pub fn create_audio_stream(
         },
         #[cfg(windows)]
         asio_observation: None,
-        asio_submission: None,
+        output_submission,
         producer: producer_in,
         parameter_producer: parameter_producer_in,
         consumer: Arc::new(Mutex::new(consumer_out)),
@@ -4555,30 +4494,191 @@ pub fn create_audio_stream(
     })
 }
 
-fn build_cpal_output<D, E>(
+#[derive(Clone)]
+struct CpalOutputFault {
+    stream_failed: Arc<AtomicBool>,
+    admission_unavailable: Arc<AtomicBool>,
+    clock: Arc<SharedOutputClock>,
+    #[cfg(windows)]
+    submission: Option<Arc<OutputSubmission>>,
+}
+
+impl CpalOutputFault {
+    fn signal(&self) {
+        #[cfg(windows)]
+        self.terminate_submission();
+        self.stream_failed.store(true, Ordering::Release);
+        self.admission_unavailable.store(true, Ordering::Release);
+        self.clock.invalidate();
+    }
+
+    #[cfg(windows)]
+    fn terminate_submission(&self) {
+        if let Some(submission) = &self.submission {
+            submission.terminate();
+        }
+    }
+
+    #[cfg(windows)]
+    fn submitted(&self, range: Range<u64>) -> bool {
+        let accepted = self
+            .submission
+            .as_ref()
+            .is_some_and(|submission| submission.confirm(range.start, range.end));
+        if !accepted {
+            self.signal();
+        }
+        accepted
+    }
+}
+
+struct CpalOutputRenderer {
+    owner: CallbackCloseOwner<AudioCallbackState>,
+    input_clock: InputClock,
+    channels: usize,
+    left: usize,
+    right: usize,
+    sample_rate_hz: u32,
+    scratch: Option<Box<[f32]>>,
+    clock_mapper: OutputClockMapper,
+    fault: CpalOutputFault,
+}
+
+impl CpalOutputRenderer {
+    fn new(
+        owner: CallbackCloseOwner<AudioCallbackState>,
+        input_clock: InputClock,
+        channels: usize,
+        left: usize,
+        right: usize,
+        sample_rate_hz: u32,
+        fault: CpalOutputFault,
+    ) -> Self {
+        let direct_stereo = channels == 2 && left == 0 && right == 1;
+        Self {
+            owner,
+            input_clock,
+            channels,
+            left,
+            right,
+            sample_rate_hz,
+            scratch: (!direct_stereo)
+                .then(|| vec![0.0; MAX_OUTPUT_CALLBACK_FRAMES * 2].into_boxed_slice()),
+            clock_mapper: OutputClockMapper::new(),
+            fault,
+        }
+    }
+
+    fn render(
+        &mut self,
+        data: &mut cpal::Data,
+        info: &cpal::OutputCallbackInfo,
+        device_frames: Option<u32>,
+    ) -> Option<Range<u64>> {
+        let Some(data) = data.as_slice_mut::<f32>() else {
+            self.fault.signal();
+            return None;
+        };
+        let frames = data.len() / self.channels;
+        if data.len() % self.channels != 0
+            || frames > MAX_OUTPUT_CALLBACK_FRAMES
+            || device_frames.is_some_and(|actual| frames == 0 || frames != actual as usize)
+        {
+            data.fill(0.0);
+            self.fault.signal();
+            return None;
+        }
+        if device_frames.is_some() && self.fault.stream_failed.load(Ordering::Acquire) {
+            return None;
+        }
+        let renderer = self.owner.state_mut();
+        let first = renderer.transport.output_frame();
+        let observed_at_ns = self.input_clock.capture_ns();
+        let snapshot = self.clock_mapper.observe_callback(
+            info,
+            output_clock_snapshot(
+                &renderer.transport,
+                first,
+                observed_at_ns,
+                self.sample_rate_hz,
+            ),
+            frames,
+        );
+        let stereo = match self.scratch.as_mut() {
+            Some(scratch) => &mut scratch[..frames * 2],
+            None => &mut *data,
+        };
+        let rendered = render_output_block(
+            renderer,
+            stereo,
+            RenderFormat {
+                channels: 2,
+                sample_rate_hz: self.sample_rate_hz,
+            },
+            &self.fault.stream_failed,
+            Some((snapshot, 0)),
+        );
+        if let Some(scratch) = self.scratch.as_ref() {
+            data.fill(0.0);
+            for (output, stereo) in data
+                .chunks_exact_mut(self.channels)
+                .zip(scratch[..frames * 2].chunks_exact(2))
+            {
+                if self.left == self.right {
+                    output[self.left] = (stereo[0] + stereo[1]) * 0.5;
+                } else {
+                    output[self.left] = stereo[0];
+                    output[self.right] = stereo[1];
+                }
+            }
+        }
+        let end = renderer.transport.output_frame();
+        if !rendered
+            || device_frames.is_some_and(|actual| {
+                end.checked_sub(first) != Some(u64::from(actual))
+                    || self.fault.stream_failed.load(Ordering::Acquire)
+            })
+        {
+            if device_frames.is_some() {
+                self.fault.signal();
+            }
+            return None;
+        }
+        Some(first..end)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for CpalOutputRenderer {
+    fn drop(&mut self) {
+        // The vendor thread can no longer release a packet through this owner.
+        self.fault.terminate_submission();
+    }
+}
+
+fn build_cpal_output(
     device: &cpal::Device,
     config: &StreamConfig,
     _options: &super::audio_output::OutputOptions,
-    data: D,
-    error: E,
-) -> Result<(Stream, serde_json::Value), cpal::BuildStreamError>
-where
-    D: FnMut(&mut cpal::Data, &cpal::OutputCallbackInfo) + Send + 'static,
-    E: FnMut(cpal::StreamError) + Send + 'static,
-{
+    mut renderer: CpalOutputRenderer,
+) -> Result<(Stream, serde_json::Value), cpal::BuildStreamError> {
+    let fault = renderer.fault.clone();
+    let error = move |_| fault.signal();
     #[cfg(windows)]
     {
         let cpal::platform::DeviceInner::Wasapi(device) = device.as_inner();
         let match_format = _options
             .wasapi_match_engine_format
             .unwrap_or(_options.sample_rate_hz.is_some());
-        let (stream, info) = device.build_output_stream_raw_with_shared_period(
+        let submission = renderer.fault.clone();
+        let (stream, info) = device.build_output_stream_raw_with_shared_period_and_submission(
             config,
             cpal::SampleFormat::F32,
             _options.buffer_frames,
             match_format,
-            data,
+            move |data, info, frames| renderer.render(data, info, Some(frames)),
             error,
+            move |range| submission.submitted(range),
         )?;
         Ok((
             stream.into(),
@@ -4605,7 +4705,9 @@ where
     }
     #[cfg(not(windows))]
     {
-        device.build_output_stream_raw(config, cpal::SampleFormat::F32, data, error, None)
+        device.build_output_stream_raw(config, cpal::SampleFormat::F32, move |data, info| {
+            renderer.render(data, info, None);
+        }, error, None)
             .map(|stream| (stream, serde_json::json!({"buffer_policy": "CPAL host request; actual callback size is observed separately"})))
     }
 }

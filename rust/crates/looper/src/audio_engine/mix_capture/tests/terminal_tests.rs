@@ -26,7 +26,7 @@ fn seal_original_prefix(rig: &mut Rig, first_frame: u64) -> [f32; 8] {
 #[test]
 fn asio_submission_preserves_covered_take_and_rejects_gap_or_replacement() {
     for termination in ["covered", "gap", "detach"] {
-        let submission = Arc::new(AsioSubmission::default());
+        let submission = Arc::new(OutputSubmission::default());
         let gate = Arc::new(writer::WorkerPhaseGate::default());
         let mut rig = Rig::new_for_output(
             config(),
@@ -45,7 +45,7 @@ fn asio_submission_preserves_covered_take_and_rejects_gap_or_replacement() {
         if covered {
             assert!(submission.confirm(0, 96));
         } else {
-            let replacement = AsioSubmission::default();
+            let replacement = OutputSubmission::default();
             assert!(replacement.confirm(0, 96));
             assert_eq!(submission.prefix(), (0, false));
         }
