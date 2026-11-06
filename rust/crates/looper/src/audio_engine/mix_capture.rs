@@ -59,7 +59,7 @@ impl AsioSubmission {
         self.0.fetch_or(SUBMISSION_ENDED, Ordering::AcqRel);
     }
 
-    fn prefix(&self) -> (u64, bool) {
+    pub(super) fn prefix(&self) -> (u64, bool) {
         let state = self.0.load(Ordering::Acquire);
         (state & !SUBMISSION_ENDED, state & SUBMISSION_ENDED != 0)
     }

@@ -88,8 +88,6 @@ impl Fixture {
                         scheduler: TransportScheduler::new(),
                         trigger_quantization: TriggerQuantization::Immediate,
                         callback_clock: Arc::new(SharedOutputClock::new()),
-                        clock_mapper: OutputClockMapper::new(),
-                        external_clock_revision: 0,
                         loop_acceptance: Arc::default(),
                         pad_peaks: [0.0; NUM_SAMPLES],
                         pad_activity: RtRenderPadActivity::default(),

@@ -124,6 +124,12 @@ driver operations. Notifications SHALL defer recovery to the control path.
 - **AND** a gap, terminal fault or verified detach before coverage leaves the spool incomplete
 - **AND** a later stream fault preserves a take whose interval was already confirmed
 
+#### Scenario: Inline ASIO output encounters an incompatible render frontier
+- **GIVEN** an ASIO session tracks requested engine-frame intervals independently of rendered and submitted frames
+- **WHEN** a registered callback requests an interval that does not begin at the next unrendered frame
+- **THEN** inline output fails the stream before draining controls or publishing a new device clock observation
+- **AND** it does not copy or confirm rendered PCM for that request
+
 #### Scenario: Only selected physical outputs belong to the session
 - **GIVEN** a valid distinct physical left/right pair was selected
 - **WHEN** native ASIO buffers are created and rendered

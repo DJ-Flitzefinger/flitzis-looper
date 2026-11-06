@@ -96,11 +96,8 @@ impl Stream {
                 channels: 2,
                 sample_rate_hz: RATE,
             },
-            1_000_000_000 + first * 1_000_000_000 / u64::from(RATE),
             &AtomicBool::new(false),
-            |mapper, snapshot, frames| {
-                mapper.observe_external_callback(snapshot, Some(0), frames, true)
-            },
+            None,
         );
         Block { first, pcm }
     }

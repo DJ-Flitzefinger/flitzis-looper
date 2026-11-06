@@ -230,6 +230,8 @@ enum Operation {
     Shutdown,
     #[cfg(all(test, feature = "asio-contract-tests"))]
     Tick,
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    RenderAhead,
 }
 struct Command {
     operation: Operation,
@@ -370,6 +372,11 @@ impl Control {
         self.observation()
             .test_tick
             .ok_or_else(|| "private Tick ended without original callback observation".into())
+    }
+
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    pub(super) fn render_ahead(&mut self) -> Result<(), String> {
+        self.request(Operation::RenderAhead).map(|_| ())
     }
 }
 
@@ -717,6 +724,18 @@ fn owner_loop(
                         Ok(owner.info)
                     }
                     Operation::Close | Operation::Shutdown => owner.close(),
+                    #[cfg(all(test, feature = "asio-contract-tests"))]
+                    Operation::RenderAhead => {
+                        if failed.load(Ordering::Acquire) || owner.test_driver.is_none() {
+                            return Err("render-ahead requires a healthy injected owner".into());
+                        }
+                        owner
+                            .context
+                            .as_ref()
+                            .ok_or("render-ahead requires the installed original callback")?
+                            .test_render_ahead();
+                        Ok(owner.info)
+                    }
                     #[cfg(all(test, feature = "asio-contract-tests"))]
                     Operation::Tick => {
                         if failed.load(Ordering::Acquire) {

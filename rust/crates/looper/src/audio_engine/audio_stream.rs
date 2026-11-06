@@ -92,6 +92,15 @@ impl AudioStreamHandle {
             .expect("original injected ASIO owner")
             .clone()
     }
+
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    pub(super) fn test_render_ahead(&self) {
+        let mut backend = self.backend.lock().unwrap();
+        let OutputBackendHandle::Asio(control) = &mut *backend else {
+            panic!("private render-ahead requires injected ASIO");
+        };
+        control.render_ahead().unwrap();
+    }
     pub(super) fn configuration(&self) -> serde_json::Value {
         let mut configuration = self.device_descriptor.configuration.clone();
         configuration["backend_released"] = self.backend_released.load(Ordering::Acquire).into();
@@ -3544,8 +3553,6 @@ struct AudioCallbackState {
     scheduler: TransportScheduler,
     trigger_quantization: TriggerQuantization,
     callback_clock: Arc<SharedOutputClock>,
-    clock_mapper: OutputClockMapper,
-    external_clock_revision: u32,
     loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
     pad_peaks: [f32; NUM_SAMPLES],
     pad_activity: RtRenderPadActivity,
@@ -3643,46 +3650,49 @@ struct RenderFormat {
     sample_rate_hz: u32,
 }
 
-/// One renderer for every output backend. Clock adapters only qualify the
-/// observation; transport, source ACKs, scheduling and DSP retain their authority.
+fn output_clock_snapshot(
+    transport: &TransportTimeline,
+    output_frame: u64,
+    observed_at_ns: u64,
+    sample_rate_hz: u32,
+) -> OutputClockSnapshot {
+    OutputClockSnapshot {
+        valid: true,
+        observed_at_ns,
+        audible_at_ns: observed_at_ns,
+        output_frame,
+        sample_rate_hz,
+        master_period_seconds: transport.master_period_seconds(),
+        downbeat_frame: transport.downbeat_frame(),
+        master_beat: transport
+            .beat_position_at_frame(output_frame)
+            .unwrap_or(0.0),
+        freshness_ns: 0,
+    }
+}
+
+/// One renderer for every output backend. Only a backend observation can
+/// publish device time; the transport still owns scheduling and render progress.
 fn render_output_block(
     state: &mut AudioCallbackState,
     data: &mut [f32],
     format: RenderFormat,
-    observed_at_ns: u64,
     failed: &AtomicBool,
-    map_clock: impl FnOnce(&mut OutputClockMapper, OutputClockSnapshot, usize) -> OutputClockSnapshot,
+    device_clock: Option<(OutputClockSnapshot, u32)>,
 ) {
     let RenderFormat {
         channels,
         sample_rate_hz,
     } = format;
-    state
-        .loop_acceptance
-        .observe_callback_geometry(data.len() / channels);
+    let frames = data.len() / channels;
+    if device_clock.is_some() {
+        state.loop_acceptance.observe_callback_geometry(frames);
+    }
     let emit_interval_frames = (u64::from(sample_rate_hz) / 10).max(1);
     let buffer_start_frame = state.transport.output_frame();
     if failed.load(Ordering::Acquire) {
         state.mixer.fail_mix_capture_stream();
     }
-    let snapshot = map_clock(
-        &mut state.clock_mapper,
-        OutputClockSnapshot {
-            valid: true,
-            observed_at_ns,
-            audible_at_ns: observed_at_ns,
-            output_frame: buffer_start_frame,
-            sample_rate_hz,
-            master_period_seconds: state.transport.master_period_seconds(),
-            downbeat_frame: state.transport.downbeat_frame(),
-            master_beat: state
-                .transport
-                .beat_position_at_frame(buffer_start_frame)
-                .unwrap_or(0.0),
-            freshness_ns: 0,
-        },
-        data.len() / channels,
-    );
     drain_control_messages(
         &mut state.consumer_in,
         &mut state.scheduler,
@@ -3709,18 +3719,20 @@ fn render_output_block(
         &mut state.transport,
         buffer_start_frame,
     );
-    state.callback_clock.publish_qualified(
-        OutputClockSnapshot {
-            master_period_seconds: state.transport.master_period_seconds(),
-            downbeat_frame: state.transport.downbeat_frame(),
-            master_beat: state
-                .transport
-                .beat_position_at_frame(buffer_start_frame)
-                .unwrap_or(0.0),
-            ..snapshot
-        },
-        state.external_clock_revision,
-    );
+    if let Some((snapshot, revision)) = device_clock {
+        state.callback_clock.publish_qualified(
+            OutputClockSnapshot {
+                master_period_seconds: state.transport.master_period_seconds(),
+                downbeat_frame: state.transport.downbeat_frame(),
+                master_beat: state
+                    .transport
+                    .beat_position_at_frame(snapshot.output_frame)
+                    .unwrap_or(0.0),
+                ..snapshot
+            },
+            revision,
+        );
+    }
     render_scheduled_audio_tracking_pads(
         &mut state.mixer,
         &mut state.scheduler,
@@ -3734,12 +3746,13 @@ fn render_output_block(
         &mut state.retired_buffers,
     );
     let master_peak = master_output_peak(data);
-    let frames = data.len() / channels;
     state.transport.advance_by_rendered_frames(frames);
     let frame_clock = state.transport.output_frame();
-    state
-        .loop_acceptance
-        .observe(&state.mixer, observed_at_ns, frame_clock, frames);
+    if let Some((snapshot, _)) = device_clock {
+        state
+            .loop_acceptance
+            .observe(&state.mixer, snapshot.observed_at_ns, frame_clock, frames);
+    }
     publish_pad_telemetry(
         &mut state.producer_out,
         &state.mixer,
@@ -3762,6 +3775,8 @@ fn render_output_block(
 struct AsioRenderState {
     owner: CallbackCloseOwner<AudioCallbackState>,
     scratch: Box<[f32]>,
+    next_device_frame: u64,
+    clock_mapper: OutputClockMapper,
     progress: super::asio_clock::DriverClockProgress,
 }
 
@@ -3794,6 +3809,22 @@ impl AsioRenderContext {
     #[cfg(all(test, feature = "asio-contract-tests"))]
     pub(super) fn test_clock_ns(&self) -> u64 {
         self.input_clock.capture_ns()
+    }
+
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    pub(super) fn test_render_ahead(&self) {
+        // Only the serialized fake owner calls this between driver ticks.
+        let state = unsafe { &mut *self.state.get() };
+        render_output_block(
+            state.owner.state_mut(),
+            &mut state.scratch,
+            RenderFormat {
+                channels: 2,
+                sample_rate_hz: self.sample_rate_hz,
+            },
+            &self.failed,
+            None,
+        );
     }
 
     #[cfg(all(test, feature = "asio-contract-tests"))]
@@ -3924,7 +3955,17 @@ pub(super) unsafe extern "C" fn asio_render(
         return 0;
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let first = state.owner.state_mut().transport.output_frame();
+        let first = state.next_device_frame;
+        let Some(end) = first.checked_add(frames as u64) else {
+            return 0;
+        };
+        state.next_device_frame = end;
+        let renderer = state.owner.state_mut();
+        // Inline rendering can only serve the next unrendered interval.
+        // Detect overlap or a gap before admitting any original control.
+        if renderer.transport.output_frame() != first {
+            return 0;
+        }
         let sample_rate_hz = context.sample_rate_hz;
         let progressed = state.progress.observe(
             super::asio_clock::DriverClockObservation {
@@ -3939,22 +3980,24 @@ pub(super) unsafe extern "C" fn asio_render(
         let latency = context.latency.load(Ordering::Acquire);
         let delay =
             super::asio_clock::latency_delay_ns(latency, time.latency_revision, sample_rate_hz);
-        state.owner.state_mut().external_clock_revision = time.latency_revision;
+        let observed_at_ns = context.input_clock.capture_ns();
+        let snapshot = state.clock_mapper.observe_external_callback(
+            output_clock_snapshot(&renderer.transport, first, observed_at_ns, sample_rate_hz),
+            delay,
+            frames as usize,
+            progressed,
+        );
         render_output_block(
-            state.owner.state_mut(),
+            renderer,
             &mut state.scratch,
             RenderFormat {
                 channels: 2,
                 sample_rate_hz,
             },
-            context.input_clock.capture_ns(),
             &context.failed,
-            |mapper, snapshot, frames| {
-                mapper.observe_external_callback(snapshot, delay, frames, progressed)
-            },
+            Some((snapshot, time.latency_revision)),
         );
-        let end = state.owner.state_mut().transport.output_frame();
-        if first.checked_add(frames as u64) != Some(end) {
+        if renderer.transport.output_frame() != end {
             return 0;
         }
         unsafe {
@@ -4032,6 +4075,8 @@ fn create_asio_audio_stream(
         state: std::cell::UnsafeCell::new(AsioRenderState {
             owner,
             scratch: vec![0.0; frames as usize * 2].into_boxed_slice(),
+            next_device_frame: 0,
+            clock_mapper: OutputClockMapper::new(),
             progress: super::asio_clock::DriverClockProgress::default(),
         }),
         input_clock,
@@ -4145,8 +4190,6 @@ fn boxed_stream_callback_state(
         scheduler: TransportScheduler::new(),
         trigger_quantization: TriggerQuantization::Immediate,
         callback_clock,
-        clock_mapper: OutputClockMapper::new(),
-        external_clock_revision: 0,
         loop_acceptance,
         pad_peaks: [0.0; NUM_SAMPLES],
         pad_activity: RtRenderPadActivity::default(),
@@ -4338,6 +4381,7 @@ pub fn create_audio_stream(
     let direct_stereo = channels == 2 && left == 0 && right == 1;
     let mut scratch =
         (!direct_stereo).then(|| vec![0.0; MAX_OUTPUT_CALLBACK_FRAMES * 2].into_boxed_slice());
+    let mut clock_mapper = OutputClockMapper::new();
     let data_callback = move |data: &mut cpal::Data, info: &cpal::OutputCallbackInfo| {
         let Some(data) = data.as_slice_mut::<f32>() else {
             callback_stream_failed.store(true, Ordering::Release);
@@ -4353,18 +4397,29 @@ pub fn create_audio_stream(
             callback_fault_clock.invalidate();
             return;
         }
+        let renderer = callback_owner.state_mut();
+        let observed_at_ns = input_clock.capture_ns();
+        let snapshot = clock_mapper.observe_callback(
+            info,
+            output_clock_snapshot(
+                &renderer.transport,
+                renderer.transport.output_frame(),
+                observed_at_ns,
+                sample_rate_hz,
+            ),
+            frames,
+        );
         if let Some(scratch) = scratch.as_mut() {
             let stereo = &mut scratch[..frames * 2];
             render_output_block(
-                callback_owner.state_mut(),
+                renderer,
                 stereo,
                 RenderFormat {
                     channels: 2,
                     sample_rate_hz,
                 },
-                input_clock.capture_ns(),
                 &callback_stream_failed,
-                |mapper, snapshot, frames| mapper.observe_callback(info, snapshot, frames),
+                Some((snapshot, 0)),
             );
             data.fill(0.0);
             for (output, stereo) in data
@@ -4380,15 +4435,14 @@ pub fn create_audio_stream(
             }
         } else {
             render_output_block(
-                callback_owner.state_mut(),
+                renderer,
                 data,
                 RenderFormat {
                     channels: 2,
                     sample_rate_hz,
                 },
-                input_clock.capture_ns(),
                 &callback_stream_failed,
-                |mapper, snapshot, frames| mapper.observe_callback(info, snapshot, frames),
+                Some((snapshot, 0)),
             );
         }
     };
