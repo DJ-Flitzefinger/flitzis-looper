@@ -4021,6 +4021,8 @@ impl AsioRenderContext {
                 generation: voice.generation,
                 frame: position.frame,
                 fraction: position.fraction,
+                rate_target: voice.source_playback.rate_target(),
+                bound_scalar_participant: state.mixer.bound_scalar_participant_for_test(id),
                 post_dsp_peak: state.pad_peaks[id],
                 key_lock: state.mixer.key_lock_for_measurement(id),
                 stem_mode,

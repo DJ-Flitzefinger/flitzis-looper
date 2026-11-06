@@ -131,6 +131,13 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the ordinary BPM service SHALL own application and acknowledgement, with independent STOP, source acknowledgements and recording retaining their timing
 - **AND** a BPM tuple that preserves the voice's exact scalar target SHALL leave the SET eligible for its existing exact Wet checks
 
+#### Scenario: A terminal scalar releases staged unanchored BPM Lock ON at an aligned ASIO Wet SET
+- **GIVEN** BPM Lock is off and its current staged unanchored ON request waits on a scalar bound beyond the qualified aligned ASIO request
+- **WHEN** the original SET reaches E and the scalar fence can become terminal at that boundary before ordinary BPM service
+- **THEN** a projected BPM tuple that would change the SET voice's exact scalar target SHALL refuse the SET at E before Native transfer
+- **AND** an unchanged scalar target SHALL leave the SET eligible for its existing exact Wet checks
+- **AND** ordinary rate service SHALL own the scalar and BPM receipts, with the independent STOP, source acknowledgements and recording retaining their timing
+
 #### Scenario: An anchored BPM Lock follows STOP that transferred an aligned ASIO Wet SET
 - **GIVEN** an independent STOP has already pulled the due SET into its original Native during a qualified stereo 96 kHz ASIO request of 96 frames
 - **WHEN** the ordinary rate service can immediately apply the current source-qualified BPM Lock ON and its exact scalar target would change a voice that still owes a claimed Wet slice

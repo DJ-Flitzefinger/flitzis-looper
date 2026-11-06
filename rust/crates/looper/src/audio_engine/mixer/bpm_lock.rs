@@ -502,18 +502,34 @@ impl RtMixer {
         {
             return false;
         }
-        let Ok((period, Some(_))) = self.bpm_target_tuple(target) else {
-            return false;
+        let changes_rate = if !self.bpm_lock_enabled
+            && target.anchor.is_none()
+            && target.source_identity.is_none()
+            && self.has_pending_global_rate()
+        {
+            // A same-boundary STOP can make the scalar terminal before its
+            // bound frame. BPM then sees the unchanged effective rate tuple.
+            self.unprotected_bpm_lock_changes_wet_rate(
+                index,
+                rate_target,
+                self.effective_global_rate(),
+            )
+        } else {
+            let Ok((period, Some(_))) = self.bpm_target_tuple(target) else {
+                return false;
+            };
+            Self::scalar_tempo_ratio(
+                self.timing_for_voice(&self.voices[index]).period_seconds(),
+                self.speed,
+                period,
+                target.enabled,
+            )
+            .to_bits()
+                != rate_target.to_bits()
         };
-        let ratio = Self::scalar_tempo_ratio(
-            self.timing_for_voice(&self.voices[index]).period_seconds(),
-            self.speed,
-            period,
-            target.enabled,
-        );
         // The command drain can still be in progress. The staged request must
         // still be current, but its ordinary service owns the eventual apply.
-        ratio.to_bits() != rate_target.to_bits()
+        changes_rate
             && self
                 .input_runtime_ownership
                 .global_rate_status

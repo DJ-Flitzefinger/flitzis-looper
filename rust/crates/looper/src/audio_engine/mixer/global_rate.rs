@@ -1083,6 +1083,30 @@ impl RtMixer {
             .is_some_and(|coordinator| coordinator.pending.is_some())
     }
 
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    pub(crate) fn bound_scalar_participant_for_test(
+        &self,
+        id: usize,
+    ) -> Option<(u64, Option<u64>)> {
+        let capture = self
+            .global_rate
+            .as_ref()?
+            .pending
+            .as_ref()?
+            .capture
+            .as_ref()?;
+        self.rate_capture_current(capture).ok()?;
+        let participant = capture
+            .voices
+            .iter()
+            .flatten()
+            .find(|participant| participant.id == id)?;
+        Some((
+            participant.generation,
+            participant.work.map(|work| work.request_id),
+        ))
+    }
+
     pub(super) fn has_staged_scalar_rate_in(&self, request: std::ops::Range<u64>) -> bool {
         // An uncaptured request can still apply at the current service boundary.
         // A captured scalar request keeps its exact bound execution frame.

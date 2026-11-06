@@ -36,6 +36,8 @@ pub(in crate::audio_engine) struct PadObservation {
     pub generation: u64,
     pub frame: usize,
     pub fraction: f64,
+    pub rate_target: f64,
+    pub bound_scalar_participant: Option<(u64, Option<u64>)>,
     pub post_dsp_peak: f32,
     pub key_lock: bool,
     pub stem_mode: u8,
