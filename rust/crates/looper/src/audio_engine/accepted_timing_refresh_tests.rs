@@ -7,7 +7,11 @@ use crate::audio_engine::audio_stream::{
     process_control_message, render_scheduled_audio,
 };
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
+use crate::audio_engine::global_rate_status::BpmReason;
 use crate::audio_engine::input_runtime_binding::{self, InputRuntimePadBinding};
+use crate::audio_engine::master_provenance::{self, MasterProvenance};
+use crate::audio_engine::pitch_intent::PitchIntent;
+use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::scheduler::{FixedCapacityScheduler, ScheduledCommand};
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ControlParameterMessage, TriggerQuantization};
@@ -1967,6 +1971,239 @@ fn qualified_on_after_off_reinitializes_different_reference_without_moving_audio
             .position(),
         position
     );
+}
+
+fn running_unity_key_lock_fixture() -> Fixture {
+    let mut fixture = constant_bpm_reference_fixture();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(false, None)
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let off = ownership.global_rate_status.read_bpm().unwrap().1;
+    assert!(off.applied && !off.effective);
+
+    let key_lock = fixture
+        .engine
+        .set_pad_key_lock_with_source(0, true, Some(7))
+        .unwrap();
+    drain_bpm_fixture(&mut fixture);
+    fixture.render(192);
+    let status = ownership.key_lock_status(0).unwrap();
+    assert_ne!(key_lock, 0);
+    assert_eq!(status.request_id, key_lock);
+    assert!(status.effective && status.ready);
+    let voice = &fixture.mixer.voices[0];
+    assert!(voice.active && !voice.paused && voice.sample_id == 0);
+    assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+    assert!(!voice.stretch.source_lane_busy());
+    assert!(!voice.stretch.has_retained_source_input());
+    assert!(!voice.stretch.has_active_native_ownership());
+    fixture
+}
+
+fn install_other_accepted_bpm_reference(fixture: &mut Fixture) -> InputRuntimePadBinding {
+    use crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing;
+    let other = source().with_complete_source(RATE);
+    fixture.engine.sample_cache.lock().unwrap()[1] = Some(other.clone());
+    fixture.engine.pad_request_ids.lock().unwrap()[1] = 1;
+    fixture.engine.loaded_source_generations.lock().unwrap()[1] = (1, RATE);
+    fixture.engine.loaded_source_digests.lock().unwrap()[1] = Some("b".repeat(64));
+    fixture
+        .engine
+        .input_runtime_ownership
+        .publish_test_source(1, &other, RATE, 1);
+    fixture.mixer.load_sample(1, other);
+    fixture
+        .engine
+        .set_pad_timing_intent_with_source(1, "automatic", Some(1))
+        .unwrap();
+    drain_bpm_fixture(fixture);
+    let timing = publish_synthetic_loaded_timing(&fixture.engine, &fixture.producer, 1, 0.75);
+    drain_bpm_fixture(fixture);
+    assert_eq!(timing.publication_status().unwrap(), "accepted");
+    let binding = input_runtime_binding::capture(&fixture.engine, 1)
+        .unwrap()
+        .unwrap();
+    assert!((binding.binding.accepted.unwrap().period_seconds - 0.75).abs() < 1e-12);
+    binding
+}
+
+fn submit_bpm_on_needing_history(
+    fixture: &mut Fixture,
+    binding: &InputRuntimePadBinding,
+) -> (u64, u64) {
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let capture = fixture.transport.output_frame();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(binding))
+        .unwrap();
+    let (request, previous) = ownership.global_rate_status.read_bpm().unwrap();
+    assert!(request > previous.revision);
+    assert!(previous.applied && !previous.effective);
+    drain_bpm_fixture(fixture);
+    let (current, pending) = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!((current, pending.revision), (request, request));
+    assert!(pending.requested && !pending.effective && !pending.applied);
+    assert_eq!(pending.reason, BpmReason::HistoryPending);
+    assert_eq!(pending.execution_frame, None);
+    assert!(fixture.mixer.voices[0].stretch.source_preparation_pending());
+    let execution = capture + PREPARED_HISTORY_FRAMES as u64;
+    assert_eq!(fixture.mixer.next_global_rate_frame(), Some(execution));
+    (request, execution)
+}
+
+#[test]
+fn qualified_on_prepares_running_unity_key_lock_voice_for_new_master() {
+    use std::time::{Duration, Instant};
+
+    let mut fixture = running_unity_key_lock_fixture();
+    let other = install_other_accepted_bpm_reference(&mut fixture);
+    let period = other.binding.accepted.unwrap().period_seconds;
+    let original_period = fixture.binding().binding.accepted.unwrap().period_seconds;
+    let provenance = MasterProvenance::qualified(
+        master_provenance::source_identity(&other).unwrap(),
+        other.binding,
+    );
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let previous_rate = ownership.global_rate_status.read().unwrap();
+    let previous_transport = fixture.transport;
+    let generation = fixture.mixer.voices[0].generation;
+    let (request, execution) = submit_bpm_on_needing_history(&mut fixture, &other);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.mixer.voices[0].stretch.prospective_work_ready() {
+        assert!(
+            Instant::now() < deadline,
+            "the original BPM Lock request must prepare real Native source history"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    fixture.render(PREPARED_HISTORY_FRAMES - 1);
+    assert_eq!(fixture.transport.output_frame(), execution - 1);
+    let (current, pending) = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!((current, pending.revision), (request, request));
+    assert!(!pending.applied && !pending.effective);
+    let actual = ownership.global_rate_status.read().unwrap();
+    assert_eq!(actual.effect.effective, previous_rate.effect.effective);
+    assert_eq!(actual.master_provenance, previous_rate.master_provenance);
+    assert_eq!(
+        fixture.transport.master_period_seconds(),
+        previous_transport.master_period_seconds()
+    );
+    let voice = &fixture.mixer.voices[0];
+    assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+    assert_eq!(voice.source_playback.rate_target(), 1.0);
+    assert_eq!(voice.generation, generation);
+    assert!(!voice.stretch.has_active_native_ownership());
+
+    // E is inside the callback, with one old-trajectory frame still to render.
+    fixture.render(3);
+    let (current, applied) = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!((current, applied.revision), (request, request));
+    assert!(applied.requested && applied.applied && applied.effective);
+    assert_eq!(applied.reason, BpmReason::None);
+    assert_eq!(applied.execution_frame, Some(execution));
+    assert_eq!(fixture.transport.output_frame(), execution + 2);
+    assert_eq!(fixture.transport.master_period_seconds(), Some(period));
+    let old_beat = previous_transport
+        .beat_position_at_frame(execution)
+        .unwrap();
+    let new_beat = fixture.transport.beat_position_at_frame(execution).unwrap();
+    assert!((old_beat - new_beat).abs() < 1e-12);
+    let actual = ownership.global_rate_status.read().unwrap();
+    assert_eq!(actual.effect.effective.period, Some(period));
+    assert_eq!(actual.master_provenance, provenance);
+    let voice = &fixture.mixer.voices[0];
+    assert_eq!(voice.generation, generation);
+    assert!(voice.stretch.has_active_native_ownership());
+    assert!(
+        voice
+            .stretch
+            .owns_pitch_contract(PitchIntent::default(), true)
+    );
+    assert!(voice.stretch.adopted_request_id().is_some());
+    assert!(!voice.stretch.source_preparation_pending());
+    assert_eq!(
+        voice.source_playback.rate_target(),
+        original_period / period
+    );
+}
+
+#[test]
+fn qualified_bpm_history_cannot_apply_after_source_revocation_or_newer_off() {
+    for revoke_source in [true, false] {
+        let mut fixture = running_unity_key_lock_fixture();
+        let other = install_other_accepted_bpm_reference(&mut fixture);
+        let ownership = fixture.engine.input_runtime_ownership.clone();
+        let previous_rate = ownership.global_rate_status.read().unwrap();
+        let previous_period = fixture.transport.master_period_seconds();
+        let generation = fixture.mixer.voices[0].generation;
+        let (request, execution) = submit_bpm_on_needing_history(&mut fixture, &other);
+
+        if revoke_source {
+            ownership.revoke(1, ownership.next_authority(1).unwrap());
+        } else {
+            fixture
+                .engine
+                .set_bpm_lock_with_binding(false, None)
+                .unwrap();
+        }
+        drain_bpm_fixture(&mut fixture);
+        assert_eq!(fixture.mixer.next_global_rate_frame(), None);
+        assert!(!fixture.mixer.voices[0].stretch.source_preparation_pending());
+        fixture.render(PREPARED_HISTORY_FRAMES + 3);
+        assert!(fixture.transport.output_frame() > execution);
+        let (current, effect) = ownership.global_rate_status.read_bpm().unwrap();
+        assert_eq!(current, effect.revision);
+        assert!(!effect.effective);
+        if revoke_source {
+            assert_eq!(current, request);
+            assert_eq!(effect.reason, BpmReason::ReferenceChanged);
+            assert!(!effect.applied);
+            assert_eq!(effect.execution_frame, None);
+        } else {
+            assert!(current > request);
+            assert_eq!(effect.reason, BpmReason::None);
+            assert!(effect.applied && !effect.requested);
+            assert!(effect.execution_frame.unwrap() < execution);
+        }
+        let actual = ownership.global_rate_status.read().unwrap();
+        assert_eq!(actual.effect.effective, previous_rate.effect.effective);
+        assert_eq!(actual.master_provenance, previous_rate.master_provenance);
+        assert_eq!(fixture.transport.master_period_seconds(), previous_period);
+        let voice = &fixture.mixer.voices[0];
+        assert_eq!(voice.generation, generation);
+        assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+        assert!(!voice.stretch.has_active_native_ownership());
+        assert_eq!(voice.stretch.adopted_request_id(), None);
+    }
+}
+
+#[test]
+fn qualified_bpm_on_at_unchanged_unity_rate_needs_no_history() {
+    let mut fixture = running_unity_key_lock_fixture();
+    let original = fixture.binding();
+    let ownership = fixture.engine.input_runtime_ownership.clone();
+    let frame = fixture.transport.output_frame();
+    fixture
+        .engine
+        .set_bpm_lock_with_binding(true, Some(&original))
+        .unwrap();
+    let request = ownership.global_rate_status.read_bpm().unwrap().0;
+    drain_bpm_fixture(&mut fixture);
+    let (current, effect) = ownership.global_rate_status.read_bpm().unwrap();
+    assert_eq!((current, effect.revision), (request, request));
+    assert!(effect.applied && effect.effective);
+    assert_eq!(effect.reason, BpmReason::None);
+    assert_eq!(effect.execution_frame, Some(frame));
+    assert_eq!(fixture.mixer.next_global_rate_frame(), None);
+    let voice = &fixture.mixer.voices[0];
+    assert_eq!(voice.source_playback.tempo_ratio(), 1.0);
+    assert!(!voice.stretch.source_preparation_pending());
+    assert!(!voice.stretch.has_active_native_ownership());
 }
 
 #[test]

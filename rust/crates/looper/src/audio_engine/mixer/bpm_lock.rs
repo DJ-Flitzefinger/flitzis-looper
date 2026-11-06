@@ -1,9 +1,11 @@
-//! Retained BPM intent, serviced on existing render boundaries without owning work.
+//! Retained BPM intent, serviced on existing render boundaries.
+use super::global_rate::RateCapture;
 use super::*;
 use crate::audio_engine::content_placement::ContentKey;
-use crate::audio_engine::global_rate_status::{BpmEffect, BpmReason};
+use crate::audio_engine::global_rate_status::{BpmEffect, BpmReason, RateTuple};
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::master_provenance::MasterProvenance;
+use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::transport::TransportTimeline;
 use std::cell::RefCell;
 
@@ -14,6 +16,17 @@ pub(crate) struct BpmLockTarget {
     pub(crate) anchor: Option<(usize, InputPadBinding, ContentKey)>,
     pub(crate) source_identity: Option<[u8; 32]>,
     pub(crate) hierarchy_stamp: u64,
+}
+
+pub(super) struct BpmHistory {
+    pub(super) capture: RateCapture,
+    previous: (bool, RateTuple),
+    requested: RateTuple,
+}
+
+enum BpmRateChange<'a> {
+    Immediate([Option<f64>; MAX_VOICES]),
+    Prepared(&'a BpmHistory),
 }
 
 #[cfg(test)]
@@ -176,10 +189,7 @@ mod tests {
                 Some(0)
             );
             let frame = fixture.transport.output_frame();
-            assert_eq!(
-                fixture.mixer.bpm_target_ready(request, frame).unwrap().2,
-                Some(0)
-            );
+            assert_eq!(fixture.mixer.bpm_target_tuple(request).unwrap().1, Some(0));
             fixture.mixer.stage_bpm_lock(request);
             settle(&mut fixture.mixer);
             let before = fixture.transport;
@@ -383,6 +393,7 @@ impl RtMixer {
             .pending_bpm_lock
             .is_none_or(|old| old.revision <= target.revision)
         {
+            self.cancel_bpm_history();
             self.pending_bpm_lock = Some(target);
             self.publish_bpm_target(target, BpmReason::DrainPending, None);
         }
@@ -410,11 +421,10 @@ impl RtMixer {
             && self.global_rate_timing_revision() == revision
     }
 
-    fn bpm_target_ready(
+    fn bpm_target_tuple(
         &self,
         target: BpmLockTarget,
-        frame: u64,
-    ) -> Result<([Option<f64>; MAX_VOICES], Option<f64>, Option<usize>), BpmReason> {
+    ) -> Result<(Option<f64>, Option<usize>), BpmReason> {
         if self
             .input_runtime_ownership
             .hierarchy_stamp
@@ -435,9 +445,6 @@ impl RtMixer {
             }
             anchor_id = Some(id);
         }
-        if !target.enabled && !self.bpm_lock_enabled && self.master_period_seconds.is_none() {
-            return Ok(([None; MAX_VOICES], self.master_period_seconds, None));
-        }
         // A qualified ON owns its current original reference even when an older
         // blocked OFF left the actual boolean ON. Only an unchanged complete tuple
         // can acknowledge this new receipt without prospective rate preparation.
@@ -456,13 +463,12 @@ impl RtMixer {
             None
         };
         if target.enabled == self.bpm_lock_enabled && period == self.master_period_seconds {
-            return Ok(([None; MAX_VOICES], period, None));
+            return Ok((period, None));
         }
         if self.has_pending_global_rate() {
             return Err(BpmReason::RatePending);
         }
-        self.prospective_scalar_targets(target.enabled, self.speed, period, frame)
-            .map(|targets| (targets, period, anchor_id))
+        Ok((period, anchor_id))
     }
 
     pub(crate) fn accepted_refresh_master_targets(
@@ -552,23 +558,141 @@ impl RtMixer {
         self.refresh_global_rate_observation_with_master(provenance);
     }
 
+    fn take_bpm_history(&mut self) -> Option<BpmHistory> {
+        self.global_rate.as_mut()?.bpm_history.take()
+    }
+
+    pub(crate) fn cancel_bpm_history(&mut self) {
+        if let Some(history) = self.take_bpm_history() {
+            self.cancel_rate_capture(&history.capture);
+        }
+    }
+
+    fn start_bpm_history(&mut self, requested: RateTuple, frame: u64) {
+        if self.rate_needs_history(requested, true) != Ok(true) {
+            return;
+        }
+        let Some(execution) = frame.checked_add(PREPARED_HISTORY_FRAMES as u64) else {
+            return;
+        };
+        let previous = (self.bpm_lock_enabled, self.effective_global_rate());
+        let mut capture = None;
+        let result = self.capture_rate_transition(requested, true, frame, execution, &mut capture);
+        if let Some(capture) = capture {
+            if result.is_ok()
+                && !self.rate_capture_has_foreign_lane(&capture)
+                && let Some(coordinator) = self.global_rate.as_mut()
+            {
+                coordinator.bpm_history = Some(BpmHistory {
+                    capture,
+                    previous,
+                    requested,
+                });
+            } else {
+                self.cancel_rate_capture(&capture);
+            }
+        }
+    }
+
+    fn bpm_history_current(&self, history: &BpmHistory, period: Option<f64>) -> bool {
+        history.previous == (self.bpm_lock_enabled, self.effective_global_rate())
+            && history.requested.period == period
+            && self.rate_capture_current(&history.capture).is_ok()
+            && !self.rate_capture_has_foreign_lane(&history.capture)
+    }
+
+    fn bpm_immediate_targets(
+        &self,
+        target: BpmLockTarget,
+        period: Option<f64>,
+        frame: u64,
+    ) -> Result<[Option<f64>; MAX_VOICES], BpmReason> {
+        if target.enabled == self.bpm_lock_enabled && period == self.master_period_seconds {
+            return Ok([None; MAX_VOICES]);
+        }
+        self.prospective_scalar_targets(target.enabled, self.speed, period, frame)
+    }
+
     pub(crate) fn service_bpm_lock(&mut self, frame: u64, transport: &mut TransportTimeline) {
         let Some(target) = self.pending_bpm_lock else {
             return;
         };
-        let ownership = self.input_runtime_ownership.clone();
-        let revision = self.global_rate_timing_revision();
         if !self.global_rate_drains_settled() {
+            self.cancel_bpm_history();
             self.publish_bpm_target(target, BpmReason::DrainPending, None);
             return;
         }
-        let (targets, period, anchor_id) = match self.bpm_target_ready(target, frame) {
+        let (period, anchor_id) = match self.bpm_target_tuple(target) {
             Ok(prepared) => prepared,
             Err(reason) => {
+                self.cancel_bpm_history();
                 self.publish_bpm_target(target, reason, None);
                 return;
             }
         };
+        if let Some(history) = self
+            .global_rate
+            .as_ref()
+            .and_then(|rate| rate.bpm_history.as_ref())
+        {
+            if !self.bpm_history_current(history, period) || frame > history.capture.execution {
+                self.cancel_bpm_history();
+                self.publish_bpm_target(target, BpmReason::HistoryPending, None);
+                return;
+            }
+            if frame < history.capture.execution {
+                return;
+            }
+        }
+        let history = self.take_bpm_history();
+        let change = if let Some(history) = &history {
+            if !self.rate_capture_ready(&history.capture, history.requested, target.enabled, frame)
+            {
+                self.cancel_rate_capture(&history.capture);
+                self.publish_bpm_target(target, BpmReason::HistoryPending, None);
+                return;
+            }
+            BpmRateChange::Prepared(history)
+        } else {
+            match self.bpm_immediate_targets(target, period, frame) {
+                Ok(targets) => BpmRateChange::Immediate(targets),
+                Err(reason) => {
+                    if reason == BpmReason::HistoryPending && target.enabled && anchor_id.is_some()
+                    {
+                        self.start_bpm_history(
+                            RateTuple {
+                                speed: self.speed,
+                                period,
+                            },
+                            frame,
+                        );
+                    }
+                    self.publish_bpm_target(target, reason, None);
+                    return;
+                }
+            }
+        };
+        if let Err(reason) =
+            self.commit_bpm_target(target, period, anchor_id, change, frame, transport)
+        {
+            if let Some(history) = history {
+                self.cancel_rate_capture(&history.capture);
+            }
+            self.publish_bpm_target(target, reason, None);
+        }
+    }
+
+    fn commit_bpm_target(
+        &mut self,
+        target: BpmLockTarget,
+        period: Option<f64>,
+        anchor_id: Option<usize>,
+        change: BpmRateChange<'_>,
+        frame: u64,
+        transport: &mut TransportTimeline,
+    ) -> Result<(), BpmReason> {
+        let ownership = self.input_runtime_ownership.clone();
+        let revision = self.global_rate_timing_revision();
         let mut candidate = *transport;
         if target.enabled
             && anchor_id.is_some()
@@ -576,8 +700,7 @@ impl RtMixer {
         {
             if let Some(period) = period {
                 if !candidate.set_master_period_preserving_beat_position_at_frame(period, frame) {
-                    self.publish_bpm_target(target, BpmReason::HistoryPending, None);
-                    return;
+                    return Err(BpmReason::HistoryPending);
                 }
                 if let Some(id) = anchor_id {
                     if let Some(previous) = candidate.bootstrap_reference() {
@@ -593,68 +716,89 @@ impl RtMixer {
         let Some(_lease) =
             super::super::GlobalTimingLease::acquire(&ownership.global_timing_publishing)
         else {
-            self.publish_bpm_target(target, BpmReason::DrainPending, None);
-            return;
+            return Err(BpmReason::DrainPending);
         };
         let id = target
             .anchor
             .and_then(|(original, binding, _)| self.timing_effect_slot(original, binding.placement))
             .unwrap_or(0);
         let Some(placement) = ownership.slot_snapshot(id) else {
-            self.publish_bpm_target(target, BpmReason::DrainPending, None);
-            return;
+            return Err(BpmReason::DrainPending);
         };
         let Ok(write) = ownership.prepare_slot_write_fixed(placement, placement.lifetime()) else {
-            self.publish_bpm_target(target, BpmReason::DrainPending, None);
-            return;
+            return Err(BpmReason::DrainPending);
         };
         let mixer = RefCell::new(self);
-        let result = ownership.commit_slot_write_fixed(
-            &write,
-            || {
-                let mixer = mixer.borrow();
-                mixer.global_drains_claimed(revision)
-                    && mixer.bpm_target_ready(target, frame).is_ok()
-            },
-            |_| {
-                let mut mixer = mixer.borrow_mut();
-                for (index, ratio) in targets.into_iter().enumerate() {
-                    if let Some(ratio) = ratio {
-                        mixer.voices[index]
-                            .stretch
-                            .retarget_retained_rate_claimed(ratio);
+        ownership
+            .commit_slot_write_fixed(
+                &write,
+                || {
+                    let mut mixer = mixer.borrow_mut();
+                    mixer.global_drains_claimed(revision)
+                        && mixer.bpm_target_tuple(target) == Ok((period, anchor_id))
+                        && match &change {
+                            BpmRateChange::Immediate(_) => {
+                                mixer.bpm_immediate_targets(target, period, frame).is_ok()
+                            }
+                            BpmRateChange::Prepared(history) => {
+                                mixer.bpm_history_current(history, period)
+                                    && mixer.rate_capture_ready(
+                                        &history.capture,
+                                        history.requested,
+                                        target.enabled,
+                                        frame,
+                                    )
+                            }
+                        }
+                },
+                |_| {
+                    let mut mixer = mixer.borrow_mut();
+                    match &change {
+                        BpmRateChange::Immediate(targets) => {
+                            for (index, ratio) in targets.iter().copied().enumerate() {
+                                if let Some(ratio) = ratio {
+                                    mixer.voices[index]
+                                        .stretch
+                                        .retarget_retained_rate_claimed(ratio);
+                                }
+                            }
+                        }
+                        BpmRateChange::Prepared(history) => {
+                            mixer.adopt_rate_capture(
+                                &history.capture,
+                                history.requested,
+                                target.enabled,
+                                frame,
+                            );
+                        }
                     }
-                }
-                let changed = mixer.bpm_lock_enabled != target.enabled;
-                let tuple_changed = changed || mixer.master_period_seconds != period;
-                if tuple_changed {
-                    mixer.invalidate_source_for_all();
-                }
-                mixer.bpm_lock_enabled = target.enabled;
-                if tuple_changed {
-                    mixer.master_period_seconds = period;
-                    mixer.rebind_launch_births(transport, &candidate, frame);
-                    *transport = candidate;
-                }
-                let provenance = if !target.enabled || period.is_none() {
-                    MasterProvenance::Absent
-                } else {
-                    target.anchor.zip(target.source_identity).map_or(
-                        MasterProvenance::Unknown,
-                        |((_, binding, _), identity)| {
-                            MasterProvenance::qualified(identity, binding)
-                        },
-                    )
-                };
-                mixer.refresh_global_rate_observation_with_master(provenance);
-                mixer.pending_bpm_lock = None;
-                mixer.publish_bpm_target(target, BpmReason::None, Some(frame));
-            },
-        );
-        if result.is_err() {
-            mixer
-                .borrow()
-                .publish_bpm_target(target, BpmReason::DrainPending, None);
-        }
+                    let changed = mixer.bpm_lock_enabled != target.enabled;
+                    let tuple_changed = changed || mixer.master_period_seconds != period;
+                    if tuple_changed {
+                        mixer.invalidate_source_for_all();
+                    }
+                    mixer.bpm_lock_enabled = target.enabled;
+                    if tuple_changed {
+                        mixer.master_period_seconds = period;
+                        mixer.rebind_launch_births(transport, &candidate, frame);
+                        *transport = candidate;
+                    }
+                    let provenance = if !target.enabled || period.is_none() {
+                        MasterProvenance::Absent
+                    } else {
+                        target.anchor.zip(target.source_identity).map_or(
+                            MasterProvenance::Unknown,
+                            |((_, binding, _), identity)| {
+                                MasterProvenance::qualified(identity, binding)
+                            },
+                        )
+                    };
+                    mixer.refresh_global_rate_observation_with_master(provenance);
+                    mixer.pending_bpm_lock = None;
+                    mixer.publish_bpm_target(target, BpmReason::None, Some(frame));
+                },
+            )
+            .map(|_| ())
+            .map_err(|_| BpmReason::DrainPending)
     }
 }

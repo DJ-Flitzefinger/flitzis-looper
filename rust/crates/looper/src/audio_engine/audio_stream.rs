@@ -1547,6 +1547,8 @@ fn render_scheduled_audio_tracking_pads<
 
     if scheduler.deferred_due().is_none() {
         mixer.service_global_rate(callback_start_frame, transport, retirement);
+    } else {
+        mixer.cancel_bpm_history();
     }
 
     if channels == 0 {
@@ -1619,6 +1621,7 @@ fn render_scheduled_audio_tracking_pads<
             }
         }
         if scheduler.deferred_due().is_some() {
+            mixer.cancel_bpm_history();
             render_mixer_segment(
                 mixer,
                 output,

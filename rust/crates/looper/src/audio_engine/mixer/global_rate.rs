@@ -58,8 +58,8 @@ impl std::ops::DerefMut for RateVoice {
     }
 }
 
-struct RateCapture {
-    execution: u64,
+pub(super) struct RateCapture {
+    pub(super) execution: u64,
     timing_fence: u64,
     voices: [Option<RateVoice>; MAX_VOICES],
     // Serializes the global effect only. It never supplies a retained source's authority.
@@ -85,6 +85,7 @@ pub(super) struct GlobalRateCoordinator {
     pending: Option<PendingRate>,
     requested_anchor: Option<TimingAnchor>,
     requested_master_publication: bool,
+    pub(super) bpm_history: Option<super::bpm_lock::BpmHistory>,
 }
 
 fn feed<'a>(
@@ -93,9 +94,9 @@ fn feed<'a>(
     key_lock: bool,
     frame: u64,
     permit: Option<&'a NativeHistoryPermit>,
-) -> ProductiveSourceFeed<'a> {
-    let readers = snapshot.readers().unwrap_or_default();
-    ProductiveSourceFeed {
+) -> Option<ProductiveSourceFeed<'a>> {
+    let readers = snapshot.readers()?;
+    Some(ProductiveSourceFeed {
         pitch_intent: pitch,
         key_lock,
         sample: &snapshot.sample,
@@ -107,7 +108,7 @@ fn feed<'a>(
         plan: snapshot.plan,
         permit,
         output_frame: Some(frame),
-    }
+    })
 }
 
 impl RtMixer {
@@ -155,6 +156,7 @@ impl RtMixer {
         anchor: Option<TimingAnchor>,
         transport: &mut TransportTimeline,
     ) {
+        self.cancel_bpm_history();
         let Some(mut coordinator) = self.global_rate.take() else {
             return;
         };
@@ -209,7 +211,7 @@ impl RtMixer {
                 RateError::InvalidTransport,
             );
         } else {
-            match self.global_rate_needs_history(pending.requested) {
+            match self.rate_needs_history(pending.requested, pending.bpm_lock) {
                 Ok(false) => {
                     let frame = transport.output_frame();
                     match self.apply_global_rate_tuple(&pending, transport, frame) {
@@ -263,12 +265,14 @@ impl RtMixer {
         &self,
         index: usize,
         requested: RateTuple,
+        bpm_lock: bool,
     ) -> Result<bool, RateError> {
         let (pitch, key_lock) = self.effective_rate_voice_tuple(index);
-        let target = self.tempo_ratio_for_source_period_with_rate(
+        let target = Self::scalar_tempo_ratio(
             self.timing_for_voice(&self.voices[index]).period_seconds(),
             requested.speed,
             requested.period,
+            bpm_lock,
         );
         if self.voices[index]
             .stretch
@@ -293,12 +297,18 @@ impl RtMixer {
         index: usize,
         requested: RateTuple,
     ) -> Result<bool, RateError> {
-        self.rate_voice_needs_history(index, requested)
+        self.rate_voice_needs_history(index, requested, self.bpm_lock_enabled)
     }
 
-    fn global_rate_needs_history(&self, requested: RateTuple) -> Result<bool, RateError> {
+    pub(super) fn rate_needs_history(
+        &self,
+        requested: RateTuple,
+        bpm_lock: bool,
+    ) -> Result<bool, RateError> {
         for index in 0..MAX_VOICES {
-            if self.voices[index].active && self.rate_voice_needs_history(index, requested)? {
+            if self.voices[index].active
+                && self.rate_voice_needs_history(index, requested, bpm_lock)?
+            {
                 return Ok(true);
             }
         }
@@ -315,14 +325,6 @@ impl RtMixer {
     #[cfg(test)]
     pub(crate) fn rate_hold_active_for_key_for_test(&self, key: ContentKey) -> bool {
         self.rate_hold_active_for_key(key)
-    }
-
-    fn global_rate_snapshot(
-        &self,
-        index: usize,
-        _pending: &PendingRate,
-    ) -> Option<PitchSourceSnapshot> {
-        self.capture_pitch_voice_snapshot(index)
     }
 
     pub(super) fn capture_voice_history_permit(
@@ -477,11 +479,13 @@ impl RtMixer {
         Ok(())
     }
 
-    fn capture_global_rate(
+    pub(super) fn capture_rate_transition(
         &mut self,
-        pending: &mut PendingRate,
+        requested: RateTuple,
+        bpm_lock: bool,
         frame: u64,
         execution: u64,
+        destination: &mut Option<RateCapture>,
     ) -> Result<(), RateError> {
         if execution < frame {
             return Err(RateError::MissedBoundary);
@@ -508,7 +512,7 @@ impl RtMixer {
                 return Err(RateError::Capacity);
             }
             let mut snapshot = self
-                .global_rate_snapshot(index, pending)
+                .capture_pitch_voice_snapshot(index)
                 .ok_or(RateError::SourceChanged)?;
             let mut participant = self.capture_rate_participant(index, &snapshot)?;
             if capture.claim_anchor.is_none() {
@@ -520,7 +524,8 @@ impl RtMixer {
             participant.playback = snapshot.playback;
             participant.plan = snapshot.plan;
             participant.context = participant.context.for_plan(snapshot.plan);
-            participant.needs_history = self.rate_voice_needs_history(index, pending.requested)?;
+            participant.needs_history =
+                self.rate_voice_needs_history(index, requested, bpm_lock)?;
             capture.voices[index] = Some(participant);
         }
         // All foreign owners and reusable storage are checked before the first
@@ -535,9 +540,9 @@ impl RtMixer {
                 return Err(RateError::Capacity);
             }
         }
-        pending.capture = Some(capture);
+        let capture = destination.insert(capture);
         for index in 0..MAX_VOICES {
-            let captured = pending.capture.as_mut().unwrap().voices[index].as_mut();
+            let captured = capture.voices[index].as_mut();
             let Some(captured) = captured.filter(|voice| voice.needs_history) else {
                 continue;
             };
@@ -550,7 +555,8 @@ impl RtMixer {
                 captured.key_lock,
                 frame,
                 Some(&captured.permit),
-            );
+            )
+            .ok_or(RateError::SourceChanged)?;
             let voice = &mut self.voices[index];
             voice.stretch.invalidate_prepared();
             let Some((epoch, request_id)) = voice.stretch.request_prospective_tuple_with_history(
@@ -569,7 +575,7 @@ impl RtMixer {
             };
             captured.work = Some(RateWork { epoch, request_id });
         }
-        self.global_rate_current(pending, false)
+        self.rate_capture_current(capture)
     }
 
     fn global_rate_current(&self, pending: &PendingRate, claimed: bool) -> Result<(), RateError> {
@@ -593,13 +599,25 @@ impl RtMixer {
         let Some(capture) = pending.capture.as_ref() else {
             return Ok(());
         };
-        if !self.global_rate_drains_for_claim(claimed)
-            || self
-                .input_runtime_ownership
-                .global_timing_revision
-                .load(Ordering::Acquire)
-                != capture.timing_fence
+        if !self.global_rate_drains_for_claim(claimed) {
+            return Err(RateError::TimingChanged);
+        }
+        self.rate_capture_current(capture)?;
+        if self
+            .input_runtime_ownership
+            .global_rate_status
+            .requested_revision()
+            > pending.revision
+            || !self.global_rate_drains_for_claim(claimed)
         {
+            return Err(RateError::TimingChanged);
+        }
+        Ok(())
+    }
+
+    pub(super) fn rate_capture_current(&self, capture: &RateCapture) -> Result<(), RateError> {
+        let timing_current = || self.global_rate_timing_revision() == capture.timing_fence;
+        if !timing_current() {
             return Err(RateError::TimingChanged);
         }
         for index in 0..MAX_VOICES {
@@ -612,18 +630,7 @@ impl RtMixer {
             };
             self.rate_participant_current(index, expected)?;
         }
-        if self
-            .input_runtime_ownership
-            .global_timing_revision
-            .load(Ordering::Acquire)
-            != capture.timing_fence
-            || self
-                .input_runtime_ownership
-                .global_rate_status
-                .requested_revision()
-                > pending.revision
-            || !self.global_rate_drains_for_claim(claimed)
-        {
+        if !timing_current() {
             return Err(RateError::TimingChanged);
         }
         Ok(())
@@ -677,11 +684,21 @@ impl RtMixer {
         if self.global_rate_current(pending, claimed).is_err() {
             return false;
         }
+        self.rate_capture_ready(capture, pending.requested, pending.bpm_lock, frame)
+    }
+
+    pub(super) fn rate_capture_ready(
+        &mut self,
+        capture: &RateCapture,
+        requested: RateTuple,
+        bpm_lock: bool,
+        frame: u64,
+    ) -> bool {
         for index in 0..MAX_VOICES {
             let Some(expected) = capture.voices[index].as_ref() else {
                 continue;
             };
-            let Some(snapshot) = self.global_rate_snapshot(index, pending) else {
+            let Some(snapshot) = self.capture_pitch_voice_snapshot(index) else {
                 return false;
             };
             if !snapshot.playback.matches_exact(&expected.playback)
@@ -690,13 +707,20 @@ impl RtMixer {
             {
                 return false;
             }
+            if expected.work.is_none() && !self.voices[index].stretch.has_retained_source_input() {
+                continue;
+            }
+            let Some(prospective) = feed(&snapshot, expected.pitch, expected.key_lock, frame, None)
+            else {
+                return false;
+            };
+            let target = Self::scalar_tempo_ratio(
+                self.timing_for_voice(&self.voices[index]).period_seconds(),
+                requested.speed,
+                requested.period,
+                bpm_lock,
+            );
             if let Some(work) = expected.work {
-                let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                let target = self.tempo_ratio_for_source_period_with_rate(
-                    self.timing_for_voice(&self.voices[index]).period_seconds(),
-                    pending.requested.speed,
-                    pending.requested.period,
-                );
                 if !self.voices[index].stretch.prospective_rate_change_ready(
                     &prospective,
                     work.epoch,
@@ -705,22 +729,28 @@ impl RtMixer {
                 ) {
                     return false;
                 }
-            } else if self.voices[index].stretch.has_retained_source_input() {
-                let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                let target = self.tempo_ratio_for_source_period_with_rate(
-                    self.timing_for_voice(&self.voices[index]).period_seconds(),
-                    pending.requested.speed,
-                    pending.requested.period,
-                );
-                if !self.voices[index]
-                    .stretch
-                    .retained_rate_change_ready(&prospective, target)
-                {
-                    return false;
-                }
+            } else if !self.voices[index]
+                .stretch
+                .retained_rate_change_ready(&prospective, target)
+            {
+                return false;
             }
         }
         true
+    }
+
+    pub(super) fn rate_capture_has_foreign_lane(&self, capture: &RateCapture) -> bool {
+        capture
+            .voices
+            .iter()
+            .zip(&self.voices)
+            .any(|(expected, voice)| {
+                expected
+                    .as_ref()
+                    .is_some_and(|expected| expected.work.is_none())
+                    && !voice.stretch.has_retained_source_input()
+                    && voice.stretch.source_lane_busy()
+            })
     }
 
     fn apply_global_rate_tuple(
@@ -827,36 +857,7 @@ impl RtMixer {
                 },
                 |_| {
                     let mut mixer = mixer.borrow_mut();
-                    for index in 0..MAX_VOICES {
-                        let Some(expected) = capture.voices[index].as_ref() else {
-                            continue;
-                        };
-                        let Some(work) = expected.work else {
-                            continue;
-                        };
-                        let snapshot = mixer
-                            .capture_pitch_voice_snapshot(index)
-                            .expect("claimed old rate endpoint");
-                        let prospective =
-                            feed(&snapshot, expected.pitch, expected.key_lock, frame, None);
-                        mixer.voices[index]
-                            .stretch
-                            .adopt_prospective_tuple_claimed(&prospective, work.request_id);
-                    }
-                    for index in 0..MAX_VOICES {
-                        let voice = &mixer.voices[index];
-                        if !voice.active || !voice.stretch.has_retained_source_input() {
-                            continue;
-                        }
-                        let target = mixer.tempo_ratio_for_source_period_with_rate(
-                            mixer.timing_for_voice(voice).period_seconds(),
-                            pending.requested.speed,
-                            pending.requested.period,
-                        );
-                        mixer.voices[index]
-                            .stretch
-                            .retarget_retained_rate_claimed(target);
-                    }
+                    mixer.adopt_rate_capture(capture, pending.requested, pending.bpm_lock, frame);
                     // Actual source controls change only after every endangered owner is adopted.
                     // Invalidation cannot revoke those now-productive Native/FIFO trajectories.
                     mixer.invalidate_source_for_all();
@@ -869,18 +870,62 @@ impl RtMixer {
             .map_err(|_| RateError::SourceChanged)
     }
 
+    pub(super) fn adopt_rate_capture(
+        &mut self,
+        capture: &RateCapture,
+        requested: RateTuple,
+        bpm_lock: bool,
+        frame: u64,
+    ) {
+        for (index, expected) in capture.voices.iter().enumerate() {
+            let Some(expected) = expected else {
+                continue;
+            };
+            let Some(work) = expected.work else {
+                continue;
+            };
+            let snapshot = self
+                .capture_pitch_voice_snapshot(index)
+                .expect("claimed old rate endpoint");
+            let prospective = feed(&snapshot, expected.pitch, expected.key_lock, frame, None)
+                .expect("claimed old rate readers");
+            self.voices[index]
+                .stretch
+                .adopt_prospective_tuple_claimed(&prospective, work.request_id);
+        }
+        for index in 0..MAX_VOICES {
+            let voice = &self.voices[index];
+            if !voice.active || !voice.stretch.has_retained_source_input() {
+                continue;
+            }
+            let target = Self::scalar_tempo_ratio(
+                self.timing_for_voice(voice).period_seconds(),
+                requested.speed,
+                requested.period,
+                bpm_lock,
+            );
+            self.voices[index]
+                .stretch
+                .retarget_retained_rate_claimed(target);
+        }
+    }
+
+    pub(super) fn cancel_rate_capture(&mut self, capture: &RateCapture) {
+        for (index, expected) in capture.voices.iter().enumerate() {
+            if let Some(expected) = expected
+                && self.voices[index].generation == expected.generation
+                && let Some(work) = expected.work
+            {
+                self.voices[index]
+                    .stretch
+                    .cancel_source_request_if_owned(work.epoch, work.request_id);
+            }
+        }
+    }
+
     fn finish_global_rate(&mut self, pending: PendingRate, error: RateError) {
         if let Some(capture) = pending.capture.as_ref() {
-            for (index, expected) in capture.voices.iter().enumerate() {
-                if let Some(expected) = expected
-                    && self.voices[index].generation == expected.generation
-                    && let Some(work) = expected.work
-                {
-                    self.voices[index]
-                        .stretch
-                        .cancel_source_request_if_owned(work.epoch, work.request_id);
-                }
-            }
+            self.cancel_rate_capture(capture);
         }
         self.publish_global_rate_effect(
             &pending,
@@ -947,7 +992,7 @@ impl RtMixer {
         }
         let qualified = pending.anchor.is_some();
         // Only this attempt's drain/claim pressure can retain uncaptured work.
-        // A foreign history owner found by capture_global_rate is a refusal.
+        // A foreign history owner found during capture is a refusal.
         let mut retryable_capacity = false;
         let current = self.global_rate_current(&pending, false);
         if current == Err(RateError::Capacity) && pending.capture.is_none() {
@@ -958,7 +1003,7 @@ impl RtMixer {
                 if !self.global_rate_drains_settled() {
                     return Ok(false);
                 }
-                if !self.global_rate_needs_history(pending.requested)? {
+                if !self.rate_needs_history(pending.requested, pending.bpm_lock)? {
                     let applied = self.apply_global_rate_tuple(&pending, transport, frame);
                     if applied == Err(RateError::Capacity) {
                         retryable_capacity = true;
@@ -969,7 +1014,14 @@ impl RtMixer {
                 let execution = frame
                     .checked_add(PREPARED_HISTORY_FRAMES as u64)
                     .ok_or(RateError::MissedBoundary)?;
-                self.capture_global_rate(&mut pending, frame, execution)?;
+                self.capture_rate_transition(
+                    pending.requested,
+                    pending.bpm_lock,
+                    frame,
+                    execution,
+                    &mut pending.capture,
+                )?;
+                self.global_rate_current(&pending, false)?;
                 self.publish_global_rate_effect(
                     &pending,
                     RateState::Preparing,
@@ -1012,11 +1064,19 @@ impl RtMixer {
     }
 
     pub(crate) fn next_global_rate_frame(&self) -> Option<u64> {
-        let pending = self.global_rate.as_ref()?.pending.as_ref()?;
-        if pending.terminal_error.is_some() {
-            return None;
-        }
-        pending.capture.as_ref().map(|capture| capture.execution)
+        let coordinator = self.global_rate.as_ref()?;
+        coordinator
+            .pending
+            .as_ref()
+            .filter(|pending| pending.terminal_error.is_none())
+            .and_then(|pending| pending.capture.as_ref())
+            .map(|capture| capture.execution)
+            .or_else(|| {
+                coordinator
+                    .bpm_history
+                    .as_ref()
+                    .map(|history| history.capture.execution)
+            })
     }
 
     pub(crate) fn has_pending_global_rate(&self) -> bool {
