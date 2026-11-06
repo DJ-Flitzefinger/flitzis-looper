@@ -998,6 +998,30 @@ fn asio_applies_same_rate_bpm_behind_stop_at_callback_start() {
 }
 
 #[test]
+fn asio_applies_bpm_off_behind_stop_after_affected_wet() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::BpmOff {
+        speed: 1.0,
+        behind_stop: true,
+    });
+}
+
+#[test]
+fn asio_applies_bpm_off_at_callback_start_when_rate_is_unchanged() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::BpmOff {
+        speed: 1.4,
+        behind_stop: true,
+    });
+}
+
+#[test]
+fn asio_applies_bpm_off_staged_before_stop_after_affected_wet() {
+    aligned_wet_set_with_ordered_control(OrderedWetControl::BpmOff {
+        speed: 1.0,
+        behind_stop: false,
+    });
+}
+
+#[test]
 fn asio_admits_coupled_master_refresh_after_affected_wet() {
     aligned_wet_set_with_ordered_control(OrderedWetControl::MasterRefresh(0.75));
 }
@@ -1012,6 +1036,7 @@ enum OrderedWetControl {
     Loop,
     StagedBpm(f64),
     BpmBehindStop(f64),
+    BpmOff { speed: f64, behind_stop: bool },
     MasterRefresh(f64),
 }
 
@@ -1038,10 +1063,16 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         OrderedWetControl::StagedBpm(period) | OrderedWetControl::BpmBehindStop(period) => {
             Some(period)
         }
+        OrderedWetControl::BpmOff { speed, .. } => Some(0.5 * speed),
         OrderedWetControl::MasterRefresh(_) => Some(0.7),
     };
+    let off_speed = match control {
+        OrderedWetControl::BpmOff { speed, .. } => Some(speed),
+        _ => None,
+    };
     let master_refresh = matches!(control, OrderedWetControl::MasterRefresh(_));
-    let capture_frame = if master_refresh { 23_040 } else { F };
+    let prelocked = master_refresh || off_speed.is_some();
+    let capture_frame = if prelocked { 23_040 } else { F };
 
     Python::initialize();
     let directory = tempfile::tempdir().unwrap().keep();
@@ -1076,7 +1107,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             "c",
             SourcePitchInitialization::FreshNeutral,
             48_000,
-            master_refresh.then_some((0, OLD_END as usize)),
+            prelocked.then_some((0, OLD_END as usize)),
         )
     });
     let stream = engine.stream_handle.as_ref().unwrap();
@@ -1113,7 +1144,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         &engine,
         &stream.producer,
         0,
-        if master_refresh { 0.7 } else { 0.5 },
+        if prelocked { 0.7 } else { 0.5 },
     );
     let ownership = &engine.input_runtime_ownership;
     assert_eq!(timing.publication_status().unwrap(), "pending");
@@ -1134,11 +1165,19 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         binding
     });
     let mut next_tick = 3 * FRAMES;
-    let master = if let OrderedWetControl::MasterRefresh(period) = control {
-        // Keep the real varispeed glide in the worker's replay history, but
-        // settle A before selecting C and capturing the aligned SET.
-        for end in (next_tick..=capture_frame - 3 * FRAMES).step_by(FRAMES as usize) {
-            if end == capture_frame - 41 * FRAMES {
+    let prior_lock = if prelocked {
+        // Keep the real varispeed glide in the worker's replay history and
+        // settle A before capturing the aligned SET.
+        let glide_tick = capture_frame - 41 * FRAMES;
+        let lock_tick = if off_speed == Some(1.0) {
+            glide_tick
+        } else {
+            capture_frame - 2 * FRAMES
+        };
+        let previous = anchor.as_ref().unwrap();
+        let original_source = master_provenance::source_identity(previous).unwrap();
+        for end in (next_tick..=lock_tick).step_by(FRAMES as usize) {
+            if end == glide_tick && off_speed != Some(1.0) {
                 push_global_rate_message(
                     &ownership.global_timing_revision,
                     &ownership.global_timing_publishing,
@@ -1146,31 +1185,36 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
                     &mut stream.parameter_producer.lock().unwrap(),
                     Some(1.4),
                     None,
-                    "ASIO coupled accepted refresh",
+                    "ASIO ordered Wet prelock speed",
                 )
                 .unwrap();
             }
+            if end == lock_tick {
+                engine
+                    .set_bpm_lock_with_binding(true, Some(previous))
+                    .unwrap();
+            }
             assert_eq!(stream.test_tick().unwrap().output_frame, end);
         }
-        next_tick = capture_frame - 2 * FRAMES;
-        let previous = anchor.as_ref().unwrap();
-        let original_source = master_provenance::source_identity(previous).unwrap();
-        let previous_timing = previous.binding.accepted.unwrap();
-        engine
-            .set_bpm_lock_with_binding(true, Some(previous))
-            .unwrap();
-        assert_eq!(stream.test_tick().unwrap().output_frame, next_tick);
-        next_tick += FRAMES;
+        next_tick = lock_tick + FRAMES;
         let (revision, bpm) = ownership.global_rate_status.read_bpm().unwrap();
         assert_eq!(bpm.revision, revision);
         assert!(bpm.requested && bpm.effective && bpm.applied);
         let before = ownership.global_rate_status.read().unwrap();
-        assert_eq!(before.effect.effective.speed, 1.4);
+        assert_eq!(bpm.execution_frame, Some(lock_tick - FRAMES));
+        assert_eq!(before.effect.effective.speed, off_speed.unwrap_or(1.4));
         assert!((before.effect.effective.period.unwrap() - 0.5).abs() < 1e-12);
         assert_eq!(
             before.master_provenance,
             MasterProvenance::qualified(original_source, previous.binding)
         );
+        Some((revision, bpm, before, original_source))
+    } else {
+        None
+    };
+    let master = if let OrderedWetControl::MasterRefresh(period) = control {
+        let (revision, bpm, before, original_source) = prior_lock.as_ref().unwrap();
+        let previous_timing = anchor.as_ref().unwrap().binding.accepted.unwrap();
         let newer = publish_synthetic_loaded_timing(&engine, &stream.producer, 2, period);
         assert_eq!(newer.publication_status().unwrap(), "pending");
         assert_eq!(stream.test_tick().unwrap().output_frame, next_tick);
@@ -1180,7 +1224,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         assert!(current.current() && current.available());
         assert_eq!(
             master_provenance::source_identity(&current),
-            Some(original_source)
+            Some(*original_source)
         );
         let accepted = current.binding.accepted.unwrap();
         assert_ne!(
@@ -1197,13 +1241,13 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         let (still_requested, still_applied) = ownership.global_rate_status.read_bpm().unwrap();
         assert_eq!(
             (still_requested, still_applied.revision),
-            (revision, bpm.revision)
+            (*revision, bpm.revision)
         );
         assert!(still_applied.applied && still_applied.effective);
         anchor = Some(current);
         Some((
             accepted.period_seconds / after.effect.effective.speed,
-            revision,
+            *revision,
         ))
     } else {
         None
@@ -1248,7 +1292,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             .unwrap()
     );
     for end in (next_tick..=capture_frame).step_by(FRAMES as usize) {
-        if end == capture_frame && !master_refresh {
+        if end == capture_frame && !prelocked {
             push_global_rate_message(
                 &ownership.global_timing_revision,
                 &ownership.global_timing_publishing,
@@ -1279,7 +1323,9 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
     assert_eq!(worker.prepared_wet(), (64, 1));
     let original_native = worker.prepared_native();
     let mut before = playing;
+    let mut previous = before.pads[0];
     for end in (capture_frame + 2 * FRAMES..=E).step_by(FRAMES as usize) {
+        previous = before.pads[0];
         before = stream.test_tick().unwrap();
         assert_eq!(before.output_frame, end);
         std::thread::sleep(Duration::from_millis(1));
@@ -1292,10 +1338,23 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         pad.frame as f64 + pad.fraction
     };
     let at_e = position(before.pads[0]);
-    if !master_refresh {
+    if !prelocked {
         assert!((at_e - 65.6).abs() < 1e-8, "actual cursor at E: {at_e}");
+    } else if off_speed.is_some() {
+        let settled = (position(previous) + FRAMES as f64 * 1.4).rem_euclid(OLD_END);
+        assert!(
+            (at_e - settled).abs() < 1e-8,
+            "settled locked cursor at E: {at_e}"
+        );
     }
-    let bpm_behind_stop = matches!(control, OrderedWetControl::BpmBehindStop(_));
+    let bpm_behind_stop = matches!(
+        control,
+        OrderedWetControl::BpmBehindStop(_)
+            | OrderedWetControl::BpmOff {
+                behind_stop: true,
+                ..
+            }
+    );
     let stop = || {
         assert!(enqueue_stop_with_producer(
             ownership,
@@ -1308,8 +1367,9 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
     }
     let bpm_request = anchor.as_ref().filter(|_| !master_refresh).map(|anchor| {
         // Both commands are in the FIFO before the callback observes the revision.
+        let enabled = off_speed.is_none();
         engine
-            .set_bpm_lock_with_binding(true, Some(anchor))
+            .set_bpm_lock_with_binding(enabled, enabled.then_some(anchor))
             .unwrap();
         let (revision, effect) = ownership.global_rate_status.read_bpm().unwrap();
         assert!(effect.revision < revision);
@@ -1399,10 +1459,15 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
         }
         assert_eq!(factory.info().unwrap().active, 0);
-        let provenance = MasterProvenance::qualified(
-            master_provenance::source_identity(anchor_binding).unwrap(),
-            anchor_binding.binding,
-        );
+        let enabled = off_speed.is_none();
+        let provenance = if enabled {
+            MasterProvenance::qualified(
+                master_provenance::source_identity(anchor_binding).unwrap(),
+                anchor_binding.binding,
+            )
+        } else {
+            MasterProvenance::Absent
+        };
         let action_state = action.state();
         let action_reason = action.reason();
         let action_effective = action.effective();
@@ -1434,15 +1499,36 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             tick.pads[0].wet_failed,
         );
         assert_eq!((requested, bpm.revision), (revision, revision));
-        assert!(bpm.requested && bpm.effective && bpm.applied);
-        assert_eq!(rate.effect.effective.period, Some(period / 1.4));
+        assert_eq!(
+            (bpm.requested, bpm.effective, bpm.applied),
+            (enabled, enabled, true)
+        );
+        assert_eq!(
+            rate.effect.effective.period,
+            enabled.then_some(period / 1.4)
+        );
+        assert_eq!(rate.effect.effective.speed, off_speed.unwrap_or(1.4));
         assert_eq!(rate.master_provenance, provenance);
         assert!(gated_ack);
         assert!(tick.pads[0].active && !tick.pads[1].active && !tick.pads[2].active);
         assert_eq!(tick.pads[0].generation, playing.pads[0].generation);
         assert_eq!(tick.pads[0].source_pcm, a.binding.source_address);
         assert_eq!(observed_revision, revision);
-        if bpm_behind_stop {
+        if let Some((prior_revision, prior_bpm, _, _)) = prior_lock {
+            assert!(observed_set && observed_effect.effective && !observed_effect.requested);
+            assert_eq!(
+                (observed_drain, timing_revision),
+                (drain_revision, drain_revision)
+            );
+            if bpm_behind_stop {
+                assert_eq!(observed_effect.revision, prior_revision);
+                assert_eq!(observed_effect.execution_frame, prior_bpm.execution_frame);
+            } else {
+                assert_eq!(observed_effect.revision, revision);
+                assert_eq!(observed_effect.reason, BpmReason::DrainPending);
+                assert!(!observed_effect.applied);
+            }
+        } else if bpm_behind_stop {
             assert!(observed_set);
             assert_eq!(observed_effect.revision, previous.revision);
             assert_eq!(observed_effect.execution_frame, previous.execution_frame);
@@ -1455,8 +1541,8 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             assert_eq!(observed_effect.reason, BpmReason::DrainPending);
             assert!(!observed_effect.applied);
         }
-        let conflict = period != 0.5;
-        if conflict && !bpm_behind_stop {
+        let conflict = off_speed.map_or(period != 0.5, |speed| speed != 1.4);
+        if conflict && !bpm_behind_stop && enabled {
             assert_eq!(action_state, "rejected");
             assert_eq!(action_reason, Some("timing_changed"));
             assert!(!action_effective);
@@ -1469,7 +1555,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
             assert!(action_effective);
             assert_eq!(tick.pads[0].native_state, original_native);
         }
-        let execution = if bpm_behind_stop && conflict {
+        let execution = if (bpm_behind_stop || !enabled) && conflict {
             E + 64
         } else {
             E
@@ -1480,7 +1566,12 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         );
         if action_effective {
             assert!(tick.pads[0].wet_current_source_output);
-            let expected_end = if conflict { 18.4 } else { 20.0 };
+            let advance = if conflict {
+                64.0 * 1.4 + (FRAMES - 64) as f64 * 1.35
+            } else {
+                FRAMES as f64 * 1.4
+            };
+            let expected_end = (at_e + advance).rem_euclid(OLD_END);
             assert!(
                 (actual_end - expected_end).abs() < 1e-8,
                 "cursor {actual_end} after BPM execution at {execution}"
@@ -1505,7 +1596,8 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
         assert_eq!(status.written_frames, FRAMES + CAPTURE_END - E);
         let pcm = pcm.expect("actual outputReady gate");
         let expected = &pcm[..(2 * (CAPTURE_END - E)) as usize];
-        assert!(expected.iter().any(|sample| *sample != 0.0));
+        assert!(expected[..128].iter().any(|sample| *sample != 0.0));
+        assert!(expected[128..].iter().any(|sample| *sample != 0.0));
         let captured = fs::read(&path).unwrap();
         assert_eq!(
             &captured[SPOOL_HEADER_BYTES as usize + FRAMES as usize * 8..],

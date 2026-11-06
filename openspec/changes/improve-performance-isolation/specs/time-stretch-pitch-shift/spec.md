@@ -128,6 +128,14 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** an unchanged scalar target or already bound BPM history SHALL keep its ordinary timing
 - **AND** independent STOP, source acknowledgements, output submission and recording SHALL keep their existing timing
 
+#### Scenario: Turning off BPM Lock would change the rate of a claimed aligned ASIO Wet slice
+- **GIVEN** BPM Lock is effective and an independent STOP has pulled the due SET into its original Native during a qualified stereo 96 kHz ASIO request of 96 frames
+- **WHEN** the ordinary rate service can immediately apply the current unanchored BPM Lock OFF
+- **THEN** a changed scalar target on a voice that still owes Wet SHALL defer the same OFF request to the exclusive end of the last affected Wet slice, with ordinary application authority checked there
+- **AND** an unchanged scalar target SHALL keep its ordinary service frame
+- **AND** OFF SHALL clear the effective master period and provenance when it applies
+- **AND** independent STOP, source acknowledgements, output submission and recording SHALL keep their existing timing
+
 #### Scenario: A derived loop-only refresh reaches admission after an aligned ASIO Wet claim
 - **GIVEN** a qualified stereo 96 kHz ASIO request of 96 frames owes an already claimed Wet slice for the live normal-loop voice of the current source
 - **WHEN** the control drain first admits a still-unbound accepted-timing refresh that changes that source's effective loop region without a master effect

@@ -7324,6 +7324,13 @@ each intervening boundary the service can reconsider the remaining slices and
 the same request. Actual application still requires the existing authority
 checks. Equal scalar targets and already bound history retain their timing.
 
+The same service protects an existing Wet claim from an immediate, unanchored
+BPM Lock OFF while the lock is effective. OFF compares the exact clamped
+global speed to the claimed voice's scalar. This applies whether OFF was
+staged before or after the independent STOP. At application the existing OFF
+path disables the lock and clears the effective master period and its
+provenance. Equal scalar targets allow OFF at its original service frame.
+
 ### First admission of a coupled accepted master refresh
 
 A current accepted-timing refresh may also carry a master period derived

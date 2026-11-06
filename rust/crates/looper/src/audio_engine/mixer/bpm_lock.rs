@@ -698,10 +698,16 @@ impl RtMixer {
         } else {
             match self.bpm_immediate_targets(target, period, frame) {
                 Ok(targets) => {
-                    if target.enabled
-                        && anchor_id.is_some()
-                        && target.source_identity.is_some()
-                        && let Some(end) = self.claimed_wet_scalar_end(frame, period, true)
+                    let protects_claimed_wet = if target.enabled {
+                        anchor_id.is_some() && target.source_identity.is_some()
+                    } else {
+                        self.bpm_lock_enabled
+                            && target.anchor.is_none()
+                            && target.source_identity.is_none()
+                    };
+                    if protects_claimed_wet
+                        && let Some(end) =
+                            self.claimed_wet_scalar_end(frame, period, target.enabled)
                         && end > frame
                         && self
                             .input_runtime_ownership
@@ -709,8 +715,8 @@ impl RtMixer {
                             .read_bpm()
                             .is_some_and(|(requested, _)| requested == target.revision)
                     {
-                        // STOP may have transferred the SET before this request was staged.
-                        // Requalify the same pending request after rendering the owed slice.
+                        // Keep the scalar used by the transferred SET until its Wet slice ends.
+                        // Requalify the same pending BPM request at the new render boundary.
                         return Some(end);
                     }
                     BpmRateChange::Immediate(targets)
