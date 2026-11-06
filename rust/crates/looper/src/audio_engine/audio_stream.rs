@@ -3497,6 +3497,10 @@ pub(super) fn process_control_message<
 #[path = "launch_callback_tests.rs"]
 mod launch_callback_tests;
 
+#[cfg(all(test, windows))]
+#[path = "render_ahead_tests.rs"]
+mod render_ahead_tests;
+
 /// Construct the callback's unique mixer owner on the control thread. Keeping the owner
 /// boxed prevents CPAL's generic callback setup from moving copies of its fixed pad/voice
 /// storage through the startup stack; rendering only borrows this preallocated owner.
