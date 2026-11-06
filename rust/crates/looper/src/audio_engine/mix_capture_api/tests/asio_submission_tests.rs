@@ -1817,6 +1817,13 @@ fn asio_prepared_interior_set_preserves_bound_peer_exclusive() {
     interior_set_at_request(InteriorSet::PeerExclusive, false);
 }
 
+#[test]
+fn asio_prepared_interior_set_yields_to_bound_bpm_history() {
+    let with_set = interior_set_at_request(InteriorSet::BoundBpm, false);
+    let without_set = interior_set_at_request(InteriorSet::BoundBpmBaseline, false);
+    assert_eq!(with_set, without_set);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InteriorSet {
     Missing,
@@ -1824,31 +1831,48 @@ enum InteriorSet {
     NoFit,
     BoundRestart,
     PeerExclusive,
+    BoundBpmBaseline,
+    BoundBpm,
 }
 
 fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
+    use crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing;
     use crate::audio_engine::constants::NUM_SAMPLES;
+    use crate::audio_engine::global_rate_status::BpmReason;
     use crate::audio_engine::input_mapping::PitchPadProjection;
     use crate::audio_engine::input_runtime_binding;
+    use crate::audio_engine::master_provenance::{self, MasterProvenance};
     use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 
     const FRAMES: u64 = 96;
     const REQUEST: u64 = 24_000;
     const FIRST: u64 = REQUEST + 7;
+    const BPM_CAPTURE: u64 = 19_968;
+    const BPM_APPLY: u64 = 24_064;
+    const SPEED: f64 = 1.2;
     let missing = case == InteriorSet::Missing;
     let no_fit = case == InteriorSet::NoFit;
     let exclusive = matches!(case, InteriorSet::Missing | InteriorSet::PeerExclusive);
     let restart = case == InteriorSet::BoundRestart;
+    let bound_bpm = matches!(case, InteriorSet::BoundBpmBaseline | InteriorSet::BoundBpm);
+    let bpm_baseline = case == InteriorSet::BoundBpmBaseline;
     let effect = if no_fit { 24_048 } else { 24_016 };
     let capture_frame = if missing { 18_240 } else { 21_120 };
     // The second ready case uses another real birth phase, with a shift that
     // fits 96 frames but cannot fit the remainder of its actual request.
-    let birth = if no_fit { 576 } else { 0 };
+    let birth = if no_fit {
+        576
+    } else if bound_bpm {
+        1056
+    } else {
+        0
+    };
     let capture_end = REQUEST
         + match case {
             InteriorSet::Fit => 64,
             InteriorSet::Missing => 73,
             InteriorSet::NoFit | InteriorSet::BoundRestart | InteriorSet::PeerExclusive => 93,
+            InteriorSet::BoundBpmBaseline | InteriorSet::BoundBpm => 96,
         };
     Python::initialize();
     let directory = tempfile::tempdir().unwrap().keep();
@@ -1868,16 +1892,27 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
             ..Default::default()
         })
         .unwrap();
-    engine.set_master_period(effect as f64 / 48_000.0).unwrap();
+    let period = effect as f64 / 48_000.0;
+    if !bound_bpm {
+        engine.set_master_period(period).unwrap();
+    }
     engine.set_trigger_quantization("immediate").unwrap();
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
     let submission = stream.output_submission.as_ref().unwrap().clone();
     let a = ColdPcm::publish(&engine, 1, "a");
-    let b = ColdPcm::publish_at(&engine, 1, 1, "b", SourcePitchInitialization::FreshNeutral);
+    let b = ColdPcm::publish_with_geometry(
+        &engine,
+        1,
+        1,
+        "b",
+        SourcePitchInitialization::FreshNeutral,
+        if bound_bpm { 48_000 } else { 1024 },
+        None,
+    );
     a.assert_ack(&engine, false);
     b.assert_ack(&engine, false);
-    let play_a = || {
+    let play_a = |stream: &crate::audio_engine::audio_stream::AudioStreamHandle| {
         stream
             .producer
             .lock()
@@ -1891,11 +1926,36 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
             .unwrap();
     };
     if birth == 0 {
-        play_a();
+        play_a(stream);
     }
     assert_eq!(stream.test_tick().unwrap().pads[0].active, birth == 0);
     a.assert_ack(&engine, true);
     b.assert_ack(&engine, true);
+    let (anchor, lead_start) = if bound_bpm {
+        engine
+            .set_pad_timing_intent_with_source(1, "automatic", Some(1))
+            .unwrap();
+        let stream = engine.stream_handle.as_ref().unwrap();
+        let timing = publish_synthetic_loaded_timing(&engine, &stream.producer, 1, period);
+        assert_eq!(stream.test_tick().unwrap().output_frame, 2 * FRAMES);
+        assert_eq!(timing.publication_status().unwrap(), "accepted");
+        let anchor = input_runtime_binding::capture(&engine, 1).unwrap().unwrap();
+        let period = anchor.binding.accepted.unwrap().period_seconds;
+        engine.set_master_period(period).unwrap();
+        engine.set_bpm_lock_with_binding(true, None).unwrap();
+        let key_lock = engine
+            .set_pad_key_lock_with_source(1, true, Some(1))
+            .unwrap();
+        let tick = engine.stream_handle.as_ref().unwrap().test_tick().unwrap();
+        assert_eq!(tick.output_frame, 3 * FRAMES);
+        let lock = engine.input_runtime_ownership.key_lock_status(1).unwrap();
+        assert_eq!(lock.request_id, key_lock);
+        assert!(lock.effective && lock.ready);
+        (Some(anchor), 4 * FRAMES)
+    } else {
+        (None, 2 * FRAMES)
+    };
+    let stream = engine.stream_handle.as_ref().unwrap();
     if !exclusive && !restart {
         stream
             .producer
@@ -1910,9 +1970,9 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
             .unwrap();
     }
     let lead_end = birth.max(if exclusive || restart { 0 } else { FRAMES }) + FRAMES;
-    for end in (2 * FRAMES..=lead_end).step_by(FRAMES as usize) {
+    for end in (lead_start..=lead_end).step_by(FRAMES as usize) {
         if end - FRAMES == birth {
-            play_a();
+            play_a(stream);
         }
         let tick = stream.test_tick().unwrap();
         assert_eq!(tick.output_frame, end);
@@ -1940,46 +2000,109 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
             rows,
         )
         .unwrap();
+    let mut bpm_revision = None;
+    let mut previous_position = None;
+    let mut first_delta = None;
+    let mut varied = None;
     for end in (lead_end + FRAMES..=capture_frame).step_by(FRAMES as usize) {
-        if end == capture_frame {
+        let frame = end - FRAMES;
+        if if bound_bpm {
+            end == BPM_CAPTURE
+        } else {
+            end == capture_frame
+        } {
             // Set the real rate before either action freezes a source trajectory.
             push_global_rate_message(
                 &ownership.global_timing_revision,
                 &ownership.global_timing_publishing,
                 &ownership.global_rate_status,
                 &mut stream.parameter_producer.lock().unwrap(),
-                Some(1.2),
+                Some(SPEED),
                 None,
                 "ASIO interior SET",
             )
             .unwrap();
         }
+        if let Some(anchor) = &anchor {
+            if frame == BPM_CAPTURE {
+                assert!(anchor.current() && anchor.available());
+                engine
+                    .set_bpm_lock_with_binding(true, Some(anchor))
+                    .unwrap();
+                let (revision, previous) = ownership.global_rate_status.read_bpm().unwrap();
+                assert!(revision > previous.revision && previous.applied && previous.effective);
+                bpm_revision = Some(revision);
+            }
+        }
         let tick = stream.test_tick().unwrap();
         assert_eq!(tick.output_frame, end);
         assert_eq!(tick.pads[0].active, end > birth);
+        if bound_bpm && frame >= BPM_CAPTURE {
+            assert!(tick.pads[1].active && tick.pads[1].key_lock);
+            assert_eq!(tick.pads[1].source_pcm, b.binding.source_address);
+            assert!(!tick.pads[1].active_native);
+            assert_eq!(tick.pads[1].adopted_native_request, None);
+            assert_eq!(tick.bound_rate_frame, Some(BPM_APPLY));
+            let position = tick.pads[0].frame as f64 + tick.pads[0].fraction;
+            if let Some(previous) = previous_position {
+                let delta = f64::rem_euclid(position - previous, 1024.0);
+                let first = *first_delta.get_or_insert((frame, delta));
+                if (delta - first.1).abs() > 1e-6 {
+                    varied = Some((first, (frame, delta)));
+                }
+            }
+            previous_position = Some(position);
+            // Pace only the fake driver. The product worker runs independently.
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     let rate = ownership.global_rate_status.read().unwrap();
-    assert_eq!(rate.effect.execution_frame, Some(capture_frame - FRAMES));
+    assert_eq!(
+        rate.effect.execution_frame,
+        Some(if bound_bpm {
+            BPM_CAPTURE - FRAMES
+        } else {
+            capture_frame - FRAMES
+        })
+    );
     assert_eq!(rate.request_revision, rate.effect.revision);
+    if let Some(revision) = bpm_revision {
+        let (early, late) = varied.expect("actual A cursor must vary within retained SET history");
+        assert!((effect - 4096..effect).contains(&early.0));
+        assert!((effect - 4096..effect).contains(&late.0));
+        let (requested, pending) = ownership.global_rate_status.read_bpm().unwrap();
+        assert_eq!((requested, pending.revision), (revision, revision));
+        assert!(pending.requested && pending.effective && !pending.applied);
+        assert_eq!(pending.reason, BpmReason::HistoryPending);
+        assert_eq!(pending.execution_frame, None);
+        eprintln!(
+            "ASIO interior BPM capture={BPM_CAPTURE} bound={BPM_APPLY} scalar={:?} BPM={revision} A_cursor_deltas={early:?},{late:?}",
+            rate.effect.execution_frame
+        );
+    }
     let clock = stream.output_clock.read().unwrap();
     assert!(clock.valid);
-    let action = runtime
-        .capture_gui_pitch(&binding, "pitch.extra:3:set", clock.observed_at_ns)
-        .unwrap();
-    assert_eq!(action.original_due_frame(), effect);
-    let worker = if missing {
-        WorkerGate::for_pitch(&action)
-    } else {
-        WorkerGate::for_pitch_return(&action)
-    };
-    assert!(engine.publish_pitch_action(&action).unwrap());
+    let pending = (!bpm_baseline).then(|| {
+        let action = runtime
+            .capture_gui_pitch(&binding, "pitch.extra:3:set", clock.observed_at_ns)
+            .unwrap();
+        assert_eq!(action.original_due_frame(), effect);
+        let worker = if missing {
+            WorkerGate::for_pitch(&action)
+        } else {
+            WorkerGate::for_pitch_return(&action)
+        };
+        assert!(engine.publish_pitch_action(&action).unwrap());
+        (action, worker)
+    });
     assert_eq!(
         stream.test_tick().unwrap().output_frame,
         capture_frame + FRAMES
     );
-    assert!(worker.wait_for(!missing).is_none());
-    assert_eq!(action.execution_target(), effect);
-    let original = (!missing).then(|| {
+    let original = pending.as_ref().and_then(|(action, worker)| {
+        assert!(worker.wait_for(!missing).is_none());
+        assert_eq!(action.execution_target(), effect);
+        if missing { return None; }
         let ((block, input, output), wet) = worker.prepared_fifo();
         let need = block.checked_sub(input).unwrap();
         let native = worker.prepared_native();
@@ -1988,10 +2111,14 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
             "ASIO interior SET {case:?} inline={inline} E={effect} block={block} input={input} output={output} need={need} cap={} Wet={wet:?} Native={native:#x}",
             REQUEST + FRAMES - effect,
         );
-        assert_eq!((block, input), if no_fit { (512, 432) } else { (512, 464) });
+        assert_eq!((block, input), if no_fit || bound_bpm { (512, 432) } else { (512, 464) });
         assert_eq!(output + 1, need);
         assert_eq!(wet, (!inline && !no_fit).then_some((need, 1)));
-        native
+        if bound_bpm {
+            assert_eq!(effect + need as u64, REQUEST + FRAMES);
+            assert!((effect..effect + need as u64).contains(&BPM_APPLY));
+        }
+        Some(native)
     });
 
     // A peer exclusive ends A. A same-pad restart validates the captured A pitch.
@@ -2007,7 +2134,7 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
                 Some(1),
             )
             .unwrap();
-        assert!(action.sequence() < start.sequence());
+        assert!(pending.as_ref().unwrap().0.sequence() < start.sequence());
         start
     });
     assert_eq!(
@@ -2025,7 +2152,7 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         before = Some(tick);
     }
     let before = before.unwrap();
-    if !missing {
+    if let Some((action, _)) = pending.as_ref().filter(|_| !missing) {
         assert_eq!(action.state(), "prepared");
     }
     let next = if let Some(start) = &start {
@@ -2034,11 +2161,15 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         None
     } else {
         assert!(before.pads[1].active);
-        assert!(enqueue_stop_with_producer(
-            ownership,
-            &mut stream.producer.lock().unwrap(),
-            Some(1),
-        ));
+        if !bound_bpm {
+            assert!(enqueue_stop_with_producer(
+                ownership,
+                &mut stream.producer.lock().unwrap(),
+                Some(1),
+            ));
+        } else {
+            assert_eq!(before.bound_rate_frame, Some(BPM_APPLY));
+        }
         let next = ColdPcm::publish_at(
             &engine,
             2,
@@ -2086,7 +2217,9 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         (tick.join().unwrap(), pcm, gated, prefix)
     });
     let applied = start.as_ref().and_then(|start| start.effective_frame());
-    let pitch_state = action.state();
+    let pitch_state = pending
+        .as_ref()
+        .map_or("absent", |(action, _)| action.state());
     eprintln!(
         "ASIO interior SET E={effect} request={REQUEST}..{} pitch={pitch_state} exclusive={applied:?} A={} B={} captured_end={:?} sealed_end={:?} raw={} rate={:?} Native={:#x} shifts={}",
         tick.output_frame,
@@ -2106,11 +2239,60 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
     assert_eq!(submission.prefix(), (REQUEST + FRAMES, false));
     if missing {
         assert_eq!(engine.pitch_work_capacity.used(), 1);
+        let worker = &pending.as_ref().unwrap().1;
         worker.release();
         worker.wait_for(true);
     }
     if let Some(next) = &next {
         next.assert_ack(&engine, true);
+    }
+    if let (Some(revision), Some(anchor)) = (bpm_revision, &anchor) {
+        let (requested, applied) = ownership.global_rate_status.read_bpm().unwrap();
+        let after = ownership.global_rate_status.read().unwrap();
+        assert_eq!((requested, applied.revision), (revision, revision));
+        assert!(applied.applied && applied.effective && applied.requested);
+        assert_eq!(applied.reason, BpmReason::None);
+        assert_eq!(applied.execution_frame, Some(BPM_APPLY));
+        assert_eq!(tick.bound_rate_frame, None);
+        assert_eq!(after.effect.effective.speed, SPEED);
+        assert_eq!(
+            after.effect.effective.period,
+            Some(anchor.binding.accepted.unwrap().period_seconds / SPEED)
+        );
+        assert_eq!(
+            after.master_provenance,
+            MasterProvenance::qualified(
+                master_provenance::source_identity(anchor).unwrap(),
+                anchor.binding
+            )
+        );
+        assert!(tick.pads[0].active && tick.pads[1].active && tick.pads[1].key_lock);
+        for (id, source) in [(0, &a), (1, &b)] {
+            assert_eq!(tick.pads[id].generation, before.pads[id].generation);
+            assert_eq!(tick.pads[id].source_pcm, source.binding.source_address);
+        }
+        let b_native_request = tick.pads[1].adopted_native_request.unwrap();
+        assert!(tick.pads[1].active_native);
+        assert_ne!(tick.pads[1].native_state, before.pads[1].native_state);
+        assert_eq!(tick.pads[0].native_state, before.pads[0].native_state);
+        assert!(!tick.pads[0].active_native && !tick.pads[0].wet_failed);
+        assert_eq!(tick.native.shifts, 0);
+        let apply_sample = (2 * (BPM_APPLY - REQUEST)) as usize;
+        assert!(pcm[..apply_sample].iter().any(|sample| *sample != 0.0));
+        assert!(pcm[apply_sample..].iter().any(|sample| *sample != 0.0));
+        eprintln!(
+            "ASIO interior BPM applied={BPM_APPLY} BPM={revision} rate_revision={} B_work={b_native_request} B_native={:#x}",
+            after.effect.revision, tick.pads[1].native_state
+        );
+        assert!(enqueue_stop_with_producer(
+            ownership,
+            &mut stream.producer.lock().unwrap(),
+            Some(1)
+        ));
+        let stopped = stream.test_tick().unwrap();
+        assert_eq!(stopped.output_frame, REQUEST + 2 * FRAMES);
+        assert!(stopped.pads[0].active && !stopped.pads[1].active);
+        assert!(capture_status().rt_sealed);
     }
     // Continue with the original stream to observe late custody and the spool.
     let final_status = until(|| {
@@ -2122,19 +2304,25 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
             .then_some(status)
     });
-    let effective_frame = action.effective_output_frame();
-    let reason = action.reason();
+    let effective_frame = pending
+        .as_ref()
+        .and_then(|(action, _)| action.effective_output_frame());
+    let reason = pending.as_ref().and_then(|(action, _)| action.reason());
     engine.shut_down().unwrap();
     let ended = owner.lock().unwrap();
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
     assert_eq!(factory.info().unwrap().active, 0);
     drop(start);
-    drop(action);
+    drop(pending);
+    drop(anchor);
     drop(engine);
     assert!(a.reader.upgrade().is_none() && b.reader.upgrade().is_none());
     assert!(next.is_none_or(|next| next.reader.upgrade().is_none()));
 
-    if exclusive {
+    if bound_bpm {
+        assert_eq!(effective_frame, None);
+        assert_eq!(reason, (!bpm_baseline).then_some("timing_changed"));
+    } else if exclusive {
         assert_eq!(applied, Some(effect), "the bound exclusive STOP retains E");
         assert_eq!(effective_frame, (!missing).then_some(effect));
         assert!(!tick.pads[0].active && tick.pads[1].active);
@@ -2168,7 +2356,8 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
                 .any(|sample| *sample != 0.0)
         );
     }
-    assert!(gated.rt_sealed);
+    // A stop at the exclusive callback end executes in the following callback.
+    assert_eq!(gated.rt_sealed, capture_end < REQUEST + FRAMES);
     assert_eq!(gated.captured_end, Some(capture_end));
     assert!(final_status.successful_spool());
     assert_eq!(final_status.written_frames, capture_end - FIRST);
@@ -2185,6 +2374,15 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         &fs::read(&path).unwrap()[SPOOL_HEADER_BYTES as usize..],
         expected
     );
+    if bound_bpm {
+        eprintln!(
+            "ASIO interior BPM {case:?} prefix={prefix:?}->({},{}) capture={FIRST}..{capture_end} frames={} STOP={} OwnACK and checked Close verified",
+            REQUEST + FRAMES,
+            false,
+            final_status.written_frames,
+            REQUEST + FRAMES,
+        );
+    }
     fs::remove_file(&path).unwrap();
     fs::remove_dir(&directory).unwrap();
     pcm.into_iter().map(f32::to_bits).collect()

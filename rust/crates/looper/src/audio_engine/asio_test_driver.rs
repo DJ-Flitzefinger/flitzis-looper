@@ -44,6 +44,8 @@ pub(in crate::audio_engine) struct PadObservation {
     pub bank_source_pcm: usize,
     pub source_samples: usize,
     pub native_state: usize,
+    pub active_native: bool,
+    pub adopted_native_request: Option<u64>,
     pub native_block_size: usize,
     pub native_start_delay: usize,
     pub input_fifo_capacity: usize,
@@ -59,6 +61,7 @@ pub(in crate::audio_engine) struct TickObservation {
     pub callback: CallbackMeasurement,
     pub native: crate::audio_engine::native_render_observation::Observation,
     pub output_frame: u64,
+    pub bound_rate_frame: Option<u64>,
     pub pads: [PadObservation; 6],
 }
 

@@ -4035,6 +4035,8 @@ impl AsioRenderContext {
                     .as_ref()
                     .map_or(0, |sample| sample.source_sample_count()),
                 native_state: voice.stretch.native_state_address(),
+                active_native: voice.stretch.has_active_native_ownership(),
+                adopted_native_request: voice.stretch.adopted_request_id(),
                 native_block_size: voice.stretch.rubberband_block_size(),
                 native_start_delay: voice.stretch.rubberband_start_delay(),
                 input_fifo_capacity: voice.stretch.rubberband_input_fifo_capacity(),
@@ -4052,6 +4054,7 @@ impl AsioRenderContext {
             callback,
             native,
             output_frame: state.transport.output_frame(),
+            bound_rate_frame: state.mixer.next_global_rate_frame(),
             pads,
         }
     }
