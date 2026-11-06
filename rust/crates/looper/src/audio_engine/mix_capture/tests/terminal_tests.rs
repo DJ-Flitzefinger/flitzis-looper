@@ -22,6 +22,53 @@ fn seal_original_prefix(rig: &mut Rig, first_frame: u64) -> [f32; 8] {
     payload
 }
 
+#[cfg(windows)]
+#[test]
+fn asio_submission_preserves_covered_take_and_rejects_gap_or_replacement() {
+    for termination in ["covered", "gap", "detach"] {
+        let submission = Arc::new(AsioSubmission::default());
+        let gate = Arc::new(writer::WorkerPhaseGate::default());
+        let mut rig = Rig::new_for_output(
+            config(),
+            writer::Hooks {
+                before_terminal_decision: Some(gate.clone()),
+                ..writer::Hooks::default()
+            },
+            Some(submission.clone()),
+        );
+        let release = ReleaseWorkerPhase(gate.clone());
+        let pcm = seal_original_prefix(&mut rig, 17);
+        wait_at_worker_phase(&gate);
+        assert!(!rig.status().terminal_decided);
+
+        let covered = termination == "covered";
+        if covered {
+            assert!(submission.confirm(0, 96));
+        } else {
+            let replacement = AsioSubmission::default();
+            assert!(replacement.confirm(0, 96));
+            assert_eq!(submission.prefix(), (0, false));
+        }
+        if termination == "gap" {
+            assert!(!submission.confirm(96, 192));
+        } else {
+            submission.terminate();
+        }
+        assert_eq!(submission.prefix(), (if covered { 96 } else { 0 }, true));
+        assert!(!submission.confirm(if covered { 96 } else { 0 }, 192));
+        rig.control.as_ref().unwrap().request_stream_failure(&rig.status());
+        assert_eq!(rig.status().failure, None);
+        drop(release);
+
+        let status = rig.release_and_join();
+        assert!(status.rt_released && status.worker_joined);
+        assert_eq!(status.successful_spool(), covered);
+        assert_eq!(status.payload_sha256.is_some(), covered);
+        assert_eq!(status.failure, (!covered).then_some(CaptureFailure::Stream));
+        assert_eq!(rig.payload_bits(), pcm.map(f32::to_bits));
+    }
+}
+
 #[test]
 fn cancellation_winning_before_terminal_decision_is_persisted_as_failed_incomplete() {
     let gate = Arc::new(writer::WorkerPhaseGate::default());

@@ -94,8 +94,7 @@ impl EngineCapture {
     fn poll(&mut self, stream_failed: bool) {
         let status = self.control.status();
         if stream_failed && !status.worker_closed {
-            self.control
-                .request_failure(status.session_id, CaptureFailure::Stream);
+            self.control.request_stream_failure(&status);
         }
         if self.start_request.is_none() && self.control.status().failure.is_some() {
             // The original publication never entered the FIFO. Its unique heavy
@@ -218,7 +217,7 @@ impl AudioEngine {
                 ));
             }
         }
-        let (control, work) = mix_capture::prepare(
+        let (control, work) = mix_capture::prepare_for_output(
             Path::new(spool_path),
             CaptureConfig {
                 sample_rate_hz,
@@ -227,6 +226,9 @@ impl AudioEngine {
                 block_count,
                 max_pool_pcm_bytes,
             },
+            self.stream_handle
+                .as_ref()
+                .and_then(|stream| stream.asio_submission.clone()),
         )
         .map_err(|error| {
             PyRuntimeError::new_err(format!("mix capture preparation failed: {error}"))
@@ -406,6 +408,10 @@ impl AudioEngine {
         result.set_item("rt_released", status.rt_released)?;
         result.set_item("worker_closed", status.worker_closed)?;
         result.set_item("worker_joined", status.worker_joined)?;
+        result.set_item(
+            "backend_submission_required",
+            capture.control.backend_submission_required(),
+        )?;
         result.set_item("terminal_decided", status.terminal_decided)?;
         // Only this original live ticket exposes the writer-owned payload
         // witness. The bounded recovery inspector grants no such authority.

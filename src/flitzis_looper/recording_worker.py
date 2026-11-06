@@ -92,6 +92,7 @@ class RecordingNativeState:
     written_frames: int
     empty: bool
     failure: str | None
+    backend_submission_required: bool = False
 
     @property
     def quiescent(self) -> bool:
@@ -121,6 +122,11 @@ def recording_native_state(status: dict[str, object]) -> RecordingNativeState:
         written_frames=_integer(status["written_frames"], "written_frames"),
         empty=_flag(status, "empty"),
         failure=failure,
+        backend_submission_required=(
+            _flag(status, "backend_submission_required")
+            if "backend_submission_required" in status
+            else False
+        ),
     )
 
 

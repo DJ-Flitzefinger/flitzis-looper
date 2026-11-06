@@ -31,6 +31,40 @@ const FINAL_DECISION: u8 = 0x80;
 const FAILURE_MASK: u8 = 0x3f;
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
+const SUBMISSION_ENDED: u64 = 1 << 63;
+
+/// The allocation identifies one ASIO stream, starting at engine frame zero.
+/// End and terminal share a word so a fault preserves the accepted prefix and
+/// no concurrent receipt can extend it after the fault.
+#[derive(Default)]
+pub(super) struct AsioSubmission(AtomicU64);
+
+impl AsioSubmission {
+    #[cfg(windows)]
+    pub(super) fn confirm(&self, first: u64, end: u64) -> bool {
+        let confirmed = first < end
+            && end < SUBMISSION_ENDED
+            && self
+                .0
+                .compare_exchange(first, end, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+        if !confirmed {
+            self.terminate();
+        }
+        confirmed
+    }
+
+    #[cfg(windows)]
+    pub(super) fn terminate(&self) {
+        self.0.fetch_or(SUBMISSION_ENDED, Ordering::AcqRel);
+    }
+
+    fn prefix(&self) -> (u64, bool) {
+        let state = self.0.load(Ordering::Acquire);
+        (state & !SUBMISSION_ENDED, state & SUBMISSION_ENDED != 0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CaptureConfig {
     pub(crate) sample_rate_hz: u32,
@@ -181,6 +215,9 @@ impl CaptureStatus {
 struct Shared {
     session_id: u64,
     config: CaptureConfig,
+    asio_submission: Option<Arc<AsioSubmission>>,
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    waiting_for_submission: AtomicBool,
     pool_pcm_bytes: usize,
     writer_scratch_bytes: usize,
     ready: AtomicBool,
@@ -320,6 +357,23 @@ pub(crate) struct CaptureControl {
 }
 
 impl CaptureControl {
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    pub(super) fn waiting_for_submission(&self) -> bool {
+        self.shared.waiting_for_submission.load(Ordering::Acquire)
+    }
+
+    pub(super) fn backend_submission_required(&self) -> bool {
+        self.shared.asio_submission.is_some()
+    }
+
+    pub(super) fn request_stream_failure(&self, status: &CaptureStatus) {
+        // The writer decides from this take's original ASIO prefix. A later
+        // stream fault cannot invalidate a sealed extent that was submitted.
+        if !self.backend_submission_required() || !status.rt_sealed || status.submitted_frames == 0 {
+            self.request_failure(status.session_id, CaptureFailure::Stream);
+        }
+    }
+
     pub(crate) fn observer(&self) -> CaptureObserver {
         CaptureObserver {
             shared: self.shared.clone(),
@@ -673,16 +727,26 @@ impl Drop for CaptureRt {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn prepare(
     spool_path: &Path,
     config: CaptureConfig,
 ) -> io::Result<(CaptureControl, Box<CaptureRt>)> {
-    prepare_inner(spool_path, config, writer::Hooks::default())
+    prepare_for_output(spool_path, config, None)
+}
+
+pub(super) fn prepare_for_output(
+    spool_path: &Path,
+    config: CaptureConfig,
+    asio_submission: Option<Arc<AsioSubmission>>,
+) -> io::Result<(CaptureControl, Box<CaptureRt>)> {
+    prepare_inner(spool_path, config, asio_submission, writer::Hooks::default())
 }
 
 fn prepare_inner(
     spool_path: &Path,
     config: CaptureConfig,
+    asio_submission: Option<Arc<AsioSubmission>>,
     hooks: writer::Hooks,
 ) -> io::Result<(CaptureControl, Box<CaptureRt>)> {
     let (samples, pool_pcm_bytes) = config.sizes()?;
@@ -736,6 +800,9 @@ fn prepare_inner(
     let shared = Arc::new(Shared {
         session_id,
         config,
+        asio_submission,
+        #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+        waiting_for_submission: AtomicBool::new(false),
         pool_pcm_bytes,
         writer_scratch_bytes: scratch_bytes,
         ready: AtomicBool::new(false),

@@ -11,6 +11,9 @@ struct FlAsioTestState {
     std::atomic<uint64_t> created{0}, released{0}, active{0};
     std::atomic<uint64_t> fail_start_session{0};
     std::atomic<uint64_t> fail_tick_session{0};
+    // 0 idle, 1 armed, 2 entered, 3 release, 4 fail.
+    std::atomic<uint32_t> ready_gate{0};
+    float gated_pcm[96 * 2]{};
     FlAsioTestState() {
         const double value = 48000;
         uint64_t bits = 0; std::memcpy(&bits, &value, sizeof(bits)); rate_bits.store(bits);
@@ -44,6 +47,8 @@ struct FakeAsio;
 struct FakeRender {
     FakeAsio* driver = nullptr;
     std::atomic<unsigned> calls{0}, invalidations{0};
+    unsigned submissions = 0;
+    uint64_t submitted_end = 0;
     std::atomic<bool> entered{false}, exited{false};
     bool reenter = false, block = false, notify_during_render = false;
     uint32_t last_flags = 0;
@@ -61,7 +66,7 @@ struct FakeAsio final : IASIO {
     ASIOError create_result = ASE_OK, start_result = ASE_OK, stop_result = ASE_OK, dispose_result = ASE_OK;
     ASIOError set_result = ASE_OK, ready_result = ASE_OK;
     bool prime = false, early_callback = false, throw_set = false, throw_restore = false;
-    bool notify_on_rate_query = false, notify_on_latency_query = false;
+    bool notify_on_rate_query = false, notify_on_latency_query = false, notify_on_ready = false;
     std::atomic<bool> stop_signalled{false};
     unsigned creates = 0, starts = 0, stops = 0, disposes = 0, releases = 0;
     unsigned setters = 0, rate_queries = 0, ready_calls = 0, position_queries = 0;
@@ -148,7 +153,25 @@ struct FakeAsio final : IASIO {
     }
     ASIOError controlPanel() override { return ASE_NotPresent; }
     ASIOError future(long, void*) override { return ASE_NotPresent; }
-    ASIOError outputReady() override { ++ready_calls; return ready_result; }
+    ASIOError outputReady() override {
+        ++ready_calls;
+        if (notify_on_ready) callbacks.asioMessage(kAsioResetRequest, 0, nullptr, nullptr);
+        if (state && state->ready_gate.load() == 1) {
+            FL_CHECK(frames == 96 && selected[0] != 2 && selected[1] != 2);
+            for (int frame = 0; frame < frames; ++frame) {
+                for (int channel = 0; channel < 2; ++channel) {
+                    double value = 0;
+                    std::memcpy(&value, storage[channel][next_index] + 8 + frame * 8, 8);
+                    state->gated_pcm[frame * 2 + channel] = static_cast<float>(value);
+                }
+            }
+            state->ready_gate.store(2);
+            const auto deadline = GetTickCount64() + 10000;
+            while (state->ready_gate.load() == 2 && GetTickCount64() < deadline) Sleep(1);
+            return state->ready_gate.exchange(0) == 3 ? ASE_OK : ASE_HWMalfunction;
+        }
+        return ready_result;
+    }
 
     void tick(long index, uint64_t position = 192, uint64_t ns = 2000000, unsigned extra = 0) {
         ASIOTime time{};
@@ -173,8 +196,8 @@ struct FakeAsio final : IASIO {
 void contract_invalidate(void* opaque, uint32_t, uint32_t) {
     static_cast<FakeRender*>(opaque)->invalidations.fetch_add(1);
 }
-void contract_render(void* opaque, void* left, void* right, int32_t frames,
-                     int32_t left_type, int32_t right_type, const FlAsioTime* time) {
+uint64_t contract_render(void* opaque, void* left, void* right, int32_t frames,
+                         int32_t left_type, int32_t right_type, const FlAsioTime* time) {
     auto& context = *static_cast<FakeRender*>(opaque);
     context.calls.fetch_add(1); context.last_flags = time->flags;
     context.entered.store(true);
@@ -187,6 +210,13 @@ void contract_render(void* opaque, void* left, void* right, int32_t frames,
     std::memset(left, 0x44, static_cast<size_t>(frames) * sample_bytes(left_type));
     std::memset(right, 0x11, static_cast<size_t>(frames) * sample_bytes(right_type));
     context.exited.store(true);
+    return static_cast<uint64_t>(context.calls.load()) * frames;
+}
+void contract_submitted(void* opaque, uint64_t first, uint64_t end) {
+    auto& context = *static_cast<FakeRender*>(opaque);
+    FL_CHECK(first == context.submitted_end && end == first + 96);
+    ++context.submissions;
+    context.submitted_end = end;
 }
 
 struct ContractSession {
@@ -212,7 +242,8 @@ struct ContractSession {
         }
     }
     void prepare() {
-        FL_CHECK(fl_asio_prepare(session, 96, 2, 5, &render, contract_render, contract_invalidate) == 0);
+        FL_CHECK(fl_asio_prepare(session, 96, 2, 5, &render, contract_render,
+                                 contract_submitted, contract_invalidate) == 0);
     }
     void start() { FL_CHECK(fl_asio_start(session) == 0); }
     FlAsioRateTransaction close() {
@@ -248,6 +279,13 @@ extern "C" int32_t fl_asio_test_fail_start(FlAsioTestState* state, uint64_t sess
 extern "C" int32_t fl_asio_test_fail_tick(FlAsioTestState* state, uint64_t session_number) noexcept {
     if (!state) return invalid_state;
     state->fail_tick_session.store(session_number); return 0;
+}
+extern "C" uint32_t fl_asio_test_output_ready_gate(FlAsioTestState* state, uint32_t action,
+                                                   float* pcm) noexcept {
+    if (action != 0) return state->ready_gate.exchange(action);
+    const auto gate = state->ready_gate.load();
+    if (gate == 2 && pcm) std::memcpy(pcm, state->gated_pcm, sizeof(state->gated_pcm));
+    return gate;
 }
 extern "C" int32_t fl_asio_test_new(FlAsioTestState* state, FlAsioSession** out) noexcept {
     if (!state || !out) return invalid_state;
@@ -329,11 +367,13 @@ extern "C" int32_t fl_asio_contract_tests(uint32_t* completed, uint32_t* failed_
             FL_CHECK(fl_asio_set_rate(test.session, 96000) == 0); test.prepare(); test.start();
             FL_CHECK(test.driver.selected[0] == 2 && test.driver.selected[1] == 5 && test.render.calls == 2);
             FL_CHECK(test.driver.guards_intact() && test.driver.ready_calls == 4);
+            FL_CHECK(test.render.submissions == 2 && test.render.submitted_end == 192);
             FL_CHECK(test.close().disposition == 2 && test.driver.rate == 48000); ++*completed;
         }
         {
             ContractSession test; test.driver.ready_result = ASE_NotPresent; test.prepare(); test.start(); test.driver.tick(0);
             FL_CHECK(test.driver.ready_calls == 1 && test.render.calls == 1 && test.driver.guards_intact());
+            FL_CHECK(test.render.submissions == 1);
             test.close(); ++*completed;
         }
         {
@@ -343,7 +383,8 @@ extern "C" int32_t fl_asio_contract_tests(uint32_t* completed, uint32_t* failed_
         }
         {
             ContractSession test; test.driver.create_result = ASE_HWMalfunction;
-            FL_CHECK(fl_asio_prepare(test.session, 96, 2, 5, &test.render, contract_render, contract_invalidate) == ASE_HWMalfunction);
+            FL_CHECK(fl_asio_prepare(test.session, 96, 2, 5, &test.render, contract_render,
+                                     contract_submitted, contract_invalidate) == ASE_HWMalfunction);
             test.close(); FL_CHECK(test.driver.disposes == 1 && test.driver.stops == 0); ++*completed;
         }
         {
@@ -396,7 +437,8 @@ extern "C" int32_t fl_asio_contract_tests(uint32_t* completed, uint32_t* failed_
             test.driver.callbacks.sampleRateDidChange(44100); test.driver.tick(1);
             FlAsioStatus changed{}; fl_asio_status(test.session, &changed);
             FL_CHECK(changed.last_notified_rate == 44100 && changed.rate_notice_count == 2);
-            FL_CHECK(test.render.calls == 1 && test.render.invalidations > 0); test.close(); ++*completed;
+            FL_CHECK(test.render.calls == 1 && test.render.submissions == 1 && test.render.invalidations > 0);
+            test.close(); ++*completed;
         }
         {
             ContractSession test; test.prepare(); test.start(); test.driver.notify_on_latency_query = true;
@@ -409,17 +451,20 @@ extern "C" int32_t fl_asio_contract_tests(uint32_t* completed, uint32_t* failed_
             ContractSession test; test.prepare(); test.start(); test.render.reenter = true; test.driver.tick(0);
             FlAsioStatus status{}; fl_asio_status(test.session, &status);
             FL_CHECK(test.render.calls == 1 && status.callback_error == callback_reentry && test.driver.guards_intact());
+            FL_CHECK(test.render.submissions == 0);
             FL_CHECK(test.driver.storage[0][0][8] == 0 && test.driver.storage[1][0][8] == 0); test.close(); ++*completed;
         }
         {
             ContractSession test; test.driver.early_callback = true; test.prepare();
             FL_CHECK(test.render.calls == 0 && test.render.invalidations > 0 && fl_asio_start(test.session) == invalid_state);
+            FL_CHECK(test.render.submissions == 0);
             FL_CHECK(test.driver.starts == 0); test.close(); ++*completed;
         }
         {
             ContractSession test; test.prepare(); test.start(); test.driver.tick(3);
             FlAsioStatus status{}; fl_asio_status(test.session, &status);
             FL_CHECK(test.render.calls == 0 && status.callback_error == invalid_callback_index && test.driver.guards_intact());
+            FL_CHECK(test.render.submissions == 0);
             test.close(); ++*completed;
         }
         {
@@ -434,6 +479,19 @@ extern "C" int32_t fl_asio_contract_tests(uint32_t* completed, uint32_t* failed_
             while (!test.render.entered.load() && GetTickCount64() < deadline) Sleep(1);
             FL_CHECK(test.render.entered.load());
             test.close(); FL_CHECK(test.render.exited && test.driver.disposes == 1); ++*completed;
+        }
+        {
+            ContractSession test; test.prepare(); test.start(); test.render.notify_during_render = true;
+            test.driver.tick(0);
+            FL_CHECK(test.render.calls == 1 && test.render.submissions == 0);
+            FL_CHECK(test.driver.storage[0][0][8] == 0 && test.driver.storage[1][0][8] == 0);
+            test.close(); ++*completed;
+        }
+        {
+            ContractSession test; test.prepare(); test.start(); test.driver.notify_on_ready = true;
+            test.driver.tick(0);
+            FL_CHECK(test.driver.ready_calls == 3 && test.render.calls == 1 && test.render.submissions == 0);
+            test.close(); ++*completed;
         }
         return 0;
     } catch (const ContractFailure& error) { *failed_line = error.line; return invalid_state; }

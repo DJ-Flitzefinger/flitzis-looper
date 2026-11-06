@@ -258,6 +258,24 @@ impl Writer {
         if let Some(gate) = &hooks.before_terminal_decision {
             gate.wait();
         }
+        if written > 0
+            && let Some(submission) = &shared.asio_submission
+        {
+            let stop = shared.end_frame.load(Ordering::Acquire);
+            while shared.failure_code() == 0 {
+                let (end, terminated) = submission.prefix();
+                if end >= stop {
+                    break;
+                }
+                if terminated {
+                    shared.fail(CaptureFailure::Stream);
+                    break;
+                }
+                #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+                shared.waiting_for_submission.store(true, Ordering::Release);
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
         // One atomic winner freezes control cancellation, while subsequent
         // writer I/O/panic can still add its first low failure code.
         shared

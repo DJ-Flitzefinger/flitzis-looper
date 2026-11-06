@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::audio_output::{OutputBackend, OutputEndpoint, OutputOptions};
-use super::audio_stream::{AsioRenderContext, asio_invalidate, asio_render};
+use super::audio_stream::{AsioRenderContext, asio_invalidate, asio_render, asio_submitted};
 use super::buffer_retirement::AudioBufferRetirementWorker;
 
 #[cfg(all(test, feature = "asio-contract-tests"))]
@@ -85,9 +85,11 @@ pub(super) struct RateTransaction {
 }
 
 type Render =
-    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, i32, *const DriverTime);
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, i32, *const DriverTime) -> u64;
+type Submitted = unsafe extern "C" fn(*mut c_void, u64, u64);
 type Enumerate = unsafe extern "C" fn(*mut c_void, *const u16, *const u16);
 type Invalidate = unsafe extern "C" fn(*mut c_void, u32, u32);
+pub(super) const DETACHED: u32 = 128;
 
 const _: () = {
     assert!(std::mem::size_of::<DriverInfo>() == 48);
@@ -120,6 +122,7 @@ unsafe extern "C" {
         right: i32,
         context: *mut c_void,
         render: Render,
+        submitted: Submitted,
         invalidate: Invalidate,
     ) -> i32;
     fn fl_asio_start(session: *mut NativeSession) -> i32;
@@ -571,6 +574,7 @@ impl Owner {
                 right,
                 context,
                 asio_render,
+                asio_submitted,
                 asio_invalidate,
             )
         })?;
@@ -653,6 +657,9 @@ fn owner_loop(
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if owner.close().is_err() && !owner.raw.is_null() {
+                    if let Some(context) = owner.context.as_ref() {
+                        context.invalidate_clock();
+                    }
                     // Retain all uncertain resources. No caller remains to accept
                     // another receipt or authorize a replacement session.
                     loop {
@@ -732,10 +739,10 @@ fn owner_loop(
                 }))
                 .unwrap_or_else(|_| Err("ASIO control owner panicked; custody retained".into()));
             if let Err(error) = result.as_ref() {
-                failed.store(true, Ordering::Release);
                 if let Some(context) = owner.context.as_ref() {
                     context.invalidate_clock();
                 }
+                failed.store(true, Ordering::Release);
                 observation
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
@@ -774,6 +781,11 @@ fn owner_loop(
         }
         let status = owner.status();
         if status.callback_error != 0 || status.notifications & (1 | 2 | 4 | 32) != 0 {
+            if !failed.load(Ordering::Acquire)
+                && let Some(context) = owner.context.as_ref()
+            {
+                context.invalidate_clock();
+            }
             failed.store(true, Ordering::Release);
         }
         if owner.info.prepared_frames > 0
@@ -809,10 +821,10 @@ fn owner_loop(
                         .unwrap_or_else(|error| error.into_inner());
                     seen.last_control_query_rate_hz = None;
                     seen.info_query_error = Some(error);
-                    failed.store(true, Ordering::Release);
                     if let Some(context) = owner.context.as_ref() {
                         context.invalidate_clock();
                     }
+                    failed.store(true, Ordering::Release);
                 }
             }
         }
@@ -844,6 +856,6 @@ mod contract_tests {
             "bridge case {} failed at native fixture line {failed_line}",
             completed + 1
         );
-        assert_eq!(completed, 19);
+        assert_eq!(completed, 21);
     }
 }

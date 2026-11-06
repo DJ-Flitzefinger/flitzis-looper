@@ -475,6 +475,47 @@ def test_standalone_stream_failure_has_no_implicit_quiescence_receipt(tmp_path: 
     assert not controller.acknowledge_failure()
 
 
+def test_asio_submission_remains_native_authority_while_failed_stream_closes(
+    tmp_path: Path,
+) -> None:
+    failed = Mock(return_value=True)
+    quiesce = Mock(side_effect=[False, True])
+    controller, owner, worker = _terminal_owner(tmp_path, stream_failed=failed, quiesce=quiesce)
+    work = worker.snapshot.return_value
+    native = replace(work.native, failure=None, backend_submission_required=True)
+    worker.snapshot.return_value = replace(work, native=native, outcome=RecordingWorkerOutcome())
+    controller.poll()
+    assert controller._owner is owner
+    assert controller.status().retirement_uncertain
+    assert controller.status().error is None
+    controller.poll()
+    assert controller._owner is None
+    assert controller.status().error is None
+    worker.cancel.assert_not_called()
+    assert quiesce.call_count == 2
+
+
+def test_asio_incomplete_take_after_verified_detach_does_not_request_failed_close(
+    tmp_path: Path,
+) -> None:
+    quiesce = Mock()
+    controller, _owner, worker = _terminal_owner(
+        tmp_path, stream_failed=Mock(return_value=False), quiesce=quiesce
+    )
+    work = worker.snapshot.return_value
+    worker.snapshot.return_value = replace(
+        work,
+        native=replace(work.native, failure="stream", backend_submission_required=True),
+        outcome=RecordingWorkerOutcome(error="stream"),
+    )
+    controller.poll()
+    assert controller.status().error == "stream"
+    assert controller.status().retired
+    assert not controller.status().retirement_uncertain
+    quiesce.assert_not_called()
+    worker.cancel.assert_not_called()
+
+
 def test_idle_does_not_request_stream_quiescence(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

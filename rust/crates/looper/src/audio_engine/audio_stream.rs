@@ -50,6 +50,7 @@ pub struct AudioStreamHandle {
     candidate_epoch: Option<u64>,
     #[cfg(windows)]
     asio_observation: Option<Arc<Mutex<super::asio_output::OwnerObservation>>>,
+    pub(super) asio_submission: Option<Arc<super::mix_capture::AsioSubmission>>,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
     pub(crate) parameter_producer: Arc<Mutex<Producer<ControlParameterMessage>>>,
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
@@ -174,6 +175,10 @@ impl AudioStreamHandle {
             self.close_control_owner()
         })();
         if result.is_err() {
+            #[cfg(windows)]
+            if let Some(submission) = &self.asio_submission {
+                submission.terminate();
+            }
             self.stream_failed.store(true, Ordering::Release);
         }
         result
@@ -3771,11 +3776,13 @@ pub(super) struct AsioRenderContext {
     latency: Arc<std::sync::atomic::AtomicU64>,
     clock: Arc<SharedOutputClock>,
     admission_unavailable: Arc<AtomicBool>,
+    submission: Arc<super::mix_capture::AsioSubmission>,
 }
 
 #[cfg(windows)]
 impl AsioRenderContext {
     pub(super) fn invalidate_clock(&self) {
+        self.submission.terminate();
         self.failed.store(true, Ordering::Release);
         self.admission_unavailable.store(true, Ordering::Release);
         self.clock.invalidate();
@@ -3868,9 +3875,21 @@ pub(super) unsafe extern "C" fn asio_invalidate(
     revision: u32,
 ) {
     let context = unsafe { &*context.cast::<AsioRenderContext>() };
-    if reason == 8 {
-        context.clock.require_external_revision(revision);
-    } else {
+    match reason {
+        8 => context.clock.require_external_revision(revision),
+        super::asio_output::DETACHED => context.submission.terminate(),
+        _ => context.invalidate_clock(),
+    }
+}
+
+#[cfg(windows)]
+pub(super) unsafe extern "C" fn asio_submitted(
+    context: *mut std::ffi::c_void,
+    first: u64,
+    end: u64,
+) {
+    let context = unsafe { &*context.cast::<AsioRenderContext>() };
+    if !context.submission.confirm(first, end) {
         context.invalidate_clock();
     }
 }
@@ -3884,27 +3903,28 @@ pub(super) unsafe extern "C" fn asio_render(
     left_type: i32,
     right_type: i32,
     time: *const super::asio_output::DriverTime,
-) {
+) -> u64 {
     // All pointers/extent are registered before Start; C++ rejects invalid plane
     // indices and reentry BEFORE granting access to the Rust callback image.
     let context = unsafe { &*context.cast::<AsioRenderContext>() };
     let state = unsafe { &mut *context.state.get() };
     let time = unsafe { &*time };
     if context.failed.load(Ordering::Acquire) {
-        return;
+        return 0;
     }
     let (Some(left_layout), Some(right_layout)) = (
         super::asio_sample_format::SampleLayout::from_asio(left_type),
         super::asio_sample_format::SampleLayout::from_asio(right_type),
     ) else {
         context.invalidate_clock();
-        return;
+        return 0;
     };
     if frames <= 0 || frames as usize != state.scratch.len() / 2 {
         context.invalidate_clock();
-        return;
+        return 0;
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first = state.owner.state_mut().transport.output_frame();
         let sample_rate_hz = context.sample_rate_hz;
         let progressed = state.progress.observe(
             super::asio_clock::DriverClockObservation {
@@ -3933,13 +3953,22 @@ pub(super) unsafe extern "C" fn asio_render(
                 mapper.observe_external_callback(snapshot, delay, frames, progressed)
             },
         );
+        let end = state.owner.state_mut().transport.output_frame();
+        if first.checked_add(frames as u64) != Some(end) {
+            return 0;
+        }
         unsafe {
             left_layout.write_channel(&state.scratch, 0, left.cast());
             right_layout.write_channel(&state.scratch, 1, right.cast());
         }
+        end
     }));
-    if result.is_err() {
-        context.invalidate_clock();
+    match result {
+        Ok(end) if end != 0 => end,
+        _ => {
+            context.invalidate_clock();
+            0
+        }
     }
 }
 
@@ -3998,6 +4027,7 @@ fn create_asio_audio_stream(
     )?;
     owner.state_mut().close_producer = Some(producer_in.clone());
     owner.state_mut().close_parameter_producer = Some(parameter_producer_in.clone());
+    let submission = Arc::new(super::mix_capture::AsioSubmission::default());
     let context = Box::new(AsioRenderContext {
         state: std::cell::UnsafeCell::new(AsioRenderState {
             owner,
@@ -4010,6 +4040,7 @@ fn create_asio_audio_stream(
         latency: control.latency.clone(),
         clock: output_clock.clone(),
         admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
+        submission: submission.clone(),
     });
     control.install(super::asio_output::Installation {
         context,
@@ -4042,6 +4073,7 @@ fn create_asio_audio_stream(
         backend_released: AtomicBool::new(false),
         admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
         asio_observation: Some(observation),
+        asio_submission: Some(submission),
         candidate_epoch: {
             let epoch = input_runtime_ownership
                 .output_change_epoch
@@ -4396,6 +4428,7 @@ pub fn create_audio_stream(
         },
         #[cfg(windows)]
         asio_observation: None,
+        asio_submission: None,
         producer: producer_in,
         parameter_producer: parameter_producer_in,
         consumer: Arc::new(Mutex::new(consumer_out)),

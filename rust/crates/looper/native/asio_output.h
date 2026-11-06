@@ -58,8 +58,11 @@ struct FlAsioRateTransaction {
     int32_t disposition;
     uint32_t flags;
 };
-typedef void (*FlAsioRender)(void*, void*, void*, int32_t, int32_t, int32_t,
-                             const FlAsioTime*);
+// A copied block returns its exclusive engine-frame end, or zero on refusal.
+typedef uint64_t (*FlAsioRender)(void*, void*, void*, int32_t, int32_t, int32_t,
+                                 const FlAsioTime*);
+typedef void (*FlAsioSubmitted)(void*, uint64_t, uint64_t);
+constexpr uint32_t fl_asio_detached = 128;
 typedef void (*FlAsioInvalidate)(void*, uint32_t, uint32_t);
 typedef void (*FlAsioEnumerate)(void*, const uint16_t*, const uint16_t*);
 
@@ -75,7 +78,7 @@ int32_t fl_asio_commit_rate(FlAsioSession*) noexcept;
 int32_t fl_asio_abort_candidate_rate(FlAsioSession*) noexcept;
 int32_t fl_asio_rate_transaction(FlAsioSession*, FlAsioRateTransaction*) noexcept;
 int32_t fl_asio_prepare(FlAsioSession*, int32_t, int32_t, int32_t,
-                        void*, FlAsioRender, FlAsioInvalidate) noexcept;
+                        void*, FlAsioRender, FlAsioSubmitted, FlAsioInvalidate) noexcept;
 int32_t fl_asio_start(FlAsioSession*) noexcept;
 // Success verifies Stop, in-flight zero, callback detachment, Dispose and COM
 // Release, in that order. Failure leaves the same session available for retry.

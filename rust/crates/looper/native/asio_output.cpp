@@ -37,6 +37,7 @@ constexpr uint32_t latencies_changed = 8;
 constexpr uint32_t overload = 16;
 constexpr uint32_t clock_lost = 32;
 constexpr uint32_t same_rate_notice = 64;
+constexpr uint32_t terminal_notifications = reset_required | rate_changed | resync_required | clock_lost;
 std::atomic<bool> session_claimed{false};
 std::atomic<FlAsioSession*> current{nullptr};
 // Entry precedes loading current, so detachment cannot race a still-unregistered
@@ -105,6 +106,7 @@ struct FlAsioSession {
     ASIOCallbacks callbacks{};
     void* render_context = nullptr;
     FlAsioRender render = nullptr;
+    FlAsioSubmitted submitted = nullptr;
     FlAsioInvalidate invalidate = nullptr;
     std::atomic_flag rendering = ATOMIC_FLAG_INIT;
     std::atomic<uint32_t> notifications{0};
@@ -181,6 +183,11 @@ void clear_planes(FlAsioSession* s, long index) noexcept {
     }
 }
 
+bool valid_callback(const FlAsioSession* s, uint32_t flags) noexcept {
+    return s->callback_error.load(std::memory_order_acquire) == 0
+        && (flags & terminal_notifications) == 0;
+}
+
 void process(ASIOTime* time, long index, ASIOBool direct) noexcept {
     Entry entry;
     auto* s = entry.session;
@@ -234,25 +241,33 @@ void process(ASIOTime* time, long index, ASIOBool direct) noexcept {
                         s->invalidate(s->render_context, rate_changed, 0);
                     }
             }
-            const auto flags = s->notifications.load(std::memory_order_relaxed);
+            const auto flags = s->notifications.load(std::memory_order_acquire);
             normalized.notifications = flags;
             normalized.latency_revision = s->latency_revision.load(std::memory_order_acquire);
-            if (s->callback_error.load(std::memory_order_relaxed) == 0
-                && (flags & (reset_required | rate_changed | resync_required | clock_lost)) == 0) {
+            uint64_t end = 0;
+            if (valid_callback(s, flags)) {
                 // Windows ASIO callbacks may process inline even when direct is
                 // false (SDK p8, 26-27). No extra render queue or mutex is used.
-                s->render(s->render_context, s->planes[0].buffers[index],
-                          s->planes[1].buffers[index], s->frames,
-                          s->channels[0].type, s->channels[1].type, &normalized);
+                end = s->render(s->render_context, s->planes[0].buffers[index],
+                                s->planes[1].buffers[index], s->frames,
+                                s->channels[0].type, s->channels[1].type, &normalized);
             }
-            if (s->callback_error.load(std::memory_order_acquire) != 0
-                || (s->notifications.load(std::memory_order_acquire)
-                    & (reset_required | rate_changed | resync_required | clock_lost))) {
+            const auto frames = static_cast<uint64_t>(s->frames);
+            const bool copied = end >= frames
+                && valid_callback(s, s->notifications.load(std::memory_order_acquire));
+            if (!copied) {
                 clear_planes(s, index);
             }
+            bool ready = true;
             if (s->ready) {
                 const auto result = s->driver->outputReady();
-                if (result != ASE_OK) fault(s, result);
+                ready = result == ASE_OK;
+                if (!ready) fault(s, result);
+            }
+            // outputReady may itself report a fault or reenter the bridge.
+            if (copied && ready
+                && valid_callback(s, s->notifications.load(std::memory_order_acquire))) {
+                s->submitted(s->render_context, end - frames, end);
             }
         } catch (...) {
             fault(s, driver_exception);
@@ -491,8 +506,9 @@ extern "C" int32_t fl_asio_abort_candidate_rate(FlAsioSession* s) noexcept {
 
 extern "C" int32_t fl_asio_prepare(FlAsioSession* s, int32_t frames, int32_t left,
                                     int32_t right, void* context, FlAsioRender render,
-                                    FlAsioInvalidate invalidate) noexcept {
-    if (!control_owner(s) || !s->driver || s->buffers || !context || !render || !invalidate || left == right)
+                                    FlAsioSubmitted submitted, FlAsioInvalidate invalidate) noexcept {
+    if (!control_owner(s) || !s->driver || s->buffers || !context || !render || !submitted
+        || !invalidate || left == right)
         return invalid_state;
     try {
         FlAsioInfo info{};
@@ -511,6 +527,7 @@ extern "C" int32_t fl_asio_prepare(FlAsioSession* s, int32_t frames, int32_t lef
         }
         s->frames = frames; s->configured_rate = info.sample_rate;
         s->render_context = context; s->render = render;
+        s->submitted = submitted;
         s->invalidate = invalidate;
         s->callbacks = {buffer_switch, sample_rate_changed, asio_message, time_switch};
         // Both the Rust context and bridge are complete before any driver callback.
@@ -569,6 +586,7 @@ extern "C" int32_t fl_asio_close(FlAsioSession* s) noexcept {
         s->prepared.store(false, std::memory_order_release);
         s->detached = true;
         while (callback_entries.load(std::memory_order_seq_cst) != 0) Sleep(1);
+        if (s->invalidate) s->invalidate(s->render_context, fl_asio_detached, 0);
         if (s->buffers) {
             const auto result = s->driver->disposeBuffers();
             if (result != ASE_OK) return result;
@@ -579,6 +597,7 @@ extern "C" int32_t fl_asio_close(FlAsioSession* s) noexcept {
         if (s->window) { DestroyWindow(s->window); s->window = nullptr; }
         if (s->com) { CoUninitialize(); s->com = false; }
         s->render = nullptr; s->render_context = nullptr;
+        s->submitted = nullptr;
         s->invalidate = nullptr;
         s->closed = true;
         return 0;

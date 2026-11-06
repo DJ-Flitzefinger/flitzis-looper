@@ -278,7 +278,12 @@ class RecordingController:
     ) -> None:
         if self._fatal_quiescence_requested:
             return
-        if native is not None and native.failure == "stream":
+        submission_required = native is not None and native.backend_submission_required
+        if (
+            native is not None
+            and native.failure == "stream"
+            and (not submission_required or self._stream_failed is None)
+        ):
             owner.stream_failure_observed = True
         if self._stream_failed is not None:
             owner.stream_check_pending = True
@@ -290,7 +295,9 @@ class RecordingController:
             owner.stream_failure_observed |= failed
         if not owner.stream_failure_observed:
             return
-        if owner.error is None:
+        # This take's native writer arbitrates the fault against the confirmed
+        # ASIO extent. Closing the failed stream is a separate obligation.
+        if owner.error is None and not submission_required:
             self._fail(
                 owner, native.failure if native and native.failure else "Audio stream failed"
             )
@@ -300,11 +307,11 @@ class RecordingController:
         if type(quiesced) is not bool:
             message = "Native failed-stream quiescence did not return a bool"
             raise TypeError(message)
-        if not quiesced:
+        if not quiesced and not submission_required:
             message = "Native failed-stream callback quiescence is not complete"
             raise RuntimeError(message)
-        owner.stream_failure_observed = False
-        self._fatal_quiescence_requested = True
+        owner.stream_failure_observed = not quiesced
+        self._fatal_quiescence_requested = quiesced
 
     def _project_take(self, owner: _TakeOwner, work: RecordingWorkSnapshot) -> None:
         native = work.native
@@ -372,12 +379,14 @@ class RecordingController:
 
     def _poll_take(self, owner: _TakeOwner) -> None:
         work = owner.worker.snapshot()
+        submission_required = work.native is not None and work.native.backend_submission_required
         if work.ready is not None:
             owner.ready = work.ready
         try:
             self._observe_failed_stream(owner, work.native)
         except (OSError, RuntimeError, ValueError, TypeError) as error:
-            self._fail(owner, f"Failed-stream quiescence remains pending: {error}")
+            if not submission_required:
+                self._fail(owner, f"Failed-stream quiescence remains pending: {error}")
         if owner.gate_cancel_error is not None or (
             work.outcome is not None and work.outcome.error is not None
         ):
@@ -388,8 +397,15 @@ class RecordingController:
                     self._fail(owner, "Original recording group is no longer current")
             except (OSError, RuntimeError, ValueError) as error:
                 self._fail(owner, str(error))
-        if work.outcome is None and (
-            work.native is None or (work.native.failure is None and not work.native.rt_sealed)
+        submission_interrupted = submission_required and (
+            owner.stream_failure_observed
+            or owner.stream_check_pending
+            or self._fatal_quiescence_requested
+        )
+        if (
+            work.outcome is None
+            and not submission_interrupted
+            and (work.native is None or (work.native.failure is None and not work.native.rt_sealed))
         ):
             self._admit_start(owner)
             self._admit_stop(owner)

@@ -117,6 +117,13 @@ driver operations. Notifications SHALL defer recovery to the control path.
 - **AND** no callback rebuilds streams, changes sample rate or fabricates current timing
 - **AND** callback data and readers remain alive until successful stop and actual retirement
 
+#### Scenario: An ASIO recording seals before its final output buffer is submitted
+- **GIVEN** an original mix capture belongs to an active ASIO session and seals at frame S
+- **WHEN** the writer has spooled the exact capture interval [E,S)
+- **THEN** success requires the same session's contiguous submission to cover that interval after final callback checks and any required successful output-ready call
+- **AND** a gap, terminal fault or verified detach before coverage leaves the spool incomplete
+- **AND** a later stream fault preserves a take whose interval was already confirmed
+
 #### Scenario: Only selected physical outputs belong to the session
 - **GIVEN** a valid distinct physical left/right pair was selected
 - **WHEN** native ASIO buffers are created and rendered

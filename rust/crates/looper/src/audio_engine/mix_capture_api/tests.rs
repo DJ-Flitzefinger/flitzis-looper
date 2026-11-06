@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(all(windows, feature = "asio-contract-tests"))]
+#[path = "tests/asio_submission_tests.rs"]
+mod asio_submission_tests;
 #[cfg(windows)]
 #[path = "tests/format_finalization_tests.rs"]
 mod format_finalization_tests;

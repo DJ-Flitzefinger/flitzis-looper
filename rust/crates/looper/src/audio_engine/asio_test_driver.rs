@@ -71,6 +71,7 @@ unsafe extern "C" {
     fn fl_asio_test_state_info(state: *mut State, out: *mut DeviceInfo) -> i32;
     fn fl_asio_test_fail_start(state: *mut State, session_number: u64) -> i32;
     fn fl_asio_test_fail_tick(state: *mut State, session_number: u64) -> i32;
+    fn fl_asio_test_output_ready_gate(state: *mut State, action: u32, pcm: *mut f32) -> u32;
     fn fl_asio_test_new(state: *mut State, out: *mut *mut NativeSession) -> i32;
     fn fl_asio_test_tick(
         session: *mut NativeSession,
@@ -119,6 +120,33 @@ impl Factory {
         checked("inject one private callback failure", unsafe {
             fl_asio_test_fail_tick(self.state.as_ptr(), session_number)
         })
+    }
+
+    pub fn arm_output_ready(&self) {
+        assert_eq!(
+            unsafe { fl_asio_test_output_ready_gate(self.state.as_ptr(), 1, ptr::null_mut()) },
+            0
+        );
+    }
+
+    pub fn gated_output_pcm(&self) -> Option<[f32; 96 * 2]> {
+        let mut pcm = [0.0; 96 * 2];
+        let gate =
+            unsafe { fl_asio_test_output_ready_gate(self.state.as_ptr(), 0, pcm.as_mut_ptr()) };
+        (gate == 2).then_some(pcm)
+    }
+
+    pub fn release_output_ready(&self, fail: bool) {
+        assert_eq!(
+            unsafe {
+                fl_asio_test_output_ready_gate(
+                    self.state.as_ptr(),
+                    if fail { 4 } else { 3 },
+                    ptr::null_mut(),
+                )
+            },
+            2
+        );
     }
 
     pub(super) fn acquire(&self, out: &mut *mut NativeSession) -> Result<(), String> {

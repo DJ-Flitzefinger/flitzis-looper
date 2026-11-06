@@ -59,6 +59,14 @@ struct Rig {
 
 impl Rig {
     fn new(config: CaptureConfig, hooks: writer::Hooks) -> Self {
+        Self::new_for_output(config, hooks, None)
+    }
+
+    fn new_for_output(
+        config: CaptureConfig,
+        hooks: writer::Hooks,
+        asio_submission: Option<Arc<AsioSubmission>>,
+    ) -> Self {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(4)
@@ -72,7 +80,7 @@ impl Rig {
         fs::write(directory.path().join("OWNER.md"),
             b"Owned native mix-capture core test: synthetic float samples, real exclusive spool/rings/writer, no Human inputs or device. Drop only after actual RT release and worker join; failed unsettled fixtures remain retained. Module proof is not productive scheduler/mixer/format acceptance.\n").unwrap();
         let path = directory.path().join("take.capture");
-        let (control, rt) = prepare_inner(&path, config, hooks).unwrap();
+        let (control, rt) = prepare_inner(&path, config, asio_submission, hooks).unwrap();
         let deadline = Instant::now() + WAIT;
         while !control.status().writer_ready {
             assert!(
