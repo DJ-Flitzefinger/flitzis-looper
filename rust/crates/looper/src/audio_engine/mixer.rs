@@ -399,6 +399,37 @@ impl RtMixer {
             .any(|voice| voice.active && voice.stretch.wet_continuation_due(end))
     }
 
+    /// Only an already claimed Wet slice of the refreshed bank constrains admission.
+    pub(super) fn loop_refresh_wet_end(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        callback_start: u64,
+    ) -> Option<u64> {
+        if !self.wet_request_at(callback_start) {
+            return None;
+        }
+        let bank = self.sample_bank.get(id)?.as_ref()?;
+        let wet_end = self
+            .voices
+            .iter()
+            .filter(|voice| {
+                voice.is_playing_sample(id)
+                    && !voice.paused
+                    && voice.explicit_seek_mode == ExplicitSeekMode::Normal
+                    && voice
+                        .sample
+                        .as_ref()
+                        .is_some_and(|sample| sample.same_source(bank))
+            })
+            .filter_map(|voice| voice.stretch.claimed_wet_end_at(callback_start))
+            .max()?;
+        let (start, end) = self.loop_intent_frames(id, start_s, end_s)?;
+        let next = effective_loop_region(start, end, bank.frame_count())?;
+        (self.effective_loop_region(id, bank.frame_count()) != Some(next)).then_some(wet_end)
+    }
+
     pub(super) fn wet_preparation_admitted(&self, capture: u64, effect: u64) -> bool {
         self.wet_request_at(capture)
             && effect > capture

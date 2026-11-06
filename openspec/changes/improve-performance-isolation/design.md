@@ -7278,6 +7278,25 @@ final slice validation still apply, including BPM Lock, loop, stem and
 accepted timing effects. The claim continues to preserve original Native custody
 and same-request STOP, capture and retained-bank OwnACK ordering.
 
+### First admission of a derived loop-only refresh
+
+A loop-only accepted-timing refresh in the control FIFO has a current source
+and authority but has no scheduled frame. After an early aligned Wet SET
+claim, changing the same live normal-loop source's region at the usual next
+frame can change the reader plan for input that the original Native already
+processed. The scheduler first binds that refresh at the exclusive end of the
+actual owed slice if it falls after the usual next frame. Rendering consumes
+that slice through its existing exact checks before executing the refresh.
+The remaining span on the live voice supplies the boundary. An equivalent
+effective region retains the normal admission frame.
+
+This rule changes only initial target selection. The drain continues through
+its ordinary bounded FIFO, including subsequent independent source OwnACKs.
+Already scheduled events retain their frame. The refresh publishes acceptance
+only after its existing source, launch, geometry and effect checks succeed.
+Immediate loop controls, coupled master refreshes and BPM Lock have separate
+admission rules.
+
 ### Missing Work at an interior in-place SET
 
 The same qualified stereo 96 kHz ASIO request can contain a non-Wet

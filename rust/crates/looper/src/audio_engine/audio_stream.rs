@@ -1048,6 +1048,15 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                     refresh,
                 ));
             };
+            #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+            if accepted {
+                let native = mixer
+                    .voices
+                    .iter()
+                    .find(|voice| voice.is_playing_sample(refresh.id))
+                    .map_or(0, |voice| voice.stretch.native_state_address());
+                refresh.observe_execution(output_frame, native);
+            }
             refresh.finish(accepted);
             retirement.retire_accepted_timing_refresh(refresh);
         }
@@ -2749,7 +2758,19 @@ pub(super) fn process_control_message<
                     && refresh.global_current()
                     && mixer.refresh_binding_current(refresh.id, refresh.binding)
             });
-            if let Some(target) = target {
+            if let Some(mut target) = target {
+                // The raw loop-only refresh has no frame yet. Its new region can
+                // first feed Native after the already committed input is consumed.
+                if refresh.master_period_seconds.is_none()
+                    && let Some(wet_end) = mixer.loop_refresh_wet_end(
+                        refresh.id,
+                        refresh.start_s,
+                        refresh.end_s,
+                        callback_start_frame,
+                    )
+                {
+                    target = target.max(wet_end);
+                }
                 let _ =
                     scheduler.schedule(target, ScheduledCommand::RefreshAcceptedTiming(refresh));
             } else {

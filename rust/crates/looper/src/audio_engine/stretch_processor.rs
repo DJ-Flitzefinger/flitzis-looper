@@ -692,6 +692,14 @@ impl StretchProcessor {
         self.required_wet_frame.is_some_and(|frame| frame < end)
     }
 
+    pub(super) fn claimed_wet_end_at(&self, start: u64) -> Option<u64> {
+        if self.required_wet_frame != Some(start) {
+            return None;
+        }
+        let remaining = self.native.wet_continuation.as_ref()?.remaining();
+        start.checked_add(remaining as u64)
+    }
+
     pub(super) fn has_bound_wet_source(&self) -> bool {
         self.native.wet_retained_voice.is_some()
     }

@@ -114,6 +114,15 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** a later claim after the parameter pass SHALL validate the actual source trajectory and exclude staged conflicting scalar rate work before transfer
 - **AND** the admitted original Native SHALL supply only its exact Wet slice, with recording confirmed through normal backend submission
 
+#### Scenario: A derived loop-only refresh reaches admission after an aligned ASIO Wet claim
+- **GIVEN** a qualified stereo 96 kHz ASIO request of 96 frames owes an already claimed Wet slice for the live normal-loop voice of the current source
+- **WHEN** the control drain first admits a still-unbound accepted-timing refresh that changes that source's effective loop region without a master effect
+- **THEN** the scheduler SHALL bind it at the later of the usual next frame and the exclusive end of that voice's actual claimed Wet slice
+- **AND** exact original Native and trajectory checks SHALL govern the owed slice before the refresh can apply
+- **AND** source, authority and retirement checks SHALL still govern the refresh and its actual acknowledgement
+- **AND** the refresh SHALL leave the control drain available for independent source acknowledgements and preserve already assigned STOP and recording frames
+- **AND** already scheduled effects and refreshes without an affected Wet obligation SHALL keep their existing timing
+
 #### Scenario: A terminal member proves its exact old atomic group impossible
 - **GIVEN** a retained atomic group has a member conclusively marked rejected
 - **WHEN** the runtime polls its exact reserved member owners before readiness acceleration

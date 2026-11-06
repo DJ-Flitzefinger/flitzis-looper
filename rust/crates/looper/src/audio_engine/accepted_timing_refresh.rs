@@ -18,6 +18,12 @@ const PENDING: u8 = 0;
 const ACCEPTED: u8 = 1;
 const REJECTED: u8 = 2;
 
+#[cfg(all(test, windows, feature = "asio-contract-tests"))]
+struct RefreshExecution {
+    frame: AtomicU64,
+    native: std::sync::atomic::AtomicUsize,
+}
+
 pub(crate) struct AcceptedTimingRefresh {
     pub(crate) id: usize,
     pub(crate) binding: InputPadBinding,
@@ -31,6 +37,8 @@ pub(crate) struct AcceptedTimingRefresh {
     pub(crate) hierarchy_stamp: u64,
     pub(crate) launch_revision: u64,
     status: Arc<AtomicU8>,
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    execution: Arc<RefreshExecution>,
 }
 
 impl std::fmt::Debug for AcceptedTimingRefresh {
@@ -69,6 +77,12 @@ impl AcceptedTimingRefresh {
             Ordering::Release,
         );
     }
+
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    pub(super) fn observe_execution(&self, frame: u64, native: usize) {
+        self.execution.native.store(native, Ordering::Relaxed);
+        self.execution.frame.store(frame, Ordering::Release);
+    }
 }
 
 impl Drop for AcceptedTimingRefresh {
@@ -90,6 +104,16 @@ pub struct AcceptedTimingRefreshTicket {
     global_revision: Option<u64>,
     hierarchy_stamp: u64,
     launch_revision: u64,
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    execution: Arc<RefreshExecution>,
+}
+
+#[cfg(all(test, windows, feature = "asio-contract-tests"))]
+impl AcceptedTimingRefreshTicket {
+    pub(super) fn execution(&self) -> Option<(u64, usize)> {
+        let frame = self.execution.frame.load(Ordering::Acquire);
+        (frame != u64::MAX).then(|| (frame, self.execution.native.load(Ordering::Relaxed)))
+    }
 }
 
 #[pymethods]
@@ -228,6 +252,11 @@ pub(super) fn enqueue(
     let mut revised = current.binding;
     revised.authority_revision = next;
     let status = Arc::new(AtomicU8::new(PENDING));
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    let execution = Arc::new(RefreshExecution {
+        frame: AtomicU64::new(u64::MAX),
+        native: std::sync::atomic::AtomicUsize::new(0),
+    });
     let refresh = Arc::new(AcceptedTimingRefresh {
         id: binding.id,
         binding: revised,
@@ -246,6 +275,8 @@ pub(super) fn enqueue(
         hierarchy_stamp,
         launch_revision,
         status: status.clone(),
+        #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+        execution: execution.clone(),
     });
     engine.input_runtime_ownership.revoke(binding.id, next);
     producer
@@ -261,6 +292,8 @@ pub(super) fn enqueue(
         global_revision: master_period_seconds.map(|_| global_revision),
         hierarchy_stamp,
         launch_revision,
+        #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+        execution,
     })
 }
 

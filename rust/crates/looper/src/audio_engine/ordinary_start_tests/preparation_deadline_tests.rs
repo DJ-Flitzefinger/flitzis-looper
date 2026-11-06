@@ -169,7 +169,8 @@ impl WorkerGate {
 
     #[cfg(feature = "asio-contract-tests")]
     pub(in crate::audio_engine) fn prepared_wet(&self) -> (usize, u64) {
-        self.state.observation.lock().unwrap().prepared_wet.unwrap()
+        let prepared_wet = self.state.observation.lock().unwrap().prepared_wet;
+        prepared_wet.expect("genuine prepared Wet span")
     }
 
     pub(in crate::audio_engine) fn release_pitch_into(
