@@ -7258,3 +7258,14 @@ bounded path expires at E if its Work is unavailable, including a worker
 that would have returned the original inline E owner. Its slot retains the
 Work's custody until return without deferring due STOP and tempo controls.
 Physical device and WASAPI acceptance remain separate.
+
+### Missing Work at an interior in-place SET
+
+The same qualified stereo 96 kHz ASIO request can contain a non-Wet
+in-place SET at an interior frame. If its original Work has not returned at
+the frozen E, deferring the event would block the rest of the current
+request. The next callback could no longer apply that SET at E. The runtime
+rejects the original at E and consumes its due event so that the scheduler
+can process following effects in order. The reserved slot and its exact
+worker return stay paired until bounded off-callback retirement. A delivered
+candidate still uses its original capacity, placement and window gates.

@@ -390,6 +390,15 @@ impl RtMixer {
             && (effect - capture)
                 .is_multiple_of(super::wet_continuation::WET_CALLBACK_FRAMES as u64)
     }
+
+    pub(super) fn qualified_asio_request_interior(&self, frame: u64) -> bool {
+        self.wet_callback_frame
+            .and_then(|first| frame.checked_sub(first))
+            .is_some_and(|offset| {
+                (1..super::wet_continuation::WET_CALLBACK_FRAMES as u64).contains(&offset)
+            })
+    }
+
     fn observe_dsp_inputs(&mut self, frame: u64) {
         for id in 0..NUM_SAMPLES {
             if let Some(key) = self

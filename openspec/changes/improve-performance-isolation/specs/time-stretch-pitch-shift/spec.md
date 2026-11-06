@@ -97,6 +97,14 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the old worker, slot, queued event and heavy source/Native owners retain their existing capacity and last-reader retirement
 - **AND** no rejected original or partial rejected group can later effect, and fresh source/DSP/OwnACK, original T and recording S/E guards remain enforced
 
+#### Scenario: An in-place SET misses its exact interior ASIO effect
+- **GIVEN** a non-Wet in-place SET has a frozen E strictly inside a qualified stereo 96 kHz ASIO request of 96 frames
+- **WHEN** the scheduler reaches E and the original preparation Work has yet to return
+- **THEN** the SET is rejected at E and the due pass continues in its original order
+- **AND** independently due effects use their original frame boundaries in the same request
+- **AND** the reserved slot retains custody until the exact Work returns and can retire off the callback
+- **AND** delivered Work follows its existing capacity and placement rules, and independent births and atomic groups keep their existing retry policy
+
 #### Scenario: A terminal member proves its exact old atomic group impossible
 - **GIVEN** a retained atomic group has a member conclusively marked rejected
 - **WHEN** the runtime polls its exact reserved member owners before readiness acceleration

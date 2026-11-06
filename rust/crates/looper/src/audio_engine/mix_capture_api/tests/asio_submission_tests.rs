@@ -77,6 +77,7 @@ fn until<T>(mut check: impl FnMut() -> Option<T>) -> T {
 }
 
 struct ColdPcm {
+    id: usize,
     publication: crate::audio_engine::input_runtime_binding::SourcePublication,
     binding: crate::audio_engine::input_runtime_binding::InputPadBinding,
     adoption: Arc<std::sync::atomic::AtomicU8>,
@@ -99,6 +100,16 @@ impl ColdPcm {
         digest: &str,
         initial_pitch: SourcePitchInitialization,
     ) -> Self {
+        Self::publish_at(engine, 0, generation, digest, initial_pitch)
+    }
+
+    fn publish_at(
+        engine: &AudioEngine,
+        id: usize,
+        generation: u64,
+        digest: &str,
+        initial_pitch: SourcePitchInitialization,
+    ) -> Self {
         use crate::audio_engine::{next_pad_request_id, publish_loaded_sample_with_arm};
 
         let ownership = &engine.input_runtime_ownership;
@@ -116,8 +127,8 @@ impl ColdPcm {
         assert_eq!(
             next_pad_request_id(
                 &engine.pad_request_ids,
-                0,
-                engine.prepared_source_epoch(0).unwrap()
+                id,
+                engine.prepared_source_epoch(id).unwrap()
             )
             .unwrap(),
             generation,
@@ -125,12 +136,12 @@ impl ColdPcm {
         let publication = publish_loaded_sample_with_arm(
             engine.control_producer().unwrap(),
             &engine.sample_cache,
-            0,
+            id,
             sample.clone(),
             LoadedSourcePublication {
                 output_restore: None,
                 initial_mix: None,
-                placement: ownership.slot_snapshot(0).unwrap(),
+                placement: ownership.slot_snapshot(id).unwrap(),
                 cold: true,
                 cold_epoch: None,
                 cold_adoption: Some(adoption.clone()),
@@ -144,14 +155,15 @@ impl ColdPcm {
                 ownership,
                 generation,
                 rate: 96_000,
-                generation_slot: &mut engine.loaded_source_generations.lock().unwrap()[0],
-                digest_slot: &mut engine.loaded_source_digests.lock().unwrap()[0],
+                generation_slot: &mut engine.loaded_source_generations.lock().unwrap()[id],
+                digest_slot: &mut engine.loaded_source_digests.lock().unwrap()[id],
                 digest: digest.repeat(64),
             },
             || Ok(()),
         )
         .unwrap();
         Self {
+            id,
             binding: publication.binding(&sample, 96_000),
             publication,
             adoption,
@@ -168,11 +180,11 @@ impl ColdPcm {
             if accepted { 2 } else { 0 }
         );
         assert_eq!(
-            ownership.binding_source_adoption_accepted(0, self.binding),
+            ownership.binding_source_adoption_accepted(self.id, self.binding),
             accepted
         );
         assert_eq!(
-            ownership.callback_feedback_key(0) == self.publication.key(),
+            ownership.callback_feedback_key(self.id) == self.publication.key(),
             accepted
         );
     }
@@ -855,6 +867,216 @@ fn asio_admits_original_pitch_owner_wet_shift_after_controls() {
     assert!(stopped[96 * 8..].iter().all(|byte| *byte == 0));
     assert_eq!(wet_admission_path(WetAdmission::Late), stopped);
     assert_eq!(wet_admission_path(WetAdmission::Tempo), inline[..96 * 8]);
+}
+
+#[test]
+fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
+    use crate::audio_engine::constants::NUM_SAMPLES;
+    use crate::audio_engine::input_mapping::PitchPadProjection;
+    use crate::audio_engine::input_runtime_binding;
+    use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
+
+    const FRAMES: u64 = 96;
+    const F: u64 = 18_240;
+    const REQUEST: u64 = 24_000;
+    const E: u64 = 24_016;
+    const FIRST: u64 = REQUEST + 7;
+    const STOP: u64 = REQUEST + 73;
+    Python::initialize();
+    let directory = tempfile::tempdir().unwrap().keep();
+    let path = directory.join("take.capture");
+    eprintln!("ASIO interior SET spool: {}", path.display());
+    let factory = Factory::new().unwrap();
+    let mut engine = AudioEngine::new().unwrap();
+    engine.test_asio_driver = Some(factory.clone());
+    engine
+        .start_audio_output(OutputOptions {
+            backend: "asio".into(),
+            sample_rate_hz: Some(96_000),
+            buffer_frames: Some(FRAMES as u32),
+            ..Default::default()
+        })
+        .unwrap();
+    engine.set_master_period(E as f64 / 48_000.0).unwrap();
+    engine.set_trigger_quantization("1/16").unwrap();
+    let stream = engine.stream_handle.as_ref().unwrap();
+    let owner = stream.test_owner_observer();
+    let submission = stream.output_submission.as_ref().unwrap().clone();
+    let ownership = &engine.input_runtime_ownership;
+    let a = ColdPcm::publish(&engine, 1, "a");
+    let b = ColdPcm::publish_at(&engine, 1, 1, "b", SourcePitchInitialization::FreshNeutral);
+    a.assert_ack(&engine, false);
+    b.assert_ack(&engine, false);
+    assert!(
+        stream
+            .producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::PlaySample {
+                id: 0,
+                volume: 1.0,
+                received_at_ns: None,
+                expected_source_generation: Some(1),
+            })
+            .is_ok()
+    );
+    assert!(stream.test_tick().unwrap().pads[0].active);
+    a.assert_ack(&engine, true);
+    b.assert_ack(&engine, true);
+
+    let runtime = engine.input_runtime.as_ref().unwrap();
+    let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
+    let mut loaded = vec![false; NUM_SAMPLES];
+    loaded[0] = true;
+    let mut bindings = vec![None; NUM_SAMPLES];
+    bindings[0] = Some(&binding);
+    let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
+    rows[0].quantize_step_64ths = Some(8);
+    runtime
+        .set_runtime_state_with_pitch(
+            true,
+            loaded,
+            vec![0.0; NUM_SAMPLES],
+            vec![None; NUM_SAMPLES],
+            bindings,
+            rows,
+        )
+        .unwrap();
+    for end in (2 * FRAMES..=F).step_by(FRAMES as usize) {
+        if end == F {
+            // Set the real rate before either action freezes a source trajectory.
+            push_global_rate_message(
+                &ownership.global_timing_revision,
+                &ownership.global_timing_publishing,
+                &ownership.global_rate_status,
+                &mut stream.parameter_producer.lock().unwrap(),
+                Some(1.2),
+                None,
+                "ASIO interior SET",
+            )
+            .unwrap();
+        }
+        assert_eq!(stream.test_tick().unwrap().output_frame, end);
+    }
+    let rate = ownership.global_rate_status.read().unwrap();
+    assert_eq!(rate.effect.execution_frame, Some(F - FRAMES));
+    assert_eq!(rate.request_revision, rate.effect.revision);
+    let clock = stream.output_clock.read().unwrap();
+    assert!(clock.valid);
+    let action = runtime
+        .capture_gui_pitch(&binding, "pitch.extra:3:set", clock.observed_at_ns)
+        .unwrap();
+    assert_eq!(action.original_due_frame(), E);
+    let worker = WorkerGate::for_pitch(&action);
+    assert!(engine.publish_pitch_action(&action).unwrap());
+    assert_eq!(stream.test_tick().unwrap().output_frame, F + FRAMES);
+    worker.wait_for(false);
+    assert_eq!(action.execution_target(), E);
+
+    // A genuine independently captured exclusive launch stops A at its own E.
+    let start = engine
+        .capture_pad_start(1, 0.0, None, 0.25, true, None, Some(1))
+        .unwrap();
+    assert!(action.sequence() < start.sequence());
+    assert_eq!(stream.test_tick().unwrap().output_frame, F + 2 * FRAMES);
+    assert_eq!(start.original_frame(), Some(E));
+    assert!(engine.publish_pad_start(&start, None).unwrap());
+    for end in (F + 3 * FRAMES..=REQUEST).step_by(FRAMES as usize) {
+        assert_eq!(stream.test_tick().unwrap().output_frame, end);
+    }
+    assert_eq!(start.execution_frame(), Some(E));
+    assert_eq!(start.state(), "scheduled", "{:?}", start.reason());
+    assert_eq!(submission.prefix(), (REQUEST, false));
+    let ticket = engine
+        .prepare_mix_capture_internal(path.to_str().unwrap(), FRAMES as usize, 4, 4096)
+        .unwrap();
+    let capture_status = || {
+        engine
+            .mix_capture_lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .control
+            .status()
+    };
+    until(|| capture_status().writer_ready.then_some(()));
+    assert!(engine.start_mix_capture_internal(&ticket, FIRST).unwrap());
+    assert!(engine.stop_mix_capture_internal(&ticket, STOP).unwrap());
+    factory.arm_output_ready();
+    let (tick, pcm, gated, prefix) = std::thread::scope(|scope| {
+        let tick = scope.spawn(|| stream.test_tick().unwrap());
+        let pcm = until(|| factory.gated_output_pcm());
+        let gated = capture_status();
+        let prefix = submission.prefix();
+        factory.release_output_ready(false);
+        (tick.join().unwrap(), pcm, gated, prefix)
+    });
+    let applied = start.effective_frame();
+    let launch_state = start.state();
+    let launch_reason = start.reason();
+    let pitch_state = action.state();
+    eprintln!(
+        "ASIO interior SET E={E} request={REQUEST}..{} pitch={pitch_state} exclusive={applied:?}/{launch_state}/{launch_reason:?} A={} B={} captured_end={:?} sealed_end={:?} raw={} rate={:?}",
+        tick.output_frame,
+        tick.pads[0].active,
+        tick.pads[1].active,
+        gated.captured_end,
+        gated.end_frame,
+        gated.written_frames,
+        rate.effect.execution_frame,
+    );
+    assert_eq!(tick.output_frame, REQUEST + FRAMES);
+    assert_eq!(prefix, (REQUEST, false));
+    assert!(!gated.terminal_decided && gated.payload_sha256.is_none());
+    assert_eq!(submission.prefix(), (REQUEST + FRAMES, false));
+    assert_eq!(engine.pitch_work_capacity.used(), 1);
+    worker.release();
+    worker.wait_for(true);
+    // Continue with the original stream to observe late custody and the spool.
+    let final_status = until(|| {
+        stream.test_tick().unwrap();
+        let mut slot = engine.mix_capture_lock().unwrap();
+        let capture = slot.as_mut().unwrap();
+        capture.poll(engine.mix_capture_stream_failed());
+        let status = capture.control.status();
+        (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
+            .then_some(status)
+    });
+    assert!(!action.effective() && action.state() == "rejected");
+    engine.shut_down().unwrap();
+    let ended = owner.lock().unwrap();
+    assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
+    assert_eq!(factory.info().unwrap().active, 0);
+    drop(start);
+    drop(action);
+    drop(engine);
+    assert!(a.reader.upgrade().is_none() && b.reader.upgrade().is_none());
+
+    assert_eq!(
+        applied,
+        Some(E),
+        "missing SET must release the exclusive STOP at E"
+    );
+    assert!(!tick.pads[0].active && tick.pads[1].active);
+    assert_eq!(pitch_state, "rejected");
+    assert!(gated.rt_sealed);
+    assert_eq!(gated.captured_end, Some(STOP));
+    assert!(final_status.successful_spool());
+    assert_eq!(final_status.written_frames, STOP - FIRST);
+    assert_eq!(
+        (final_status.first_frame, final_status.end_frame),
+        (Some(FIRST), Some(STOP))
+    );
+    let expected: Vec<_> = pcm[2 * (FIRST - REQUEST) as usize..2 * (STOP - REQUEST) as usize]
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect();
+    assert_eq!(
+        &fs::read(&path).unwrap()[SPOOL_HEADER_BYTES as usize..],
+        expected
+    );
+    fs::remove_file(&path).unwrap();
+    fs::remove_dir(&directory).unwrap();
 }
 
 #[test]
