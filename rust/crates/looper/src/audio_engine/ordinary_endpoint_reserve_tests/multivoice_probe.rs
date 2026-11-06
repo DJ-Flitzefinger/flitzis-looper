@@ -4,10 +4,15 @@ use super::*;
 use crate::audio_engine::audio_stream::render_scheduled_audio;
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::native_render_observation::{Observation, Scope};
+use sha2::{Digest, Sha256};
 
-const FRAMES: usize = 512;
-const PERIODS: usize = 768;
-const RATIO: f64 = 1.2;
+#[derive(Clone, Copy)]
+struct Workload {
+    rate: u32,
+    frames: usize,
+    periods: usize,
+    require_loop_crossings: bool,
+}
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 struct Voice {
@@ -47,15 +52,15 @@ struct Period {
     trajectory_errors: usize,
 }
 
-fn sources() -> [SampleBuffer; 6] {
+fn sources(rate: u32) -> [SampleBuffer; 6] {
     std::array::from_fn(|id| {
         SampleBuffer {
             channels: 2,
             residency: None,
-            samples: (0..3 * RATE as usize)
+            samples: (0..3 * rate as usize)
                 .flat_map(|frame| {
                     (0..2).map(move |channel| {
-                        let t = frame as f64 / f64::from(RATE);
+                        let t = frame as f64 / f64::from(rate);
                         let hz = 110.0 + id as f64 * 37.0 + channel as f64 * 13.0;
                         let phase = t * std::f64::consts::TAU;
                         // Integer frequencies and a two-second envelope keep the loop continuous.
@@ -67,7 +72,7 @@ fn sources() -> [SampleBuffer; 6] {
                 .collect::<Vec<_>>()
                 .into(),
         }
-        .with_complete_source(RATE)
+        .with_complete_source(rate)
     })
 }
 
@@ -142,18 +147,32 @@ fn voices(fixture: &Fixture, peaks: &[f32; NUM_SAMPLES]) -> [Voice; 6] {
     })
 }
 
-fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
-    let mut fixture = Fixture::new_format(lock, RATE, 2);
+fn case(
+    sources: &[SampleBuffer; 6],
+    workload: Workload,
+    count: usize,
+    lock: bool,
+    source_bpm: u32,
+) -> bool {
+    let Workload {
+        rate,
+        frames,
+        periods,
+        require_loop_crossings,
+    } = workload;
+    let ratio = 120.0 / f64::from(source_bpm);
+    let wet = lock && source_bpm != 120;
+    let mut fixture = Fixture::new_format(lock, rate, 2);
     let ids = (0..count).collect::<Vec<_>>();
     for (id, source) in sources.iter().enumerate().take(count) {
-        publish_tone_with_rate(&fixture.control, id, source.clone(), true, RATE);
+        publish_tone_with_rate(&fixture.control, id, source.clone(), true, rate);
     }
     adopt_current_source_ids(&mut fixture, lock, &ids);
     bind(&fixture, count);
     fixture.mixer.set_bpm_lock(true);
     fixture.mixer.set_master_bpm(120.0);
     for &id in &ids {
-        fixture.mixer.set_pad_bpm(id, Some(100.0));
+        fixture.mixer.set_pad_bpm(id, Some(f64::from(source_bpm)));
         fixture.mixer.set_pad_loop_region(id, 0.1, Some(2.1));
         assert_eq!(fixture.mixer.key_lock_for_measurement(id), lock);
     }
@@ -200,7 +219,7 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
         .map(CapturedPadStart::execution_frame)
         .collect::<Vec<_>>();
     let prepared_begin = Instant::now();
-    if lock {
+    if wet {
         crate::audio_engine::ordinary_start_tests::wait_ready(
             &mut fixture,
             &starts
@@ -213,14 +232,15 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
     fixture.render(0);
     fixture.feedback.reserve(128);
     let origin = fixture.transport.output_frame();
-    let mut output = [0.0_f32; FRAMES * 2];
+    let mut output = vec![0.0_f32; frames * 2];
     let mut peaks = [0.0; NUM_SAMPLES];
-    let mut rows = Vec::with_capacity(PERIODS);
+    let mut rows = Vec::with_capacity(periods);
+    let mut pcm = Vec::with_capacity(periods * frames * 2);
     let mut previous_sample = [0.0_f32; 2];
     let epoch = Instant::now();
-    for index in 0..PERIODS {
-        sleep_until(epoch, (index * FRAMES) as u64, RATE);
-        let due = Duration::from_secs_f64((index * FRAMES) as f64 / f64::from(RATE));
+    for index in 0..periods {
+        sleep_until(epoch, (index * frames) as u64, rate);
+        let due = Duration::from_secs_f64((index * frames) as f64 / f64::from(rate));
         let pacing_late_ns = epoch.elapsed().saturating_sub(due).as_nanos();
         let before: [_; 6] = std::array::from_fn(|id| {
             fixture
@@ -249,12 +269,13 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
         );
         let render_ns = began.elapsed().as_nanos();
         let native = scope.finish();
-        fixture.transport.advance_by_rendered_frames(FRAMES);
+        fixture.transport.advance_by_rendered_frames(frames);
+        pcm.extend_from_slice(&output);
         let actual = voices(&fixture, &peaks);
         let mut trajectory_errors = 0;
         for (id, previous) in before.into_iter().enumerate() {
             if let Some(mut expected) = previous
-                && (!expected.advance(FRAMES)
+                && (!expected.advance(frames)
                     || !fixture.voice(id).source_playback.matches_exact(&expected))
             {
                 trajectory_errors += 1;
@@ -287,12 +308,25 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
         .iter()
         .map(CapturedPadStart::effective_frame)
         .collect::<Vec<_>>();
+    let effect = effects[0].unwrap_or(u64::MAX);
+    let pcm_sha256 = effect
+        .checked_sub(origin)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .and_then(|offset| pcm.get(offset.saturating_mul(2)..))
+        .map(|pcm| {
+            let mut hash = Sha256::new();
+            for sample in pcm {
+                hash.update(sample.to_bits().to_le_bytes());
+            }
+            (pcm.len() / 2, format!("{:x}", hash.finalize()))
+        });
     eprintln!(
         "multivoice_raw {}",
         serde_json::json!({
-            "count":count,"key_lock":lock,"rate":RATE,"channels":2,"frames":FRAMES,
-            "master_bpm":120,"source_bpm":100,"ratio":RATIO,"periods":PERIODS,
-            "original_T":original,"admitted_E":admitted,"effects_E":effects,"origin":origin,"preparation_ns":preparation_ns,"waited_for_native":lock,
+            "count":count,"key_lock":lock,"rate":rate,"channels":2,"frames":frames,
+            "master_bpm":120,"source_bpm":source_bpm,"ratio":ratio,"periods":periods,
+            "original_T":original,"admitted_E":admitted,"effects_E":effects,"origin":origin,"preparation_ns":preparation_ns,"waited_for_native":wet,
+            "pcm_from_effect":pcm_sha256,
             "source_addresses":sources.iter().map(|s|s.samples.as_ptr() as usize).collect::<Vec<_>>(),
             "source_frames":sources.iter().map(SampleBuffer::frame_count).collect::<Vec<_>>(),
             "rows":rows,"limits":"Synthetic complete stereo sources, no selected stems, manual Native BPM authority, public original group; render-thread scoped cfgtest instrumentation, no device/controller/hearing/quality/Human acceptance. FIFO deficits cover Rust adapter only, not Native internal fallback."
@@ -300,7 +334,6 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
     );
     // FirstSound may accelerate to this callback or retain the admitted E.
     // Preserve pre-E silence and every onset row, including silent Native output.
-    let effect = effects[0].unwrap_or(u64::MAX);
     let active_rows = rows
         .iter()
         .filter(|row| row.first >= effect)
@@ -331,13 +364,15 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
             }),
         ),
         (
-            "three_source_loops",
-            active_rows.len() as f64 * FRAMES as f64 * RATIO > 6.0 * f64::from(RATE),
+            "measured_sustained_output",
+            active_rows.len() > periods / 2
+                && (!require_loop_crossings
+                    || active_rows.len() as f64 * frames as f64 * ratio > 6.0 * f64::from(rate)),
         ),
         (
             "pre_E_silence",
             rows.iter()
-                .filter(|row| row.first + FRAMES as u64 <= effect)
+                .filter(|row| row.first + frames as u64 <= effect)
                 .all(|row| row.mix_peak == 0.0 && row.native.shifts == 0),
         ),
         (
@@ -348,13 +383,13 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
                         && !v.failed
                         && !v.pending
                         && v.source == sources[id].samples.as_ptr() as usize
-                        && (v.ratio - RATIO).abs() < 1e-12
-                        && (v.target - RATIO).abs() < 1e-12
-                        && if lock {
+                        && (v.ratio - ratio).abs() < 1e-12
+                        && (v.target - ratio).abs() < 1e-12
+                        && if wet {
                             v.wet
                                 && v.native != 0
                                 && v.native_pitch
-                                    .is_some_and(|p| (p - 1.0 / RATIO).abs() < 1e-12)
+                                    .is_some_and(|p| (p - 1.0 / ratio).abs() < 1e-12)
                         } else {
                             !v.wet
                         }
@@ -371,13 +406,22 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
         ),
         (
             "actual_shift_count",
-            active_rows.iter().all(|r| {
-                if lock {
-                    r.native.shifts == count as u64
-                } else {
-                    r.native.shifts == 0
-                }
-            }),
+            if wet && require_loop_crossings {
+                active_rows
+                    .iter()
+                    .all(|row| row.native.shifts == count as u64)
+            } else if wet {
+                let block = fixture.voice(0).stretch.rubberband_block_size();
+                active_rows.windows(2).all(|pair| {
+                    let expected: usize = pair[0].voices[..count]
+                        .iter()
+                        .map(|voice| (voice.fifo.0 + frames) / block)
+                        .sum();
+                    pair[1].native.shifts == expected as u64
+                })
+            } else {
+                rows.iter().all(|row| row.native.shifts == 0)
+            },
         ),
         (
             "stable_history_and_owners",
@@ -386,14 +430,14 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
                     let (a, b) = (pair[0].voices[id], pair[1].voices[id]);
                     (a.generation, a.native, a.origin, a.continuity)
                         == (b.generation, b.native, b.origin, b.continuity)
-                        && b.history_frames == a.history_frames.map(|n| n + FRAMES as u64)
+                        && b.history_frames == a.history_frames.map(|n| n + frames as u64)
                 })
             }),
         ),
     ];
     eprintln!(
         "multivoice_checks {}",
-        serde_json::json!({"count":count,"key_lock":lock,"checks":checks})
+        serde_json::json!({"count":count,"key_lock":lock,"source_bpm":source_bpm,"checks":checks})
     );
     checks.iter().all(|(_, passed)| *passed)
 }
@@ -401,8 +445,45 @@ fn case(sources: &[SampleBuffer; 6], count: usize, lock: bool) -> bool {
 #[test]
 #[ignore = "explicit matched 4/5/6-wet plus6OFF paced stereo diagnostic; no device"]
 fn matched_multivoice_key_lock_workload() {
-    let sources = sources();
+    let workload = Workload {
+        rate: RATE,
+        frames: 512,
+        periods: 768,
+        require_loop_crossings: true,
+    };
+    let sources = sources(workload.rate);
     let results = [(4, true), (5, true), (6, true), (6, false)]
-        .map(|(count, lock)| (count, lock, case(&sources, count, lock)));
+        .map(|(count, lock)| (count, lock, case(&sources, workload, count, lock, 100)));
     assert!(results.iter().all(|(_, _, passed)| *passed), "{results:?}");
+}
+
+#[test]
+#[ignore = "paced device-free 96 kHz / 96-frame callback profile"]
+fn small_buffer_key_lock_callback_workload() {
+    let workload = Workload {
+        rate: 96_000,
+        frames: 96,
+        periods: 1024,
+        require_loop_crossings: false,
+    };
+    let sources = sources(workload.rate);
+    let results = [
+        (2, true, 100),
+        (4, true, 100),
+        (6, true, 100),
+        (6, false, 100),
+        (6, true, 120),
+    ]
+    .map(|(count, lock, source_bpm)| {
+        (
+            count,
+            lock,
+            source_bpm,
+            case(&sources, workload, count, lock, source_bpm),
+        )
+    });
+    assert!(
+        results.iter().all(|(_, _, _, passed)| *passed),
+        "{results:?}"
+    );
 }

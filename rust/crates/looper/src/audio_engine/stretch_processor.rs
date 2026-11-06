@@ -1343,39 +1343,47 @@ impl FixedFifo {
     }
 
     pub(super) fn push_slice(&mut self, input: &[f32]) -> usize {
-        let mut written = 0;
-        for sample in input {
-            if self.len == self.buffer.len() {
-                break;
-            }
-            self.buffer[self.write_pos] = *sample;
-            self.write_pos = (self.write_pos + 1) % self.buffer.len();
-            self.len += 1;
-            written += 1;
-        }
+        let (tail, head) = self.write_spans(input.len());
+        let written = tail.len() + head.len();
+        tail.copy_from_slice(&input[..tail.len()]);
+        head.copy_from_slice(&input[tail.len()..written]);
         written
     }
 
     pub(super) fn push_silence(&mut self, frames: usize) {
-        debug_assert!(self.len + frames <= self.buffer.len());
-        for _ in 0..frames.min(self.buffer.len().saturating_sub(self.len)) {
-            self.buffer[self.write_pos] = 0.0;
-            self.write_pos = (self.write_pos + 1) % self.buffer.len();
-            self.len += 1;
-        }
+        debug_assert!(frames <= self.buffer.len() - self.len);
+        let (tail, head) = self.write_spans(frames);
+        tail.fill(0.0);
+        head.fill(0.0);
+    }
+
+    fn write_spans(&mut self, frames: usize) -> (&mut [f32], &mut [f32]) {
+        let written = frames.min(self.buffer.len() - self.len);
+        let (head, tail) = self.buffer.split_at_mut(self.write_pos);
+        let first = written.min(tail.len());
+        let wrapped = written - first;
+        self.write_pos = if first == tail.len() {
+            wrapped
+        } else {
+            self.write_pos + first
+        };
+        self.len += written;
+        (&mut tail[..first], &mut head[..wrapped])
     }
 
     pub(super) fn pop_into(&mut self, output: &mut [f32]) -> usize {
-        let mut read = 0;
-        for sample in output {
-            if self.len == 0 {
-                break;
-            }
-            *sample = self.buffer[self.read_pos];
-            self.read_pos = (self.read_pos + 1) % self.buffer.len();
-            self.len -= 1;
-            read += 1;
-        }
+        let read = output.len().min(self.len);
+        let (head, tail) = self.buffer.split_at(self.read_pos);
+        let first = read.min(tail.len());
+        let wrapped = read - first;
+        output[..first].copy_from_slice(&tail[..first]);
+        output[first..read].copy_from_slice(&head[..wrapped]);
+        self.read_pos = if first == tail.len() {
+            wrapped
+        } else {
+            self.read_pos + first
+        };
+        self.len -= read;
         read
     }
 }
@@ -1383,6 +1391,41 @@ impl FixedFifo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_fifo_preserves_wrapped_pcm_bits_and_short_counts() {
+        let mut fifo = FixedFifo::new(5);
+        let bits = [0x8000_0000, 0x7fc0_0001, 0.25_f32.to_bits()];
+        let mut first = [0.0; 3];
+        assert_eq!(fifo.push_slice(&[]), 0);
+        assert_eq!(fifo.push_slice(&bits.map(f32::from_bits)), 3);
+        assert_eq!(fifo.push_slice(&[-0.5]), 1);
+        assert_eq!(fifo.pop_into(&mut first), 3);
+        assert_eq!(first.map(f32::to_bits), bits);
+
+        assert_eq!(fifo.push_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]), 4);
+        assert_eq!(fifo.push_slice(&[6.0]), 0);
+        assert_eq!(fifo.pop_into(&mut []), 0);
+        let mut output = [99.0; 6];
+        assert_eq!(fifo.pop_into(&mut output), 5);
+        assert_eq!(output, [-0.5, 1.0, 2.0, 3.0, 4.0, 99.0]);
+        assert_eq!(fifo.pop_into(&mut output), 0);
+        assert_eq!((fifo.read_pos, fifo.write_pos, fifo.len()), (3, 3, 0));
+
+        fifo.push_silence(3);
+        assert_eq!(fifo.pop_into(&mut output), 3);
+        assert_eq!(
+            output.map(f32::to_bits),
+            [
+                0,
+                0,
+                0,
+                3.0_f32.to_bits(),
+                4.0_f32.to_bits(),
+                99.0_f32.to_bits()
+            ]
+        );
+    }
 
     fn estimate_frequency(samples: &[f32], sample_rate_hz: f32) -> f32 {
         let mut crossings = Vec::new();
