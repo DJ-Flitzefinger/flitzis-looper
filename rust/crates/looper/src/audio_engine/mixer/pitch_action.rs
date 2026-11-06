@@ -761,6 +761,22 @@ impl RtMixer {
         };
         if let (Some(index), Some(snapshot)) = (index, snapshot.as_ref()) {
             if work.preparation_required() {
+                if self.wet_request_at(output_frame)
+                    && work
+                        .candidate
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.wet_continuation.is_some())
+                    && (!self.wet_timing_parameters_clear
+                        || self.has_staged_scalar_rate_in(
+                            output_frame
+                                ..output_frame.saturating_add(
+                                    super::super::wet_continuation::WET_CALLBACK_FRAMES as u64,
+                                ),
+                        ))
+                {
+                    // A conflicting rate must leave the incumbent in the voice.
+                    return Err(PitchActionReject::TimingChanged);
+                }
                 if !self.pitch_action_candidate_matches(work, snapshot, index, output_frame) {
                     return Err(PitchActionReject::PreparedMismatch);
                 }

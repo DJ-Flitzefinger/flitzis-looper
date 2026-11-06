@@ -105,6 +105,15 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the reserved slot retains custody until the exact Work returns and can retire off the callback
 - **AND** delivered Work follows its existing capacity and placement rules, and independent births and atomic groups keep their existing retry policy
 
+#### Scenario: Fast timing parameters meet an aligned ASIO Wet SET
+- **GIVEN** an in-place SET carries an already shifted Wet prefix for its frozen E at the start of a qualified stereo 96 kHz ASIO request of 96 frames
+- **WHEN** ordered controls reach the SET before the ordinary fast-parameter pass
+- **THEN** the SET SHALL claim the worker Native only if the bounded FIFO prefix contains no source-timing parameter and no already staged scalar rate effect can conflict in the request
+- **AND** a refused Wet claim SHALL leave the incumbent playable and release the due event at E for following STOP and capture effects
+- **AND** when an early claim still owes Wet, only the inspected fast-parameter prefix SHALL drain in that request, with later unbound messages retaining their queued request status
+- **AND** a later claim after the parameter pass SHALL validate the actual source trajectory and exclude staged conflicting scalar rate work before transfer
+- **AND** the admitted original Native SHALL supply only its exact Wet slice, with recording confirmed through normal backend submission
+
 #### Scenario: A terminal member proves its exact old atomic group impossible
 - **GIVEN** a retained atomic group has a member conclusively marked rejected
 - **WHEN** the runtime polls its exact reserved member owners before readiness acceleration

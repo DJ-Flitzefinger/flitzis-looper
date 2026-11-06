@@ -277,6 +277,7 @@ pub struct RtMixer {
     mix_capture_pending_group: Option<capture::PendingGroupCapture>,
     mix_capture_scheduler_cleared: bool,
     wet_callback_frame: Option<u64>,
+    wet_timing_parameters_clear: bool,
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
@@ -384,8 +385,22 @@ impl RtMixer {
         self.wet_callback_frame = frame;
     }
 
+    pub(super) fn wet_request_at(&self, frame: u64) -> bool {
+        self.wet_callback_frame == Some(frame)
+    }
+
+    pub(super) fn set_wet_timing_parameters_clear(&mut self, clear: bool) {
+        self.wet_timing_parameters_clear = clear;
+    }
+
+    pub(super) fn requires_wet_before(&self, end: u64) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.active && voice.stretch.wet_continuation_due(end))
+    }
+
     pub(super) fn wet_preparation_admitted(&self, capture: u64, effect: u64) -> bool {
-        self.wet_callback_frame == Some(capture)
+        self.wet_request_at(capture)
             && effect > capture
             && (effect - capture)
                 .is_multiple_of(super::wet_continuation::WET_CALLBACK_FRAMES as u64)
@@ -1048,6 +1063,7 @@ impl RtMixer {
             mix_capture_pending_group: None,
             mix_capture_scheduler_cleared: true,
             wet_callback_frame: None,
+            wet_timing_parameters_clear: true,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             pad_pitch_intent: [PitchIntent::default(); NUM_SAMPLES],
             pad_key_lock_request_id: [0; NUM_SAMPLES],
@@ -6344,12 +6360,9 @@ impl RtMixer {
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
-        if output_start_frame.is_some_and(|frame| {
-            let end = frame.saturating_add(frames as u64);
-            self.voices
-                .iter()
-                .any(|voice| voice.active && voice.stretch.wet_continuation_due(end))
-        }) {
+        if output_start_frame
+            .is_some_and(|frame| self.requires_wet_before(frame.saturating_add(frames as u64)))
+        {
             return false;
         }
         for key in ordinary_terminated.into_iter().flatten() {

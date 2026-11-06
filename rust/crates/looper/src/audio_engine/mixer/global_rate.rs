@@ -1085,6 +1085,21 @@ impl RtMixer {
             .is_some_and(|coordinator| coordinator.pending.is_some())
     }
 
+    pub(super) fn has_staged_scalar_rate_in(&self, request: std::ops::Range<u64>) -> bool {
+        // An uncaptured request can still apply at the current service boundary.
+        // A captured scalar request keeps its exact bound execution frame.
+        self.global_rate
+            .as_ref()
+            .and_then(|coordinator| coordinator.pending.as_ref())
+            .is_some_and(|pending| {
+                pending.terminal_error.is_none()
+                    && pending
+                        .capture
+                        .as_ref()
+                        .is_none_or(|capture| request.contains(&capture.execution))
+            })
+    }
+
     /// Legacy effects have no held rate request. Their actual callback state is
     /// the next coalescing base, including an explicitly cleared master period.
     pub(super) fn refresh_global_rate_intent(&mut self) {

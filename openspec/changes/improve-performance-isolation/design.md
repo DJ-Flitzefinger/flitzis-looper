@@ -7259,6 +7259,25 @@ that would have returned the original inline E owner. Its slot retains the
 Work's custody until return without deferring due STOP and tempo controls.
 Physical device and WASAPI acceptance remain separate.
 
+### Fast timing ingress at the aligned Wet claim
+
+An immediate ordered control can drain the aligned SET before the fast
+parameters are applied. The sole consumer observes the bounded parameter
+FIFO prefix before that control pass. If the prefix contains source-timing
+messages, the early Wet transfer is refused at its original E and the
+incumbent stays live. An early transfer that still owes Wet closes that
+prefix for this request. The mixer resolves and applies the prefix in the
+normal parameter pass. Concurrent appends remain queued for a later pass,
+with their original requested status and no assigned effect frame.
+
+After the parameter pass, candidate matching checks the actual trajectory.
+Both claim paths also refuse outstanding staged scalar rate work that can take
+effect within the request. This gate covers fast timing application and
+already staged scalar rate work. The existing ordered source-control and
+final slice validation still apply, including BPM Lock, loop, stem and
+accepted timing effects. The claim continues to preserve original Native custody
+and same-request STOP, capture and retained-bank OwnACK ordering.
+
 ### Missing Work at an interior in-place SET
 
 The same qualified stereo 96 kHz ASIO request can contain a non-Wet

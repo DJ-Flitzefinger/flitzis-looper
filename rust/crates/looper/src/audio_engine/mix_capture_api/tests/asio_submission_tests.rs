@@ -1,6 +1,7 @@
 use super::*;
 use crate::audio_engine::asio_output::test_driver::Factory;
 use crate::audio_engine::audio_output::OutputOptions;
+use crate::audio_engine::global_rate_status::RateState;
 use crate::audio_engine::input_runtime_binding::enqueue_stop_with_producer;
 use crate::audio_engine::mix_capture::{SPOOL_HEADER_BYTES, SpoolState, inspect_spool};
 use crate::audio_engine::transport::QuantizeGrid;
@@ -198,6 +199,7 @@ enum WetAdmission {
     Stop,
     Late,
     Tempo,
+    TempoAfterClaim,
     Retained,
     PendingBank,
 }
@@ -233,8 +235,9 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     let owner = stream.test_owner_observer();
     let submission = stream.output_submission.as_ref().unwrap().clone();
     let ownership = &engine.input_runtime_ownership;
-    let accepted = matches!(mode, WetAdmission::Retained | WetAdmission::PendingBank)
-        .then(|| ColdPcm::publish(&engine, 1, "a"));
+    let tempo_case = matches!(mode, WetAdmission::Tempo | WetAdmission::TempoAfterClaim);
+    let retained_case = matches!(mode, WetAdmission::Retained | WetAdmission::PendingBank);
+    let accepted = (tempo_case || retained_case).then(|| ColdPcm::publish(&engine, 1, "a"));
     if let Some(source) = &accepted {
         source.assert_ack(&engine, false);
         // FIFO order makes Play follow the callback's actual OwnACK at frame zero.
@@ -254,6 +257,23 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     } else {
         queue_pcm(&engine);
     }
+    let stopped_source = tempo_case.then(|| {
+        let source =
+            ColdPcm::publish_at(&engine, 1, 1, "c", SourcePitchInitialization::FreshNeutral);
+        source.assert_ack(&engine, false);
+        stream
+            .producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::PlaySample {
+                id: 1,
+                volume: 1.0,
+                received_at_ns: None,
+                expected_source_generation: Some(1),
+            })
+            .unwrap();
+        source
+    });
     let weak = Arc::downgrade(
         &engine.sample_cache.lock().unwrap()[0]
             .as_ref()
@@ -266,6 +286,10 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     let original_birth = first.pads[0].generation;
     if let Some(source) = &accepted {
         source.assert_ack(&engine, true);
+    }
+    if let Some(source) = &stopped_source {
+        source.assert_ack(&engine, true);
+        assert!(first.pads[1].active);
     }
     let runtime = engine.input_runtime.as_ref().unwrap();
     let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
@@ -303,7 +327,7 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
             .start_mix_capture_internal(&ticket, E - FRAMES)
             .unwrap()
     );
-    let capture_end = E + if mode == WetAdmission::Split {
+    let capture_end = E + if mode == WetAdmission::Split || tempo_case {
         17
     } else {
         FRAMES
@@ -341,12 +365,13 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         .unwrap();
     assert_eq!(action.original_due_frame(), E);
     let gate = (mode == WetAdmission::Late).then(|| WorkerGate::for_pitch(&action));
-    let retained_worker = accepted
+    let prepared_worker = accepted
         .as_ref()
         .map(|_| WorkerGate::for_pitch_return(&action));
     assert!(engine.publish_pitch_action(&action).unwrap());
     let start = Instant::now();
     let mut ready = None;
+    let mut incumbent = first.pads[0].native_state;
     for end in (F + FRAMES..=E).step_by(FRAMES as usize) {
         let tick = stream.test_tick().unwrap();
         assert_eq!(tick.output_frame, end);
@@ -356,7 +381,7 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
             gate.wait_for(false);
         }
         if end == F + FRAMES
-            && let Some(worker) = &retained_worker
+            && let Some(worker) = &prepared_worker
         {
             assert!(worker.wait_for(true).is_none());
             let (wet_frames, shifts) = worker.prepared_wet();
@@ -366,6 +391,10 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         }
         if action.state() == "prepared" && ready.is_none() {
             ready = Some((end, start.elapsed()));
+        }
+        if tempo_case && end == E {
+            incumbent = tick.pads[0].native_state;
+            assert!(tick.pads[1].active);
         }
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -382,20 +411,17 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     if matches!(mode, WetAdmission::Tempo | WetAdmission::Late) {
         rate(1.2);
     }
-    if mode == WetAdmission::Tempo {
-        // The vacant slot's due command drains SET before the rate parameter pass.
-        assert!(
-            stream
-                .producer
-                .lock()
-                .unwrap()
-                .push(ControlMessage::StopSample { id: 1 })
-                .is_ok()
-        );
+    if tempo_case {
+        // A genuine independent STOP drains the aligned SET before the parameter pass.
+        assert!(enqueue_stop_with_producer(
+            ownership,
+            &mut stream.producer.lock().unwrap(),
+            Some(1)
+        ));
     }
     let mut replacement = None;
     let mut submitted_pcm = None;
-    let tick = if let Some(source) = &accepted {
+    let tick = if let Some(source) = accepted.as_ref().filter(|_| retained_case) {
         use std::sync::mpsc::sync_channel;
 
         // The vacant STOP makes the original SET run inside the control drain.
@@ -460,6 +486,45 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
             replacement = Some(next);
             tick
         })
+    } else if tempo_case {
+        use std::sync::mpsc::sync_channel;
+
+        factory.arm_output_ready();
+        std::thread::scope(|scope| {
+            let (claimed, wait_claim) = sync_channel(1);
+            let (published, wait_publication) = sync_channel(1);
+            let after_claim = (mode == WetAdmission::TempoAfterClaim).then(|| {
+                Box::new(move || {
+                    if claimed.send(()).is_ok() {
+                        let _ = wait_publication.recv_timeout(WAIT);
+                    }
+                }) as Box<dyn FnOnce() + Send>
+            });
+            let callback = scope.spawn(move || stream.test_tick_with_effect(after_claim).unwrap());
+            if mode == WetAdmission::TempoAfterClaim {
+                wait_claim.recv_timeout(WAIT).unwrap();
+                assert!(action.effective());
+                rate(1.2);
+                published.send(()).unwrap();
+            }
+            submitted_pcm = until(|| {
+                factory
+                    .gated_output_pcm()
+                    .map(Some)
+                    .or_else(|| callback.is_finished().then_some(None))
+            });
+            let prefix_before_ready = submission.prefix();
+            if submitted_pcm.is_some() {
+                factory.release_output_ready(false);
+            }
+            let tick = callback.join().unwrap();
+            assert_eq!(prefix_before_ready, (E, false));
+            assert!(
+                submitted_pcm.is_some(),
+                "tempo case never reached outputReady"
+            );
+            tick
+        })
     } else {
         stream.test_tick().unwrap()
     };
@@ -467,21 +532,39 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         "Wet {mode:?} T=E={E} ready={ready:?} result={} shifts={} callback={:?}",
         tick.output_frame, tick.native.shifts, tick.callback,
     );
-    if mode == WetAdmission::Tempo {
+    assert_eq!(tick.output_frame, E + FRAMES);
+    assert_eq!(submission.prefix(), (E + FRAMES, false));
+    if tempo_case {
         let status = ownership.global_rate_status.read().unwrap();
-        assert_eq!(status.effect.execution_frame, Some(E));
-        assert_eq!(status.request_revision, status.effect.revision);
-        assert!(action.effective());
-        assert_eq!(tick.output_frame, E);
-        assert_eq!(submission.prefix(), (E, true));
-        assert_eq!(
-            (tick.callback.left_peak, tick.callback.right_peak),
-            (0.0, 0.0)
-        );
-        assert!(stream.stream_failed.load(Ordering::Acquire));
+        let source = accepted.as_ref().unwrap();
+        source.assert_ack(&engine, true);
+        assert!(tick.pads[0].active && !tick.pads[1].active);
+        assert_eq!(tick.pads[0].generation, original_birth);
+        assert_eq!(tick.pads[0].source_pcm, source.binding.source_address);
+        assert!(!stream.stream_failed.load(Ordering::Acquire));
+        if mode == WetAdmission::Tempo {
+            assert_eq!(status.effect.execution_frame, Some(E));
+            assert_eq!(status.request_revision, status.effect.revision);
+            assert_eq!(status.effect.state, RateState::Applied);
+            assert_eq!(status.effect.effective.speed.to_bits(), 1.2_f64.to_bits());
+            assert_eq!(action.state(), "rejected");
+            assert_eq!(action.reason(), Some("timing_changed"));
+            assert!(!action.effective());
+            assert_eq!(tick.pads[0].native_state, incumbent);
+        } else {
+            assert!(status.request_revision > status.effect.revision);
+            assert_eq!(status.requested.speed.to_bits(), 1.2_f64.to_bits());
+            assert_eq!(status.effect.effective.speed.to_bits(), 1.4_f64.to_bits());
+            assert_ne!(status.effect.execution_frame, Some(E));
+            assert!(action.effective());
+            assert_eq!(tick.native.shifts, 0);
+            assert!(tick.pads[0].wet_current_source_output && !tick.pads[0].wet_failed);
+            assert_eq!(
+                tick.pads[0].native_state,
+                prepared_worker.as_ref().unwrap().prepared_native()
+            );
+        }
     } else {
-        assert_eq!(tick.output_frame, E + FRAMES);
-        assert_eq!(submission.prefix(), (E + FRAMES, false));
         assert_eq!(tick.native.shifts, u64::from(mode == WetAdmission::Inline));
         assert_eq!(
             tick.pads[0].active,
@@ -504,15 +587,22 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         gate.release();
         assert!(gate.wait_for(true).is_some());
     }
-    if mode != WetAdmission::Tempo {
+    {
         let suffix = stream.test_tick().unwrap();
         assert_eq!(suffix.output_frame, E + 2 * FRAMES);
         assert_eq!(submission.prefix(), (E + 2 * FRAMES, false));
-        if let Some(source) = &accepted {
+        if mode == WetAdmission::TempoAfterClaim {
+            let status = ownership.global_rate_status.read().unwrap();
+            assert_eq!(status.request_revision, status.effect.revision);
+            assert_eq!(status.effect.execution_frame, Some(E + FRAMES));
+            assert_eq!(status.effect.state, RateState::Applied);
+            assert_eq!(status.effect.effective.speed.to_bits(), 1.2_f64.to_bits());
+        }
+        if let Some(source) = accepted.as_ref().filter(|_| retained_case) {
             let next = replacement.as_ref().unwrap();
             next.assert_ack(&engine, true);
             assert_eq!(suffix.pads[0].bank_source_pcm, next.binding.source_address);
-            let worker = retained_worker.as_ref().unwrap();
+            let worker = prepared_worker.as_ref().unwrap();
             let native = worker.prepared_native();
             let (wet_frames, shifts) = worker.prepared_wet();
             eprintln!(
@@ -564,31 +654,23 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         let capture = slot.as_mut().unwrap();
         capture.poll(false);
         let status = capture.control.status();
-        (status.worker_joined && status.rt_released).then_some(status)
+        (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
+            .then_some(status)
     });
     let ended = owner.lock().unwrap();
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
     assert_eq!(factory.info().unwrap().active, 0);
-    let failed = mode == WetAdmission::Tempo;
     assert_eq!(status.first_frame, Some(E - FRAMES));
-    if !failed {
-        assert_eq!(status.end_frame, Some(capture_end));
-    }
-    assert_eq!(status.successful_spool(), !failed);
-    assert_eq!(status.failure, failed.then_some(CaptureFailure::Stream));
-    assert_eq!(
-        status.written_frames,
-        if failed {
-            FRAMES
-        } else {
-            capture_end - (E - FRAMES)
-        }
-    );
+    assert_eq!(status.end_frame, Some(capture_end));
+    assert!(status.successful_spool());
+    assert_eq!(status.failure, None);
+    assert_eq!(status.written_frames, capture_end - (E - FRAMES));
     let pcm = fs::read(&path)
         .unwrap()
         .split_off(SPOOL_HEADER_BYTES as usize);
     assert_eq!(pcm.len(), status.written_frames as usize * 8);
     if let Some(submitted) = submitted_pcm {
+        let submitted = &submitted[..((capture_end - E) * 2) as usize];
         assert!(
             submitted
                 .iter()
@@ -608,6 +690,9 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     drop(action);
     drop(engine);
     assert!(weak.upgrade().is_none());
+    if let Some(source) = stopped_source {
+        assert!(source.reader.upgrade().is_none());
+    }
     if let Some(next) = replacement {
         assert!(next.reader.upgrade().is_none());
     }
@@ -866,7 +951,13 @@ fn asio_admits_original_pitch_owner_wet_shift_after_controls() {
     assert_eq!(stopped[..96 * 8], inline[..96 * 8]);
     assert!(stopped[96 * 8..].iter().all(|byte| *byte == 0));
     assert_eq!(wet_admission_path(WetAdmission::Late), stopped);
-    assert_eq!(wet_admission_path(WetAdmission::Tempo), inline[..96 * 8]);
+}
+
+#[test]
+fn asio_wet_set_uses_exact_scalar_tempo_ingress() {
+    Python::initialize();
+    wet_admission_path(WetAdmission::Tempo);
+    wet_admission_path(WetAdmission::TempoAfterClaim);
 }
 
 #[test]

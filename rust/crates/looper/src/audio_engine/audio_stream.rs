@@ -2630,16 +2630,58 @@ impl PendingControlParameters {
     }
 }
 
+// Inspect the exact bounded FIFO prefix without consuming or resolving PAD bindings.
+// The sole consumer has not advanced, so a concurrent producer can only append.
+fn wet_safe_parameter_prefix(consumer: &mut Consumer<ControlParameterMessage>) -> Option<usize> {
+    let count = consumer.slots().min(MAX_PARAMETER_MESSAGES_PER_CALLBACK);
+    let chunk = consumer.read_chunk(count).ok()?;
+    let (first, second) = chunk.as_slices();
+    first
+        .iter()
+        .chain(second)
+        .all(|message| match message {
+            ControlParameterMessage::SetVolume(_)
+            | ControlParameterMessage::SetPadGainGuarded { .. }
+            | ControlParameterMessage::SetPadEqGuarded { .. } => true,
+            ControlParameterMessage::SetRateIntent { .. }
+            | ControlParameterMessage::SetLegacyPadBpm { .. } => false,
+            #[cfg(test)]
+            ControlParameterMessage::SetPadGain { .. }
+            | ControlParameterMessage::SetPadEq { .. } => true,
+            #[cfg(test)]
+            ControlParameterMessage::SetSpeed(_)
+            | ControlParameterMessage::SetMasterBpm(_)
+            | ControlParameterMessage::SetMasterPeriod(_)
+            | ControlParameterMessage::SetSpeedAndMasterPeriod { .. }
+            | ControlParameterMessage::SetPadBpm { .. } => false,
+        })
+        .then_some(count)
+}
+
 pub(super) fn drain_parameter_messages(
     consumer: &mut Consumer<ControlParameterMessage>,
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
 ) -> ParameterDrainResult {
+    drain_parameter_prefix(
+        consumer,
+        mixer,
+        transport,
+        MAX_PARAMETER_MESSAGES_PER_CALLBACK,
+    )
+}
+
+fn drain_parameter_prefix(
+    consumer: &mut Consumer<ControlParameterMessage>,
+    mixer: &mut RtMixer,
+    transport: &mut TransportTimeline,
+    limit: usize,
+) -> ParameterDrainResult {
     let drain_revision = mixer.begin_global_timing_drain();
     let mut pending = PendingControlParameters::default();
     let mut messages_drained = 0;
 
-    while messages_drained < MAX_PARAMETER_MESSAGES_PER_CALLBACK {
+    while messages_drained < limit {
         let Ok(message) = consumer.pop() else {
             break;
         };
@@ -3720,6 +3762,21 @@ fn render_output_block(
     }
     let emit_interval_frames = (u64::from(sample_rate_hz) / 10).max(1);
     let buffer_start_frame = state.transport.output_frame();
+    // A Wet SET is prepared for a future, already queued E. Immediate control
+    // commands may execute it before the ordinary parameter pass.
+    let wet_parameter_prefix = if state.mixer.wet_request_at(buffer_start_frame)
+        && state
+            .scheduler
+            .peek_next_target_frame()
+            .is_some_and(|frame| frame <= buffer_start_frame)
+    {
+        wet_safe_parameter_prefix(&mut state.parameter_consumer_in)
+    } else {
+        None
+    };
+    state
+        .mixer
+        .set_wet_timing_parameters_clear(wet_parameter_prefix.is_some());
     if failed.load(Ordering::Acquire) {
         state.mixer.fail_mix_capture_stream();
     }
@@ -3739,11 +3796,27 @@ fn render_output_block(
             .mixer
             .service_mix_capture(&mut state.scheduler, &mut state.retired_buffers);
     }
-    drain_parameter_messages(
-        &mut state.parameter_consumer_in,
-        &mut state.mixer,
-        &mut state.transport,
-    );
+    if let Some(limit) = wet_parameter_prefix.filter(|_| {
+        state
+            .mixer
+            .requires_wet_before(buffer_start_frame.saturating_add(1))
+    }) {
+        // Only an actual early claim which still owes Wet closes this prefix.
+        // Later publications remain queued, with their original requested status.
+        drain_parameter_prefix(
+            &mut state.parameter_consumer_in,
+            &mut state.mixer,
+            &mut state.transport,
+            limit,
+        );
+    } else {
+        drain_parameter_messages(
+            &mut state.parameter_consumer_in,
+            &mut state.mixer,
+            &mut state.transport,
+        );
+    }
+    state.mixer.set_wet_timing_parameters_clear(true);
     try_bootstrap_transport_from_reference(
         &mut state.mixer,
         &mut state.transport,
