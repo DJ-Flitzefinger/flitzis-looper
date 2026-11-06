@@ -1145,15 +1145,20 @@ impl StretchProcessor {
                     feed.playback,
                 ))
                 || {
-                    feed.plan
-                        .fill_fractional_buffers_checked_with_readers(
-                            feed.sample,
-                            readers,
-                            feed.playback,
-                            self.resampled_buffers_mut(frames),
-                            frames,
-                        )
-                        .is_err()
+                    #[cfg(test)]
+                    let timing = super::native_render_observation::SourceTimer::begin(|source| {
+                        &mut source.checked_fill
+                    });
+                    let result = feed.plan.fill_fractional_buffers_checked_with_readers(
+                        feed.sample,
+                        readers,
+                        feed.playback,
+                        self.resampled_buffers_mut(frames),
+                        frames,
+                    );
+                    #[cfg(test)]
+                    timing.filled(if result.is_ok() { frames } else { 0 });
+                    result.is_err()
                 })
         {
             // Never consume missing-tap zeros or touch productive native/FIFO/history state.
@@ -1213,15 +1218,20 @@ impl StretchProcessor {
             .productive_history
             .map_or(0, |history| history.fed_output_frames);
         if !finite && {
-            feed.plan
-                .fill_fractional_buffers_with_readers(
-                    feed.sample,
-                    readers,
-                    feed.playback,
-                    self.resampled_buffers_mut(frames),
-                    frames,
-                )
-                .is_err()
+            #[cfg(test)]
+            let timing = super::native_render_observation::SourceTimer::begin(|source| {
+                &mut source.unchecked_fill
+            });
+            let result = feed.plan.fill_fractional_buffers_with_readers(
+                feed.sample,
+                readers,
+                feed.playback,
+                self.resampled_buffers_mut(frames),
+                frames,
+            );
+            #[cfg(test)]
+            timing.filled(if result.is_ok() { frames } else { 0 });
+            result.is_err()
         } {
             self.silence_output(frames);
             self.wet_render_failed = wet;

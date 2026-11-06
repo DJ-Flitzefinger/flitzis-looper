@@ -1,9 +1,14 @@
-//! Matched stereo all-wet software workload; no device or stem-selection claim.
+//! Matched stereo all-wet software workloads; no device or stem-selection claim.
 
 use super::*;
 use crate::audio_engine::audio_stream::render_scheduled_audio;
 use crate::audio_engine::constants::NUM_SAMPLES;
-use crate::audio_engine::native_render_observation::{Observation, Scope};
+use crate::audio_engine::native_render_observation::{Observation, Scope, SourceObservation};
+use crate::audio_engine::source_reader::{
+    ExplicitSeekMode, TapReadObservation, reset_tap_observation_for_test, tap_observation_for_test,
+    without_tap_observation,
+};
+use crate::messages::ResidentContext;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy)]
@@ -12,6 +17,7 @@ struct Workload {
     frames: usize,
     periods: usize,
     require_loop_crossings: bool,
+    measure_source: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
@@ -43,6 +49,8 @@ struct Period {
     render_ns: u128,
     pacing_late_ns: u128,
     native: Observation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<SourceObservation>,
     voices: [Voice; 6],
     mix_peak: f32,
     max_step: f32,
@@ -50,6 +58,12 @@ struct Period {
     subnormal: usize,
     clipped: usize,
     trajectory_errors: usize,
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+struct Parity {
+    pcm: Option<(usize, String)>,
+    trajectory: String,
 }
 
 fn sources(rate: u32) -> [SampleBuffer; 6] {
@@ -153,21 +167,54 @@ fn case(
     count: usize,
     lock: bool,
     source_bpm: u32,
-) -> bool {
+) -> Option<Parity> {
     let Workload {
         rate,
         frames,
         periods,
         require_loop_crossings,
+        measure_source,
     } = workload;
     let ratio = 120.0 / f64::from(source_bpm);
     let wet = lock && source_bpm != 120;
+    let finite = !crate::audio_engine::native_source_coverage::complete_view_available(&sources[0]);
     let mut fixture = Fixture::new_format(lock, rate, 2);
     let ids = (0..count).collect::<Vec<_>>();
     for (id, source) in sources.iter().enumerate().take(count) {
         publish_tone_with_rate(&fixture.control, id, source.clone(), true, rate);
     }
     adopt_current_source_ids(&mut fixture, lock, &ids);
+    if measure_source {
+        let ownership = &fixture.control.engine.input_runtime_ownership;
+        for &id in &ids {
+            let bank = fixture.mixer.bank_for_measurement()[id].as_ref().unwrap();
+            let expected = &sources[id];
+            assert!(
+                bank.same_window(expected)
+                    && std::sync::Arc::ptr_eq(&bank.samples, &expected.samples)
+            );
+            assert_eq!(
+                ownership.callback_feedback_key(id),
+                ownership.slot_snapshot(id).unwrap().content_key()
+            );
+            assert!(ownership.callback_feedback_key(id).is_some());
+            assert_eq!(bank.frame_count(), 288_000);
+            let (start, end, revision, context) = if finite {
+                (9_600, 201_600, 2, ResidentContext::KeyLockFiniteLoop)
+            } else {
+                (0, 288_000, 1, ResidentContext::FullTrack)
+            };
+            assert_eq!(
+                (
+                    bank.resident_start(),
+                    bank.resident_end(),
+                    bank.window_revision()
+                ),
+                (start, end, revision)
+            );
+            assert_eq!(bank.residency.as_ref().unwrap().context, context);
+        }
+    }
     bind(&fixture, count);
     fixture.mixer.set_bpm_lock(true);
     fixture.mixer.set_master_bpm(120.0);
@@ -229,6 +276,17 @@ fn case(
         );
     }
     let preparation_ns = prepared_begin.elapsed().as_nanos();
+    let prepared_addresses = measure_source.then(|| {
+        let runtime = fixture.mixer.pitch_runtime.as_ref().unwrap();
+        starts
+            .iter()
+            .map(|start| {
+                runtime
+                    .ready_ordinary_native_address(start.sequence())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    });
     fixture.render(0);
     fixture.feedback.reserve(128);
     let origin = fixture.transport.output_frame();
@@ -254,21 +312,38 @@ fn case(
         let began = Instant::now();
         fixture.drain();
         let drain_ns = began.elapsed().as_nanos();
-        let scope = Scope::begin();
-        let began = Instant::now();
-        render_scheduled_audio(
-            &mut fixture.mixer,
-            &mut fixture.scheduler,
-            &mut output,
-            &mut peaks,
-            first,
-            2,
-            &mut fixture.transport,
-            &mut fixture.feedback,
-            &mut fixture.retirement,
-        );
-        let render_ns = began.elapsed().as_nanos();
-        let native = scope.finish();
+        let mut render = || {
+            let scope = if measure_source {
+                Scope::begin_source()
+            } else {
+                Scope::begin()
+            };
+            let began = Instant::now();
+            render_scheduled_audio(
+                &mut fixture.mixer,
+                &mut fixture.scheduler,
+                &mut output,
+                &mut peaks,
+                first,
+                2,
+                &mut fixture.transport,
+                &mut fixture.feedback,
+                &mut fixture.retirement,
+            );
+            let render_ns = began.elapsed().as_nanos();
+            let (native, source) = if measure_source {
+                let (native, source) = scope.finish_source();
+                (native, Some(source))
+            } else {
+                (scope.finish(), None)
+            };
+            (render_ns, native, source)
+        };
+        let (render_ns, native, source) = if measure_source {
+            without_tap_observation(render)
+        } else {
+            render()
+        };
         fixture.transport.advance_by_rendered_frames(frames);
         pcm.extend_from_slice(&output);
         let actual = voices(&fixture, &peaks);
@@ -295,6 +370,7 @@ fn case(
             render_ns,
             pacing_late_ns,
             native,
+            source,
             voices: actual,
             mix_peak: output.iter().map(|v| v.abs()).fold(0.0, f32::max),
             max_step,
@@ -320,18 +396,20 @@ fn case(
             }
             (pcm.len() / 2, format!("{:x}", hash.finalize()))
         });
-    eprintln!(
-        "multivoice_raw {}",
-        serde_json::json!({
-            "count":count,"key_lock":lock,"rate":rate,"channels":2,"frames":frames,
-            "master_bpm":120,"source_bpm":source_bpm,"ratio":ratio,"periods":periods,
-            "original_T":original,"admitted_E":admitted,"effects_E":effects,"origin":origin,"preparation_ns":preparation_ns,"waited_for_native":wet,
-            "pcm_from_effect":pcm_sha256,
-            "source_addresses":sources.iter().map(|s|s.samples.as_ptr() as usize).collect::<Vec<_>>(),
-            "source_frames":sources.iter().map(SampleBuffer::frame_count).collect::<Vec<_>>(),
-            "rows":rows,"limits":"Synthetic complete stereo sources, no selected stems, manual Native BPM authority, public original group; render-thread scoped cfgtest instrumentation, no device/controller/hearing/quality/Human acceptance. FIFO deficits cover Rust adapter only, not Native internal fallback."
-        })
-    );
+    if !measure_source {
+        eprintln!(
+            "multivoice_raw {}",
+            serde_json::json!({
+                "count":count,"key_lock":lock,"rate":rate,"channels":2,"frames":frames,
+                "master_bpm":120,"source_bpm":source_bpm,"ratio":ratio,"periods":periods,
+                "original_T":original,"admitted_E":admitted,"effects_E":effects,"origin":origin,"preparation_ns":preparation_ns,"waited_for_native":wet,
+                "pcm_from_effect":pcm_sha256,
+                "source_addresses":sources.iter().map(|s|s.samples.as_ptr() as usize).collect::<Vec<_>>(),
+                "source_frames":sources.iter().map(SampleBuffer::frame_count).collect::<Vec<_>>(),
+                "rows":rows,"limits":"Synthetic complete stereo sources, no selected stems, manual Native BPM authority, public original group; render-thread scoped cfgtest instrumentation, no device/controller/hearing/quality/Human acceptance. FIFO deficits cover Rust adapter only, not Native internal fallback."
+            })
+        );
+    }
     // FirstSound may accelerate to this callback or retain the admitted E.
     // Preserve pre-E silence and every onset row, including silent Native output.
     let active_rows = rows
@@ -439,7 +517,104 @@ fn case(
         "multivoice_checks {}",
         serde_json::json!({"count":count,"key_lock":lock,"source_bpm":source_bpm,"checks":checks})
     );
-    checks.iter().all(|(_, passed)| *passed)
+    let mut trajectory = Sha256::new();
+    if let Some(addresses) = prepared_addresses {
+        assert!(
+            addresses
+                .iter()
+                .enumerate()
+                .all(|(id, address)| *address != 0 && !addresses[..id].contains(address))
+        );
+        assert!(
+            active_rows
+                .iter()
+                .all(|row| row.voices[..count]
+                    .iter()
+                    .zip(&addresses)
+                    .all(|(voice, &address)| {
+                        voice.native == address
+                            && voice
+                                .origin
+                                .is_some_and(|(lock, request)| lock && request != 0)
+                    }))
+        );
+        for id in 0..count {
+            let voice = fixture.voice(id);
+            assert!(voice.sample.as_ref().unwrap().same_window(&sources[id]));
+            assert_eq!(
+                voice.source_playback.position().seek_mode,
+                ExplicitSeekMode::Normal
+            );
+            let taps = voice.stretch.native_tap_observation();
+            if finite {
+                // A physical birth primes the original Native with silent prehistory.
+                assert_eq!(taps, Some(TapReadObservation::default()));
+            } else {
+                assert!(taps.is_none());
+            }
+        }
+        let steady = active_rows
+            .iter()
+            .copied()
+            .filter(|row| row.first - effect >= 8192);
+        let mut steady_count = 0;
+        for row in steady.clone() {
+            steady_count += 1;
+            let source = row.source.unwrap();
+            let (filled, unused) = if finite {
+                (source.checked_fill, source.unchecked_fill)
+            } else {
+                (source.unchecked_fill, source.checked_fill)
+            };
+            assert_eq!(
+                (filled.calls, filled.filled_frames, unused.calls),
+                (count, count * frames, 0)
+            );
+            if finite {
+                assert!(source.coverage.calls >= count);
+            }
+            for voice in &row.voices[..count] {
+                for value in [
+                    voice.position as u64,
+                    voice.fraction.to_bits(),
+                    voice.fifo.0 as u64,
+                    voice.fifo.1 as u64,
+                ] {
+                    trajectory.update(value.to_le_bytes());
+                }
+            }
+        }
+        assert!(steady_count > periods / 2);
+        // Observe real source addresses after timing, with the usual tap checks enabled.
+        reset_tap_observation_for_test();
+        let _ = fixture.render(frames);
+        let live_taps = tap_observation_for_test();
+        assert_eq!(live_taps.left_reads, count * frames * 2);
+        assert!(live_taps.right_reads > 0 && live_taps.missing_reads == 0);
+        assert!(live_taps.min_frame.unwrap() >= 9_600 && live_taps.max_frame.unwrap() < 201_600);
+        eprintln!(
+            "source_fill_rows {}",
+            serde_json::json!({
+                "count": count, "finite": finite, "rate": rate, "frames": frames, "channels": 2,
+                "original": original, "admitted": admitted, "effect": effect, "origin": origin,
+                "prepared_addresses": addresses, "pcm": pcm_sha256,
+                "unmeasured_live_taps": {
+                    "left": live_taps.left_reads, "right": live_taps.right_reads,
+                    "missing": live_taps.missing_reads, "min": live_taps.min_frame,
+                    "max": live_taps.max_frame, "checksum": live_taps.address_checksum,
+                },
+                "rows": steady.map(|row| serde_json::json!({
+                    "offset": row.first - effect, "drain_ns": row.drain_ns, "render_ns": row.render_ns,
+                    "pacing_late_ns": row.pacing_late_ns, "shifts": row.native.shifts,
+                    "shift_ns": row.native.shift_ns, "max_shift_ns": row.native.max_shift_ns, "source": row.source
+                })).collect::<Vec<_>>(),
+            })
+        );
+    }
+    checks.iter().all(|(_, passed)| *passed).then(|| Parity {
+        pcm: pcm_sha256,
+        trajectory: format!("{:x}", trajectory.finalize()),
+    })
 }
 
 #[test]
@@ -450,11 +625,15 @@ fn matched_multivoice_key_lock_workload() {
         frames: 512,
         periods: 768,
         require_loop_crossings: true,
+        measure_source: false,
     };
     let sources = sources(workload.rate);
     let results = [(4, true), (5, true), (6, true), (6, false)]
         .map(|(count, lock)| (count, lock, case(&sources, workload, count, lock, 100)));
-    assert!(results.iter().all(|(_, _, passed)| *passed), "{results:?}");
+    assert!(
+        results.iter().all(|(_, _, result)| result.is_some()),
+        "{results:?}"
+    );
 }
 
 #[test]
@@ -465,6 +644,7 @@ fn small_buffer_key_lock_callback_workload() {
         frames: 96,
         periods: 1024,
         require_loop_crossings: false,
+        measure_source: false,
     };
     let sources = sources(workload.rate);
     let results = [
@@ -483,7 +663,37 @@ fn small_buffer_key_lock_callback_workload() {
         )
     });
     assert!(
-        results.iter().all(|(_, _, _, passed)| *passed),
+        results.iter().all(|(_, _, _, result)| result.is_some()),
         "{results:?}"
     );
+}
+
+#[test]
+#[ignore = "paced device-free comparison of live finite and complete 96-frame source feeds"]
+fn ordinary_96_source_fill_workload() {
+    let workload = Workload {
+        rate: 96_000,
+        frames: 96,
+        periods: 1792,
+        require_loop_crossings: false,
+        measure_source: true,
+    };
+    let complete = sources(workload.rate);
+    let finite = complete.each_ref().map(|source| {
+        source
+            .window(9_600, 201_600, 2, ResidentContext::KeyLockFiniteLoop)
+            .unwrap()
+    });
+    for count in [1, 6] {
+        let (first, second) = if count == 1 {
+            (&complete, &finite)
+        } else {
+            (&finite, &complete)
+        };
+        let first = case(first, workload, count, true, 100).expect("first matched source case");
+        let second = case(second, workload, count, true, 100).expect("second matched source case");
+        assert!(first.pcm.is_some());
+        assert_eq!(first, second);
+        eprintln!("source_fill_parity count={count} {first:?}");
+    }
 }

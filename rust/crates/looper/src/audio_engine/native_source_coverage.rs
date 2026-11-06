@@ -149,6 +149,9 @@ pub(crate) fn normal_loop_feed_available_with_readers(
     plan: SourceReadPlan,
     playback: &SourcePlayback,
 ) -> bool {
+    #[cfg(test)]
+    let _timing =
+        super::native_render_observation::SourceTimer::begin(|source| &mut source.coverage);
     if !normal_loop_context_available(sample, plan.loop_region, plan.seek_mode)
         || plan.channels != sample.channels
         || plan.sample_frames != sample.frame_count()

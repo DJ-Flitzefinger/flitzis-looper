@@ -14,8 +14,24 @@ pub(crate) struct Observation {
     pub first_shift_dependency: Option<ShiftDependency>,
 }
 
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub(crate) struct SourceObservation {
+    pub coverage: SourceTiming,
+    pub checked_fill: SourceTiming,
+    pub unchecked_fill: SourceTiming,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub(crate) struct SourceTiming {
+    pub calls: usize,
+    pub filled_frames: usize,
+    pub ns: u128,
+    pub max_ns: u128,
+}
+
 thread_local! {
     static CURRENT: Cell<Option<Observation>> = const { Cell::new(None) };
+    static SOURCE: Cell<Option<SourceObservation>> = const { Cell::new(None) };
     static PENDING_DEPENDENCY: Cell<Option<PendingDependency>> = const { Cell::new(None) };
 }
 
@@ -72,12 +88,62 @@ impl Scope {
     pub(crate) fn finish(self) -> Observation {
         CURRENT.with(|current| current.take().expect("active render observation"))
     }
+
+    #[cfg(windows)]
+    pub(crate) fn begin_source() -> Self {
+        let scope = Self::begin();
+        SOURCE.set(Some(SourceObservation::default()));
+        scope
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn finish_source(self) -> (Observation, SourceObservation) {
+        let source = SOURCE.take().expect("active source timing");
+        (self.finish(), source)
+    }
 }
 
 impl Drop for Scope {
     fn drop(&mut self) {
         CURRENT.with(|current| current.set(None));
+        SOURCE.set(None);
         PENDING_DEPENDENCY.with(|pending| pending.set(None));
+    }
+}
+
+pub(crate) struct SourceTimer {
+    begin: Option<Instant>,
+    bucket: fn(&mut SourceObservation) -> &mut SourceTiming,
+    filled_frames: usize,
+}
+
+impl SourceTimer {
+    pub(crate) fn begin(bucket: fn(&mut SourceObservation) -> &mut SourceTiming) -> Self {
+        Self {
+            begin: SOURCE.with(|source| source.get().map(|_| Instant::now())),
+            bucket,
+            filled_frames: 0,
+        }
+    }
+
+    pub(crate) fn filled(mut self, frames: usize) {
+        self.filled_frames = frames;
+    }
+}
+
+impl Drop for SourceTimer {
+    fn drop(&mut self) {
+        if let Some(begin) = self.begin {
+            let ns = begin.elapsed().as_nanos();
+            if let Some(mut observation) = SOURCE.get() {
+                let timing = (self.bucket)(&mut observation);
+                timing.calls += 1;
+                timing.filled_frames += self.filled_frames;
+                timing.ns += ns;
+                timing.max_ns = timing.max_ns.max(ns);
+                SOURCE.set(Some(observation));
+            }
+        }
     }
 }
 

@@ -33,11 +33,25 @@ pub(crate) struct TapReadObservation {
 
 #[cfg(test)]
 thread_local! {
+    static TAP_OBSERVATION_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TAP_READ_OBSERVATION: std::cell::Cell<TapReadObservation> =
         std::cell::Cell::new(TapReadObservation {
             left_reads: 0, right_reads: 0, min_frame: None, max_frame: None,
             missing_reads: 0, address_checksum: 0,
         });
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn without_tap_observation<T>(measure: impl FnOnce() -> T) -> T {
+    struct Resume(bool);
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            TAP_OBSERVATION_PAUSED.set(self.0);
+        }
+    }
+
+    let _resume = Resume(TAP_OBSERVATION_PAUSED.replace(true));
+    measure()
 }
 
 #[cfg(test)]
@@ -972,14 +986,18 @@ impl SourceReadPlan {
             for channel in 0..self.channels {
                 if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
                     #[cfg(test)]
-                    observe_tap(taps.left, channel, false, false);
+                    if !TAP_OBSERVATION_PAUSED.get() {
+                        observe_tap(taps.left, channel, false, false);
+                    }
                     return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
                 }
                 if let Some(right) = taps.right
                     && !plan.tap_available_with_readers(sample, readers, right, channel)
                 {
                     #[cfg(test)]
-                    observe_tap(right, channel, true, false);
+                    if !TAP_OBSERVATION_PAUSED.get() {
+                        observe_tap(right, channel, true, false);
+                    }
                     return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
                 }
             }
@@ -1228,24 +1246,30 @@ impl SourceReadPlan {
         channel: usize,
     ) -> f32 {
         #[cfg(test)]
-        observe_tap(
-            taps.left,
-            channel,
-            false,
-            self.tap_available_with_readers(sample, readers, taps.left, channel),
-        );
+        let observe = !TAP_OBSERVATION_PAUSED.get();
+        #[cfg(test)]
+        if observe {
+            observe_tap(
+                taps.left,
+                channel,
+                false,
+                self.tap_available_with_readers(sample, readers, taps.left, channel),
+            );
+        }
         let left =
             self.sample_at_frame_with_gains(sample, readers, taps.left, transition_gains, channel);
         let Some(right_frame) = taps.right else {
             return left;
         };
         #[cfg(test)]
-        observe_tap(
-            right_frame,
-            channel,
-            true,
-            self.tap_available_with_readers(sample, readers, right_frame, channel),
-        );
+        if observe {
+            observe_tap(
+                right_frame,
+                channel,
+                true,
+                self.tap_available_with_readers(sample, readers, right_frame, channel),
+            );
+        }
         let right = self.sample_at_frame_with_gains(
             sample,
             readers,
