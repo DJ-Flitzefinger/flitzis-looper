@@ -7145,3 +7145,42 @@ Exact assignment IDs or original/cache tuples must leave no own claim. Discarded
 nested worker panic results remain UNKNOWN. This adds no production Drop,
 collector, registry, limit or model/device behavior; cumulative parent capacity,
 historical failures and whole-system acceptance remain separate gates.
+
+## Ready Wet PCM at the live mix boundary
+
+`RtMixer::render_rt_chunk` renders each admitted voice through
+`ProductiveSourceFeed` and `StretchProcessor::process_source`. It then applies
+live gain, EQ and final mix before recording. The source read receipt and logical
+playback update accompany the native input and retained physical history. A
+queue of pre-mixed blocks would commit these effects before the device callback
+can apply due STOP, tempo and recording controls.
+
+The existing output FIFO contains an immutable prefix of the current Native
+owner's next Wet output. At a callback boundary `C`, its due interval is
+`[C, C + ready_frames)` while the same admitted voice birth and Native/FIFO
+lineage continue. A same-owner scalar rate change can retain these already
+generated samples while the next input follows the accepted trajectory. STOP
+ends that birth and clears its prefix. A bank replacement can leave an older
+admitted voice pinned to its original source, so the bank generation alone
+cannot determine whether that voice may still contribute.
+
+At 96 kHz and 96 frames, an adapter with a 512-frame Native block and 480
+pending inputs has 31 ready frames. The next callback needs 32 additional
+input frames before the next shift can supply its remaining 65 output frames.
+In the current adapter the shift uses the pitch from the chunk that completes
+the input block, which can include inputs collected before a rate change.
+The ready FIFO prefix alone therefore cannot cover every callback or move the
+critical shift off the device thread at the current delay.
+
+Any speculative Wet continuation must bind its exact output interval to the
+stream and admitted voice birth, source permit and reader set, actual playback
+trajectory, and Native/FIFO lineage. Transfer its PCM together with the source
+read receipt and corresponding continuation state. Validate the required
+interval after due controls and before live DSP. Keep the current valid inline
+owner available for stale or missing speculative work. If a future cutover has
+given up that owner and required Wet is missing, fail the affected submission
+and preserve any previously confirmed recording prefix. A stopped voice owes
+no Wet output. Device time, scheduling, final mix and capture remain callback
+owned. The bounded shared-renderer probe exercises the retained prefix, STOP,
+scalar tempo, and final capture. Product worker ownership, underrun handling,
+backend submission and device acceptance require separate evidence.

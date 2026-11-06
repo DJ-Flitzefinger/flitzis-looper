@@ -1213,6 +1213,20 @@ impl StretchProcessor {
     }
 
     #[cfg(test)]
+    pub(crate) fn copy_ready_wet_pcm_for_test(&self) -> Vec<Vec<f32>> {
+        self.native
+            .output_fifo
+            .iter()
+            .map(|fifo| {
+                let mut snapshot = fifo.clone();
+                let mut pcm = vec![0.0; snapshot.len()];
+                snapshot.pop_into(&mut pcm);
+                pcm
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn fail_preparation_worker(&self) {
         self.preparation.fail_worker();
     }

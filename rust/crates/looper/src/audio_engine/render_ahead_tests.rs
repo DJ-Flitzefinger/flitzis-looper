@@ -1,6 +1,7 @@
 //! Device-free render-ahead evidence at the real shared stream renderer.
 
 use super::*;
+use crate::audio_engine::buffer_retirement::close_callback_and_join;
 use crate::audio_engine::global_rate_status::RateState;
 use crate::audio_engine::input_runtime_binding::{
     InputRuntimeOwnership, enqueue_stop_with_producer,
@@ -10,6 +11,7 @@ use crate::audio_engine::mix_capture::{
     CaptureConfig, CaptureControl, CaptureFailure, CaptureStatus, SPOOL_HEADER_BYTES, prepare,
 };
 use crate::audio_engine::native_render_observation::Scope;
+use crate::audio_engine::pitch_intent::PitchIntent;
 use crate::messages::{MixCaptureTarget, SampleBuffer};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -27,7 +29,7 @@ struct Block {
 
 struct Stream {
     owner: CallbackCloseOwner<AudioCallbackState>,
-    _retirement: AudioBufferRetirementWorker,
+    retirement: AudioBufferRetirementWorker,
     controls: Producer<ControlMessage>,
     parameters: Producer<ControlParameterMessage>,
     _feedback: Consumer<AudioMessage>,
@@ -36,6 +38,10 @@ struct Stream {
 
 impl Stream {
     fn new(sources: &[SampleBuffer], wet: bool) -> Self {
+        Self::with_source_preparation(sources, wet, false)
+    }
+
+    fn with_source_preparation(sources: &[SampleBuffer], wet: bool, prepare: bool) -> Self {
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         let mut mixer = create_stream_mixer(
             2,
@@ -56,7 +62,7 @@ impl Stream {
         }
         // As in the continuous Native partition test, fence asynchronous
         // replacement to compare equivalent unused warm Native owners.
-        if wet {
+        if wet && !prepare {
             mixer.set_input_runtime_ownership(Arc::new(InputRuntimeOwnership::tracked()));
         }
         let (controls, control_rx) = RingBuffer::new(16);
@@ -74,7 +80,7 @@ impl Stream {
         .unwrap();
         Self {
             owner,
-            _retirement: retirement,
+            retirement,
             controls,
             parameters,
             _feedback: feedback_rx,
@@ -282,6 +288,126 @@ fn committed_mix_cannot_apply_new_stop_rate_or_capture_to_unconsumed_frames() {
     early_capture.assert_recording(&unconsumed);
     assert_eq!(inline.frame(), consumed + FRAMES as u64);
     assert!(unconsumed.first > inline.frame());
+}
+
+#[test]
+fn wet_fifo_prefix_survives_same_owner_rate_but_cannot_cover_due_native_shift() {
+    struct ReadyWet {
+        slot: usize,
+        generation: u64,
+        native: usize,
+        pcm: Vec<Vec<f32>>,
+    }
+
+    let samples = sources(2);
+    let readers: Vec<_> = samples
+        .iter()
+        .map(|sample| Arc::downgrade(&sample.samples))
+        .collect();
+    let mut stream = Stream::with_source_preparation(&samples, true, true);
+    stream.render();
+    // Let the preparation worker publish both lanes before crossing their
+    // original adoption frame. The render clock stays at 96 while waiting.
+    let deadline = Instant::now() + WAIT;
+    for voice in stream.owner.state_mut().mixer.voices.iter_mut().take(2) {
+        assert!(voice.active);
+        while !voice.stretch.source_preparation_ready() {
+            assert!(
+                Instant::now() < deadline,
+                "source-owned Wet preparation timed out"
+            );
+            std::thread::sleep(PERIOD);
+        }
+        assert_eq!(voice.stretch.prepared_target_output_frame(), Some(4096));
+    }
+
+    // Warm beyond adoption, ending with 480 of 512 inputs and 31 ready outputs.
+    const CUT: u64 = 69 * FRAMES as u64;
+    while stream.frame() < CUT {
+        stream.render();
+    }
+    assert_eq!(stream.frame(), CUT);
+    let voices = &stream.owner.state_mut().mixer.voices;
+    let [stopped, continuing] = [0, 1].map(|id| {
+        let (index, voice) = voices
+            .iter()
+            .enumerate()
+            .find(|(_, voice)| voice.is_playing_sample(id))
+            .unwrap();
+        let stretch = &voice.stretch;
+        assert!(stretch.wet_current_source_output_ready());
+        assert!(stretch.owns_pitch_contract(PitchIntent::default(), true));
+        assert_eq!(stretch.rubberband_block_size(), 512);
+        assert_eq!(stretch.pending_fifo_frames(), (480, 31));
+        let pcm = stretch.copy_ready_wet_pcm_for_test();
+        assert_eq!((pcm[0].len(), pcm[1].len()), (31, 31));
+        assert!(
+            pcm.iter()
+                .all(|channel| channel.iter().any(|v| v.abs() > 0.001))
+        );
+        ReadyWet {
+            slot: index,
+            generation: voice.generation,
+            native: stretch.native_identity(),
+            pcm,
+        }
+    });
+    assert_ne!(stopped.native, continuing.native);
+    assert_ne!(stopped.pcm, continuing.pcm);
+
+    let stopped_key = stream.ownership.callback_content_key(0).unwrap();
+    let before_stop = stream.ownership.ordinary_snapshot(stopped_key).unwrap();
+    stream.stop_pad(0);
+    stream.change_rate();
+    let mut take = stream.record(CUT + 17, CUT + 83);
+    let scope = Scope::begin();
+    let mixed = stream.render();
+    let observation = scope.finish();
+    assert_eq!(mixed.first, CUT);
+    assert_eq!(stream.frame(), CUT + FRAMES as u64);
+    let effect = stream.ownership.global_rate_status.read().unwrap();
+    assert_eq!(effect.request_revision, effect.effect.revision);
+    assert_eq!(effect.effect.state, RateState::Applied);
+    assert_eq!(effect.effect.execution_frame, Some(CUT));
+    let state = stream.owner.state_mut();
+    assert_eq!(state.transport.master_period_seconds(), Some(0.4));
+    let stopped_voice = &state.mixer.voices[stopped.slot];
+    assert!(!stopped_voice.active);
+    assert_ne!(stopped_voice.generation, stopped.generation);
+    assert_eq!(stopped_voice.stretch.pending_fifo_frames(), (0, 0));
+    let continuing_voice = &state.mixer.voices[continuing.slot];
+    assert!(continuing_voice.is_playing_sample(1));
+    assert_eq!(continuing_voice.generation, continuing.generation);
+    assert_eq!(
+        continuing_voice.stretch.native_identity(),
+        continuing.native
+    );
+    assert_eq!(continuing_voice.source_playback.rate_target(), 1.3);
+    assert_eq!(continuing_voice.source_playback.tempo_ratio(), 1.25);
+    assert_eq!(continuing_voice.stretch.pending_fifo_frames(), (64, 447));
+    assert_eq!(observation.shifts, 1);
+    assert_eq!(observation.adapter_shortfall_channel_frames, 0);
+    assert_eq!(observation.source_refusals, 0);
+    let after_stop = stream.ownership.ordinary_snapshot(stopped_key).unwrap();
+    assert_eq!(after_stop.kind, super::super::ordinary_transport::STOPPED);
+    assert_eq!(after_stop.source, before_stop.source);
+    assert!(after_stop.sequence > before_stop.sequence);
+    assert!(!after_stop.active);
+
+    // Both channels are neutral downstream. Only the continuing owner's
+    // already-generated prefix can reach the final mix after STOP and rate.
+    for (frame, stereo) in mixed.pcm.chunks_exact(2).take(31).enumerate() {
+        assert_eq!(stereo[0].to_bits(), continuing.pcm[0][frame].to_bits());
+        assert_eq!(stereo[1].to_bits(), continuing.pcm[1][frame].to_bits());
+    }
+    assert!(mixed.pcm[62..].iter().any(|sample| sample.abs() > 0.001));
+    take.assert_recording(&mixed);
+    drop(samples);
+    close_callback_and_join(stream.owner, stream.retirement).unwrap();
+    assert!(readers.iter().all(|reader| reader.upgrade().is_none()));
+    eprintln!(
+        "Wet FIFO cut at {CUT}: 31 retained frames, 65 from one due Native shift, capture [17,83) relative to cut"
+    );
 }
 
 #[test]
