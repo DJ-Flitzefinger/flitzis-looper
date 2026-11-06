@@ -21,7 +21,7 @@ pub(super) fn after_effect() {
     }
 }
 
-fn with_after_effect<T>(hook: impl FnOnce() + 'static, action: impl FnOnce() -> T) -> T {
+pub(super) fn with_after_effect<T>(hook: impl FnOnce() + 'static, action: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {

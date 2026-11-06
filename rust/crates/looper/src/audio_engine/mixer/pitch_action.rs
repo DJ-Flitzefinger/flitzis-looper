@@ -688,13 +688,23 @@ impl RtMixer {
             pitch_intent: render.pitch,
             key_lock: render.key_lock,
         };
-        self.voices[index].stretch.adopt_prepared_pitch_claimed(
-            work.candidate
-                .as_mut()
-                .expect("ready pitch retains its own candidate"),
-            &feed,
-            work.action.sequence(),
-        );
+        let candidate = work
+            .candidate
+            .as_mut()
+            .expect("ready pitch retains its own candidate");
+        let voice = &mut self.voices[index];
+        if candidate.wet_continuation.is_some() {
+            candidate.wet_retained_voice = voice.source_admission.as_ref().and_then(|admission| {
+                candidate.source.as_ref()?.permit.retained_voice_at_claim(
+                    admission,
+                    &voice.history_lifetime,
+                    voice.generation,
+                )
+            });
+        }
+        voice
+            .stretch
+            .adopt_prepared_pitch_claimed(candidate, &feed, work.action.sequence());
     }
 
     pub(crate) fn execute_pitch_action(
@@ -1021,6 +1031,10 @@ impl RtMixer {
             )
             .map_err(placement_rejection);
         committed?;
+        #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+        if work.borrow().prepare_wet_continuation {
+            super::super::audio_stream::after_pad_feedback_effect_for_test();
+        }
         for entry in feedback.into_iter().take(feedback_count).flatten() {
             let (captured, id, started) = entry;
             audio_messages.push_captured_pad_feedback(

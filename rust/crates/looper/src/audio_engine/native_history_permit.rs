@@ -29,6 +29,14 @@ pub(crate) struct NativeSourceAdmission {
     source_generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RetainedVoiceIdentity {
+    key: super::content_placement::ContentKey,
+    source_generation: u64,
+    lifetime: OwnerIdentity,
+    generation: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg(test)]
 pub(crate) struct NativeSourceAdmissionIdentity {
@@ -348,6 +356,45 @@ impl NativeVoiceHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    /// Bind an already validated action to the admitted birth receiving its Native.
+    /// This scalar does not grant preparation or revive the original action permit.
+    pub(super) fn retained_voice_at_claim(
+        &self,
+        admission: &NativeSourceAdmission,
+        lifetime: &Arc<AtomicU64>,
+        generation: u64,
+    ) -> Option<RetainedVoiceIdentity> {
+        let key = admission.content_key()?;
+        (self.source_generation == admission.source_generation
+            && self.binding.placement?.content_key() == Some(key)
+            && generation != 0
+            && generation != u64::MAX
+            && lifetime.load(Ordering::Acquire) == generation)
+            .then_some(RetainedVoiceIdentity {
+                key,
+                source_generation: self.source_generation,
+                lifetime: OwnerIdentity::of(lifetime),
+                generation,
+            })
+    }
+
+    pub(super) fn current_for_retained_voice(
+        &self,
+        identity: RetainedVoiceIdentity,
+        sample: &SampleBuffer,
+        rate: u32,
+    ) -> bool {
+        matches!(&self.authority, NativeHistoryAuthority::RetainedVoice { lifetime, generation }
+            if OwnerIdentity::of(lifetime) == identity.lifetime && *generation == identity.generation)
+            && self.source_generation == identity.source_generation
+            && self
+                .binding
+                .placement
+                .and_then(|placement| placement.content_key())
+                == Some(identity.key)
+            && self.current(sample, rate)
+    }
+
     #[cfg(test)]
     pub(crate) fn stage_effective_voice(
         &self,

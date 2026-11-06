@@ -30,6 +30,8 @@ struct GateObservation {
     reason: Option<PitchActionReject>,
     return_held: bool,
     prepared_native: Option<usize>,
+    #[cfg(feature = "asio-contract-tests")]
+    prepared_wet: Option<(usize, u64)>,
 }
 
 #[derive(Default)]
@@ -102,6 +104,14 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
             .map(|native| native.state_address()),
         _ => None,
     };
+    #[cfg(feature = "asio-contract-tests")]
+    if let PreparedActionWork::Pitch(work) = work {
+        observation.prepared_wet = work
+            .candidate
+            .as_ref()
+            .and_then(|candidate| candidate.wet_continuation.as_ref())
+            .map(|span| (span.receipt.output_frames, span.shifts));
+    }
     gate.changed.notify_all();
     while observation.return_held {
         let waited = gate.changed.wait_timeout(observation, GATE_WAIT).unwrap();
@@ -155,6 +165,11 @@ impl WorkerGate {
             .prepared_native
             .filter(|address| *address != 0)
             .expect("genuine prepared Native owner")
+    }
+
+    #[cfg(feature = "asio-contract-tests")]
+    pub(in crate::audio_engine) fn prepared_wet(&self) -> (usize, u64) {
+        self.state.observation.lock().unwrap().prepared_wet.unwrap()
     }
 
     pub(in crate::audio_engine) fn release_pitch_into(

@@ -3,7 +3,7 @@
 //! Preparation runs on the existing Key Lock worker. Rendering and worker catch-up use the same
 //! adapter, while every source pin travels with the native/FIFO owner until worker retirement.
 
-use super::native_history_permit::NativeHistoryPermit;
+use super::native_history_permit::{NativeHistoryPermit, RetainedVoiceIdentity};
 use super::native_source_coverage::{
     NormalLoopCoverage, complete_view_available, normal_loop_feed_available,
     normal_loop_feed_available_with_readers,
@@ -557,16 +557,16 @@ impl NativeHistoryRequest {
         feed: &ProductiveSourceFeed<'_>,
         _epoch: u64,
     ) -> bool {
-        self.matches_effective_contract_with_transition(feed, _epoch, None, false, self.key_lock)
+        self.matches_effective_contract_with_transition(feed, None, false, self.key_lock, false)
     }
 
     fn matches_effective_contract_with_transition(
         &self,
         feed: &ProductiveSourceFeed<'_>,
-        _epoch: u64,
         expected_transition: Option<StemTransition>,
         productive_continuity: bool,
         effective_key_lock: bool,
+        retained_authority: bool,
     ) -> bool {
         if self.plan.transition.is_active()
             && expected_transition
@@ -587,7 +587,7 @@ impl NativeHistoryRequest {
             )
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
-            && self.effective_source_current(feed.sample, feed.sample_rate_hz)
+            && (retained_authority || self.effective_source_current(feed.sample, feed.sample_rate_hz))
             && self.permit.matches_projection(feed.accepted)
             && self.plan.matches_source_contract(feed.plan)
             // Pending candidates still require their frozen exact target below. Once adopted,
@@ -726,6 +726,7 @@ pub(crate) struct NativeAdapterState {
     pub(crate) source_transition: Option<StemTransition>,
     pub(crate) primed_output_frames: usize,
     pub(super) wet_continuation: Option<super::wet_continuation::WetSpan>,
+    pub(super) wet_retained_voice: Option<RetainedVoiceIdentity>,
     #[cfg(test)]
     pub(crate) wet_probe: Option<super::wet_continuation::WetSpan>,
     input_history_context: Option<NativeStartHistoryContext>,
@@ -758,6 +759,7 @@ impl NativeAdapterState {
             source_transition: None,
             primed_output_frames: 0,
             wet_continuation: None,
+            wet_retained_voice: None,
             #[cfg(test)]
             wet_probe: None,
             input_history_context: None,
@@ -778,6 +780,7 @@ impl NativeAdapterState {
         self.pitch_scale = 1.0;
         self.primed_output_frames = 0;
         self.wet_continuation = None;
+        self.wet_retained_voice = None;
         #[cfg(test)]
         {
             self.wet_probe = None;
@@ -866,15 +869,23 @@ impl NativeAdapterState {
             if self.source_transition.is_some() || productive_continuity {
                 source.matches_effective_contract_with_transition(
                     feed,
-                    epoch,
                     self.source_transition,
                     productive_continuity,
                     self.effective_mode.unwrap_or(source.key_lock),
+                    productive_continuity && self.retains_wet_source(feed),
                 )
             } else {
                 source.matches_effective_contract(feed, epoch)
             }
         })
+    }
+
+    pub(super) fn retains_wet_source(&self, feed: &ProductiveSourceFeed<'_>) -> bool {
+        self.wet_retained_voice
+            .zip(feed.permit)
+            .is_some_and(|(birth, permit)| {
+                permit.current_for_retained_voice(birth, feed.sample, feed.sample_rate_hz)
+            })
     }
 
     /// Native reset, initial pitch setup, source catch-up and old pin destruction are worker-only.

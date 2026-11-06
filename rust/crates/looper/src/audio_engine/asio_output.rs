@@ -236,7 +236,7 @@ enum Operation {
     Close,
     Shutdown,
     #[cfg(all(test, feature = "asio-contract-tests"))]
-    Tick,
+    Tick(Option<Box<dyn FnOnce() + Send>>),
     #[cfg(all(test, feature = "asio-contract-tests"))]
     RenderAhead,
 }
@@ -374,8 +374,11 @@ impl Control {
     }
 
     #[cfg(all(test, feature = "asio-contract-tests"))]
-    pub(super) fn tick(&mut self) -> Result<test_driver::TickObservation, String> {
-        self.request(Operation::Tick)?;
+    pub(super) fn tick(
+        &mut self,
+        after_effect: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<test_driver::TickObservation, String> {
+        self.request(Operation::Tick(after_effect))?;
         self.observation()
             .test_tick
             .ok_or_else(|| "private Tick ended without original callback observation".into())
@@ -749,7 +752,7 @@ fn owner_loop(
                         Ok(owner.info)
                     }
                     #[cfg(all(test, feature = "asio-contract-tests"))]
-                    Operation::Tick => {
+                    Operation::Tick(after_effect) => {
                         if failed.load(Ordering::Acquire) {
                             return Err("failed original owner cannot Tick".into());
                         }
@@ -762,7 +765,13 @@ fn owner_loop(
                             .as_ref()
                             .ok_or("Tick requires the installed original callback")?;
                         let scope = super::native_render_observation::Scope::begin();
-                        let callback = factory.tick(owner.raw, context.test_clock_ns())?;
+                        let tick = || factory.tick(owner.raw, context.test_clock_ns());
+                        let callback = match after_effect {
+                            Some(hook) => {
+                                super::audio_stream::with_pad_feedback_effect_for_test(hook, tick)
+                            }
+                            None => tick(),
+                        }?;
                         let native = scope.finish();
                         owner.test_tick = Some(context.test_observation(callback, native));
                         Ok(owner.info)

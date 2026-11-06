@@ -706,7 +706,6 @@ impl StretchProcessor {
         callback: Option<u64>,
     ) -> Option<SourceReadReceipt> {
         let source = self.native.source.as_ref()?;
-        let span = self.native.wet_continuation.as_mut()?;
         let permit = feed.permit?;
         if callback != Some(source.target_output_frame)
             || feed.output_frame != self.required_wet_frame
@@ -716,12 +715,14 @@ impl StretchProcessor {
             || self.native.dirty
             || feed.pitch_intent != source.pitch_intent
             || feed.key_lock != source.key_lock
-            || !source.permit.current(feed.sample, feed.sample_rate_hz)
-            || !permit.current(feed.sample, feed.sample_rate_hz)
-            || !source.permit.same_endpoint_authority(permit)
+            || !(self.native.retains_wet_source(feed)
+                || (source.permit.current(feed.sample, feed.sample_rate_hz)
+                    && permit.current(feed.sample, feed.sample_rate_hz)
+                    && source.permit.same_endpoint_authority(permit)))
         {
             return None;
         }
+        let span = self.native.wet_continuation.as_mut()?;
         let receipt = span.slice_for(feed, frames)?;
         let next_position = feed.playback.position_at(frames)?;
         let end = span.consumed + frames;

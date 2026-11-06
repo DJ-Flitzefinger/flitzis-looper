@@ -73,12 +73,20 @@ impl AudioStreamHandle {
     pub(super) fn test_tick(
         &self,
     ) -> Result<super::asio_output::test_driver::TickObservation, String> {
+        self.test_tick_with_effect(None)
+    }
+
+    #[cfg(all(windows, test, feature = "asio-contract-tests"))]
+    pub(super) fn test_tick_with_effect(
+        &self,
+        after_effect: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<super::asio_output::test_driver::TickObservation, String> {
         let mut backend = self
             .backend
             .lock()
             .map_err(|_| "original backend lock poisoned")?;
         match &mut *backend {
-            OutputBackendHandle::Asio(control) => control.tick(),
+            OutputBackendHandle::Asio(control) => control.tick(after_effect),
             OutputBackendHandle::Cpal(_) => {
                 Err("private Tick refuses physical CPAL backends".into())
             }
@@ -7047,6 +7055,14 @@ mod content_feedback_tests;
 #[cfg(test)]
 pub(super) fn after_pad_feedback_effect_for_test() {
     content_feedback_tests::after_effect();
+}
+
+#[cfg(all(test, windows, feature = "asio-contract-tests"))]
+pub(super) fn with_pad_feedback_effect_for_test<T>(
+    hook: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    content_feedback_tests::with_after_effect(hook, action)
 }
 
 #[cfg(test)]
