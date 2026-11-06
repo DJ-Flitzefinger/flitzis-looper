@@ -7238,13 +7238,17 @@ the adopted action, live source permit, readers, and playback trajectory.
 Final gain, EQ, mix, and capture remain on the callback. Only the admitted
 slice advances the logical journal. The suffix uses the same post-shift owner.
 
-If a new bank assignment takes effect after the original SET claim, the
+If a new bank assignment is published after the original SET claim, the
 continuing birth may finish its prepared slice under a fresh retained-voice
 permit. The claim binds the Native to that birth's lifetime, content and source
 generation. The mixer still checks the exact slice, PCM readers and trajectory.
 After the slice, the same Native and FIFO continue only with a current permit
 for that birth and an unbroken productive read. A new bank's OwnACK belongs to
-that bank. The original claim still requires its current-bank authority.
+that bank. Publication can revoke the old control-side permit after the callback
+has already drained controls. The mixer may still hold the old actual bank
+through this submission. Its separately bound birth permit authorizes the exact
+continuation in that interval. Preparing or claiming a new current-bank owner
+still requires the original current-bank authority.
 
 STOP ends the birth and its pending contribution. A continuing birth whose
 accepted worker owner cannot supply the exact required slice fails that ASIO

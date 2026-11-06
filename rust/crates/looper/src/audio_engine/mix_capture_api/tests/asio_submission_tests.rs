@@ -85,6 +85,20 @@ struct ColdPcm {
 
 impl ColdPcm {
     fn publish(engine: &AudioEngine, generation: u64, digest: &str) -> Self {
+        Self::publish_with_pitch(
+            engine,
+            generation,
+            digest,
+            SourcePitchInitialization::FreshNeutral,
+        )
+    }
+
+    fn publish_with_pitch(
+        engine: &AudioEngine,
+        generation: u64,
+        digest: &str,
+        initial_pitch: SourcePitchInitialization,
+    ) -> Self {
         use crate::audio_engine::{next_pad_request_id, publish_loaded_sample_with_arm};
 
         let ownership = &engine.input_runtime_ownership;
@@ -125,7 +139,7 @@ impl ColdPcm {
                 loop_region: None,
                 resident_cancelled: None,
                 incoming_defaults: None,
-                initial_pitch: SourcePitchInitialization::FreshNeutral,
+                initial_pitch,
                 intent: None,
                 ownership,
                 generation,
@@ -173,6 +187,7 @@ enum WetAdmission {
     Late,
     Tempo,
     Retained,
+    PendingBank,
 }
 
 fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
@@ -206,7 +221,8 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     let owner = stream.test_owner_observer();
     let submission = stream.asio_submission.as_ref().unwrap().clone();
     let ownership = &engine.input_runtime_ownership;
-    let accepted = (mode == WetAdmission::Retained).then(|| ColdPcm::publish(&engine, 1, "a"));
+    let accepted = matches!(mode, WetAdmission::Retained | WetAdmission::PendingBank)
+        .then(|| ColdPcm::publish(&engine, 1, "a"));
     if let Some(source) = &accepted {
         source.assert_ack(&engine, false);
         // FIFO order makes Play follow the callback's actual OwnACK at frame zero.
@@ -370,15 +386,18 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
     let tick = if let Some(source) = &accepted {
         use std::sync::mpsc::sync_channel;
 
-        // Drain the original SET at E while more real control commands can still be read.
-        assert!(
-            stream
-                .producer
-                .lock()
-                .unwrap()
-                .push(ControlMessage::StopSample { id: 1 })
-                .is_ok()
-        );
+        // The vacant STOP makes the original SET run inside the control drain.
+        // Without it, SET runs after the drain and B can only be accepted next tick.
+        if mode == WetAdmission::Retained {
+            assert!(
+                stream
+                    .producer
+                    .lock()
+                    .unwrap()
+                    .push(ControlMessage::StopSample { id: 1 })
+                    .is_ok()
+            );
+        }
         std::thread::scope(|scope| {
             let (claimed, wait_claim) = sync_channel(1);
             let (published, wait_publication) = sync_channel(1);
@@ -407,11 +426,20 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
             });
             let prefix_before_ready = submission.prefix();
             if let Some(pcm) = gated {
+                next.assert_ack(&engine, mode == WetAdmission::Retained);
                 factory.release_output_ready(false);
                 submitted_pcm = Some(pcm);
             }
             let tick = callback.join().unwrap();
-            next.assert_ack(&engine, true);
+            next.assert_ack(&engine, mode == WetAdmission::Retained);
+            assert_eq!(
+                tick.pads[0].bank_source_pcm,
+                if mode == WetAdmission::Retained {
+                    next.binding.source_address
+                } else {
+                    source.binding.source_address
+                }
+            );
             assert_eq!(prefix_before_ready, (E, false));
             assert!(
                 submitted_pcm.is_some(),
@@ -470,6 +498,8 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
         assert_eq!(submission.prefix(), (E + 2 * FRAMES, false));
         if let Some(source) = &accepted {
             let next = replacement.as_ref().unwrap();
+            next.assert_ack(&engine, true);
+            assert_eq!(suffix.pads[0].bank_source_pcm, next.binding.source_address);
             let worker = retained_worker.as_ref().unwrap();
             let native = worker.prepared_native();
             let (wet_frames, shifts) = worker.prepared_wet();
@@ -576,6 +606,167 @@ fn wet_admission_path(mode: WetAdmission) -> Vec<u8> {
 fn asio_admits_retained_pitch_owner_wet_shift_after_new_bank_ack() {
     Python::initialize();
     wet_admission_path(WetAdmission::Retained);
+}
+
+#[test]
+fn asio_preserves_claimed_wet_while_new_bank_awaits_own_ack() {
+    Python::initialize();
+    wet_admission_path(WetAdmission::PendingBank);
+}
+
+#[test]
+fn asio_observes_first_due_shift_on_the_original_ordinary_pad_native() {
+    use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
+    use crate::audio_engine::pitch_intent::PitchIntent;
+
+    const FRAMES: u64 = 96;
+    const E: u64 = 4096;
+    const C: u64 = 4320;
+    const DUE: u64 = 4512;
+    const END: u64 = DUE + FRAMES;
+    Python::initialize();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ordinary.capture");
+    let factory = Factory::new().unwrap();
+    let mut engine = AudioEngine::new().unwrap();
+    engine.test_asio_driver = Some(factory.clone());
+    engine
+        .start_audio_output(OutputOptions {
+            backend: "asio".into(),
+            sample_rate_hz: Some(96_000),
+            buffer_frames: Some(FRAMES as u32),
+            ..Default::default()
+        })
+        .unwrap();
+    engine.set_trigger_quantization("1/64").unwrap();
+    engine
+        .set_master_period(E as f64 * 16.0 / 96_000.0)
+        .unwrap();
+    let stream = engine.stream_handle.as_ref().unwrap();
+    let owner = stream.test_owner_observer();
+    let submission = stream.asio_submission.as_ref().unwrap().clone();
+    let source = ColdPcm::publish_with_pitch(
+        &engine,
+        1,
+        "a",
+        SourcePitchInitialization::RestoredTuple {
+            pitch: PitchIntent::new(0, 3).unwrap(),
+            key_lock: Some(false),
+        },
+    );
+    source.assert_ack(&engine, false);
+    assert_eq!(stream.test_tick().unwrap().output_frame, FRAMES);
+    source.assert_ack(&engine, true);
+    let start = engine
+        .capture_pad_start(0, 0.0, None, 1.0, false, None, Some(1))
+        .unwrap();
+    assert_eq!(stream.test_tick().unwrap().output_frame, 2 * FRAMES);
+    assert_eq!(start.original_frame(), Some(E));
+    let worker = WorkerGate::for_ordinary(&start);
+    assert!(engine.publish_pad_start(&start, None).unwrap());
+    assert_eq!(stream.test_tick().unwrap().output_frame, 3 * FRAMES);
+    worker.wait_for(false);
+    worker.release();
+    assert_eq!(worker.wait_for(true), None);
+    let native = worker.prepared_native();
+    let ticket = engine
+        .prepare_mix_capture_internal(path.to_str().unwrap(), FRAMES as usize, 4, 4096)
+        .unwrap();
+    until(|| {
+        engine
+            .mix_capture_lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .control
+            .status()
+            .writer_ready
+            .then_some(())
+    });
+    assert!(engine.start_mix_capture_internal(&ticket, C).unwrap());
+    assert!(engine.stop_mix_capture_internal(&ticket, END).unwrap());
+
+    let mut fed_before_shift = 0;
+    for end in (4 * FRAMES..=DUE).step_by(FRAMES as usize) {
+        let tick = stream.test_tick().unwrap();
+        assert_eq!(tick.output_frame, end);
+        assert_eq!(submission.prefix(), (end, false));
+        assert_eq!(tick.native.shifts, 0);
+        let pad = tick.pads[0];
+        assert_eq!(pad.active, end > E);
+        if end > E {
+            assert_eq!(pad.native_state, native);
+            assert_eq!(pad.source_pcm, source.binding.source_address);
+            assert!(pad.wet_current_source_output && !pad.wet_failed);
+            let fed = end - E;
+            assert_eq!(pad.frame as u64, fed);
+            assert_eq!(pad.fraction, 0.0);
+            assert_eq!(pad.pending_fifo_frames, (fed as usize, 511 - fed as usize));
+            assert_eq!(pad.native_block_size, 512);
+            fed_before_shift = pad.productive_fed_frames;
+        }
+    }
+    assert_eq!(start.execution_frame(), Some(E));
+    assert_eq!(start.effective_frame(), Some(E));
+    let (tick, submitted_pcm) = std::thread::scope(|scope| {
+        factory.arm_output_ready();
+        let callback = scope.spawn(|| stream.test_tick().unwrap());
+        let submitted = until(|| factory.gated_output_pcm());
+        let prefix = submission.prefix();
+        factory.release_output_ready(false);
+        let tick = callback.join().unwrap();
+        assert_eq!(prefix, (DUE, false));
+        (tick, submitted)
+    });
+    assert_eq!(tick.output_frame, END);
+    assert_eq!(submission.prefix(), (END, false));
+    assert_eq!(tick.native.shifts, 1);
+    assert_eq!(tick.pads[0].native_state, native);
+    assert_eq!(tick.pads[0].pending_fifo_frames, (0, 511));
+    assert_eq!(
+        tick.pads[0].productive_fed_frames - fed_before_shift,
+        FRAMES
+    );
+    eprintln!(
+        "Ordinary PAD T=E={E} S=0 C={C} FIFO=(224,287) first shift=[{DUE},{END}) Native={native:#x}",
+    );
+
+    let ownership = &engine.input_runtime_ownership;
+    assert!(enqueue_stop_with_producer(
+        ownership,
+        &mut stream.producer.lock().unwrap(),
+        Some(0)
+    ));
+    let stopped = stream.test_tick().unwrap();
+    assert_eq!(stopped.output_frame, END + FRAMES);
+    assert!(!stopped.pads[0].active);
+    assert_eq!(stopped.native.shifts, 0);
+    engine.shut_down().unwrap();
+    let status = until(|| {
+        let mut slot = engine.mix_capture_lock().unwrap();
+        let capture = slot.as_mut().unwrap();
+        capture.poll(false);
+        let status = capture.control.status();
+        (status.worker_joined && status.rt_released).then_some(status)
+    });
+    assert!(status.successful_spool());
+    assert_eq!((status.first_frame, status.end_frame), (Some(C), Some(END)));
+    assert_eq!(status.written_frames, END - C);
+    let captured = fs::read(&path).unwrap();
+    let submitted_bytes = submitted_pcm
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &captured[SPOOL_HEADER_BYTES as usize + (DUE - C) as usize * 8..],
+        submitted_bytes
+    );
+    let ended = owner.lock().unwrap();
+    assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
+    assert_eq!(factory.info().unwrap().active, 0);
+    drop(start);
+    drop(engine);
+    assert!(source.reader.upgrade().is_none());
 }
 
 #[test]

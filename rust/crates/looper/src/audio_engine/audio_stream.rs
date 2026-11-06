@@ -3883,6 +3883,7 @@ impl AsioRenderContext {
                 crate::messages::StemMixMode::AllStems => 1,
             };
             let bank = state.mixer.bank_for_measurement()[id].as_ref();
+            let bank_source_pcm = bank.map_or(0, |sample| sample.source_address());
             let Some(voice) = state
                 .mixer
                 .voices
@@ -3893,7 +3894,8 @@ impl AsioRenderContext {
                     key_lock: state.mixer.key_lock_for_measurement(id),
                     stem_mode,
                     stem_mask,
-                    source_pcm: bank.map_or(0, |sample| sample.source_address()),
+                    source_pcm: bank_source_pcm,
+                    bank_source_pcm,
                     source_samples: bank.map_or(0, |sample| sample.source_sample_count()),
                     ..PadObservation::default()
                 };
@@ -3908,6 +3910,7 @@ impl AsioRenderContext {
                 key_lock: state.mixer.key_lock_for_measurement(id),
                 stem_mode,
                 stem_mask,
+                bank_source_pcm,
                 source_pcm: voice
                     .sample
                     .as_ref()
@@ -3921,6 +3924,7 @@ impl AsioRenderContext {
                 native_start_delay: voice.stretch.rubberband_start_delay(),
                 input_fifo_capacity: voice.stretch.rubberband_input_fifo_capacity(),
                 output_fifo_capacity: voice.stretch.rubberband_output_fifo_capacity(),
+                pending_fifo_frames: voice.stretch.pending_fifo_frames(),
                 productive_fed_frames: voice
                     .stretch
                     .productive_history()

@@ -6041,10 +6041,10 @@ impl RtMixer {
                         acknowledgements,
                         preparation_epoch: &prepared_source_epochs[cell.index()],
                     });
-                    let permit = if bank_sources[voice.sample_id]
+                    let is_bank_source = bank_sources[voice.sample_id]
                         .as_ref()
-                        .is_some_and(|bank| bank.same_source(&sample))
-                    {
+                        .is_some_and(|bank| bank.same_source(&sample));
+                    let permit = if is_bank_source {
                         context.and_then(|context| {
                             context.capture(
                                 &sample,
@@ -6081,11 +6081,31 @@ impl RtMixer {
                         permit: permit.as_ref(),
                         output_frame,
                     };
+                    let retained_wet = voice
+                        .source_admission
+                        .as_ref()
+                        .filter(|_| is_bank_source && voice.stretch.has_bound_wet_source())
+                        .and_then(|admission| {
+                            NativeVoiceHistoryContext {
+                                admission,
+                                lifetime: &voice.history_lifetime,
+                                generation: voice.generation,
+                                preparation_epoch: voice.stretch.source_epoch_owner(),
+                                accepted: voice.source_timing.accepted,
+                            }
+                            .capture(&sample, sample_rate_hz as u32)
+                        });
+                    let retained_wet = retained_wet
+                        .as_ref()
+                        .filter(|permit| voice.stretch.accepts_bound_wet_source(&feed, permit));
                     let source_read = if output_frame.is_some_and(|frame| {
                         voice.stretch.wet_continuation_due(frame.saturating_add(1))
                     }) {
                         let Some(receipt) = voice.stretch.consume_wet_continuation(
-                            &feed,
+                            &ProductiveSourceFeed {
+                                permit: retained_wet.or(feed.permit),
+                                ..feed
+                            },
                             chunk_frames,
                             self.wet_callback_frame,
                         ) else {
@@ -6093,7 +6113,11 @@ impl RtMixer {
                         };
                         Some(receipt)
                     } else {
-                        voice.stretch.process_source(feed, chunk_frames, key_lock)
+                        voice.stretch.process_source_with_retained_wet(
+                            feed,
+                            chunk_frames,
+                            retained_wet,
+                        )
                     };
                     #[cfg(test)]
                     super::native_render_observation::source_result(source_read.is_some());

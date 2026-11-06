@@ -692,6 +692,21 @@ impl StretchProcessor {
         self.required_wet_frame.is_some_and(|frame| frame < end)
     }
 
+    pub(super) fn has_bound_wet_source(&self) -> bool {
+        self.native.wet_retained_voice.is_some()
+    }
+
+    pub(super) fn accepts_bound_wet_source(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        permit: &NativeHistoryPermit,
+    ) -> bool {
+        self.native.retains_wet_source(&ProductiveSourceFeed {
+            permit: Some(permit),
+            ..*feed
+        })
+    }
+
     pub(super) fn wet_continuation_limit(&self, frames: usize) -> usize {
         self.native
             .wet_continuation
@@ -1016,11 +1031,21 @@ impl StretchProcessor {
     /// Projection refreshes retain chronological history only across exact source continuity.
     /// A receipt describes only a successful reader and render pass, including dry bypass.
     /// A refused read/render remains a gap even when the independent logical clock advances.
+    #[cfg(test)]
     pub(crate) fn process_source(
         &mut self,
         feed: ProductiveSourceFeed<'_>,
         output_frames: usize,
         _preserve_pitch: bool,
+    ) -> Option<SourceReadReceipt> {
+        self.process_source_with_retained_wet(feed, output_frames, None)
+    }
+
+    pub(super) fn process_source_with_retained_wet(
+        &mut self,
+        feed: ProductiveSourceFeed<'_>,
+        output_frames: usize,
+        retained_wet: Option<&NativeHistoryPermit>,
     ) -> Option<SourceReadReceipt> {
         self.wet_rendered = false;
         self.wet_source_rendered = false;
@@ -1056,6 +1081,12 @@ impl StretchProcessor {
             outgoing_stems: readers.outgoing,
             ..feed
         };
+        // This witness is only for continuity of the already claimed Native.
+        // A pending bank publication cannot lend its preparation authority to A.
+        let continuity_feed = ProductiveSourceFeed {
+            permit: retained_wet.or(feed.permit),
+            ..feed
+        };
         if !feed.playback.can_read_frames(frames) {
             self.silence_output(frames);
             self.wet_render_failed = true;
@@ -1085,7 +1116,7 @@ impl StretchProcessor {
         if retained_feed.is_some()
             && (!wet
                 || !self.native.matches_effective_source(
-                    &feed,
+                    &continuity_feed,
                     self.preparation_epoch,
                     self.productive_history,
                 ))
@@ -1146,7 +1177,7 @@ impl StretchProcessor {
             if wet
                 && !self.request_pending
                 && !self.native.matches_effective_source(
-                    &feed,
+                    &continuity_feed,
                     self.preparation_epoch,
                     self.productive_history,
                 )
@@ -1212,7 +1243,7 @@ impl StretchProcessor {
         };
         self.wet_source_rendered = self.wet_render_ready()
             && self.native.matches_effective_source(
-                &feed,
+                &continuity_feed,
                 self.preparation_epoch,
                 self.productive_history,
             );
