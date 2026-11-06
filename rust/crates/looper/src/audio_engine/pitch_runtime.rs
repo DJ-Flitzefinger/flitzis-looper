@@ -57,6 +57,7 @@ struct ActionSlot {
     epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
     owner: Option<OriginalActionOwner>,
     independent_birth: bool,
+    wet_deadline: bool,
     replans: u8,
     work: Option<PreparedActionWork>,
     group: Option<OrdinaryStartGroup>,
@@ -196,6 +197,7 @@ impl PitchRuntime {
         slot.epoch = None;
         slot.content = None;
         slot.independent_birth = false;
+        slot.wet_deadline = false;
         slot.original = 0;
         slot.planned = 0;
         slot.replans = 0;
@@ -233,6 +235,8 @@ impl PitchRuntime {
             PreparedActionWork::Ordinary(_) => true,
             PreparedActionWork::Pitch(work) => work.late_reprepare_snapshot().is_some(),
         };
+        slot.wet_deadline =
+            matches!(work, PreparedActionWork::Pitch(work) if work.prepare_wet_continuation);
         slot.replans = 0;
     }
 
@@ -367,6 +371,7 @@ impl PitchRuntime {
                 epoch: None,
                 owner: None,
                 independent_birth: false,
+                wet_deadline: false,
                 replans: 0,
                 work: None,
                 group: None,
@@ -526,6 +531,14 @@ impl PitchRuntime {
         let capture = work
             .freeze_execution_frame(execution)
             .and_then(|()| mixer.capture_pitch_action_request(&mut work, callback, execution));
+        work.prepare_wet_continuation = needs_worker
+            && work.action.variant() == super::pitch_actions::PitchActionVariant::Set
+            && work.action.original_due_frame() == execution
+            && execution - callback <= PREPARATION_LEAD_FRAMES
+            && work
+                .source_feed_future
+                .is_some_and(|(_, _, frames, _)| frames > 0)
+            && mixer.wet_preparation_admitted(callback, execution);
         let result = match capture {
             Ok(Some(request)) => work.rt_capture(request).map_err(|request| {
                 let retained = work.retain_rejected_capture(request);
@@ -1040,6 +1053,18 @@ impl PitchRuntime {
         let preceding = (!expired).then(|| self.preceding_endpoint(index)).flatten();
         let slot = &mut self.slots[index];
         if slot.work.is_none() || retirement.available_retirement_slots() == 0 {
+            if slot.wet_deadline && frame >= slot.planned {
+                // Keep the slot until its exact Work returns. The due event must
+                // release STOP and rate even while the worker owns its Native.
+                slot.epoch.as_ref().unwrap().store(0, Ordering::Release);
+                let owner = slot.owner.as_ref().unwrap();
+                owner.reject(PitchActionReject::PreparationFailed);
+                // The worker may have changed PREPARING to PREPARED during rejection.
+                if !owner.rejected() {
+                    owner.reject(PitchActionReject::PreparationFailed);
+                }
+                return ScheduledExecution::Complete;
+            }
             if frame
                 .checked_sub(slot.original)
                 .is_some_and(|frames| frames > MAX_LAUNCH_DELAY)
@@ -1129,12 +1154,14 @@ impl PitchRuntime {
                 }
             }
         };
-        if matches!(
-            result,
-            Err(PitchActionReject::Capacity
-                | PitchActionReject::PlacementPending
-                | PitchActionReject::WindowPending)
-        ) {
+        if !slot.wet_deadline
+            && matches!(
+                result,
+                Err(PitchActionReject::Capacity
+                    | PitchActionReject::PlacementPending
+                    | PitchActionReject::WindowPending)
+            )
+        {
             return ScheduledExecution::Pending(command);
         }
         if let Err(reason) = result {
@@ -1151,12 +1178,28 @@ pub(super) fn service_endpoint_reserve<const CAPACITY: usize>(
     mixer: &mut RtMixer,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback: u64,
+    retirement: &mut impl AudioBufferRetirement,
 ) {
     let mut runtime = mixer
         .pitch_runtime
         .take()
         .expect("one callback owns preparation lane");
     runtime.poll();
+    for slot in runtime.slots.iter_mut().filter(|slot| {
+        slot.wet_deadline
+            && slot
+                .owner
+                .as_ref()
+                .is_some_and(OriginalActionOwner::rejected)
+    }) {
+        if retirement.available_retirement_slots() == 0 {
+            break;
+        }
+        if let Some(work) = slot.work.take() {
+            PitchRuntime::clear_slot_metadata(slot);
+            retire(work, retirement);
+        }
+    }
     runtime.accelerate_completed_starts(mixer, scheduler, callback);
     runtime.endpoint.service(mixer, &mut runtime.preparation);
     mixer.pitch_runtime = Some(runtime);

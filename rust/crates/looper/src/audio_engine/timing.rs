@@ -283,6 +283,11 @@ impl SharedOutputClock {
         self.required_revision.fetch_max(revision, Ordering::SeqCst);
     }
 
+    pub(crate) fn external_revision_current(&self, revision: u32) -> bool {
+        !self.invalidated.load(Ordering::SeqCst)
+            && revision == self.required_revision.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn publish_qualified(&self, snapshot: OutputClockSnapshot, revision: u32) {
         let sequence = self.sequence.load(Ordering::SeqCst).wrapping_add(1) | 1;
         self.sequence.store(sequence, Ordering::SeqCst);
@@ -319,9 +324,7 @@ impl SharedOutputClock {
         }
         let period_seconds = f64::from_bits(fields[5]);
         Some(OutputClockSnapshot {
-            valid: fields[0] != 0
-                && !self.invalidated.load(Ordering::SeqCst)
-                && fields[9] == u64::from(self.required_revision.load(Ordering::SeqCst)),
+            valid: fields[0] != 0 && self.external_revision_current(fields[9] as u32),
             observed_at_ns: fields[1],
             audible_at_ns: fields[2],
             output_frame: fields[3],

@@ -55,6 +55,7 @@ const DEFAULT_SAMPLE_RATE_HZ: f32 = 48_000.0;
 const RUBBERBAND_MIN_SAMPLE_RATE_HZ: f32 = 8_000.0;
 
 pub struct StretchProcessor {
+    required_wet_frame: Option<u64>,
     channels: usize,
     varispeed: Vec<Vec<f32>>,
     output: Vec<Vec<f32>>,
@@ -376,6 +377,12 @@ impl StretchProcessor {
         request_id: u64,
     ) {
         std::mem::swap(&mut self.native, candidate);
+        self.required_wet_frame = self
+            .native
+            .wet_continuation
+            .as_ref()
+            .and_then(|_| self.native.source.as_ref())
+            .map(|source| source.target_output_frame);
         self.request_pending = false;
         self.adopted_request_id = Some(request_id);
         self.productive_history = self.prepared_input_history(feed);
@@ -643,6 +650,7 @@ impl StretchProcessor {
             adopted_request_id: None,
             preparation,
             productive_history: None,
+            required_wet_frame: None,
             wet_rendered: false,
             wet_render_failed: false,
             wet_output_emitted: false,
@@ -673,6 +681,71 @@ impl StretchProcessor {
             channel.fill(0.0);
         }
         self.reset_rubberband_state();
+    }
+
+    pub(super) fn reset_for_new_birth(&mut self) {
+        self.required_wet_frame = None;
+        self.reset();
+    }
+
+    pub(super) fn wet_continuation_due(&self, end: u64) -> bool {
+        self.required_wet_frame.is_some_and(|frame| frame < end)
+    }
+
+    pub(super) fn wet_continuation_limit(&self, frames: usize) -> usize {
+        self.native
+            .wet_continuation
+            .as_ref()
+            .map_or(frames, |span| frames.min(span.remaining()))
+    }
+
+    pub(super) fn consume_wet_continuation(
+        &mut self,
+        feed: &ProductiveSourceFeed<'_>,
+        frames: usize,
+        callback: Option<u64>,
+    ) -> Option<SourceReadReceipt> {
+        let source = self.native.source.as_ref()?;
+        let span = self.native.wet_continuation.as_mut()?;
+        let permit = feed.permit?;
+        if callback != Some(source.target_output_frame)
+            || feed.output_frame != self.required_wet_frame
+            || self.adopted_request_id != Some(source.request_id)
+            || !self.native.active
+            || !self.native.used
+            || self.native.dirty
+            || feed.pitch_intent != source.pitch_intent
+            || feed.key_lock != source.key_lock
+            || !source.permit.current(feed.sample, feed.sample_rate_hz)
+            || !permit.current(feed.sample, feed.sample_rate_hz)
+            || !source.permit.same_endpoint_authority(permit)
+        {
+            return None;
+        }
+        let receipt = span.slice_for(feed, frames)?;
+        let next_position = feed.playback.position_at(frames)?;
+        let end = span.consumed + frames;
+        for (output, pcm) in self.output.iter_mut().zip(&span.pcm) {
+            output[..frames].copy_from_slice(&pcm[span.consumed..end]);
+        }
+        span.consumed = end;
+        self.productive_history = Some(ProductiveSourceHistory {
+            binding: receipt.context.binding,
+            next_position,
+            domain: Some(receipt.plan.domain()),
+            fed_output_frames: self.native.primed_output_frames as u64 + end as u64,
+        });
+        self.wet_rendered = true;
+        self.wet_source_rendered = true;
+        if span.remaining() == 0 {
+            self.native.wet_continuation = None;
+            self.required_wet_frame = None;
+        } else {
+            self.required_wet_frame = feed
+                .output_frame
+                .and_then(|frame| frame.checked_add(frames as u64));
+        }
+        Some(receipt)
     }
 
     /// Fence a pending source-specific candidate without touching current audio/native history.
@@ -801,7 +874,7 @@ impl StretchProcessor {
         let claim = self.wet_probe.take()?;
         let next_position = feed.playback.position_at(frames);
         let accepted = feed.output_frame == Some(claim.execution)
-            && frames == super::wet_continuation_probe::WET_PROBE_FRAMES
+            && frames == super::wet_continuation::WET_CALLBACK_FRAMES
             && next_position.is_some()
             && self.native_identity() == claim.incumbent
             && self.adopted_request_id == Some(claim.incumbent_request)
@@ -855,7 +928,7 @@ impl StretchProcessor {
     }
 
     #[cfg(test)]
-    pub(super) fn accepted_wet_probe(&self) -> Option<&super::wet_continuation_probe::WetSpan> {
+    pub(super) fn accepted_wet_probe(&self) -> Option<&super::wet_continuation::WetSpan> {
         self.native.wet_probe.as_ref()
     }
 
@@ -905,6 +978,7 @@ impl StretchProcessor {
         request_id: u64,
     ) {
         self.preparation.exchange_source_claimed(&mut self.native);
+        self.required_wet_frame = None;
         self.prospective_request = None;
         self.request_pending = false;
         self.adopted_request_id = Some(request_id);

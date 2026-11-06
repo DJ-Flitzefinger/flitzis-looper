@@ -276,6 +276,7 @@ pub struct RtMixer {
     mix_capture_pending_start: Option<u64>,
     mix_capture_pending_group: Option<capture::PendingGroupCapture>,
     mix_capture_scheduler_cleared: bool,
+    wet_callback_frame: Option<u64>,
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
@@ -379,6 +380,16 @@ pub(crate) struct PreparedLoopEdit {
 }
 
 impl RtMixer {
+    pub(super) fn set_wet_callback_frame(&mut self, frame: Option<u64>) {
+        self.wet_callback_frame = frame;
+    }
+
+    pub(super) fn wet_preparation_admitted(&self, capture: u64, effect: u64) -> bool {
+        self.wet_callback_frame == Some(capture)
+            && effect > capture
+            && (effect - capture)
+                .is_multiple_of(super::wet_continuation::WET_CALLBACK_FRAMES as u64)
+    }
     fn observe_dsp_inputs(&mut self, frame: u64) {
         for id in 0..NUM_SAMPLES {
             if let Some(key) = self
@@ -1027,6 +1038,7 @@ impl RtMixer {
             mix_capture_pending_start: None,
             mix_capture_pending_group: None,
             mix_capture_scheduler_cleared: true,
+            wet_callback_frame: None,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             pad_pitch_intent: [PitchIntent::default(); NUM_SAMPLES],
             pad_key_lock_request_id: [0; NUM_SAMPLES],
@@ -5741,14 +5753,14 @@ impl RtMixer {
         output_start_frame: u64,
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
-    ) {
+    ) -> bool {
         self.render_rt_with_output_frame(
             output,
             pad_peaks,
             Some(output_start_frame),
             pad_activity,
             retirement,
-        );
+        )
     }
 
     fn render_rt_with_output_frame(
@@ -5758,7 +5770,7 @@ impl RtMixer {
         output_start_frame: Option<u64>,
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
-    ) {
+    ) -> bool {
         if let Some(frame) = output_start_frame {
             self.observe_dsp_inputs(frame);
         }
@@ -5767,12 +5779,12 @@ impl RtMixer {
         self.pad_playhead_frame.fill(None);
 
         if self.channels == 0 {
-            return;
+            return true;
         }
 
         let frames = output.len() / self.channels;
         if frames == 0 {
-            return;
+            return true;
         }
 
         let max_frames = self.max_realtime_render_frames();
@@ -5789,13 +5801,15 @@ impl RtMixer {
             let start = rendered_frames * self.channels;
             let end = start + chunk_frames * self.channels;
 
-            self.render_rt_chunk(
+            if !self.render_rt_chunk(
                 &mut output[start..end],
                 &mut chunk_peaks,
                 chunk_output_start_frame,
                 pad_activity,
                 retirement,
-            );
+            ) {
+                return false;
+            }
             for id in pad_activity.iter() {
                 pad_peaks[id] = pad_peaks[id].max(chunk_peaks[id]);
             }
@@ -5805,6 +5819,7 @@ impl RtMixer {
         if let Some(frame) = output_start_frame.and_then(|frame| frame.checked_add(frames as u64)) {
             self.observe_dsp_inputs(frame);
         }
+        true
     }
 
     fn render_rt_chunk(
@@ -5814,16 +5829,16 @@ impl RtMixer {
         output_start_frame: Option<u64>,
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
-    ) {
+    ) -> bool {
         pad_peaks.fill(f32::EQUILIBRIUM);
 
         if self.channels == 0 {
-            return;
+            return true;
         }
 
         let frames = output.len() / self.channels;
         if frames == 0 {
-            return;
+            return true;
         }
 
         let channels = self.channels;
@@ -5986,6 +6001,7 @@ impl RtMixer {
                     };
                     let pending_dry = pad_key_lock_pending_on[voice.sample_id]
                         && voice.stretch.pending_mode_needs_dry();
+                    let remaining = voice.stretch.wet_continuation_limit(remaining);
                     let (chunk_frames, tempo_ratio) = voice.source_playback.chunk(remaining);
                     let position = voice.source_playback.position();
                     let source_plan = SourceReadPlan {
@@ -6052,23 +6068,33 @@ impl RtMixer {
                         .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
                             view.outgoing.as_ref()
                         });
-                    let source_read = voice.stretch.process_source(
-                        ProductiveSourceFeed {
-                            pitch_intent,
-                            key_lock,
-                            sample: &sample,
-                            stems: prepared_stem_set,
-                            outgoing_stems: outgoing_stem_set,
-                            sample_rate_hz: sample_rate_hz as u32,
-                            accepted: voice.source_timing.accepted,
-                            plan: source_plan,
-                            playback: &voice.source_playback,
-                            permit: permit.as_ref(),
-                            output_frame,
-                        },
-                        chunk_frames,
+                    let feed = ProductiveSourceFeed {
+                        pitch_intent,
                         key_lock,
-                    );
+                        sample: &sample,
+                        stems: prepared_stem_set,
+                        outgoing_stems: outgoing_stem_set,
+                        sample_rate_hz: sample_rate_hz as u32,
+                        accepted: voice.source_timing.accepted,
+                        plan: source_plan,
+                        playback: &voice.source_playback,
+                        permit: permit.as_ref(),
+                        output_frame,
+                    };
+                    let source_read = if output_frame.is_some_and(|frame| {
+                        voice.stretch.wet_continuation_due(frame.saturating_add(1))
+                    }) {
+                        let Some(receipt) = voice.stretch.consume_wet_continuation(
+                            &feed,
+                            chunk_frames,
+                            self.wet_callback_frame,
+                        ) else {
+                            return false;
+                        };
+                        Some(receipt)
+                    } else {
+                        voice.stretch.process_source(feed, chunk_frames, key_lock)
+                    };
                     #[cfg(test)]
                     super::native_render_observation::source_result(source_read.is_some());
                     if let Some(receipt) = source_read {
@@ -6276,6 +6302,14 @@ impl RtMixer {
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
+        if output_start_frame.is_some_and(|frame| {
+            let end = frame.saturating_add(frames as u64);
+            self.voices
+                .iter()
+                .any(|voice| voice.active && voice.stretch.wet_continuation_due(end))
+        }) {
+            return false;
+        }
         for key in ordinary_terminated.into_iter().flatten() {
             let active = self.voices.iter().any(|voice| {
                 voice.active
@@ -6298,6 +6332,7 @@ impl RtMixer {
             self.publish_key_lock_status(id);
             self.finish_committed_stem_mode(id);
         }
+        true
     }
 }
 

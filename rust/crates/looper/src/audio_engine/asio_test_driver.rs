@@ -84,6 +84,7 @@ unsafe extern "C" {
 #[derive(Debug)]
 pub(in crate::audio_engine) struct Factory {
     state: NonNull<State>,
+    pub inline_wet: std::sync::atomic::AtomicBool,
 }
 
 // The C++ state contains only atomics. Arc retains it through every original
@@ -99,6 +100,7 @@ impl Factory {
         })?;
         Ok(Arc::new(Self {
             state: NonNull::new(state).ok_or("private device state is null")?,
+            inline_wet: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 

@@ -756,7 +756,7 @@ impl WorkerLane {
         let result = if matches!(&result, Ok(true))
             && history.as_ref().is_some_and(|work| work.render_wet_probe)
         {
-            state.wet_probe = super::wet_continuation_probe::WetSpan::render(&mut state);
+            state.wet_probe = super::wet_continuation::WetSpan::render(&mut state);
             if state.wet_probe.is_some() {
                 result
             } else {

@@ -186,8 +186,7 @@ mod resident_proposal;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
 pub(crate) mod stem_conversion;
-#[cfg(test)]
-mod wet_continuation_probe;
+mod wet_continuation;
 pub use prepared_source::PreparedSourceTicket;
 mod material_migration;
 mod material_migration_control;

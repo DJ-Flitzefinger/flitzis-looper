@@ -84,8 +84,15 @@ pub(super) struct RateTransaction {
     flags: u32,
 }
 
-type Render =
-    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, i32, *const DriverTime) -> u64;
+type Render = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    i32,
+    i32,
+    *const DriverTime,
+) -> u64;
 type Submitted = unsafe extern "C" fn(*mut c_void, u64, u64);
 type Enumerate = unsafe extern "C" fn(*mut c_void, *const u16, *const u16);
 type Invalidate = unsafe extern "C" fn(*mut c_void, u32, u32);
@@ -585,7 +592,12 @@ impl Owner {
                 asio_invalidate,
             )
         })?;
-        self.info()
+        let info = self.info()?;
+        self.context
+            .as_ref()
+            .unwrap()
+            .set_output_ready(info.output_ready != 0);
+        Ok(info)
     }
 
     fn close(&mut self) -> Result<DriverInfo, String> {

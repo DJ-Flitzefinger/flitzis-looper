@@ -7217,3 +7217,32 @@ provide no deadline or throughput measurement. A productive source worker
 still needs a control admission boundary, bounded misses, and a submission
 failure when required Wet has no valid owner. A real device's submission
 receipt and OwnACK remain separate.
+
+### Native shift on the original prepared pitch action
+
+An in-place SET can carry one source-only prefix on its existing prepared Native
+owner. The first supported request is stereo ASIO at 96 kHz and 96 frames with
+qualified device time and a contiguous same-owner post-outputReady receipt.
+The existing future quantized T remains E, on the observed callback grid and
+within the existing preparation lead. An immediate SET keeps its existing
+scheduling and inline render policy.
+
+The existing worker prepares the original effect. When its actual input FIFO
+needs a shift within the first 96 frames, it reads the exact prefix through
+that shift within one source-rate step. Unsupported geometry and source
+coverage leave the same prepared E owner available for inline rendering.
+The existing action claim retains authority over pitch, source, and the Native
+transfer. A staged Native can transfer only in a still-qualified request at E.
+The mixer validates the requested slice after due controls against
+the adopted action, live source permit, readers, and playback trajectory.
+Final gain, EQ, mix, and capture remain on the callback. Only the admitted
+slice advances the logical journal. The suffix uses the same post-shift owner.
+
+STOP ends the birth and its pending contribution. A continuing birth whose
+accepted worker owner cannot supply the exact required slice fails that ASIO
+submission before it can be confirmed. The stream's existing failure path
+preserves the earlier confirmed recording prefix. A SET selected for this
+bounded path expires at E if its Work is unavailable, including a worker
+that would have returned the original inline E owner. Its slot retains the
+Work's custody until return without deferring due STOP and tempo controls.
+Physical device and WASAPI acceptance remain separate.

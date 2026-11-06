@@ -1540,13 +1540,18 @@ fn render_scheduled_audio_tracking_pads<
     transport: &mut TransportTimeline,
     audio_messages: &mut S,
     retirement: &mut R,
-) {
+) -> bool {
     output.fill(0.0);
     pad_peaks.fill(0.0);
     pad_activity.clear();
 
     mixer.service_mix_capture(scheduler, retirement);
-    super::pitch_runtime::service_endpoint_reserve(mixer, scheduler, callback_start_frame);
+    super::pitch_runtime::service_endpoint_reserve(
+        mixer,
+        scheduler,
+        callback_start_frame,
+        retirement,
+    );
 
     drain_scheduler_due_at_callback_start(
         scheduler,
@@ -1566,12 +1571,12 @@ fn render_scheduled_audio_tracking_pads<
     }
 
     if channels == 0 {
-        return;
+        return true;
     }
 
     let frames = output.len() / channels;
     if frames == 0 {
-        return;
+        return true;
     }
 
     let callback_end_frame = callback_start_frame.saturating_add(frames as u64);
@@ -1586,7 +1591,7 @@ fn render_scheduled_audio_tracking_pads<
             .min(mixer.next_global_rate_frame().unwrap_or(callback_end_frame));
 
         if next_target_frame >= callback_end_frame {
-            render_mixer_segment(
+            if !render_mixer_segment(
                 mixer,
                 output,
                 pad_peaks,
@@ -1597,13 +1602,15 @@ fn render_scheduled_audio_tracking_pads<
                 callback_end_frame,
                 channels,
                 retirement,
-            );
+            ) {
+                return false;
+            }
             mixer.service_mix_capture(scheduler, retirement);
             break;
         }
 
         if next_target_frame > rendered_until_frame {
-            render_mixer_segment(
+            if !render_mixer_segment(
                 mixer,
                 output,
                 pad_peaks,
@@ -1614,7 +1621,9 @@ fn render_scheduled_audio_tracking_pads<
                 next_target_frame,
                 channels,
                 retirement,
-            );
+            ) {
+                return false;
+            }
             mixer.service_mix_capture(scheduler, retirement);
             rendered_until_frame = next_target_frame;
         }
@@ -1636,7 +1645,7 @@ fn render_scheduled_audio_tracking_pads<
         }
         if scheduler.deferred_due().is_some() {
             mixer.cancel_bpm_history();
-            render_mixer_segment(
+            if !render_mixer_segment(
                 mixer,
                 output,
                 pad_peaks,
@@ -1647,7 +1656,9 @@ fn render_scheduled_audio_tracking_pads<
                 callback_end_frame,
                 channels,
                 retirement,
-            );
+            ) {
+                return false;
+            }
             // The rendered interval is half-open. A boundary at the next
             // callback remains eligible for that callback's ordinary due pass.
             mixer.settle_group_capture_stop_through(callback_end_frame - 1);
@@ -1660,6 +1671,7 @@ fn render_scheduled_audio_tracking_pads<
         scheduler.peek_next_target_frame().is_none() && scheduler.deferred_due().is_none(),
     );
     mixer.service_mix_capture(scheduler, retirement);
+    true
 }
 
 // Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
@@ -1675,9 +1687,9 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     segment_end_frame: u64,
     channels: usize,
     retirement: &mut R,
-) {
+) -> bool {
     if segment_end_frame <= segment_start_frame {
-        return;
+        return true;
     }
 
     let start_frame = (segment_start_frame - callback_start_frame) as usize;
@@ -1685,18 +1697,21 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     let start = start_frame * channels;
     let end = end_frame * channels;
 
-    mixer.render_rt_at_output_frame_tracking_pads(
+    if !mixer.render_rt_at_output_frame_tracking_pads(
         &mut output[start..end],
         segment_peaks,
         segment_start_frame,
         pad_activity,
         retirement,
-    );
+    ) {
+        return false;
+    }
     mixer.append_mix_capture(segment_start_frame, &output[start..end]);
 
     for id in pad_activity.iter() {
         pad_peaks[id] = pad_peaks[id].max(segment_peaks[id]);
     }
+    true
 }
 
 fn master_output_peak(output: &[f32]) -> f32 {
@@ -3679,7 +3694,7 @@ fn render_output_block(
     format: RenderFormat,
     failed: &AtomicBool,
     device_clock: Option<(OutputClockSnapshot, u32)>,
-) {
+) -> bool {
     let RenderFormat {
         channels,
         sample_rate_hz,
@@ -3733,7 +3748,7 @@ fn render_output_block(
             revision,
         );
     }
-    render_scheduled_audio_tracking_pads(
+    if !render_scheduled_audio_tracking_pads(
         &mut state.mixer,
         &mut state.scheduler,
         data,
@@ -3744,7 +3759,13 @@ fn render_output_block(
         &mut state.transport,
         &mut state.producer_out,
         &mut state.retired_buffers,
-    );
+    ) {
+        state.mixer.fail_mix_capture_stream();
+        state
+            .mixer
+            .service_mix_capture(&mut state.scheduler, &mut state.retired_buffers);
+        return false;
+    }
     let master_peak = master_output_peak(data);
     state.transport.advance_by_rendered_frames(frames);
     let frame_clock = state.transport.output_frame();
@@ -3769,6 +3790,7 @@ fn render_output_block(
         emit_interval_frames,
         &mut state.last_master_emit_frame,
     );
+    true
 }
 
 #[cfg(windows)]
@@ -3792,10 +3814,19 @@ pub(super) struct AsioRenderContext {
     clock: Arc<SharedOutputClock>,
     admission_unavailable: Arc<AtomicBool>,
     submission: Arc<super::mix_capture::AsioSubmission>,
+    output_ready: AtomicBool,
+    #[cfg(all(test, feature = "asio-contract-tests"))]
+    inline_wet: bool,
 }
 
 #[cfg(windows)]
 impl AsioRenderContext {
+    pub(super) fn set_output_ready(&self, ready: bool) {
+        #[cfg(all(test, feature = "asio-contract-tests"))]
+        let ready = ready && !self.inline_wet;
+        self.output_ready.store(ready, Ordering::Release);
+    }
+
     pub(super) fn invalidate_clock(&self) {
         self.submission.terminate();
         self.failed.store(true, Ordering::Release);
@@ -3987,7 +4018,18 @@ pub(super) unsafe extern "C" fn asio_render(
             frames as usize,
             progressed,
         );
-        render_output_block(
+        let wet_callback = snapshot.valid
+            && context
+                .clock
+                .external_revision_current(time.latency_revision)
+            && context.output_ready.load(Ordering::Acquire)
+            && context.submission.prefix() == (first, false)
+            && sample_rate_hz == super::wet_continuation::WET_SAMPLE_RATE
+            && frames as usize == super::wet_continuation::WET_CALLBACK_FRAMES;
+        renderer
+            .mixer
+            .set_wet_callback_frame(wet_callback.then_some(first));
+        let rendered = render_output_block(
             renderer,
             &mut state.scratch,
             RenderFormat {
@@ -3997,7 +4039,8 @@ pub(super) unsafe extern "C" fn asio_render(
             &context.failed,
             Some((snapshot, time.latency_revision)),
         );
-        if renderer.transport.output_frame() != end {
+        renderer.mixer.set_wet_callback_frame(None);
+        if !rendered || renderer.transport.output_frame() != end {
             return 0;
         }
         unsafe {
@@ -4086,6 +4129,12 @@ fn create_asio_audio_stream(
         clock: output_clock.clone(),
         admission_unavailable: input_runtime_ownership.output_unavailable.clone(),
         submission: submission.clone(),
+        output_ready: AtomicBool::new(false),
+        #[cfg(all(test, feature = "asio-contract-tests"))]
+        inline_wet: options
+            .test_driver
+            .as_ref()
+            .is_some_and(|driver| driver.inline_wet.load(Ordering::Acquire)),
     });
     control.install(super::asio_output::Installation {
         context,

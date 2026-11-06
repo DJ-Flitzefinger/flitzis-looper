@@ -148,7 +148,7 @@ impl VoiceSlot {
     ) {
         // The source-address history is valid only while this voice retains its PCM pin.
         self.source_feed_history.reset();
-        self.stretch.reset();
+        self.stretch.reset_for_new_birth();
         if let Some(old_sample) = self.sample.take() {
             retirement.retire_sample(old_sample);
         }
@@ -193,7 +193,7 @@ impl VoiceSlot {
     #[cfg(test)]
     pub(crate) fn stop(&mut self) {
         self.source_feed_history.reset();
-        self.stretch.reset();
+        self.stretch.reset_for_new_birth();
         self.sample = None;
         self.frozen_stems = None;
         self.stop_inner();
@@ -201,7 +201,7 @@ impl VoiceSlot {
 
     pub(crate) fn stop_rt(&mut self, retirement: &mut impl AudioBufferRetirement) {
         self.source_feed_history.reset();
-        self.stretch.reset();
+        self.stretch.reset_for_new_birth();
         if let Some(sample) = self.sample.take() {
             retirement.retire_sample(sample);
         }
@@ -263,7 +263,7 @@ impl VoiceSlot {
         );
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.stretch.reset();
+        self.stretch.reset_for_new_birth();
     }
 
     pub(crate) fn seek(
@@ -287,7 +287,7 @@ impl VoiceSlot {
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
         self.source_playback = playback;
-        self.stretch.reset();
+        self.stretch.reset_for_new_birth();
         true
     }
 

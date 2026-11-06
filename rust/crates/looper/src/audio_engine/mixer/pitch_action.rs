@@ -652,6 +652,9 @@ impl RtMixer {
         let Some(candidate) = work.candidate.as_ref() else {
             return false;
         };
+        if candidate.wet_continuation.is_some() && self.wet_callback_frame != Some(output_frame) {
+            return false;
+        }
         self.voices[index].stretch.prepared_pitch_matches(
             candidate,
             &feed,

@@ -960,6 +960,7 @@ pub(crate) struct PitchActionWork {
     pub(crate) source_feed: SourceFeedSnapshot,
     pub(crate) source_feed_future: Option<(SourcePlayback, SourceReadPlan, u64, SourceFeedContext)>,
     pub(crate) source_feed_voice: Option<(Arc<AtomicU64>, u64)>,
+    pub(crate) prepare_wet_continuation: bool,
     // Some means source_feed proves actual rate epochs, while input phase is
     // explicitly derived for a new Normal owner rather than continued live PCM.
     pub(crate) endpoint_reset_history: Option<EndpointResetHistory>,
@@ -1008,6 +1009,7 @@ impl PitchActionWork {
             source_feed: SourceFeedSnapshot::new(),
             source_feed_future: None,
             source_feed_voice: None,
+            prepare_wet_continuation: false,
             endpoint_reset_history: None,
             _custody: custody,
         });
@@ -1439,6 +1441,11 @@ impl PitchActionWork {
                 PitchActionPreparationMode::ForwardHistory => candidate.prepare_source(request),
             }
             .map_err(|_| PitchActionReject::PreparationFailed)?;
+            if self.prepare_wet_continuation {
+                candidate.wet_continuation =
+                    super::wet_continuation::WetSpan::prepare_shift(candidate)
+                        .map_err(|_| PitchActionReject::PreparationFailed)?;
+            }
         } else {
             self.request = Some(request);
         }
