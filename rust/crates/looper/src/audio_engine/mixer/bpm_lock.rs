@@ -24,6 +24,16 @@ pub(super) struct BpmHistory {
     requested: RateTuple,
 }
 
+impl BpmLockTarget {
+    fn protects_claimed_wet(self, anchored: bool, current: bool) -> bool {
+        if self.enabled {
+            anchored && self.source_identity.is_some()
+        } else {
+            current && self.anchor.is_none() && self.source_identity.is_none()
+        }
+    }
+}
+
 enum BpmRateChange<'a> {
     Immediate([Option<f64>; MAX_VOICES]),
     Prepared(&'a BpmHistory),
@@ -421,9 +431,10 @@ impl RtMixer {
             && self.global_rate_timing_revision() == revision
     }
 
-    fn bpm_target_tuple(
+    fn bpm_target_projection(
         &self,
         target: BpmLockTarget,
+        rate: RateTuple,
     ) -> Result<(Option<f64>, Option<usize>), BpmReason> {
         if self
             .input_runtime_ownership
@@ -455,13 +466,22 @@ impl RtMixer {
                         .period_seconds()
                         .filter(|period| period.is_finite() && *period > 0.0)
                         .ok_or(BpmReason::ReferenceChanged)?
-                        / self.speed,
+                        / rate.speed,
                 ),
-                None => self.master_period_seconds, // Compatible unqualified legacy call.
+                None => rate.period,
             }
         } else {
             None
         };
+        Ok((period, anchor_id))
+    }
+
+    fn bpm_target_tuple(
+        &self,
+        target: BpmLockTarget,
+    ) -> Result<(Option<f64>, Option<usize>), BpmReason> {
+        let (period, anchor_id) =
+            self.bpm_target_projection(target, self.effective_global_rate())?;
         if target.enabled == self.bpm_lock_enabled && period == self.master_period_seconds {
             return Ok((period, None));
         }
@@ -499,6 +519,31 @@ impl RtMixer {
                 .global_rate_status
                 .read_bpm()
                 .is_some_and(|(requested, _)| requested == target.revision)
+    }
+
+    pub(super) fn unprotected_bpm_lock_changes_wet_rate(
+        &self,
+        index: usize,
+        rate_target: f64,
+        rate: RateTuple,
+    ) -> bool {
+        let Some(target) = self.pending_bpm_lock else {
+            return false;
+        };
+        // Scalar service can clear its fence before servicing BPM at the
+        // same boundary, even when its captured effect was scheduled later.
+        let Ok((period, anchor)) = self.bpm_target_projection(target, rate) else {
+            return false;
+        };
+        !target.protects_claimed_wet(anchor.is_some(), self.bpm_lock_enabled)
+            && Self::scalar_tempo_ratio(
+                self.timing_for_voice(&self.voices[index]).period_seconds(),
+                rate.speed,
+                period,
+                target.enabled,
+            )
+            .to_bits()
+                != rate_target.to_bits()
     }
 
     pub(crate) fn accepted_refresh_master_targets(
@@ -698,14 +743,7 @@ impl RtMixer {
         } else {
             match self.bpm_immediate_targets(target, period, frame) {
                 Ok(targets) => {
-                    let protects_claimed_wet = if target.enabled {
-                        anchor_id.is_some() && target.source_identity.is_some()
-                    } else {
-                        self.bpm_lock_enabled
-                            && target.anchor.is_none()
-                            && target.source_identity.is_none()
-                    };
-                    if protects_claimed_wet
+                    if target.protects_claimed_wet(anchor_id.is_some(), self.bpm_lock_enabled)
                         && let Some(end) =
                             self.claimed_wet_scalar_end(frame, period, target.enabled)
                         && end > frame

@@ -429,6 +429,23 @@ impl RtMixer {
         ))
     }
 
+    pub(super) fn bound_refresh_affects_wet(
+        &self,
+        id: usize,
+        refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
+    ) -> bool {
+        if !refresh.global_current() {
+            return false;
+        }
+        refresh
+            .master_period_seconds
+            .is_some_and(|period| self.refresh_changes_interior_wet_rate(id, period))
+            || (self.timing_effect_slot(refresh.id, refresh.binding.placement) == Some(id)
+                && self
+                    .prepare_loop_edit(id, refresh.start_s, refresh.end_s)
+                    .is_none_or(|edit| !edit.unchanged))
+    }
+
     fn claimed_wet_scalar_end(
         &self,
         frame: u64,
@@ -479,11 +496,17 @@ impl RtMixer {
         (self.effective_loop_region(id, bank.frame_count()) != Some(next)).then_some(wet_end)
     }
 
-    pub(super) fn wet_preparation_admitted(&self, capture: u64, effect: u64) -> bool {
-        self.wet_request_at(capture)
-            && effect > capture
-            && (effect - capture)
-                .is_multiple_of(super::wet_continuation::WET_CALLBACK_FRAMES as u64)
+    pub(super) fn wet_preparation_request(&self, capture: u64, effect: u64) -> Option<u64> {
+        use super::wet_continuation::WET_CALLBACK_FRAMES;
+
+        if !self.wet_request_at(capture) || effect <= capture {
+            return None;
+        }
+        let start = effect - (effect - capture) % WET_CALLBACK_FRAMES as u64;
+        // Interior admission requires a future qualified request, after its two
+        // ingress passes. The current request has no off-RT preparation lead.
+        (start > capture && start.checked_add(WET_CALLBACK_FRAMES as u64).is_some())
+            .then_some(start)
     }
 
     pub(super) fn qualified_asio_request_interior(&self, frame: u64) -> bool {

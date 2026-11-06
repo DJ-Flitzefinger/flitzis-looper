@@ -98,12 +98,22 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** no rejected original or partial rejected group can later effect, and fresh source/DSP/OwnACK, original T and recording S/E guards remain enforced
 
 #### Scenario: An in-place SET misses its exact interior ASIO effect
-- **GIVEN** a non-Wet in-place SET has a frozen E strictly inside a qualified stereo 96 kHz ASIO request of 96 frames
+- **GIVEN** an in-place SET has a frozen E strictly inside a qualified stereo 96 kHz ASIO request of 96 frames
 - **WHEN** the scheduler reaches E and the original preparation Work has yet to return
 - **THEN** the SET is rejected at E and the due pass continues in its original order
 - **AND** independently due effects use their original frame boundaries in the same request
 - **AND** the reserved slot retains custody until the exact Work returns and can retire off the callback
-- **AND** delivered Work follows its existing capacity and placement rules, and independent births and atomic groups keep their existing retry policy
+- **AND** delivered Work without prepared Wet follows its existing capacity and placement rules, and independent births and atomic groups keep their existing retry policy
+
+#### Scenario: One prepared shift fits inside the qualified interior ASIO request
+- **GIVEN** the original in-place SET requires Native preparation for its frozen interior E
+- **WHEN** the worker's actual input FIFO needs N frames to shift, and all N frames fit before the end of the predicted request
+- **THEN** that original Native MAY prepare exactly those N frames and retain the exact callback origin separately from E
+- **AND** an insufficient request remainder SHALL return the ordinary unshifted preparation for its existing exact-E rules
+- **AND** the callback SHALL verify its actual request origin, E, full Wet source trajectory and remaining ordered effects before transferring the original Native
+- **AND** a bound effect on the same voice or its source or rate in [E, E+N) SHALL retain its own frame, with the Wet SET refused before transfer if its continuation would conflict
+- **AND** independent effects and effects at E+N SHALL keep their existing timing and authority
+- **AND** only the matching request SHALL consume the prepared Wet slice, with its suffix continuing on the same Native and recording confirmed through normal backend submission
 
 #### Scenario: Fast timing parameters meet an aligned ASIO Wet SET
 - **GIVEN** an in-place SET carries an already shifted Wet prefix for its frozen E at the start of a qualified stereo 96 kHz ASIO request of 96 frames

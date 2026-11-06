@@ -7259,6 +7259,23 @@ that would have returned the original inline E owner. Its slot retains the
 Work's custody until return without deferring due STOP and tempo controls.
 Physical device and WASAPI acceptance remain separate.
 
+### Fitting interior ASIO Wet SET
+
+The original SET Work carries the predicted request origin independently of
+its frozen E. After preparation, the worker uses the actual input FIFO to
+decide whether its one shift fits in the remaining request frames. A no-fit
+result leaves the Native and both FIFOs in ordinary prepared state. Missing
+Work still releases the exact interior due event at E.
+
+The interior due pass follows both ingress drains. Once the SET event has
+been popped, the callback checks the remaining scheduler events and the
+callback-owned rate and Key Lock boundaries through the exclusive end of
+the prepared slice. An effect on the owed source or voice keeps its bound
+frame. A conflicting Wet transfer is refused before claiming the Native.
+Recording and disjoint PAD effects keep their existing executors. The
+actual request origin, frozen effect frame and source receipt remain
+separate checks through every consumed slice.
+
 ### Fast timing ingress at the aligned Wet claim
 
 An immediate ordered control can drain the aligned SET before the fast

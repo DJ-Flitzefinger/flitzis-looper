@@ -15,6 +15,7 @@ pub(super) const WET_CALLBACK_FRAMES: usize = 96;
 pub(super) const WET_SAMPLE_RATE: u32 = 96_000;
 
 pub(crate) struct WetSpan {
+    callback_start: u64,
     pub(super) receipt: SourceReadReceipt,
     pub(super) pcm: [[f32; WET_CALLBACK_FRAMES]; 2],
     pub(super) consumed: usize,
@@ -29,18 +30,39 @@ pub(crate) struct WetSpan {
 impl WetSpan {
     pub(super) fn prepare_shift(
         native: &mut NativeAdapterState,
+        callback_start: u64,
     ) -> Result<Option<Self>, RubberBandError> {
+        let Some(effect) = native
+            .source
+            .as_ref()
+            .map(|source| source.target_output_frame)
+        else {
+            return Ok(None);
+        };
         let frames = native.block_size.saturating_sub(native.input_fifo[0].len());
-        Self::prepare(native, frames)
+        if !Self::fits_request(callback_start, effect, frames) {
+            // The ordinary candidate still owns its original, unshifted FIFO.
+            return Ok(None);
+        }
+        // An interior recording split or STOP may consume fewer than N frames.
+        // Those frames must already have been available without the shift.
+        if effect != callback_start && native.output_fifo[0].len() < frames.saturating_sub(1) {
+            return Ok(None);
+        }
+        Self::prepare(native, callback_start, frames)
     }
 
     #[cfg(test)]
     pub(super) fn render(native: &mut NativeAdapterState) -> Option<Self> {
-        Self::prepare(native, WET_CALLBACK_FRAMES).ok().flatten()
+        let callback_start = native.source.as_ref()?.target_output_frame;
+        Self::prepare(native, callback_start, WET_CALLBACK_FRAMES)
+            .ok()
+            .flatten()
     }
 
     fn prepare(
         native: &mut NativeAdapterState,
+        callback_start: u64,
         frames: usize,
     ) -> Result<Option<Self>, RubberBandError> {
         let Some(source) = native.source.as_ref() else {
@@ -117,6 +139,7 @@ impl WetSpan {
             channel[..frames].copy_from_slice(&output);
         }
         Ok(Some(Self {
+            callback_start,
             receipt,
             pcm,
             consumed: 0,
@@ -131,6 +154,22 @@ impl WetSpan {
 
     pub(super) fn remaining(&self) -> usize {
         self.receipt.output_frames - self.consumed
+    }
+
+    fn fits_request(callback_start: u64, effect: u64, frames: usize) -> bool {
+        effect.checked_sub(callback_start).is_some_and(|offset| {
+            offset < WET_CALLBACK_FRAMES as u64
+                && frames as u64 <= WET_CALLBACK_FRAMES as u64 - offset
+                && callback_start
+                    .checked_add(WET_CALLBACK_FRAMES as u64)
+                    .is_some()
+        })
+    }
+
+    pub(super) fn matches_request(&self, callback: Option<u64>, effect: u64, frame: u64) -> bool {
+        callback == Some(self.callback_start)
+            && Self::fits_request(self.callback_start, effect, self.receipt.output_frames)
+            && effect.checked_add(self.consumed as u64) == Some(frame)
     }
 
     #[cfg(test)]

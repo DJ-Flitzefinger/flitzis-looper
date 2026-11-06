@@ -730,8 +730,10 @@ impl StretchProcessor {
     ) -> Option<SourceReadReceipt> {
         let source = self.native.source.as_ref()?;
         let permit = feed.permit?;
-        if callback != Some(source.target_output_frame)
-            || feed.output_frame != self.required_wet_frame
+        let frame = feed.output_frame?;
+        let span = self.native.wet_continuation.as_ref()?;
+        if !span.matches_request(callback, source.target_output_frame, frame)
+            || Some(frame) != self.required_wet_frame
             || self.adopted_request_id != Some(source.request_id)
             || !self.native.active
             || !self.native.used

@@ -1098,6 +1098,75 @@ impl RtMixer {
             })
     }
 
+    pub(super) fn rate_effect_affects_interior_wet(
+        &self,
+        index: usize,
+        span: std::ops::Range<u64>,
+        rate_target: f64,
+    ) -> bool {
+        if self.unprotected_bpm_lock_changes_wet_rate(
+            index,
+            rate_target,
+            self.effective_global_rate(),
+        ) {
+            return true;
+        }
+        let affects = |capture: &RateCapture| {
+            span.contains(&capture.execution) && capture.voices[index].is_some()
+        };
+        let period = self.timing_for_voice(&self.voices[index]).period_seconds();
+        self.global_rate.as_ref().is_some_and(|rate| {
+            rate.pending.as_ref().is_some_and(|pending| {
+                pending.terminal_error.is_none()
+                    && pending.capture.as_ref().map_or_else(
+                        || {
+                            let next = pending.requested;
+                            Self::scalar_tempo_ratio(
+                                period,
+                                next.speed,
+                                next.period,
+                                self.bpm_lock_enabled,
+                            )
+                            .to_bits()
+                                != rate_target.to_bits()
+                                || self.unprotected_bpm_lock_changes_wet_rate(
+                                    index,
+                                    rate_target,
+                                    next,
+                                )
+                        },
+                        affects,
+                    )
+            }) || rate
+                .bpm_history
+                .as_ref()
+                .is_some_and(|history| affects(&history.capture))
+        })
+    }
+
+    pub(super) fn refresh_changes_interior_wet_rate(&self, id: usize, period: f64) -> bool {
+        self.voices
+            .iter()
+            .filter(|voice| voice.is_playing_sample(id))
+            .any(|voice| {
+                let source_period = self.timing_for_voice(voice).period_seconds();
+                let changes = |speed| {
+                    Self::scalar_tempo_ratio(source_period, speed, Some(period), true).to_bits()
+                        != voice.source_playback.rate_target().to_bits()
+                };
+                changes(self.speed)
+                    || self
+                        .global_rate
+                        .as_ref()
+                        .and_then(|rate| rate.pending.as_ref())
+                        .is_some_and(|pending| {
+                            pending.terminal_error.is_none()
+                                && pending.capture.is_none()
+                                && changes(pending.requested.speed)
+                        })
+            })
+    }
+
     /// Legacy effects have no held rate request. Their actual callback state is
     /// the next coalescing base, including an explicitly cleared master period.
     pub(super) fn refresh_global_rate_intent(&mut self) {

@@ -1791,22 +1791,73 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) {
 
 #[test]
 fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
+    interior_set_at_request(InteriorSet::Missing, false);
+}
+
+#[test]
+fn asio_prepared_interior_set_uses_fitting_original_fifo() {
+    let inline = interior_set_at_request(InteriorSet::Fit, true);
+    assert_eq!(interior_set_at_request(InteriorSet::Fit, false), inline);
+}
+
+#[test]
+fn asio_prepared_interior_set_retains_unshifted_no_fit() {
+    let inline = interior_set_at_request(InteriorSet::NoFit, true);
+    assert_eq!(interior_set_at_request(InteriorSet::NoFit, false), inline);
+}
+
+#[test]
+fn asio_prepared_interior_set_yields_to_bound_same_pad_restart() {
+    interior_set_at_request(InteriorSet::BoundRestart, true);
+    interior_set_at_request(InteriorSet::BoundRestart, false);
+}
+
+#[test]
+fn asio_prepared_interior_set_preserves_bound_peer_exclusive() {
+    interior_set_at_request(InteriorSet::PeerExclusive, false);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InteriorSet {
+    Missing,
+    Fit,
+    NoFit,
+    BoundRestart,
+    PeerExclusive,
+}
+
+fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
     use crate::audio_engine::constants::NUM_SAMPLES;
     use crate::audio_engine::input_mapping::PitchPadProjection;
     use crate::audio_engine::input_runtime_binding;
     use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
 
     const FRAMES: u64 = 96;
-    const F: u64 = 18_240;
     const REQUEST: u64 = 24_000;
-    const E: u64 = 24_016;
     const FIRST: u64 = REQUEST + 7;
-    const STOP: u64 = REQUEST + 73;
+    let missing = case == InteriorSet::Missing;
+    let no_fit = case == InteriorSet::NoFit;
+    let exclusive = matches!(case, InteriorSet::Missing | InteriorSet::PeerExclusive);
+    let restart = case == InteriorSet::BoundRestart;
+    let effect = if no_fit { 24_048 } else { 24_016 };
+    let capture_frame = if missing { 18_240 } else { 21_120 };
+    // The second ready case uses another real birth phase, with a shift that
+    // fits 96 frames but cannot fit the remainder of its actual request.
+    let birth = if no_fit { 576 } else { 0 };
+    let capture_end = REQUEST
+        + match case {
+            InteriorSet::Fit => 64,
+            InteriorSet::Missing => 73,
+            InteriorSet::NoFit | InteriorSet::BoundRestart | InteriorSet::PeerExclusive => 93,
+        };
     Python::initialize();
     let directory = tempfile::tempdir().unwrap().keep();
     let path = directory.join("take.capture");
     eprintln!("ASIO interior SET spool: {}", path.display());
     let factory = Factory::new().unwrap();
+    factory
+        .inline_wet
+        .store(inline, std::sync::atomic::Ordering::Release);
     let mut engine = AudioEngine::new().unwrap();
     engine.test_asio_driver = Some(factory.clone());
     engine
@@ -1817,17 +1868,16 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
             ..Default::default()
         })
         .unwrap();
-    engine.set_master_period(E as f64 / 48_000.0).unwrap();
-    engine.set_trigger_quantization("1/16").unwrap();
+    engine.set_master_period(effect as f64 / 48_000.0).unwrap();
+    engine.set_trigger_quantization("immediate").unwrap();
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
     let submission = stream.output_submission.as_ref().unwrap().clone();
-    let ownership = &engine.input_runtime_ownership;
     let a = ColdPcm::publish(&engine, 1, "a");
     let b = ColdPcm::publish_at(&engine, 1, 1, "b", SourcePitchInitialization::FreshNeutral);
     a.assert_ack(&engine, false);
     b.assert_ack(&engine, false);
-    assert!(
+    let play_a = || {
         stream
             .producer
             .lock()
@@ -1838,11 +1888,39 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
                 received_at_ns: None,
                 expected_source_generation: Some(1),
             })
-            .is_ok()
-    );
-    assert!(stream.test_tick().unwrap().pads[0].active);
+            .unwrap();
+    };
+    if birth == 0 {
+        play_a();
+    }
+    assert_eq!(stream.test_tick().unwrap().pads[0].active, birth == 0);
     a.assert_ack(&engine, true);
     b.assert_ack(&engine, true);
+    if !exclusive && !restart {
+        stream
+            .producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::PlaySample {
+                id: 1,
+                volume: 0.25,
+                received_at_ns: None,
+                expected_source_generation: Some(1),
+            })
+            .unwrap();
+    }
+    let lead_end = birth.max(if exclusive || restart { 0 } else { FRAMES }) + FRAMES;
+    for end in (2 * FRAMES..=lead_end).step_by(FRAMES as usize) {
+        if end - FRAMES == birth {
+            play_a();
+        }
+        let tick = stream.test_tick().unwrap();
+        assert_eq!(tick.output_frame, end);
+        assert_eq!(tick.pads[0].active, end > birth);
+    }
+    engine.set_trigger_quantization("1/16").unwrap();
+    let stream = engine.stream_handle.as_ref().unwrap();
+    let ownership = &engine.input_runtime_ownership;
 
     let runtime = engine.input_runtime.as_ref().unwrap();
     let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
@@ -1862,8 +1940,8 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
             rows,
         )
         .unwrap();
-    for end in (2 * FRAMES..=F).step_by(FRAMES as usize) {
-        if end == F {
+    for end in (lead_end + FRAMES..=capture_frame).step_by(FRAMES as usize) {
+        if end == capture_frame {
             // Set the real rate before either action freezes a source trajectory.
             push_global_rate_message(
                 &ownership.global_timing_revision,
@@ -1876,36 +1954,101 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
             )
             .unwrap();
         }
-        assert_eq!(stream.test_tick().unwrap().output_frame, end);
+        let tick = stream.test_tick().unwrap();
+        assert_eq!(tick.output_frame, end);
+        assert_eq!(tick.pads[0].active, end > birth);
     }
     let rate = ownership.global_rate_status.read().unwrap();
-    assert_eq!(rate.effect.execution_frame, Some(F - FRAMES));
+    assert_eq!(rate.effect.execution_frame, Some(capture_frame - FRAMES));
     assert_eq!(rate.request_revision, rate.effect.revision);
     let clock = stream.output_clock.read().unwrap();
     assert!(clock.valid);
     let action = runtime
         .capture_gui_pitch(&binding, "pitch.extra:3:set", clock.observed_at_ns)
         .unwrap();
-    assert_eq!(action.original_due_frame(), E);
-    let worker = WorkerGate::for_pitch(&action);
+    assert_eq!(action.original_due_frame(), effect);
+    let worker = if missing {
+        WorkerGate::for_pitch(&action)
+    } else {
+        WorkerGate::for_pitch_return(&action)
+    };
     assert!(engine.publish_pitch_action(&action).unwrap());
-    assert_eq!(stream.test_tick().unwrap().output_frame, F + FRAMES);
-    worker.wait_for(false);
-    assert_eq!(action.execution_target(), E);
+    assert_eq!(
+        stream.test_tick().unwrap().output_frame,
+        capture_frame + FRAMES
+    );
+    assert!(worker.wait_for(!missing).is_none());
+    assert_eq!(action.execution_target(), effect);
+    let original = (!missing).then(|| {
+        let ((block, input, output), wet) = worker.prepared_fifo();
+        let need = block.checked_sub(input).unwrap();
+        let native = worker.prepared_native();
+        worker.release();
+        eprintln!(
+            "ASIO interior SET {case:?} inline={inline} E={effect} block={block} input={input} output={output} need={need} cap={} Wet={wet:?} Native={native:#x}",
+            REQUEST + FRAMES - effect,
+        );
+        assert_eq!((block, input), if no_fit { (512, 432) } else { (512, 464) });
+        assert_eq!(output + 1, need);
+        assert_eq!(wet, (!inline && !no_fit).then_some((need, 1)));
+        native
+    });
 
-    // A genuine independently captured exclusive launch stops A at its own E.
-    let start = engine
-        .capture_pad_start(1, 0.0, None, 0.25, true, None, Some(1))
-        .unwrap();
-    assert!(action.sequence() < start.sequence());
-    assert_eq!(stream.test_tick().unwrap().output_frame, F + 2 * FRAMES);
-    assert_eq!(start.original_frame(), Some(E));
-    assert!(engine.publish_pad_start(&start, None).unwrap());
-    for end in (F + 3 * FRAMES..=REQUEST).step_by(FRAMES as usize) {
-        assert_eq!(stream.test_tick().unwrap().output_frame, end);
+    // A peer exclusive ends A. A same-pad restart validates the captured A pitch.
+    let start = (exclusive || restart).then(|| {
+        let start = engine
+            .capture_pad_start(
+                usize::from(exclusive),
+                0.0,
+                None,
+                0.25,
+                exclusive,
+                None,
+                Some(1),
+            )
+            .unwrap();
+        assert!(action.sequence() < start.sequence());
+        start
+    });
+    assert_eq!(
+        stream.test_tick().unwrap().output_frame,
+        capture_frame + 2 * FRAMES
+    );
+    if let Some(start) = &start {
+        assert_eq!(start.original_frame(), Some(effect));
+        assert!(engine.publish_pad_start(start, None).unwrap());
     }
-    assert_eq!(start.execution_frame(), Some(E));
-    assert_eq!(start.state(), "scheduled", "{:?}", start.reason());
+    let mut before = None;
+    for end in (capture_frame + 3 * FRAMES..=REQUEST).step_by(FRAMES as usize) {
+        let tick = stream.test_tick().unwrap();
+        assert_eq!(tick.output_frame, end);
+        before = Some(tick);
+    }
+    let before = before.unwrap();
+    if !missing {
+        assert_eq!(action.state(), "prepared");
+    }
+    let next = if let Some(start) = &start {
+        assert_eq!(start.execution_frame(), Some(effect));
+        assert_eq!(start.state(), "scheduled", "{:?}", start.reason());
+        None
+    } else {
+        assert!(before.pads[1].active);
+        assert!(enqueue_stop_with_producer(
+            ownership,
+            &mut stream.producer.lock().unwrap(),
+            Some(1),
+        ));
+        let next = ColdPcm::publish_at(
+            &engine,
+            2,
+            1,
+            "next",
+            SourcePitchInitialization::FreshNeutral,
+        );
+        next.assert_ack(&engine, false);
+        Some(next)
+    };
     assert_eq!(submission.prefix(), (REQUEST, false));
     let ticket = engine
         .prepare_mix_capture_internal(path.to_str().unwrap(), FRAMES as usize, 4, 4096)
@@ -1921,22 +2064,31 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
     };
     until(|| capture_status().writer_ready.then_some(()));
     assert!(engine.start_mix_capture_internal(&ticket, FIRST).unwrap());
-    assert!(engine.stop_mix_capture_internal(&ticket, STOP).unwrap());
+    assert!(
+        engine
+            .stop_mix_capture_internal(&ticket, capture_end)
+            .unwrap()
+    );
     factory.arm_output_ready();
     let (tick, pcm, gated, prefix) = std::thread::scope(|scope| {
         let tick = scope.spawn(|| stream.test_tick().unwrap());
-        let pcm = until(|| factory.gated_output_pcm());
+        let pcm = until(|| {
+            factory
+                .gated_output_pcm()
+                .map(Some)
+                .or_else(|| tick.is_finished().then_some(None))
+        });
         let gated = capture_status();
         let prefix = submission.prefix();
-        factory.release_output_ready(false);
+        if pcm.is_some() {
+            factory.release_output_ready(false);
+        }
         (tick.join().unwrap(), pcm, gated, prefix)
     });
-    let applied = start.effective_frame();
-    let launch_state = start.state();
-    let launch_reason = start.reason();
+    let applied = start.as_ref().and_then(|start| start.effective_frame());
     let pitch_state = action.state();
     eprintln!(
-        "ASIO interior SET E={E} request={REQUEST}..{} pitch={pitch_state} exclusive={applied:?}/{launch_state}/{launch_reason:?} A={} B={} captured_end={:?} sealed_end={:?} raw={} rate={:?}",
+        "ASIO interior SET E={effect} request={REQUEST}..{} pitch={pitch_state} exclusive={applied:?} A={} B={} captured_end={:?} sealed_end={:?} raw={} rate={:?} Native={:#x} shifts={}",
         tick.output_frame,
         tick.pads[0].active,
         tick.pads[1].active,
@@ -1944,14 +2096,22 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
         gated.end_frame,
         gated.written_frames,
         rate.effect.execution_frame,
+        tick.pads[0].native_state,
+        tick.native.shifts,
     );
+    let pcm = pcm.expect("interior SET request reached actual outputReady");
     assert_eq!(tick.output_frame, REQUEST + FRAMES);
     assert_eq!(prefix, (REQUEST, false));
     assert!(!gated.terminal_decided && gated.payload_sha256.is_none());
     assert_eq!(submission.prefix(), (REQUEST + FRAMES, false));
-    assert_eq!(engine.pitch_work_capacity.used(), 1);
-    worker.release();
-    worker.wait_for(true);
+    if missing {
+        assert_eq!(engine.pitch_work_capacity.used(), 1);
+        worker.release();
+        worker.wait_for(true);
+    }
+    if let Some(next) = &next {
+        next.assert_ack(&engine, true);
+    }
     // Continue with the original stream to observe late custody and the spool.
     let final_status = until(|| {
         stream.test_tick().unwrap();
@@ -1962,7 +2122,8 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
         (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
             .then_some(status)
     });
-    assert!(!action.effective() && action.state() == "rejected");
+    let effective_frame = action.effective_output_frame();
+    let reason = action.reason();
     engine.shut_down().unwrap();
     let ended = owner.lock().unwrap();
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
@@ -1971,23 +2132,52 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
     drop(action);
     drop(engine);
     assert!(a.reader.upgrade().is_none() && b.reader.upgrade().is_none());
+    assert!(next.is_none_or(|next| next.reader.upgrade().is_none()));
 
+    if exclusive {
+        assert_eq!(applied, Some(effect), "the bound exclusive STOP retains E");
+        assert_eq!(effective_frame, (!missing).then_some(effect));
+        assert!(!tick.pads[0].active && tick.pads[1].active);
+    } else if restart && !inline {
+        assert_eq!(
+            applied,
+            Some(effect),
+            "the captured same-pad restart retains E"
+        );
+        assert_eq!(effective_frame, None);
+        assert_eq!(reason, Some("timing_changed"));
+        assert!(tick.pads[0].active && tick.pads[0].generation > before.pads[0].generation);
+        assert_ne!(tick.pads[0].native_state, original.unwrap());
+    } else {
+        assert_eq!(effective_frame, Some(effect));
+        assert_eq!(applied, None);
+        assert!(tick.pads[0].active && !tick.pads[1].active);
+        assert!(tick.pads[0].wet_current_source_output && !tick.pads[0].wet_failed);
+        assert_eq!(tick.pads[0].native_state, original.unwrap());
+        assert_eq!(tick.pads[0].generation, before.pads[0].generation);
+        assert_eq!(tick.native.shifts, u64::from(inline && !no_fit));
+    }
     assert_eq!(
-        applied,
-        Some(E),
-        "missing SET must release the exclusive STOP at E"
+        tick.callback.output_ready_calls,
+        before.callback.output_ready_calls + 1
     );
-    assert!(!tick.pads[0].active && tick.pads[1].active);
-    assert_eq!(pitch_state, "rejected");
+    if case == InteriorSet::Fit {
+        assert!(
+            pcm[2 * (effect - REQUEST) as usize..2 * (capture_end - REQUEST) as usize]
+                .iter()
+                .any(|sample| *sample != 0.0)
+        );
+    }
     assert!(gated.rt_sealed);
-    assert_eq!(gated.captured_end, Some(STOP));
+    assert_eq!(gated.captured_end, Some(capture_end));
     assert!(final_status.successful_spool());
-    assert_eq!(final_status.written_frames, STOP - FIRST);
+    assert_eq!(final_status.written_frames, capture_end - FIRST);
     assert_eq!(
         (final_status.first_frame, final_status.end_frame),
-        (Some(FIRST), Some(STOP))
+        (Some(FIRST), Some(capture_end))
     );
-    let expected: Vec<_> = pcm[2 * (FIRST - REQUEST) as usize..2 * (STOP - REQUEST) as usize]
+    let expected: Vec<_> = pcm
+        [2 * (FIRST - REQUEST) as usize..2 * (capture_end - REQUEST) as usize]
         .iter()
         .flat_map(|sample| sample.to_le_bytes())
         .collect();
@@ -1997,6 +2187,7 @@ fn asio_missing_interior_set_releases_same_frame_stop_and_capture_end() {
     );
     fs::remove_file(&path).unwrap();
     fs::remove_dir(&directory).unwrap();
+    pcm.into_iter().map(f32::to_bits).collect()
 }
 
 #[test]

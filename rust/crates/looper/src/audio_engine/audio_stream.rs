@@ -778,14 +778,30 @@ fn execute_due_event<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferR
     audio_messages: &mut S,
     retirement: &mut R,
 ) -> bool {
-    let complete = match execute_scheduled_command(
-        mixer,
-        transport,
-        event.execution_frame,
-        event.command,
-        audio_messages,
-        retirement,
-    ) {
+    let result = match event.command {
+        ScheduledCommand::PitchAction {
+            slot,
+            action_sequence,
+        } => super::pitch_runtime::execute(
+            mixer,
+            slot,
+            action_sequence,
+            event.execution_frame,
+            Some(&mut scheduler.queued_events()),
+            Some(*transport),
+            audio_messages,
+            retirement,
+        ),
+        command => execute_scheduled_command(
+            mixer,
+            transport,
+            event.execution_frame,
+            command,
+            audio_messages,
+            retirement,
+        ),
+    };
+    let complete = match result {
         ScheduledExecution::Complete => true,
         ScheduledExecution::Pending(command) => {
             scheduler.defer_due(DueEvent { command, ..event }, callback_frame);
@@ -1030,6 +1046,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                 slot,
                 action_sequence,
                 output_frame,
+                None,
                 Some(*transport),
                 audio_messages,
                 retirement,

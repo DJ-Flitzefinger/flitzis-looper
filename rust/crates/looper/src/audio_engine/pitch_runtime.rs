@@ -7,6 +7,7 @@ mod group_peer_tests;
 
 use super::audio_stream::{AudioMessageSink, ScheduledExecution};
 use super::buffer_retirement::AudioBufferRetirement;
+use super::content_placement::ContentKey;
 use super::global_playback_batch::GlobalPlaybackBatch;
 use super::mixer::RtMixer;
 use super::ordinary_endpoint_reserve::OrdinaryEndpointReserve;
@@ -15,7 +16,7 @@ use super::pitch_actions::{
     PitchActionPreparation, PitchActionPreparationWorker, PitchActionReject, PitchActionWork,
     PreparedActionWork,
 };
-use super::scheduler::{FixedCapacityScheduler, ScheduledCommand};
+use super::scheduler::{FixedCapacityScheduler, ScheduledCommand, ScheduledEvent};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -58,7 +59,7 @@ struct ActionSlot {
     owner: Option<OriginalActionOwner>,
     independent_birth: bool,
     wet_deadline: bool,
-    expired_missing_work: bool,
+    expired_exact_effect: bool,
     replans: u8,
     work: Option<PreparedActionWork>,
     group: Option<OrdinaryStartGroup>,
@@ -199,7 +200,7 @@ impl PitchRuntime {
         slot.content = None;
         slot.independent_birth = false;
         slot.wet_deadline = false;
-        slot.expired_missing_work = false;
+        slot.expired_exact_effect = false;
         slot.original = 0;
         slot.planned = 0;
         slot.replans = 0;
@@ -237,8 +238,8 @@ impl PitchRuntime {
             PreparedActionWork::Ordinary(_) => true,
             PreparedActionWork::Pitch(work) => work.late_reprepare_snapshot().is_some(),
         };
-        slot.wet_deadline =
-            matches!(work, PreparedActionWork::Pitch(work) if work.prepare_wet_continuation);
+        slot.wet_deadline = matches!(work, PreparedActionWork::Pitch(work)
+            if work.wet_request_start == Some(execution));
         slot.replans = 0;
     }
 
@@ -394,7 +395,7 @@ impl PitchRuntime {
                 owner: None,
                 independent_birth: false,
                 wet_deadline: false,
-                expired_missing_work: false,
+                expired_exact_effect: false,
                 replans: 0,
                 work: None,
                 group: None,
@@ -554,14 +555,16 @@ impl PitchRuntime {
         let capture = work
             .freeze_execution_frame(execution)
             .and_then(|()| mixer.capture_pitch_action_request(&mut work, callback, execution));
-        work.prepare_wet_continuation = needs_worker
+        let wet_intent = needs_worker
             && work.action.variant() == super::pitch_actions::PitchActionVariant::Set
             && work.action.original_due_frame() == execution
             && execution - callback <= PREPARATION_LEAD_FRAMES
             && work
                 .source_feed_future
-                .is_some_and(|(_, _, frames, _)| frames > 0)
-            && mixer.wet_preparation_admitted(callback, execution);
+                .is_some_and(|(_, _, frames, _)| frames > 0);
+        work.wet_request_start = wet_intent
+            .then(|| mixer.wet_preparation_request(callback, execution))
+            .flatten();
         let result = match capture {
             Ok(Some(request)) => work.rt_capture(request).map_err(|request| {
                 let retained = work.retain_rejected_capture(request);
@@ -1036,12 +1039,90 @@ impl PitchRuntime {
         true
     }
 
-    fn execute(
+    fn scheduled_affects_wet(
+        &self,
+        mixer: &RtMixer,
+        content: ContentKey,
+        id: usize,
+        command: &ScheduledCommand,
+    ) -> bool {
+        match command {
+            ScheduledCommand::CaptureStart { .. }
+            | ScheduledCommand::CaptureStop { .. }
+            | ScheduledCommand::StopAll
+            | ScheduledCommand::StopSampleForPlacement { .. } => false,
+            ScheduledCommand::PlaySample { id: target, .. }
+            | ScheduledCommand::StopAllThenPlaySample { id: target, .. } => *target == id,
+            #[cfg(test)]
+            ScheduledCommand::StopSample { .. } => false,
+            ScheduledCommand::TriggerInputPad {
+                id: target,
+                binding,
+                ..
+            } => mixer.timing_effect_slot(*target, binding.placement) == Some(id),
+            ScheduledCommand::RefreshAcceptedTiming(refresh) => {
+                mixer.bound_refresh_affects_wet(id, refresh)
+            }
+            ScheduledCommand::GlobalPlaybackBatch(batch) => {
+                batch.start
+                    && batch.entries.iter().any(|entry| {
+                        mixer.timing_effect_slot(entry.id, entry.binding.placement) == Some(id)
+                    })
+            }
+            ScheduledCommand::PitchAction {
+                slot,
+                action_sequence,
+            } => self
+                .slots
+                .get(*slot)
+                .filter(|slot| slot.sequence == *action_sequence)
+                .is_some_and(|slot| {
+                    if let Some(group) = &slot.group {
+                        return group.slots[..group.len]
+                            .iter()
+                            .any(|member| self.slots[*member].content == Some(content));
+                    }
+                    slot.owner
+                        .as_ref()
+                        .is_none_or(|owner| !owner.rejected() && slot.content == Some(content))
+                }),
+        }
+    }
+
+    fn interior_wet_schedule_clear<'a>(
+        &self,
+        mixer: &RtMixer,
+        slot: &ActionSlot,
+        frame: u64,
+        frames: usize,
+        following: Option<&mut dyn Iterator<Item = &'a ScheduledEvent>>,
+    ) -> bool {
+        let (Some(content), Some(end), Some(events)) =
+            (slot.content, frame.checked_add(frames as u64), following)
+        else {
+            return false;
+        };
+        let Some(id) = mixer
+            .input_ownership_for_effect()
+            .callback_key_slot(content)
+        else {
+            return false;
+        };
+        // The current SET was already popped. Use the remaining bound order,
+        // including later events at E, up to the exclusive end of its PCM.
+        !events
+            .take_while(|event| event.target_frame < end)
+            .any(|event| self.scheduled_affects_wet(mixer, content, id, &event.command))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute<'a>(
         &mut self,
         mixer: &mut RtMixer,
         index: usize,
         sequence: u64,
         frame: u64,
+        following: Option<&mut dyn Iterator<Item = &'a ScheduledEvent>>,
         timeline: Option<super::transport::TransportTimeline>,
         messages: &mut impl AudioMessageSink,
         retirement: &mut impl AudioBufferRetirement,
@@ -1074,17 +1155,35 @@ impl PitchRuntime {
             .checked_sub(self.slots[index].original)
             .is_some_and(|frames| frames > MAX_LAUNCH_DELAY);
         let preceding = (!expired).then(|| self.preceding_endpoint(index)).flatten();
+        let wet = match slot.work.as_ref() {
+            Some(PreparedActionWork::Pitch(work)) => work
+                .candidate
+                .as_ref()
+                .and_then(|candidate| candidate.wet_continuation.as_ref()),
+            _ => None,
+        };
+        let exact_wet = slot.wet_deadline || wet.is_some();
+        let interior_conflict = wet.is_some_and(|span| {
+            mixer.qualified_asio_request_interior(frame)
+                && !self.interior_wet_schedule_clear(
+                    mixer,
+                    slot,
+                    frame,
+                    span.remaining(),
+                    following,
+                )
+        });
         let slot = &mut self.slots[index];
         if slot.work.is_none() || retirement.available_retirement_slots() == 0 {
             // A deferred retry starts in a later callback and cannot apply an
             // in-place SET at its frozen E. Keep Work custody, release the event.
-            let missed_interior_set = !slot.wet_deadline
+            let missed_interior_set = !exact_wet
                 && slot.work.is_none()
                 && frame == slot.planned
                 && mixer.qualified_asio_request_interior(frame)
                 && matches!(slot.owner.as_ref(), Some(OriginalActionOwner::Pitch(owner))
                     if owner.variant() == super::pitch_actions::PitchActionVariant::Set);
-            if (slot.wet_deadline && frame >= slot.planned) || missed_interior_set {
+            if (exact_wet && frame >= slot.planned) || missed_interior_set {
                 slot.epoch.as_ref().unwrap().store(0, Ordering::Release);
                 let owner = slot.owner.as_ref().unwrap();
                 owner.reject(PitchActionReject::PreparationFailed);
@@ -1092,7 +1191,7 @@ impl PitchRuntime {
                 if !owner.rejected() {
                     owner.reject(PitchActionReject::PreparationFailed);
                 }
-                slot.expired_missing_work = missed_interior_set;
+                slot.expired_exact_effect = !slot.wet_deadline;
                 return ScheduledExecution::Complete;
             }
             if frame
@@ -1168,6 +1267,8 @@ impl PitchRuntime {
             PreparedActionWork::Pitch(work) => {
                 if work.action.state() == "rejected" {
                     Err(PitchActionReject::PreparationFailed)
+                } else if interior_conflict {
+                    Err(PitchActionReject::TimingChanged)
                 } else {
                     work.launch_qualified =
                         work.launch_qualification
@@ -1184,7 +1285,7 @@ impl PitchRuntime {
                 }
             }
         };
-        if !slot.wet_deadline
+        if !exact_wet
             && matches!(
                 result,
                 Err(PitchActionReject::Capacity
@@ -1216,7 +1317,7 @@ pub(super) fn service_endpoint_reserve<const CAPACITY: usize>(
         .expect("one callback owns preparation lane");
     runtime.poll();
     for slot in runtime.slots.iter_mut().filter(|slot| {
-        (slot.wet_deadline || slot.expired_missing_work)
+        (slot.wet_deadline || slot.expired_exact_effect)
             && slot
                 .owner
                 .as_ref()
@@ -1289,11 +1390,13 @@ pub(super) fn accept_group<const CAPACITY: usize>(
     mixer.pitch_runtime = Some(runtime);
 }
 
-pub(super) fn execute(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn execute<'a>(
     mixer: &mut RtMixer,
     slot: usize,
     sequence: u64,
     frame: u64,
+    following: Option<&mut dyn Iterator<Item = &'a ScheduledEvent>>,
     timeline: Option<super::transport::TransportTimeline>,
     messages: &mut impl AudioMessageSink,
     retirement: &mut impl AudioBufferRetirement,
@@ -1302,7 +1405,9 @@ pub(super) fn execute(
         .pitch_runtime
         .take()
         .expect("one callback owns preparation lane");
-    let result = runtime.execute(mixer, slot, sequence, frame, timeline, messages, retirement);
+    let result = runtime.execute(
+        mixer, slot, sequence, frame, following, timeline, messages, retirement,
+    );
     mixer.pitch_runtime = Some(runtime);
     result
 }

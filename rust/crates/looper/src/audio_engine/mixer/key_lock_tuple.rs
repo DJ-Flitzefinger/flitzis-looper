@@ -505,4 +505,11 @@ impl RtMixer {
                 frames.min((target - frame).min(usize::MAX as u64) as usize)
             })
     }
+
+    pub(super) fn key_lock_tuple_affects_wet(&self, id: usize, span: std::ops::Range<u64>) -> bool {
+        self.pending_key_lock_tuples[id]
+            .as_ref()
+            .and_then(|pending| pending.execution)
+            .is_some_and(|target| span.contains(&target))
+    }
 }

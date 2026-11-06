@@ -493,6 +493,10 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
             .and_then(|event| event.as_ref().map(|event| event.target_frame))
     }
 
+    pub(super) fn queued_events(&self) -> impl Iterator<Item = &ScheduledEvent> {
+        self.events[..self.len].iter().flatten()
+    }
+
     pub(crate) fn pop_due_at_callback_start(
         &mut self,
         callback_start_frame: u64,

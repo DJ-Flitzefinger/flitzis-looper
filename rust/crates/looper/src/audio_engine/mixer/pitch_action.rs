@@ -652,7 +652,14 @@ impl RtMixer {
         let Some(candidate) = work.candidate.as_ref() else {
             return false;
         };
-        if candidate.wet_continuation.is_some() && self.wet_callback_frame != Some(output_frame) {
+        if let Some(span) = candidate.wet_continuation.as_ref()
+            && (!span.matches_request(
+                self.wet_callback_frame,
+                work.action.execution_target(),
+                output_frame,
+            ) || (self.qualified_asio_request_interior(output_frame)
+                && (snapshot.paused || span.slice_for(&feed, span.remaining()).is_none())))
+        {
             return false;
         }
         self.voices[index].stretch.prepared_pitch_matches(
@@ -779,6 +786,20 @@ impl RtMixer {
                         ))
                 {
                     // A conflicting rate must leave the incumbent in the voice.
+                    return Err(PitchActionReject::TimingChanged);
+                }
+                if self.qualified_asio_request_interior(output_frame)
+                    && let Some(span) = work
+                        .candidate
+                        .as_ref()
+                        .and_then(|candidate| candidate.wet_continuation.as_ref())
+                    && let Some(end) = output_frame.checked_add(span.remaining() as u64)
+                    && (self.rate_effect_affects_interior_wet(
+                        index,
+                        output_frame..end,
+                        snapshot.playback.rate_target(),
+                    ) || self.key_lock_tuple_affects_wet(id, output_frame..end))
+                {
                     return Err(PitchActionReject::TimingChanged);
                 }
                 if !self.pitch_action_candidate_matches(work, snapshot, index, output_frame) {
@@ -1052,7 +1073,7 @@ impl RtMixer {
             .map_err(placement_rejection);
         committed?;
         #[cfg(all(test, windows, feature = "asio-contract-tests"))]
-        if work.borrow().prepare_wet_continuation {
+        if work.borrow().wet_request_start.is_some() {
             super::super::audio_stream::after_pad_feedback_effect_for_test();
         }
         for entry in feedback.into_iter().take(feedback_count).flatten() {

@@ -32,6 +32,8 @@ struct GateObservation {
     prepared_native: Option<usize>,
     #[cfg(feature = "asio-contract-tests")]
     prepared_wet: Option<(usize, u64)>,
+    #[cfg(feature = "asio-contract-tests")]
+    prepared_fifo: Option<(usize, usize, usize)>,
 }
 
 #[derive(Default)]
@@ -111,6 +113,18 @@ pub(crate) fn after_worker(work: &PreparedActionWork, reason: Option<PitchAction
             .as_ref()
             .and_then(|candidate| candidate.wet_continuation.as_ref())
             .map(|span| (span.receipt.output_frames, span.shifts));
+        observation.prepared_fifo = work.candidate.as_ref().map(|candidate| {
+            let (input, output) = candidate.wet_continuation.as_ref().map_or_else(
+                || {
+                    (
+                        candidate.input_fifo[0].len(),
+                        candidate.output_fifo[0].len(),
+                    )
+                },
+                |span| span.before,
+            );
+            (candidate.block_size, input, output)
+        });
     }
     gate.changed.notify_all();
     while observation.return_held {
@@ -171,6 +185,14 @@ impl WorkerGate {
     pub(in crate::audio_engine) fn prepared_wet(&self) -> (usize, u64) {
         let prepared_wet = self.state.observation.lock().unwrap().prepared_wet;
         prepared_wet.expect("genuine prepared Wet span")
+    }
+
+    #[cfg(feature = "asio-contract-tests")]
+    pub(in crate::audio_engine) fn prepared_fifo(
+        &self,
+    ) -> ((usize, usize, usize), Option<(usize, u64)>) {
+        let observation = self.state.observation.lock().unwrap();
+        (observation.prepared_fifo.unwrap(), observation.prepared_wet)
     }
 
     pub(in crate::audio_engine) fn release_pitch_into(
