@@ -767,6 +767,10 @@ impl RtMixer {
                         .as_ref()
                         .is_some_and(|candidate| candidate.wet_continuation.is_some())
                     && (!self.wet_timing_parameters_clear
+                        || self.staged_bpm_lock_changes_wet_rate(
+                            index,
+                            snapshot.playback.rate_target(),
+                        )
                         || self.has_staged_scalar_rate_in(
                             output_frame
                                 ..output_frame.saturating_add(

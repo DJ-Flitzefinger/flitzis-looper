@@ -471,6 +471,36 @@ impl RtMixer {
         Ok((period, anchor_id))
     }
 
+    pub(super) fn staged_bpm_lock_changes_wet_rate(&self, index: usize, rate_target: f64) -> bool {
+        let Some(target) = self.pending_bpm_lock.filter(|target| target.enabled) else {
+            return false;
+        };
+        if self
+            .global_rate
+            .as_ref()
+            .is_none_or(|rate| rate.bpm_history.is_some())
+        {
+            return false;
+        }
+        let Ok((period, Some(_))) = self.bpm_target_tuple(target) else {
+            return false;
+        };
+        let ratio = Self::scalar_tempo_ratio(
+            self.timing_for_voice(&self.voices[index]).period_seconds(),
+            self.speed,
+            period,
+            target.enabled,
+        );
+        // The command drain can still be in progress. The staged request must
+        // still be current, but its ordinary service owns the eventual apply.
+        ratio.to_bits() != rate_target.to_bits()
+            && self
+                .input_runtime_ownership
+                .global_rate_status
+                .read_bpm()
+                .is_some_and(|(requested, _)| requested == target.revision)
+    }
+
     pub(crate) fn accepted_refresh_master_targets(
         &self,
         period: f64,

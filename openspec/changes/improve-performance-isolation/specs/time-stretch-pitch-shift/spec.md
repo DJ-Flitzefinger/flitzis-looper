@@ -114,6 +114,13 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** a later claim after the parameter pass SHALL validate the actual source trajectory and exclude staged conflicting scalar rate work before transfer
 - **AND** the admitted original Native SHALL supply only its exact Wet slice, with recording confirmed through normal backend submission
 
+#### Scenario: A staged source-qualified BPM Lock changes the rate of an aligned Wet SET
+- **GIVEN** the mixer has already staged a current source-qualified anchored BPM Lock ON request with no bound history transition
+- **WHEN** a qualified aligned ASIO Wet SET reaches its original E and the qualified BPM tuple would change the voice's prepared scalar target in the same request
+- **THEN** the SET SHALL be refused at E before Native transfer and the incumbent SHALL remain playable
+- **AND** the ordinary BPM service SHALL own application and acknowledgement, with independent STOP, source acknowledgements and recording retaining their timing
+- **AND** a BPM tuple that preserves the voice's exact scalar target SHALL leave the SET eligible for its existing exact Wet checks
+
 #### Scenario: A derived loop-only refresh reaches admission after an aligned ASIO Wet claim
 - **GIVEN** a qualified stereo 96 kHz ASIO request of 96 frames owes an already claimed Wet slice for the live normal-loop voice of the current source
 - **WHEN** the control drain first admits a still-unbound accepted-timing refresh that changes that source's effective loop region without a master effect

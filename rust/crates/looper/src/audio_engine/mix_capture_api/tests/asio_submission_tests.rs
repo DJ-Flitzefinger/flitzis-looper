@@ -974,10 +974,26 @@ fn asio_wet_set_uses_exact_scalar_tempo_ingress() {
 
 #[test]
 fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
+    aligned_wet_set_with_ordered_control(None);
+}
+
+#[test]
+fn asio_refuses_wet_set_for_a_staged_bpm_lock_that_changes_its_rate() {
+    aligned_wet_set_with_ordered_control(Some(0.75));
+}
+
+#[test]
+fn asio_admits_wet_set_when_staged_bpm_lock_preserves_its_rate() {
+    aligned_wet_set_with_ordered_control(Some(0.5));
+}
+
+fn aligned_wet_set_with_ordered_control(anchor_period: Option<f64>) {
     use crate::audio_engine::constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing;
     use crate::audio_engine::constants::NUM_SAMPLES;
+    use crate::audio_engine::global_rate_status::BpmReason;
     use crate::audio_engine::input_mapping::PitchPadProjection;
     use crate::audio_engine::input_runtime_binding;
+    use crate::audio_engine::master_provenance::{self, MasterProvenance};
     use crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::WorkerGate;
     use std::sync::mpsc::sync_channel;
 
@@ -993,7 +1009,10 @@ fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
     Python::initialize();
     let directory = tempfile::tempdir().unwrap().keep();
     let path = directory.join("take.capture");
-    eprintln!("ASIO ordered Wet refresh spool: {}", path.display());
+    eprintln!(
+        "ASIO ordered Wet {anchor_period:?} spool: {}",
+        path.display()
+    );
     let factory = Factory::new().unwrap();
     let mut engine = AudioEngine::new().unwrap();
     engine.test_asio_driver = Some(factory.clone());
@@ -1015,9 +1034,23 @@ fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
         Some((0, OLD_END as usize)),
     );
     let b = ColdPcm::publish_at(&engine, 1, 1, "b", SourcePitchInitialization::FreshNeutral);
+    let anchor_source = anchor_period.map(|_| {
+        ColdPcm::publish_with_geometry(
+            &engine,
+            2,
+            1,
+            "c",
+            SourcePitchInitialization::FreshNeutral,
+            48_000,
+            None,
+        )
+    });
     let stream = engine.stream_handle.as_ref().unwrap();
     let owner = stream.test_owner_observer();
     let submission = stream.output_submission.as_ref().unwrap().clone();
+    if anchor_source.is_some() {
+        engine.set_bpm_lock_with_binding(false, None).unwrap();
+    }
     for id in [0, 1] {
         stream
             .producer
@@ -1036,18 +1069,36 @@ fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
     assert!(playing.pads[0].active && playing.pads[1].active);
     a.assert_ack(&engine, true);
     b.assert_ack(&engine, true);
+    assert!(!playing.pads[2].active);
+    if let Some(source) = &anchor_source {
+        source.assert_ack(&engine, true);
+        engine.set_pad_timing_intent(2, "automatic").unwrap();
+    }
     engine.set_pad_timing_intent(0, "automatic").unwrap();
     let timing = publish_synthetic_loaded_timing(&engine, &stream.producer, 0, 0.5);
     assert_eq!(timing.publication_status().unwrap(), "pending");
+    let anchor_timing = anchor_period.map(|period| {
+        let timing = publish_synthetic_loaded_timing(&engine, &stream.producer, 2, period);
+        assert_eq!(timing.publication_status().unwrap(), "pending");
+        timing
+    });
     assert_eq!(stream.test_tick().unwrap().output_frame, 2 * FRAMES);
     assert_eq!(timing.publication_status().unwrap(), "accepted");
     let runtime = engine.input_runtime.as_ref().unwrap();
     let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
     assert!(binding.current() && binding.available() && binding.binding.accepted.is_some());
+    let anchor = anchor_timing.as_ref().map(|timing| {
+        assert_eq!(timing.publication_status().unwrap(), "accepted");
+        let binding = input_runtime_binding::capture(&engine, 2).unwrap().unwrap();
+        assert!(binding.current() && binding.available() && binding.binding.accepted.is_some());
+        binding
+    });
     let mut loaded = vec![false; NUM_SAMPLES];
     loaded[0] = true;
     let mut bindings = vec![None; NUM_SAMPLES];
     bindings[0] = Some(&binding);
+    loaded[2] = anchor.is_some();
+    bindings[2] = anchor.as_ref();
     let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
     rows[0].quantize_step_64ths = Some(8);
     runtime
@@ -1125,16 +1176,178 @@ fn asio_admits_late_loop_refresh_at_the_end_of_claimed_wet() {
     };
     let at_e = position(before.pads[0]);
     assert!((at_e - 65.6).abs() < 1e-8, "actual cursor at E: {at_e}");
-    // The first taps at E+1 coincide. At E+18 the old loop reads near zero
-    // and the refreshed loop would read eight source frames later.
-    assert!(at_e + 1.4 + 1.0 < OLD_END && at_e + 1.4 > NEW_START);
-    assert!((at_e + 18.0 * 1.4 - OLD_END - 0.8).abs() < 1e-8);
+    let bpm_revision = anchor.as_ref().map(|anchor| {
+        // The real request is ahead of STOP in the control FIFO. Nothing
+        // publishes a timing revision from the after-effect observation.
+        engine
+            .set_bpm_lock_with_binding(true, Some(anchor))
+            .unwrap();
+        let (revision, effect) = ownership.global_rate_status.read_bpm().unwrap();
+        assert!(effect.revision < revision);
+        revision
+    });
     assert!(enqueue_stop_with_producer(
         ownership,
         &mut stream.producer.lock().unwrap(),
         Some(1)
     ));
 
+    if let (Some(anchor_binding), Some(period), Some(revision)) =
+        (&anchor, anchor_period, bpm_revision)
+    {
+        let next = ColdPcm::publish_at(&engine, 3, 1, "d", SourcePitchInitialization::FreshNeutral);
+        next.assert_ack(&engine, false);
+        factory.arm_output_ready();
+        let (tick, pcm, gated_prefix, gated_ack, staged, (requested, bpm)) =
+            std::thread::scope(|scope| {
+                let (record_stage, staged) = sync_channel(1);
+                let callback_ownership = ownership.clone();
+                let callback = scope.spawn(|| {
+                    stream.test_tick_with_effect(Some(Box::new(move || {
+                        let _ =
+                            record_stage.try_send(callback_ownership.global_rate_status.read_bpm());
+                    })))
+                });
+                let pcm = until(|| {
+                    factory
+                        .gated_output_pcm()
+                        .map(Some)
+                        .or_else(|| callback.is_finished().then_some(None))
+                });
+                let gated_prefix = submission.prefix();
+                let gated_ack = ownership.binding_source_adoption_accepted(3, next.binding);
+                let bpm = ownership.global_rate_status.read_bpm();
+                if pcm.is_some() {
+                    factory.release_output_ready(false);
+                }
+                (
+                    callback.join().unwrap().unwrap(),
+                    pcm,
+                    gated_prefix,
+                    gated_ack,
+                    staged.try_recv().ok().flatten(),
+                    bpm.unwrap(),
+                )
+            });
+        let rate = ownership.global_rate_status.read().unwrap();
+        let confirmed = submission.prefix();
+        let actual_end = position(tick.pads[0]);
+        let failed = engine.mix_capture_stream_failed();
+        a.assert_ack(&engine, true);
+        b.assert_ack(&engine, true);
+        let anchor_pcm = anchor_source.as_ref().unwrap();
+        anchor_pcm.assert_ack(&engine, true);
+        next.assert_ack(&engine, true);
+        engine.shut_down().unwrap();
+        let status = until(|| {
+            let status = capture_status(&engine);
+            (status.worker_joined && status.rt_released && engine.pitch_work_capacity.used() == 0)
+                .then_some(status)
+        });
+        let ended = owner.lock().unwrap();
+        assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
+        assert_eq!(factory.info().unwrap().active, 0);
+        let provenance = MasterProvenance::qualified(
+            master_provenance::source_identity(anchor_binding).unwrap(),
+            anchor_binding.binding,
+        );
+        eprintln!(
+            "ASIO staged BPM period={period} revision={revision} executed={:?} provenance={:?} SET={} effective={} worker={original_native:#x} actual_native={:#x} output={} cursor={actual_end} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
+            bpm.execution_frame,
+            rate.master_provenance,
+            action.state(),
+            action.effective(),
+            tick.pads[0].native_state,
+            tick.output_frame,
+            status.first_frame,
+            status.end_frame,
+            status.written_frames,
+            status.failure,
+            tick.pads[0].wet_failed,
+        );
+        assert_eq!((requested, bpm.revision), (revision, revision));
+        assert!(bpm.requested && bpm.effective && bpm.applied);
+        assert_eq!(
+            (bpm.execution_frame, bpm.reason),
+            (Some(E), BpmReason::None)
+        );
+        assert_eq!(rate.effect.effective.period, Some(period / 1.4));
+        assert_eq!(rate.master_provenance, provenance);
+        assert!(gated_ack);
+        assert!(tick.pads[0].active && !tick.pads[1].active && !tick.pads[2].active);
+        assert_eq!(tick.pads[0].generation, playing.pads[0].generation);
+        assert_eq!(tick.pads[0].source_pcm, a.binding.source_address);
+        let (staged_revision, staged) = staged.expect("BPM staged before the first due effect");
+        assert_eq!((staged_revision, staged.revision), (revision, revision));
+        assert_eq!(staged.reason, BpmReason::DrainPending);
+        assert!(!staged.applied);
+        let conflict = period != 0.5;
+        if conflict {
+            assert_eq!(action.state(), "rejected");
+            assert_eq!(action.reason(), Some("timing_changed"));
+            assert!(!action.effective());
+            assert_eq!(tick.pads[0].native_state, before.pads[0].native_state);
+            assert!(
+                (actual_end - 15.2).abs() < 1e-8,
+                "glide cursor {actual_end}"
+            );
+        } else {
+            assert!(action.effective());
+            assert_eq!(tick.pads[0].native_state, original_native);
+            assert!(tick.pads[0].wet_current_source_output);
+            assert!(
+                (actual_end - 20.0).abs() < 1e-8,
+                "stable cursor {actual_end}"
+            );
+        }
+        assert!(!failed && !tick.pads[0].wet_failed);
+        assert_eq!(gated_prefix, (E, false));
+        assert_eq!(confirmed, (E + FRAMES, false));
+        assert_eq!(tick.output_frame, E + FRAMES);
+        assert_eq!(tick.callback.frames, FRAMES as u32);
+        assert_eq!(
+            tick.callback.output_ready_calls,
+            before.callback.output_ready_calls + 1
+        );
+        assert_eq!(tick.native.shifts, 0);
+        assert_eq!(
+            (status.first_frame, status.end_frame),
+            (Some(E - FRAMES), Some(CAPTURE_END))
+        );
+        assert!(status.successful_spool());
+        assert_eq!(status.written_frames, FRAMES + CAPTURE_END - E);
+        let pcm = pcm.expect("actual outputReady gate");
+        let expected = &pcm[..(2 * (CAPTURE_END - E)) as usize];
+        assert!(expected.iter().any(|sample| *sample != 0.0));
+        let captured = fs::read(&path).unwrap();
+        assert_eq!(
+            &captured[SPOOL_HEADER_BYTES as usize + FRAMES as usize * 8..],
+            expected
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        drop(anchor);
+        drop(anchor_timing);
+        drop(timing);
+        drop(binding);
+        drop(action);
+        drop(engine);
+        assert!(
+            a.reader.upgrade().is_none()
+                && b.reader.upgrade().is_none()
+                && anchor_pcm.reader.upgrade().is_none()
+                && next.reader.upgrade().is_none()
+        );
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&directory).unwrap();
+        return;
+    }
+
+    // The first taps at E+1 coincide. At E+18 the old loop reads near zero
+    // and the refreshed loop would read eight source frames later.
+    assert!(at_e + 1.4 + 1.0 < OLD_END && at_e + 1.4 > NEW_START);
+    assert!((at_e + 18.0 * 1.4 - OLD_END - 0.8).abs() < 1e-8);
     factory.arm_output_ready();
     let (tick, pcm, refresh, next, gated_prefix, gated_ack) = std::thread::scope(|scope| {
         let (claimed, wait_claim) = sync_channel(1);

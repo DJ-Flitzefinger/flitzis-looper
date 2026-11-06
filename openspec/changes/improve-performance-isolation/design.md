@@ -7272,11 +7272,28 @@ with their original requested status and no assigned effect frame.
 
 After the parameter pass, candidate matching checks the actual trajectory.
 Both claim paths also refuse outstanding staged scalar rate work that can take
-effect within the request. This gate covers fast timing application and
-already staged scalar rate work. The existing ordered source-control and
-final slice validation still apply, including BPM Lock, loop, stem and
-accepted timing effects. The claim continues to preserve original Native custody
-and same-request STOP, capture and retained-bank OwnACK ordering.
+effect within the request. The existing ordered source-control and final slice
+validation still apply. The claim preserves original Native custody and
+same-request STOP, capture and retained-bank OwnACK ordering.
+
+### Source-qualified BPM Lock staged before an aligned Wet SET
+
+An anchored BPM Lock ON request can already be staged when a later ordered
+STOP drains a due aligned SET. The BPM service can apply at E after the
+command and parameter drains complete, before the first Wet frame is mixed.
+A changed scalar target invalidates the prepared read trajectory even when
+the source cursor at E has the same position.
+
+Before transferring the Wet Native, the mixer checks the current staged BPM
+receipt, using the existing BPM tuple qualification and the SET voice's
+effective source period. This check covers an anchored target with no bound
+history transition. If the qualified tuple would change the exact prepared
+playback target, the SET expires at its original E with the incumbent still
+playable. A qualified tuple that preserves the voice's scalar target can
+leave the original Wet slice eligible. The BPM service remains responsible
+for the actual drain, source and apply checks and its acknowledgement. STOP,
+source acknowledgements and recording keep their existing timing. A BPM
+target reaching the mixer after the Wet claim is a separate ordering case.
 
 ### First admission of a derived loop-only refresh
 
