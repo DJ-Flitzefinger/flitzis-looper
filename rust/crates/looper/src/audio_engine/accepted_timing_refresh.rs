@@ -33,6 +33,7 @@ pub(crate) struct AcceptedTimingRefresh {
     pub(crate) master_provenance: super::master_provenance::MasterProvenance,
     pub(crate) global_revision: u64,
     pub(crate) global_owner: Arc<AtomicU64>,
+    master_order: Option<u64>,
     pub(crate) ownership: Arc<InputRuntimeOwnership>,
     pub(crate) hierarchy_stamp: u64,
     pub(crate) launch_revision: u64,
@@ -69,6 +70,12 @@ impl AcceptedTimingRefresh {
             && launch_current(&self.ownership, self.binding, self.launch_revision)
             && (self.master_period_seconds.is_none()
                 || self.global_owner.load(Ordering::Acquire) == self.global_revision)
+            && self.master_order.is_none_or(|order| {
+                self.ownership
+                    .accepted_master_refresh_order
+                    .load(Ordering::Acquire)
+                    == order
+            })
     }
 
     pub(crate) fn finish(&self, accepted: bool) {
@@ -107,6 +114,7 @@ pub struct AcceptedTimingRefreshTicket {
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
     global_owner: Arc<AtomicU64>,
     global_revision: Option<u64>,
+    master_order: Option<u64>,
     hierarchy_stamp: u64,
     launch_revision: u64,
     #[cfg(all(test, windows, feature = "asio-contract-tests"))]
@@ -168,6 +176,12 @@ impl AcceptedTimingRefreshTicket {
             && self
                 .global_revision
                 .is_none_or(|revision| self.global_owner.load(Ordering::Acquire) == revision)
+            && self.master_order.is_none_or(|order| {
+                self.ownership
+                    .accepted_master_refresh_order
+                    .load(Ordering::Acquire)
+                    == order
+            })
             && self.ownership.authority_current(self.id, self.binding)
     }
 }
@@ -254,6 +268,20 @@ pub(super) fn enqueue(
         ));
     }
     let global_revision = engine.global_timing_revision.load(Ordering::Acquire);
+    let master_provenance = super::master_provenance::MasterProvenance::qualified(
+        super::master_provenance::source_identity(&current).ok_or_else(|| {
+            PyRuntimeError::new_err("accepted refresh requires original source identity")
+        })?,
+        current.binding,
+    );
+    // Supersede only older master-refresh ingress. The global timing fence also
+    // belongs to independent, immutable rate captures and must not be rebased.
+    let master_order = master_period_seconds
+        .map(|_| {
+            super::scheduler::reserve_input_order()
+                .ok_or_else(|| PyRuntimeError::new_err("accepted master refresh order exhausted"))
+        })
+        .transpose()?;
     let hierarchy_stamp = engine
         .input_runtime_ownership
         .hierarchy_stamp
@@ -272,14 +300,10 @@ pub(super) fn enqueue(
         start_s,
         end_s,
         master_period_seconds,
-        master_provenance: super::master_provenance::MasterProvenance::qualified(
-            super::master_provenance::source_identity(&current).ok_or_else(|| {
-                PyRuntimeError::new_err("accepted refresh requires original source identity")
-            })?,
-            revised,
-        ),
+        master_provenance,
         global_revision,
         global_owner: engine.global_timing_revision.clone(),
+        master_order,
         ownership: engine.input_runtime_ownership.clone(),
         hierarchy_stamp,
         launch_revision,
@@ -287,6 +311,12 @@ pub(super) fn enqueue(
         #[cfg(all(test, windows, feature = "asio-contract-tests"))]
         execution: execution.clone(),
     });
+    if let Some(order) = master_order {
+        engine
+            .input_runtime_ownership
+            .accepted_master_refresh_order
+            .store(order, Ordering::Release);
+    }
     engine.input_runtime_ownership.revoke(binding.id, next);
     producer
         .push(ControlMessage::RefreshAcceptedTiming(refresh))
@@ -299,6 +329,7 @@ pub(super) fn enqueue(
         acknowledgements: engine.current_timing_acknowledgements.clone(),
         global_owner: engine.global_timing_revision.clone(),
         global_revision: master_period_seconds.map(|_| global_revision),
+        master_order,
         hierarchy_stamp,
         launch_revision,
         #[cfg(all(test, windows, feature = "asio-contract-tests"))]

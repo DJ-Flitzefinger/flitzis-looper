@@ -247,6 +247,8 @@ pub(crate) struct InputRuntimeOwnership {
     // One original control revocation fence, shared with the callback's rate capture.
     pub(crate) global_timing_revision: Arc<AtomicU64>,
     pub(crate) global_timing_publishing: AtomicBool,
+    /// Latest master-refresh ingress order; only rejects superseded refreshes.
+    pub(super) accepted_master_refresh_order: AtomicU64,
     /// Observation of the existing timing revision, written only by hierarchy commits.
     pub(crate) hierarchy_stamp: AtomicU64,
     pub(crate) global_rate_status: super::global_rate_status::GlobalRateStatusSlot,
@@ -297,6 +299,7 @@ impl Default for InputRuntimeOwnership {
             key_lock_start_policy: Arc::default(),
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             global_timing_publishing: AtomicBool::new(false),
+            accepted_master_refresh_order: AtomicU64::new(0),
             hierarchy_stamp: AtomicU64::new(1),
             global_rate_status: super::global_rate_status::GlobalRateStatusSlot::default(),
             authority: std::array::from_fn(|_| AtomicU64::new(1)),

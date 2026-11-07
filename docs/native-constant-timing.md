@@ -250,6 +250,12 @@ global control revision. Current source, authority, full accepted projection
 and retirement and scheduler capacity are checked before effects. The loop and
 optional master/bootstrap commit together. Failure preserves the previous
 derived values.
+Each master-bearing refresh reserves the existing input order and supersedes
+older master-refresh receipts, including equal-value requests from different
+qualified sources. This rejection witness does not change the global timing fence
+of an independent rate or BPM history capture. The raw native API uses current
+source qualification; Python chooses the session anchor. Source-only refreshes
+keep their independent per-source authority and do not reserve this witness.
 The coupled master effect replaces an older pending bootstrap reference with its
 selected current pad; an already completed one-time bootstrap keeps its epoch.
 An older foreign reference becoming ready afterward cannot anchor the beat phase

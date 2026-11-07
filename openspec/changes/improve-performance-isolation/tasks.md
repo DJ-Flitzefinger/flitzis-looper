@@ -1077,6 +1077,12 @@ matrix from the distinct successful-case union or weaken their original assertio
 
 ## Capacity and continuity
 
+- [x] Preserve ordered master-refresh ingress across different qualified sources
+      with an existing-input-order supersession witness while preserving original
+      global timing fences; compare the real aligned 96-frame mixer and full recording with
+      a standalone latest-refresh reference, retaining source-only independence,
+      failed-admission atomicity and unread-publication rejection.
+
 - [x] Reproduce a bound accepted master refresh retaining a dry Key Lock peer
       at its original Wet-end frame, and preserve an independent active recording's
       admitted STOP through the deferred final-mix tap without reordering effects;

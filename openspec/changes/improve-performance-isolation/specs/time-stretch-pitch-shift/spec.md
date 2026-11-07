@@ -170,6 +170,16 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** the ordinary execution checks SHALL govern the coupled effect and acknowledgement at the assigned frame
 - **AND** already assigned frames and independent STOP, source acknowledgements and recording SHALL keep their existing timing
 
+#### Scenario: A later qualified master refresh supersedes an older foreign Wet-bound refresh
+- **GIVEN** an older accepted master refresh would first bind at an affected claimed Wet slice's exclusive end
+- **WHEN** a later master-bearing refresh is admitted from another current qualified source, including an equal master value
+- **THEN** the later admission SHALL supersede the older coupled refresh through the existing input order before either effect can execute
+- **AND** the older refresh SHALL have no partial loop, master, provenance or later effect
+- **AND** the latest refresh SHALL retain its own normal frame and execution checks, with complete request PCM and recording matching its corresponding standalone reference
+- **AND** the global timing fence and completed-drain checks SHALL remain unchanged, preserving an independently bound original rate or BPM history owner and unread-publication checks
+- **AND** source-only refreshes SHALL retain their independent per-source authority without revoking a foreign master intent
+- **AND** failed admission SHALL preserve prior global and source authority and queued commands
+
 #### Scenario: A bound master refresh still lacks a dry peer's Key Lock history
 - **GIVEN** an accepted master refresh has reached its original assigned Wet-end frame but a live dry Key Lock peer cannot support the requested nonunity target
 - **WHEN** ordinary execution retains that same refresh pending and the final mix continues through a later already admitted STOP for an active recording

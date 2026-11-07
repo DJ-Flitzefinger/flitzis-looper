@@ -7368,6 +7368,25 @@ claims the current global and source effects together. The new admission
 boundary preserves already assigned frames, continued FIFO draining,
 independent source acknowledgements and normal submission and recording.
 
+### Ordered master-refresh ingress
+
+An optional master in the raw accepted-refresh API is a qualified global intent;
+the Python controller chooses its session anchor. Provenance records the actual
+effect and is not an additional admission authority. Different source revisions
+alone cannot prevent an older Wet-delayed master from overwriting a newer one.
+Master-bearing admission therefore reserves the existing input order after all
+fallible capacity, ownership and provenance checks. Under the existing global
+publication lease it records the latest master-refresh order before publishing
+the coupled effect. Its payload and ticket check that same rejection witness,
+including the final original source/global claim. Equal values still carry distinct
+intent. Source-only refreshes neither reserve nor consult the master witness.
+
+The witness only rejects superseded refreshes; it cannot grant source authority or
+choose tempo, values, frames or readiness. The existing global timing revision and
+both drain witnesses remain unchanged. In particular, a refused derived refresh
+must not invalidate an independent scalar or BPM capture's immutable timing fence.
+There is no new scheduler lane, tempo authority, callback lock or replay.
+
 ### Missing Work at an interior in-place SET
 
 The same qualified stereo 96 kHz ASIO request can contain a non-Wet

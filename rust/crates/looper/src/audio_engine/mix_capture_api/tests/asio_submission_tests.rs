@@ -1032,6 +1032,15 @@ fn asio_admits_same_rate_master_refresh_at_the_first_eligible_frame() {
 }
 
 #[test]
+fn asio_later_master_refresh_supersedes_foreign_wet_bound_ingress() {
+    let reference =
+        aligned_wet_set_with_ordered_control(OrderedWetControl::OrderedMasterRefresh(false));
+    let ordered =
+        aligned_wet_set_with_ordered_control(OrderedWetControl::OrderedMasterRefresh(true));
+    assert_eq!(ordered, reference);
+}
+
+#[test]
 fn asio_bound_master_refresh_preserves_independent_capture_stop() {
     for stop_offset in [93, 96] {
         let reference = aligned_wet_set_with_ordered_control(
@@ -1051,6 +1060,7 @@ enum OrderedWetControl {
     BpmBehindStop(f64),
     BpmOff { speed: f64, behind_stop: bool },
     MasterRefresh(f64),
+    OrderedMasterRefresh(bool),
     MasterRefreshHistory(bool, u64),
 }
 
@@ -1081,16 +1091,18 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
             Some(period)
         }
         OrderedWetControl::BpmOff { speed, .. } => Some(0.5 * speed),
-        OrderedWetControl::MasterRefresh(_) | OrderedWetControl::MasterRefreshHistory(..) => {
-            Some(0.7)
-        }
+        OrderedWetControl::MasterRefresh(_)
+        | OrderedWetControl::OrderedMasterRefresh(_)
+        | OrderedWetControl::MasterRefreshHistory(..) => Some(0.7),
     };
     let off_speed = match control {
         OrderedWetControl::BpmOff { speed, .. } => Some(speed),
         _ => None,
     };
     let history = matches!(control, OrderedWetControl::MasterRefreshHistory(..));
-    let master_refresh = history || matches!(control, OrderedWetControl::MasterRefresh(_));
+    let ordered_refresh = matches!(control, OrderedWetControl::OrderedMasterRefresh(_));
+    let master_refresh =
+        history || ordered_refresh || matches!(control, OrderedWetControl::MasterRefresh(_));
     let prelocked = master_refresh || off_speed.is_some();
     let capture_frame = if prelocked { 23_040 } else { F };
 
@@ -1128,6 +1140,17 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
             SourcePitchInitialization::FreshNeutral,
             48_000,
             None,
+        )
+    });
+    let later_source = ordered_refresh.then(|| {
+        ColdPcm::publish_with_geometry(
+            &engine,
+            4,
+            1,
+            "e",
+            SourcePitchInitialization::FreshNeutral,
+            48_000,
+            Some((0, OLD_END as usize)),
         )
     });
     let anchor_source = anchor_period.map(|_| {
@@ -1187,6 +1210,10 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
         engine.set_pad_timing_intent(4, "automatic").unwrap();
         publish_synthetic_loaded_timing(&engine, &stream.producer, 4, 0.5)
     });
+    let later_timing = later_source.as_ref().map(|_| {
+        engine.set_pad_timing_intent(4, "automatic").unwrap();
+        publish_synthetic_loaded_timing(&engine, &stream.producer, 4, 0.7)
+    });
     assert_eq!(stream.test_tick().unwrap().output_frame, 2 * FRAMES);
     assert_eq!(timing.publication_status().unwrap(), "accepted");
     let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
@@ -1205,6 +1232,14 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
         engine
             .set_pad_key_lock_with_source(4, true, Some(1))
             .unwrap();
+        binding
+    });
+    let later_binding = later_timing.as_ref().map(|timing| {
+        assert_eq!(timing.publication_status().unwrap(), "accepted");
+        later_source.as_ref().unwrap().assert_ack(&engine, true);
+        let binding = input_runtime_binding::capture(&engine, 4).unwrap().unwrap();
+        assert!(binding.current() && binding.available());
+        assert_eq!(binding.binding.accepted.unwrap().period_seconds, 0.7);
         binding
     });
     let stream = engine.stream_handle.as_ref().unwrap();
@@ -1260,6 +1295,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     };
     let refresh_period = match control {
         OrderedWetControl::MasterRefresh(period) => Some(period),
+        OrderedWetControl::OrderedMasterRefresh(_) => Some(0.75),
         OrderedWetControl::MasterRefreshHistory(..) => Some(0.75),
         _ => None,
     };
@@ -1335,8 +1371,8 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     bindings[0] = Some(&binding);
     loaded[2] = anchor.is_some();
     bindings[2] = anchor.as_ref();
-    loaded[4] = history;
-    bindings[4] = dry_binding.as_ref();
+    loaded[4] = history || ordered_refresh;
+    bindings[4] = dry_binding.as_ref().or(later_binding.as_ref());
     let mut rows = vec![PitchPadProjection::default(); NUM_SAMPLES];
     rows[0].quantize_step_64ths = Some(8);
     runtime
@@ -1409,7 +1445,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     assert!(worker.wait_for(true).is_none());
     worker.release();
     assert_eq!(worker.prepared_wet(), (64, 1));
-    if history {
+    if history || ordered_refresh {
         assert_eq!(worker.prepared_fifo(), ((512, 448, 63), Some((64, 1))));
     }
     let original_native = worker.prepared_native();
@@ -1722,7 +1758,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
         _ => (&binding, NEW_START, None, 2),
     };
     factory.arm_output_ready();
-    let (tick, pcm, refresh, next, gated_prefix, gated_ack, gated_capture) =
+    let (tick, pcm, refresh, earlier_refresh, next, gated_prefix, gated_ack, gated_capture) =
         std::thread::scope(|scope| {
             let (claimed, wait_claim) = sync_channel(1);
             let (published, wait_publication) = sync_channel(1);
@@ -1735,17 +1771,38 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
             });
             wait_claim.recv_timeout(WAIT).unwrap();
             assert!(action.effective());
-            let refresh = (!matches!(control, OrderedWetControl::MasterRefreshHistory(false, _)))
-                .then(|| {
-                    engine
-                        .refresh_current_constant_timing(
-                            refresh_binding,
-                            seconds(start),
-                            Some(seconds(OLD_END)),
-                            master_period,
-                        )
-                        .unwrap()
-                });
+            let first_refresh = (!matches!(
+                control,
+                OrderedWetControl::MasterRefreshHistory(false, _)
+                    | OrderedWetControl::OrderedMasterRefresh(false)
+            ))
+            .then(|| {
+                engine
+                    .refresh_current_constant_timing(
+                        refresh_binding,
+                        seconds(start),
+                        Some(seconds(OLD_END)),
+                        master_period,
+                    )
+                    .unwrap()
+            });
+            let (refresh, earlier_refresh) = if let Some(later) = &later_binding {
+                (
+                    Some(
+                        engine
+                            .refresh_current_constant_timing(
+                                later,
+                                0.0,
+                                Some(seconds(OLD_END)),
+                                Some(0.7 / 1.4),
+                            )
+                            .unwrap(),
+                    ),
+                    first_refresh,
+                )
+            } else {
+                (first_refresh, None)
+            };
             if let Some(refresh) = &refresh {
                 assert_eq!(refresh.publication_status(), "pending");
             }
@@ -1774,6 +1831,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
                 callback.join().unwrap().unwrap(),
                 pcm,
                 refresh,
+                earlier_refresh,
                 next,
                 gated_prefix,
                 gated_ack,
@@ -1927,7 +1985,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     let rate = ownership.global_rate_status.read().unwrap();
     let bpm = ownership.global_rate_status.read_bpm();
     let failed = engine.mix_capture_stream_failed();
-    let provenance = anchor.as_ref().map(|anchor| {
+    let provenance = later_binding.as_ref().or(anchor.as_ref()).map(|anchor| {
         MasterProvenance::qualified(
             master_provenance::source_identity(anchor).unwrap(),
             anchor.binding,
@@ -1938,6 +1996,26 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     if let Some(source) = &anchor_source {
         source.assert_ack(&engine, true);
     }
+    if let Some(source) = &later_source {
+        source.assert_ack(&engine, true);
+        assert!(!tick.pads[4].active);
+        let settled = stream.test_tick().unwrap();
+        let later = stream.test_tick().unwrap();
+        assert_eq!(settled.output_frame, E + 2 * FRAMES);
+        assert_eq!(later.output_frame, E + 3 * FRAMES);
+        let state = ownership.global_rate_status.read().unwrap();
+        assert_eq!(state.effect.effective.period, rate.effect.effective.period);
+        assert_eq!(state.master_provenance, rate.master_provenance);
+        assert!(refresh.is_current());
+    }
+    let earlier_effect = earlier_refresh.as_ref().map(|earlier| {
+        (
+            earlier.execution_identity(),
+            earlier.publication_status(),
+            earlier.execution(),
+            earlier.is_current(),
+        )
+    });
     next.assert_ack(&engine, true);
     engine.shut_down().unwrap();
     let status = until(|| {
@@ -1949,6 +2027,9 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     assert!(ended.owner_ended && ended.owner_join_verified && ended.retirement_verified);
     assert_eq!(factory.info().unwrap().active, 0);
     drop(refresh);
+    drop(earlier_refresh);
+    drop(later_binding);
+    drop(later_timing);
     drop(anchor);
     drop(anchor_timing);
     drop(timing);
@@ -1963,7 +2044,11 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
                 .as_ref()
                 .is_none_or(|c| c.reader.upgrade().is_none())
             && next.reader.upgrade().is_none()
+            && later_source
+                .as_ref()
+                .is_none_or(|source| source.reader.upgrade().is_none())
     );
+
     eprintln!(
         "ASIO ordered Wet {control:?} E={E} refresh={publication} effect_frame_and_native={execution:?} original_native={original_native:#x} A_native={:#x} current={current} output={} cursor={at_e}->{actual_end_position} master={:?} provenance={:?} gated={gated_prefix:?} confirmed={confirmed:?} capture={:?}..{:?} frames={} failure={:?} wet_failed={}",
         tick.pads[0].native_state,
@@ -1977,9 +2062,19 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
         tick.pads[0].wet_failed,
     );
 
+    if ordered_refresh {
+        eprintln!("ASIO ordered master ingress {control:?} earlier={earlier_effect:?}");
+        assert!(!gated_capture.terminal_decided && gated_capture.payload_sha256.is_none());
+        if let Some((_, status, execution, current)) = earlier_effect {
+            assert_eq!(status, "rejected");
+            assert_eq!(execution, None);
+            assert!(!current);
+        }
+    }
     assert_eq!(publication, "accepted");
     assert!(current);
     if let Some((period, revision)) = master {
+        let period = if ordered_refresh { 0.7 / 1.4 } else { period };
         assert_eq!(rate.effect.effective.period, Some(period));
         assert_eq!(Some(rate.master_provenance), provenance);
         let (requested, applied) = bpm.unwrap();
@@ -1988,7 +2083,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
         assert!(action_effective);
         assert_eq!(tick.pads[0].native_state, original_native);
         assert!(!tick.pads[2].active);
-        let same_rate = matches!(control, OrderedWetControl::MasterRefresh(0.7));
+        let same_rate = ordered_refresh || matches!(control, OrderedWetControl::MasterRefresh(0.7));
         assert_eq!(execution, Some((if same_rate { E + 1 } else { E + 64 }, 0)));
         let advance = if same_rate {
             FRAMES as f64 * 1.4
@@ -2034,7 +2129,17 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     );
     fs::remove_file(&path).unwrap();
     fs::remove_dir(&directory).unwrap();
-    Vec::new()
+    if ordered_refresh {
+        let mut oracle: Vec<_> = pcm.iter().map(|sample| sample.to_bits()).collect();
+        oracle.extend(
+            captured[SPOOL_HEADER_BYTES as usize..]
+                .chunks_exact(4)
+                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap())),
+        );
+        oracle
+    } else {
+        Vec::new()
+    }
 }
 
 #[test]
