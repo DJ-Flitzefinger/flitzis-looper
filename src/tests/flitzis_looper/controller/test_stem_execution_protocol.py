@@ -163,3 +163,49 @@ def test_public_progress_facade_converts_internal_receipts_for_external_callers(
     expected = public.public_execution(receipt)
     assert events == [(None, None, expected), (0.85, "Aligning", expected)]
     assert all(isinstance(event[2], public.StemExecution) for event in events)
+
+
+@pytest.mark.parametrize("identity", ["3" * 64, None])
+def test_optional_actual_device_identity_preserves_public_and_legacy_wire(
+    identity: str | None,
+) -> None:
+    line = protocol.completed_execution_line(
+        "demucs",
+        "htdemucs",
+        "cuda",
+        threads=(1, 1),
+        cuda_peak_bytes=123,
+        cuda_device_identity=identity,
+    )
+    assert line == public.completed_execution_line(
+        "demucs",
+        "htdemucs",
+        "cuda",
+        threads=(1, 1),
+        cuda_peak_bytes=123,
+        cuda_device_identity=identity,
+    )
+    assert ("cuda_device_identity" in line) == (identity is not None)
+    args = {"backend": "demucs", "model_name": "htdemucs", "device": "cuda", "cpu_fallback": False}
+    receipt = protocol.completed_execution(line, **args)
+    assert receipt is not None
+    assert receipt.cuda_device_identity == identity
+    assert public.public_execution(receipt) == public.completed_execution(line, **args)
+
+
+@pytest.mark.parametrize("identity", [True, 1, "", "3" * 63, "G" * 64, "3" * 64 + "\n"])
+def test_invalid_device_identity_is_unknown_in_both_protocols(identity: object) -> None:
+    line = protocol.STEM_EXECUTION_RESULT + json.dumps(
+        _values() | {"cuda_device_identity": identity}
+    )
+    args = {"backend": "demucs", "model_name": "htdemucs", "device": "cuda", "cpu_fallback": False}
+    assert protocol.completed_execution(line, **args) is None
+    assert public.completed_execution(line, **args) is None
+
+
+def test_cpu_cannot_carry_cuda_device_identity() -> None:
+    for module in (public, protocol):
+        with pytest.raises(ValueError, match=r"CUDA identity|Incoherent"):
+            module.completed_execution_line(
+                "demucs", "htdemucs", "cpu", cuda_device_identity="3" * 64
+            )

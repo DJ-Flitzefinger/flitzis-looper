@@ -25,6 +25,7 @@ class StemExecution(BaseModel):
     intra_op_threads: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
     inter_op_threads: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
     cuda_peak_bytes: Annotated[int, Field(strict=True, ge=0, le=9223372036854775807)] | None = None
+    cuda_device_identity: Annotated[str, Field(pattern="^[0-9a-f]{64}$")] | None = None
 
     @model_validator(mode="after")
     def _coherent_fallback(self) -> Self:
@@ -36,6 +37,9 @@ class StemExecution(BaseModel):
             raise ValueError(message)
         if self.cuda_peak_bytes is not None and self.device != "cuda":
             message = "CUDA memory observation requires completed CUDA inference"
+            raise ValueError(message)
+        if self.cuda_device_identity is not None and self.device != "cuda":
+            message = "CUDA identity requires completed CUDA inference"
             raise ValueError(message)
         return self
 
@@ -54,6 +58,7 @@ def completed_execution_line(
     *,
     threads: tuple[int, int] | None = None,
     cuda_peak_bytes: int | None = None,
+    cuda_device_identity: str | None = None,
 ) -> str:
     """Encode only after the owned child's successful inference has completed."""
     receipt = StemExecution.model_validate({
@@ -63,8 +68,10 @@ def completed_execution_line(
         "intra_op_threads": None if threads is None else threads[0],
         "inter_op_threads": None if threads is None else threads[1],
         "cuda_peak_bytes": cuda_peak_bytes,
+        "cuda_device_identity": cuda_device_identity,
     })
-    return STEM_EXECUTION_RESULT + receipt.model_dump_json()
+    excluded = {"cuda_device_identity"} if receipt.cuda_device_identity is None else set()
+    return STEM_EXECUTION_RESULT + receipt.model_dump_json(exclude=excluded)
 
 
 def completed_execution(

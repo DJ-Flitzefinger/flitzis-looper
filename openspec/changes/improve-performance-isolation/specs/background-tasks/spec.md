@@ -643,6 +643,14 @@ mandatory on CPU-only systems.
 - **THEN** the attempt fails without repeating the model on CPU
 - **AND** only a recognized placement, transfer or inference CUDA fault can request the same-model CPU fallback
 
+#### Scenario: Completed execution qualifies passive calibration
+- **GIVEN** an ordinary completed separator result has passed final source, producer, resource and actual-reader settlement guards
+- **WHEN** its observation is considered for the bounded 32-key, 600-second calibration cache
+- **THEN** its backend, model and effective one-thread pools SHALL match the captured plan
+- **AND** CUDA learning SHALL require known allocator peak bytes and the child's actual runtime/driver/device identity matching the probed key, using the exact executed ordinal
+- **AND** missing, foreign or mixed-device observations remain valid optional diagnostics without teaching a preference or repeating successful inference
+- **AND** old V1 receipts remain readable, CPU execution queries no CUDA metadata, and original observation age is never renewed by promotion
+
 ### Requirement: Separator Diagnostics Cannot Become Protocol Receipts
 The host SHALL preserve the distinction between diagnostic text and exact child
 protocol lines while compacting or truncating command output. Whitespace

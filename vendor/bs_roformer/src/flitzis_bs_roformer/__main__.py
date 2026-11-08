@@ -23,6 +23,7 @@ from flitzis_looper.inference_provider import (
     emit_cuda_failure,
 )
 from flitzis_looper.offline_runtime import configure_child
+from flitzis_looper.provider_probe import completed_model_cuda_observation
 from flitzis_looper.stem_cancellation import (
     CANCEL_EXIT_CODE,
     StemCancellation,
@@ -89,13 +90,17 @@ def main() -> None:
         "normalize": False,
         "transient_pcm_bytes_bound": plan.transient_pcm_bytes,
     })
+    cuda_identity, cuda_peak = (
+        completed_model_cuda_observation(model) if args.device == "cuda" else (None, None)
+    )
     sys.stdout.write(
         completed_execution_line(
             "bs-roformer",
             "BS-RoFormer MUSDB18HQ",
             args.device,
             threads=threads,
-            cuda_peak_bytes=torch.cuda.max_memory_reserved() if args.device == "cuda" else None,
+            cuda_peak_bytes=cuda_peak,
+            cuda_device_identity=cuda_identity,
         )
         + "\n"
     )

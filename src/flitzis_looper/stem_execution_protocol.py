@@ -26,6 +26,7 @@ class ExecutionReceipt:
     intra_op_threads: int | None = None
     inter_op_threads: int | None = None
     cuda_peak_bytes: int | None = None
+    cuda_device_identity: str | None = None
 
     def __post_init__(self) -> None:
         message = "Invalid completed execution fields"
@@ -59,6 +60,13 @@ class ExecutionReceipt:
             )
         ):
             raise ValueError(message)
+        if self.cuda_device_identity is not None and (
+            self.device != "cuda"
+            or type(self.cuda_device_identity) is not str
+            or len(self.cuda_device_identity) != 64
+            or any(char not in "0123456789abcdef" for char in self.cuda_device_identity)
+        ):
+            raise ValueError(message)
 
 
 def execution_fields(receipt: ExecutionReceipt) -> dict[str, object]:
@@ -72,6 +80,7 @@ def execution_fields(receipt: ExecutionReceipt) -> dict[str, object]:
         "intra_op_threads": receipt.intra_op_threads,
         "inter_op_threads": receipt.inter_op_threads,
         "cuda_peak_bytes": receipt.cuda_peak_bytes,
+        "cuda_device_identity": receipt.cuda_device_identity,
     }
 
 
@@ -82,6 +91,7 @@ def completed_execution_line(
     *,
     threads: tuple[int, int] | None = None,
     cuda_peak_bytes: int | None = None,
+    cuda_device_identity: str | None = None,
 ) -> str:
     """Encode only after the owned child's successful inference has completed."""
     receipt = ExecutionReceipt(
@@ -91,10 +101,12 @@ def completed_execution_line(
         intra_op_threads=None if threads is None else threads[0],
         inter_op_threads=None if threads is None else threads[1],
         cuda_peak_bytes=cuda_peak_bytes,
+        cuda_device_identity=cuda_device_identity,
     )
-    return STEM_EXECUTION_RESULT + json.dumps(
-        execution_fields(receipt), ensure_ascii=False, separators=(",", ":")
-    )
+    fields = execution_fields(receipt)
+    if receipt.cuda_device_identity is None:
+        del fields["cuda_device_identity"]
+    return STEM_EXECUTION_RESULT + json.dumps(fields, ensure_ascii=False, separators=(",", ":"))
 
 
 def completed_execution(

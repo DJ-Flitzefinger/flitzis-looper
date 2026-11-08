@@ -32,7 +32,7 @@ def _driver_release() -> str | None:
         nvml.nvmlShutdown()
 
 
-def _device_identity() -> dict[str, object]:
+def _device_identity(index: int = 0) -> dict[str, object]:
     """Return no identity when a required driver/UUID observation is missing."""
     driver = ctypes.CDLL("nvcuda.dll" if os.name == "nt" else "libcuda.so.1")
     driver.cuDriverGetVersion.argtypes = [ctypes.POINTER(ctypes.c_int)]
@@ -43,11 +43,11 @@ def _device_identity() -> dict[str, object]:
     release = _driver_release()
     if release is None:
         return {}
-    properties = torch.cuda.get_device_properties(0)
+    properties = torch.cuda.get_device_properties(index)
     uuid = str(getattr(properties, "uuid", ""))
     if not uuid:
         return {}
-    free, total = torch.cuda.mem_get_info(0)
+    free, total = torch.cuda.mem_get_info(index)
     identity = (
         platform.platform(),
         platform.machine(),
@@ -66,6 +66,30 @@ def _device_identity() -> dict[str, object]:
         "identity": hashlib.sha256(repr(identity).encode()).hexdigest(),
         "free_bytes": free,
     }
+
+
+def completed_cuda_observation(device: str) -> tuple[str | None, int | None]:
+    """Observe the completed child's exact device; unavailable metadata cannot teach policy."""
+    if device.split(":", 1)[0] != "cuda":
+        return None, None
+    with suppress(OSError, ValueError, RuntimeError, AttributeError):
+        executed = torch.device(device)
+        index = torch.cuda.current_device() if executed.index is None else executed.index
+        observed = _device_identity(index)
+        identity = observed.get("identity")
+        peak = torch.cuda.max_memory_reserved(index)
+        if isinstance(identity, str) and type(peak) is int and 0 <= peak <= 2**63 - 1:
+            return identity, peak
+    return None, None
+
+
+def completed_model_cuda_observation(model: torch.nn.Module) -> tuple[str | None, int | None]:
+    """Use the actually placed model, leaving missing or mixed placement unqualified."""
+    with suppress(AttributeError, RuntimeError, TypeError):
+        devices = {tensor.device for tensor in (*model.parameters(), *model.buffers())}
+        if len(devices) == 1:
+            return completed_cuda_observation(str(next(iter(devices))))
+    return None, None
 
 
 def main() -> None:

@@ -172,13 +172,23 @@ def test_actual_demucs_completion_emitter_ignores_public_facade(
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_actual_bs_completion_emitter_ignores_public_facade(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], device: str
 ) -> None:
     emitter = importlib.import_module("flitzis_bs_roformer.__main__")
     _poison_public(monkeypatch)
+    model = object()
+    observations = []
+
+    def observe(placed: object) -> tuple[str, int]:
+        assert placed is model
+        observations.append(placed)
+        return "3" * 64, 1234
+
+    monkeypatch.setattr(emitter, "completed_model_cuda_observation", observe)
     monkeypatch.setattr(emitter, "configure_child", lambda *_: (1, 1))
-    monkeypatch.setattr(emitter, "load_model", lambda *_: object())
+    monkeypatch.setattr(emitter, "load_model", lambda *_: model)
     monkeypatch.setattr(emitter, "decode_source", lambda *_args, **_kwargs: 2)
     monkeypatch.setattr(emitter, "separate_pcm", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(emitter, "input_completion_line", lambda: "diagnostic only")
@@ -196,17 +206,17 @@ def test_actual_bs_completion_emitter_ignores_public_facade(
             "--config",
             "unused",
             "--device",
-            "cpu",
+            device,
         ],
     )
     emitter.main()
-    assert (
-        protocol.completed_execution(
-            capsys.readouterr().out,
-            backend="bs-roformer",
-            model_name="BS-RoFormer MUSDB18HQ",
-            device="cpu",
-            cpu_fallback=False,
-        )
-        is not None
+    receipt = protocol.completed_execution(
+        capsys.readouterr().out,
+        backend="bs-roformer",
+        model_name="BS-RoFormer MUSDB18HQ",
+        device=device,
+        cpu_fallback=False,
     )
+    assert receipt is not None
+    assert receipt.cuda_device_identity == ("3" * 64 if device == "cuda" else None)
+    assert observations == ([model] if device == "cuda" else [])

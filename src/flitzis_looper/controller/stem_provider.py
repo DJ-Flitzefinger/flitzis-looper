@@ -62,6 +62,7 @@ class ProviderPlan:
 
     devices: tuple[Device, ...]
     key: tuple[str, str, str] | None = None
+    backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,16 +117,21 @@ class StemProviderSelector:
         )
         key = (
             (fingerprint, model, capability.identity)
-            if fingerprint is not None and capability.identity is not None
+            if fingerprint is not None
+            and capability.identity is not None
+            and re.fullmatch(r"[0-9a-f]{64}", capability.identity) is not None
+            and type(capability.free_bytes) is int
+            and 0 <= capability.free_bytes <= 2**63 - 1
             else None
         )
+        backend = request.separator.split(":", 1)[0]
         if request.device_policy != "cpu":
             with self._lock:
                 self._last_capability = (
                     (capability, stamp) if capability.identity is not None else None
                 )
         if request.device_policy == "cpu" or not capability.available:
-            return ProviderPlan(("cpu",), key)
+            return ProviderPlan(("cpu",), key, backend)
         with self._lock:
             self._expire(stamp)
             costs = self._costs.get(key, {}) if key is not None else {}
@@ -138,12 +144,12 @@ class StemProviderSelector:
                     and capability.free_bytes < cuda.cuda_peak_bytes + _CUDA_MARGIN_BYTES
                 )
             ):
-                return ProviderPlan(("cpu",), key)
+                return ProviderPlan(("cpu",), key, backend)
             # Both totals cover real complete launches and artifact settlement.
             # A meaningful margin prevents route churn from timer noise.
             if cpu is not None and cuda is not None and cpu.seconds <= cuda.seconds * 0.85:
-                return ProviderPlan(("cpu",), key)
-        return ProviderPlan(("cuda", "cpu"), key)
+                return ProviderPlan(("cpu",), key, backend)
+        return ProviderPlan(("cuda", "cpu"), key, backend)
 
     def observe(
         self,
@@ -161,6 +167,16 @@ class StemProviderSelector:
             or not isinstance(execution, ExecutionReceipt)
             or not verified
             or execution.cpu_fallback
+        ):
+            return
+        if (
+            execution.model_name != plan.key[1]
+            or execution.backend != plan.backend
+            or (execution.intra_op_threads, execution.inter_op_threads) != (1, 1)
+        ):
+            return
+        if execution.device == "cuda" and (
+            execution.cuda_device_identity != plan.key[2] or execution.cuda_peak_bytes is None
         ):
             return
         if execution.device not in plan.devices or not math.isfinite(seconds) or seconds <= 0:

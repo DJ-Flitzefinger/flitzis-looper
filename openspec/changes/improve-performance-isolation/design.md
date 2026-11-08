@@ -7475,3 +7475,45 @@ existing intentional original-SET preparation path retains its separate proof.
 No tolerance changes. The final-mix test queue remains disconnected from
 production. Steady callback Native shifts, whole quality, physical/device/
 listening acceptance and the entire remaining performance program remain open.
+
+
+## Completed provider observation qualification
+
+The existing complete-host diagnosis now matches all 23 ordered executed parent
+roles for both separators under the supported source policy. The public string
+import in the process adapter was not a causal failure and remains unchanged.
+The selected WorkerLimits seam does not execute the separate Beat Pydantic
+adapters. This does not establish arbitrary generated-validator or loaded-image
+attestation beyond the existing policy.
+
+Passive calibration now additionally requires matching backend/model and observed
+one-thread pools. Actual CUDA children extend the readable V1 diagnostic with an
+optional runtime/driver/device fingerprint. Demucs retains its explicit executed
+ordinal even when PCM returns on CPU. BS inspects actual model parameter/buffer
+placement. The existing source-sealed capability implementation queries properties,
+memory and allocator peak on that ordinal; it never copies the parent probe key.
+Missing or mixed placement and unavailable metadata leave the successful result
+unlearnable. CPU queries no CUDA metadata. Old V1 emission remains byte-compatible
+when the optional identity is absent, and the public Pydantic facade accepts both.
+
+The selector learns CUDA cost only with an exact identity match and known peak;
+current free-memory observations must be complete before a key is available.
+Existing final source/producer/resource and actual-reader settlement still precede
+promotion. The 32-key/600-second bounds, original observation age, explicit CPU
+intent and guarded same-model device-fault fallback remain unchanged. No new
+inference, timer, worker or persistent calibration is introduced. This software
+qualification is separate from actual CUDA model, fault/fresh-CPU, quality,
+platform, installed-footprint and combined performance acceptance.
+
+
+Verification used both real complete source/library/native producer captures:
+23 parent roles each, 51 Demucs and 44 BS file witnesses, stable repeated producer
+identities and successful sealed-file verification without NN or audio input.
+Focused tests cover legacy/public receipts, both actual emitter paths with declared
+non-neural substitutes, exact and changing CUDA ordinals, mixed model placement,
+missing/foreign observations, expiry, bounded eviction and final reader settlement.
+They establish software policy qualification, not measured acceleration or actual
+CUDA model/fault/quality acceptance. Full unsuppressed affected typing retains
+inherited Windows/POSIX and upstream vendor diagnostics; no error was introduced
+in the six changed source files. Source-compatible compiled conversion evidence
+is distinct from OS loaded-image/toolchain attestation.

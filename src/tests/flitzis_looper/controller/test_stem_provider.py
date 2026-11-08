@@ -60,8 +60,37 @@ def _execution(device: str) -> ExecutionReceipt:
         backend="demucs",
         model_name="htdemucs",
         device=device,
+        intra_op_threads=1,
+        inter_op_threads=1,
         cuda_peak_bytes=1024**3 if device == "cuda" else None,
+        cuda_device_identity=CAPABILITY.identity if device == "cuda" else None,
     )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model_name": "other"},
+        {"backend": "bs-roformer"},
+        {"intra_op_threads": None, "inter_op_threads": None},
+        {"cuda_device_identity": None},
+        {"cuda_device_identity": "4" * 64},
+        {"cuda_peak_bytes": None},
+    ],
+)
+def test_incomplete_or_foreign_execution_never_teaches_cuda_cost(changes: dict) -> None:
+    selector = StemProviderSelector()
+    request = replace(_request(), producer_identity="2" * 64)
+    plan = selector.plan(request, "htdemucs", CAPABILITY, now=0)
+    selector.observe(plan, replace(_execution("cuda"), **changes), 1, verified=True, now=1)
+    assert not selector._costs
+
+
+@pytest.mark.parametrize("free", [None, -1, True, 2**63])
+def test_missing_or_invalid_current_headroom_cannot_create_calibration_key(free: object) -> None:
+    selector = StemProviderSelector()
+    request = replace(_request(), producer_identity="2" * 64)
+    assert selector.plan(request, "htdemucs", replace(CAPABILITY, free_bytes=free)).key is None
 
 
 def test_passive_total_cost_changes_only_comparable_workload_and_retains_explicit_cpu() -> None:
@@ -372,6 +401,8 @@ def test_calibration_promotion_requires_final_positive_provenance_and_actual_rea
         assert job.source is None
         if outcome == "success":
             accepted.assert_called_once()
+            assert plan.key in selector._costs
+            assert "cpu" in selector._costs[plan.key]
         else:
             accepted.assert_not_called()
             assert not selector._costs
