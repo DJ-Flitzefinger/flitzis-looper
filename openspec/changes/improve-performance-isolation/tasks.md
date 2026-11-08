@@ -1117,5 +1117,10 @@ remaining plan into each successor; report actual hard service limits honestly.
 - [x] Qualify both complete current producer captures without NN/audio and bind
       passive learning to actual backend/model/thread/device/peak observations;
       preserve old V1/public diagnostics, final reader/resource settlement and
-      fail-closed foreign/incomplete/stale identity behavior. Actual CUDA model,
-      same-model fault/fresh CPU, whole quality and all original final gates remain open.
+      fail-closed foreign/incomplete/stale identity behavior. Other providers,
+      whole quality and all original final gates remain open.
+
+- [x] Qualify actual stopped-target BS CUDA and explicit CPU completion through
+      the same backend/selector and original final settlement, inspect both real
+      learned rows, and verify genuine owned CUDA-fault to fresh-CPU fallback
+      without teaching a fallback cost. Preserve all broader quality/final limits.

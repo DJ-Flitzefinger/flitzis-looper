@@ -7517,3 +7517,57 @@ CUDA model/fault/quality acceptance. Full unsuppressed affected typing retains
 inherited Windows/POSIX and upstream vendor diagnostics; no error was introduced
 in the six changed source files. Source-compatible compiled conversion evidence
 is distinct from OS loaded-image/toolchain attestation.
+
+### Productive BS provider qualification profile
+
+The explicit ignored `actual_stock_bs_productive_provider_qualification` profile
+uses the original embedded Native, public Loader and stopped-target controller.
+Its first non-neural context proves the complete original shutdown, callback,
+known-holder collection and saved-file-only registry state before any model attempt.
+The streamless fixture completes the current App's real idle workload/output
+owners without starting saved output, a device or an output worker. The ordinary
+Python helper is imported from its explicitly frozen stage path and hash; it is
+runtime Python source, distinct from the compiled Rust profile identity.
+It retains one pure Python backend and selector across a real automatic CUDA
+completion and an explicit CPU backend-request seam. Three sequential independent
+Native/App fixtures use identical complete generated source bytes, geometry,
+model/configuration and producer identity; locator and content-owner identities
+remain distinct. Each fixture uses the public Loader and generation path. The
+captured public request remains automatic; this fixture does
+not add a CPU setting. Each run requires all five full outputs, matching source,
+model/configuration/producer and normalized key, and the original final provenance,
+source-reader, resource and process-tree/pipe-reader settlement before learning.
+The profile inspects actual cost rows and fresh headroom policy without extra
+calibration inference. Each run writes a detached provisional checkpoint before
+retiring its original workers, jobs, processing guards, App and Native owners.
+Actual callback destruction and collection of all known Python Native holders
+precede the next fixture. The original non-mutating registry observer must show
+zero live Native, engine, owner and history witnesses, transient readers,
+assignments, reservations and retirements. All remaining reader records must be
+saved cold-file descriptors. The original process-wide service deliberately keeps
+those persisted assignments protected after App shutdown; the profile neither
+prunes nor retires them. It fully rehashes the original files with shared reads
+between fixtures. Final enclosing EXE/Job closure and parent exclusive original-file
+rehashing establish actual file-handle end separately. Only the pure backend/selector
+and detached receipts survive in the shared Python qualification state.
+
+A separate fresh fault backend prevents a learned CPU preference from suppressing
+the intended CUDA attempt. Its disposable child sets a small Torch allocator quota
+and calls the original BS entry point. Only an actual CUDA placement/inference
+failure classified by the existing boundary may produce the original marker and
+exit code, then a fresh ordinary CPU child after actual tree and readers end.
+Fallback cannot teach a cost. The six-active-PAD overlap profile remains separate
+and continues to require zero learning. These are bounded functional observations;
+they do not establish acceleration, device deadlines, numerical/whole-track quality,
+other providers/platforms or complete Native replacement.
+
+
+The bounded qualification completed genuine CUDA and explicit CPU runs with both
+actual learned rows, then a genuine CUDA allocator failure followed by a fresh CPU
+child. Each run verified all five complete 144,000-frame stereo 48 kHz outputs.
+The original executor, callback, known holders and transient registry owners ended;
+only persisted file claims remained until process exit. After actual test EXE and
+enclosing Job closure, a separate parent exclusively rehashed all 23 original
+source and output files. These observations establish this functional route on one
+source and runtime, without claiming measured acceleration, numerical quality or
+broader platform and complete-replacement acceptance.

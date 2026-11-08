@@ -220,6 +220,243 @@ fn actual_stock_bs_available_cuda_inference_with_six_pads() {
     run(false);
 }
 
+#[test]
+#[ignore = "explicit stock BS CUDA/CPU learned rows and genuine allocator fault; no device"]
+fn actual_stock_bs_productive_provider_qualification() {
+    install_current_native();
+    let mut runtime = CommandRuntime::new();
+    let root = PathBuf::from(
+        std::env::var_os("FLITZIS_INFERENCE_PROFILE_ROOT").expect("fresh owned root required"),
+    );
+    assert!(root.is_absolute() && !root.exists());
+    fs::create_dir(&root).unwrap();
+    let (module, shared) = Python::attach(|py| {
+        let name = "tests.flitzis_looper.controller.provider_qualification_probe";
+        assert!(
+            !py.import("sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .contains(name)
+                .unwrap()
+        );
+        let module = py.import(name).unwrap();
+        let actual: PathBuf = module.getattr("__file__").unwrap().extract().unwrap();
+        let expected = PathBuf::from(std::env::var_os("FLITZIS_PROVIDER_HELPER_SOURCE").unwrap());
+        assert_eq!(
+            actual.canonicalize().unwrap(),
+            expected.canonicalize().unwrap()
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(&actual).unwrap())),
+            std::env::var("FLITZIS_PROVIDER_HELPER_SHA256").unwrap()
+        );
+        let shared = module
+            .getattr("ProviderQualificationState")
+            .unwrap()
+            .call0()
+            .unwrap()
+            .unbind();
+        (module.unbind(), shared)
+    });
+    for mode in ["preflight", "cuda", "cpu", "fault"] {
+        productive_fixture(&root.join(mode), &module, &shared, mode);
+    }
+    let report: String = Python::attach(|py| {
+        shared
+            .call_method0(py, "finish")
+            .unwrap()
+            .extract(py)
+            .unwrap()
+    });
+    Python::attach(|_| {
+        drop(shared);
+        drop(module);
+    });
+    runtime.restore();
+    fs::write(root.join("provider-qualification.provisional.json"), report).unwrap();
+    eprintln!("stock_bs_productive_provider_qualification completed all three original runs");
+}
+
+fn productive_fixture(root: &Path, module: &Py<PyModule>, shared: &Py<PyAny>, mode: &str) {
+    fs::create_dir(root).unwrap();
+    let mut f = Fixture::new(root, false);
+    verify_original_native_identity(&f);
+    let path = root.join("source-6.wav");
+    f.script(&format!(
+        "from tests.flitzis_looper.controller.controller_overlap_probe import write_source\nwrite_source({:?}, {RATE}, 3, 1606)\nprobe.load(6, {:?})",
+        path.to_string_lossy(), path.to_string_lossy()
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !script_value(&f, "probe.poll_load(6)") {
+        f.drain();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    f.drain();
+    let original_sources = sources(&mut f, &[6]);
+    let session = InferenceSession(Python::attach(|py| {
+        let options = PyDict::new(py);
+        options
+            .set_item(
+                "shape_audio",
+                Py::new(
+                    py,
+                    InferenceSourceShape {
+                        engine: f.engine.clone_ref(py),
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        options.set_item("shared", shared.bind(py)).unwrap();
+        options.set_item("mode", mode).unwrap();
+        module
+            .bind(py)
+            .getattr("ProviderQualification")
+            .unwrap()
+            .call((f.probe.bind(py),), Some(&options))
+            .unwrap()
+            .unbind()
+    }));
+    if mode != "preflight" {
+        Python::attach(|py| session.0.call_method1(py, "start", (mode,)).unwrap());
+        let began = Instant::now();
+        loop {
+            f.drain();
+            f.render(512);
+            f.call("poll_feedback");
+            let complete = Python::attach(|py| {
+                session
+                    .0
+                    .call_method0(py, "poll")
+                    .unwrap()
+                    .extract::<bool>(py)
+                    .unwrap()
+            });
+            assert!(
+                began.elapsed() < Duration::from_secs(600),
+                "bounded {mode} qualification"
+            );
+            if complete {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert_eq!(sources(&mut f, &[6]), original_sources);
+    assert!(!active(&mut f, 6));
+    let mut files: Vec<(String, String)> = Python::attach(|py| {
+        let files = session
+            .0
+            .call_method0(
+                py,
+                if mode == "preflight" {
+                    "preflight_files"
+                } else {
+                    "finish_run"
+                },
+            )
+            .unwrap()
+            .extract(py)
+            .unwrap();
+        session.0.call_method0(py, "close").unwrap();
+        files
+    });
+    files.push((path.to_string_lossy().into_owned(), files[0].1.clone()));
+    let closing = Instant::now();
+    while !f.ready_to_close() {
+        f.drain();
+        f.call("poll_feedback");
+        assert!(closing.elapsed() < Duration::from_secs(10));
+        thread::sleep(Duration::from_millis(1));
+    }
+    f.call("finish_close");
+    f.script("assert probe.audio_output._operation is None\nassert not probe.audio_output.available\nassert not probe._runtime_activated");
+    f.drain();
+    let counts = Python::attach(|py| f.engine.borrow(py).cold_jobs.counts_for_test());
+    assert_eq!(counts, (0, 0, 0));
+    f.close_callback();
+    Python::attach(|_| {
+        drop(session);
+        drop(f);
+    });
+    Python::attach(|py| {
+        shared
+            .call_method0(py, "assert_fixture_owners_ended")
+            .unwrap();
+    });
+    let registry = productive_asset_registry(root);
+    // The original registry intentionally keeps persisted file-only claims.
+    // Verify bytes here; require exclusive access only after this exact EXE
+    // and its enclosing Job end, without retiring those saved assignments.
+    rehash_productive_files(&files);
+    Python::attach(|py| {
+        shared
+            .call_method1(py, "fixture_ended", (mode, registry))
+            .unwrap();
+    });
+}
+
+fn productive_asset_registry(root: &Path) -> String {
+    let began = Instant::now();
+    let mut observations = Vec::new();
+    loop {
+        let registry = match crate::audio_engine::project_assets::ProjectAssets::shared()
+            .observe_registry_for_test()
+        {
+            Ok(value) => serde_json::to_value(value).unwrap(),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        let settled = [
+            "native_live",
+            "pending_without_native",
+            "other_without_native_or_pending",
+            "pending_assignments",
+            "live_engine_witnesses",
+            "live_owner_witnesses",
+            "live_history_witnesses",
+            "reserved_reader_slots",
+            "retirements",
+        ]
+        .iter()
+        .all(|key| registry[*key].as_u64() == Some(0))
+            && [
+                "externally_held_accounts",
+                "live_owner_witnesses",
+                "pending_reservations",
+            ]
+            .iter()
+            .all(|key| registry["residency"][*key].as_u64() == Some(0))
+            && registry["reader_records"].as_u64().is_some_and(|count| {
+                count > 0
+                    && ["saved_cold_file_only", "saved_claims", "cold_descriptors"]
+                        .iter()
+                        .all(|key| registry[*key].as_u64() == Some(count))
+            });
+        observations.push(serde_json::json!({
+            "elapsed_ns": began.elapsed().as_nanos(), "registry": registry
+        }));
+        let trace = serde_json::json!({"settled": settled, "observations": &observations});
+        let report = serde_json::to_string(&trace).unwrap();
+        fs::write(root.join("asset-registry-after-fixture.json"), &report).unwrap();
+        if settled {
+            return report;
+        }
+        assert!(began.elapsed() < Duration::from_secs(2), "{report}");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn rehash_productive_files(files: &[(String, String)]) {
+    for (path, digest) in files {
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            *digest
+        );
+    }
+}
+
 fn run(cpu_only: bool) {
     install_current_native();
     let mut runtime = CommandRuntime::new();
