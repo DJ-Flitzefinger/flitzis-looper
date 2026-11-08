@@ -26,6 +26,7 @@ def _context() -> SimpleNamespace:
     session = SessionState()
     output = SimpleNamespace(
         phase="starting",
+        available=False,
         can_perform=False,
         has_runtime=False,
         exclusive_native_access=True,
@@ -35,6 +36,7 @@ def _context() -> SimpleNamespace:
         draft=AudioOutputOptions(),
         inventory=[],
         observed=None,
+        numeric_edits={},
         previous_errors={},
     )
     settings = SettingsActions(

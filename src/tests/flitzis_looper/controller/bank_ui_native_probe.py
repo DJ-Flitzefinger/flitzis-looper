@@ -15,6 +15,7 @@ from unittest.mock import patch
 from imgui_bundle import imgui
 
 from flitzis_looper.control_diagnostics import ConsoleDiagnostics
+from flitzis_looper.controller.audio_output import AudioOutputController
 from flitzis_looper.controller.performance_confirmation import (
     BankConfirmation,
     PerformanceConfirmationController,
@@ -38,6 +39,15 @@ class _UiAppDelegate:
         self._probe = probe
         self._close_requested = False
         self.diagnostics = ConsoleDiagnostics()
+        # Rust already owns the running headless callback. Declare only its UI
+        # performer envelope; never start output or manufacture a device receipt.
+        self._runtime_activated = True
+        self.audio_output = AudioOutputController(cast("AppController", self))
+        self.audio_output.phase = "ready"
+        self.audio_output.available = True
+        self._output = self.audio_output
+        self._output_options = self._probe.project.audio_output
+        self.assert_headless_output()
         self.performance_confirmation = PerformanceConfirmationController(
             cast("AppController", self)
         )
@@ -48,6 +58,21 @@ class _UiAppDelegate:
     def poll_runtime_events(self) -> None:
         """Keep the real global pointer tick; limit App polling to this Bank owner."""
         self._probe.controller.poll()
+
+    def assert_headless_output(self) -> None:
+        """Keep the real gesture tick enabled without acquiring output authority."""
+        output = self.audio_output
+        assert output is self._output
+        assert output.has_runtime
+        assert output.can_perform
+        assert not output.exclusive_native_access
+        assert output._operation is None
+        assert output._epoch is None
+        assert output.observed is None
+        assert output.inventory == []
+        assert output.draft is self._output_options
+        assert self._probe.project.audio_output is self._output_options
+        assert output._persisted_options is self._output_options
 
 
 class RenderedBankProbe:
@@ -123,6 +148,7 @@ class RenderedBankProbe:
         return accepted
 
     def _frame(self) -> None:
+        self.app.assert_headless_output()
         self.texts.clear()
         imgui.new_frame()
         imgui.set_next_window_pos((0, 0))
@@ -143,6 +169,7 @@ class RenderedBankProbe:
                     assert command.clip_rect.z >= command.clip_rect.x
                     assert command.clip_rect.w >= command.clip_rect.y
         run._poll_runtime_tick(self.context)
+        self.app.assert_headless_output()
 
     def _click(self, label: str, button: int = imgui.MouseButton_.left) -> None:
         # A newly appearing auto-sized modal settles its position on later frames.
@@ -236,6 +263,7 @@ class RenderedBankProbe:
 
     def close(self) -> None:
         """Release only render contexts and observation wrappers after settlement."""
+        self.app.assert_headless_output()
         assert not self.probe.controller.active
         assert self.context.ui.confirmation.pending is None
         assert len(self.captures) == 5

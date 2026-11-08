@@ -7700,3 +7700,41 @@ still exceeds the 1 ms software period, including drain. No unchanged matrix is
 repeated to select better noise.
 The complete raw data, observer limits and historical failures remain material;
 overall performance, quality, device, platform and final acceptance stay open.
+
+## Current reconciliation of the original Bank/Copy custody cluster
+
+Six retained original representatives were run together before changing their
+fixtures: all-36 Copy/Clear, rendered Bank gestures, three-process fresh recovery,
+B2 last-reader deletion, shared Copy and shared completion behind a pending Bank
+Config writer. Five pass unchanged. The rendered case fails before Bank admission
+because its narrow App envelope lacks the output controller now read by the real
+global UI tick. The fixture creates the declared five WAVs, completion manifest
+and selected pair under a real typed stem generation, with the same asset owner
+and explicit project CWD. A common current custody failure is not reproduced.
+
+The rendered fixture now constructs the actual nonacquiring output controller and
+declares only the existing headless callback's performer-envelope state. It keeps
+the real global pointer/arrangement tick enabled. Before and after each frame and
+at close it verifies controller/options identity and the absence of an output
+worker, transaction epoch, inventory or observed device receipt. It never starts,
+polls, applies or refreshes output. Separate startup UI fixtures supply the real
+controller's empty numeric-edit state and unavailable-output default. Production
+output, source classification, existence, custody, OwnACK and reader guards are
+unchanged; no device readiness is inferred from the declared headless UI state.
+
+One freshly compiled optimized test artifact passes all six original routes
+together, retaining their gesture/request, complete callback ACK, durable Config,
+recovery, shared-interest and last-reader assertions. An equivalent later split
+of one combined assertion preserves getter order and success conditions; this
+reuses behavior evidence, not an assertion that the measured EXE has the final
+source identity. Nineteen focused Python cases pass: four missing-custody fences,
+three terminal reader/writer retry cases and twelve startup UI context cases.
+Both changed Python files pass lint, format and scoped type checks. The inherited
+complete typing failure remains separate.
+
+The initial UI failure, earlier missing-field/lint failures and the test build's
+strict cleanup failure remain recorded separately from verified own-job/handle
+end. Historical STEP14 failures are not erased: these six current outcomes do not
+establish a clean full matrix, resolve the distinct-216 watchdog or initial
+registry uncertainty, or close Native replacement, numerical, platform,
+performance, distribution, device or final acceptance.

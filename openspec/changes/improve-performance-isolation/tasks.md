@@ -1067,6 +1067,11 @@ STEP14 carries 32 unchanged-parent failures (31 normalized leaf matches; duplica
 isolated PASS. Preserve and resolve these real gates; do not infer a clean overall
 matrix from the distinct successful-case union or weaken their original assertions.
 
+- [x] Reconcile six original Bank/Copy/UI/recovery/shared-job/last-reader routes
+      together, correct their stale headless UI output envelopes and retain real
+      gesture, ACK, Config and custody assertions; keep the historical full-matrix
+      failures and remaining combined acceptance separate.
+
 - [ ] Run the declared 2/4/6-PAD latency/deadline/overlap matrix and <=10 stress.
 - [ ] Review actual cumulative diff, focused regressions, memory plateaus, docs,
       CPU fallback and distribution implications; fix real failures coherently.
