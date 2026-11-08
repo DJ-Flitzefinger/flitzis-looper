@@ -165,6 +165,12 @@ recycling and destruction stay on workers; cancelled results retire even when a
 voice is paused or inactive. The callback never waits/spins for a reserve.
 Unavailable reserves can produce bounded silence without rewriting canonical feed.
 
+Captured pitch and ordinary-start actions use a separate bounded preparation
+pool. At most two workers prepare independent Native/Work owners; the pool keeps
+the existing aggregate action queues and original scheduler/group authority.
+The selected endpoint still has one lower-priority owner across the whole pool.
+Worker completion order does not change original input order or atomic common E.
+
 [prepared_native_history.rs](../../rust/crates/looper/src/audio_engine/prepared_native_history.rs)
 owns unique handles, fixed input/output FIFOs and source/history/stem pins.
 [stretch_processor.rs](../../rust/crates/looper/src/audio_engine/stretch_processor.rs)

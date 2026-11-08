@@ -290,6 +290,16 @@ impl PitchRuntime {
     pub(super) fn selected_endpoint_ready(&self) -> bool {
         self.endpoint.ready()
     }
+    #[cfg(all(test, windows))]
+    pub(super) fn selected_endpoint_request_queued(&self) -> bool {
+        !self.preparation.endpoint_available()
+    }
+    #[cfg(all(test, windows))]
+    pub(super) fn preparation_pool_observation(
+        &self,
+    ) -> Arc<super::preparation_observation::PoolObservation> {
+        self.preparation.observation()
+    }
     #[cfg(test)]
     pub(super) fn selected_endpoint_native_address(&self) -> usize {
         self.endpoint.native_address()

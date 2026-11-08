@@ -70,6 +70,8 @@ pub(crate) mod heavy_work;
 mod loader_overlap_observation;
 #[cfg(all(test, windows))]
 mod native_lifecycle_observation;
+#[cfg(all(test, windows))]
+mod preparation_observation;
 pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 pub(crate) use complete_context::NativeAnalysisOwner;
 pub(crate) mod constant_timing;

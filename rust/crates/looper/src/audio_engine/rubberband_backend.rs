@@ -132,10 +132,9 @@ impl RubberBandLiveShifter {
         let sample_rate_c =
             c_uint::try_from(sample_rate_hz).map_err(|_| RubberBandError::InvalidSampleRate)?;
 
-        let raw_handle = unsafe {
-            rubberband_live_set_default_debug_level(0);
-            rubberband_live_new(sample_rate_c, channels_c, options.bits())
-        };
+        // The backend's zero default is process-global. Leave it immutable while
+        // independent workers construct instances; configure this instance below.
+        let raw_handle = unsafe { rubberband_live_new(sample_rate_c, channels_c, options.bits()) };
         let handle = NonNull::new(raw_handle).ok_or(RubberBandError::ConstructionFailed)?;
 
         #[cfg(test)]
@@ -455,7 +454,6 @@ unsafe extern "C" {
     );
     fn rubberband_live_get_channel_count(state: *mut RubberBandLiveStateOpaque) -> c_uint;
     fn rubberband_live_set_debug_level(state: *mut RubberBandLiveStateOpaque, level: c_int);
-    fn rubberband_live_set_default_debug_level(level: c_int);
 }
 
 #[cfg(test)]

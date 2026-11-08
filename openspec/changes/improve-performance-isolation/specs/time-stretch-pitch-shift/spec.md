@@ -1,5 +1,37 @@
 ## ADDED Requirements
 
+### Requirement: Independent Action Preparation Uses Bounded Concurrent Owners
+Captured pitch and ordinary-start preparation SHALL use a bounded pool of at
+most two independent off-realtime workers, selected according to host parallelism.
+Their aggregate request,
+ready and retirement cells SHALL retain the existing action budget. Worker
+completion SHALL NOT replace original input order, scheduler fences, atomic
+group readiness, common E, source authority or final effect claims.
+The single selected-endpoint preparation owner SHALL remain below accepted
+action work across the whole pool. Every started worker SHALL be joined after
+callback shutdown, including partial worker-start failure. Concurrent Native
+construction SHALL preserve independent mutable state and avoid per-constructor
+writes to process-global backend defaults; each instance SHALL retain quiet
+processing configuration.
+
+#### Scenario: An independent later worker finishes first
+- **GIVEN** two original actions or atomic group members retain independent Native and source Work
+- **WHEN** their workers finish in a different order
+- **THEN** existing original-order and whole-group checks still govern the actual effect and common E
+- **AND** failed, cancelled or stale Work returns intact through existing retirement and own acknowledgement paths
+
+#### Scenario: Aggregate preparation capacity is available
+- **GIVEN** a whole group passes the existing aggregate capacity check
+- **WHEN** one bounded shard has no request cells available
+- **THEN** publication uses another available shard without changing total capacity or partially applying the group
+- **AND** accepted work on either shard delays a not-yet-started endpoint preparation
+
+#### Scenario: A later worker cannot be started
+- **GIVEN** one pool worker has actually started before another worker-start attempt fails
+- **WHEN** pool construction returns its error
+- **THEN** every already-started worker has been signalled and joined
+- **AND** callback publication has not acquired a partially initialized pool
+
 ### Requirement: Production Trigger Response Has Separate Timing Evidence
 The system SHALL measure original input capture, requested target T, actual
 effect E and rendered significant onset separately for performance validation.

@@ -29,6 +29,8 @@ pub(crate) struct OrdinaryCompletionPlan {
 }
 
 pub(crate) struct OrdinaryStartWork {
+    #[cfg(all(test, windows))]
+    pub(super) preparation_observation: Option<Arc<super::preparation_observation::Timing>>,
     origin: Option<CapturedPadStart>,
     sequence: u64,
     pub(crate) candidate: Option<Box<NativeAdapterState>>,
@@ -69,6 +71,8 @@ impl OrdinaryStartWork {
         let sequence = super::scheduler::reserve_input_order()
             .ok_or(RubberBandError::UnavailableSourceHistory)?;
         Ok(Box::new(Self {
+            #[cfg(all(test, windows))]
+            preparation_observation: super::preparation_observation::capture(sequence),
             origin: None,
             sequence,
             candidate: None,

@@ -6,7 +6,7 @@ use crate::audio_engine::ordinary_start::OrdinaryStartWork;
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -19,6 +19,13 @@ pub(crate) enum PreparedActionWork {
 }
 
 impl PreparedActionWork {
+    #[cfg(all(test, windows))]
+    fn observation(&self) -> Option<&Arc<crate::audio_engine::preparation_observation::Timing>> {
+        match self {
+            Self::Ordinary(work) => work.preparation_observation.as_ref(),
+            Self::Pitch(_) => None,
+        }
+    }
     pub(crate) fn sequence(&self) -> u64 {
         match self {
             Self::Pitch(work) => work.action.sequence(),
@@ -27,10 +34,29 @@ impl PreparedActionWork {
     }
 
     pub(crate) fn prepare(&mut self) -> Result<(), PitchActionReject> {
-        match self {
+        #[cfg(all(test, windows))]
+        let observation = self.observation().cloned();
+        #[cfg(all(test, windows))]
+        if let Some(observation) = &observation {
+            observation.start();
+        }
+        let result = match self {
             Self::Pitch(work) => work.prepare(),
             Self::Ordinary(work) => work.prepare(),
+        };
+        #[cfg(all(test, windows))]
+        if let Some(observation) = observation {
+            let native = match self {
+                Self::Ordinary(work) => work
+                    .candidate
+                    .as_ref()
+                    .and_then(|candidate| candidate.rubberband.as_ref())
+                    .map_or(0, |native| native.state_address()),
+                Self::Pitch(_) => 0,
+            };
+            observation.end(native);
         }
+        result
     }
 
     pub(crate) fn reject(&self, reason: PitchActionReject) {
@@ -57,23 +83,164 @@ impl PreparedActionWork {
     }
 }
 
-pub(crate) struct PitchActionPreparation {
+#[inline]
+fn publish_ready(
+    output: &mut Producer<PreparedActionWork>,
+    work: PreparedActionWork,
+    accepted_pending: &AtomicUsize,
+) -> Result<(), PushError<PreparedActionWork>> {
+    #[cfg(all(test, windows))]
+    let observation = work.observation().cloned();
+    #[cfg(all(test, windows))]
+    if let Some(observation) = &observation {
+        observation.ready_before();
+    }
+    let result = output.push(work);
+    #[cfg(all(test, windows))]
+    if result.is_ok()
+        && let Some(observation) = observation
+    {
+        observation.ready_after();
+    }
+    if result.is_ok() {
+        accepted_pending.fetch_sub(1, Ordering::SeqCst);
+    }
+    result
+}
+
+struct CallbackPreparationLane {
     requests: Producer<PreparedActionWork>,
     ready: Consumer<PreparedActionWork>,
-    // Keep this producer alive for the worker's retirement lane in every build.
+    // Retain the worker's retirement producer in every build.
     _retirement: Producer<PreparedActionWork>,
+}
+
+pub(crate) struct PitchActionPreparation {
+    #[cfg(all(test, windows))]
+    observation: Arc<crate::audio_engine::preparation_observation::PoolObservation>,
+    lanes: Vec<CallbackPreparationLane>,
+    publish_next: usize,
+    poll_next: usize,
+    _retire_next: usize,
+    accepted_pending: Arc<AtomicUsize>,
     endpoint_requests: Producer<Box<EndpointReserveWork>>,
     endpoint_ready: Consumer<Box<EndpointReserveWork>>,
 }
 
 pub(crate) struct PitchActionPreparationWorker {
     running: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
+    joins: Vec<JoinHandle<()>>,
+}
+
+struct EndpointWorkerLane {
+    input: Consumer<Box<EndpointReserveWork>>,
+    output: Producer<Box<EndpointReserveWork>>,
+    pending: Option<Box<EndpointReserveWork>>,
+}
+
+struct ActionWorkerLane {
+    #[cfg(all(test, windows))]
+    observation: Arc<crate::audio_engine::preparation_observation::PoolObservation>,
+    input: Consumer<PreparedActionWork>,
+    output: Producer<PreparedActionWork>,
+    retired: Consumer<PreparedActionWork>,
+    pending: Option<PreparedActionWork>,
+}
+
+impl ActionWorkerLane {
+    fn run(
+        mut self,
+        running: Arc<AtomicBool>,
+        accepted_pending: Arc<AtomicUsize>,
+        mut endpoint: Option<EndpointWorkerLane>,
+    ) {
+        while running.load(Ordering::Acquire) {
+            let mut worked = false;
+            if let Ok(work) = self.retired.pop() {
+                drop(work);
+                worked = true;
+            }
+            if let Some(work) = self.pending.take() {
+                match publish_ready(&mut self.output, work, &accepted_pending) {
+                    Ok(()) => worked = true,
+                    Err(PushError::Full(work)) => self.pending = Some(work),
+                }
+            }
+            if self.pending.is_none()
+                && self.output.slots() != 0
+                && let Ok(mut work) = self.input.pop()
+            {
+                #[cfg(all(test, windows))]
+                crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::before_worker(&work);
+                let result = work.prepare();
+                #[cfg(all(test, windows))]
+                crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::after_worker(
+                    &work,
+                    result.as_ref().err().copied(),
+                );
+                if let Err(reason) = result {
+                    work.reject(reason);
+                }
+                if let Err(PushError::Full(work)) =
+                    publish_ready(&mut self.output, work, &accepted_pending)
+                {
+                    self.pending = Some(work);
+                }
+                worked = true;
+            }
+            if let Some(endpoint) = endpoint.as_mut() {
+                if let Some(work) = endpoint.pending.take() {
+                    match endpoint.output.push(work) {
+                        Ok(()) => worked = true,
+                        Err(PushError::Full(work)) => endpoint.pending = Some(work),
+                    }
+                }
+                // One aggregate boundary covers queued, executing and unpublished ready
+                // actions on every shard. Already-started endpoint work is not preempted.
+                let pending = accepted_pending.load(Ordering::SeqCst);
+                if pending == 0
+                    && endpoint.pending.is_none()
+                    && endpoint.output.slots() != 0
+                    && let Ok(mut work) = endpoint.input.pop()
+                {
+                    #[cfg(all(test, windows))]
+                    self.observation.endpoint_started();
+                    work.prepare();
+                    if let Err(PushError::Full(work)) = endpoint.output.push(work) {
+                        endpoint.pending = Some(work);
+                    }
+                    worked = true;
+                }
+                #[cfg(all(test, windows))]
+                self.observation.endpoint_checked(pending);
+            }
+            if !worked {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        // Rendering has stopped. Retain the original off-realtime destruction path.
+        if let Some(work) = self.pending.take() {
+            accepted_pending.fetch_sub(1, Ordering::SeqCst);
+            drop(work);
+        }
+        while let Ok(work) = self.input.pop() {
+            accepted_pending.fetch_sub(1, Ordering::SeqCst);
+            drop(work);
+        }
+        while let Ok(work) = self.retired.pop() {
+            drop(work);
+        }
+        if let Some(mut endpoint) = endpoint {
+            drop(endpoint.pending.take());
+            while let Ok(work) = endpoint.input.pop() {
+                drop(work);
+            }
+        }
+    }
 }
 
 impl PitchActionPreparation {
-    /// Control-only channel/thread allocation. Capacity is the existing action budget,
-    /// not a per-pad latest slot. Failed actions return intact for terminal feedback.
+    /// Allocate fixed aggregate lanes off realtime; every action retains its own Work.
     pub(crate) fn new(capacity: usize) -> std::io::Result<(Self, PitchActionPreparationWorker)> {
         if capacity == 0 {
             return Err(std::io::Error::new(
@@ -81,109 +248,89 @@ impl PitchActionPreparation {
                 "pitch action capacity must be positive",
             ));
         }
-        let (requests, mut input) = RingBuffer::<PreparedActionWork>::new(capacity);
-        let (mut output, ready) = RingBuffer::<PreparedActionWork>::new(capacity);
-        let (retirement, mut retired) = RingBuffer::<PreparedActionWork>::new(capacity);
-        // One background owner is separate from all accepted-action request cells.
-        let (endpoint_requests, mut endpoint_input) =
-            RingBuffer::<Box<EndpointReserveWork>>::new(1);
-        let (mut endpoint_output, endpoint_ready) = RingBuffer::<Box<EndpointReserveWork>>::new(1);
+        // Leave headroom for rendering without claiming a dedicated CPU reservation.
+        let worker_count =
+            thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).clamp(1, 2));
+        #[cfg(all(test, windows))]
+        let worker_count = crate::audio_engine::preparation_observation::workers(worker_count);
+        let worker_count = worker_count.min(capacity);
         let running = Arc::new(AtomicBool::new(true));
-        let worker_running = running.clone();
-        let join = thread::Builder::new()
-            .name("flitzis-pitch-actions".into())
-            .spawn(move || {
-                let mut pending = None;
-                let mut pending_endpoint = None;
-                while worker_running.load(Ordering::Acquire) {
-                    let mut worked = false;
-                    if let Ok(work) = retired.pop() {
-                        drop(work);
-                        worked = true;
-                    }
-                    if let Some(work) = pending.take() {
-                        match output.push(work) {
-                            Ok(()) => worked = true,
-                            Err(PushError::Full(work)) => pending = Some(work),
-                        }
-                    }
-                    if pending.is_none()
-                        && output.slots() != 0
-                        && let Ok(mut work) = input.pop()
-                    {
-                        #[cfg(all(test, windows))]
-                        crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::before_worker(&work);
-                        let result = work.prepare();
-                        #[cfg(all(test, windows))]
-                        crate::audio_engine::ordinary_start_tests::preparation_deadline_tests::after_worker(&work, result.as_ref().err().copied());
-                        if let Err(reason) = result {
-                            work.reject(reason);
-                        }
-                        if let Err(PushError::Full(work)) = output.push(work) {
-                            pending = Some(work);
-                        }
-                        worked = true;
-                    }
-                    if let Some(work) = pending_endpoint.take() {
-                        match endpoint_output.push(work) {
-                            Ok(()) => worked = true,
-                            Err(PushError::Full(work)) => pending_endpoint = Some(work),
-                        }
-                    }
-                    // Accepted work always wins at the next job boundary. A stale queued
-                    // endpoint validates its own epoch before Native construction/preparation.
-                    if pending.is_none()
-                        && input.is_empty()
-                        && pending_endpoint.is_none()
-                        && endpoint_output.slots() != 0
-                        && let Ok(mut work) = endpoint_input.pop()
-                    {
-                        work.prepare();
-                        if let Err(PushError::Full(work)) = endpoint_output.push(work) {
-                            pending_endpoint = Some(work);
-                        }
-                        worked = true;
-                    }
-                    if !worked {
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                }
-                // Stream teardown has stopped the callback before joining this worker.
-                // All values still on its lanes release source/native pins off realtime.
-                drop(pending);
-                drop(pending_endpoint);
-                while let Ok(work) = input.pop() {
-                    drop(work);
-                }
-                while let Ok(work) = retired.pop() {
-                    drop(work);
-                }
-                while let Ok(work) = endpoint_input.pop() {
-                    drop(work);
-                }
-            })?;
-        Ok((
-            Self {
+        let accepted_pending = Arc::new(AtomicUsize::new(0));
+        #[cfg(all(test, windows))]
+        let observation =
+            Arc::new(crate::audio_engine::preparation_observation::PoolObservation::default());
+        // This guard owns each successful spawn before another fallible operation.
+        let mut worker = PitchActionPreparationWorker {
+            running: running.clone(),
+            joins: Vec::with_capacity(worker_count),
+        };
+        let (endpoint_requests, endpoint_input) = RingBuffer::new(1);
+        let (endpoint_output, endpoint_ready) = RingBuffer::new(1);
+        let mut endpoint = Some(EndpointWorkerLane {
+            input: endpoint_input,
+            output: endpoint_output,
+            pending: None,
+        });
+        let mut lanes = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let cells = capacity / worker_count + usize::from(index < capacity % worker_count);
+            let (requests, input) = RingBuffer::new(cells);
+            let (output, ready) = RingBuffer::new(cells);
+            let (retirement, retired) = RingBuffer::new(cells);
+            let lane = ActionWorkerLane {
+                #[cfg(all(test, windows))]
+                observation: observation.clone(),
+                input,
+                output,
+                retired,
+                pending: None,
+            };
+            let thread_running = running.clone();
+            let thread_pending = accepted_pending.clone();
+            let endpoint = endpoint.take();
+            #[cfg(all(test, windows))]
+            crate::audio_engine::preparation_observation::before_spawn(index)?;
+            let join = thread::Builder::new()
+                .name(format!("flitzis-pitch-actions-{index}"))
+                .spawn(move || lane.run(thread_running, thread_pending, endpoint))?;
+            worker.joins.push(join);
+            #[cfg(all(test, windows))]
+            crate::audio_engine::preparation_observation::after_spawn(worker.joins.last().unwrap());
+            lanes.push(CallbackPreparationLane {
                 requests,
                 ready,
                 _retirement: retirement,
+            });
+        }
+        Ok((
+            Self {
+                #[cfg(all(test, windows))]
+                observation,
+                lanes,
+                publish_next: 0,
+                poll_next: 0,
+                _retire_next: 0,
+                accepted_pending,
                 endpoint_requests,
                 endpoint_ready,
             },
-            PitchActionPreparationWorker {
-                running,
-                join: Some(join),
-            },
+            worker,
         ))
+    }
+
+    #[cfg(all(test, windows))]
+    pub(in crate::audio_engine) fn observation(
+        &self,
+    ) -> Arc<crate::audio_engine::preparation_observation::PoolObservation> {
+        self.observation.clone()
     }
 
     pub(crate) fn preparation_available(&self) -> bool {
         self.preparation_slots() != 0
     }
     pub(crate) fn preparation_slots(&self) -> usize {
-        self.requests.slots()
+        self.lanes.iter().map(|lane| lane.requests.slots()).sum()
     }
-
     pub(crate) fn endpoint_available(&self) -> bool {
         self.endpoint_requests.slots() != 0
     }
@@ -201,49 +348,89 @@ impl PitchActionPreparation {
         self.endpoint_ready.pop().ok()
     }
 
-    /// Single callback producer. A failed publish leaves the complete owner with caller.
+    /// The single callback producer selects an available lane after aggregate preflight.
     pub(crate) fn publish_prepared(
         &mut self,
         work: &mut Option<PreparedActionWork>,
     ) -> Result<bool, PitchActionReject> {
-        if self.requests.slots() == 0 {
+        if self.preparation_slots() == 0 {
             return Err(PitchActionReject::Capacity);
         }
         let Some(value) = work.take() else {
             return Ok(false);
         };
-        match self.requests.push(value) {
-            Ok(()) => Ok(true),
-            Err(PushError::Full(value)) => {
-                *work = Some(value);
-                Err(PitchActionReject::Capacity)
+        let mut value = Some(value);
+        for offset in 0..self.lanes.len() {
+            let index = (self.publish_next + offset) % self.lanes.len();
+            if self.lanes[index].requests.slots() == 0 {
+                continue;
+            }
+            #[cfg(all(test, windows))]
+            let observation = value
+                .as_ref()
+                .and_then(PreparedActionWork::observation)
+                .cloned();
+            #[cfg(all(test, windows))]
+            if let Some(observation) = &observation {
+                observation.enqueue_before();
+            }
+            // Count before publication so the endpoint cannot observe an accepted gap.
+            self.accepted_pending.fetch_add(1, Ordering::SeqCst);
+            match self.lanes[index].requests.push(value.take().unwrap()) {
+                Ok(()) => {
+                    self.publish_next = (index + 1) % self.lanes.len();
+                    #[cfg(all(test, windows))]
+                    if let Some(observation) = observation {
+                        observation.enqueue_after();
+                    }
+                    return Ok(true);
+                }
+                Err(PushError::Full(returned)) => {
+                    self.accepted_pending.fetch_sub(1, Ordering::SeqCst);
+                    value = Some(returned);
+                }
             }
         }
+        *work = value;
+        Err(PitchActionReject::Capacity)
     }
 
-    /// Returns the original work including failed owners. Caller retains or retires it;
-    /// polling never applies pitch and never calls native code.
+    /// Return intact original owners; the runtime still matches and orders their sequence.
     pub(crate) fn poll_prepared(&mut self) -> Option<PreparedActionWork> {
-        self.ready.pop().ok()
+        for offset in 0..self.lanes.len() {
+            let index = (self.poll_next + offset) % self.lanes.len();
+            if let Ok(work) = self.lanes[index].ready.pop() {
+                self.poll_next = (index + 1) % self.lanes.len();
+                #[cfg(all(test, windows))]
+                if let Some(observation) = work.observation() {
+                    observation.polled();
+                }
+                return Some(work);
+            }
+        }
+        None
     }
 
     #[cfg(test)]
     pub(crate) fn retire_prepared(&mut self, work: &mut Option<PreparedActionWork>) -> bool {
-        if self._retirement.slots() == 0 {
-            return false;
-        }
-        let Some(value) = work.take() else {
-            return true;
-        };
-        match self._retirement.push(value) {
-            Ok(()) => true,
-            Err(PushError::Full(value)) => {
-                *work = Some(value);
-                false
+        for offset in 0..self.lanes.len() {
+            let index = (self._retire_next + offset) % self.lanes.len();
+            if self.lanes[index]._retirement.slots() == 0 {
+                continue;
+            }
+            let Some(value) = work.take() else {
+                return true;
+            };
+            match self.lanes[index]._retirement.push(value) {
+                Ok(()) => {
+                    self._retire_next = (index + 1) % self.lanes.len();
+                    return true;
+                }
+                Err(PushError::Full(value)) => *work = Some(value),
             }
         }
+        false
     }
-
     #[cfg(test)]
     pub(crate) fn publish(
         &mut self,
@@ -280,21 +467,19 @@ impl PitchActionPreparation {
 
 #[cfg(all(test, windows))]
 impl PitchActionPreparationWorker {
-    pub(crate) fn thread_handle_for_test(&self) -> std::os::windows::io::OwnedHandle {
+    pub(crate) fn thread_handles_for_test(&self) -> Vec<std::os::windows::io::OwnedHandle> {
         use std::os::windows::io::AsHandle;
-        self.join
-            .as_ref()
-            .unwrap()
-            .as_handle()
-            .try_clone_to_owned()
-            .unwrap()
+        self.joins
+            .iter()
+            .map(|join| join.as_handle().try_clone_to_owned().unwrap())
+            .collect()
     }
 }
 
 impl Drop for PitchActionPreparationWorker {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
-        if let Some(join) = self.join.take() {
+        for join in self.joins.drain(..) {
             let _ = join.join();
         }
     }

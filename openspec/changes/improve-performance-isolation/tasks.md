@@ -1100,3 +1100,13 @@ then at most 60 seconds, without a chosen retry/total limit. Inspect uncertain
 side effects before retrying commits, pushes, jobs or chat creation. No unilateral
 model change or invented automatic resumption. Carry these duties and the complete
 remaining plan into each successor; report actual hard service limits honestly.
+
+
+## Bounded captured-action preparation
+
+- [x] Compare one and two bounded action-preparation workers on genuine original
+      2/4/6-PAD cohorts with complete paired PCM, readiness/queue/service and
+      qualified CPU/tail measurements. Preserve original order/common E, the
+      singleton endpoint priority, capacity, cancellation/failure, every worker
+      join, OwnACK and last readers. Retain continuous-replay and steady-shift
+      limits separately.

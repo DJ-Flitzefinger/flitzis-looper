@@ -7408,3 +7408,70 @@ rejects the original at E and consumes its due event so that the scheduler
 can process following effects in order. The reserved slot and its exact
 worker return stay paired until bounded off-callback retirement. A delivered
 candidate still uses its original capacity, placement and window gates.
+
+
+## Bounded action preparation concurrency
+
+An optimized, device-free Windows baseline used real public original groups at
+96 kHz, stereo and 96-frame mixer requests, resident source PCM and a new Native
+owner for each member. Eight cohorts per size measured median complete
+preparation readiness of 7.336 / 14.015 / 20.729 ms for 2 / 4 / 6 PADs. The last
+original waited 4.130 / 10.810 / 17.443 ms before roughly 3.2 ms of individual
+preparation. One actual worker ID and birth served each cohort without
+overlapping work. These small samples justify checking two workers. They do not
+establish audible latency, a device deadline, acoustic quality or a reliable
+tail percentile. Raw thread CPU increments were coarse: 0 or 15.625 ms.
+
+Only the captured-action pool changes. It retains the aggregate bounded cells,
+original Work and source ownership, scheduler order, common group E and final
+effect fences. Publication selects an available shard; polling stays bounded
+and the existing runtime restores Work by its original sequence. A shared count
+covers queued, executing and unpublished ready Work, so the singleton endpoint
+cannot begin while accepted preparation remains on either shard. Every started
+worker has a join guard, including partial spawn failure. The separate Key Lock
+reserve and source worker is unchanged.
+
+Independent Rubber Band 4.0.0 LiveShifter instances support concurrent
+construction and use, as documented in the
+[pinned upstream header](https://raw.githubusercontent.com/breakfastquay/rubberband/v4.0.0/rubberband/RubberBandLiveShifter.h).
+The wrapper leaves the plain process-global debug default immutable during
+construction and retains its explicit per-instance zero setting. The original
+default is zero. This removes a source-proved shared-write race without adding
+a callback lock or serializing Native preparation.
+
+A fresh optimized comparison used 100 counterbalanced pairs for each group
+size on a 32-logical-processor Windows host. Both arms used the same factory
+with one or two workers. Each pair compared all 4128 own-E stereo frames
+bit-for-bit, phase/FIFO/T/E and original Native/Work/source identities before
+checked shutdown of every worker and current source reader. All 300 pairs
+passed; the two-worker preparation intervals actually overlapped in every
+cohort. Measured complete preparation readiness was:
+
+| PADs | Median, 1 / 2 workers (ms) | Empirical p99, 1 / 2 workers (ms) | Preparation/control/poll process CPU change |
+| --- | --- | --- | --- |
+| 2 | 7.354 / 4.610 | 8.977 / 6.873 | +3.6% |
+| 4 | 14.794 / 11.390 | 16.588 / 13.579 | +37.5% |
+| 6 | 21.750 / 13.403 | 24.250 / 19.169 | +37.4% |
+
+The six-PAD median gains 8.346 ms at an additional 8.125 ms of aggregate
+process CPU per cohort. This is a bounded burst-readiness tradeoff, not a CPU
+efficiency improvement. Windows CPU counters advance coarsely by 15.625 ms;
+the CPU comparison sums the preparation/control/poll intervals over all 100
+cohorts per arm. The p99 is the nearest-rank observation of 100 samples, with no
+confidence or deadline guarantee. Unpaced render p99 remains approximately
+0.6 / 1.4 / 2.0 ms for 2 / 4 / 6 PADs, with no established steady rendering
+gain. These device-free results do not establish physical callback deadlines,
+audible response, combined-load headroom or whole musical quality. The normal
+functional smoke uses two pairs per size and does not require a busy host to
+exhibit actual overlap; the explicit optimized experiment does.
+
+The separate same-tuple worker replay remains unqualified for productive
+continuous ownership. A genuine untouched-reference experiment had an equal
+complete prefix and matching FIFO geometry, but all 192 stereo samples differed
+in each of seven 96-frame blocks after optional replay adoption. The maximum
+absolute difference was 0.081545. Both recordings, checked closes and reader ends
+preceded the decisive comparison. This blocks that TESTONLY promotion; the
+existing intentional original-SET preparation path retains its separate proof.
+No tolerance changes. The final-mix test queue remains disconnected from
+production. Steady callback Native shifts, whole quality, physical/device/
+listening acceptance and the entire remaining performance program remain open.

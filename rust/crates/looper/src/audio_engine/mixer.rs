@@ -1065,10 +1065,9 @@ impl RtMixer {
 
     #[cfg(all(test, windows))]
     pub(super) fn thread_handles_for_test(&self) -> Vec<std::os::windows::io::OwnedHandle> {
-        vec![
-            self._key_lock_preparation_worker.thread_handle_for_test(),
-            self._pitch_preparation_worker.thread_handle_for_test(),
-        ]
+        let mut handles = vec![self._key_lock_preparation_worker.thread_handle_for_test()];
+        handles.extend(self._pitch_preparation_worker.thread_handles_for_test());
+        handles
     }
 
     #[cfg(test)]
