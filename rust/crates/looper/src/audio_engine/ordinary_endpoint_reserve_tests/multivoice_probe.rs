@@ -11,6 +11,9 @@ use crate::audio_engine::source_reader::{
 use crate::messages::ResidentContext;
 use sha2::{Digest, Sha256};
 
+#[path = "service_probe.rs"]
+mod service_probe;
+
 #[derive(Clone, Copy)]
 struct Workload {
     rate: u32,
@@ -18,6 +21,7 @@ struct Workload {
     periods: usize,
     require_loop_crossings: bool,
     measure_source: bool,
+    service: Option<service_probe::Cell>,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
@@ -47,6 +51,8 @@ struct Period {
     first: u64,
     drain_ns: u128,
     render_ns: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render_thread: Option<crate::audio_engine::native_render_observation::thread_cpu::Span>,
     pacing_late_ns: u128,
     native: Observation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,6 +69,7 @@ struct Period {
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 struct Parity {
     pcm: Option<(usize, String)>,
+    full_pcm: Option<(usize, String)>,
     trajectory: String,
 }
 
@@ -174,6 +181,7 @@ fn case(
         periods,
         require_loop_crossings,
         measure_source,
+        service,
     } = workload;
     let ratio = 120.0 / f64::from(source_bpm);
     let wet = lock && source_bpm != 120;
@@ -287,6 +295,8 @@ fn case(
             })
             .collect::<Vec<_>>()
     });
+    let service_state =
+        service.map(|cell| service_probe::State::prepare(cell, &fixture, &starts, wet));
     fixture.render(0);
     fixture.feedback.reserve(128);
     let origin = fixture.transport.output_frame();
@@ -313,12 +323,17 @@ fn case(
         fixture.drain();
         let drain_ns = began.elapsed().as_nanos();
         let mut render = || {
-            let scope = if measure_source {
+            let scope = if service.is_some_and(|cell| cell.instrumented) {
+                Scope::begin_service()
+            } else if measure_source {
                 Scope::begin_source()
             } else {
                 Scope::begin()
             };
             let began = Instant::now();
+            let thread = service.filter(|cell| cell.instrumented).map(|_| {
+                crate::audio_engine::native_render_observation::thread_cpu::Timer::begin()
+            });
             render_scheduled_audio(
                 &mut fixture.mixer,
                 &mut fixture.scheduler,
@@ -330,6 +345,8 @@ fn case(
                 &mut fixture.feedback,
                 &mut fixture.retirement,
             );
+            let render_thread = thread
+                .map(crate::audio_engine::native_render_observation::thread_cpu::Timer::finish);
             let render_ns = began.elapsed().as_nanos();
             let (native, source) = if measure_source {
                 let (native, source) = scope.finish_source();
@@ -337,9 +354,9 @@ fn case(
             } else {
                 (scope.finish(), None)
             };
-            (render_ns, native, source)
+            (render_ns, render_thread, native, source)
         };
-        let (render_ns, native, source) = if measure_source {
+        let (render_ns, render_thread, native, source) = if measure_source || service.is_some() {
             without_tap_observation(render)
         } else {
             render()
@@ -368,6 +385,7 @@ fn case(
             first,
             drain_ns,
             render_ns,
+            render_thread,
             pacing_late_ns,
             native,
             source,
@@ -396,7 +414,7 @@ fn case(
             }
             (pcm.len() / 2, format!("{:x}", hash.finalize()))
         });
-    if !measure_source {
+    if !measure_source && service.is_none() {
         eprintln!(
             "multivoice_raw {}",
             serde_json::json!({
@@ -518,6 +536,22 @@ fn case(
         serde_json::json!({"count":count,"key_lock":lock,"source_bpm":source_bpm,"checks":checks})
     );
     let mut trajectory = Sha256::new();
+    if service.is_some() {
+        for row in &rows {
+            for voice in &row.voices[..count] {
+                for value in [
+                    voice.position as u64,
+                    voice.fraction.to_bits(),
+                    voice.fifo.0 as u64,
+                    voice.fifo.1 as u64,
+                    voice.ratio.to_bits(),
+                    voice.target.to_bits(),
+                ] {
+                    trajectory.update(value.to_le_bytes());
+                }
+            }
+        }
+    }
     if let Some(addresses) = prepared_addresses {
         assert!(
             addresses
@@ -611,10 +645,41 @@ fn case(
             })
         );
     }
-    checks.iter().all(|(_, passed)| *passed).then(|| Parity {
+    let result = checks.iter().all(|(_, passed)| *passed).then(|| Parity {
         pcm: pcm_sha256,
+        full_pcm: service.map(|_| {
+            let mut hash = Sha256::new();
+            for sample in &pcm {
+                hash.update(sample.to_bits().to_le_bytes());
+            }
+            (pcm.len() / 2, format!("{:x}", hash.finalize()))
+        }),
         trajectory: format!("{:x}", trajectory.finalize()),
-    })
+    });
+    if let Some(state) = service_state {
+        let metadata = serde_json::json!({
+            "original_T":original,"admitted_E":admitted,"effects_E":effects,"origin":origin,
+            "start_sequences":starts.iter().map(CapturedPadStart::sequence).collect::<Vec<_>>(),
+            "preparation_ns":preparation_ns,"source_bpm":source_bpm,"master_bpm":120,"ratio":ratio,
+            "source_addresses":sources.iter().map(|s|s.samples.as_ptr() as usize).collect::<Vec<_>>(),
+            "source_frames":sources.iter().map(SampleBuffer::frame_count).collect::<Vec<_>>(),
+            "source_geometry":sources.iter().map(|s| (s.resident_start(),s.resident_end(),s.window_revision())).collect::<Vec<_>>()
+        });
+        drop(starts);
+        drop(captured);
+        state.finish(
+            fixture,
+            &rows,
+            &pcm,
+            &sources[..count],
+            &result,
+            service_probe::Context {
+                effect,
+                original: metadata,
+            },
+        );
+    }
+    result
 }
 
 #[test]
@@ -626,6 +691,7 @@ fn matched_multivoice_key_lock_workload() {
         periods: 768,
         require_loop_crossings: true,
         measure_source: false,
+        service: None,
     };
     let sources = sources(workload.rate);
     let results = [(4, true), (5, true), (6, true), (6, false)]
@@ -645,6 +711,7 @@ fn small_buffer_key_lock_callback_workload() {
         periods: 1024,
         require_loop_crossings: false,
         measure_source: false,
+        service: None,
     };
     let sources = sources(workload.rate);
     let results = [
@@ -677,6 +744,7 @@ fn ordinary_96_source_fill_workload() {
         periods: 1792,
         require_loop_crossings: false,
         measure_source: true,
+        service: None,
     };
     let complete = sources(workload.rate);
     let finite = complete.each_ref().map(|source| {

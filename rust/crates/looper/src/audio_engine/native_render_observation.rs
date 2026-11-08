@@ -3,6 +3,9 @@
 use std::cell::Cell;
 use std::time::Instant;
 
+#[cfg(windows)]
+pub(crate) mod thread_cpu;
+
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub(crate) struct Observation {
     pub shifts: u64,
@@ -12,6 +15,9 @@ pub(crate) struct Observation {
     pub adapter_resets: u64,
     pub source_refusals: u64,
     pub first_shift_dependency: Option<ShiftDependency>,
+    #[cfg(windows)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shift_thread: Option<thread_cpu::Shifts>,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
@@ -90,6 +96,13 @@ impl Scope {
     }
 
     #[cfg(windows)]
+    pub(crate) fn begin_service() -> Self {
+        let scope = Self::begin();
+        update(|row| row.shift_thread = Some(thread_cpu::Shifts::default()));
+        scope
+    }
+
+    #[cfg(windows)]
     pub(crate) fn begin_source() -> Self {
         let scope = Self::begin();
         SOURCE.set(Some(SourceObservation::default()));
@@ -147,17 +160,39 @@ impl Drop for SourceTimer {
     }
 }
 
-pub(crate) fn shift_begin() -> Option<Instant> {
-    CURRENT.with(|current| current.get().map(|_| Instant::now()))
+pub(crate) struct ShiftStart {
+    wall: Instant,
+    #[cfg(windows)]
+    thread: Option<thread_cpu::Timer>,
 }
 
-pub(crate) fn shift_end(begin: Option<Instant>) {
+pub(crate) fn shift_begin() -> Option<ShiftStart> {
+    CURRENT.with(|current| {
+        current.get().map(|row| {
+            #[cfg(not(windows))]
+            let _ = row;
+            ShiftStart {
+                wall: Instant::now(),
+                #[cfg(windows)]
+                thread: row.shift_thread.map(|_| thread_cpu::Timer::begin()),
+            }
+        })
+    })
+}
+
+pub(crate) fn shift_end(begin: Option<ShiftStart>) {
     if let Some(begin) = begin {
-        let elapsed = begin.elapsed().as_nanos();
+        #[cfg(windows)]
+        let thread = begin.thread.map(thread_cpu::Timer::finish);
+        let elapsed = begin.wall.elapsed().as_nanos();
         update(|row| {
             row.shifts += 1;
             row.shift_ns += elapsed;
             row.max_shift_ns = row.max_shift_ns.max(elapsed);
+            #[cfg(windows)]
+            if let Some(thread) = thread {
+                row.shift_thread.as_mut().unwrap().push(thread);
+            }
         });
     }
 }

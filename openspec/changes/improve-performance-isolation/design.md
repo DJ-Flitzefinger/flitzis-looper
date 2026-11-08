@@ -7571,3 +7571,82 @@ enclosing Job closure, a separate parent exclusively rehashed all 23 original
 source and output files. These observations establish this functional route on one
 source and runtime, without claiming measured acceleration, numerical quality or
 broader platform and complete-replacement acceptance.
+
+## Original steady render-thread service at 96 frames
+
+A bounded optimized Windows diagnostic observes the original scheduled mixer at
+96 kHz, stereo, 96 frames, after genuine public group capture, source OwnACK and
+original Native preparation. Two counterbalanced rounds cover 2 / 4 / 6 Wet PADs
+and 6 Key Lock OFF PADs at the same 120/100 tempo ratio. Group order reverses;
+each cell also reverses the order of its wall-only and CPU-instrumented arms.
+Every arm retains all 1792 callbacks and 172032 complete stereo PCM frames;
+1706 callbacks follow the independently declared 8192-frame settling span.
+Each Wet cell has 320 shift-bearing and 1386 no-shift steady callbacks. OFF has
+1706 no-shift callbacks. This is synthetic resident PCM without a device.
+
+The opt-in test observer samples Windows `QueryThreadCycleTime` and
+`GetThreadTimes` on that same original render thread at the existing enclosing
+render and exact Rubber Band FFI boundaries. It retains raw before/after counters,
+thread ID/birth and query wall spans, including zeros and tails. There is no
+sampler, new pool, priority/affinity change or productive callback instrumentation.
+Cycle counts remain counts, following the
+[Windows cycle-counter contract](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-querythreadcycletime).
+
+The two CPU-instrumented rounds observed:
+
+| Cohort | Shift-bearing render median, round 1 / 2 (ms) | FFI share of shift-bearing render-thread cycles, round 1 / 2 |
+| --- | --- | --- |
+| 2 Wet | 0.878 / 0.913 | 96.36% / 96.39% |
+| 4 Wet | 1.612 / 1.662 | 96.91% / 96.88% |
+| 6 Wet | 2.424 / 2.546 | 97.11% / 97.10% |
+| 6 OFF | 0.057 / 0.059, no shifts | No FFI shifts |
+
+Both instrumented and wall-only 4-/6-Wet cells have all 320 shift-bearing
+callbacks above the 1 ms software period, including control drain. These counts
+are observations, not a new hard product gate or physical callback deadline.
+Within shift-bearing callbacks, the cycle observations localize dominant
+on-thread work to the original FFI boundary beyond the earlier wall-only finding.
+Including every steady no-shift callback in the denominator, the FFI cycle
+shares are 84.02% / 84.19%, 86.54% / 86.80% and 87.72% / 88.21% for 2 / 4 / 6
+Wet PADs respectively. These observations do not identify a safe
+optimization or prove that scheduler delay is absent.
+
+The real thread-time counters have 100 ns representation but visibly advance
+in 15.625 ms quanta here. Most individual intervals report zero; short disjoint
+intervals also alias the accounting updates. For example, one 2-Wet steady cell
+accumulates 328.125 ms at the enclosing render boundaries and only 93.750 ms
+inside FFI brackets despite a 96.36% FFI cycle share. Some summed render CPU
+values exceed summed wall values. Keep those raw observations; neither their
+nested sums nor wall minus CPU gives an exact service/preemption decomposition.
+The [thread-time contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadtimes)
+defines units, not submillisecond attribution accuracy.
+
+Empty counter brackets have a 2.1 microsecond median before the matrix and
+0.8 microseconds afterward; empty FFI hooks have a 2.2 microsecond median.
+No overhead subtraction is applied. The larger test-only TLS/Copy observation
+also perturbs both current arms, so historical wall timings are not an exact
+current timing reference. The two rounds supply no stable tail or speed claim.
+
+All four arms per cohort match their complete PCM and nonempty full
+cursor/fraction/FIFO/rate trajectory. Full PCM files and every raw callback,
+pacing/tail row, original T/admission/E/preparation/source geometry and original
+Native identity are preserved. Public STOP retains SourceACK, leaves no voices
+or scheduled effects and recovers action capacity. Checked engine shutdown,
+original callback destruction, retirement join, signaled-and-closed exact worker
+handles and Native Created/DeleteCompleted identities precede the next cell.
+The deliberately shared original PCM is released only after all cells, then
+all six weak PCM readers are dead. Compatible existing control/recording/STOP/
+OwnACK/checked-close traces retain their original separate limits.
+
+The measured artifact and its exact frozen source remain bound separately.
+The final test-only context-argument grouping and non-Windows unused-binding
+cleanup are outside the unchanged Windows measurement path; their reviewed
+source-compatible behavior evidence is reused with a fresh final Clippy compile.
+No final-source identity is attributed to the older measured executable.
+No production DSP, ABI, dependencies, arithmetic or ownership policy changes.
+The next causal boundary is the exact pinned R3LiveShifter steady implementation
+and actual build/CPU-dispatch recipe. Only a concrete semantics-preserving lead
+warrants a paired optimized build and complete relevant PCM/control/reader checks.
+Speculative prefill, replay, Native phase staggering or worker transfer is not
+justified by this matrix. Device/hearing, whole quality, Native replacement,
+platform and all remaining performance acceptance remain open.

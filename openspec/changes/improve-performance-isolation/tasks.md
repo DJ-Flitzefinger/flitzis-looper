@@ -1124,3 +1124,15 @@ remaining plan into each successor; report actual hard service limits honestly.
       the same backend/selector and original final settlement, inspect both real
       learned rows, and verify genuine owned CUDA-fault to fresh-CPU fallback
       without teaching a fallback cost. Preserve all broader quality/final limits.
+
+## Original steady render service
+
+- [x] Observe counterbalanced original 2/4/6-Wet and 6-OFF groups at 96 kHz,
+      stereo, 96 frames with same-thread raw cycles and thread CPU at existing
+      render/FFI test boundaries, full PCM/trajectory and explicit STOP/OwnACK/
+      worker/Native/reader closure. Preserve accounting quantization, observer
+      costs and all device/quality/platform/final limits; no optimization claimed.
+
+- [ ] Identify a concrete semantics-preserving steady cost in the exact pinned
+      Native implementation/build/dispatch recipe before changing DSP or
+      ownership; qualify any candidate with complete relevant paired evidence.
