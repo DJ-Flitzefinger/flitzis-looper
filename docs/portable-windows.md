@@ -27,6 +27,13 @@ build files. `Flitzis-Looper/Runtime` holds the private Python interpreter,
 dependencies, FFmpeg and launch helpers. Native binaries sit beside their tracked
 wrappers in the checkout. The app's working directory is this checkout.
 
+The pinned Windows build selects the tracked libsamplerate 0.2.2 overlay in
+`scripts/native/vcpkg-overlay`. It reuses unchanged stereo ratio controls within
+each processing call while retaining the original SINC coefficients, tap order,
+history and delay. The upstream BSD-2-Clause notice and complete patch accompany
+source recovery. A changed overlay requires a matching Native build; installed
+system-package builds on other platforms are qualified separately.
+
 The optional `signalsmith-probe` Cargo feature is a development diagnostic.
 Ordinary locked Portable builds do not enable it, compile its C++ shim or add a
 Signalsmith runtime DLL. Its pinned MIT headers ship as tracked source; existing

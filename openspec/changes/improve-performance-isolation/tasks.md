@@ -1133,6 +1133,6 @@ remaining plan into each successor; report actual hard service limits honestly.
       worker/Native/reader closure. Preserve accounting quantization, observer
       costs and all device/quality/platform/final limits; no optimization claimed.
 
-- [ ] Identify a concrete semantics-preserving steady cost in the exact pinned
+- [x] Identify a concrete semantics-preserving steady cost in the exact pinned
       Native implementation/build/dispatch recipe before changing DSP or
       ownership; qualify any candidate with complete relevant paired evidence.

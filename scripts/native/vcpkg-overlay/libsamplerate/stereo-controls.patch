@@ -1,0 +1,40 @@
+--- a/src/src_sinc.c
++++ b/src/src_sinc.c
+@@ -587,6 +587,8 @@
+ sinc_stereo_vari_process (SRC_STATE *state, SRC_DATA *data)
+ {	SINC_FILTER *filter ;
+ 	double		input_index, src_ratio, count, float_increment, terminate, rem ;
++	double		cached_ratio = 0.0, scale = 0.0, input_step = 0.0 ;
++	int			ratio_cached = 0 ;
+ 	increment_t	increment, start_filter_index ;
+ 	int			half_filter_chan_len, samples_in_hand ;
+ 
+@@ -648,16 +650,24 @@
+ 		if (filter->out_count > 0 && fabs (state->last_ratio - data->src_ratio) > 1e-10)
+ 			src_ratio = state->last_ratio + filter->out_gen * (data->src_ratio - state->last_ratio) / filter->out_count ;
+ 
+-		float_increment = filter->index_inc * (src_ratio < 1.0 ? src_ratio : 1.0) ;
+-		increment = double_to_fp (float_increment) ;
++		/* Reuse only call-local controls; preserve every per-frame tap and position update.
++		** Initialise after the original input/termination checks, including zero-output calls. */
++		if (!ratio_cached || src_ratio != cached_ratio)
++		{	float_increment = filter->index_inc * (src_ratio < 1.0 ? src_ratio : 1.0) ;
++			increment = double_to_fp (float_increment) ;
++			scale = float_increment / filter->index_inc ;
++			input_step = 1.0 / src_ratio ;
++			cached_ratio = src_ratio ;
++			ratio_cached = 1 ;
++			} ;
+ 
+ 		start_filter_index = double_to_fp (input_index * float_increment) ;
+ 
+-		calc_output_stereo (filter, state->channels, increment, start_filter_index, float_increment / filter->index_inc, data->data_out + filter->out_gen) ;
++		calc_output_stereo (filter, state->channels, increment, start_filter_index, scale, data->data_out + filter->out_gen) ;
+ 		filter->out_gen += 2 ;
+ 
+ 		/* Figure out the next index. */
+-		input_index += 1.0 / src_ratio ;
++		input_index += input_step ;
+ 		rem = fmod_one (input_index) ;
+ 
+ 		filter->b_current = (filter->b_current + state->channels * lrint (input_index - rem)) % filter->b_len ;

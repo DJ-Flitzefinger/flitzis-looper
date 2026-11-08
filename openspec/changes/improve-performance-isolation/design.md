@@ -7650,3 +7650,53 @@ warrants a paired optimized build and complete relevant PCM/control/reader check
 Speculative prefill, replay, Native phase staggering or worker transfer is not
 justified by this matrix. Device/hearing, whole quality, Native replacement,
 platform and all remaining performance acceptance remain open.
+
+## Call-local stereo resampler controls
+
+Inspection of pinned RubberBand 4.0.0 and the actual optimized Windows dependency
+shows that the original stereo libsamplerate path recalculates its fixed-point
+increment, scale division and reciprocal input step for every generated frame.
+The selected patch reuses those exact calculations within one call until the
+ratio changes. Initialisation remains after the original input/termination checks;
+each frame retains its original position conversion, filter taps, summation and
+history updates. This changes no persistent state or ABI. The precise normal
+floating-point environment remains part of the qualified recipe.
+
+The source-owned vcpkg overlay retains libsamplerate 0.2.2, its verified archive,
+converter options and BSD-2-Clause notice. Windows developer and Portable builds
+select it explicitly. Native source compatibility includes all overlay inputs,
+and packaging rejects untracked new overlay inputs as well as tracked changes.
+Held binaries and original dependency receipts are preserved during development.
+
+The final dependency passes 69 direct API cases against both the installed and
+fresh original build: all 8,866,936 PCM bytes per arm and complete frame-count
+trajectories match. Cases include changing/near-equal and minimum/maximum ratios,
+all three SINC qualities, mono/stereo/four/six channels, clone, reset and tails.
+The alternative integer-quotient candidate is rejected: its extra guard and
+out-of-line call costs do not improve on the simpler patch.
+
+Eight counterbalanced direct R3 rounds compare the actual final dependency with
+the original installed library, using the same RubberBand build. Complete dynamic
+pitch/tail PCM and start-delay rows match. The reductions in marginal median
+same-thread cycles are 1.05%, 1.02% and 0.62% for pitch ratios 0.8333, 1 and 1.2;
+median paired reductions are 1.07%, 1.16% and 0.69%. Retain all 24 observations:
+22 improve, while the first unity and 1.2 pairs regress by 3.42% and 0.045%.
+This is a modest Windows component result, without a significance, sustained
+device, end-to-end speed or tail-latency claim. Cycles are not elapsed time.
+
+Both original 16-cell mixer arms and all six existing ASIO control/recording cases
+pass with the same frozen executable. Direct whole-file comparisons match all
+16 complete PCM captures, all 16 nonempty full position/fraction/FIFO/rate
+trajectories and all 13 complete control mix/recording files per arm. Original
+T/admission/E, source geometry, final input bits, STOP, SourceACK, checked engine
+shutdown, callback destruction, retirement join, closed exact worker handles,
+Native Created/DeleteCompleted and all six weak PCM reader endings are retained.
+
+The product variants ran original then candidate, so their timings do not establish
+an end-to-end benefit. In the first CPU-instrumented round, the candidate 2-Wet
+steady shift-bearing median increases from 0.903 to 1.272 ms; its cause remains
+UNKNOWN. Every steady 4-/6-Wet shift-bearing callback in both rounds and variants
+still exceeds the 1 ms software period, including drain. No unchanged matrix is
+repeated to select better noise.
+The complete raw data, observer limits and historical failures remain material;
+overall performance, quality, device, platform and final acceptance stay open.

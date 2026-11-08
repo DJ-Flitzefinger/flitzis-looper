@@ -1,5 +1,26 @@
 ## ADDED Requirements
 
+### Requirement: Reuse Unchanged Stereo Resampler Controls Within One Call
+The pinned Windows dependency build SHALL use the source-owned libsamplerate
+overlay to reuse stereo increment, scale and input-step calculations only while
+the exact processing ratio remains unchanged within the same call. It SHALL
+preserve converter quality, coefficient and tap order, per-frame positions,
+history, delay, frame counts and the existing control and ownership boundaries.
+
+#### Scenario: Constant and changing ratios share the original processing path
+- **GIVEN** the original stereo SINC converter processes a valid input block
+- **WHEN** its processing ratio stays unchanged or changes during that call
+- **THEN** invariant controls SHALL be calculated lazily after the original input and termination checks and recalculated on an exact ratio change
+- **AND** the complete PCM and consumed/generated frame trajectory SHALL match the original converter, including reset, clone and end-of-input behavior
+- **AND** there SHALL be no unity-ratio bypass, persistent cache, new allocation or fast-math policy
+
+#### Scenario: Packaging receives a different dependency overlay
+- **GIVEN** a Native binary is attributed to an earlier source commit
+- **WHEN** the selected source changes or adds an overlay input
+- **THEN** Portable packaging SHALL refuse that stale Native attribution
+- **AND** installation SHALL select the overlay from the exact checkout and preserve its pinned upstream source and BSD-2-Clause notice
+- **AND** software timing observations SHALL remain separate from device, deadline, quality and platform acceptance
+
 ### Requirement: Independent Action Preparation Uses Bounded Concurrent Owners
 Captured pitch and ordinary-start preparation SHALL use a bounded pool of at
 most two independent off-realtime workers, selected according to host parallelism.

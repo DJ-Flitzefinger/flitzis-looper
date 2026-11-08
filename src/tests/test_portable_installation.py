@@ -275,6 +275,74 @@ def require_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_native_dependency_overlay_is_bound_to_selected_source(tmp_path: Path) -> None:
+    root = tmp_path / "portable root ü with spaces"
+    source = tmp_path / "selected source ü with spaces"
+    pin = "020c8202737fb3ae3bfef5dd78ca537137be0ea0"
+    (root / f"tools/vcpkg-{pin[:12]}").mkdir(parents=True)
+    patch = source / "scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch"
+    patch.parent.mkdir(parents=True)
+    patch.write_text("fixture patch\n", encoding="utf-8")
+    script = tmp_path / "native-overlay.ps1"
+    script.write_text(
+        "$ErrorActionPreference = 'Stop'\nSet-StrictMode -Version Latest\n"
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n"
+        f"$Root = {_ps_string(root)}\n$Source = {_ps_string(source)}\n"
+        f"$recipe = {_ps_string(REPO / 'scripts/portable/install-main.ps1')}\n"
+        f"$patch = {_ps_string(patch)}\n"
+        r"""
+$tokens = $null; $errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($recipe, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Installer parse error' }
+$function = @($ast.FindAll({param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Get-PortableVcpkg'
+}, $true))
+if ($function.Count -ne 1) { throw 'Expected one real dependency recipe' }
+Invoke-Expression $function[0].Extent.Text
+function Assert-PlainPath([string] $Path) { }
+function Get-FixtureGit {
+    $global:LASTEXITCODE = 0
+    return '020c8202737fb3ae3bfef5dd78ca537137be0ea0'
+}
+$Git = 'Get-FixtureGit'
+$calls = [Collections.Generic.List[object]]::new()
+function Invoke-Checked([string] $File, [object[]] $Arguments) {
+    $calls.Add(@{file=$File; arguments=@($Arguments)})
+}
+Get-PortableVcpkg | Out-Null
+$install = @($calls | Where-Object { $_.arguments[0] -eq 'install' })
+if ($install.Count -ne 1) { throw 'Expected one dependency install' }
+Remove-Item -LiteralPath $patch
+$refused = $false
+try { Get-PortableVcpkg | Out-Null } catch {
+    if ($_.Exception.Message -notmatch 'missing its native dependency overlay') { throw }
+    $refused = $true
+}
+if (-not $refused) { throw 'Missing source patch was accepted' }
+if (@($calls | Where-Object { $_.arguments[0] -eq 'install' }).Count -ne 1) {
+    throw 'Missing overlay reached dependency installation'
+}
+Write-Output ('NATIVE_OVERLAY:' + (@($install[0].arguments) | ConvertTo-Json -Compress))
+""",
+        encoding="utf-8-sig",
+    )
+    result = _run_powershell(["-File", str(script)], output_encoding="utf-8")
+    require_success(result)
+    records = [
+        line.removeprefix("NATIVE_OVERLAY:")
+        for line in result.stdout.splitlines()
+        if line.startswith("NATIVE_OVERLAY:")
+    ]
+    assert len(records) == 1
+    assert json.loads(records[0]) == [
+        "install",
+        "rubberband:x64-windows",
+        "--disable-metrics",
+        f"--overlay-ports={source / 'scripts/native/vcpkg-overlay'}",
+    ]
+
+
 @contextmanager
 def exclusive_file(path: Path) -> Iterator[None]:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)

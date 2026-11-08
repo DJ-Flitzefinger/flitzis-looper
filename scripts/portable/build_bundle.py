@@ -177,12 +177,17 @@ def source_identity(args: argparse.Namespace) -> tuple[str, bool]:
                 "--",
                 "rust",
                 "src/flitzis_looper_audio",
+                "scripts/native/vcpkg-overlay",
             ],
             check=False,
         ).returncode
         == 0
     )
     require(unchanged, "Native inputs changed since the supplied Release source commit")
+    require(
+        not git("ls-files", "--others", "--", "scripts/native/vcpkg-overlay"),
+        "Commit Native dependency overlay inputs before packaging",
+    )
     return commit, dirty
 
 

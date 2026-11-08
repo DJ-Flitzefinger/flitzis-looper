@@ -11,6 +11,40 @@ use crate::audio_engine::{
 };
 use crate::messages::SampleBuffer;
 
+// Called only after checked shutdown, original spool assertions and spool removal.
+fn preserve_dependency_pcm(pcm: &[f32], recording: &[u8]) {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let Some(directory) = std::env::var_os("FLITZIS_SERVICE_CONTROL_PCM_DIR") else {
+        return;
+    };
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let index = NEXT.fetch_add(1, Ordering::Relaxed);
+    let path = std::path::PathBuf::from(directory).join(format!("control-{index:03}.pcm"));
+    let mut bytes = Vec::with_capacity(16 + pcm.len() * 4 + recording.len());
+    bytes.extend_from_slice(&(pcm.len() as u64 * 4).to_le_bytes());
+    bytes.extend_from_slice(&(recording.len() as u64).to_le_bytes());
+    bytes.extend(pcm.iter().flat_map(|sample| sample.to_bits().to_le_bytes()));
+    bytes.extend_from_slice(recording);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(&bytes).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    eprintln!(
+        "native_service_control_pcm {}",
+        serde_json::json!({
+            "index":index,"path":path,"mix_samples":pcm.len(),"recording_bytes":recording.len(),
+            "full_file_sha256":format!("{:x}",Sha256::digest(&bytes)),"after_original_closure":true,
+        })
+    );
+}
+
 fn queue_pcm(engine: &AudioEngine) {
     let ownership = &engine.input_runtime_ownership;
     let producer = engine.control_producer().unwrap();
@@ -2218,6 +2252,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
                 .chunks_exact(4)
                 .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap())),
         );
+        preserve_dependency_pcm(&pcm, &captured[SPOOL_HEADER_BYTES as usize..]);
         return oracle;
     }
     if history {
@@ -2356,6 +2391,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
                 .chunks_exact(4)
                 .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap())),
         );
+        preserve_dependency_pcm(&pcm, &captured[SPOOL_HEADER_BYTES as usize..]);
         return oracle;
     }
     let refresh = refresh.unwrap();
@@ -2511,6 +2547,7 @@ fn aligned_wet_set_with_ordered_control(control: OrderedWetControl) -> Vec<u32> 
     );
     fs::remove_file(&path).unwrap();
     fs::remove_dir(&directory).unwrap();
+    preserve_dependency_pcm(&pcm, &captured[SPOOL_HEADER_BYTES as usize..]);
     if ordered_refresh {
         let mut oracle: Vec<_> = pcm.iter().map(|sample| sample.to_bits()).collect();
         oracle.extend(
@@ -3100,15 +3137,13 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
         (final_status.first_frame, final_status.end_frame),
         (Some(FIRST), Some(capture_end))
     );
+    let captured = fs::read(&path).unwrap();
     let expected: Vec<_> = pcm
         [2 * (FIRST - REQUEST) as usize..2 * (capture_end - REQUEST) as usize]
         .iter()
         .flat_map(|sample| sample.to_le_bytes())
         .collect();
-    assert_eq!(
-        &fs::read(&path).unwrap()[SPOOL_HEADER_BYTES as usize..],
-        expected
-    );
+    assert_eq!(&captured[SPOOL_HEADER_BYTES as usize..], expected);
     if bound_bpm {
         eprintln!(
             "ASIO interior BPM {case:?} prefix={prefix:?}->({},{}) capture={FIRST}..{capture_end} frames={} STOP={} OwnACK and checked Close verified",
@@ -3120,6 +3155,7 @@ fn interior_set_at_request(case: InteriorSet, inline: bool) -> Vec<u32> {
     }
     fs::remove_file(&path).unwrap();
     fs::remove_dir(&directory).unwrap();
+    preserve_dependency_pcm(&pcm, &captured[SPOOL_HEADER_BYTES as usize..]);
     pcm.into_iter().map(f32::to_bits).collect()
 }
 

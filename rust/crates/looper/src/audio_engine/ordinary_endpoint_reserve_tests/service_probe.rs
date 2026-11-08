@@ -8,6 +8,9 @@ use std::io::Write;
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, OwnedHandle};
 use std::sync::Arc;
 
+#[path = "dependency_variant.rs"]
+mod dependency_variant;
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
@@ -276,6 +279,7 @@ impl State {
 #[test]
 #[ignore = "counterbalanced original 96k stereo96 same-thread CPU/cycle service matrix; isolated child"]
 fn original_96_native_thread_service_matrix() {
+    dependency_variant::assert_selected();
     lifecycle::enable();
     let empty: Vec<_> = (0..256).map(|_| Timer::begin().finish()).collect();
     let empty_ffi: Vec<_> = (0..256)

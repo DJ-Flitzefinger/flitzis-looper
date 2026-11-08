@@ -65,7 +65,12 @@ function Get-PortableVcpkg {
     if (-not $usable) {
         Invoke-Checked (Join-Path $directory 'bootstrap-vcpkg.bat') @('-disableMetrics') | Out-Host
     }
-    Invoke-Checked $executable @('install','rubberband:x64-windows','--disable-metrics') | Out-Host
+    $overlay = Join-Path $Source 'scripts/native/vcpkg-overlay'
+    Assert-PlainPath $overlay
+    if (-not (Test-Path -LiteralPath (Join-Path $overlay 'libsamplerate/stereo-controls.patch') -PathType Leaf)) {
+        throw 'The selected source is missing its native dependency overlay.'
+    }
+    Invoke-Checked $executable @('install','rubberband:x64-windows','--disable-metrics',"--overlay-ports=$overlay") | Out-Host
     return $directory
 }
 

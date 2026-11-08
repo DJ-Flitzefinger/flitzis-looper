@@ -189,8 +189,9 @@ For local Windows development, vcpkg is the preferred route:
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git "$env:LOCALAPPDATA\vcpkg"
+git -C "$env:LOCALAPPDATA\vcpkg" checkout 020c8202737fb3ae3bfef5dd78ca537137be0ea0
 & "$env:LOCALAPPDATA\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-& "$env:LOCALAPPDATA\vcpkg\vcpkg.exe" install rubberband:x64-windows
+& "$env:LOCALAPPDATA\vcpkg\vcpkg.exe" install rubberband:x64-windows "--overlay-ports=$PWD\scripts\native\vcpkg-overlay"
 setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
 ```
 
