@@ -1066,6 +1066,8 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                 ));
             };
             #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+            refresh.observe_settlement(output_frame);
+            #[cfg(all(test, windows, feature = "asio-contract-tests"))]
             if accepted {
                 let native = mixer
                     .voices
@@ -1187,6 +1189,19 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
 
 #[cfg(test)]
 thread_local! { static REFRESH_GLOBAL_CLAIM_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
+
+#[cfg(all(test, windows, feature = "asio-contract-tests"))]
+thread_local! {
+    static REFRESH_BOUND_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(u64, usize)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Observe the original scheduler admission, without changing its event or frame.
+#[cfg(all(test, windows, feature = "asio-contract-tests"))]
+pub(super) fn on_refresh_bound_for_test(hook: impl FnOnce(u64, usize) + 'static) {
+    REFRESH_BOUND_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
 
 #[cfg(test)]
 pub(crate) fn with_refresh_global_claim_for_test<T>(
@@ -2789,8 +2804,18 @@ pub(super) fn process_control_message<
                 {
                     target = target.max(wet_end);
                 }
-                let _ =
+                #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+                let identity = refresh.execution_identity();
+                let scheduled =
                     scheduler.schedule(target, ScheduledCommand::RefreshAcceptedTiming(refresh));
+                #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+                if scheduled.is_ok() {
+                    let hook = REFRESH_BOUND_HOOK.with(|slot| slot.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook(target, identity);
+                    }
+                }
+                let _ = scheduled;
             } else {
                 refresh.finish(false);
                 retirement.retire_accepted_timing_refresh(refresh);
@@ -4059,6 +4084,7 @@ impl AsioRenderContext {
         TickObservation {
             callback,
             native,
+            loops: std::array::from_fn(|id| state.mixer.loop_region_frames(id)),
             output_frame: state.transport.output_frame(),
             bound_rate_frame: state.mixer.next_global_rate_frame(),
             deferred_refresh: state.scheduler.deferred_due().and_then(|event| {

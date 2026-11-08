@@ -21,6 +21,7 @@ const REJECTED: u8 = 2;
 #[cfg(all(test, windows, feature = "asio-contract-tests"))]
 struct RefreshExecution {
     frame: AtomicU64,
+    settled_frame: AtomicU64,
     native: std::sync::atomic::AtomicUsize,
 }
 
@@ -95,6 +96,11 @@ impl AcceptedTimingRefresh {
     pub(super) fn execution_identity(&self) -> usize {
         Arc::as_ptr(&self.execution) as usize
     }
+
+    #[cfg(all(test, windows, feature = "asio-contract-tests"))]
+    pub(super) fn observe_settlement(&self, frame: u64) {
+        self.execution.settled_frame.store(frame, Ordering::Release);
+    }
 }
 
 impl Drop for AcceptedTimingRefresh {
@@ -123,6 +129,11 @@ pub struct AcceptedTimingRefreshTicket {
 
 #[cfg(all(test, windows, feature = "asio-contract-tests"))]
 impl AcceptedTimingRefreshTicket {
+    pub(super) fn settled_frame(&self) -> Option<u64> {
+        let frame = self.execution.settled_frame.load(Ordering::Acquire);
+        (frame != u64::MAX).then_some(frame)
+    }
+
     pub(super) fn execution_identity(&self) -> usize {
         Arc::as_ptr(&self.execution) as usize
     }
@@ -292,6 +303,7 @@ pub(super) fn enqueue(
     #[cfg(all(test, windows, feature = "asio-contract-tests"))]
     let execution = Arc::new(RefreshExecution {
         frame: AtomicU64::new(u64::MAX),
+        settled_frame: AtomicU64::new(u64::MAX),
         native: std::sync::atomic::AtomicUsize::new(0),
     });
     let refresh = Arc::new(AcceptedTimingRefresh {

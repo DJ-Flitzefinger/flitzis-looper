@@ -62,6 +62,7 @@ pub(in crate::audio_engine) struct PadObservation {
 pub(in crate::audio_engine) struct TickObservation {
     pub callback: CallbackMeasurement,
     pub native: crate::audio_engine::native_render_observation::Observation,
+    pub loops: [(usize, Option<usize>); 6],
     pub output_frame: u64,
     pub bound_rate_frame: Option<u64>,
     pub deferred_refresh: Option<(u64, usize)>,

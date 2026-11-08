@@ -434,13 +434,18 @@ impl RtMixer {
         id: usize,
         refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
     ) -> bool {
-        if !refresh.global_current() {
+        let Some(source_id) = self.timing_effect_slot(refresh.id, refresh.binding.placement) else {
+            return false;
+        };
+        if !refresh.global_current()
+            || !self.refresh_admitted_binding_current(source_id, refresh.binding)
+        {
             return false;
         }
         refresh
             .master_period_seconds
             .is_some_and(|period| self.refresh_changes_interior_wet_rate(id, period))
-            || (self.timing_effect_slot(refresh.id, refresh.binding.placement) == Some(id)
+            || (source_id == id
                 && self
                     .prepare_loop_edit(id, refresh.start_s, refresh.end_s)
                     .is_none_or(|edit| !edit.unchanged))

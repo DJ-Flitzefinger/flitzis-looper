@@ -180,6 +180,15 @@ outcomes rather than mutate replacement content or report success prematurely.
 - **AND** source-only refreshes SHALL retain their independent per-source authority without revoking a foreign master intent
 - **AND** failed admission SHALL preserve prior global and source authority and queued commands
 
+#### Scenario: A source-revoked bound refresh overlaps another original Wet SET
+- **GIVEN** an accepted master refresh is already bound at one original voice's Wet end inside the same qualified 96 kHz stereo request of 96 frames as another original interior SET
+- **WHEN** a public source-timing edit conclusively revokes that refresh's original source or accepted binding before the interior SET, without changing the global timing fence or master-refresh order
+- **THEN** the revoked refresh SHALL no longer veto the other SET's otherwise valid original Wet continuation
+- **AND** a still-current refresh whose effect conflicts inside that continuation SHALL retain its original barrier and frame
+- **AND** the revoked refresh SHALL reject at its original assigned frame without a partial loop, master, provenance or later effect
+- **AND** both original SET targets, Work and Native owners, complete request PCM and recording SHALL match the corresponding reference without the revoked refresh
+- **AND** independent STOP, source acknowledgements, output submission and last-reader retirement SHALL retain their existing authority and timing
+
 #### Scenario: A bound master refresh still lacks a dry peer's Key Lock history
 - **GIVEN** an accepted master refresh has reached its original assigned Wet-end frame but a live dry Key Lock peer cannot support the requested nonunity target
 - **WHEN** ordinary execution retains that same refresh pending and the final mix continues through a later already admitted STOP for an active recording

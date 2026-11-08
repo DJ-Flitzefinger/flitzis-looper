@@ -7387,6 +7387,17 @@ both drain witnesses remain unchanged. In particular, a refused derived refresh
 must not invalidate an independent scalar or BPM capture's immutable timing fence.
 There is no new scheduler lane, tempo authority, callback lock or replay.
 
+### Source validity of bound refresh barriers
+
+A bound accepted refresh is an interior Wet barrier only while its original
+content resolves and its admitted source/accepted binding remains current, using
+the same existing checks as execution. A public source-only revocation can leave
+the global timing revision and master-order witness unchanged. Such an impossible
+effect must not reject an independent original Wet SET. The check removes only
+a conclusively revoked barrier; it grants no source, frame, tempo or readiness
+authority. The old event keeps its frame and normal final execution claims and
+retirement, while current conflicting refreshes remain barriers.
+
 ### Missing Work at an interior in-place SET
 
 The same qualified stereo 96 kHz ASIO request can contain a non-Wet

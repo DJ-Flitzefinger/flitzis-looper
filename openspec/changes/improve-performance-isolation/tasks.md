@@ -1077,6 +1077,11 @@ matrix from the distinct successful-case union or weaken their original assertio
 
 ## Capacity and continuity
 
+- [x] Preserve an original fitting interior Wet SET when a previously bound
+      master refresh has genuinely lost its original source/accepted authority;
+      verify two actual Wet owners, public post-binding revocation, full request
+      PCM/recording parity, current-refresh conflict protection and normal custody.
+
 - [x] Preserve ordered master-refresh ingress across different qualified sources
       with an existing-input-order supersession witness while preserving original
       global timing fences; compare the real aligned 96-frame mixer and full recording with
