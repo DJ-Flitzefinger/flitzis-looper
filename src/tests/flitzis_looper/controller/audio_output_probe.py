@@ -169,6 +169,49 @@ class OutputProbe:
             and self.app.session.bpm_lock_anchor_pad_id == 0
         )
 
+    def _select_unrelated_loaded_pad(self) -> None:
+        self.app.select_pad(1)
+
+    def _set_reopen_test_speed(self) -> None:
+        self.app.transport.global_params.set_speed(1.05)
+
+    def _reopened_transport_revisions(self) -> tuple[int, int, int]:
+        """Check this App's original BPM owner independently of the new selection."""
+        assert self._bpm_restored(), self.status()
+        reference = self.app.project.bpm_lock_reference
+        assert reference is not None
+        assert (reference.pad_id, reference.content_instance_id) == (0, "1" * 32)
+        assert self.app.project.selected_pad == 1
+        rate = self.app.transport.global_params.global_rate_status()
+        speed = self.app.project.speed
+        assert rate.state == "applied"
+        assert rate.effective_speed == speed
+        assert rate.effective_master_period == 0.5 / speed
+        assert rate.request_revision is not None
+        feedback = self.app.audio.bpm_lock_status()
+        assert feedback is not None
+        assert feedback["execution_frame"] is not None
+        assert feedback["effect_revision"] == feedback["request_revision"]
+        selected = self.app.audio.input_selected_projection()
+        assert selected is not None
+        assert selected[1] == 1
+        return rate.request_revision, feedback["effect_revision"], selected[0]
+
+    def _start_reopen_pair(self) -> None:
+        playback = self.app.transport.playback
+        playback.trigger_pad_keep_others(0)
+        playback.trigger_pad_keep_others(1)
+
+    def _restart_reopen_pair(self) -> None:
+        assert self.app.session.global_stop_restore_sample_ids == {0, 1}
+        self.app.transport.playback.start_or_restart_global_start_stop()
+
+    def _disable_multi_loop(self) -> None:
+        self.app.transport.global_params.set_multi_loop(enabled=False)
+
+    def _start_single_after_reopen(self) -> None:
+        self.app.transport.playback.start_or_restart_global_start_stop()
+
     def _change_saved_bpm_speed(self) -> None:
         assert self.app.project.selected_pad == PADS
         self.app.select_pad(1)

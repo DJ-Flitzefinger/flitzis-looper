@@ -325,7 +325,8 @@ class AppController:
         self.transport.residency.poll()
         self.transport.pitch.poll()
         self.transport.global_params._poll_global_rate_status()
-        self.transport.global_params.poll_bpm_lock_application()
+        if not self.loader._output_restore_cancelling:
+            self.transport.global_params.poll_bpm_lock_application()
         self.stems._poll_pair_preparations()
         self.stems._poll_disk_selection_settlements()
         self.stems._poll_stem_publications()
@@ -336,12 +337,15 @@ class AppController:
         self.stems._poll_residency_demands()
         self.stems._poll_stem_admissions()
 
-    def _restore_initial_runtime_state(self) -> None:
+    def _restore_initial_runtime_state(self, *, after_output_retirement: bool = False) -> None:
         """Restore source/control state in order, then initialize one configured GUI selection."""
         restored_paths = self.loader._validate_restored_sample_paths()
         # Initial timing/loop edits must finish before Cold captures their epoch
         # and residency guards. Mixing also travels with that original source ACK.
-        self.transport.apply_project_state_to_audio(restored_sample_ids=frozenset(restored_paths))
+        self.transport.apply_project_state_to_audio(
+            restored_sample_ids=frozenset(restored_paths),
+            after_output_retirement=after_output_retirement,
+        )
         self.loader.restore_samples_from_project_state(validated_paths=restored_paths)
         self.stems.restore_stem_cache_from_project_state()
         self.material_migration.schedule_after_restore()
@@ -461,12 +465,17 @@ class AppController:
             return None
         return revision, slot
 
-    def _initialize_native_gui_selection(self) -> None:
+    def _initialize_native_gui_selection(self, *, after_output_retirement: bool = False) -> None:
         current = self._current_native_selection()
-        if current is None or current[0] != 0:
+        if current is None:
+            return
+        revision, slot = current
+        # A replacement runtime starts unselected at the retired epoch's
+        # monotone revision. A live selection still owns its projection.
+        if slot is not None or (revision != 0 and not after_output_retirement):
             return
         sample_id = self._project.selected_pad
-        self._gui_native_selection = (0, sample_id)
+        self._gui_native_selection = (revision, sample_id)
         self._refresh_native_gui_selection(sample_id)
 
     def _refresh_native_gui_selection(self, sample_id: int) -> None:

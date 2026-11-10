@@ -111,7 +111,7 @@ def _configured(controller: AppController, audio: Mock, *, pad_id: int = 0) -> d
 
     audio.global_rate_status = Mock(side_effect=observe_rate)
 
-    def submit(*, enabled: bool, anchor_binding: object = None) -> None:
+    def submit(*, enabled: bool, anchor_binding: object = None) -> int:
         nonlocal submitted_provenance, submitted_revision
         if enabled:
             assert isinstance(anchor_binding, FakeInputRuntimePadBinding)
@@ -129,6 +129,7 @@ def _configured(controller: AppController, audio: Mock, *, pad_id: int = 0) -> d
             execution_frame=None,
         )
         submitted_revision = cast("int", receipt["request_revision"])
+        return submitted_revision
 
     audio.set_bpm_lock = Mock(side_effect=submit)
     return receipt

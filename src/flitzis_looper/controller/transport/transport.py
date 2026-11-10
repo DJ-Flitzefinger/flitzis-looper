@@ -101,11 +101,13 @@ class TransportController(BaseController):
         *,
         restored_sample_ids: frozenset[int] | None = None,
         source_initializers_in_loader: bool = False,
+        after_output_retirement: bool = False,
     ) -> None:
         ApplyProjectState(
             self,
             restored_sample_ids=restored_sample_ids,
             source_initializers_in_loader=source_initializers_in_loader,
+            after_output_retirement=after_output_retirement,
         ).apply_project_state_to_audio()
 
     def bind_incoming_global_key_lock(self, callback: Callable[[], None]) -> None:

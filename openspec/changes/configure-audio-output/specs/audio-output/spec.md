@@ -97,6 +97,8 @@ selected stems and persistent musical intent with fresh runtime epochs and ACKs.
 - **THEN** ordinary Loader and stem-restoration paths create fresh source/timing/input bindings
 - **AND** loop and grid positions preserve their time meaning within the stated rounding bound
 - **AND** old acknowledgements and mutable DSP history cannot certify the new runtime
+- **AND** restored speed and a qualified BPM Lock are confirmed by the new callback before performance resumes, while an unresolved saved BPM reference remains pending
+- **AND** the saved PAD selection is published against the new runtime binding independently of the BPM reference
 - **AND** playback does not restart automatically
 
 #### Scenario: Backend replacement or cleanup fails

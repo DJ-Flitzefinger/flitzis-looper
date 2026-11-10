@@ -558,10 +558,15 @@ class StemController(BaseController):  # noqa: PLR0904
             )
             return False
         demand = self._remember_demand(sample_id, current)
-        demand.explicit = self._project.pad_stem_mix_mode[sample_id] == "all_stems"
-        demand.policy = self._project.preload_stem_loops_on_startup
-        if demand.state == "verified" and (
-            demand.explicit or demand.policy or demand.withdraw_policy
+        explicit = self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+        preload = self._project.preload_stem_loops_on_startup
+        added_interest = (explicit and not demand.explicit) or (preload and not demand.policy)
+        demand.explicit = explicit
+        demand.policy = preload
+        # A preload ACK can arrive before recovery checks the explicit saved mix.
+        has_component_demand = explicit or preload or demand.withdraw_policy
+        if (demand.state == "acked" and added_interest) or (
+            demand.state == "verified" and has_component_demand
         ):
             demand.state = "queued"
             demand.error = None

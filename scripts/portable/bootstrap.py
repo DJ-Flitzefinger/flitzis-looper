@@ -369,9 +369,9 @@ def check_global_rate_api(engine_type: object) -> None:
         assert anchor.kind is inspect.Parameter.KEYWORD_ONLY, error
         assert anchor.default is None, error
     provenance_version = getattr(engine_type, "GLOBAL_RATE_PROVENANCE_API_VERSION", None)
-    provenance_error = "Native master provenance API requires GLOBAL_RATE_PROVENANCE_API_VERSION=1"
+    provenance_error = "Native master provenance API requires GLOBAL_RATE_PROVENANCE_API_VERSION=2"
     assert type(provenance_version) is int, provenance_error
-    assert provenance_version == 1, provenance_error
+    assert provenance_version == 2, provenance_error
 
 
 def check_ordinary_transport_api(native_module: object) -> None:

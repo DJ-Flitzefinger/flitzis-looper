@@ -342,7 +342,7 @@ fn speed_admitted_while_master_is_pending_keeps_its_original_prefix_until_real_p
 
 #[test]
 fn native_metadata_and_status_expose_the_same_canonical_proof_without_an_engine_instance() {
-    assert_eq!(AudioEngine::GLOBAL_RATE_PROVENANCE_API_VERSION, 1);
+    assert_eq!(AudioEngine::GLOBAL_RATE_PROVENANCE_API_VERSION, 2);
     let mut fixture = Fixture::new();
     let original = accepted_master(&mut fixture);
     Python::attach(|py| {
@@ -394,7 +394,7 @@ fn native_metadata_and_status_expose_the_same_canonical_proof_without_an_engine_
                 .unwrap()
                 .extract::<u32>()
                 .unwrap(),
-            1
+            2
         );
     });
 }

@@ -231,6 +231,10 @@ def retire_runtime_projections(app: AppController) -> None:
     global_._bpm_feedback = None
     global_._bpm_application = None
     global_._bpm_application_error = None
+    app.session.master_bpm = None
+    app.session.master_period_seconds = None
+    app.session.bpm_lock_anchor_bpm = None
+    app.session.bpm_lock_anchor_revision = None
     app.stems._committed_residency.shut_down()
     app.stems._resident_pairs.clear()
     app.stems._demands.clear()
@@ -306,7 +310,9 @@ def restore_sources(app: AppController, snapshot: OutputRestoreSnapshot, *, roll
         app.project.stem_cache[sample_id] = current
         app.stems._restored_stem_candidates[sample_id] = current
     app.transport.apply_project_state_to_audio(
-        restored_sample_ids=frozenset(snapshot.paths), source_initializers_in_loader=True
+        restored_sample_ids=frozenset(snapshot.paths),
+        source_initializers_in_loader=True,
+        after_output_retirement=True,
     )
     app.loader.restore_samples_from_project_state(
         validated_paths=snapshot.paths, preserve_output_identity=True
@@ -412,18 +418,21 @@ class OutputRestoreRuntime:
     def __init__(self, app: AppController) -> None:
         self._app = app
 
-    def activate(self) -> None:
+    def activate(self, *, after_output_retirement: bool = False) -> None:
         """Activate historical startup custody once, after output installation."""
         self._app._activate_startup_owners()
-        self._app._restore_initial_runtime_state()
+        self._app._restore_initial_runtime_state(after_output_retirement=after_output_retirement)
 
-    def startup_restored(self) -> bool:
+    def startup_restored(self, *, after_output_retirement: bool = False) -> bool:
         """Observe the post-recovery image while Native input remains disabled."""
-        return startup_sources_restored(self._app)
+        return startup_sources_restored(self._app) and (
+            not after_output_retirement
+            or self._app.transport.global_params._output_transport_restored()
+        )
 
-    def finish_startup(self) -> None:
+    def finish_startup(self, *, after_output_retirement: bool = False) -> None:
         """Enable saved input once, after initial source and selection own ACKs."""
-        self._app._initialize_native_gui_selection()
+        self._app._initialize_native_gui_selection(after_output_retirement=after_output_retirement)
         self._app.input_mapping.apply_project_state_to_input_runtime()
 
     def release_completed_restore(self) -> None:
@@ -497,11 +506,14 @@ class OutputRestoreRuntime:
         if snapshot is None:
             message = "Original output restoration snapshot is unavailable"
             raise RuntimeError(message)
-        return sources_restored(self._app, snapshot)
+        return (
+            sources_restored(self._app, snapshot)
+            and self._app.transport.global_params._output_transport_restored()
+        )
 
     def finish_restore(self) -> None:
         """Publish complete input/MIDI state last, without any playback request."""
-        self._app._initialize_native_gui_selection()
+        self._app._initialize_native_gui_selection(after_output_retirement=True)
         self._app.input_mapping.apply_project_state_to_input_runtime()
         self._app.loader._output_restore = False
 

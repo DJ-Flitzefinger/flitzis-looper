@@ -277,8 +277,9 @@ optional original timestamp/source-generation/exclusive capture keywords and the
 default `window=None` publication parameter. The callable `global_rate_status`
 observation is also required so requested speed settings can be distinguished from
 the callback's pending, applied or rejected rate effect. The class must declare
-`GLOBAL_RATE_PROVENANCE_API_VERSION=1`: the same coherent observation carries
-actual master provenance, distinguishing a qualified Manual/TAP/Legacy reference
+`GLOBAL_RATE_PROVENANCE_API_VERSION=2`. The BPM Lock setter returns its admitted
+revision, and the callback reports the effect separately. The rate observation
+carries actual master provenance, distinguishing a qualified Manual/TAP/Legacy reference
 from an unknown origin or a qualified accepted revision. Binding metadata carries
 the matching original-source correlation without granting execution authority.
 Missing methods, receipt fields or

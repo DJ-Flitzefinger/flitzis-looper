@@ -15,6 +15,7 @@ class ApplyProjectState:
         *,
         restored_sample_ids: frozenset[int] | None = None,
         source_initializers_in_loader: bool = False,
+        after_output_retirement: bool = False,
     ) -> None:
         self._transport = transport
         self._project = transport._project
@@ -24,6 +25,7 @@ class ApplyProjectState:
         self._audio = transport._audio
         self._restored_sample_ids = restored_sample_ids
         self._source_initializers_in_loader = source_initializers_in_loader
+        self._after_output_retirement = after_output_retirement
 
     def _has_assignment(self, sample_id: int) -> bool:
         return self._project.sample_paths[sample_id] is not None and (
@@ -44,7 +46,8 @@ class ApplyProjectState:
         if self._project.volume != defaults.volume:
             self._audio.set_volume(self._project.volume)
 
-        if self._project.speed != defaults.speed:
+        # Output END invalidates the old rate effect, including at Unity.
+        if self._after_output_retirement or self._project.speed != defaults.speed:
             self._audio.set_speed(self._project.speed)
 
         # Output reset preserves musical placement while retiring its source.

@@ -1679,7 +1679,7 @@ impl PublicBpmAudio {
         &self,
         enabled: bool,
         anchor_binding: Option<&crate::audio_engine::input_runtime_binding::InputRuntimePadBinding>,
-    ) -> PyResult<()> {
+    ) -> PyResult<u64> {
         let _requests = self.engine.pad_request_ids.lock().unwrap();
         crate::audio_engine::push_bpm_lock_message(
             &self.engine,

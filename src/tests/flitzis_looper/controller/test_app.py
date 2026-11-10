@@ -326,7 +326,7 @@ def _restored_bpm_receipt(audio: Mock, manual_bpm: float | None) -> dict[str, ob
     _bind_fixture_source_identity(audio, pad_id=1)
     submitted_provenance = _master_provenance(None, kind="absent")
 
-    def admit_bpm(*, enabled: bool, anchor_binding: object = None) -> None:
+    def admit_bpm(*, enabled: bool, anchor_binding: object = None) -> int:
         nonlocal submitted_provenance
         assert enabled
         assert isinstance(anchor_binding, FakeInputRuntimePadBinding)
@@ -334,6 +334,7 @@ def _restored_bpm_receipt(audio: Mock, manual_bpm: float | None) -> dict[str, ob
             cast("str", anchor_binding.metadata()["source_identity"])
         )
         receipt.update(request_revision=1, requested_enabled=True, state="queued")
+        return 1
 
     audio.set_bpm_lock.side_effect = admit_bpm
     audio.global_rate_status.side_effect = lambda: {

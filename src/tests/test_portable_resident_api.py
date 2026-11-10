@@ -357,7 +357,7 @@ def _set_speed_and_master_period(
 
 
 _GLOBAL_RATE_IMPLEMENTATIONS: dict[str, object] = {
-    "GLOBAL_RATE_PROVENANCE_API_VERSION": 1,
+    "GLOBAL_RATE_PROVENANCE_API_VERSION": 2,
     "global_rate_status": _forbidden_native_work,
     "bpm_lock_status": _bpm_lock_status,
     "set_bpm_lock": _set_bpm_lock,
@@ -372,11 +372,11 @@ def test_global_rate_observation_is_reflected_without_native_work() -> None:
     check(engine_type)
 
 
-@pytest.mark.parametrize("version", [None, True, 0, 2, 1.0, "1"])
+@pytest.mark.parametrize("version", [None, True, 0, 1, 2.0, "2"])
 def test_invalid_global_rate_provenance_version_cannot_activate(version: object) -> None:
     check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
     attributes = _GLOBAL_RATE_IMPLEMENTATIONS | {"GLOBAL_RATE_PROVENANCE_API_VERSION": version}
-    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=1"):
+    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=2"):
         check(type("InvalidProvenanceEngine", (), attributes))
 
 
@@ -384,7 +384,7 @@ def test_missing_global_rate_provenance_version_cannot_activate() -> None:
     check = runpy.run_path(str(REPO / "scripts/portable/bootstrap.py"))["check_global_rate_api"]
     attributes = _GLOBAL_RATE_IMPLEMENTATIONS.copy()
     del attributes["GLOBAL_RATE_PROVENANCE_API_VERSION"]
-    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=1"):
+    with pytest.raises(AssertionError, match="GLOBAL_RATE_PROVENANCE_API_VERSION=2"):
         check(type("OldProvenanceEngine", (), attributes))
 
 

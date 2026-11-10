@@ -303,8 +303,12 @@ class AudioOutputController:
             self.request_failed_close()
             return
         try:
-            if self._app.audio_output_runtime.startup_restored():
-                self._app.audio_output_runtime.finish_startup()
+            if self._app.audio_output_runtime.startup_restored(
+                after_output_retirement=self._empty_startup
+            ):
+                self._app.audio_output_runtime.finish_startup(
+                    after_output_retirement=self._empty_startup
+                )
                 self._source_startup_completed = True
                 self.phase = "ready"
         except (OSError, RuntimeError, TypeError, ValueError) as error:
@@ -477,7 +481,7 @@ class AudioOutputController:
         if self._commit_kind == "startup" or self._empty_startup:
             self.phase = "startup_restoring"
             try:
-                self._app.audio_output_runtime.activate()
+                self._app.audio_output_runtime.activate(after_output_retirement=self._empty_startup)
             except (OSError, RuntimeError, TypeError, ValueError) as error:
                 self.error = str(error)
                 self.phase = "startup_failed"

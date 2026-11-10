@@ -32,7 +32,7 @@ class _BpmPublication:
     rate: dict[str, object]
     submitted_provenance: dict[str, object] | None = None
 
-    def submit(self, *, enabled: bool, anchor_binding: object = None) -> None:
+    def submit(self, *, enabled: bool, anchor_binding: object = None) -> int:
         if enabled:
             assert isinstance(anchor_binding, FakeInputRuntimePadBinding)
             metadata = anchor_binding.metadata()
@@ -48,6 +48,7 @@ class _BpmPublication:
             reason=None,
             execution_frame=None,
         )
+        return cast("int", self.receipt["request_revision"])
 
     def apply(self, *, enabled: bool, period: float | None) -> None:
         """Supply this fixture's own matching effect, then use the normal observer."""

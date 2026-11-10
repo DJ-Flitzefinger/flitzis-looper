@@ -637,6 +637,120 @@ fn actual_saved_bpm_lock_and_six_pads_48k_192_frames() {
     assert_eq!(device.created, device.released);
 }
 
+#[test]
+#[ignore = "fresh-process App/ASIO Apply and rollback with two playing PADs; no hardware"]
+fn actual_output_reopen_and_rollback_restore_bpm_and_transport() {
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_AUDIO_OUTPUT_PROFILE_ROOT").expect("owned root required"),
+    );
+    assert!(root.is_absolute() && !root.exists());
+    fs::create_dir(&root).unwrap();
+    let _cwd = DirectoryGuard {
+        original: std::env::current_dir().unwrap(),
+        readers_ended: Arc::new(AtomicBool::new(false)),
+    };
+    std::env::set_current_dir(&root).unwrap();
+    let factory = Factory::new().unwrap();
+    let mut fixture = Fixture::new_profile(&root, factory.clone(), false, true);
+    fixture.ready();
+    fixture.seed_leases.clear();
+    fixture.settle("original-bpm-lock", |f, _| f.predicate("_bpm_restored"));
+    fixture.call("_select_unrelated_loaded_pad");
+    let revisions = |f: &Fixture| {
+        Python::attach(|py| {
+            f.probe()
+                .call_method0(py, "_reopened_transport_revisions")
+                .unwrap()
+                .extract::<(u64, u64, u64)>(py)
+                .unwrap()
+        })
+    };
+    let original = fixture.sources();
+    let before = revisions(&fixture);
+    fixture.apply(48_000);
+    assert!(
+        fixture.predicate("output_change_succeeded"),
+        "{}",
+        fixture.status()
+    );
+    let unity = revisions(&fixture);
+    assert!(unity.0 > before.0 && unity.1 > before.1 && unity.2 > before.2);
+    let applied = fixture.sources();
+    fresh_sources(&original, &applied, 48_000);
+
+    fixture.call("_set_reopen_test_speed");
+    fixture.settle("saved-speed", |f, _| {
+        f.predicate("_saved_bpm_speed_applied")
+    });
+    let before = revisions(&fixture);
+    factory
+        .fail_start_of_session(factory.info().unwrap().created + 1)
+        .unwrap();
+    fixture.apply(96_000);
+    assert!(fixture.status().contains("Failed to start audio stream"));
+    let rolled_back = revisions(&fixture);
+    assert!(rolled_back.0 > before.0 && rolled_back.1 > before.1 && rolled_back.2 > before.2);
+    fresh_sources(&applied, &fixture.sources(), 48_000);
+    assert!(fixture.tick().unwrap().pads.iter().all(|pad| !pad.active));
+
+    let pair = |_: &Fixture, row: Option<&TickObservation>| {
+        row.is_some_and(|row| {
+            row.pads[0].active
+                && row.pads[1].active
+                && (row.pads[0].stem_mode, row.pads[0].stem_mask) == (1, 5)
+        })
+    };
+    let stopped = |f: &Fixture, row: Option<&TickObservation>| {
+        f.predicate("stopped") && row.is_some_and(|row| row.pads.iter().all(|pad| !pad.active))
+    };
+    fixture.call("_start_reopen_pair");
+    fixture.settle("two fresh triggers", pair);
+    fixture.call("stop");
+    fixture.settle("group stop", stopped);
+    fixture.call("_restart_reopen_pair");
+    fixture.settle("group restart", pair);
+    // Editor selection is independent. In single mode the last effective
+    // explicit launch remains the ordinary START/STOP target.
+    let target = Python::attach(|py| {
+        fixture
+            .engine()
+            .borrow(py)
+            .current_explicit_playback_target()
+            .unwrap()
+            .unwrap()
+            .current_control_slot()
+            .unwrap()
+            .unwrap()
+    });
+    assert!(target < 2);
+    let single = |_: &Fixture, row: Option<&TickObservation>| {
+        row.is_some_and(|row| {
+            row.pads
+                .iter()
+                .enumerate()
+                .all(|(id, pad)| pad.active == (id == target))
+        })
+    };
+    fixture.call("_disable_multi_loop");
+    fixture.settle("single-mode peer stop", single);
+    fixture.call("_start_single_after_reopen");
+    fixture.settle("single-mode start", single);
+    fixture.call("stop");
+    fixture.settle("single-mode stop", stopped);
+    fixture.call("_toggle_bpm_lock");
+    fixture.settle("BPM OFF", |f, _| f.predicate("_bpm_off"));
+    fixture.call("_toggle_bpm_lock");
+    fixture.settle("BPM ON selected PAD", |f, _| {
+        f.predicate("_new_bpm_reference")
+    });
+    fixture.settle("output close", |f, _| f.predicate("close"));
+    fixture.closed.set(true);
+    fixture.release_owners().unwrap();
+    let device = factory.info().unwrap();
+    assert_eq!(device.active, 0);
+    assert_eq!(device.created, device.released);
+}
+
 fn fresh_sources(before: &[SourceImage; 6], after: &[SourceImage; 6], rate: u32) {
     for (old, new) in before.iter().zip(after) {
         assert_eq!(

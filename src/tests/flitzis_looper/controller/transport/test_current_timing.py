@@ -101,7 +101,7 @@ def bpm_runtime(audio_engine_mock: Mock, accepted_pad: dict[str, object]) -> Non
         "master_provenance": _master_provenance(None, kind="absent"),
     }
 
-    def admit(*, enabled: bool, anchor_binding: InputRuntimePadBinding | None = None) -> None:
+    def admit(*, enabled: bool, anchor_binding: InputRuntimePadBinding | None = None) -> int:
         if enabled:
             assert anchor_binding is not None
             assert anchor_binding.metadata()["accepted_timing"] == accepted_pad
@@ -111,6 +111,7 @@ def bpm_runtime(audio_engine_mock: Mock, accepted_pad: dict[str, object]) -> Non
             requested_enabled=enabled,
             execution_frame=None,
         )
+        return cast("int", receipt["request_revision"])
 
     audio_engine_mock.bpm_lock_status = Mock(return_value=receipt)
     audio_engine_mock.set_bpm_lock = Mock(side_effect=admit)

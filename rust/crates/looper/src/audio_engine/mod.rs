@@ -388,7 +388,7 @@ fn push_bpm_lock_message(
     producer: &mut Producer<ControlMessage>,
     enabled: bool,
     anchor_binding: Option<&InputRuntimePadBinding>,
-) -> PyResult<()> {
+) -> PyResult<u64> {
     if producer.is_full() {
         return Err(PyRuntimeError::new_err(
             "Failed to send SetBpmLock - buffer may be full",
@@ -443,7 +443,8 @@ fn push_bpm_lock_message(
                 .hierarchy_stamp
                 .load(Ordering::Acquire),
         }))
-        .map_err(|_| PyRuntimeError::new_err("reserved single-producer BPM capacity lost"))
+        .map_err(|_| PyRuntimeError::new_err("reserved single-producer BPM capacity lost"))?;
+    Ok(next)
 }
 
 fn bpm_lock_status_with_producer(
@@ -1806,7 +1807,7 @@ impl AudioEngine {
     #[classattr]
     const RESIDENT_PCM_ADMISSION_VERSION: u32 = 2;
     #[classattr]
-    const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 1;
+    const GLOBAL_RATE_PROVENANCE_API_VERSION: u32 = 2;
     #[classattr]
     const ORDINARY_TRANSPORT_API_VERSION: u32 = 3;
     #[classattr]
@@ -4605,12 +4606,13 @@ impl AudioEngine {
         )
     }
 
+    /// Return the admitted revision. The callback publishes its effect separately.
     #[pyo3(name = "set_bpm_lock", signature = (enabled, *, anchor_binding=None))]
     pub fn set_bpm_lock_with_binding(
         &self,
         enabled: bool,
         anchor_binding: Option<&InputRuntimePadBinding>,
-    ) -> PyResult<()> {
+    ) -> PyResult<u64> {
         let _requests = self
             .pad_request_ids
             .lock()

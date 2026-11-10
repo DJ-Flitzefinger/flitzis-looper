@@ -646,10 +646,11 @@ def _install_bpm_queue(audio: Mock) -> None:
         "submission_available": True,
     }
 
-    def admit(*, enabled: bool, anchor_binding: object = None) -> None:
+    def admit(*, enabled: bool, anchor_binding: object = None) -> int:
         assert enabled is True
         assert anchor_binding is not None
         receipt.update(request_revision=1, state="queued", requested_enabled=True)
+        return 1
 
     audio.bpm_lock_status = Mock(side_effect=receipt.copy)
     audio.set_bpm_lock = Mock(side_effect=admit)

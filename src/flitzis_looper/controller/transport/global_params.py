@@ -26,8 +26,6 @@ from flitzis_looper.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper.models import (
         TriggerQuantizationMode,
@@ -79,7 +77,7 @@ class _BpmLockApplication:
     admitted_revision: int | None = None
     attempted: bool = False
     master_projected: bool = False
-    unobserved_after_revision: int | None = None
+    admission_unverified: bool = False
 
 
 def _decode_bpm_lock_status(feedback: object) -> BpmLockStatus:
@@ -600,11 +598,7 @@ class GlobalParametersController:
             or application.original_content_id is not None
         ):
             return False
-        return (
-            application.admitted_revision is None
-            and not application.attempted
-            and application.unobserved_after_revision is None
-        )
+        return application.admitted_revision is None and not application.attempted
 
     def _bind_first_bpm_content(self) -> None:
         anchor = self._session.bpm_lock_anchor_pad_id
@@ -631,11 +625,13 @@ class GlobalParametersController:
             )
             return
         try:
-            feedback = _decode_bpm_lock_status(observe())
+            raw_feedback = observe()
+            feedback = None if raw_feedback is None else _decode_bpm_lock_status(raw_feedback)
         except (RuntimeError, ValueError, TypeError) as error:
             self._bpm_application_error = str(error)
             return
-        self._bpm_feedback = feedback
+        if feedback is not None:
+            self._bpm_feedback = feedback
         application = self._bpm_application
         if application is None:
             return
@@ -643,14 +639,20 @@ class GlobalParametersController:
             self._begin_bpm_lock_application(capture_anchor=False)
             application = self._bpm_application
             assert application is not None
-        if self._observe_unconfirmed_bpm_admission(application, feedback):
-            self._service_bpm_application(application, feedback, observe)
+        if application.admission_unverified:
+            return
+        # After output END there is no effect to observe until the first
+        # real request reaches the new callback. An admitted revision stays
+        # owned while its receipt is unavailable.
+        if feedback is None and application.admitted_revision is not None:
+            self._bpm_application_error = "BPM Lock confirmation is unavailable."
+            return
+        self._service_bpm_application(application, feedback)
 
     def _service_bpm_application(
         self,
         application: _BpmLockApplication,
-        feedback: BpmLockStatus,
-        observe: Callable[[], object],
+        feedback: BpmLockStatus | None,
     ) -> None:
         try:
             self._bind_first_bpm_content()
@@ -664,12 +666,20 @@ class GlobalParametersController:
                     # A fresh current-source observation may recover from a
                     # transient read/Hold error without replaying an audio effect.
                     self._bpm_application_error = None
-                if feedback["state"] == "applied" and feedback["submission_available"]:
+                if (
+                    feedback is not None
+                    and feedback["state"] == "applied"
+                    and feedback["submission_available"]
+                ):
                     self._reconcile_manual_bpm_master(qualified)
                 return
-            if application.attempted and feedback["submission_available"] is not True:
+            if (
+                application.attempted
+                and feedback is not None
+                and not feedback["submission_available"]
+            ):
                 return
-            self._submit_bpm_application(application, feedback, qualified, observe)
+            self._submit_bpm_application(application, qualified)
         except (RuntimeError, ValueError, TypeError) as error:
             self._bpm_application_error = str(error)
 
@@ -737,31 +747,15 @@ class GlobalParametersController:
         self._bpm_application_error = None
         return True
 
-    @staticmethod
-    def _observe_unconfirmed_bpm_admission(
-        application: _BpmLockApplication, feedback: BpmLockStatus
-    ) -> bool:
-        """A normal setter return retains ownership even while the receipt is unreadable."""
-        if application.unobserved_after_revision is not None:
-            if (
-                feedback["request_revision"] > application.unobserved_after_revision
-                and feedback["requested_enabled"] is application.enabled
-            ):
-                application.admitted_revision = feedback["request_revision"]
-                application.unobserved_after_revision = None
-            else:
-                return False
-        return True
-
     def _bpm_application_needs_admission(
         self,
         application: _BpmLockApplication,
-        feedback: BpmLockStatus,
+        feedback: BpmLockStatus | None,
         qualified: tuple[InputRuntimePadBinding, tuple[object, ...]] | None,
     ) -> bool:
         if application.admitted_revision is None:
             return True
-        if feedback["request_revision"] != application.admitted_revision:
+        if feedback is None or feedback["request_revision"] != application.admitted_revision:
             return False
         fingerprint_changed = (
             application.enabled
@@ -856,30 +850,61 @@ class GlobalParametersController:
     def _submit_bpm_application(
         self,
         application: _BpmLockApplication,
-        feedback: BpmLockStatus,
         qualified: tuple[InputRuntimePadBinding, tuple[object, ...]] | None,
-        observe: Callable[[], object],
     ) -> None:
         application.attempted = True
-        before = feedback["request_revision"]
         if application.enabled:
             assert qualified is not None
-            self._audio.set_bpm_lock(enabled=True, anchor_binding=qualified[0])
+            revision = self._audio.set_bpm_lock(enabled=True, anchor_binding=qualified[0])
             application.fingerprint = qualified[1]
         else:
-            self._audio.set_bpm_lock(enabled=False)
-        application.unobserved_after_revision = before
-        admitted = _decode_bpm_lock_status(observe())
-        self._bpm_feedback = admitted
+            revision = self._audio.set_bpm_lock(enabled=False)
+        if type(revision) is not int or not 0 < revision < 1 << 64:
+            # A successful setter may have enqueued work even if its
+            # admission receipt is incompatible. Never replay it blindly.
+            application.admission_unverified = True
+            message = "BPM Lock admission revision is unavailable."
+            raise ValueError(message)
+        application.admitted_revision = revision
+        self._bpm_application_error = None
+
+    def _output_transport_restored(self) -> bool:
+        """Gate reopening on the new rate and any currently qualified lock."""
+        rate = self.global_rate_status()
+        if rate.state == "rejected":
+            message = rate.error or "The restored playback speed was rejected."
+            raise RuntimeError(message)
+        if rate.state != "applied":
+            return False
+        if rate.effective_speed != self._project.speed:
+            message = "The new output did not apply the saved playback speed."
+            raise RuntimeError(message)
+        application = self._bpm_application
+        if application is None:
+            return False
+        if application.admission_unverified:
+            message = "BPM Lock admission revision is unavailable."
+            raise RuntimeError(message)
+        if not application.enabled:
+            return self._bpm_receipt_applied()
+        anchor = self._session.bpm_lock_anchor_pad_id
+        content = self._project.pad_content[anchor] if anchor is not None else None
         if (
-            admitted["request_revision"] > before
-            and admitted["requested_enabled"] is application.enabled
+            anchor is None
+            or content is None
+            or content.instance_id != application.original_content_id
         ):
-            application.admitted_revision = admitted["request_revision"]
-            application.unobserved_after_revision = None
-            self._bpm_application_error = None
-        else:
-            self._bpm_application_error = "BPM Lock admission is pending."
+            return True
+        timing = self._bpm.current_timing(anchor)
+        if timing is None:
+            # A source without timing can remain pending after the output is usable.
+            return application.admitted_revision is None
+        qualified = self._qualified_bpm_anchor(timing=timing)
+        return (
+            qualified is not None
+            and self._bpm_receipt_applied()
+            and self._own_actual_master_provenance(rate, qualified=qualified) is not None
+        )
 
     def _publish_trigger_quantization(
         self, *, enabled: bool, step: TriggerQuantizationStep

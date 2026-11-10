@@ -3,7 +3,7 @@
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -22,7 +22,12 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
     from flitzis_looper.models import StemCacheEntry
-    from flitzis_looper_audio import AudioEngine, PreparedStemPair, ProjectAssetLease
+    from flitzis_looper_audio import (
+        AudioEngine,
+        PreparedSourceTicket,
+        PreparedStemPair,
+        ProjectAssetLease,
+    )
 
 _TARGET = 215
 
@@ -321,6 +326,50 @@ def test_preload_interest_requires_its_own_ack_only_when_enabled(
     assert not fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
     fixture.project.preload_stem_loops_on_startup = False
     assert fixture.controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+
+
+def test_recovered_saved_mix_admits_its_own_request_after_preload_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch)
+    fixture.project.preload_stem_loops_on_startup = True
+    explicit = _ResidencyReceipt()
+    requests = fixture.audio.request_committed_stem_residency
+    requests.side_effect = [fixture.residency, explicit]
+    controller = fixture.controller
+    fixture.registration.state = "accepted"
+    content = fixture.project.pad_content[_TARGET]
+    assert content is not None
+    controller._committed_residency.register(
+        _TARGET,
+        fixture.prepared.native_view,
+        cast("PreparedSourceTicket", fixture.source),
+        fixture.entry,
+        content.instance_id,
+        fixture.project.sample_paths[_TARGET],
+    )
+    assert not controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+    controller._poll_residency_demands()
+    fixture.residency.residency = "accepted"
+    controller._poll_residency_demands()
+    assert controller._demands[_TARGET].state == "acked"
+
+    fixture.project.pad_stem_mix_mode[_TARGET] = "all_stems"
+    assert not controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+    controller._poll_residency_demands()
+    assert not controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+    explicit.residency = "accepted"
+    assert controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+    controller._poll_residency_demands()
+    assert controller.recovered_copy_selection_ready(_TARGET, fixture.entry)
+    assert requests.call_args_list == [
+        call(fixture.registration, mode="full_mix", interest="preload"),
+        call(
+            fixture.registration,
+            mode="all_stems",
+            enabled_mask=fixture.project.pad_stem_intent[_TARGET].enabled_mask,
+        ),
+    ]
 
 
 @pytest.mark.parametrize("damage", ["pair", "source_version", "content", "path"])

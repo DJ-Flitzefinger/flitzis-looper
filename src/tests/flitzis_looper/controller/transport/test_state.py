@@ -18,7 +18,7 @@ def test_output_restore_carries_source_controls_with_loader_before_own_ack(
     project.pad_gain_db[0] = -3.0
     project.pad_eq_low_db[0] = 2.0
     project.volume = 0.8
-    project.speed = 1.1
+    project.speed = 1.0
     project.manual_bpm[0] = 123.0
     project.pad_loop_start_s[0] = 0.25
     project.pad_loop_end_s[0] = 2.75
@@ -30,13 +30,15 @@ def test_output_restore_carries_source_controls_with_loader_before_own_ack(
         patch.object(transport_controller.bpm, "on_pad_bpm_changed") as bpm,
     ):
         transport_controller.apply_project_state_to_audio(
-            restored_sample_ids=frozenset({0}), source_initializers_in_loader=True
+            restored_sample_ids=frozenset({0}),
+            source_initializers_in_loader=True,
+            after_output_retirement=True,
         )
     audio_engine_mock.set_pad_key_lock.assert_not_called()
     audio_engine_mock.set_pad_gain.assert_not_called()
     audio_engine_mock.set_pad_eq.assert_not_called()
     audio_engine_mock.set_volume.assert_called_once_with(0.8)
-    audio_engine_mock.set_speed.assert_called_once_with(1.1)
+    audio_engine_mock.set_speed.assert_called_once_with(1.0)
     loop.assert_called_once()
     bpm.assert_called_once_with(0)
 
