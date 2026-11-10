@@ -133,7 +133,4 @@ class ApplyProjectState:
             self._bpm.on_pad_bpm_changed(sample_id)
 
     def _apply_bpm_lock_settings(self) -> None:
-        self._global_modes._begin_bpm_lock_application(
-            capture_anchor=self._project.resolve_bpm_lock()
-        )
-        self._global_modes.poll_bpm_lock_application()
+        self._global_modes._restore_bpm_lock_application()

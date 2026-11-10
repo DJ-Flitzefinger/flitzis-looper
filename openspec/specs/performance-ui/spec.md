@@ -269,6 +269,8 @@ requests use the same live mode. Global changes SHALL affect only inheriting loa
 ### Requirement: BPM Lock Anchors Master BPM To The Current Pad When Enabled
 When the performer explicitly enables BPM lock, the system SHALL capture the currently selected qualified source as the lock reference and derive the master BPM from that source when available. Selection, ordinary starts/retriggers and MultiLoop transitions SHALL preserve that same source owner and the established master tempo. Hierarchy-only requalification SHALL NOT re-anchor the master timeline. An empty captured reference MAY bind its first qualified content; later replacement SHALL NOT rebind a successor merely by slot.
 
+Saved BPM Lock SHALL retain its nominated PAD and, once bound, the original content identity. On restore, the original content SHALL be located independently of selection and SHALL require fresh Native confirmation before accepting a qualified speed change. Projects saved without a nomination SHALL use the saved selected PAD as their initial nomination.
+
 #### Scenario: Enabling BPM lock captures master BPM from selected pad and speed
 - **GIVEN** Pad 1 is selected
 - **AND** Pad 1 has an effective BPM value

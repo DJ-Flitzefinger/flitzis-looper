@@ -5,8 +5,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import LooperAction
-from flitzis_looper.models import PadContentIdentity, ProjectState
+from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from tests.flitzis_looper.conftest import FakeGlobalPlaybackBatchTicket
 from tests.flitzis_looper.controller.bpm_lock_fixture import _configured
 from tests.flitzis_looper.controller.transport.test_global_batches import (
@@ -226,6 +227,36 @@ def test_lock_can_be_disabled_while_multi_loop_is_off(
     controller.transport.global_params.set_bpm_lock(enabled=False)
     audio_engine_mock.set_bpm_lock.assert_called_with(enabled=False)
     assert not controller.project.resolve_bpm_lock()
+
+
+@pytest.mark.parametrize("original_present", [True, False])
+def test_saved_bpm_lock_restores_the_original_content_before_any_fresh_ack(
+    controller: AppController, audio_engine_mock: Mock, *, original_present: bool
+) -> None:
+    _confirmed_lock(controller, audio_engine_mock, multi_loop=True)
+    project = controller.project
+    original = project.pad_content[0]
+    assert original is not None
+    project.selected_pad = 2
+    project.pad_content[0] = PadContentIdentity(instance_id="b" * 32)
+    if original_present:
+        project.pad_content[1] = original
+    restored = ProjectState.model_validate_json(project.model_dump_json())
+    session = SessionState()
+    audio = Mock()
+    audio.bpm_lock_status.return_value = None
+    parameters = TransportController(restored, session, audio).global_params
+    parameters._restore_bpm_lock_application()
+
+    assert session.bpm_lock_anchor_pad_id == (1 if original_present else 0)
+    application = parameters._bpm_application
+    assert application is not None
+    assert application.original_content_id == original.instance_id
+    assert session.master_period_seconds is None
+    with pytest.raises(RuntimeError, match="not acknowledged"):
+        parameters.set_speed(1.05)
+    audio.set_speed.assert_not_called()
+    audio.set_speed_and_master_period.assert_not_called()
 
 
 @pytest.mark.parametrize("multi_loop", [False, True])

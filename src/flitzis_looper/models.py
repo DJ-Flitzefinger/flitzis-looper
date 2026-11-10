@@ -458,6 +458,14 @@ class PadContentIdentity(BaseModel):
         return self
 
 
+class BpmLockReference(BaseModel):
+    """Saved nomination for BPM Lock, independent of selection and Native receipts."""
+
+    model_config = ConfigDict(frozen=True)
+    pad_id: Annotated[int, AfterValidator(validate_sample_id)]
+    content_instance_id: str | None = Field(default=None, strict=True, pattern=r"^[0-9a-f]{32}$")
+
+
 def _default_pad_stem_intent() -> list[PadStemIntent]:
     return [PadStemIntent() for _ in range(NUM_SAMPLES)]
 
@@ -686,6 +694,8 @@ class ProjectState(BaseModel):
     """Global launch contract; edits require Native's completely stopped admission."""
     bpm_lock: bool = False
     """BPM lock state."""
+    bpm_lock_reference: BpmLockReference | None = None
+    """Saved reference nomination, independently of live confirmation."""
     trigger_quantization_enabled: bool = False
     """Whether global pad trigger quantization is enabled."""
     trigger_quantization_step: TriggerQuantizationStep = DEFAULT_TRIGGER_QUANTIZATION_STEP

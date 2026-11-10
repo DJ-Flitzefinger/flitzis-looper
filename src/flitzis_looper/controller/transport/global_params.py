@@ -22,6 +22,7 @@ from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import (
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
     TRIGGER_QUANTIZATION_STEPS,
+    BpmLockReference,
 )
 
 if TYPE_CHECKING:
@@ -454,6 +455,8 @@ class GlobalParametersController:
         if enabled:
             self._transport.ensure_pad_edit_allowed(self._project.selected_pad)
         self._project.bpm_lock = enabled
+        if not enabled:
+            self._project.bpm_lock_reference = None
         self._begin_bpm_lock_application(capture_anchor=enabled)
         self._transport._mark_project_changed()
         self.poll_bpm_lock_application()
@@ -462,16 +465,46 @@ class GlobalParametersController:
         """Capture placement once; Pair's existing mirror is its only later mover."""
         enabled = self._project.resolve_bpm_lock()
         if capture_anchor and enabled:
-            self._session.bpm_lock_anchor_pad_id = self._project.selected_pad
+            anchor = self._project.selected_pad
+            self._project.bpm_lock_reference = BpmLockReference(pad_id=anchor)
+            self._session.bpm_lock_anchor_pad_id = anchor
             self._session.bpm_lock_anchor_bpm = None
             self._session.bpm_lock_anchor_revision = None
-        self._bpm_application = _BpmLockApplication(enabled, None)
+        reference = self._project.bpm_lock_reference if enabled else None
+        self._bpm_application = _BpmLockApplication(
+            enabled, reference.content_instance_id if reference is not None else None
+        )
         self._bpm_application_error = None
         if enabled:
             try:
                 self._bind_first_bpm_content()
             except (RuntimeError, ValueError) as error:
                 self._bpm_application_error = str(error)
+
+    def _restore_bpm_lock_application(self) -> None:
+        """Restore the saved owner while requiring a new Native application."""
+        if self._project.resolve_bpm_lock():
+            reference = self._project.bpm_lock_reference
+            if reference is None:
+                reference = BpmLockReference(pad_id=self._project.selected_pad)
+                self._project.bpm_lock_reference = reference
+                self._transport._mark_project_changed()
+            anchor: int | None = reference.pad_id
+            if reference.content_instance_id is not None:
+                placements = [
+                    pad_id
+                    for pad_id, content in enumerate(self._project.pad_content)
+                    if content is not None and content.instance_id == reference.content_instance_id
+                ]
+                if placements:
+                    # A duplicate is ambiguous. An absent owner can only return
+                    # at the nominated slot with the same exact content identity.
+                    anchor = placements[0] if len(placements) == 1 else None
+            self._session.bpm_lock_anchor_pad_id = anchor
+            self._session.bpm_lock_anchor_bpm = None
+            self._session.bpm_lock_anchor_revision = None
+        self._begin_bpm_lock_application(capture_anchor=False)
+        self.poll_bpm_lock_application()
 
     def _bpm_lock_application_status(self) -> BpmLockApplicationStatus:
         """Return cached actual effect, preserving pending and missing-runtime errors."""
@@ -584,6 +617,10 @@ class GlobalParametersController:
             application = self._bpm_application
             assert application is not None
             application.original_content_id = content.instance_id
+            self._project.bpm_lock_reference = BpmLockReference(
+                pad_id=anchor, content_instance_id=content.instance_id
+            )
+            self._transport._mark_project_changed()
 
     def poll_bpm_lock_application(self) -> None:
         """Qualify unadmitted work once per fresh coherent observation; Native owns retries."""

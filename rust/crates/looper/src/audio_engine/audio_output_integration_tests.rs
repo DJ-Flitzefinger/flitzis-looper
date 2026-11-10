@@ -180,6 +180,10 @@ impl Fixture {
     }
 
     fn new_source_layout(root: &Path, factory: Arc<Factory>, flat: bool) -> Self {
+        Self::new_profile(root, factory, flat, false)
+    }
+
+    fn new_profile(root: &Path, factory: Arc<Factory>, flat: bool, restore_bpm: bool) -> Self {
         Python::initialize();
         Python::attach(|py| {
             let modules = py
@@ -256,17 +260,15 @@ impl Fixture {
                 .map(|lease| material_paths::ordinary_windows_path(&lease.original_path))
                 .collect();
             let constructor = module.getattr("OutputProbe").unwrap();
-            let probe = if flat {
-                constructor.call1((engine.bind(py), root.to_string_lossy().as_ref()))
-            } else {
-                constructor.call1((
+            let probe = constructor
+                .call1((
                     engine.bind(py),
                     root.to_string_lossy().as_ref(),
-                    source_paths,
+                    (!flat).then_some(source_paths),
+                    if restore_bpm { "saved-bpm" } else { "standard" },
                 ))
-            }
-            .unwrap()
-            .unbind();
+                .unwrap()
+                .unbind();
             Self {
                 engine: Some(engine),
                 probe: Some(probe),
@@ -562,6 +564,77 @@ fn actual_six_flat_saved_project_startup() {
         .unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+#[ignore = "fresh-process saved BPM Lock and six PADs at 48 kHz/192, software ASIO"]
+fn actual_saved_bpm_lock_and_six_pads_48k_192_frames() {
+    let root = PathBuf::from(
+        std::env::var_os("FLITZI_AUDIO_OUTPUT_PROFILE_ROOT").expect("owned root required"),
+    );
+    assert!(root.is_absolute() && !root.exists());
+    fs::create_dir(&root).unwrap();
+    let _cwd = DirectoryGuard {
+        original: std::env::current_dir().unwrap(),
+        readers_ended: Arc::new(AtomicBool::new(false)),
+    };
+    std::env::set_current_dir(&root).unwrap();
+    let factory = Factory::new().unwrap();
+    let mut fixture = Fixture::new_profile(&root, factory.clone(), false, true);
+    fixture.ready();
+    assert!(fixture.sources().iter().all(|source| source.rate == 48_000));
+    fixture.seed_leases.clear();
+    fixture.settle("restored-bpm-lock", |f, _| f.predicate("_bpm_restored"));
+    fixture.call("_change_saved_bpm_speed");
+    fixture.settle("own-speed-ack", |f, _| {
+        f.predicate("_saved_bpm_speed_applied")
+    });
+    Python::attach(|py| {
+        fixture.probe().call_method1(py, "start", ("wet",)).unwrap();
+    });
+    let six_active = |_: &Fixture, row: Option<&TickObservation>| {
+        row.is_some_and(|row| {
+            row.callback.frames == 192
+                && row.callback.guards_intact == 1
+                && row
+                    .pads
+                    .iter()
+                    .all(|pad| pad.active && pad.key_lock && pad.post_dsp_peak > 0.0)
+                && (row.pads[0].stem_mode, row.pads[0].stem_mask) == (1, 5)
+                && row.callback.left_peak > 0.0
+                && row.callback.right_peak > 0.0
+        })
+    };
+    fixture.settle("six-pads-with-saved-stems", six_active);
+    let stopped = |f: &Fixture, row: Option<&TickObservation>| {
+        f.predicate("stopped") && row.is_some_and(|row| row.pads.iter().all(|pad| !pad.active))
+    };
+    fixture.call("stop");
+    fixture.settle("global-stop", stopped);
+    fixture.call("_restart_group");
+    fixture.settle("global-start", six_active);
+    for _ in 0..32 {
+        fixture.call("poll");
+        let row = fixture.tick().unwrap();
+        assert!(six_active(&fixture, Some(&row)));
+        assert!(row.pads.iter().all(|pad| !pad.wet_failed));
+        assert_eq!(row.native.adapter_shortfall_channel_frames, 0);
+    }
+    assert!(fixture.predicate("_saved_bpm_speed_applied"));
+    fixture.call("stop");
+    fixture.settle("final-global-stop", stopped);
+    fixture.call("_toggle_bpm_lock");
+    fixture.settle("bpm-off", |f, _| f.predicate("_bpm_off"));
+    fixture.call("_toggle_bpm_lock");
+    fixture.settle("bpm-on-selected-pad", |f, _| {
+        f.predicate("_new_bpm_reference")
+    });
+    fixture.settle("output-close", |f, _| f.predicate("close"));
+    fixture.closed.set(true);
+    fixture.release_owners().unwrap();
+    let device = factory.info().unwrap();
+    assert_eq!(device.active, 0);
+    assert_eq!(device.created, device.released);
 }
 
 fn fresh_sources(before: &[SourceImage; 6], after: &[SourceImage; 6], rate: u32) {

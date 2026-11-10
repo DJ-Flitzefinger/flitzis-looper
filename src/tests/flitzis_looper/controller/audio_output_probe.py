@@ -12,9 +12,14 @@ from unittest.mock import patch
 from flitzis_looper.audio_output_options import AudioOutputOptions
 from flitzis_looper.controller import app as app_module
 from flitzis_looper.controller.audio_output_restore import require_frontend_idle
-from flitzis_looper.controller.stem_cache import cache_dir_for_sample_id, expected_stem_files
+from flitzis_looper.controller.stem_cache import (
+    cache_dir_for_sample_id,
+    expected_stem_files,
+    source_version_for_sample_path,
+)
 from flitzis_looper.material_migration_model import MigrationArtifactEvidence
-from flitzis_looper.models import ProjectState, StemCacheEntry
+from flitzis_looper.models import BpmLockReference, PadContentIdentity, ProjectState, StemCacheEntry
+from flitzis_looper.project_materials import original_asset
 from flitzis_looper.stem_intent import PadStemIntent
 from flitzis_looper_audio import AudioEngine
 
@@ -60,22 +65,27 @@ class OutputProbe:
     """Only the Engine constructor binding is replaced; all operations remain real."""
 
     def __init__(
-        self, engine: AudioEngine, root: str, source_paths: list[str] | None = None
+        self,
+        engine: AudioEngine,
+        root: str,
+        source_paths: list[str] | None = None,
+        profile: str = "standard",
     ) -> None:
         self.root = Path(root)
         self._flat_startup = source_paths is None
+        restore_bpm = profile == "saved-bpm"
         project = ProjectState(
             audio_output=AudioOutputOptions(
                 backend="asio",
                 device_id="private-asio-fixture",
                 sample_rate_hz=48_000,
-                buffer_frames=96,
+                buffer_frames=192 if restore_bpm else 96,
                 left_channel=2,
                 right_channel=5,
             ),
             input_mapping_enabled=False,
             key_lock=True,
-            speed=1.1,
+            speed=1.0 if restore_bpm else 1.1,
             multi_loop=True,
             trigger_quantization_enabled=False,
         )
@@ -93,11 +103,13 @@ class OutputProbe:
         for pad, reference in enumerate(source_paths):
             path = Path(reference)
             project.sample_paths[pad] = path.relative_to(self.root).as_posix()
-            project.manual_bpm[pad] = 120.0
+            project.manual_bpm[pad] = 112.0 if restore_bpm and pad else 120.0
             project.pad_loop_start_s[pad] = 0.25
             project.pad_loop_end_s[pad] = 2.75
             project.pad_loop_auto[pad] = False
             project.pad_grid_offset_samples[pad] = 7 + pad
+        if restore_bpm:
+            self._save_bpm_profile(project)
         self.original_hashes = {
             Path(reference).relative_to(self.root).as_posix(): _sha(Path(reference))
             for reference in source_paths
@@ -112,6 +124,86 @@ class OutputProbe:
         self.owner_identity = id(engine)
         self.legacy_hashes: dict[str, str] = {}
         self.legacy_selection: dict[str, object] | None = None
+
+    def _save_bpm_profile(self, project: ProjectState) -> None:
+        """Start from saved settings, existing samples, and an unrelated selected PAD."""
+        original = "1" * 32
+        project.bpm_lock = True
+        project.preload_stem_loops_on_startup = True
+        project.bpm_lock_reference = BpmLockReference(pad_id=0, content_instance_id=original)
+        project.selected_pad = PADS
+        source = project.sample_paths[0]
+        assert source is not None
+        project.pad_content[0] = PadContentIdentity(
+            instance_id=original, material_id=original_asset(source).material_id
+        )
+        version = source_version_for_sample_path(source)
+        assert version is not None
+        cache = cache_dir_for_sample_id(0, source)
+        path = self.root / cache
+        path.mkdir(parents=True, exist_ok=True)
+        assert not any(path.iterdir())
+        for name in ("vocals", "melody", "bass", "drums", "instrumental"):
+            _wave(path / f"{name}.wav", 0, 0.75 if name == "instrumental" else 0.25)
+        (path / ".complete.json").write_text(
+            json.dumps({
+                "schema": "stem-set-sha256-v1",
+                "source_version": version,
+                "stems": {file.stem: _sha(file) for file in path.glob("*.wav")},
+            }),
+            encoding="utf-8",
+        )
+        project.stem_cache[0] = StemCacheEntry(
+            source_version=version, cache_dir=cache, stems=expected_stem_files(cache)
+        )
+        project.pad_stem_mix_mode[0] = "all_stems"
+        project.pad_stem_intent[0] = PadStemIntent(
+            enabled_mask=5, last_custom_mask=5, display_mode="custom"
+        )
+
+    def _bpm_restored(self) -> bool:
+        status = self.app.transport.global_params._bpm_lock_application_status()
+        return (
+            status.effective is True
+            and not status.pending
+            and self.app.session.bpm_lock_anchor_pad_id == 0
+        )
+
+    def _change_saved_bpm_speed(self) -> None:
+        assert self.app.project.selected_pad == PADS
+        self.app.select_pad(1)
+        parameters = self.app.transport.global_params
+        parameters.set_multi_loop(enabled=False)
+        parameters.set_multi_loop(enabled=True)
+        parameters.set_speed(1.05)
+
+    def _saved_bpm_speed_applied(self) -> bool:
+        status = self.app.transport.global_params.global_rate_status()
+        return (
+            self._bpm_restored()
+            and status.state == "applied"
+            and status.effective_speed == 1.05
+            and status.effective_master_period == 0.5 / 1.05
+        )
+
+    def _restart_group(self) -> None:
+        assert self.app.session.global_stop_restore_sample_ids == set(range(PADS))
+        self.app.transport.playback.start_or_restart_global_start_stop()
+
+    def _toggle_bpm_lock(self) -> None:
+        self.app.transport.global_params.set_bpm_lock(enabled=not self.app.project.bpm_lock)
+
+    def _bpm_off(self) -> bool:
+        status = self.app.transport.global_params._bpm_lock_application_status()
+        return status.effective is False and not status.pending
+
+    def _new_bpm_reference(self) -> bool:
+        status = self.app.transport.global_params._bpm_lock_application_status()
+        return (
+            status.effective is True
+            and not status.pending
+            and self.app.session.bpm_lock_anchor_pad_id == 1
+        )
 
     def poll(self) -> None:
         """Use the ordinary UI/control event paths, with no fabricated source receipt."""
@@ -167,6 +259,7 @@ class OutputProbe:
             "captured_starts": sorted(self.app.transport.residency._captured_starts),
             "load_errors": self.app.session.sample_load_errors,
             "stem_errors": self.app.session.stem_generation_errors,
+            "bpm": self.app.transport.global_params._bpm_lock_application_status(),
             "loading": sorted(self.app.session.loading_sample_ids),
             "paths": self.app.project.sample_paths[:PADS],
             "requests": dict(self.app.loader._load_request_ids),
