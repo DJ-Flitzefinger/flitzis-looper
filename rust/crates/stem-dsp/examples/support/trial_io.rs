@@ -5,13 +5,13 @@ use std::{
     fmt,
     fs::File,
     io::{self, BufReader, BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub const BUFFER_BYTES: usize = 8192;
 pub type Result<T> = std::result::Result<T, Failure>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Failure {
     Message(&'static str),
     Core(Error),
@@ -302,27 +302,85 @@ impl<W: Write> Drop for ExplicitBuffer<W> {
 pub struct Output {
     pub writer: ExplicitBuffer<File>,
     phase: &'static str,
+    // Only create_new output paths are owned. Never infer cleanup from a name.
+    path: Option<PathBuf>,
 }
 
 impl Output {
     fn prepare(directory: &Path, name: &str, phase: &'static str) -> Result<Self> {
-        let file = File::create_new(directory.join(name)).at(phase)?;
+        let path = directory.join(name);
+        let file = File::create_new(&path).at(phase)?;
         Ok(Self {
             writer: ExplicitBuffer::new(file),
             phase,
+            path: Some(path),
         })
     }
 
     pub fn write_values(&mut self, values: &[f32]) -> Result<()> {
-        for value in values {
-            self.writer.write_all(&value.to_le_bytes()).at(self.phase)?;
+        self.write_values_checked(values, &|| Ok(()))
+    }
+
+    pub fn write_values_checked(
+        &mut self,
+        values: &[f32],
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        let mut bytes = [0u8; BUFFER_BYTES];
+        for block in values.chunks(BUFFER_BYTES / 4) {
+            check()?;
+            for (raw, value) in bytes.chunks_exact_mut(4).zip(block) {
+                raw.copy_from_slice(&value.to_le_bytes());
+            }
+            self.writer
+                .write_all(&bytes[..block.len() * 4])
+                .at(self.phase)?;
         }
-        Ok(())
+        check()
     }
 
     pub fn complete(self, successful: bool) -> Result<()> {
-        complete_buffer(self.writer, successful)
+        let mut result = complete_buffer(self.writer, successful);
+        if !successful && let Some(path) = self.path {
+            // All numerical borrows and the sole checked close precede deletion.
+            // No recursive deletion or destructor retry, even on close failure.
+            retain_first(
+                &mut result,
+                std::fs::remove_file(path).at("output.invalidate"),
+            );
+        }
+        result
     }
+}
+
+/// Primary outcome and cleanup qualification are independent. In particular a
+/// Cancelled primary cannot conceal a later close/invalidation failure from ACK.
+pub fn complete<T>(
+    mut result: Result<T>,
+    inputs: Inputs,
+    mut outputs: Option<Outputs>,
+    cleanup: &mut Result<()>,
+    final_check: &dyn Fn() -> Result<()>,
+) -> Result<T> {
+    // Move path custody, without allocating, beyond the last flush/sync/close.
+    let paths = outputs.as_mut().map(Outputs::take_paths);
+    let successful = result.is_ok();
+    inputs.complete(cleanup);
+    if let Some(outputs) = outputs {
+        outputs.complete(successful, cleanup);
+    }
+    retain_first(&mut result, *cleanup);
+    if result.is_ok() {
+        retain_first(&mut result, final_check());
+    }
+    if result.is_err()
+        && let Some(paths) = paths
+    {
+        for path in paths.into_iter().flatten() {
+            retain_first(cleanup, std::fs::remove_file(path).at("output.invalidate"));
+        }
+    }
+    result
 }
 
 pub struct ChunkOutputs {
@@ -333,11 +391,24 @@ pub struct ChunkOutputs {
 }
 
 pub enum Outputs {
-    Chunk(ChunkOutputs),
+    // Prepared before seal together with handles, paths and buffered storage.
+    Chunk(Box<ChunkOutputs>),
     Track(Output),
 }
 
 impl Outputs {
+    fn take_paths(&mut self) -> [Option<PathBuf>; 4] {
+        match self {
+            Self::Chunk(output) => [
+                output.features.path.take(),
+                output.masks.path.take(),
+                output.prediction.path.take(),
+                output.original_masks.as_mut().and_then(|o| o.path.take()),
+            ],
+            Self::Track(output) => [output.path.take(), None, None, None],
+        }
+    }
+
     /// Only a fresh private directory is accepted. A preparation or later error
     /// invalidates ALL its empty/partial files; no cleanup or success is implied.
     pub fn prepare(directory: &Path, chunk: bool, original: bool) -> Result<Self> {
@@ -372,12 +443,12 @@ impl Outputs {
             return failed;
         }
         if chunk {
-            Ok(Self::Chunk(ChunkOutputs {
+            Ok(Self::Chunk(Box::new(ChunkOutputs {
                 features: staged[0].take().unwrap(),
                 masks: staged[1].take().unwrap(),
                 prediction: staged[2].take().unwrap(),
                 original_masks: staged[3].take(),
-            }))
+            })))
         } else {
             Ok(Self::Track(staged[0].take().unwrap()))
         }

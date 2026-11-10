@@ -959,6 +959,11 @@ every original CUDA/fullhost/quality/platform/distribution gate and negative UNK
 
 ## 66. Remaining native parity before cutover
 
+- [x] Connect standalone BS diagnostic cancellation through numerical and block
+      I/O owners, qualify ACK independently of cleanup failures, and invalidate
+      only newly created private output files. Keep real learned/CUDA, WHOLE
+      allowance and ORIGINAL admission requirements open.
+
 - [x] Consume retained diagnostic input/output files after their last readers and
       before positive status; preserve first failure, all-owner completion and
       no destructor write retry, without claiming whole Native SUCCESS.

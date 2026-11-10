@@ -1014,6 +1014,16 @@ import. Run it as `python -B -m scripts.bs_learned_trial_reference` from an
 authenticated checkout. The private `bs_learned` executable can compare original-feature masks
 and composed spectral/model/PCM; it never publishes application artifacts. See
 the [STEP27 design](../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network).
+The standalone CLI accepts an invocation-specific `FLITZIS_STEM_CANCEL_PATH`.
+Creating that marker requests cooperative cancellation through preparation,
+numerical callbacks and block I/O. After checked file cleanup and private-output
+deletion it emits one `FLITZIS_STEM_CANCELLED_V1:{"stage":"..."}` line and exits130.
+Cleanup/terminal failure suppresses that qualified outcome. The empty private
+directory remains; no application output is published. Blocking native calls
+still require supervisor escalation. ACK never replaces actual tree and reader
+retirement. `--cancellation-control NEW_PRIVATE_DIRECTORY` exercises this protocol
+without weights or a neural network; its Windows regression is opt-in through
+`FLITZIS_BS_CANCELLATION_EXE`. Production Python inference recognition is unchanged.
 STEP28 retains ALL native parity requirements and FINAL29 the ENTIRE former
 FINAL28 regression scope, including every earlier unproved gate. No productive
 Torch dependency or installer/recovery path is removed by this trial.

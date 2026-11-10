@@ -545,6 +545,7 @@ fn actual_output_failure_still_completes_later_file_owners() {
         features: Output {
             writer: ExplicitBuffer::new(File::open(&read_only).unwrap()),
             phase: "output.features",
+            path: None,
         },
         masks: Output::prepare(&directory, "masks", "output.masks").unwrap(),
         prediction: Output::prepare(&directory, "pcm", "output.pcm").unwrap(),
@@ -561,7 +562,7 @@ fn actual_output_failure_still_completes_later_file_owners() {
         output.write_values(&[0.25]).unwrap();
     }
     let mut result = Ok(());
-    Outputs::Chunk(outputs).complete(true, &mut result);
+    Outputs::Chunk(Box::new(outputs)).complete(true, &mut result);
     assert!(matches!(
         result,
         Err(Failure::Io {
@@ -576,4 +577,95 @@ fn actual_output_failure_still_completes_later_file_owners() {
             0.25f32.to_le_bytes()
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn cancelled_work_closes_all_readers_and_removes_only_created_outputs() {
+    let directory = fixture_directory().join("private");
+    let mut outputs = Outputs::prepare(&directory, true, true).unwrap();
+    let Outputs::Chunk(output) = &mut outputs else {
+        unreachable!()
+    };
+    output.features.write_values(&[0.25; 4096]).unwrap();
+    output.features.writer.flush().unwrap();
+    let mut inputs = Inputs::default();
+    inputs
+        .prepare(
+            &directory.join("features.f32"),
+            16384,
+            &directory.join("masks.f32"),
+            0,
+            Some((&directory.join("output.f32"), 0)),
+        )
+        .unwrap();
+    let handles: Vec<_> = [&inputs.source, &inputs.weights, &inputs.original]
+        .into_iter()
+        .map(|reader| {
+            std::os::windows::io::AsRawHandle::as_raw_handle(reader.as_ref().unwrap().get_ref())
+        })
+        .collect();
+    let mut cleanup = Ok(());
+    let result: Result<()> = complete(
+        Err(Error::Cancelled.into()),
+        inputs,
+        Some(outputs),
+        &mut cleanup,
+        &|| Ok(()),
+    );
+    assert!(matches!(result, Err(Failure::Core(Error::Cancelled))));
+    cleanup.unwrap();
+    for handle in handles {
+        observe_closed_control(handle).unwrap();
+    }
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    std::fs::remove_dir(&directory).unwrap();
+    std::fs::remove_dir(directory.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn cancellation_primary_does_not_qualify_a_failed_cleanup() {
+    let mut cleanup = Err("unresolved output close".into());
+    let result: Result<()> = complete(
+        Err(Error::Cancelled.into()),
+        Inputs::default(),
+        None,
+        &mut cleanup,
+        &|| Ok(()),
+    );
+    assert!(matches!(result, Err(Failure::Core(Error::Cancelled))));
+    assert!(cleanup.is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn cancellation_after_successful_file_completion_still_invalidates_every_output() {
+    let directory = fixture_directory().join("late");
+    let mut outputs = Outputs::prepare(&directory, true, false).unwrap();
+    let Outputs::Chunk(output) = &mut outputs else {
+        unreachable!()
+    };
+    output.features.write_values(&[0.25]).unwrap();
+    output.masks.write_values(&[0.5]).unwrap();
+    output.prediction.write_values(&[1.0]).unwrap();
+    let mut cleanup = Ok(());
+    let result = complete(
+        Ok(()),
+        Inputs::default(),
+        Some(outputs),
+        &mut cleanup,
+        &|| {
+            // All intended flush/sync/close calls ended before this decision.
+            assert_eq!(
+                std::fs::read(directory.join("output.f32")).unwrap(),
+                1f32.to_le_bytes()
+            );
+            Err(Error::Cancelled.into())
+        },
+    );
+    assert!(matches!(result, Err(Failure::Core(Error::Cancelled))));
+    cleanup.unwrap();
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    std::fs::remove_dir(&directory).unwrap();
+    std::fs::remove_dir(directory.parent().unwrap()).unwrap();
 }

@@ -1542,6 +1542,39 @@ chain review this scoped correction; all readers must end before publication.
 
 ## Retained diagnostic file completion
 
+The standalone `bs_learned` invocation captures its caller's explicit
+`FLITZIS_STEM_CANCEL_PATH` once. Its plan/preparation, model decoder, spectral,
+learned masks, reconstruction and track callbacks now observe that exact marker.
+Core polling is latched and time-throttled to 20 ms; named phase boundaries force
+a fresh check. Source/original-feature reads and interleaved track/output writes
+use bounded blocks with checkpoints, retaining f32 bytes and lane ordering.
+An in-flight native FFT, SGEMM, file or close call has no bounded interruption
+claim. There is no watcher, new scheduler or productive command-whitelist change.
+
+Failed work abandons buffered output and, after checked close, attempts deletion
+of each exact path created with `create_new`. An empty private directory remains.
+Partial preparation visits every created file too. Cleanup status is independent
+of the original error; any close or deletion failure suppresses cancellation ACK
+and exit130, while preserving and reporting the primary cancellation. Successful
+work retains the existing all-sink flush/sync/close ordering. Paths and the boxed
+chunk-output descriptor are prepared before allocator seal.
+Exact path custody survives consuming file completion. A forced cancellation
+check after all closes and before positive status catches requests arriving
+during flush/sync/close; such a request invalidates even the completed private
+files. An earlier work or completion error keeps precedence over late cancellation.
+
+Only a cancelled attempt with successful consuming cleanup and checked borrowed
+stdout/stderr flushes emits `FLITZIS_STEM_CANCELLED_V1:{"stage":"..."}` on stdout
+and exits130. A failed ACK write/flush produces failure. Runtime standard handles
+remain runtime-owned; ACK/130 alone proves neither process-tree nor pipe-reader
+END. The opt-in nonneural `--cancellation-control NEW_PRIVATE_DIRECTORY` uses the
+same marker, spectral callbacks, retained inputs, private outputs and completion
+path. Its external regression uses the real owned-command supervisor, own abort
+hook, actual Job retirement and both joined/closed pipe readers. This is bounded
+protocol/lifecycle verification, not real learned or CUDA cancellation acceptance.
+Finite WHOLE Native allowance, fresh sufficient COMPLETE ORIGINAL admission and
+all original numerical/provider/platform/distribution gates remain open.
+
 The private learned CLI consumes its prepared input and output owners after all
 synchronous numerical readers end and before its positive chunk/track report.
 The original work-success flag is independent of the first completion error:

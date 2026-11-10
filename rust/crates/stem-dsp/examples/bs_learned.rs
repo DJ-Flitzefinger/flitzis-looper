@@ -1,4 +1,6 @@
 //! Exclusive private diagnostic output, never an application publication receipt.
+#[path = "support/cancellation.rs"]
+mod cancellation;
 #[path = "support/trial_io.rs"]
 mod trial_io;
 #[path = "support/workspace.rs"]
@@ -7,6 +9,7 @@ mod workspace;
 #[global_allocator]
 static WORKSPACE: workspace::WorkspaceAllocator = workspace::WorkspaceAllocator::new();
 
+use cancellation::Cancellation;
 use flitzis_stem_dsp::{
     Error, Geometry, RATE, SpectralPlan, SpectralWorkspace, Spectrum,
     learned::{Model, activation_bytes, weight_bytes},
@@ -55,8 +58,11 @@ fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>> {
     Ok(values)
 }
 
-fn execute(status: &mut impl Write) -> Result<()> {
+fn execute(status: &mut impl Write, cancel: &Cancellation, cleanup: &mut Result<()>) -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 2 && args[0] == "--cancellation-control" {
+        return cancellation_control(Path::new(&args[1]), status, cancel, cleanup);
+    }
     if args.len() == 1 && args[0] == "--workspace-control" {
         return workspace_control(status);
     }
@@ -120,6 +126,7 @@ fn execute(status: &mut impl Write) -> Result<()> {
     let mut inputs = Inputs::default();
     let mut outputs = None;
     let mut result = (|| {
+        cancel.checkpoint("input.prepare")?;
         inputs.prepare(
             Path::new(&args[3]),
             source_bytes as u64,
@@ -141,6 +148,7 @@ fn execute(status: &mut impl Write) -> Result<()> {
         // Paths, exclusive handles and buffered storage are prepared BEFORE seal.
         // A later failure invalidates ALL new empty/partial private files. Nothing
         // in the sealed phase opens/reopens an output or formats platform error text.
+        cancel.checkpoint("output.prepare")?;
         outputs = Some(Outputs::prepare(
             Path::new(&args[5]),
             mode == "chunk",
@@ -148,6 +156,7 @@ fn execute(status: &mut impl Write) -> Result<()> {
         )?);
         // Retain selected plans/windows before seal; their bootstrap/native backing
         // still needs a complete process allowance. Working vectors use the arena.
+        cancel.checkpoint("spectral.plan")?;
         let spectral_plan = SpectralPlan::new(
             if mode == "chunk" {
                 frames
@@ -155,28 +164,48 @@ fn execute(status: &mut impl Write) -> Result<()> {
                 flitzis_stem_dsp::track::CHUNK
             },
             RATE,
-            &|| false,
+            &|| cancel.cancelled(),
         )?;
+        cancel.checkpoint("workspace.seal")?;
         WORKSPACE.seal(capacity)?;
-        let mut spectral_workspace = SpectralWorkspace::from_plan(spectral_plan, &|| false)?;
-        let model = Model::load(inputs.weights.as_mut().unwrap(), &expected, &|| false)?;
+        cancel.checkpoint("spectral.prepare")?;
+        let mut spectral_workspace =
+            SpectralWorkspace::from_plan(spectral_plan, &|| cancel.cancelled())?;
+        cancel.checkpoint("model.load")?;
+        let model = Model::load(inputs.weights.as_mut().unwrap(), &expected, &|| {
+            cancel.cancelled()
+        })?;
         let source = inputs.source.as_mut().unwrap();
         let outputs = outputs.as_mut().unwrap();
         if let Outputs::Chunk(output) = outputs {
             let mut pcm = reserved(frames * 2, "learned-trial.pcm")?;
-            for _ in 0..frames * 2 {
-                let mut value = [0; 4];
-                source.read_exact(&mut value).at("source.read")?;
-                pcm.push(f32::from_le_bytes(value));
-            }
-            let spectral = spectral_workspace.analyze(&pcm, RATE, &|| false)?;
+            cancel.checkpoint("source.read")?;
+            read_values(source, frames * 2, "source.read", cancel, |_, value| {
+                pcm.push(value)
+            })?;
+            cancel.checkpoint("spectral.analyze")?;
+            let spectral = spectral_workspace.analyze(&pcm, RATE, &|| cancel.cancelled())?;
             drop(pcm);
             let geometry = spectral.geometry();
-            let masks = model.masks(spectral.features(), geometry.steps(), &|| false)?;
-            let prediction = spectral_workspace.reconstruct(&spectral, &masks, &|| false)?;
-            output.features.write_values(spectral.features())?;
-            output.masks.write_values(&masks)?;
-            output.prediction.write_values(&prediction)?;
+            cancel.checkpoint("model.masks")?;
+            let masks = model.masks(spectral.features(), geometry.steps(), &|| {
+                cancel.cancelled()
+            })?;
+            cancel.checkpoint("spectral.reconstruct")?;
+            let prediction =
+                spectral_workspace.reconstruct(&spectral, &masks, &|| cancel.cancelled())?;
+            cancel.checkpoint("output.features")?;
+            output
+                .features
+                .write_values_checked(spectral.features(), &|| cancel.check())?;
+            cancel.checkpoint("output.masks")?;
+            output
+                .masks
+                .write_values_checked(&masks, &|| cancel.check())?;
+            cancel.checkpoint("output.pcm")?;
+            output
+                .prediction
+                .write_values_checked(&prediction, &|| cancel.check())?;
             // These private diagnostic buffers have no readers after the writes.
             // Do not retain the whole first forward during the independent oracle-
             // feature forward. A later failure still invalidates ALL private files.
@@ -186,17 +215,23 @@ fn execute(status: &mut impl Write) -> Result<()> {
             if let Some(reader) = &mut inputs.original {
                 let mut features =
                     reserved(geometry.feature_len(), "learned-trial.original-features")?;
-                for _ in 0..geometry.feature_len() {
-                    let mut raw = [0; 4];
-                    reader.read_exact(&mut raw).at("original-features.read")?;
-                    features.push(f32::from_le_bytes(raw));
-                }
-                let original_masks = model.masks(&features, geometry.steps(), &|| false)?;
+                cancel.checkpoint("original-features.read")?;
+                read_values(
+                    reader,
+                    geometry.feature_len(),
+                    "original-features.read",
+                    cancel,
+                    |_, value| features.push(value),
+                )?;
+                cancel.checkpoint("original-features.masks")?;
+                let original_masks =
+                    model.masks(&features, geometry.steps(), &|| cancel.cancelled())?;
+                cancel.checkpoint("output.original-masks")?;
                 output
                     .original_masks
                     .as_mut()
                     .ok_or("missing prepared original-feature output")?
-                    .write_values(&original_masks)?;
+                    .write_values_checked(&original_masks, &|| cancel.check())?;
             }
             Ok(TrialReport::Chunk {
                 frames,
@@ -210,49 +245,65 @@ fn execute(status: &mut impl Write) -> Result<()> {
             let result = process_track(
                 plan,
                 |start, count, pcm| {
+                    cancel
+                        .checkpoint("track.source")
+                        .map_err(|_| Error::Cancelled)?;
                     core_io(
                         source.seek(SeekFrom::Start((start * 8) as u64)),
                         "source.seek",
                         &mut source_error,
                         Error::Source,
                     )?;
-                    for i in 0..count {
-                        for c in 0..2 {
-                            let mut raw = [0; 4];
-                            core_io(
-                                source.read_exact(&mut raw),
-                                "source.read",
-                                &mut source_error,
-                                Error::Source,
-                            )?;
-                            pcm[c * count + i] = f32::from_le_bytes(raw);
+                    if let Err(error) =
+                        read_values(source, count * 2, "source.read", cancel, |index, value| {
+                            pcm[(index % 2) * count + index / 2] = value
+                        })
+                    {
+                        if matches!(error, trial_io::Failure::Core(Error::Cancelled)) {
+                            return Err(Error::Cancelled);
                         }
+                        source_error.get_or_insert(error);
+                        return Err(Error::Source);
                     }
                     Ok(count)
                 },
                 |input, batch| {
+                    cancel
+                        .checkpoint("track.predict")
+                        .map_err(|_| Error::Cancelled)?;
                     model.track_batch_with_workspace(input, batch, &mut spectral_workspace, &|| {
-                        false
+                        cancel.cancelled()
                     })
                 },
                 |start, count, pcm| {
+                    cancel
+                        .checkpoint("track.output")
+                        .map_err(|_| Error::Cancelled)?;
                     if start != written {
                         return Err(Error::Output);
                     }
-                    for i in 0..count {
-                        for lane in 0..8 {
-                            core_io(
-                                sink.writer.write_all(&pcm[lane * count + i].to_le_bytes()),
-                                "output.pcm.write",
-                                &mut sink_error,
-                                Error::Output,
-                            )?;
+                    let mut bytes = [0u8; trial_io::BUFFER_BYTES];
+                    for base in (0..count).step_by(bytes.len() / 32) {
+                        cancel.check().map_err(|_| Error::Cancelled)?;
+                        let frames = (count - base).min(bytes.len() / 32);
+                        for i in 0..frames {
+                            for lane in 0..8 {
+                                let offset = (i * 8 + lane) * 4;
+                                bytes[offset..offset + 4]
+                                    .copy_from_slice(&pcm[lane * count + base + i].to_le_bytes());
+                            }
                         }
+                        core_io(
+                            sink.writer.write_all(&bytes[..frames * 32]),
+                            "output.pcm.write",
+                            &mut sink_error,
+                            Error::Output,
+                        )?;
                     }
                     written += count;
                     Ok(())
                 },
-                &|| false,
+                &|| cancel.cancelled(),
             );
             if let Err(error) = result {
                 return Err(source_error.or(sink_error).unwrap_or_else(|| error.into()));
@@ -268,12 +319,93 @@ fn execute(status: &mut impl Write) -> Result<()> {
             unreachable!()
         }
     })();
-    let successful = result.is_ok();
-    inputs.complete(&mut result);
-    if let Some(outputs) = outputs {
-        outputs.complete(successful, &mut result);
+    if result.is_ok() {
+        trial_io::retain_first(&mut result, cancel.checkpoint("output.complete"));
     }
+    let result = trial_io::complete(result, inputs, outputs, cleanup, &|| {
+        cancel.checkpoint("output.closed")
+    });
     result?.write(status)
+}
+
+/// Decode bounded blocks, retaining original f32 bits and caller-owned layout.
+fn read_values(
+    reader: &mut impl Read,
+    count: usize,
+    phase: &'static str,
+    cancel: &Cancellation,
+    mut accept: impl FnMut(usize, f32),
+) -> Result<()> {
+    let mut bytes = [0u8; trial_io::BUFFER_BYTES];
+    for start in (0..count).step_by(bytes.len() / 4) {
+        cancel.check()?;
+        let count = (count - start).min(bytes.len() / 4);
+        reader.read_exact(&mut bytes[..count * 4]).at(phase)?;
+        for (i, raw) in bytes[..count * 4].chunks_exact(4).enumerate() {
+            accept(start + i, f32::from_le_bytes(raw.try_into().unwrap()));
+        }
+    }
+    cancel.check()
+}
+
+fn cancellation_control(
+    directory: &Path,
+    status: &mut impl Write,
+    cancel: &Cancellation,
+    cleanup: &mut Result<()>,
+) -> Result<()> {
+    if !cancel.bound() {
+        return Err("cancellation control requires an own marker channel".into());
+    }
+    let mut inputs = Inputs::default();
+    let mut outputs = None;
+    let result = (|| {
+        cancel.checkpoint("control.prepare")?;
+        outputs = Some(Outputs::prepare(directory, true, true)?);
+        let Some(Outputs::Chunk(output)) = &mut outputs else {
+            unreachable!()
+        };
+        output.features.write_values(&[0.25; 8198])?;
+        output.features.writer.flush().at("control.flush")?;
+        inputs.prepare(
+            &directory.join("features.f32"),
+            8198 * 4,
+            &directory.join("masks.f32"),
+            0,
+            Some((&directory.join("output.f32"), 0)),
+        )?;
+        let plan = SpectralPlan::new(4099, RATE, &|| cancel.cancelled())?;
+        WORKSPACE.seal(4 << 20)?;
+        let mut spectral = SpectralWorkspace::from_plan(plan, &|| cancel.cancelled())?;
+        let mut pcm = reserved(8198, "control.pcm")?;
+        read_values(
+            inputs.source.as_mut().unwrap(),
+            8198,
+            "control.read",
+            cancel,
+            |_, value| pcm.push(value),
+        )?;
+        cancel.checkpoint("control.spectral")?;
+        let first = spectral.analyze(&pcm, RATE, &|| cancel.cancelled())?;
+        output
+            .masks
+            .write_values_checked(first.features(), &|| cancel.check())?;
+        drop(first);
+        writeln!(
+            status,
+            "BS cancellation control ready: nonneural retained-inputs=3 private-outputs=4"
+        )
+        .at("status.write")?;
+        status.flush().at("status.flush")?;
+        loop {
+            let _spectrum = spectral.analyze(&pcm, RATE, &|| cancel.cancelled())?;
+            // Keep the tiny control bounded in CPU and file growth while waiting.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    })();
+    trial_io::complete(result, inputs, outputs, cleanup, &|| {
+        cancel.checkpoint("output.closed")
+    })
 }
 
 fn workspace_control(status: &mut impl Write) -> Result<()> {
@@ -477,14 +609,62 @@ fn main() -> ExitCode {
     let stderr = std::io::stderr();
     let mut status = stdout.lock();
     let mut errors = stderr.lock();
-    let result = execute(&mut status);
-    let result = trial_io::report_terminal(result, &mut status, &mut errors);
+    let cancel = Cancellation::from_environment();
+    let mut cleanup = Ok(());
+    let result = execute(&mut status, &cancel, &mut cleanup);
+    let code = cancellation::report(result, cleanup, &cancel, &mut status, &mut errors);
     // Release borrowed locks; runtime standard handles remain runtime-owned.
     drop(status);
     drop(errors);
-    if result.is_ok() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    code
+}
+
+#[cfg(test)]
+mod io_blocks {
+    use super::*;
+
+    #[test]
+    fn source_block_tail_preserves_stereo_lane_order_and_float_bits() {
+        let frames = 4099;
+        let values: Vec<_> = (0..frames * 2)
+            .map(|i| f32::from_bits(0x3f000000 + i as u32))
+            .collect();
+        let bytes: Vec<_> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let cancel = Cancellation::from_environment();
+        let mut lanes = vec![0.; values.len()];
+        read_values(
+            &mut bytes.as_slice(),
+            values.len(),
+            "test.read",
+            &cancel,
+            |index, value| lanes[(index % 2) * frames + index / 2] = value,
+        )
+        .unwrap();
+        for i in 0..frames {
+            for lane in 0..2 {
+                assert_eq!(
+                    lanes[lane * frames + i].to_bits(),
+                    values[i * 2 + lane].to_bits()
+                );
+            }
+        }
+        let error = read_values(
+            &mut &bytes[..bytes.len() - 1],
+            values.len(),
+            "test.short",
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            trial_io::Failure::Io {
+                phase: "test.short",
+                ..
+            }
+        ));
     }
 }
