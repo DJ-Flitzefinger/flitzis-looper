@@ -62,8 +62,46 @@ impl BeatModel {
         provider: Provider,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::load_completed(
+            graph,
+            expected_sha256,
+            profile,
+            provider,
+            cancelled,
+            &|_| {},
+            None,
+        )
+    }
+
+    pub fn load_on_owned(
+        graph: &[u8],
+        expected_sha256: &str,
+        profile: &Path,
+        provider: Provider,
+        context: &crate::trial_lifetime::Context,
+    ) -> Result<Self, String> {
+        Self::load_completed(
+            graph,
+            expected_sha256,
+            profile,
+            provider,
+            &|| context.cancelled(),
+            &|result| context.record(result),
+            Some(context),
+        )
+    }
+
+    fn load_completed(
+        graph: &[u8],
+        expected_sha256: &str,
+        profile: &Path,
+        provider: Provider,
+        cancelled: &dyn Fn() -> bool,
+        completion: &dyn Fn(Result<(), String>),
+        context: Option<&crate::trial_lifetime::Context>,
+    ) -> Result<Self, String> {
         checkpoint(cancelled)?;
-        validate_graph(graph, expected_sha256)?;
+        validate_graph_checked(graph, expected_sha256, cancelled)?;
         let providers = match provider {
             Provider::Cpu => vec![ep::CPU::default().build().error_on_failure()],
             #[cfg(feature = "native-inference-cuda")]
@@ -83,40 +121,81 @@ impl BeatModel {
                     .error_on_failure(),
             ],
         };
-        let session = Session::builder()
+        checkpoint(cancelled)?;
+        let mut builder = Session::builder()
             .map_err(|e| e.to_string())?
             .with_auto_device(AutoDevicePolicy::Default)
-            .and_then(|s| s.with_execution_providers(providers))
-            .and_then(|s| s.with_intra_threads(1))
-            .and_then(|s| s.with_inter_threads(1))
-            .and_then(|s| s.with_parallel_execution(false))
-            .and_then(|s| s.with_intra_op_spinning(false))
-            .and_then(|s| s.with_inter_op_spinning(false))
-            .and_then(|s| s.with_profiling(profile))
             .map_err(|e| e.to_string())?
-            .commit_from_memory(graph)
+            .with_execution_providers(providers)
+            .map_err(|e| e.to_string())?
+            .with_intra_threads(1)
+            .map_err(|e| e.to_string())?
+            .with_inter_threads(1)
+            .map_err(|e| e.to_string())?
+            .with_parallel_execution(false)
+            .map_err(|e| e.to_string())?
+            .with_intra_op_spinning(false)
+            .map_err(|e| e.to_string())?
+            .with_inter_op_spinning(false)
+            .map_err(|e| e.to_string())?
+            .with_profiling(profile)
             .map_err(|e| e.to_string())?;
         checkpoint(cancelled)?;
-        let inputs = session.inputs();
-        if inputs.len() != 1 || inputs[0].name() != "spectrogram" {
-            return Err("unexpected BeatThis input names".into());
+        // Keep the exact builder's native options alive through the helper join.
+        // Cloning the builder would create different options. Unknown load errors
+        // remain primary even when an own load-cancel request races them.
+        let mut session = if let Some(context) = context {
+            let canceler = builder.canceler();
+            crate::trial_lifetime::terminate_during(
+                context,
+                None,
+                || canceler.cancel().map_err(|e| e.to_string()),
+                || builder.commit_from_memory(graph).map_err(|e| e.to_string()),
+            )
+            .0?
+        } else {
+            builder
+                .commit_from_memory(graph)
+                .map_err(|e| e.to_string())?
+        };
+        let validation = (|| {
+            if let Some(context) = context {
+                context.cleanup()?;
+            }
+            checkpoint(cancelled)?;
+            let inputs = session.inputs();
+            if inputs.len() != 1 || inputs[0].name() != "spectrogram" {
+                return Err("unexpected BeatThis input names".into());
+            }
+            let fixed_frames = input_signature(inputs[0].dtype())?;
+            let outputs = session.outputs();
+            if outputs.len() != 2 {
+                return Err("expected exactly two BeatThis outputs".into());
+            }
+            for name in ["beat", "downbeat"] {
+                let output = outputs
+                    .iter()
+                    .find(|o| o.name() == name)
+                    .ok_or_else(|| format!("missing BeatThis {name} output"))?;
+                signature(output.dtype(), &[1, fixed_frames.map_or(-1, |n| n as i64)])?;
+            }
+            Ok(fixed_frames)
+        })();
+        match validation {
+            Ok(fixed_frames) => Ok(Self {
+                session,
+                fixed_frames,
+            }),
+            Err(primary) => {
+                let profile = session.end_profiling();
+                completion(
+                    profile
+                        .map(|_| ())
+                        .map_err(|e| format!("profile.finish: {e}")),
+                );
+                Err(primary)
+            }
         }
-        let fixed_frames = input_signature(inputs[0].dtype())?;
-        let outputs = session.outputs();
-        if outputs.len() != 2 {
-            return Err("expected exactly two BeatThis outputs".into());
-        }
-        for name in ["beat", "downbeat"] {
-            let output = outputs
-                .iter()
-                .find(|o| o.name() == name)
-                .ok_or_else(|| format!("missing BeatThis {name} output"))?;
-            signature(output.dtype(), &[1, fixed_frames.map_or(-1, |n| n as i64)])?;
-        }
-        Ok(Self {
-            session,
-            fixed_frames,
-        })
     }
 
     /// Execute one exact chunk. Cancellation surrounds synchronous ORT work;
@@ -141,42 +220,68 @@ impl BeatModel {
         options: &RunOptions,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Logits, String> {
-        checkpoint(cancelled)?;
-        let frames = spectrogram.len() / BINS;
-        if spectrogram.len() % BINS != 0
-            || !(14..=FRAMES).contains(&frames)
-            || self.fixed_frames.is_some_and(|n| n != frames)
-            || !spectrogram.iter().all(|x| x.is_finite())
-        {
-            return Err("expected finite supported BeatThis chunk by 128 spectrogram".into());
-        }
-        let input = TensorRef::from_array_view(([1, frames, BINS], spectrogram))
-            .map_err(|e| e.to_string())?;
-        let outputs = self
-            .session
-            .run_with_options(ort::inputs!["spectrogram" => input], options)
-            .map_err(|e| e.to_string())?;
-        checkpoint(cancelled)?;
-        let read = |name| -> Result<Vec<f32>, String> {
-            let output = outputs.get(name).ok_or_else(|| format!("missing {name}"))?;
-            let (shape, data) = output
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-            if shape.as_ref() != [1, frames as i64] || !data.iter().all(|x| x.is_finite()) {
-                return Err(format!("invalid {name} logits"));
+        self.run_with_options_observed(spectrogram, options, cancelled)
+            .0
+    }
+
+    /// Preserve native failure details and separately identify only ORT's exact
+    /// termination status. Unknown/new statuses remain ordinary native failures.
+    pub fn run_with_options_observed(
+        &mut self,
+        spectrogram: &[f32],
+        options: &RunOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> (Result<Logits, String>, bool) {
+        let terminated = std::cell::Cell::new(false);
+        let result = (|| {
+            checkpoint(cancelled)?;
+            let frames = spectrogram.len() / BINS;
+            if !spectrogram.len().is_multiple_of(BINS)
+                || !(14..=FRAMES).contains(&frames)
+                || self.fixed_frames.is_some_and(|n| n != frames)
+                || !spectrogram.iter().all(|x| x.is_finite())
+            {
+                return Err("expected finite supported BeatThis chunk by 128 spectrogram".into());
             }
-            Ok(data.to_vec())
-        };
-        Ok(Logits {
-            beat: read("beat")?,
-            downbeat: read("downbeat")?,
-        })
+            let input = TensorRef::from_array_view(([1, frames, BINS], spectrogram))
+                .map_err(|e| e.to_string())?;
+            let outputs = self
+                .session
+                .run_with_options(ort::inputs!["spectrogram" => input], options)
+                .map_err(|e| {
+                    terminated.set(is_run_termination(e.code(), e.message()));
+                    e.to_string()
+                })?;
+            checkpoint(cancelled)?;
+            let read = |name| -> Result<Vec<f32>, String> {
+                let output = outputs.get(name).ok_or_else(|| format!("missing {name}"))?;
+                let (shape, data) = output
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| e.to_string())?;
+                if shape.as_ref() != [1, frames as i64] || !data.iter().all(|x| x.is_finite()) {
+                    return Err(format!("invalid {name} logits"));
+                }
+                Ok(data.to_vec())
+            };
+            Ok(Logits {
+                beat: read("beat")?,
+                downbeat: read("downbeat")?,
+            })
+        })();
+        (result, terminated.get())
     }
 
     /// Finalize actual executed-node evidence before the process retires.
     pub fn finish_profile(&mut self) -> Result<String, String> {
         self.session.end_profiling().map_err(|e| e.to_string())
     }
+}
+
+// ORT v1.24.4 core/framework/stream_execution_context.cc, RunSince:
+// ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, this exact message). No substring matching.
+fn is_run_termination(code: ort::ErrorCode, message: &str) -> bool {
+    code == ort::ErrorCode::GenericFailure
+        && message == "Exiting due to terminate flag being set to true."
 }
 
 pub(crate) fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
@@ -190,10 +295,24 @@ pub(crate) fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
 /// Admit immutable graph bytes before a standalone caller loads native code.
 /// Session construction repeats this check for callers without that bootstrap.
 pub fn validate_graph(graph: &[u8], expected: &str) -> Result<(), String> {
+    validate_graph_checked(graph, expected, &|| false)
+}
+
+pub fn validate_graph_checked(
+    graph: &[u8],
+    expected: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    checkpoint(cancelled)?;
     if graph.is_empty() || graph.len() > MAX_GRAPH_BYTES {
         return Err("BeatThis graph exceeds trial bound".into());
     }
-    if expected.len() != 64 || format!("{:x}", Sha256::digest(graph)) != expected {
+    let mut hash = Sha256::new();
+    for block in graph.chunks(65536) {
+        checkpoint(cancelled)?;
+        hash.update(block);
+    }
+    if expected.len() != 64 || format!("{:x}", hash.finalize()) != expected {
         return Err("BeatThis graph digest mismatch".into());
     }
     Ok(())
@@ -243,6 +362,23 @@ fn signature(value: &ValueType, expected: &[i64]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_fault_is_never_reinterpreted_as_termination() {
+        let message = "Exiting due to terminate flag being set to true.";
+        assert!(is_run_termination(ort::ErrorCode::GenericFailure, message));
+        assert!(!is_run_termination(
+            ort::ErrorCode::ExecutionProviderFailure,
+            message
+        ));
+        assert!(!is_run_termination(
+            ort::ErrorCode::GenericFailure,
+            "CUDA allocation failed"
+        ));
+        assert!(!is_run_termination(
+            ort::ErrorCode::GenericFailure,
+            &format!("unrelated: {message}")
+        ));
+    }
     #[test]
     fn changed_graph_is_rejected_before_runtime_load() {
         let digest = format!("{:x}", Sha256::digest(b"original"));

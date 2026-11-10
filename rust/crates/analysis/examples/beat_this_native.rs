@@ -1,29 +1,19 @@
 //! Developer-only one-chunk CLI; output is diagnostic logits, never an App receipt.
 use flitzis_looper_analysis::beat_inference::{
-    BINS, BeatModel, FRAMES, MAX_GRAPH_BYTES, validate_graph,
+    BINS, BeatModel, FRAMES, MAX_GRAPH_BYTES, Provider, validate_graph_checked,
 };
 use std::{
-    fs::File,
-    io::{Read, Write},
     path::{Path, PathBuf},
+    process::ExitCode,
 };
+#[path = "beat_this_audio/invocation.rs"]
+mod invocation;
 #[path = "beat_this_audio/runtime.rs"]
 mod runtime;
 
-fn bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, String> {
-    let mut data = Vec::new();
-    File::open(path)
-        .map_err(|e| e.to_string())?
-        .take(maximum as u64 + 1)
-        .read_to_end(&mut data)
-        .map_err(|e| e.to_string())?;
-    if data.len() > maximum {
-        return Err("trial input exceeds byte bound".into());
-    }
-    Ok(data)
-}
-
-fn main() -> Result<(), String> {
+fn execute(own: &mut invocation::Invocation) -> Result<serde_json::Value, String> {
+    let context = own.context.clone();
+    context.checkpoint("startup")?;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 5 {
         return Err(
@@ -36,20 +26,15 @@ fn main() -> Result<(), String> {
     {
         return Err("trial output already exists".into());
     }
-    let graph = bounded(Path::new(&args[0]), MAX_GRAPH_BYTES)?;
-    let raw = bounded(Path::new(&args[2]), FRAMES * BINS * 4)?;
+    let (graph, _) = own.read(Path::new(&args[0]), MAX_GRAPH_BYTES)?;
+    let (raw, _) = own.read(Path::new(&args[2]), FRAMES * BINS * 4)?;
     if raw.len() != FRAMES * BINS * 4 {
         return Err("incomplete trial spectrogram".into());
     }
-    let spect: Vec<_> = raw
-        .chunks_exact(4)
-        .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
-        .collect();
-    if !spect.iter().all(|x| x.is_finite()) {
-        return Err("nonfinite trial spectrogram".into());
-    }
+    let spect = own.floats(&raw)?;
+    drop(raw);
     let digest = args[1].to_str().ok_or("invalid digest encoding")?;
-    validate_graph(&graph, digest)?;
+    validate_graph_checked(&graph, digest, &|| context.cancelled())?;
     let path = std::env::var_os(runtime::MANIFEST_ENV);
     let sha = std::env::var(runtime::DIGEST_ENV);
     let requested = if path.is_some() || std::env::var_os(runtime::DIGEST_ENV).is_some() {
@@ -60,32 +45,38 @@ fn main() -> Result<(), String> {
     } else {
         None
     };
-    let (admitted, environment) =
-        runtime::configure(requested.as_ref().map(|(p, d)| (p.as_path(), d.as_str())))?;
+    let (admitted, environment) = runtime::configure(
+        requested.as_ref().map(|(p, d)| (p.as_path(), d.as_str())),
+        &context,
+    )?;
     runtime::commit(environment)?;
-    let mut model = BeatModel::load(&graph, digest, Path::new(&args[4]), &|| false)?;
-    // The copying session owns its model; no run/profile/output reads graph.
+    let profile = own.profile(Path::new(&args[4]))?;
+    context.checkpoint("model.prepare")?;
+    let mut model = BeatModel::load_on_owned(&graph, digest, &profile, Provider::Cpu, &context)?;
     drop(graph);
-    let logits = model.run(&spect, &|| false)?;
-    let profile = model.finish_profile()?;
+    let mut result = invocation::run(&mut model, &spect, &context, None);
+    let profile = own.finish_profile(&mut model, &mut result);
     drop(model);
+    let logits = result?;
     let receipt = admitted
         .as_ref()
         .map(runtime::Admission::receipt)
         .transpose()?;
-    // Exclusive creation prevents overwriting an earlier result or an input.
-    let mut output = File::create_new(&args[3]).map_err(|e| e.to_string())?;
-    for value in logits.beat.iter().chain(&logits.downbeat) {
-        output
-            .write_all(&value.to_le_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-    output.sync_all().map_err(|e| e.to_string())?;
-    println!(
-        "{}",
-        serde_json::json!({"trial_only":true,"os":std::env::consts::OS,
-        "arch":std::env::consts::ARCH,"frames":FRAMES,"profile":profile,
-        "runtime_admission":receipt})
-    );
-    Ok(())
+    let values: Vec<_> = logits.beat.into_iter().chain(logits.downbeat).collect();
+    own.write_floats(Path::new(&args[3]), &values)?;
+    Ok(
+        serde_json::json!({"trial_only":true,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+        "frames":FRAMES,"profile":profile,"runtime_admission":receipt}),
+    )
+}
+
+fn main() -> ExitCode {
+    let mut own = invocation::Invocation::new();
+    let result = execute(&mut own);
+    own.finish(
+        result,
+        None,
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+    )
 }

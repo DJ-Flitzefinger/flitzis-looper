@@ -1087,6 +1087,12 @@ matrix from the distinct successful-case union or weaken their original assertio
 
 ## Capacity and continuity
 
+- [x] Connect both standalone BeatThis entries to the exact invocation marker,
+      consuming file/profile completion and run-scoped ORT termination ownership;
+      preserve primary failures and independently qualify cleanup and terminal
+      reporting. Keep real learned/mid-ORT/CUDA, whole-process admission, Native
+      cutover and platform acceptance separate from the nonneural control.
+
 - [x] Preserve an original fitting interior Wet SET when a previously bound
       master refresh has genuinely lost its original source/accepted authority;
       verify two actual Wet owners, public post-binding revocation, full request

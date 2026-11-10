@@ -2,6 +2,7 @@
 //! No application dispatch, realtime work, Python or LibTorch is involved.
 
 use super::beat_inference::{BINS, FRAMES, Logits, checkpoint};
+use crate::trial_lifetime::{Context, OwnedFile, OwnedLibrary, retain_first};
 use libloading::Library;
 use rustfft::{FftPlanner, num_complex::Complex};
 use sha2::{Digest, Sha256};
@@ -60,18 +61,23 @@ type Version = unsafe extern "C" fn() -> *const c_char;
 
 /// Explicit caller-owned, digest-checked libsoxr-0.1.3, never a Python extension.
 pub struct Soxr {
-    library: Library,
+    library: OwnedLibrary,
     // Keep the verified file open through all native users (including DLL unload).
-    _file: File,
+    file: OwnedFile,
 }
 
 impl Soxr {
     /// Loading native code is restricted to the admitted developer trial caller.
     pub fn load(path: &Path, expected: &str) -> Result<Self, String> {
+        Self::load_checked(path, expected, &Context::new(None))
+    }
+
+    pub fn load_checked(path: &Path, expected: &str, context: &Context) -> Result<Self, String> {
+        context.checkpoint("soxr.load")?;
         if !path.is_absolute() {
             return Err("libsoxr path must be absolute".into());
         }
-        let mut file = File::open(path).map_err(|e| e.to_string())?;
+        let mut file = context.file(File::open(path).map_err(|e| e.to_string())?, "soxr.close");
         if file.metadata().map_err(|e| e.to_string())?.len() > 32 * 1024 * 1024 {
             return Err("libsoxr exceeds trial bound".into());
         }
@@ -79,6 +85,7 @@ impl Soxr {
         let mut buffer = [0u8; 65536];
         let mut bytes = 0usize;
         loop {
+            context.check()?;
             let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
@@ -96,7 +103,8 @@ impl Soxr {
         // the retained library owns every resolved symbol for the entire call.
         // The caller must keep this owned trial path immutable. Hashing the file
         // does not attest an OS-loaded image or a complete product producer.
-        let library = unsafe { Library::new(path) }.map_err(|e| e.to_string())?;
+        context.checkpoint("soxr.library")?;
+        let library = context.library(unsafe { Library::new(path) }.map_err(|e| e.to_string())?);
         let version = unsafe {
             let get = library
                 .get::<Version>(b"soxr_version\0")
@@ -109,10 +117,15 @@ impl Soxr {
         if version != "libsoxr-0.1.3" {
             return Err(format!("unsupported {version}"));
         }
-        Ok(Self {
-            library,
-            _file: file,
-        })
+        Ok(Self { library, file })
+    }
+
+    /// Unload Soxr before consuming its retained file pin.
+    pub fn complete(self) -> Result<(), String> {
+        let Self { library, file } = self;
+        let mut result = library.complete();
+        retain_first(&mut result, file.complete());
+        result
     }
 
     /// Original full-buffer HQ resample, using the original wrapper's block size
@@ -342,7 +355,7 @@ pub fn predict(
     mut run: impl FnMut(&[f32]) -> Result<Logits, String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Logits, String> {
-    if spect.len() % BINS != 0 || !spect.iter().all(|x| x.is_finite()) {
+    if !spect.len().is_multiple_of(BINS) || !spect.iter().all(|x| x.is_finite()) {
         return Err("invalid spectrogram".into());
     }
     let frames = spect.len() / BINS;
@@ -388,11 +401,14 @@ pub fn predict(
     Ok(output)
 }
 
-fn peaks(logits: &[f32]) -> Vec<f64> {
+fn peaks_checked(logits: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<f64>, String> {
     let mut result = Vec::new();
     let mut count = 0;
     let mut mean = 0.0;
     for i in 0..logits.len() {
+        if i.is_multiple_of(1024) {
+            checkpoint(cancelled)?;
+        }
         if logits[i] <= 0.0
             || logits[i.saturating_sub(3)..(i + 4).min(logits.len())]
                 .iter()
@@ -414,11 +430,26 @@ fn peaks(logits: &[f32]) -> Vec<f64> {
     if count != 0 {
         result.push(mean / 50.0);
     }
-    result
+    checkpoint(cancelled)?;
+    Ok(result)
+}
+
+#[cfg(test)]
+fn peaks(logits: &[f32]) -> Vec<f64> {
+    peaks_checked(logits, &|| false).unwrap()
 }
 
 /// Minimal postprocessor; duration exclusion follows downbeat-to-beat snapping.
 pub fn postprocess(logits: &Logits, duration: f64) -> Result<(Vec<f64>, Vec<f64>), String> {
+    postprocess_checked(logits, duration, &|| false)
+}
+
+pub fn postprocess_checked(
+    logits: &Logits,
+    duration: f64,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    checkpoint(cancelled)?;
     if !duration.is_finite()
         || duration <= 0.0
         || logits.beat.is_empty()
@@ -431,26 +462,73 @@ pub fn postprocess(logits: &Logits, duration: f64) -> Result<(Vec<f64>, Vec<f64>
     {
         return Err("invalid postprocessor input".into());
     }
-    let mut beats = peaks(&logits.beat);
-    let mut downbeats = peaks(&logits.downbeat);
+    let mut beats = peaks_checked(&logits.beat, cancelled)?;
+    let mut downbeats = peaks_checked(&logits.downbeat, cancelled)?;
     if !beats.is_empty() {
         for d in &mut downbeats {
-            *d = *beats
-                .iter()
-                .min_by(|a, b| (**a - *d).abs().total_cmp(&(**b - *d).abs()))
-                .unwrap();
+            checkpoint(cancelled)?;
+            // Strictly smaller replaces the winner: preserve min_by's first
+            // equal-distance tie and the original arithmetic/comparison order.
+            let mut nearest = beats[0];
+            for (i, &beat) in beats.iter().enumerate().skip(1) {
+                if i.is_multiple_of(1024) {
+                    checkpoint(cancelled)?;
+                }
+                if (beat - *d).abs().total_cmp(&(nearest - *d).abs()).is_lt() {
+                    nearest = beat;
+                }
+            }
+            *d = nearest;
         }
     }
     downbeats.sort_by(f64::total_cmp);
     downbeats.dedup();
     beats.retain(|t| *t >= 0.0 && *t < duration);
     downbeats.retain(|t| *t >= 0.0 && *t < duration);
+    checkpoint(cancelled)?;
     Ok((beats, downbeats))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn postprocessing_and_aggregation_observe_cancellation_without_changing_ties() {
+        use std::cell::Cell;
+        let logits = Logits {
+            beat: vec![1.0; 4096],
+            downbeat: vec![1.0; 4096],
+        };
+        let calls = Cell::new(0);
+        assert!(
+            postprocess_checked(&logits, 10.0, &|| {
+                calls.set(calls.get() + 1);
+                calls.get() == 3
+            })
+            .unwrap_err()
+            .contains("cancelled")
+        );
+        let mut runs = 0;
+        let cancelled = Cell::new(false);
+        assert!(
+            predict(
+                &vec![0.0; 1489 * BINS],
+                |chunk| {
+                    runs += 1;
+                    cancelled.set(true);
+                    Ok(Logits {
+                        beat: vec![1.0; chunk.len() / BINS],
+                        downbeat: vec![1.0; chunk.len() / BINS],
+                    })
+                },
+                &|| cancelled.get()
+            )
+            .err()
+            .unwrap()
+            .contains("cancelled")
+        );
+        assert_eq!(runs, 1);
+    }
     #[test]
     fn complete_source_limits_precede_allocations_and_preserve_original_envelope() {
         assert_eq!(

@@ -1024,6 +1024,24 @@ still require supervisor escalation. ACK never replaces actual tree and reader
 retirement. `--cancellation-control NEW_PRIVATE_DIRECTORY` exercises this protocol
 without weights or a neural network; its Windows regression is opt-in through
 `FLITZIS_BS_CANCELLATION_EXE`. Production Python inference recognition is unchanged.
+Both standalone BeatThis entries use the same exact invocation marker and a shared
+owner for input/hash, frontend, runtime preparation, ORT runs and output completion.
+Session loading uses the actual retained builder's LoadCanceler. Load and run
+termination helpers join before profiling and builder/session release. Unknown
+load errors retain ordinary failure classification; a run error qualifies as
+cancellation only for the exact native termination status after successful own
+termination. Profile
+files live in a newly created private directory under the requested prefix; the
+returned profile path identifies the actual file. Primary errors and cleanup
+qualification are independent. Only exclusively created files are invalidated,
+including after late cancellation or terminal failure. ORT's process-global module,
+directory and file guards intentionally remain until actual process exit.
+`beat_this_audio --cancellation-control SOXR SHA PCM RATE NEW_JSON` runs real
+nonneural frontend work with private partial output. Its opt-in Windows regression
+uses `FLITZIS_BEATTHIS_CANCELLATION_EXE` and `FLITZIS_BEATTHIS_SOXR`. This control
+proves neither learned/mid-ORT/CUDA execution nor Native/Torch cutover. Synchronous
+native loading, session construction, I/O and close have no bounded interruption
+claim; the owning supervisor still establishes tree and both pipe-reader END.
 STEP28 retains ALL native parity requirements and FINAL29 the ENTIRE former
 FINAL28 regression scope, including every earlier unproved gate. No productive
 Torch dependency or installer/recovery path is removed by this trial.

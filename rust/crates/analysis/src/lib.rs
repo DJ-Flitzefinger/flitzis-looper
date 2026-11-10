@@ -10,6 +10,8 @@
 pub mod beat_audio;
 #[cfg(feature = "native-inference-trial")]
 pub mod beat_inference;
+#[cfg(feature = "native-inference-trial")]
+pub mod trial_lifetime;
 mod bpm_pipeline;
 mod canonical_digest;
 mod detection_function;

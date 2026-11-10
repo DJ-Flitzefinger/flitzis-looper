@@ -5,13 +5,11 @@ mod loader;
 #[cfg(any(feature = "native-inference-dynamic", test))]
 #[path = "package.rs"]
 mod package;
+use flitzis_looper_analysis::trial_lifetime::{Context, OwnedFile};
 use serde::Deserialize;
 #[cfg(any(feature = "native-inference-dynamic", test))]
 use sha2::{Digest, Sha256};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 #[cfg(any(feature = "native-inference-dynamic", test))]
 use std::{fs::OpenOptions, io::Read, path::Component};
 
@@ -90,12 +88,27 @@ impl Spec {
 
 struct CheckedFile {
     path: PathBuf,
-    _file: File,
+    _file: OwnedFile,
+    context: Context,
 }
 
 #[cfg(any(feature = "native-inference-dynamic", test))]
 impl CheckedFile {
+    fn context(&self) -> Context {
+        self.context.clone()
+    }
+    #[cfg(test)]
     fn open(path: &Path, expected: &str, limit: u64, size: Option<u64>) -> Result<Self, String> {
+        Self::open_checked(path, expected, limit, size, &Context::new(None))
+    }
+    fn open_checked(
+        path: &Path,
+        expected: &str,
+        limit: u64,
+        size: Option<u64>,
+        context: &Context,
+    ) -> Result<Self, String> {
+        context.checkpoint("runtime.hash")?;
         if !path.is_absolute() || !digest_valid(expected) {
             return Err("runtime admission requires an absolute path and lowercase SHA256".into());
         }
@@ -108,7 +121,10 @@ impl CheckedFile {
             // Read sharing only: deny writes/renames/deletes of this opened file.
             options.share_mode(1);
         }
-        let mut file = options.open(&path).map_err(|e| e.to_string())?;
+        let mut file = context.file(
+            options.open(&path).map_err(|e| e.to_string())?,
+            "runtime.file.close",
+        );
         let metadata = file.metadata().map_err(|e| e.to_string())?;
         if !metadata.is_file()
             || metadata.len() == 0
@@ -121,6 +137,7 @@ impl CheckedFile {
         let mut bytes = 0u64;
         let mut buffer = [0u8; 65536];
         loop {
+            context.check()?;
             let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
             if count == 0 {
                 break;
@@ -134,22 +151,33 @@ impl CheckedFile {
         if bytes != metadata.len() || format!("{:x}", hash.finalize()) != expected {
             return Err("runtime file digest/extent mismatch".into());
         }
-        Ok(Self { path, _file: file })
+        Ok(Self {
+            path,
+            _file: file,
+            context: context.clone(),
+        })
     }
 
-    fn read_json(&mut self, digest: &str, limit: u64) -> Result<Vec<u8>, String> {
+    fn read_json(
+        &mut self,
+        digest: &str,
+        limit: u64,
+        context: &Context,
+    ) -> Result<Vec<u8>, String> {
+        context.check()?;
         use std::io::{Seek, SeekFrom};
         self._file
             .seek(SeekFrom::Start(0))
             .map_err(|e| e.to_string())?;
         let mut raw = Vec::new();
-        (&mut self._file)
+        (&mut *self._file)
             .take(limit + 1)
             .read_to_end(&mut raw)
             .map_err(|e| e.to_string())?;
         if raw.len() as u64 > limit || format!("{:x}", Sha256::digest(&raw)) != digest {
             return Err("runtime manifest changed before parsing".into());
         }
+        context.check()?;
         Ok(raw)
     }
 }
@@ -158,6 +186,7 @@ impl CheckedFile {
 /// On other OSes the caller must keep the owned directory immutable. Even on
 /// Windows these file checks do not attest OS-mapped images or dependent DLLs.
 pub struct Admission {
+    context: Context,
     #[cfg(all(windows, feature = "native-inference-dynamic"))]
     loaded: Option<std::sync::Arc<std::sync::Mutex<loader::Admission>>>,
     manifest: CheckedFile,
@@ -170,24 +199,31 @@ pub struct Admission {
 
 impl Admission {
     #[cfg(any(feature = "native-inference-dynamic", test))]
+    #[cfg(test)]
     fn verify(path: &Path, digest: &str) -> Result<Self, String> {
-        let mut manifest = CheckedFile::open(path, digest, MAX_MANIFEST, None)?;
-        let raw = manifest.read_json(digest, MAX_MANIFEST)?;
+        Self::verify_checked(path, digest, &Context::new(None))
+    }
+    #[cfg(any(feature = "native-inference-dynamic", test))]
+    fn verify_checked(path: &Path, digest: &str, context: &Context) -> Result<Self, String> {
+        let mut manifest = CheckedFile::open_checked(path, digest, MAX_MANIFEST, None, context)?;
+        let raw = manifest.read_json(digest, MAX_MANIFEST, context)?;
         let spec = Spec::parse(&raw)?;
         let directory = manifest
             .path
             .parent()
             .ok_or("runtime package has no directory")?;
-        let runtime = CheckedFile::open(
+        let runtime = CheckedFile::open_checked(
             &directory.join(&spec.library),
             &spec.sha256,
             MAX_RUNTIME,
             Some(spec.bytes),
+            context,
         )?;
         if runtime.path.parent() != Some(directory) {
             return Err("runtime library escapes its owned package directory".into());
         }
         Ok(Self {
+            context: context.clone(),
             #[cfg(all(windows, feature = "native-inference-dynamic"))]
             loaded: None,
             manifest,
@@ -199,6 +235,7 @@ impl Admission {
     }
 
     pub fn receipt(&self) -> Result<serde_json::Value, String> {
+        self.context.checkpoint("runtime.receipt")?;
         let receipt = serde_json::json!({"schema_version":self.spec.schema_version,"library":self.spec.library,
             "manifest_sha256":self.manifest_sha256,
             "runtime_sha256":self.spec.sha256,"runtime_bytes":self.spec.bytes,
@@ -234,7 +271,9 @@ impl Admission {
 /// wrapper caches its first library globally; this is not an App/reload API.
 pub fn configure(
     request: Option<(&Path, &str)>,
+    context: &Context,
 ) -> Result<(Option<Admission>, ort::environment::EnvironmentBuilder), String> {
+    context.checkpoint("runtime.prepare")?;
     #[cfg(feature = "native-inference-dynamic")]
     {
         use libloading::Library;
@@ -245,7 +284,7 @@ pub fn configure(
         static ATTEMPTED: AtomicBool = AtomicBool::new(false);
         let (path, digest) =
             request.ok_or("dynamic trial requires an explicit runtime manifest and SHA256")?;
-        let mut admission = Admission::verify(path, digest)?;
+        let mut admission = Admission::verify_checked(path, digest, context)?;
         if package_requested() {
             let path = std::env::var_os(PACKAGE_ENV).ok_or("missing ORT package manifest path")?;
             let digest = std::env::var(PACKAGE_DIGEST_ENV).map_err(|e| e.to_string())?;
@@ -267,7 +306,7 @@ pub fn configure(
         if ATTEMPTED.swap(true, Ordering::SeqCst) {
             return Err("runtime bootstrap requires a fresh standalone process".into());
         }
-        eprintln!("native_ort_runtime_phase verified_files");
+        phase("verified_files")?;
         // SAFETY: explicit caller-authorized native bytes were verified above;
         // immutable package custody is required. This local handle remains alive
         // until init_from has retained its process-global reference to the DLL.
@@ -281,11 +320,13 @@ pub fn configure(
             admission.loaded = Some(std::sync::Arc::new(std::sync::Mutex::new(loaded)));
             library
         } else {
-            unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?
+            context.library(
+                unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?,
+            )
         };
         #[cfg(not(windows))]
-        let library =
-            unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?;
+        let library = context
+            .library(unsafe { Library::new(&admission.runtime.path) }.map_err(|e| e.to_string())?);
         let base = unsafe {
             let get = library
                 .get::<unsafe extern "C" fn() -> *const ort::sys::OrtApiBase>(b"OrtGetApiBase\0")
@@ -318,7 +359,7 @@ pub fn configure(
         if version != admission.spec.version || expected_api.is_null() {
             return Err("runtime exact version/API mismatch".into());
         }
-        eprintln!("native_ort_runtime_phase verified_version_api");
+        phase("verified_version_api")?;
         #[cfg(windows)]
         if let Some(loaded) = &admission.loaded {
             // ort caches its library/environment in globals without Rust Drop.
@@ -331,6 +372,7 @@ pub fn configure(
                 .set(std::sync::Arc::clone(loaded))
                 .map_err(|_| "loaded runtime guard already configured")?;
         }
+        context.checkpoint("runtime.initialize")?;
         let environment = ort::init_from(&admission.runtime.path).map_err(|e| e.to_string())?;
         if !std::ptr::eq(ort::api(), expected_api) {
             return Err("cached ORT API differs from admitted runtime API".into());
@@ -347,11 +389,19 @@ pub fn configure(
     }
 }
 
+fn phase(name: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut errors = std::io::stderr().lock();
+    writeln!(errors, "native_ort_runtime_phase {name}")
+        .and_then(|()| errors.flush())
+        .map_err(|e| e.to_string())
+}
+
 pub fn commit(environment: ort::environment::EnvironmentBuilder) -> Result<(), String> {
     if !environment.commit() {
         return Err("runtime environment already configured; request did not take effect".into());
     }
-    eprintln!("native_ort_runtime_phase configured_environment");
+    phase("configured_environment")?;
     Ok(())
 }
 

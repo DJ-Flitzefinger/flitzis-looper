@@ -1,11 +1,11 @@
 //! Explicit fresh-child Windows policy and observed declared backing-file identity.
 //! Neither a complete loader closure nor an attestation of relocated memory bytes.
 use super::{CheckedFile, package};
+use flitzis_looper_analysis::trial_lifetime::{Context, OwnedFile, OwnedLibrary};
 use libloading::{Library, os::windows::Library as WindowsLibrary};
 use std::{
     collections::HashSet,
     ffi::{OsString, c_void},
-    fs::File,
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
 };
@@ -75,16 +75,17 @@ fn inside_package(path: &Path, directory: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-struct Module(usize);
+struct Module(usize, Context);
 impl Module {
-    fn at(address: usize) -> Result<Self, String> {
+    fn at(address: usize, context: &Context) -> Result<Self, String> {
+        context.check()?;
         let mut handle = 0;
         // FROM_ADDRESS increments a real reference; never use an unowned basename
         // lookup or UNCHANGED_REFCOUNT across module enumeration/identity checks.
         if unsafe { GetModuleHandleExW(FROM_ADDRESS, address as *const u16, &mut handle) } == 0 {
             return Err(error());
         }
-        Ok(Self(handle))
+        Ok(Self(handle, context.clone()))
     }
     fn path(&self) -> Result<PathBuf, String> {
         let mut path = vec![0u16; MAX_PATH_UNITS];
@@ -102,13 +103,15 @@ impl Module {
 }
 impl Drop for Module {
     fn drop(&mut self) {
-        unsafe {
-            FreeLibrary(self.0);
+        if unsafe { FreeLibrary(self.0) } == 0 {
+            self.1
+                .record(Err(format!("runtime.module.release: {}", error())));
         }
     }
 }
 
-fn modules() -> Result<Vec<Module>, String> {
+fn modules(context: &Context) -> Result<Vec<Module>, String> {
+    context.check()?;
     let mut handles = vec![0usize; MAX_MODULES];
     let mut needed = 0u32;
     let bytes = std::mem::size_of_val(handles.as_slice());
@@ -130,12 +133,16 @@ fn modules() -> Result<Vec<Module>, String> {
     handles.truncate(needed / std::mem::size_of::<usize>());
     // A disappearing/query-failed module invalidates this snapshot, not a partial
     // success. Each acquired reference protects its later path/file queries.
-    handles.into_iter().map(Module::at).collect()
+    handles
+        .into_iter()
+        .map(|address| Module::at(address, context))
+        .collect()
 }
 
-struct Directory(usize);
+struct Directory(usize, Context);
 impl Directory {
-    fn set(path: &Path) -> Result<Self, String> {
+    fn set(path: &Path, context: &Context) -> Result<Self, String> {
+        context.check()?;
         let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         // The old SetDllDirectory path can affect children. Reset it explicitly;
         // this mode intentionally changes only this fresh standalone process.
@@ -148,13 +155,14 @@ impl Directory {
         if cookie.is_null() {
             return Err(error());
         }
-        Ok(Self(cookie as usize))
+        Ok(Self(cookie as usize, context.clone()))
     }
 }
 impl Drop for Directory {
     fn drop(&mut self) {
-        unsafe {
-            RemoveDllDirectory(self.0 as *mut c_void);
+        if unsafe { RemoveDllDirectory(self.0 as *mut c_void) } == 0 {
+            self.1
+                .record(Err(format!("runtime.directory.release: {}", error())));
         }
     }
 }
@@ -164,7 +172,7 @@ pub(super) struct Admission {
     // library globally, runtime.rs retains this entire guard until process exit.
     modules: Vec<Module>,
     _directory: Directory,
-    _pins: Vec<File>,
+    _pins: Vec<OwnedFile>,
     image_pins: Vec<CheckedFile>,
     seen: HashSet<usize>,
     runtime_module: usize,
@@ -174,8 +182,8 @@ impl Admission {
     pub(super) fn load(
         package: &package::Admission,
         runtime: &super::Admission,
-    ) -> Result<(Self, Library), String> {
-        for module in modules()? {
+    ) -> Result<(Self, OwnedLibrary), String> {
+        for module in modules(package.context())? {
             let path = module.path()?;
             if package.declares(&path) || inside_package(&path, package.directory())? {
                 return Err(
@@ -184,7 +192,7 @@ impl Admission {
             }
         }
         let pins = package.clone_pins(runtime)?;
-        let directory = Directory::set(package.directory())?;
+        let directory = Directory::set(package.directory(), package.context())?;
         // Exact documented per-call flags exclude CWD/PATH/application-directory
         // search for this load's imports. Later ORT overrides remain a separate
         // boundary; snapshots below never certify a complete closure.
@@ -194,7 +202,8 @@ impl Admission {
         .map_err(|e| e.to_string())?;
         let raw = library.into_raw();
         let library: Library = unsafe { WindowsLibrary::from_raw(raw) }.into();
-        let module = Module::at(raw as usize)?;
+        let library = package.context().library(library);
+        let module = Module::at(raw as usize, package.context())?;
         let (pin, _) = package.check_image(&module.path()?)?;
         let mut admission = Self {
             modules: vec![module],
@@ -218,7 +227,7 @@ impl Admission {
         address: usize,
         package: &package::Admission,
     ) -> Result<(), String> {
-        let module = Module::at(address)?;
+        let module = Module::at(address, package.context())?;
         if module.0 != self.runtime_module {
             return Err("ORT API export belongs to another module".into());
         }
@@ -234,7 +243,7 @@ impl Admission {
     ) -> Result<serde_json::Value, String> {
         let mut observed = Vec::new();
         let mut found_runtime = false;
-        for module in modules()? {
+        for module in modules(package.context())? {
             let path = module.path()?;
             if package.declares(&path) {
                 let (pin, mut receipt) = package.check_image(&path)?;

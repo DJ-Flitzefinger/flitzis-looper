@@ -7787,3 +7787,38 @@ discard retries through their release. Worker events carry result metadata
 without an additional physical source reader. The controller binds the source
 from the exact surviving subscriber when it consumes an event. Terminal batch
 rows retain their outcome without holding cancellation readers.
+
+## Standalone BeatThis cancellation and consuming completion
+
+The complete-audio and one-chunk diagnostic entries share one invocation owner.
+The exact caller marker reaches bounded reads and block hashes, Soxr, frontend,
+graph and runtime preparation, model callbacks, aggregation, postprocessing and
+output completion. Frequent callbacks throttle filesystem polling; phase changes
+and the final post-close/pre-status decision force a fresh observation. A scoped
+helper uses the actual ORT RunOptions termination primitive; session loading uses
+the retained original builder's LoadCanceler. Both always join before options,
+builder/run/session owners or profiling are released. Unknown load errors remain
+primary; only the exact native run-termination status after successful own
+termination qualifies for cancellation. Session construction
+and synchronous native/I/O calls remain unbounded interruption boundaries.
+
+Primary work errors survive later profile, close and invalidation errors. Cleanup
+qualification independently gates ACK/130. Whole input and create_new output
+handles receive one consuming native close attempt; a failed close is unresolved
+ownership and is never retried. Output paths survive every close and the final
+cancellation decision. Only successful exclusive creations are invalidated.
+ORT-generated profile files use a fresh private directory, with actual entries
+collected after session release; no caller prefix/glob deletion is allowed.
+Both borrowed terminal sinks are checked, and terminal failure invalidates private
+results. Runtime-owned standard handles remain open until process exit.
+
+Soxr unload precedes its file-pin close. ORT instead retains the intentional
+process-global module references, DLL-directory cookie and same-file pins through
+actual process exit. Cancellation does not turn CUDA diagnostics into fallback.
+Peak running means, first equal-distance snapping, duration exclusion order,
+keep-first aggregation, source geometry and all numerical bounds are preserved.
+The nonneural frontend protocol control establishes only its exact native outcome,
+private-file invalidation and actual owned tree plus both pipe-reader END. Real
+learned/mid-ORT/CUDA proof still requires fresh sufficient complete admission.
+The finite BS whole-process allowance remains open; Torch remains active with
+zero installed savings and productive Python command recognition is unchanged.

@@ -1,5 +1,6 @@
 //! Optional declared ORT component custody, not native loader/closure attestation.
 use super::{CheckedFile, digest_valid};
+use flitzis_looper_analysis::trial_lifetime::OwnedFile;
 use serde::Deserialize;
 use std::{collections::HashSet, fs::File, path::Path};
 
@@ -148,6 +149,11 @@ pub(super) struct Admission {
 
 impl Admission {
     #[cfg(all(windows, feature = "native-inference-dynamic"))]
+    pub(super) fn context(&self) -> &super::Context {
+        &self.manifest.context
+    }
+
+    #[cfg(all(windows, feature = "native-inference-dynamic"))]
     pub(super) fn directory(&self) -> &Path {
         self.manifest
             .path
@@ -168,11 +174,17 @@ impl Admission {
     }
 
     #[cfg(all(windows, feature = "native-inference-dynamic"))]
-    pub(super) fn clone_pins(&self, runtime: &super::Admission) -> Result<Vec<File>, String> {
+    pub(super) fn clone_pins(&self, runtime: &super::Admission) -> Result<Vec<OwnedFile>, String> {
         [&runtime.manifest, &runtime.runtime, &self.manifest]
             .into_iter()
             .chain(self.files.iter())
-            .map(|f| f._file.try_clone().map_err(|e| e.to_string()))
+            .map(|f| {
+                runtime.context.check()?;
+                f._file
+                    .try_clone()
+                    .map(|file| runtime.context.file(file, "runtime.pin.close"))
+                    .map_err(|e| e.to_string())
+            })
             .collect()
     }
 
@@ -192,7 +204,13 @@ impl Admission {
                     .is_some_and(|name| item.name.eq_ignore_ascii_case(name))
             })
             .ok_or("loaded package image is not declared")?;
-        let file = CheckedFile::open(path, &item.sha256, MAX_COMPONENT, Some(item.bytes))?;
+        let file = CheckedFile::open_checked(
+            path,
+            &item.sha256,
+            MAX_COMPONENT,
+            Some(item.bytes),
+            &self.manifest.context(),
+        )?;
         let actual = identity(&file._file)?;
         if file.path.parent() != Some(self.directory()) || actual != identity(&pin._file)? {
             return Err("loaded image differs from admitted package file identity".into());
@@ -208,7 +226,8 @@ impl Admission {
         digest: &str,
         runtime: &super::Admission,
     ) -> Result<Self, String> {
-        let mut manifest = CheckedFile::open(path, digest, MAX_MANIFEST, None)?;
+        let mut manifest =
+            CheckedFile::open_checked(path, digest, MAX_MANIFEST, None, &runtime.context)?;
         let directory = runtime
             .manifest
             .path
@@ -217,7 +236,7 @@ impl Admission {
         if manifest.path.parent() != Some(directory) {
             return Err("ORT package manifest must share the runtime package directory".into());
         }
-        let raw = manifest.read_json(digest, MAX_MANIFEST)?;
+        let raw = manifest.read_json(digest, MAX_MANIFEST, &runtime.context)?;
         let spec = Spec::parse(&raw, &runtime.spec)?;
         let mut identities = HashSet::from([
             identity(&manifest._file)?,
@@ -226,11 +245,13 @@ impl Admission {
         let runtime_identity = identity(&runtime.runtime._file)?;
         let mut files = Vec::with_capacity(spec.components.len());
         for item in &spec.components {
-            let file = CheckedFile::open(
+            runtime.context.checkpoint("runtime.package")?;
+            let file = CheckedFile::open_checked(
                 &directory.join(&item.name),
                 &item.sha256,
                 MAX_COMPONENT,
                 Some(item.bytes),
+                &runtime.context,
             )?;
             if file.path.parent() != Some(directory) {
                 return Err("ORT component escapes its owned package directory".into());
