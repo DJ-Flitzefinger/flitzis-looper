@@ -159,6 +159,7 @@ def uncommitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[_Rig]:
+    controller.settings.set_stem_separator("demucs:htdemucs")
     with _held_pool() as held, ExitStack() as stack:
         _production_pool(controller, audio_engine_mock, tmp_path, held.pool)
         _readable_sources(controller, audio_engine_mock, tmp_path)
