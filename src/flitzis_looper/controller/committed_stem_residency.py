@@ -32,6 +32,7 @@ def resident_stem_capacity_pressure(message: object) -> bool:
         in {
             "cold source queue full (2 workers, 32 queued jobs)",
             "Stem queue full (2 workers, 32 queued jobs)",
+            "committed residency queue is full",
         }
         or message.startswith("[resident_stem_interest_busy]")
     )

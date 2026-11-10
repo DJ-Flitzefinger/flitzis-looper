@@ -252,6 +252,7 @@ class _DiskSelectionSettlement:
     verified_restore: bool = False
     assignment_adopted: bool = False
     last_error: str | None = None
+    registration_attempted: bool = False
 
 
 @dataclass(slots=True)
@@ -1457,10 +1458,11 @@ class StemController(BaseController):  # noqa: PLR0904
                         deferred_jobs.append(job)
                     continue
                 job.remove_subscriber(row.sample_id)
+                self._forget_generation_candidate(row.sample_id, row.intent)
                 if self._generation_sources.get(row.sample_id) is row.source:
                     self._clear_stem_generation_state(row.sample_id)
             if matched and job not in deferred_jobs and job.cancel_event.is_set():
-                if job.running:
+                if self._generation_job_readers_pending(job):
                     readers.append(job)
                 elif path not in self._inference_jobs:
                     self._discard_generation_artifacts(job.request.sample_id, path)
@@ -1483,7 +1485,7 @@ class StemController(BaseController):  # noqa: PLR0904
     def generation_cancellation_is_pending(self, cancellation: StemGenerationCancellation) -> bool:
         """Observe only this cancellation's original physical reads and returned-result route."""
         return (
-            any(job.running for job in cancellation.jobs)
+            any(self._generation_job_readers_pending(job) for job in cancellation.jobs)
             or any(
                 self._cancelled_preparation_is_pending(request, cancellation.owner)
                 for request in cancellation.preparations
@@ -1493,9 +1495,15 @@ class StemController(BaseController):  # noqa: PLR0904
                     not cancellation.owner.current
                     and any(row.interest_owner is cancellation.owner for row in job.subscribers())
                 )
-                or (job.cancel_event.is_set() and job.running)
+                or (job.cancel_event.is_set() and self._generation_job_readers_pending(job))
                 for job in cancellation.deferred_jobs
             )
+        )
+
+    def _generation_job_readers_pending(self, job: StemGenerationJob) -> bool:
+        return job.running or any(
+            (job, kind) in self._pair_held_generation_events
+            for kind in ("identity", "progress", "terminal")
         )
 
     def _cancelled_preparation_is_pending(
@@ -1505,9 +1513,16 @@ class StemController(BaseController):  # noqa: PLR0904
             # A new caller may take over still-fenced, uncancelled original work.
             # Its continuing reads do not belong to the detached batch token.
             return False
-        return any(
-            current is request for current in self._pair_preparations.pending.values()
-        ) or any(row.request is request for row in self._disk_selection_settlements.values())
+        if any(current is request for current in self._pair_preparations.pending.values()) or any(
+            row.request is request for row in self._disk_selection_settlements.values()
+        ):
+            return True
+        if request.prepared is not None and self._pair_preparations.discard_pending(
+            request.prepared
+        ):
+            return True
+        request.prepared = None
+        return False
 
     def generation_interest_is_pending(self, owner: StemGenerationInterests) -> bool:
         """Read existing operation containers without borrowing slot or Native authority."""
@@ -1650,6 +1665,7 @@ class StemController(BaseController):  # noqa: PLR0904
             if binding is not None and binding.interest_owner is owner:
                 preparation.heavy_work.close()
                 self._requested_preparations.pop(sample_id, None)
+                self._forget_generation_candidate(sample_id, binding.generation_intent)
 
     @staticmethod
     def _stem_request_class(
@@ -1711,6 +1727,12 @@ class StemController(BaseController):  # noqa: PLR0904
             + len(self._pending_stem_publications)
         )
 
+    def _pair_preparation_admission_pending(self, sample_id: int) -> bool:
+        return (
+            sample_id in self._disk_selection_settlements
+            or self._pair_preparations.admission_pending(sample_id)
+        )
+
     def _stem_admission_candidates(
         self,
     ) -> tuple[StemAdmissionCandidate[_StemAdmissionOwner], ...]:
@@ -1747,7 +1769,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 for delivery in self._pair_held_generation_events.values()
                 if delivery.event.event_type == "success" or delivery.admission_route == "reuse"
                 for row in self._available_generation_subscribers(delivery, consume=False)
-                if not self._pair_preparations.admission_pending(row.sample_id)
+                if not self._pair_preparation_admission_pending(row.sample_id)
             )
             candidates.extend(
                 StemAdmissionCandidate(
@@ -1760,7 +1782,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
                 for sample_id, row in self._requested_preparations.items()
                 if sample_id not in deferred
-                and not self._pair_preparations.admission_pending(sample_id)
+                and not self._pair_preparation_admission_pending(sample_id)
             )
         return tuple(candidates)
 
@@ -1817,7 +1839,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 continue
             if not any(
                 row.sample_id not in deferred
-                and not self._pair_preparations.admission_pending(row.sample_id)
+                and not self._pair_preparation_admission_pending(row.sample_id)
                 and self._stem_preparation_count() < STEM_WORKERS + STEM_QUEUED_JOBS
                 and self._generation_subscriber_current(row, delivery.job)
                 for row in delivery.remaining
@@ -1826,7 +1848,7 @@ class StemController(BaseController):  # noqa: PLR0904
         for sample_id, row in tuple(self._requested_preparations.items()):
             if (
                 sample_id in deferred
-                or self._pair_preparations.admission_pending(sample_id)
+                or self._pair_preparation_admission_pending(sample_id)
                 or self._stem_preparation_count() >= STEM_WORKERS + STEM_QUEUED_JOBS
                 or not self._requested_preparation_current(row.spec)
             ):
@@ -1919,7 +1941,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._requested_preparations.pop(spec.sample_id, None)
             return "settled"
         if (
-            self._pair_preparations.admission_pending(spec.sample_id)
+            self._pair_preparation_admission_pending(spec.sample_id)
             or self._stem_preparation_count() >= STEM_WORKERS + STEM_QUEUED_JOBS
         ):
             return "deferred"
@@ -1991,7 +2013,7 @@ class StemController(BaseController):  # noqa: PLR0904
         if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
             return "deferred"
         if (
-            self._pair_preparations.admission_pending(sample_id)
+            self._pair_preparation_admission_pending(sample_id)
             or self._stem_preparation_count() >= STEM_WORKERS + STEM_QUEUED_JOBS
         ):
             return "deferred"
@@ -2626,6 +2648,9 @@ class StemController(BaseController):  # noqa: PLR0904
         demand.explicit = True
         demand.state = "queued"
         demand.error = None
+        if sample_id in self._disk_selection_settlements:
+            self._save_all_stems_intent(sample_id)
+            return True
         handled, ticket = self._request_registered_pair_mode(sample_id, source_version, demand)
         if handled is not None:
             if handled:
@@ -3356,6 +3381,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 ):
                     continue
                 job.remove_subscriber(subscriber.sample_id)
+                self._forget_generation_candidate(subscriber.sample_id, subscriber.intent)
                 if self._generation_sources.get(subscriber.sample_id) is subscriber.source:
                     self._clear_stem_generation_state(subscriber.sample_id)
             if not job.subscribers() and path not in self._inference_jobs and not job.running:
@@ -3653,6 +3679,13 @@ class StemController(BaseController):  # noqa: PLR0904
                 )
         elif job.generation_fingerprint is None:
             self._verified_candidates.pop(subscriber.sample_id, None)
+
+    def _forget_generation_candidate(
+        self, sample_id: int, intent: StemGenerationIntent | None
+    ) -> None:
+        candidate = self._verified_candidates.get(sample_id)
+        if candidate is not None and candidate[0] is intent:
+            self._verified_candidates.pop(sample_id)
 
     def _remember_verified_selection(self, sample_id: int, entry: StemCacheEntry) -> None:
         candidate = self._verified_candidates.pop(sample_id, None)
@@ -4091,9 +4124,15 @@ class StemController(BaseController):  # noqa: PLR0904
                 self._set_full_mix(sample_id)
         for sample_id, error in self._pair_preparations.retry_discards():
             self._session.stem_generation_errors[sample_id] = f"Stem pair cleanup deferred: {error}"
-        for request in self._pair_preparations.collect(
-            getattr(self, "_pair_deferred_sample_ids", frozenset())
-        ):
+        deferred: frozenset[int] = getattr(self, "_pair_deferred_sample_ids", frozenset())
+        settling = frozenset(
+            sample_id
+            for sample_id, request in self._pair_preparations.pending.items()
+            if sample_id in self._disk_selection_settlements
+            and not request.cancelled.is_set()
+            and _generation_interest_allows_preparation(request.interest_owner)
+        )
+        for request in self._pair_preparations.collect(deferred | settling):
             self._accept_returned_pair(request)
 
     def _accept_returned_pair(self, request: PairPreparation) -> None:
@@ -4120,11 +4159,15 @@ class StemController(BaseController):  # noqa: PLR0904
                     if request.prepared is not None:
                         pending = self._pending_stem_publications.get(request.sample_id)
                         settlement = self._disk_selection_settlements.get(request.sample_id)
-                        if (pending is None or pending.prepared_pair is not request.prepared) and (
+                        if (
                             settlement is None
                             or settlement.request.prepared is not request.prepared
                         ):
-                            self._discard_pair(request.sample_id, request.prepared)
+                            prepared = request.prepared
+                            if (
+                                pending is not None and pending.prepared_pair is prepared
+                            ) or self._discard_pair(request.sample_id, prepared):
+                                request.prepared = None
                 finally:
                     queued = self._pair_preparations.pending.get(request.sample_id)
                     if (
@@ -4375,9 +4418,14 @@ class StemController(BaseController):  # noqa: PLR0904
     def _poll_disk_selection_settlements(self) -> None:
         attempted = 0
         for settlement in tuple(self._disk_selection_settlements.values()):
-            if settlement.request.sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
+            sample_id = settlement.request.sample_id
+            if sample_id in getattr(self, "_pair_deferred_sample_ids", ()):
                 continue
             self._settle_disk_selection(settlement)
+            if self._disk_selection_settlements.get(sample_id) is settlement:
+                self._disk_selection_settlements[sample_id] = self._disk_selection_settlements.pop(
+                    sample_id
+                )
             attempted += 1
             if attempted == 8:
                 break
@@ -4419,9 +4467,8 @@ class StemController(BaseController):  # noqa: PLR0904
                 prepared.select()
                 current = self._disk_selection_assignment_current(settlement)
                 if current:
-                    self._assets.adopt_stems(
-                        sample_id, (Path(settlement.entry.cache_dir).absolute(), settlement.lease)
-                    )
+                    if not self._adopt_written_disk_selection(settlement, prepared):
+                        return
                 else:
                     # Newer content can arrive after the actual config replacement.
                     # Preserve that memory image and first replace its old durable
@@ -4440,6 +4487,11 @@ class StemController(BaseController):  # noqa: PLR0904
         settlement.retirement.close()
         if not current:
             return
+        self._finish_written_disk_selection(settlement)
+
+    def _finish_written_disk_selection(self, settlement: _DiskSelectionSettlement) -> None:
+        request = settlement.request
+        sample_id = request.sample_id
         message = self._session.stem_generation_errors.get(sample_id, "")
         if message.startswith("Stem selection committed; owner settlement deferred:"):
             self._session.stem_generation_errors.pop(sample_id, None)
@@ -4450,7 +4502,6 @@ class StemController(BaseController):  # noqa: PLR0904
         self._restored_stem_candidates.pop(sample_id, None)
         if self._commit_disk_selection is None:
             self._mark_project_changed()
-        self._register_committed_pair(sample_id, prepared, settlement.ticket)
         self._settled_residency_demand(sample_id, settlement.entry)
         if request.residency_only or (
             request.generation_intent is not None
@@ -4460,6 +4511,23 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         ):
             self._publish_all_stems_mode_if_preferred(sample_id, settlement.entry.source_version)
+
+    def _adopt_written_disk_selection(
+        self, settlement: _DiskSelectionSettlement, prepared: PreparedStemPair
+    ) -> bool:
+        sample_id = settlement.request.sample_id
+        if not settlement.registration_attempted:
+            if not self._register_committed_pair(
+                sample_id, prepared, settlement.ticket, defer_on_queue_full=True
+            ):
+                return False
+            settlement.registration_attempted = True
+        if not settlement.assignment_adopted:
+            self._assets.adopt_stems(
+                sample_id, (Path(settlement.entry.cache_dir).absolute(), settlement.lease)
+            )
+            settlement.assignment_adopted = True
+        return True
 
     def _settled_residency_demand(self, sample_id: int, entry: StemCacheEntry) -> None:
         demand = self._demands.get(sample_id)
@@ -4668,10 +4736,11 @@ class StemController(BaseController):  # noqa: PLR0904
         self._project.stem_cache[sample_id] = pending.previous_entry
         self._mark_project_changed()
 
-    def _discard_pair(self, sample_id: int, prepared: PreparedStemPair) -> None:
+    def _discard_pair(self, sample_id: int, prepared: PreparedStemPair) -> bool:
         error = self._pair_preparations.discard(sample_id, prepared)
         if error is not None:
             self._session.stem_generation_errors[sample_id] = f"Stem pair cleanup deferred: {error}"
+        return error is None
 
     def _release_pending_stems(self, pending: _PendingStemPublication) -> None:
         self._publication_retries.forget(pending)
@@ -5001,6 +5070,10 @@ class StemController(BaseController):  # noqa: PLR0904
             error = str(err) or type(err).__name__
             completed = True
         finally:
+            # Only the current subscriber may lend a source to control delivery.
+            # Drop worker-local reader references before exposing read end.
+            processing = None
+            source_lease = None
             job.finish_resolution()
             if not completed:
                 self._put_generation_event(
@@ -5010,7 +5083,7 @@ class StemController(BaseController):  # noqa: PLR0904
             _StemBackendEvent(
                 sample_id=job.request.sample_id,
                 source_version=job.request.source_version,
-                source_lease=source_lease,
+                source_lease=None,
                 cache_dir=job.request.cache_dir,
                 event_type=event_type,
                 error=error,
@@ -5044,7 +5117,7 @@ class StemController(BaseController):  # noqa: PLR0904
         return _StemBackendEvent(
             sample_id=job.request.sample_id,
             source_version=job.request.source_version,
-            source_lease=job.source,
+            source_lease=None,
             cache_dir=job.request.cache_dir,
             event_type="settled",
             error=error,
@@ -5074,6 +5147,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return
         request = job.resolved_request
         if request is None:
+            source_lease = None
             job.finish_read()
             self._put_generation_event(self._settled_job_event(job))
             return
@@ -5085,7 +5159,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 _StemBackendEvent(
                     sample_id=request.sample_id,
                     source_version=request.source_version,
-                    source_lease=source_lease,
+                    source_lease=None,
                     cache_dir=request.cache_dir,
                     event_type="progress",
                     percent=percent,
@@ -5124,7 +5198,7 @@ class StemController(BaseController):  # noqa: PLR0904
             event = _StemBackendEvent(
                 sample_id=request.sample_id,
                 source_version=request.source_version,
-                source_lease=source_lease,
+                source_lease=None,
                 cache_dir=request.cache_dir,
                 event_type="success",
                 result=result,
@@ -5134,7 +5208,7 @@ class StemController(BaseController):  # noqa: PLR0904
             event = _StemBackendEvent(
                 sample_id=request.sample_id,
                 source_version=request.source_version,
-                source_lease=source_lease,
+                source_lease=None,
                 cache_dir=request.cache_dir,
                 event_type="error",
                 error=str(err) or type(err).__name__,
@@ -5142,6 +5216,7 @@ class StemController(BaseController):  # noqa: PLR0904
             )
         finally:
             processing = None
+            source_lease = None
             try:
                 job.finish_read()
             finally:
@@ -5333,13 +5408,19 @@ class StemController(BaseController):  # noqa: PLR0904
         return True
 
     def _register_committed_pair(
-        self, sample_id: int, prepared: PreparedStemPair, ticket: PreparedSourceTicket
-    ) -> None:
-        if not self._committed_residency.supported:
-            return
+        self,
+        sample_id: int,
+        prepared: PreparedStemPair,
+        ticket: PreparedSourceTicket,
+        *,
+        defer_on_queue_full: bool = False,
+    ) -> bool:
+        """Report whether the caller can release its exact preparation."""
+        if self._shutting_down or not self._committed_residency.supported:
+            return True
         entry = self._project.stem_cache[sample_id]
         if entry is None or entry.pair is None:
-            return
+            return True
         try:
             self._committed_residency.register(
                 sample_id,
@@ -5351,7 +5432,15 @@ class StemController(BaseController):  # noqa: PLR0904
                 active=sample_id in self._session.active_sample_ids,
             )
         except (RuntimeError, TypeError, ValueError) as error:
+            # Native rejects before creating a registration owner in this case.
+            if (
+                defer_on_queue_full
+                and isinstance(error, RuntimeError)
+                and str(error) == "committed registration queue is full"
+            ):
+                return False
             self._report_residency_error(sample_id, f"Committed stem registration failed: {error}")
+        return True
 
     def _requires_committed_residency(self, sample_id: int) -> bool:
         entry = self._project.stem_cache[sample_id]

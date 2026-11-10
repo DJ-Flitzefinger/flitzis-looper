@@ -1,11 +1,13 @@
 """Actual pool admission includes failed Native discard custody and fresh fences."""
 
+import weakref
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.controller.stem_job import StemGenerationInterests
+from flitzis_looper.controller.stem_job import DIRECT_STEM_INTEREST, StemGenerationInterests
 from flitzis_looper.controller.stem_pair_preparation import StemPairIntentBinding
 from flitzis_looper.models import PadContentIdentity
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.stem_workers import StemWorkerReservation
-    from flitzis_looper_audio import PreparedSourceTicket, PreparedStemPair
+    from flitzis_looper_audio import PreparedSourceTicket, PreparedStemPair, SealedProcessingFiles
 
 
 def _request_pair(controller: AppController, audio: Mock) -> StemGenerationInterests:
@@ -37,6 +39,49 @@ def _request_pair(controller: AppController, audio: Mock) -> StemGenerationInter
     assert stems.generation_interest_is_pending(owner)
     assert not stems._pair_preparations.pending
     return owner
+
+
+@pytest.mark.parametrize("newer_candidate", [False, True])
+def test_withdrawn_requested_pair_releases_only_its_original_producer_guard(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    *,
+    newer_candidate: bool,
+) -> None:
+    with _held_pool() as held:
+        _production_pool(controller, audio_engine_mock, tmp_path, held.pool)
+        stems = controller.stems
+        owner = _request_pair(controller, audio_engine_mock)
+        requested = stems._requested_preparations[0]
+        request = stems._generation_request(0, requested.spec.entry.source_version)
+        assert request is not None
+        intent = stems._intents.capture(request, controller.project.stem_processing_revision)
+        binding = requested.spec.binding
+        assert binding is not None
+        stems._requested_preparations[0] = replace(
+            requested,
+            spec=replace(requested.spec, binding=replace(binding, generation_intent=intent)),
+        )
+        candidate_intent = (
+            stems._intents.capture(request, controller.project.stem_processing_revision)
+            if newer_candidate
+            else intent
+        )
+        guard = Mock(name="declared-sealed-producer-reader")
+        observed = weakref.ref(guard)
+        stems._verified_candidates[0] = (
+            candidate_intent,
+            request,
+            cast("SealedProcessingFiles", guard),
+        )
+        del guard
+
+        stems.cancel_generation_interest(owner, DIRECT_STEM_INTEREST)
+
+        assert not stems._requested_preparations
+        assert (observed() is not None) is newer_candidate
+        stems._verified_candidates.clear()
 
 
 def test_failed_discards_bound_new_readers_even_after_executor_capacity_returns(

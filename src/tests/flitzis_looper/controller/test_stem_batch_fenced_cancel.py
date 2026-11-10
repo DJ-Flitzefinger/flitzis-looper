@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller.pair_stem_mirror import PreparedPairStemMirror
     from flitzis_looper.controller.stem_job import StemGenerationJob, StemSubscriber
+    from flitzis_looper.controller.stem_pair_preparation import PairPreparation
     from flitzis_looper.controller.stems import StemController, StemGenerationCancellation
     from flitzis_looper_audio import OfflineStemSourceLease, PreparedStemPair
     from tests.flitzis_looper.controller.test_stem_job import _Lease, _Reservation
@@ -384,6 +385,58 @@ def test_final_batch_cancel_and_queued_pair_entry_keep_event_and_reader_until_mi
         request.close()
 
 
+def _settle_refused_cancelled_pair(
+    controller: StemController,
+    request: PairPreparation,
+    prepared: PreparedStemPair,
+    cancellation: StemGenerationCancellation,
+) -> None:
+    discard = cast("Mock", prepared).discard
+    discard.side_effect = [RuntimeError("retirement queue full"), None]
+    controller._pair_deferred_sample_ids = frozenset()
+    controller._poll_pair_preparations()
+    assert controller.generation_cancellation_is_pending(cancellation)
+    assert request.prepared is prepared
+    controller._poll_pair_preparations()
+    assert not controller.generation_cancellation_is_pending(cancellation)
+    assert request.prepared is None
+    assert discard.call_count == 2
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_cancelled_returned_pair_collects_behind_another_disk_settlement(*, shutdown: bool) -> None:
+    controller, assets, _audio = _controller()
+    previous = _pending_preparation(controller, assets)
+    settlement = stems._DiskSelectionSettlement(
+        previous,
+        previous.entry,
+        previous.ticket,
+        previous.lease,
+        None,
+        previous.retirement,
+    )
+    controller._disk_selection_settlements[0] = settlement
+    request = _pending_preparation(controller, assets)
+    request.interest_owner = StemGenerationInterests()
+    prepared = Mock(name="cancelled-prepared-pair")
+    request.prepared = cast("PreparedStemPair", prepared)
+    controller._pair_preparations._results.put(request)
+    try:
+        if shutdown:
+            controller.shut_down()
+        else:
+            controller.cancel_generation_interest(request.interest_owner, DIRECT_STEM_INTEREST)
+            controller._poll_pair_preparations()
+        assert not controller._pair_preparations.pending
+        assert not controller._pair_preparations._held_results
+        assert request.prepared is None
+        prepared.discard.assert_called_once()
+        assert controller._disk_selection_settlements[0] is settlement
+    finally:
+        request.close()
+        previous.close()
+
+
 @pytest.mark.parametrize("route", ["returned_pair", "disk_settlement"])
 def test_final_batch_cancel_preserves_returned_pair_and_settlement_event_guards(
     route: str,
@@ -439,5 +492,7 @@ def test_final_batch_cancel_preserves_returned_pair_and_settlement_event_guards(
         assert controller.generation_cancellation_is_pending(cancellation)
         cast("Mock", prepared).discard.assert_not_called()
         cast("Mock", prepared).select.assert_not_called()
+        if route == "returned_pair":
+            _settle_refused_cancelled_pair(controller, request, prepared, cancellation)
     finally:
         request.close()

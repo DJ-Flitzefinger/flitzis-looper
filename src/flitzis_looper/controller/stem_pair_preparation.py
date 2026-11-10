@@ -476,6 +476,10 @@ class StemPairPreparationQueue:
                 errors.append((sample_id, error))
         return tuple(errors)
 
+    def discard_pending(self, prepared: PreparedStemPair) -> bool:
+        """Observe a retained discard for this exact prepared pair."""
+        return id(prepared) in self._discard_retries
+
     @staticmethod
     def selected_entry(request: PairPreparation) -> StemCacheEntry:
         """Validate the actual native disk selection before installing references."""

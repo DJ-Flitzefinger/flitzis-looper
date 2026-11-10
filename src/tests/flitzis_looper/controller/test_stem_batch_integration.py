@@ -1,11 +1,13 @@
 """Real App/batch/pool/config joins; audio and separator fixtures are substitutes."""
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 from flitzis_looper.controller.performance_confirmation import StemBatchConfirmation
 from flitzis_looper.controller.stem_job import DIRECT_STEM_INTEREST, StemGenerationInterests
 from flitzis_looper.models import PadContentIdentity
 from tests.flitzis_looper.controller import test_stem_disk_commit as disk_fixtures
+from tests.flitzis_looper.controller.test_committed_stem_residency import _RegistrationTicket
 from tests.flitzis_looper.controller.test_stem_admission import _held_pool
 from tests.flitzis_looper.controller.test_stem_pending_admission import _production_pool
 
@@ -13,7 +15,8 @@ disk_commit = disk_fixtures.disk_commit
 
 if TYPE_CHECKING:
     from pathlib import Path
-    from unittest.mock import Mock
+
+    import pytest
 
     from flitzis_looper.controller import AppController
     from tests.flitzis_looper.controller.test_stem_disk_commit import _DiskCommit
@@ -89,14 +92,44 @@ def test_real_hidden_settings_batch_keeps_snapshot_and_shared_direct_interest(
         assert not stems.delete_stems(215)
 
 
+def _observe_registration_retry(
+    rig: _DiskCommit, register: Mock, registration: _RegistrationTicket
+) -> None:
+    app, stems = rig.controller, rig.controller.stems
+    settlement = stems._disk_selection_settlements[0]
+    assert settlement.request is rig.request
+    assert stems._committed_residency.status(0) is None
+    stems._poll_disk_selection_settlements()
+    assert register.call_count == 3
+    assert register.call_args_list[0] == register.call_args_list[1] == register.call_args_list[2]
+    assert not stems._disk_selection_settlements
+    assert app._assets._reserved == 0
+    entry = app.project.stem_cache[0]
+    assert entry is not None
+    assert not stems._committed_residency.registered_selection_current(0, entry)
+    registration.state = "accepted"
+    assert stems._committed_residency.registered_selection_current(0, entry)
+
+
 def test_real_batch_done_waits_for_config_replace_and_late_cancel_keeps_result(
     disk_commit: _DiskCommit,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rig = disk_commit
     app, stems = rig.controller, rig.controller.stems
     _loaded_metadata(app, rig.audio, (0,))
     owner = StemGenerationInterests()  # Existing direct Pair work stays independent.
     rig.request.interest_owner = owner
+    registration = _RegistrationTicket(state="pending")
+    register = Mock(
+        side_effect=[
+            RuntimeError("committed registration queue is full"),
+            RuntimeError("committed registration queue is full"),
+            registration,
+        ]
+    )
+    monkeypatch.setattr(rig.audio, "register_committed_stem_pair", register, raising=False)
+    monkeypatch.setattr(rig.audio, "request_committed_stem_residency", Mock(), raising=False)
     app.session.settings_open = False
     selected = app.project.selected_pad, app.project.selected_bank
     app.performance_confirmation.request_all_loaded_stems()
@@ -130,5 +163,6 @@ def test_real_batch_done_waits_for_config_replace_and_late_cancel_keeps_result(
     assert rig.prepared.selected
     app.stem_batch.cancel()
     assert app.stem_batch.summary == summary
+    _observe_registration_retry(rig, register, registration)
     assert app._persistence.config_path.read_bytes() == saved
     assert (app.project.selected_pad, app.project.selected_bank) == selected

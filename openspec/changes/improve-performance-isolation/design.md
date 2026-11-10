@@ -7738,3 +7738,19 @@ end. Historical STEP14 failures are not erased: these six current outcomes do no
 establish a clean full matrix, resolve the distinct-216 watchdog or initial
 registry uncertainty, or close Native replacement, numerical, platform,
 performance, distribution, device or final acceptance.
+
+## Settle saved Stem registration and cancelled readers
+
+The durable Config replacement completes the batch's saved result. If Native
+rejects registration because its callback queue is full, retain the exact
+prepared pair, source ticket and reserved assignment in the existing disk
+settlement. Retry admission within the per-frame settlement budget and rotate
+retained attempts so other PADs can settle. Never replay Config replacement or
+an admitted registration. Native acceptance still requires the PAD's own
+current ticket.
+
+Final-interest cancellation observes held generation deliveries and exact
+discard retries through their release. Worker events carry result metadata
+without an additional physical source reader. The controller binds the source
+from the exact surviving subscriber when it consumes an event. Terminal batch
+rows retain their outcome without holding cancellation readers.

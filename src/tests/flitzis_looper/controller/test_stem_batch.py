@@ -546,6 +546,8 @@ def test_cancelling_waits_for_exact_original_reader_receipt_and_ignores_foreign_
     assert not case.batch.start(case.inventory())
     case.batch.poll()
     assert _summary(case).cancelling == 1
+    case.batch.cancel()
+    assert len(case.cancellations) == 2
 
     case.original_reads.remove(original)
     case.batch.poll()
@@ -555,6 +557,8 @@ def test_cancelling_waits_for_exact_original_reader_receipt_and_ignores_foreign_
     assert unrelated in case.original_reads
     assert case.observed_receipts[-1] is receipt
     assert len(case.cancellations) == 2
+    assert case.batch._rows is not None
+    assert all(row.cancellation is None for row in case.batch._rows)
 
 
 def test_failure_after_cancel_does_not_hide_unsettled_original_reader() -> None:

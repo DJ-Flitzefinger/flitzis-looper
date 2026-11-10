@@ -11,7 +11,7 @@ import pytest
 from flitzis_looper.controller import stems
 from flitzis_looper.controller.stem_cache import expected_stem_files, promote_generation_artifacts
 from flitzis_looper.controller.stem_generation import AudioShape, StemGenerationRequest
-from flitzis_looper.controller.stem_job import StemGenerationJob
+from flitzis_looper.controller.stem_job import DIRECT_STEM_INTEREST, StemGenerationJob
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState, StemCacheEntry
 from tests.conftest import write_mono_pcm16_wav
@@ -181,6 +181,11 @@ def _move(rig: _ObserverRig, mirror: PreparedPairStemMirror, acknowledgement: ob
     rig.placements[215] = rig.placements.pop(0)
 
 
+def _run_backend(rig: _ObserverRig, job: StemGenerationJob) -> None:
+    assert job.heavy_work.try_acquire()
+    rig.controller._run_stem_backend(job)
+
+
 def _assert_completed_shared_job(
     rig: _ObserverRig,
     original_request: StemGenerationRequest,
@@ -289,10 +294,12 @@ def test_progress_backlog_coalesces_without_blocking_unrelated_job_terminal(
             stage="Latest participant stage",
         )
     )
-    rig.controller._run_stem_backend(unrelated)
+    _run_backend(rig, unrelated)
     rig.controller._poll_generation_events()
 
-    assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36]
+    assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36], (
+        rig.controller._session.stem_generation_errors
+    )
     assert 36 not in rig.controller._session.stem_generating_sample_ids
     assert rig.controller._jobs == {job.request.cache_dir: job}
     assert len(rig.controller._pair_held_generation_events) == 1
@@ -310,6 +317,28 @@ def test_progress_backlog_coalesces_without_blocking_unrelated_job_terminal(
     job.cancel()
 
 
+def test_final_cancel_waits_for_a_held_terminal_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = _rig(tmp_path, monkeypatch)
+    controller = rig.controller
+    job = _job(rig)
+    owner = job.subscribers()[0].interest_owner
+    controller._pair_deferred_sample_ids = frozenset({0})
+    _run_backend(rig, job)
+    controller._poll_generation_events()
+    assert not job.running
+    assert (job, "terminal") in controller._pair_held_generation_events
+
+    controller._pair_deferred_sample_ids = frozenset()
+    cancellation = controller.cancel_generation_interest(owner, DIRECT_STEM_INTEREST)
+    assert controller.generation_cancellation_is_pending(cancellation)
+    controller._poll_generation_events()
+    assert not controller.generation_cancellation_is_pending(cancellation)
+    assert not controller._pair_held_generation_events
+    assert not rig.queued
+
+
 @pytest.mark.parametrize("mirror_first", [False, True])
 @pytest.mark.parametrize("unrelated_queued", [False, True])
 def test_shared_success_retains_one_promotion_until_remaining_moved_interest_is_delivered(
@@ -324,7 +353,6 @@ def test_shared_success_retains_one_promotion_until_remaining_moved_interest_is_
     _subscribe(rig, job, 36)
     original = job.subscribers()[0]
     original_request = job.request
-    physical_source = job.source
     mirror, acknowledgement = _prepare(rig.controller)
     rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
     if not unrelated_queued:
@@ -339,13 +367,13 @@ def test_shared_success_retains_one_promotion_until_remaining_moved_interest_is_
         return promote(entry, directory)
 
     monkeypatch.setattr(stems, "promote_generation_artifacts", promote_once)
-    rig.controller._run_stem_backend(job)
+    _run_backend(rig, job)
     rig.controller._poll_generation_events()
     held = rig.controller._pair_held_generation_events[job, "terminal"]
     terminal = held.event
     promotion = held.promotion
     assert promotion is not None
-    assert terminal.source_lease is physical_source
+    assert terminal.source_lease is None
     assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36]
     assert job.request is original_request
     assert job.phase == "settled"
@@ -387,7 +415,7 @@ def test_shared_failure_retains_exact_terminal_owner_and_delivers_remaining_afte
     rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
     if terminal_kind == "error":
         rig.backend.error = RuntimeError("Original worker failure")
-        rig.controller._run_stem_backend(job)
+        _run_backend(rig, job)
     else:
 
         def unexpected(
@@ -399,7 +427,7 @@ def test_shared_failure_retains_exact_terminal_owner_and_delivers_remaining_afte
 
         monkeypatch.setattr(rig.backend, "generate", unexpected)
         with pytest.raises(KeyError, match="unexpected worker failure"):
-            rig.controller._run_stem_backend(job)
+            _run_backend(rig, job)
     rig.controller._poll_generation_events()
     held = rig.controller._pair_held_generation_events[job, "terminal"]
     terminal = held.event
@@ -435,7 +463,7 @@ def test_remaining_interest_still_requires_current_own_native_source_after_mirro
     _subscribe(rig, job, 36)
     mirror, acknowledgement = _prepare(rig.controller)
     rig.controller._pair_deferred_sample_ids = frozenset((0, 215))
-    rig.controller._run_stem_backend(job)
+    _run_backend(rig, job)
     rig.controller._poll_generation_events()
     _move(rig, mirror, acknowledgement)
     rig.placements[215] = replace(rig.placements[215], source_request=999)
@@ -478,7 +506,7 @@ def test_identity_is_one_retained_owner_while_unrelated_terminal_continues(
     )
     rig.controller._put_generation_event(event)
     rig.controller._put_generation_event(event)
-    rig.controller._run_stem_backend(unrelated)
+    _run_backend(rig, unrelated)
     rig.controller._poll_generation_events()
     assert admissions == []
     assert [sample_id for sample_id, _entry, _ticket in rig.queued] == [36]

@@ -581,6 +581,34 @@ class Probe:
 
     def begin(self) -> str:
         assert self.controller.generate_stems_async(0)
+        return self._complete_begin()
+
+    def _begin_with_registration_pressure(self) -> None:
+        self.project.pad_stem_mix_mode[0] = "full_mix"
+        self.persistence = ProjectPersistence(self.project)
+        self.persistence.flush()
+        self.controller.bind_disk_selection_commit(
+            self.persistence.commit_stem_selection, self.persistence.flush
+        )
+        assert self.controller.generate_stems_async(0)
+
+    def _observe_registration_pressure(self) -> None:
+        self.controller.on_frame_render()
+        self.pressured = self.controller._disk_selection_settlements[0]
+        assert self.pressured.request.prepared is not None
+        assert self.pressured.request.interest_owner is not None
+        assert self.pressured.request.interest_owner.committed
+        assert not self.pressured.assignment_adopted
+        assert not self.pressured.registration_attempted
+        assert not self.controller._committed_residency.contains(0)
+        saved = self.persistence.config_path.read_bytes()
+        reopened = ProjectPersistence.from_config_path(self.persistence.config_path)
+        assert reopened.project.stem_cache[0] == self.project.stem_cache[0]
+        self.controller.on_frame_render()
+        assert self.controller._disk_selection_settlements[0] is self.pressured
+        assert self.persistence.config_path.read_bytes() == saved
+
+    def _complete_begin(self) -> str:
         self.controller.on_frame_render()
         assert not self.session.stem_generation_errors, self.session.stem_generation_errors
         self.original_ticket = wait_for_committed_registration(self.controller, 0)

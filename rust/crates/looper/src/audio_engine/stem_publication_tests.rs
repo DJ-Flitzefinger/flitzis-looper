@@ -587,13 +587,28 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
             None,
         );
     }
-    let version: String = Python::attach(|py| {
-        probe
-            .call_method0(py, "begin")
-            .unwrap()
-            .extract(py)
-            .unwrap()
-    });
+    let begin = if accepted_only && !shared {
+        call(&probe, "_begin_with_registration_pressure");
+        {
+            let mut queue = producer.lock().unwrap();
+            while !queue.is_full() {
+                queue
+                    .push(ControlMessage::SetStemMixMode {
+                        id: 0,
+                        mode: StemMixMode::FullMix,
+                        source_version_hash: 0,
+                    })
+                    .unwrap();
+            }
+        }
+        call(&probe, "_observe_registration_pressure");
+        assert_eq!(callback.drain(&mut consumer), 16);
+        "_complete_begin"
+    } else {
+        "begin"
+    };
+    let version: String =
+        Python::attach(|py| probe.call_method0(py, begin).unwrap().extract(py).unwrap());
     // Initial generation selected complete disk truth without resident components.
     // Its own Register/Capture/Worker/Adopt receipts establish callback custody.
     committed_probe_ack(

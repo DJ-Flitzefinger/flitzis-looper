@@ -409,6 +409,7 @@ def test_preload_retries_only_exact_native_memory_admission_codec(
     "message",
     [
         "cold source queue full (2 workers, 32 queued jobs)",
+        "committed residency queue is full",
         (
             "[resident_stem_interest_busy] explicit stem intent is preparing "
             "or awaiting effective acknowledgement"

@@ -193,7 +193,7 @@ class StemBatchController:
 
     def cancel(self) -> None:
         """Withdraw only this operation's tokens and retain exact reader receipts."""
-        if not self.active or self._rows is None:
+        if self._cancel_requested or not self.active or self._rows is None:
             return
         self._cancel_requested = True
         for row in self._rows:
@@ -202,9 +202,9 @@ class StemBatchController:
                 if row.state not in _TERMINAL_STATES:
                     row.state = "cancelled"
                 continue
-            if row.cancellation is None:
-                row.cancellation = self._stems.cancel_generation_interest(row.owner, row.token)
+            cancellation = self._stems.cancel_generation_interest(row.owner, row.token)
             if row.state not in _TERMINAL_STATES:
+                row.cancellation = cancellation
                 row.state = "cancelling"
                 self._refresh(row)
 
@@ -239,6 +239,7 @@ class StemBatchController:
         if row.cancellation is not None:
             if self._stems.generation_cancellation_is_pending(row.cancellation):
                 return
+            row.cancellation = None
             if not self._refresh_outcome(row):
                 row.state = "cancelled"
             return
