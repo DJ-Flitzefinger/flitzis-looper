@@ -231,7 +231,7 @@ impl CpuModel {
             .with_profiling(profile)
             .map_err(|e| e.to_string())?;
         let mut session = trial_ort::commit(builder, graph, Some(context))?;
-        let validation = validate_session(&session, "torchscript-opset18-dense")
+        let validation = validate_session(&session, "torchscript-opset18-dense", TORCH)
             .and_then(|()| context.cleanup())
             .and_then(|()| context.checkpoint("demucs.model.loaded"));
         if let Err(primary) = validation {
@@ -298,7 +298,7 @@ impl CpuModel {
                     .map_err(|e| e.to_string())?;
                 trial_ort::commit(builder, graph, Some(&context))
             })?;
-        validate_session(&session, SCAN64_LOWERING)?;
+        validate_session(&session, SCAN64_LOWERING, "2.12.0+cpu")?;
         let metadata = session.metadata().map_err(|e| e.to_string())?;
         if metadata.custom("attention_query_block").as_deref() != Some("64")
             || metadata.custom("trace_sha256").as_deref() != Some(release.trace_sha256.as_str())
@@ -530,11 +530,11 @@ fn shape_matches(actual: &[i64], expected: &[usize]) -> bool {
     actual.len() == expected.len() && actual.iter().zip(expected).all(|(&a, &b)| a == b as i64)
 }
 
-fn validate_session(session: &Session, lowering: &str) -> Result<(), String> {
+fn validate_session(session: &Session, lowering: &str, torch_version: &str) -> Result<(), String> {
     let metadata = session.metadata().map_err(|e| e.to_string())?;
     if metadata.custom("flitzis_htdemucs_contract").as_deref() != Some(CONTRACT)
         || metadata.custom("checkpoint_sha256").as_deref() != Some(CHECKPOINT)
-        || metadata.custom("torch_version").as_deref() != Some(TORCH)
+        || metadata.custom("torch_version").as_deref() != Some(torch_version)
         || metadata.custom("torch_commit").as_deref() != Some(TORCH_COMMIT)
         || metadata.custom("source_closure_sha256").as_deref() != Some(SOURCE_CLOSURE)
         || metadata.custom("lowering").as_deref() != Some(lowering)

@@ -1367,6 +1367,24 @@ source and checkpoint check. ONNX is absent from the original producer's
 import path. Trace, rewrite and check use the explicit checked overlay and
 verify package versions, module origins and binary digests.
 
+The CPU release producer uses the separately verified Torch 2.12.0+cpu
+Windows CP314 wheel at the same Torch source commit. It requires its own
+phase admission. Only the separated trace selects the CPU Flash SDPA backend.
+The stock reference keeps its original dispatch. The separated path uses the
+pinned TorchScript graph conversion with ONNX constant folding disabled. It
+serializes the graph with the learned parameters as named inputs, then writes
+each parameter to a bounded raw bank with its name, shape, dtype and SHA-256.
+Using the binding's deferred export flag would instead create a Python bytes
+object for every parameter.
+
+`assemble_trace` runs in a separate ONNX-only child. It matches the parameter
+manifest to every nonpublic input, checks each tensor and the whole bank as it
+streams them into the inline graph, and binds the exact assembled bytes as
+the trace identity used by rewrite and check. The approved Scan64 worker
+requires CPU trace provenance. The original reduction profile retains its
+existing pin. The isolated CPU producer is a development tool and adds no
+installed dependency.
+
 The opt-in `demucs-inference-trial` feature adds a synchronous CPU adapter.
 It checks the trusted graph digest and metadata and validates both decoder
 outputs through NaN-initialized ORT bindings before writing caller buffers.

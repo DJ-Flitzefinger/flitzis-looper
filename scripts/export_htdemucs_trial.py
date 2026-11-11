@@ -10,7 +10,7 @@ import sys
 import sysconfig
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module, metadata, util
 from math import prod
@@ -43,8 +43,13 @@ TRACE_SOURCE_PINS = {
     "utils": "2a01910c4972939180bdd75ff264ba7105f7360e8a47c3328e566cfe4100b649",
     "onnx_proto_utils": "9da95f9437a5d1e5bad430b0a8c5d060d6ae26d20bb5b61d56537542c2c97efa",
     "symbolic_opset14": SYMBOLIC_SHA256,
+    "_globals": "6125429ba650e6d122037a6bf89249be72248ddd5d9fd62c72cb2c4b555d59a6",
+    "registration": "ff0a203f914e09556497ceec62c9d20935cbd574b515b22cfd7064fd78f901c1",
+    "symbolic_helper": "26dbbeec9ab526916ff62543add7c88fde57a11d8f2f04546e15ce1ac061c46d",
 }
 TORCH = "2.12.0+cu130"
+TORCH_CPU = "2.12.0+cpu"
+TORCH_CPU_EXTENSION = "4015fbb9ab66c319de062ec748bababfeffa1ebaa5db22fc65aaa4faaaab250c"
 TORCH_COMMIT = "7661cd9c6b841b62b7f411aa52ec51f05457263b"
 SOURCES = ("drums", "bass", "other", "vocals")
 SHAPES = {
@@ -54,6 +59,11 @@ SHAPES = {
     "decoded_waveform": (1, 4, 2, 343980),
 }
 MAX_GRAPH_BYTES = 192 * 1024 * 1024
+MAX_SKELETON_BYTES = 8 * 1024 * 1024
+MAX_MANIFEST_BYTES = 256 * 1024
+STREAM_CHUNK_BYTES = 256 * 1024
+# Fixed release parameters and folded tensor inputs are float32 or int64.
+INITIALIZER_TYPES = {"float32": (1, 4), "int64": (7, 8)}
 PCM_SHAPE = SHAPES["decoded_waveform"]
 ONNX_PINS = {
     "onnx": (
@@ -106,6 +116,7 @@ class Phase(Enum):
 
     REFERENCE = "reference"
     TRACE = "trace"
+    ASSEMBLE = "assemble"
     REWRITE = "rewrite"
     CHECK = "check"
 
@@ -172,6 +183,40 @@ class TraceArtifact:
 
     graph: Artifact
     reference: ReferenceArtifacts
+    torch_version: str = TORCH
+
+
+@dataclass(frozen=True, slots=True)
+class SeparatedTrace:
+    """Parameter-free graph and initializer custody from a retired CPU trace."""
+
+    skeleton: Artifact
+    manifest: Artifact
+    weights: Artifact
+    reference: ReferenceArtifacts
+
+
+@dataclass(frozen=True, slots=True)
+class Initializer:
+    """One named, ordered slice of the separate initializer bank."""
+
+    name: str
+    dtype: str
+    shape: tuple[int, ...]
+    size: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        Artifact(self.size, self.sha256)
+        if (
+            not isinstance(self.name, str)
+            or not self.name
+            or self.dtype not in INITIALIZER_TYPES
+            or any(type(dim) is not int or dim <= 0 for dim in self.shape)
+            or self.size != prod(self.shape) * INITIALIZER_TYPES[self.dtype][1]
+        ):
+            msg = "invalid HTDemucs initializer metadata"
+            raise ValueError(msg)
 
 
 def read_artifact(path: Path, expected: Artifact, limit: int) -> bytes:
@@ -292,18 +337,32 @@ def check_platform() -> None:
         raise ValueError(msg)
 
 
-def torch_producer():
+def torch_producer(cpu_overlay: Path | None = None):
     """Verify the Torch/Demucs producer without importing ONNX."""
     check_platform()
-    versions = {"demucs": "4.0.1", "einops": "0.6.1", "torch": TORCH, "numpy": "2.4.0"}
+    expected_version = TORCH if cpu_overlay is None else TORCH_CPU
+    versions = {"demucs": "4.0.1", "einops": "0.6.1", "torch": expected_version, "numpy": "2.4.0"}
     for name, version in versions.items():
         if metadata.version(name) != version:
             msg = f"unexpected HTDemucs producer package: {name}"
             raise ValueError(msg)
     torch = import_module("torch")
-    if torch.version.git_version != TORCH_COMMIT:
+    if str(torch.__version__) != expected_version or torch.version.git_version != TORCH_COMMIT:
         msg = "requires the pinned Torch build"
         raise ValueError(msg)
+    if cpu_overlay is not None:
+        root = cpu_overlay.resolve(strict=True)
+        extension = Path(torch._C.__file__).resolve(strict=True)
+        if (
+            Path(torch.__file__).resolve(strict=True) != root / "torch/__init__.py"
+            or extension != root / "torch/_C.cp314-win_amd64.pyd"
+            or hashlib.sha256(extension.read_bytes()).hexdigest() != TORCH_CPU_EXTENSION
+            or any(
+                getattr(torch.version, backend) is not None for backend in ("cuda", "hip", "xpu")
+            )
+        ):
+            msg = "requires the pinned CPU-only Torch overlay"
+            raise ValueError(msg)
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
     if torch.get_num_threads() != 1 or torch.get_num_interop_threads() != 1:
@@ -709,6 +768,7 @@ def capture_reference(
     output: Path,
     *,
     admit: Callable[[Phase], None],
+    cpu_overlay: Path | None = None,
 ) -> ReferenceArtifacts:
     """Run the stock forward and check the extracted boundary in an admitted child.
 
@@ -718,7 +778,7 @@ def capture_reference(
     begin_phase(Phase.REFERENCE, admit)
     sources = source_files()
     output.mkdir(exist_ok=False)
-    torch = torch_producer()
+    torch = torch_producer(cpu_overlay)
     module = import_module("demucs.htdemucs")
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
     model = load_model(torch, checkpoint, module)
@@ -786,13 +846,294 @@ def trace_core(
     return TraceArtifact(describe_artifact(output, MAX_GRAPH_BYTES), reference)
 
 
+def export_skeleton(torch, wrapper, inputs):
+    """Use the pinned legacy lowering while leaving weights as named graph inputs."""
+    utils = import_module("torch.onnx._internal.torchscript_exporter.utils")
+    settings = utils.GLOBALS
+    operator = torch._C._onnx.OperatorExportTypes.ONNX
+    if settings.in_onnx_export:
+        msg = "nested HTDemucs legacy graph export"
+        raise ValueError(msg)
+    settings.in_onnx_export = True
+    settings.export_onnx_opset_version = 18
+    settings.operator_export_type = operator
+    settings.onnx_shape_inference = True
+    settings.autograd_inlining = True
+    try:
+        utils._trigger_symbolic_function_registration()
+        utils._setup_trace_module_map(wrapper, export_modules_as_functions=False)
+        with utils.exporter_context(wrapper, torch._C._onnx.TrainingMode.EVAL, verbose=False):
+            graph, weights, _ = utils._model_to_graph(
+                wrapper,
+                inputs,
+                input_names=list(SHAPES)[:2],
+                output_names=list(SHAPES)[2:],
+                operator_export_type=operator,
+                training=torch._C._onnx.TrainingMode.EVAL,
+                do_constant_folding=False,
+                dynamic_axes={},
+            )
+            del _
+            torch._C._jit_pass_dce_allow_deleting_nodes_with_side_effects(graph)
+            weights = torch._C._jit_pass_onnx_deduplicate_initializers(
+                graph,
+                weights,
+                wrapper.training,
+            )
+            torch._C._jit_pass_onnx_assign_scoped_names_for_node_and_value(graph)
+            # The binding converts every deferred tensor to bytes if deferral
+            # is enabled. An empty initializer map avoids that full owner.
+            defer_weights = keep_initializers_as_inputs = False
+            strip_doc_strings = add_node_names = True
+            proto, exported, external, _ = graph._export_onnx(
+                {},
+                18,
+                {},
+                defer_weights,
+                operator,
+                strip_doc_strings,
+                keep_initializers_as_inputs,
+                {MARKER_DOMAIN: 1},
+                add_node_names,
+                "",
+                {},
+            )
+        names = [item.debugName() for item in graph.inputs()][2:]
+        if exported or external or len(names) != len(weights) or set(names) != weights.keys():
+            msg = "HTDemucs legacy graph has unmatched parameter inputs"
+            raise ValueError(msg)
+        return proto, {name: weights[name] for name in names}
+    finally:
+        settings.in_onnx_export = False
+        utils._reset_trace_module_map()
+
+
+def write_initializers(path: Path, weights) -> tuple[list[Initializer], Artifact]:
+    """Write one contiguous initializer at a time and record the bytes written."""
+    manifest = []
+    digest = hashlib.sha256()
+    with path.open("xb") as stream:
+        for name, value in weights.items():
+            array = value.detach().contiguous().numpy()
+            with memoryview(array).cast("B") as raw:
+                if not raw.nbytes or stream.tell() + raw.nbytes > MAX_GRAPH_BYTES:
+                    msg = "HTDemucs initializer bank exceeds the export extent"
+                    raise ValueError(msg)
+                manifest.append(
+                    Initializer(
+                        name,
+                        array.dtype.name,
+                        tuple(array.shape),
+                        raw.nbytes,
+                        hashlib.sha256(raw).hexdigest(),
+                    )
+                )
+                if stream.write(raw) != raw.nbytes:
+                    msg = "incomplete HTDemucs initializer bank write"
+                    raise OSError(msg)
+                digest.update(raw)
+            del array
+        extent = stream.tell()
+    return manifest, Artifact(extent, digest.hexdigest())
+
+
+def trace_core_separated(
+    checkpoint: Path,
+    references: Path,
+    reference: ReferenceArtifacts,
+    output: Path,
+    *,
+    cpu_overlay: Path,
+    admit: Callable[[Phase], None],
+) -> SeparatedTrace:
+    """Trace the fixed learned core in an admitted CPU-only Torch child."""
+    begin_phase(Phase.TRACE, admit)
+    sources = source_files()
+    torch = torch_producer(cpu_overlay)
+    module = import_module("demucs.htdemucs")
+    inputs = (
+        read_tensor(torch, references / "spectral.f32", reference.spectral, SHAPES["spectral"]),
+        read_tensor(torch, references / "waveform.f32", reference.waveform, SHAPES["waveform"]),
+    )
+    model = load_model(torch, checkpoint, module)
+    wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
+    previous = torch.backends.mha.get_fastpath_enabled()
+    attention = import_module("torch.nn.attention")
+    try:
+        torch.backends.mha.set_fastpath_enabled(False)
+        with (
+            torch.inference_mode(),
+            mark_attention(torch),
+            attention.sdpa_kernel(attention.SDPBackend.FLASH_ATTENTION),
+        ):
+            proto, weights = export_skeleton(torch, wrapper, inputs)
+    finally:
+        torch.backends.mha.set_fastpath_enabled(previous)
+    del wrapper, model, inputs
+    if source_files() != sources or not 0 < len(proto) <= MAX_SKELETON_BYTES or not weights:
+        msg = "HTDemucs separated trace source or skeleton differs"
+        raise ValueError(msg)
+
+    output.mkdir(exist_ok=False)
+    skeleton_path = output / "skeleton.onnx"
+    weights_path = output / "weights.bin"
+    manifest_path = output / "initializers.json"
+    with skeleton_path.open("xb") as stream:
+        stream.write(proto)
+    manifest, bank = write_initializers(weights_path, weights)
+    encoded_manifest = json.dumps([asdict(item) for item in manifest]).encode("utf-8")
+    if len(encoded_manifest) > MAX_MANIFEST_BYTES:
+        msg = "HTDemucs initializer manifest exceeds its export extent"
+        raise ValueError(msg)
+    with manifest_path.open("xb") as stream:
+        stream.write(encoded_manifest)
+    return SeparatedTrace(
+        Artifact(len(proto), hashlib.sha256(proto).hexdigest()),
+        Artifact(len(encoded_manifest), hashlib.sha256(encoded_manifest).hexdigest()),
+        bank,
+        reference,
+    )
+
+
+def length_field(field: int, size: int) -> bytes:
+    """Encode a protobuf length-delimited field header."""
+    raw = bytearray()
+    for value in (field * 8 + 2, size):
+        number = value
+        while number >= 128:
+            raw.append((number & 127) | 128)
+            number >>= 7
+        raw.append(number)
+    return bytes(raw)
+
+
+def initializer_headers(onnx, model, manifest: list[Initializer]) -> list[bytes]:
+    """Bind every initializer to its declared graph input and encode its metadata."""
+    values = model.graph.input
+    names = [value.name for value in values]
+    if (
+        model.graph.initializer
+        or model.graph.sparse_initializer
+        or names != [*tuple(SHAPES)[:2], *(item.name for item in manifest)]
+        or len(set(names)) != len(names)
+    ):
+        msg = "HTDemucs initializer manifest does not match the graph inputs"
+        raise ValueError(msg)
+    headers = []
+    for value, item in zip(values[2:], manifest, strict=True):
+        kind, _ = INITIALIZER_TYPES[item.dtype]
+        tensor = value.type.tensor_type
+        shape = tensor.shape.dim
+        if (
+            tensor.elem_type != kind
+            or not tensor.HasField("shape")
+            or any(not dim.HasField("dim_value") for dim in shape)
+            or tuple(dim.dim_value for dim in shape) != tuple(item.shape)
+        ):
+            msg = f"HTDemucs initializer type or shape differs: {item.name}"
+            raise ValueError(msg)
+        header = onnx.TensorProto(name=item.name, data_type=kind, dims=item.shape)
+        raw_field = header.DESCRIPTOR.fields_by_name["raw_data"].number
+        headers.append(header.SerializeToString() + length_field(raw_field, item.size))
+    del values[2:]
+    return headers
+
+
+def copy_initializers(
+    source: BinaryIO,
+    write: Callable[[bytes], None],
+    expected: Artifact,
+    entries,
+    field: int,
+) -> None:
+    """Verify each exact byte range and the complete bank while streaming it."""
+    bank = hashlib.sha256()
+    for item, header in entries:
+        write(length_field(field, len(header) + item.size))
+        write(header)
+        tensor = hashlib.sha256()
+        remaining = item.size
+        while remaining:
+            chunk = source.read(min(STREAM_CHUNK_BYTES, remaining))
+            if not chunk:
+                msg = f"truncated HTDemucs initializer: {item.name}"
+                raise ValueError(msg)
+            tensor.update(chunk)
+            bank.update(chunk)
+            write(chunk)
+            remaining -= len(chunk)
+        if tensor.hexdigest() != item.sha256:
+            msg = f"HTDemucs initializer digest differs: {item.name}"
+            raise ValueError(msg)
+    if source.read(1) or bank.hexdigest() != expected.sha256:
+        msg = "HTDemucs initializer bank differs"
+        raise ValueError(msg)
+
+
+def assemble_trace(
+    separated: Path,
+    trace: SeparatedTrace,
+    output: Path,
+    *,
+    overlay: Path,
+    admit: Callable[[Phase], None],
+) -> TraceArtifact:
+    """Assemble an exact inline marked trace in a fresh ONNX-only child."""
+    begin_phase(Phase.ASSEMBLE, admit)
+    onnx = onnx_producer(overlay)
+    skeleton = read_artifact(separated / "skeleton.onnx", trace.skeleton, MAX_SKELETON_BYTES)
+    model = parse_inline_graph(onnx, skeleton)
+    del skeleton
+    manifest_bytes = read_artifact(
+        separated / "initializers.json",
+        trace.manifest,
+        MAX_MANIFEST_BYTES,
+    )
+    manifest = [Initializer(**item) for item in json.loads(manifest_bytes)]
+    if not manifest or sum(item.size for item in manifest) != trace.weights.size:
+        msg = "HTDemucs initializer bank extent differs"
+        raise ValueError(msg)
+    headers = initializer_headers(onnx, model, manifest)
+    field = model.graph.DESCRIPTOR.fields_by_name["initializer"].number
+    graph_field = model.DESCRIPTOR.fields_by_name["graph"].number
+    graph = model.graph.SerializeToString()
+    model.ClearField("graph")
+    envelope = model.SerializeToString()
+    entries = list(zip(manifest, headers, strict=True))
+    graph_size = len(graph) + sum(
+        len(length_field(field, len(header) + item.size)) + len(header) + item.size
+        for item, header in entries
+    )
+    graph_header = length_field(graph_field, graph_size)
+    extent = len(envelope) + len(graph_header) + graph_size
+    if extent > MAX_GRAPH_BYTES:
+        msg = "HTDemucs assembled trace exceeds the inline extent"
+        raise ValueError(msg)
+    digest = hashlib.sha256()
+    with (separated / "weights.bin").open("rb") as source, output.open("xb") as target:
+
+        def write(raw: bytes) -> None:
+            if target.write(raw) != len(raw):
+                msg = "incomplete HTDemucs assembled trace write"
+                raise OSError(msg)
+            digest.update(raw)
+
+        for raw in (envelope, graph_header, graph):
+            write(raw)
+        copy_initializers(source, write, trace.weights, entries, field)
+        if target.tell() != extent:
+            msg = "HTDemucs assembled trace extent differs"
+            raise ValueError(msg)
+    return TraceArtifact(Artifact(extent, digest.hexdigest()), trace.reference, TORCH_CPU)
+
+
 def graph_metadata(trace: TraceArtifact, attention_sha256: str) -> dict[str, str]:
     """Bind the graph to the release and the upstream original references."""
     reference = trace.reference
     return {
         "flitzis_htdemucs_contract": CONTRACT,
         "checkpoint_sha256": CHECKPOINT,
-        "torch_version": TORCH,
+        "torch_version": trace.torch_version,
         "torch_commit": TORCH_COMMIT,
         "source_closure_sha256": source_digest(),
         "lowering": LOWERING,
