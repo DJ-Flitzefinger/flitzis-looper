@@ -125,6 +125,8 @@ SPECTRAL_REWRITE_DENSE = (
     0,
     SPECTRAL_REWRITE_BYTES,
 )
+SPECTRAL_DCONV_DENSE = ((512, 96, 1, 336), (32256, 336, 336, 1), 0, 66_060_288)
+SPECTRAL_DCONV_RETURN = ((512, 96, 336), (32256, 336, 1), 0, SPECTRAL_DCONV_DENSE[3])
 SPECTRAL_TRANSPOSE_SHAPE = (1, 16, 2052, 336)
 SPECTRAL_TRANSPOSE_BYTES = prod(SPECTRAL_TRANSPOSE_SHAPE) * 4
 SPECTRAL_TRANSPOSE_PUBLIC_STRIDES = (11031552, 1, 5376, 16)
@@ -1355,12 +1357,7 @@ def reference_dispatch_mode(dispatch):
     return ReferenceDispatch(dispatch)
 
 
-def check_spectral_rewrite_operands(torch, operands):
-    geometry = (
-        ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33030144),
-        ((96, 48, 3, 3), (432, 9, 3, 1), 0, 165888),
-        ((96,), (1,), 0, 384),
-    )
+def check_mapped_convolution_operands(torch, operands, geometry):
     for value, expected in zip(operands, geometry, strict=True):
         if (
             type(value) not in {torch.Tensor, torch.nn.Parameter}
@@ -1369,13 +1366,14 @@ def check_spectral_rewrite_operands(torch, operands):
             or value.is_neg()
             or state_storage_geometry(value) != expected
         ):
-            msg = "unexpected HTDemucs spectral rewrite operands"
+            msg = "unexpected HTDemucs mapped convolution operands"
             raise ValueError(msg)
 
 
-def mapped_spectral_rewrite_storage(torch, output: Path, inputs):
-    owner = mapped_reference_scratch(output, SPECTRAL_REWRITE_BYTES, "rewrite-dense")
-    mapped = torch.frombuffer(owner, dtype=torch.float32).view(SPECTRAL_REWRITE_SHAPE)
+def mapped_convolution_return_storage(torch, output: Path, inputs, geometry, label):
+    shape, _, _, size = geometry
+    owner = mapped_reference_scratch(output, size, label)
+    mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
     _, storage, address = tensor_backing(mapped)
     live_spans = tuple(
         (*tensor_backing(value)[1:], value.untyped_storage().nbytes()) for value in inputs
@@ -1383,19 +1381,18 @@ def mapped_spectral_rewrite_storage(torch, output: Path, inputs):
     if (
         address % STATE_ALIGNMENT
         or mapped.untyped_storage().resizable()
-        or state_storage_geometry(mapped) != SPECTRAL_REWRITE_DENSE
+        or state_storage_geometry(mapped) != geometry
         or any(
-            storage == other_storage
-            or (address < start + size and start < address + SPECTRAL_REWRITE_BYTES)
-            for other_storage, start, size in live_spans
+            storage == other_storage or (address < start + other_size and start < address + size)
+            for other_storage, start, other_size in live_spans
         )
     ):
-        msg = "unexpected HTDemucs spectral rewrite mapped storage"
+        msg = "unexpected HTDemucs mapped convolution storage"
         raise ValueError(msg)
     return mapped
 
 
-def native_spectral_rewrite(torch, output: Path, func, args, cpu):
+def native_mapped_convolution_return(torch, output: Path, func, args, cpu, geometry, label):
     """Supply the ABCD destination of the stock oneDNN public reorder."""
     aten = torch.ops.aten
     empty_options = {
@@ -1404,6 +1401,7 @@ def native_spectral_rewrite(torch, output: Path, func, args, cpu):
         "device": torch.device("cpu"),
     }
     contiguous = {"memory_format": torch.contiguous_format}
+    shape = geometry[0]
     stage = 0
     backing = None
 
@@ -1413,8 +1411,8 @@ def native_spectral_rewrite(torch, output: Path, func, args, cpu):
             if stage == 0 and tuple(operands[0]) == (0,):
                 stage = 1
                 return op(*operands, **options)
-            if stage == 1 and tuple(operands[0]) == SPECTRAL_REWRITE_SHAPE:
-                mapped = mapped_spectral_rewrite_storage(torch, output, args[:3])
+            if stage == 1 and tuple(operands[0]) == shape:
+                mapped = mapped_convolution_return_storage(torch, output, args[:3], geometry, label)
                 backing = tensor_backing(mapped)
                 stage = 2
                 return mapped
@@ -1422,7 +1420,7 @@ def native_spectral_rewrite(torch, output: Path, func, args, cpu):
             if (
                 op == aten.as_strided_.default
                 and stage == 2
-                and (tuple(operands[1]), tuple(operands[2])) == SPECTRAL_REWRITE_DENSE[:2]
+                and (tuple(operands[1]), tuple(operands[2])) == geometry[:2]
                 and operands[3:] in {(), (None,), (0,)}
                 and not options
             ):
@@ -1436,55 +1434,95 @@ def native_spectral_rewrite(torch, output: Path, func, args, cpu):
                 op == aten.resize_.default
                 and stage in {3, 4}
                 and len(operands) == 2
-                and tuple(operands[1]) == SPECTRAL_REWRITE_SHAPE
+                and tuple(operands[1]) == shape
                 and options == contiguous
             ):
                 stage = 5
                 return op(*operands, **options)
-        msg = "unexpected HTDemucs spectral rewrite allocation or layout operation"
+        msg = "unexpected HTDemucs mapped convolution allocation or layout operation"
         raise ValueError(msg)
 
     with reference_dispatch_mode(dispatch):
         dense = func.redispatch(cpu, *args)
-    if (
-        stage != 5
-        or tensor_backing(dense) != backing
-        or state_storage_geometry(dense) != SPECTRAL_REWRITE_DENSE
-    ):
-        msg = "unexpected HTDemucs spectral rewrite dense return"
+    if stage != 5 or tensor_backing(dense) != backing or state_storage_geometry(dense) != geometry:
+        msg = "unexpected HTDemucs mapped convolution dense return"
         raise ValueError(msg)
     return dense
 
 
-def redispatch_spectral_rewrite(torch, output: Path, func, args, cpu):
+def redispatch_mapped_convolution(
+    torch, output: Path, func, args, cpu, geometry, label, *, lift=None
+):
     aten = torch.ops.aten
-    stride, padding, dilation = args[3:6]
+    stride, padding, dilation = map(tuple, args[3:6])
+    spatial = (padding, stride, dilation)
     backing = tuple(tensor_backing(value) for value in args[:3])
-    used_reorder = False
+    if lift is not None:
+        # Native Conv1d unsqueezes input and weight before the oneDNN call.
+        spatial = ((0, *padding), (1, *stride), (1, *dilation))
+    native_backing = None
 
     def dispatch(op, operands, options):
-        nonlocal used_reorder
+        nonlocal native_backing
         if op != aten.mkldnn_convolution.default:
             return op(*operands, **options)
+        observed = tuple(tensor_backing(value) for value in operands[:3])
+        expected = backing
+        if lift is not None:
+            check_mapped_convolution_operands(torch, operands[:3], lift)
+            # Input and weight have new TensorImpls but retain their backing.
+            observed = (observed[0][1:], observed[1][1:], observed[2])
+            expected = (backing[0][1:], backing[1][1:], backing[2])
         if (
-            used_reorder
+            native_backing is not None
             or options
-            or tuple(tensor_backing(value) for value in operands[:3]) != backing
-            or tuple(tuple(value) for value in operands[3:6])
-            != (tuple(padding), tuple(stride), tuple(dilation))
+            or observed != expected
+            or tuple(map(tuple, operands[3:6])) != spatial
             or operands[6:] != (1,)
         ):
-            msg = "unexpected HTDemucs native spectral rewrite convolution"
+            msg = "unexpected HTDemucs native mapped convolution"
             raise ValueError(msg)
-        used_reorder = True
-        return native_spectral_rewrite(torch, output, op, operands, cpu)
+        mapped = native_mapped_convolution_return(torch, output, op, operands, cpu, geometry, label)
+        native_backing = tensor_backing(mapped)
+        return mapped
 
     with reference_dispatch_mode(dispatch):
         dense = func.redispatch(cpu, *args)
-    if not used_reorder:
-        msg = "missing HTDemucs native spectral rewrite convolution"
+    if native_backing is None:
+        msg = "missing HTDemucs native mapped convolution"
+        raise ValueError(msg)
+    if lift is not None and (
+        tensor_backing(dense)[1:] != native_backing[1:]
+        or state_storage_geometry(dense) != SPECTRAL_DCONV_RETURN
+    ):
+        msg = "unexpected HTDemucs spectral DConv squeeze result"
         raise ValueError(msg)
     return dense
+
+
+def mapped_convolution_dispatch(torch, operands, wrappers, params, redispatch):
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    expected_tensors = tuple(value._cdata for value in operands)
+
+    def dispatch(op, args, options):
+        expected = params if op == aten._convolution.default else wrappers.get(op)
+        supplied = args[3:-4] if op == aten._convolution.default else args[3:]
+        if (
+            expected is None
+            or options
+            or tuple(value._cdata for value in args[:3]) != expected_tensors
+            or tuple(tuple(value) if isinstance(value, list) else value for value in supplied)
+            != expected
+        ):
+            msg = "unexpected HTDemucs mapped convolution"
+            raise ValueError(msg)
+        if op in wrappers:
+            with reference_dispatch_mode(dispatch):
+                return op.redispatch(cpu, *args)
+        return redispatch(op, args, cpu)
+
+    return reference_dispatch_mode(dispatch)
 
 
 @contextmanager
@@ -1502,12 +1540,21 @@ def mapped_spectral_rewrite(torch, conv, output: Path):
         raise ValueError(msg)
     stock = conv.forward
     aten = torch.ops.aten
-    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
     convolution_args = (stride, padding, dilation, False, output_padding, 1)
     wrappers = {
         aten.conv2d.default: (stride, padding),
         aten.convolution.default: convolution_args,
     }
+    geometry = (
+        ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33030144),
+        ((96, 48, 3, 3), (432, 9, 3, 1), 0, 165888),
+        ((96,), (1,), 0, 384),
+    )
+
+    def redispatch(op, args, cpu):
+        return redispatch_mapped_convolution(
+            torch, output, op, args, cpu, SPECTRAL_REWRITE_DENSE, "rewrite-dense"
+        )
 
     def forward(source):
         check_reference_inference_dispatch(torch, "spectral rewrite")
@@ -1518,32 +1565,64 @@ def mapped_spectral_rewrite(torch, conv, output: Path):
         if backend != torch._C._ConvBackend.Mkldnn:
             msg = "unexpected HTDemucs spectral rewrite backend"
             raise ValueError(msg)
-        check_spectral_rewrite_operands(torch, operands)
+        check_mapped_convolution_operands(torch, operands, geometry)
+        with mapped_convolution_dispatch(torch, operands, wrappers, convolution_args, redispatch):
+            return stock(source)
 
-        def dispatch(op, args, options):
-            expected = wrappers.get(op)
-            if op == aten._convolution.default:
-                expected = convolution_args
-                params = args[3:-4]
-            else:
-                params = args[3:]
-            if (
-                expected is None
-                or options
-                or tuple(value._cdata for value in args[:3])
-                != tuple(value._cdata for value in operands)
-                or tuple(tuple(value) if isinstance(value, list) else value for value in params)
-                != expected
-            ):
-                msg = "unexpected HTDemucs spectral rewrite convolution"
-                raise ValueError(msg)
-            if op in wrappers:
-                with reference_dispatch_mode(dispatch):
-                    return op.redispatch(cpu, *args)
+    conv.forward = forward
+    try:
+        yield
+    finally:
+        del conv.forward
 
-            return redispatch_spectral_rewrite(torch, output, op, args, cpu)
 
-        with reference_dispatch_mode(dispatch):
+@contextmanager
+def mapped_spectral_dconv_pointwise(torch, conv, output: Path):
+    """Map the second pointwise return of the final spectral DConv."""
+    stride, padding, dilation = (1,), (0,), (1,)
+    if (
+        type(conv) is not torch.nn.Conv1d
+        or "forward" in vars(conv)
+        or (conv.in_channels, conv.out_channels, conv.groups, conv.padding_mode)
+        != (6, 96, 1, "zeros")
+        or (conv.kernel_size, conv.stride, conv.padding, conv.dilation)
+        != ((1,), stride, padding, dilation)
+    ):
+        msg = "unexpected HTDemucs final spectral DConv pointwise module"
+        raise ValueError(msg)
+    stock = conv.forward
+    aten = torch.ops.aten
+    convolution_args = (stride, padding, dilation, False, (0,), 1)
+    wrappers = {aten.conv1d.default: (), aten.convolution.default: convolution_args}
+    bias = ((96,), (1,), 0, 384)
+    geometry = (
+        ((512, 6, 336), (2016, 336, 1), 0, 4_128_768),
+        ((96, 6, 1), (6, 1, 1), 0, 2_304),
+        bias,
+    )
+    lifted = (
+        ((512, 6, 1, 336), (2016, 336, 336, 1), 0, 4_128_768),
+        ((96, 6, 1, 1), (6, 1, 1, 1), 0, 2_304),
+        bias,
+    )
+
+    def redispatch(op, args, cpu):
+        return redispatch_mapped_convolution(
+            torch, output, op, args, cpu, SPECTRAL_DCONV_DENSE, "dconv-pointwise", lift=lifted
+        )
+
+    def forward(source):
+        check_reference_inference_dispatch(torch, "spectral DConv pointwise")
+        operands = (source, conv.weight, conv.bias)
+        # Backend selection may make a rank-three input contiguous.
+        check_mapped_convolution_operands(torch, operands, geometry)
+        backend = torch._C._select_conv_backend(*operands, *convolution_args)
+        if backend == torch._C._ConvBackend.Slow2d:
+            return stock(source)
+        if backend != torch._C._ConvBackend.Mkldnn:
+            msg = "unexpected HTDemucs spectral DConv pointwise backend"
+            raise ValueError(msg)
+        with mapped_convolution_dispatch(torch, operands, wrappers, convolution_args, redispatch):
             return stock(source)
 
     conv.forward = forward
@@ -1554,21 +1633,19 @@ def mapped_spectral_rewrite(torch, conv, output: Path):
 
 
 def check_spectral_transpose_operands(torch, operands):
+    # The stock DConv view gives the singleton batch axis its folded stride.
+    # A dense ABCD input also has the canonical contiguous batch stride.
+    source, weight, bias = operands
+    batch_stride = source.stride(0)
+    if batch_stride not in {172032, 8257536}:
+        msg = "unexpected HTDemucs spectral transpose batch stride"
+        raise ValueError(msg)
     geometry = (
-        ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33030144),
+        ((1, 48, 512, 336), (batch_stride, 172032, 336, 1), 0, 33030144),
         ((48, 16, 8, 1), (128, 8, 1, 1), 0, 24576),
         ((16,), (1,), 0, 64),
     )
-    for value, expected in zip(operands, geometry, strict=True):
-        if (
-            type(value) not in {torch.Tensor, torch.nn.Parameter}
-            or (value.device.type, value.dtype, value.layout)
-            != ("cpu", torch.float32, torch.strided)
-            or value.is_neg()
-            or state_storage_geometry(value) != expected
-        ):
-            msg = "unexpected HTDemucs spectral transpose operands"
-            raise ValueError(msg)
+    check_mapped_convolution_operands(torch, (source, weight, bias), geometry)
 
 
 def mapped_spectral_transpose_storage(torch, output: Path, label: str, live_spans):
@@ -2446,6 +2523,9 @@ def capture_reference(
             reference.enter_context(mapped_reference_attention(torch, model, output))
             reference.enter_context(
                 mapped_spectral_rewrite(torch, model.decoder[-1].rewrite, output)
+            )
+            reference.enter_context(
+                mapped_spectral_dconv_pointwise(torch, model.decoder[-1].dconv.layers[1][3], output)
             )
             reference.enter_context(
                 mapped_spectral_transpose(torch, model.decoder[-1].conv_tr, output)
