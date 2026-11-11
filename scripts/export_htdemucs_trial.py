@@ -1026,6 +1026,43 @@ def infer_shapes_without_initializers(torch):
         torch._C._jit_pass_onnx_graph_shape_type_inference = infer
 
 
+@contextmanager
+def trace_with_metadata_outputs(torch, utils):
+    """Release the eager trace output backings before ONNX lowering."""
+    create_graph = utils._create_jit_graph
+
+    def create_graph_with_metadata(model, args):
+        graph, parameters, outputs, module = create_graph(model, args)
+        if not isinstance(outputs, tuple) or len(outputs) != 2:
+            msg = "HTDemucs trace requires two output examples"
+            raise ValueError(msg)
+        examples = []
+        for output in outputs:
+            if (
+                not isinstance(output, torch.Tensor)
+                or output.device.type != "cpu"
+                or output.dtype != torch.float32
+                or output.layout != torch.strided
+            ):
+                msg = "HTDemucs trace output examples must be strided CPU float32 tensors"
+                raise ValueError(msg)
+            # The pinned C++ output-shape pass reads only TensorType metadata.
+            # ZeroTensor represents the storage extent with a null data pointer.
+            extent = output.untyped_storage().nbytes() // output.element_size()
+            backing = torch._efficientzerotensor(
+                (extent,), dtype=output.dtype, device=output.device
+            )
+            example = backing.as_strided(output.shape, output.stride(), output.storage_offset())
+            examples.append(example.requires_grad_(output.requires_grad))
+        return graph, parameters, tuple(examples), module
+
+    utils._create_jit_graph = create_graph_with_metadata
+    try:
+        yield
+    finally:
+        utils._create_jit_graph = create_graph
+
+
 def export_skeleton(torch, wrapper, inputs):
     """Use the pinned legacy lowering while leaving weights as named graph inputs."""
     utils = import_module("torch.onnx._internal.torchscript_exporter.utils")
@@ -1053,17 +1090,18 @@ def export_skeleton(torch, wrapper, inputs):
             utils.exporter_context(wrapper, torch._C._onnx.TrainingMode.EVAL, verbose=False),
             infer_shapes_without_initializers(torch),
         ):
-            graph, weights, _ = utils._model_to_graph(
-                wrapper,
-                inputs,
-                input_names=list(SHAPES)[:2],
-                output_names=list(SHAPES)[2:],
-                operator_export_type=operator,
-                training=torch._C._onnx.TrainingMode.EVAL,
-                do_constant_folding=False,
-                dynamic_axes={},
-            )
-            del _
+            with trace_with_metadata_outputs(torch, utils):
+                graph, weights, examples = utils._model_to_graph(
+                    wrapper,
+                    inputs,
+                    input_names=list(SHAPES)[:2],
+                    output_names=list(SHAPES)[2:],
+                    operator_export_type=operator,
+                    training=torch._C._onnx.TrainingMode.EVAL,
+                    do_constant_folding=False,
+                    dynamic_axes={},
+                )
+            del examples
             torch._C._jit_pass_dce_allow_deleting_nodes_with_side_effects(graph)
             weights = torch._C._jit_pass_onnx_deduplicate_initializers(
                 graph,
