@@ -131,7 +131,9 @@ journal covers short checkout/runtime backups, data transfer and starter
 selection. Repeating the same BAT after an interruption restores the previous
 installation or finishes cleanup of a fully verified accepted candidate before
 starting another update. A starter refuses an unfinished transaction and points
-to that recovery step.
+to that recovery step. If the journal records a completed Native Samples
+capture, rollback requires its relocation record. When that record is missing,
+recovery stops before moving files and preserves the transaction for diagnosis.
 
 The installation uses these areas:
 

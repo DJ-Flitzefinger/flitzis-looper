@@ -156,6 +156,7 @@ HELPER = r"""
 param([string] $Root, [string] $Source, [string] $Git, [string] $Commit,
     [string] $RuntimeDirectory, [string] $OperationId)
 Set-StrictMode -Version Latest
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 $actual = & $Git -C $Source rev-parse HEAD
@@ -1590,6 +1591,58 @@ def test_recovery_validates_candidate_before_any_execution(
     assert (installation.target / "portable-transaction.json").exists()
     if seam == "accepted":
         assert (installation.target / "portable-transaction.json").read_bytes() == journal
+
+
+def test_rollback_requires_record_for_completed_native_capture(
+    installation: Installation,
+) -> None:
+    first = installation.publish("first")
+    require_success(installation.run())
+    original_pointer = installation.pointer()
+    worker = installation.target / "analysis-runtime/beat-this/current.json"
+    original_worker = worker.read_bytes()
+    contents = _user_data(installation)
+    second = installation.publish("second", failure="prepared-interrupt")
+    assert installation.run().returncode != 0
+    paths = _simulate_activation_interrupt(installation, "state", second)
+    hidden_record = paths.relocation.with_suffix(".withheld")
+    paths.relocation.rename(hidden_record)
+
+    journal = installation.target / "portable-transaction.json"
+    current = installation.target / "current.json"
+    before = {path: path.read_bytes() for path in (journal, current, worker, hidden_record)}
+    directories = (paths.checkout, paths.runtime, paths.old_checkout, paths.old_runtime)
+    identities = {path: path.stat().st_ino for path in directories}
+    relocations = installation.trace("native-relocation-history.jsonl")
+
+    result = installation.run()
+
+    assert result.returncode != 0
+    assert "completed Native capture is missing its relocation record" in result.stdout
+    assert {path: path.read_bytes() for path in before} == before
+    assert {path: path.stat().st_ino for path in directories} == identities
+    assert installation.trace("native-relocation-history.jsonl") == relocations
+    assert not paths.source.exists()
+    assert not paths.candidate.exists()
+    assert all(path.read_bytes() == content for path, content in contents.items())
+
+    hidden_record.rename(paths.relocation)
+    require_success(
+        _run_embedded(
+            installation.installer.parent,
+            f"Recover-PortableTransaction {_ps_string(installation.target)}",
+        )
+    )
+    assert original_pointer["git_commit"] == first
+    assert installation.pointer() == original_pointer
+    assert worker.read_bytes() == original_worker
+    assert not journal.exists()
+    assert not paths.relocation.exists()
+    assert not paths.old_checkout.exists()
+    assert not paths.old_runtime.exists()
+    assert paths.checkout.stat().st_ino == identities[paths.old_checkout]
+    assert paths.runtime.stat().st_ino == identities[paths.old_runtime]
+    assert all(path.read_bytes() == content for path, content in contents.items())
 
 
 def test_rollback_rejects_candidate_reparse_before_relocation_execution(

@@ -577,8 +577,15 @@ function Complete-PortableTransaction([string] $Root, $Record) {
 
 function Undo-PortableTransaction([string] $Root, $Record) {
     $paths = Get-PortablePaths $Root $Record.operation
+    $restoreSamples = $Record.had_samples -and $Record.capture_completed
+    if ($restoreSamples) {
+        Assert-PlainPath $paths.relocation
+        if (-not (Test-Path -LiteralPath $paths.relocation -PathType Leaf)) {
+            throw 'The completed Native capture is missing its relocation record; files will be preserved.'
+        }
+    }
     Save-PortableTransaction $Root $Record 'rolling_back'
-    if ($Record.had_samples -and $Record.capture_completed -and (Test-Path -LiteralPath $paths.relocation)) {
+    if ($restoreSamples) {
         $custody = Get-PortableCandidateCustody $paths $Record
         $sourceRoot = Get-PortableDataSource $Root $Record $paths
         Invoke-PortableRelocation $Root $custody.checkout $custody.runtime (Join-Path $sourceRoot 'samples') (Join-Path $paths.checkout 'samples') $paths.relocation 'rollback'
