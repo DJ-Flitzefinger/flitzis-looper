@@ -1258,3 +1258,13 @@ remaining plan into each successor; report actual hard service limits honestly.
       refusals with nonlearned controls under the disposable process protocol.
 - [ ] Establish prospective whole-process admission for each learned producer
       phase and the Native load/run, including startup, failures, exit and readers.
+
+## HTDemucs inline load control
+
+- [x] Exercise copied and same-handle read-only mapped loading of a fixed
+      inline ONNX graph with two large nonlearned FP32 initializers under
+      independent guarded CPU ORT children, checking all output values.
+- [x] Check exact graph custody and pre-bootstrap refusals and account for
+      private, file-backed, parsed and materialized owners separately.
+- [ ] Bound the actual learned graph's complete initializer, graph, loader,
+      provider, operator and reader owners through successful and failed exit.

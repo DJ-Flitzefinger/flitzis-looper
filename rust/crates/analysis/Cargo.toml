@@ -24,6 +24,10 @@ required-features = ["native-inference-trial"]
 name = "demucs_attention_control"
 required-features = ["native-inference-dynamic"]
 
+[[example]]
+name = "demucs_inline_load_control"
+required-features = ["native-inference-dynamic"]
+
 [dependencies]
 flitzis-stem-dsp = { path = "../stem-dsp", optional = true }
 matrixmultiply = "0.3"

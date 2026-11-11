@@ -1417,3 +1417,49 @@ ORT CPU package. The learned export still requires finite per-phase
 producer allowances. The CPU adapter remains closed before ORT bootstrap.
 Full graph/runtime and process admission, complete learned branch and
 PCM/tail comparisons, and production cutover remain open.
+
+#### Exact inline graph load control
+
+The Windows-only `demucs_inline_load_control` accepts the single fixed fixture
+from `scripts/demucs_inline_load_fixture.py`. The graph is 134,217,914 bytes and
+contains two 67,108,864-byte inline FP32 MatMul initializers. Its source-pinned
+SHA-256 covers the complete artifact, including tensor contents and metadata.
+No external data, alternative digest or learned artifact is accepted.
+The separately admitted child uses the pinned ORT 1.24.4/API 24 CPU package
+under the existing package-system32 process guard. Both modes use sequential
+execution, one intra-op and one inter-op thread, with graph optimizations,
+prepacking, CPU arena and memory patterns disabled.
+
+The copied control holds a Rust allocation of the exact serialized extent
+through synchronous session creation. The mapped control uses one unnamed
+read-only disk-file view from the same handle that established the extent.
+The handle rejects write and delete sharing and outlives the view. The slice
+hashed by Rust is the slice passed to ORT's `CreateSessionFromArray`. ORT
+never reopens the graph path. The control releases the serialized owner and
+file before evaluating every output value of both MatMuls.
+
+The mapping removes the serialized private heap allocation. Its entire extent
+can still occupy file-backed physical pages, with separate address-space,
+page-table and fault costs. ORT parses the same bytes into a ModelProto,
+resolves shapes and then materializes large initializers one at a time during
+graph transformation, including with the optimizer disabled. While each
+initializer is copied, its protobuf raw data coexists with its new CPU tensor
+and the other initializers. The fixture therefore has a 201,326,592-byte
+initializer subtotal at that handoff, before allocator retention or other
+work. Adding the serialized extent gives 335,544,506 logical bytes in both
+modes with distinct private versus file-backed ownership. The CPU session
+state reuses these materialized tensors. Small initializers, nested graph
+attributes, required transforms, provider copies and other allocations need
+separate treatment for the learned graph. Keep the conservative learned load
+estimate until those lifetimes are closed.
+
+See [ORT array loading](https://github.com/microsoft/onnxruntime/blob/2d924974ef147392ced8409d36bd6d2e7fcc8a74/onnxruntime/core/session/inference_session.cc#L1101-L1151),
+[initializer conversion](https://github.com/microsoft/onnxruntime/blob/2d924974ef147392ced8409d36bd6d2e7fcc8a74/onnxruntime/core/graph/graph.cc#L3740-L3799),
+[CPU initializer reuse](https://github.com/microsoft/onnxruntime/blob/2d924974ef147392ced8409d36bd6d2e7fcc8a74/onnxruntime/core/framework/session_state_utils.cc#L363-L441)
+and [Windows file view semantics](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile).
+
+The Job commit observation and ORT profiles describe the controlled fixture.
+A map failure or in-page error invalidates the child result. The parent must
+observe process tree, Job and both pipe readers through retirement.
+The release graph, metadata, adapter refusal and independent learned
+producer and Native admission gates remain in effect.
