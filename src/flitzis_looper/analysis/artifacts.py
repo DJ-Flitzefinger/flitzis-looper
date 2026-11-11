@@ -20,6 +20,11 @@ if TYPE_CHECKING:
 SOURCE_REVISION = "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c"
 FRONTEND_ID = "beat-this-1.1.0-soxr-hq-logmel-v1"
 WORKER_FILES = ("pyproject.toml", "uv.lock", "worker.py")
+NATIVE_MODEL = BeatModelIdentity(
+    sha256="46bfb2c1a1f1e5c1d8786d0d9462f285971ff7fa8a592ac5f4ab609698bd44ca",
+    frontend_id="beat-this-1.1.0-native-soxr-hq-logmel-v1",
+    environment_id="native-onnxruntime-1.24.4-api24-windows-x64-cpu-v1",
+)
 _METADATA_LIMIT = 4 * 1024 * 1024
 type Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 

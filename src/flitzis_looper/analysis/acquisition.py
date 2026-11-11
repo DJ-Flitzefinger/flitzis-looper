@@ -301,10 +301,12 @@ def acquire_pinned_asset(
         return AcquiredArtifact(destination, artifact.sha256, artifact.size_bytes)
 
 
-def copy_to_quarantine(source: Path, destination: Path) -> AcquiredArtifact:
+def copy_to_quarantine(
+    source: Path, destination: Path, *, max_bytes: int = MAX_CHECKPOINT_BYTES
+) -> AcquiredArtifact:
     """Copy selected local bytes without networking or trusting the source filename."""
     with source.open("rb") as stream:
-        return _copy_quarantined(stream, destination, MAX_CHECKPOINT_BYTES)
+        return _copy_quarantined(stream, destination, max_bytes)
 
 
 def _copy_quarantined(stream: BinaryIO, destination: Path, max_bytes: int) -> AcquiredArtifact:

@@ -20,6 +20,8 @@ const ENVIRONMENT_ID: &str =
     "uv-lock-sha256:e7d180bd53a02736693e0054dfb62a868da77478922b8ca3027c07fe12f98a75";
 const FRONTEND_ID: &str = "beat-this-1.1.0-soxr-hq-logmel-v1";
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
+const NATIVE_GRAPH_SHA256: &str =
+    "46bfb2c1a1f1e5c1d8786d0d9462f285971ff7fa8a592ac5f4ab609698bd44ca";
 const CUDA_ENVIRONMENT_ID: &str =
     "uv-lock-sha256:0a662b8a7b4058899bc8eb0b775d186bc1e5acf6f101ec2186d3f998c84d0f30";
 
@@ -165,6 +167,14 @@ pub(in crate::audio_engine) fn pinned_cuda_model() -> Value {
     model
 }
 
+pub(in crate::audio_engine) fn pinned_native_model() -> Value {
+    let mut model = pinned_model();
+    model["sha256"] = NATIVE_GRAPH_SHA256.into();
+    model["frontend_id"] = "beat-this-1.1.0-native-soxr-hq-logmel-v1".into();
+    model["environment_id"] = "native-onnxruntime-1.24.4-api24-windows-x64-cpu-v1".into();
+    model
+}
+
 pub(in crate::audio_engine) fn expected_logit_count(
     frames: usize,
     rate: u32,
@@ -234,19 +244,29 @@ impl BeatThisRawData {
         // This method is used only after validate(). The legacy known worker is
         // CPU-only and explicitly places its model/input on CPU. Derive a NEW
         // App receipt without inserting any field into its canonical raw bytes.
-        if self.request.schema_version == 1 {
-            Some(
+        match self.request.schema_version {
+            1 => Some(
                 json!({"schema_version":1,"requested_policy":"cpu","device":"cpu",
                 "device_name":null,"precision":"float32","torch_version":"2.8.0+cpu",
                 "cuda_build_version":null,"fallback_reason":null}),
-            )
-        } else {
-            self.result
+            ),
+            3 => Some(
+                json!({"schema_version":1,"requested_policy":"cpu","device":"cpu",
+                "device_name":null,"precision":"float32","ort_version":"1.24.4",
+                "ort_api":24,"fallback_reason":null}),
+            ),
+            _ => self
+                .result
                 .execution
                 .as_ref()
-                .map(|receipt| serde_json::to_value(receipt).expect("typed execution receipt"))
+                .map(|receipt| serde_json::to_value(receipt).expect("typed execution receipt")),
         }
     }
+
+    pub(in crate::audio_engine) fn model_provenance(&self) -> (&str, &str) {
+        (&self.request.model.sha256, &self.request.model.frontend_id)
+    }
+
     pub(in crate::audio_engine) fn decoder_identity(&self) -> &str {
         &self.source.decoder_identity
     }
@@ -259,18 +279,17 @@ impl BeatThisRawData {
         let request = &self.request;
         let result = &self.result;
         let cuda = request.schema_version == 2;
-        let expected_model = if cuda {
-            pinned_cuda_model()
-        } else {
-            pinned_model()
+        let (expected_model, expected_encoding) = match request.schema_version {
+            1 => (pinned_model(), WORKER_ENCODING),
+            2 => (pinned_cuda_model(), "source-map-beat-this-worker-v2"),
+            3 => (pinned_native_model(), "source-map-beat-this-worker-v3"),
+            _ => return Err("unknown Beat This worker profile".into()),
         };
-        if !(request.schema_version == 1 || cuda)
-            || (if cuda {
-                request.execution_policy.as_deref() != Some("auto")
-            } else {
-                request.execution_policy.is_some()
-            })
-            || !codec::text(&request.identity.source_id)
+        if (if cuda {
+            request.execution_policy.as_deref() != Some("auto")
+        } else {
+            request.execution_policy.is_some()
+        }) || !codec::text(&request.identity.source_id)
             || request.identity.request_id == 0
             || request.identity.source_generation == 0
             || !codec::text(&request.pcm.path)
@@ -293,12 +312,7 @@ impl BeatThisRawData {
             return Err("Beat This staged PCM exceeds worker limit".into());
         }
         if result.schema_version != request.schema_version
-            || result.encoding
-                != (if cuda {
-                    "source-map-beat-this-worker-v2"
-                } else {
-                    WORKER_ENCODING
-                })
+            || result.encoding != expected_encoding
             || result.identity != request.identity
             || result.model.as_ref() != Some(&request.model)
             || !result.resources_released
@@ -332,7 +346,7 @@ impl BeatThisRawData {
                 .ok_or("Beat This actual execution receipt missing")?
                 .validate()?;
         } else if result.execution.is_some() || result.request_json.is_some() {
-            return Err("Legacy CPU capture cannot contain CUDA execution metadata".into());
+            return Err("CPU capture cannot contain CUDA execution metadata".into());
         }
         let p = result
             .predictions

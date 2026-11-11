@@ -6,7 +6,9 @@ pub(super) mod descriptor;
 pub(super) mod raw;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
-use raw::{BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model};
+use raw::{
+    BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model, pinned_native_model,
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -124,6 +126,9 @@ pub(in crate::audio_engine) fn invoke_worker(
             expected["schema_version"] = 2.into();
             expected["model"] = pinned_cuda_model();
             expected["execution_policy"] = "auto".into();
+        } else if version.schema_version == 3 {
+            expected["schema_version"] = 3.into();
+            expected["model"] = pinned_native_model();
         } else if version.schema_version != 1 {
             return Err("unknown Beat This worker profile".into());
         }

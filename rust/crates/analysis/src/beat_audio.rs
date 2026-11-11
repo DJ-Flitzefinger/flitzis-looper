@@ -8,7 +8,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::{CStr, c_char, c_void},
-    fs::File,
+    fs::OpenOptions,
     io::Read,
     path::Path,
 };
@@ -77,7 +77,14 @@ impl Soxr {
         if !path.is_absolute() {
             return Err("libsoxr path must be absolute".into());
         }
-        let mut file = context.file(File::open(path).map_err(|e| e.to_string())?, "soxr.close");
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(1); // Keep this exact DLL read-only through unloading.
+        }
+        let mut file = context.file(options.open(path).map_err(|e| e.to_string())?, "soxr.close");
         if file.metadata().map_err(|e| e.to_string())?.len() > 32 * 1024 * 1024 {
             return Err("libsoxr exceeds trial bound".into());
         }
@@ -99,12 +106,21 @@ impl Soxr {
         if expected.len() != 64 || format!("{:x}", digest.finalize()) != expected {
             return Err("libsoxr digest mismatch".into());
         }
-        // SAFETY: caller explicitly supplies a trusted native library and digest;
-        // the retained library owns every resolved symbol for the entire call.
-        // The caller must keep this owned trial path immutable. Hashing the file
-        // does not attest an OS-loaded image or a complete product producer.
         context.checkpoint("soxr.library")?;
-        let library = context.library(unsafe { Library::new(path) }.map_err(|e| e.to_string())?);
+        // SAFETY: this absolute library is checked against the caller's pin.
+        // On Windows only the DLL's own directory and System32 may resolve dependencies.
+        #[cfg(windows)]
+        let loaded = unsafe {
+            libloading::os::windows::Library::load_with_flags(
+                path,
+                libloading::os::windows::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                    | libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+            .map(Library::from)
+        };
+        #[cfg(not(windows))]
+        let loaded = unsafe { Library::new(path) };
+        let library = context.library(loaded.map_err(|e| e.to_string())?);
         let version = unsafe {
             let get = library
                 .get::<Version>(b"soxr_version\0")

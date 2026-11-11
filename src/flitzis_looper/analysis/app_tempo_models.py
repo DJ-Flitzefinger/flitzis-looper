@@ -20,9 +20,11 @@ from flitzis_looper.analysis.app_tempo_probe import (
     validate_adaptive_probe,
 )
 from flitzis_looper.analysis.app_tempo_range import BpmRangeResult, validate_bpm_range
+from flitzis_looper.analysis.artifacts import NATIVE_MODEL
 from flitzis_looper.analysis.execution import (
     ACTUAL_EXECUTION_ADAPTER,
     ActualExecutionReceipt,
+    NativeCpuExecutionReceipt,
     validate_execution,
 )
 
@@ -76,7 +78,9 @@ class AppTempoMethod(BaseModel):
     )
     ordinal_fit: OrdinalFit | None = Field(default=None, exclude_if=lambda value: value is None)
     model_sha256: _Digest
-    frontend_id: Literal["beat-this-1.1.0-soxr-hq-logmel-v1"]
+    frontend_id: Literal[
+        "beat-this-1.1.0-soxr-hq-logmel-v1", "beat-this-1.1.0-native-soxr-hq-logmel-v1"
+    ]
     source_sha256: _Digest
     mono_sha256: _Digest
     sample_rate_hz: Annotated[int, Field(ge=8000, le=384_000)]
@@ -188,6 +192,12 @@ class AppTempoMethod(BaseModel):
         return self
 
     def _validate_estimate(self) -> None:
+        native = isinstance(self.execution, NativeCpuExecutionReceipt)
+        if native != (self.frontend_id == NATIVE_MODEL.frontend_id) or (
+            native and self.model_sha256 != NATIVE_MODEL.sha256
+        ):
+            message = "Native BeatThis provenance differs from its execution receipt"
+            raise ValueError(message)
         if self.execution is not None:
             if self.schema_version not in {4, 5, 6, 7, 8, 9, 10, 11}:
                 message = "Execution receipts require tempo metadata version four through eleven"

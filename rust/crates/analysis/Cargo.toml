@@ -10,6 +10,7 @@ name = "flitzis_looper_analysis"
 native-inference-trial = ["dep:libloading"]
 native-inference-dynamic = ["native-inference-trial", "ort/load-dynamic"]
 native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
+native-beat-this-worker = ["native-inference-dynamic", "dep:serde", "dep:serde_json"]
 demucs-inference-trial = ["native-inference-trial", "dep:flitzis-stem-dsp"]
 
 [[example]]
@@ -28,6 +29,11 @@ required-features = ["native-inference-dynamic"]
 name = "demucs_inline_load_control"
 required-features = ["native-inference-dynamic"]
 
+[[bin]]
+name = "native-beat-this-worker"
+path = "src/beat_worker.rs"
+required-features = ["native-beat-this-worker"]
+
 [dependencies]
 flitzis-stem-dsp = { path = "../stem-dsp", optional = true }
 matrixmultiply = "0.3"
@@ -38,6 +44,8 @@ realfft = "3.4"
 rubato = "0.14"
 rustfft = "6.2"
 sha2 = "0.10"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

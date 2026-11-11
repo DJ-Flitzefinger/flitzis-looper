@@ -833,6 +833,7 @@ class AudioEngine:
     def request_loop_acceptance_snapshot(self, sample_id: int) -> int: ...
     SYNC_DIAGNOSTIC_API_VERSION: int
     BEAT_THIS_EXECUTION_API_VERSION: ClassVar[int]
+    BEAT_THIS_NATIVE_CPU_API_VERSION: ClassVar[int]
     def loop_acceptance_snapshot(
         self, sample_id: int, request_id: int
     ) -> dict[str, object] | None: ...

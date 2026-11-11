@@ -2155,6 +2155,9 @@ impl AudioEngine {
     /// Closed CPU-v1 and CUDA-auto-v2 analysis execution receipts.
     #[classattr]
     const BEAT_THIS_EXECUTION_API_VERSION: u32 = 2;
+
+    #[classattr]
+    const BEAT_THIS_NATIVE_CPU_API_VERSION: u32 = 1;
     #[classattr]
     const BPM_ONLY_RUNTIME_API_VERSION: u32 = 1;
 

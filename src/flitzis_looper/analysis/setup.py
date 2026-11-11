@@ -1,6 +1,7 @@
 """Explicit setup CLI/API for the optional isolated Beat This reference worker."""
 
 import argparse
+import hashlib
 import os
 import platform
 import re
@@ -33,6 +34,13 @@ from flitzis_looper.analysis.execution import (
     CudaBeatModelIdentity,
     require_cuda_native_capability,
 )
+from flitzis_looper.analysis.native_beat_worker import (
+    NativeWorkerConfiguration,
+    load_native_configuration,
+    require_native_cpu_capability,
+    stage_native_package,
+    verify_native_package,
+)
 from flitzis_looper.analysis.worker import WorkerConfiguration
 
 
@@ -46,6 +54,7 @@ class _InstallationPointer:
 
 
 _POINTER_ADAPTER = TypeAdapter(_InstallationPointer)
+type InstalledWorkerConfiguration = WorkerConfiguration | NativeWorkerConfiguration
 
 
 def install_worker(
@@ -114,16 +123,36 @@ def install_worker(
             configuration = load_staged_worker_configuration(install_dir, installed, scratch_dir)
         else:
             configuration = activate_worker_installation(install_dir, installed, scratch_dir)
+    assert isinstance(configuration, WorkerConfiguration)
+    return configuration
+
+
+def stage_native_worker(
+    install_dir: Path, scratch_dir: Path, package: Path
+) -> NativeWorkerConfiguration:
+    """Retain a complete local CPU worker without changing the active selection."""
+    _validate_setup_paths(install_dir, scratch_dir, package)
+    install_dir.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".staging-", dir=install_dir) as temporary:
+        staging = Path(temporary)
+        stage_native_package(package, staging)
+        retained = _retain_installation(staging, install_dir)
+    configuration = load_staged_worker_configuration(install_dir, retained, scratch_dir)
+    assert isinstance(configuration, NativeWorkerConfiguration)
     return configuration
 
 
 def load_staged_worker_configuration(
     install_dir: Path, installation: Path, scratch_dir: Path
-) -> WorkerConfiguration:
+) -> InstalledWorkerConfiguration:
     """Verify one inactive direct child without reading or changing current.json."""
     _validate_setup_paths(install_dir, scratch_dir, None)
     installed = _validated_installation_child(install_dir, installation)
     manifest_path = installed / "manifest.json"
+    native = load_native_configuration(manifest_path, _manifest_bytes(manifest_path), scratch_dir)
+    if native is not None:
+        verify_native_package(native)
+        return native
     manifest = read_installed_manifest(manifest_path)
     verify_worker_installation(manifest_path, manifest.model, Event())
     checkpoint = installed / "final0.ckpt"
@@ -139,14 +168,19 @@ def load_staged_worker_configuration(
 
 def activate_worker_installation(
     install_dir: Path, installation: Path, scratch_dir: Path
-) -> WorkerConfiguration:
+) -> InstalledWorkerConfiguration:
     """Reverify a retained known installation and atomically select that exact child."""
     configuration = load_staged_worker_configuration(install_dir, installation, scratch_dir)
     manifest = configuration.manifest
     assert manifest is not None
     pointer = _InstallationPointer(1, manifest.parent.name, artifacts.file_digest(manifest))
+    if isinstance(configuration, NativeWorkerConfiguration):
+        require_native_cpu_capability()
     _write_installation_pointer(
-        install_dir, pointer, cuda=isinstance(configuration.model, CudaBeatModelIdentity)
+        install_dir,
+        pointer,
+        cuda=isinstance(configuration, WorkerConfiguration)
+        and isinstance(configuration.model, CudaBeatModelIdentity),
     )
     return configuration
 
@@ -180,7 +214,17 @@ def _configuration_for_installation(
     )
 
 
-def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> WorkerConfiguration:
+def _manifest_bytes(path: Path) -> bytes:
+    limit = 4 * 1024 * 1024
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        message = "installation_manifest_limit"
+        raise ValueError(message)
+    return raw
+
+
+def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> InstalledWorkerConfiguration:
     """Read the explicitly named installed worker without acquisition or subprocess startup."""
     if not install_dir.is_absolute() or not scratch_dir.is_absolute():
         msg = "worker installation and scratch paths must be absolute"
@@ -193,11 +237,15 @@ def load_worker_configuration(install_dir: Path, scratch_dir: Path) -> WorkerCon
     if re.fullmatch(r"installation-[0-9a-f]{32}", pointer.directory) is None:
         msg = "installation_pointer_invalid"
         raise ValueError(msg)
-    installed = install_dir / pointer.directory
+    installed = _validated_installation_child(install_dir, install_dir / pointer.directory)
     manifest_path = installed / "manifest.json"
-    if artifacts.file_digest(manifest_path) != pointer.manifest_sha256:
+    raw = _manifest_bytes(manifest_path)
+    if hashlib.sha256(raw).hexdigest() != pointer.manifest_sha256:
         msg = "installation_manifest_corrupt"
         raise ValueError(msg)
+    native = load_native_configuration(manifest_path, raw, scratch_dir)
+    if native is not None:
+        return native
     manifest = read_installed_manifest(manifest_path)
     verify_worker_installation(manifest_path, manifest.model, Event())
     return _configuration_for_installation(installed, scratch_dir, manifest)
@@ -352,6 +400,7 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--stage-only", action="store_true")
     action.add_argument("--activate-installation", type=Path)
+    action.add_argument("--stage-native-cpu-package", type=Path)
     parser.add_argument(
         "--profile", choices=("legacy-cpu-v1", "cuda-auto-v2"), default="legacy-cpu-v1"
     )
@@ -362,8 +411,16 @@ def main() -> int:
         parser.error(
             "activation uses the retained manifest; omit checkpoint, offline and profile options"
         )
+    if options.stage_native_cpu_package is not None and (
+        options.checkpoint_file is not None or options.offline or options.profile != "legacy-cpu-v1"
+    ):
+        parser.error("Native CPU staging uses only the explicit local package")
     try:
-        if options.activate_installation is not None:
+        if options.stage_native_cpu_package is not None:
+            configuration = stage_native_worker(
+                options.install_dir, options.scratch_dir, options.stage_native_cpu_package
+            )
+        elif options.activate_installation is not None:
             configuration = activate_worker_installation(
                 options.install_dir, options.activate_installation, options.scratch_dir
             )
@@ -379,7 +436,8 @@ def main() -> int:
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"Beat This setup failed: {error}\n")
         return 1
-    status = "Verified inactive" if options.stage_only else "Verified"
+    inactive = options.stage_only or options.stage_native_cpu_package is not None
+    status = "Verified inactive" if inactive else "Verified"
     sys.stdout.write(f"{status} Beat This worker: {configuration.manifest}\n")
     return 0
 

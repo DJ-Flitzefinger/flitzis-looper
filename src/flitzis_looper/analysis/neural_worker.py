@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from pydantic import TypeAdapter
 
+from flitzis_looper.analysis.artifacts import NATIVE_MODEL
 from flitzis_looper.analysis.contracts import (
     AnalysisIdentity,
     BeatComponentResult,
@@ -30,6 +31,11 @@ from flitzis_looper.analysis.execution import (
     CudaBeatWorkerRequest,
     require_cuda_native_capability,
     validate_cuda_component_result,
+)
+from flitzis_looper.analysis.native_beat_worker import (
+    NativeWorkerConfiguration,
+    require_native_cpu_capability,
+    run_native_cpu,
 )
 from flitzis_looper.analysis.publication import _pack
 from flitzis_looper.analysis.setup import load_worker_configuration
@@ -78,10 +84,14 @@ def _envelope(
     status: ComponentStatus,
     reason: str,
     predictions: dict[str, str] | None = None,
+    *,
+    native: bool = False,
 ) -> str:
     envelope = {
-        "schema_version": 1,
-        "encoding": "source-map-beat-this-worker-v1",
+        "schema_version": 3 if native else 1,
+        "encoding": "source-map-beat-this-worker-v3"
+        if native
+        else "source-map-beat-this-worker-v1",
         "identity": asdict(identity),
         "input": input_metadata,
         "model": None if model is None else asdict(model),
@@ -92,9 +102,7 @@ def _envelope(
     }
     encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_NEURAL_WORKER_BYTES:
-        envelope.update(
-            status="failed", reason="neural_worker_response_limit", predictions=None
-        )
+        envelope.update(status="failed", reason="neural_worker_response_limit", predictions=None)
         encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
     return encoded
 
@@ -221,6 +229,32 @@ def _cuda_envelope(
     return encoded
 
 
+def _native_envelope(
+    configuration: NativeWorkerConfiguration,
+    pcm: MonoPcmInput,
+    mono_sha: str,
+    identity: AnalysisIdentity,
+    input_metadata: dict[str, object],
+    cancel: Event,
+) -> str:
+    try:
+        require_native_cpu_capability()
+        predictions = run_native_cpu(configuration, pcm, mono_sha, cancel)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        status: ComponentStatus = "cancelled" if cancel.is_set() else "failed"
+        reason = "cancelled" if status == "cancelled" else str(error)
+        return _envelope(identity, input_metadata, NATIVE_MODEL, status, reason, native=True)
+    if cancel.is_set():
+        return _envelope(
+            identity, input_metadata, NATIVE_MODEL, "cancelled", "cancelled", native=True
+        )
+    packed = {
+        "encoding": "float64-le/base64",
+        **{name: _pack(getattr(predictions, name)) for name in _ARRAY_NAMES},
+    }
+    return _envelope(identity, input_metadata, NATIVE_MODEL, "ready", "ready", packed, native=True)
+
+
 def run_beat_this(
     pcm_path: str,
     sample_rate_hz: int,
@@ -255,6 +289,8 @@ def run_beat_this(
             "cancelled" if status == "cancelled" else f"worker_installation_unavailable: {error}"
         )
         return _envelope(identity, input_metadata, None, status, reason)
+    if isinstance(configuration, NativeWorkerConfiguration):
+        return _native_envelope(configuration, pcm, mono_sha256, identity, input_metadata, cancel)
     model = configuration.model
     if isinstance(model, CudaBeatModelIdentity):
         require_cuda_native_capability()

@@ -75,7 +75,23 @@ class LegacyCpuExecutionReceipt(_StrictDto):
     fallback_reason: None
 
 
-type ActualExecutionReceipt = ExecutionReceipt | LegacyCpuExecutionReceipt
+@dataclass(frozen=True, slots=True)
+class NativeCpuExecutionReceipt(_StrictDto):
+    """Actual execution on the pinned CPU-only Native runtime."""
+
+    schema_version: ProtocolOne
+    requested_policy: Literal["cpu"]
+    device: Literal["cpu"]
+    device_name: None
+    precision: Literal["float32"]
+    ort_version: Literal["1.24.4"]
+    ort_api: Literal[24]
+    fallback_reason: None
+
+
+type ActualExecutionReceipt = (
+    ExecutionReceipt | LegacyCpuExecutionReceipt | NativeCpuExecutionReceipt
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +142,7 @@ def validate_execution(
     if policy is not None and validated.requested_policy != policy:
         msg = "execution_policy_mismatch"
         raise ValueError(msg)
-    if isinstance(validated, LegacyCpuExecutionReceipt):
+    if isinstance(validated, (LegacyCpuExecutionReceipt, NativeCpuExecutionReceipt)):
         return
     if not _device_fields_valid(validated) or not _policy_fields_valid(validated):
         msg = "incoherent_execution_receipt"

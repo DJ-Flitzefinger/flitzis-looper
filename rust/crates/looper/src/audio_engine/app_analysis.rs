@@ -485,8 +485,9 @@ pub(super) fn analyze_with_range(
         // final capacity accounting below must not retain a second typed method.
         drop(estimate);
         let object = method.as_object_mut().ok_or("neural estimate envelope missing")?;
-        object.extend(json!({"schema_version":schema_version,"backend":"beat_this","model_sha256":pinned_model()["sha256"],
-            "frontend_id":pinned_model()["frontend_id"],"source_sha256":source_digest,
+        let (model_sha256, frontend_id) = raw.model_provenance();
+        object.extend(json!({"schema_version":schema_version,"backend":"beat_this","model_sha256":model_sha256,
+            "frontend_id":frontend_id,"source_sha256":source_digest,
             "mono_sha256":mono_sha256,"sample_rate_hz":rate,"frame_count":frames,
             "raw_beats":predictions.beat_seconds,"raw_downbeats":predictions.downbeat_seconds}).as_object().unwrap().clone());
         if let Some(execution) = raw.execution() {

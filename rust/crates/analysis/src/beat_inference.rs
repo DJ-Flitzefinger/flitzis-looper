@@ -67,7 +67,7 @@ impl BeatModel {
         Self::load_completed(
             graph,
             expected_sha256,
-            profile,
+            Some(profile),
             provider,
             cancelled,
             &|_| {},
@@ -85,7 +85,7 @@ impl BeatModel {
         Self::load_completed(
             graph,
             expected_sha256,
-            profile,
+            Some(profile),
             provider,
             &|| context.cancelled(),
             &|result| context.record(result),
@@ -93,10 +93,33 @@ impl BeatModel {
         )
     }
 
+    /// CPU-only disposable worker, with the same exact graph and cancellation
+    /// path as the standalone command. Production needs no profiling file.
+    #[cfg(feature = "native-beat-this-worker")]
+    pub fn load_worker_cpu(
+        graph: &[u8],
+        expected_sha256: &str,
+        context: &crate::trial_lifetime::Context,
+    ) -> Result<Self, String> {
+        let model = Self::load_completed(
+            graph,
+            expected_sha256,
+            None,
+            Provider::Cpu,
+            &|| context.cancelled(),
+            &|result| context.record(result),
+            Some(context),
+        )?;
+        if model.fixed_frames.is_some() {
+            return Err("BeatThis worker requires a dynamic-time graph".into());
+        }
+        Ok(model)
+    }
+
     fn load_completed(
         graph: &[u8],
         expected_sha256: &str,
-        profile: &Path,
+        profile: Option<&Path>,
         provider: Provider,
         cancelled: &dyn Fn() -> bool,
         completion: &dyn Fn(Result<(), String>),
@@ -124,9 +147,14 @@ impl BeatModel {
             ],
         };
         checkpoint(cancelled)?;
-        let builder = trial_ort::session_builder(&providers)?
-            .with_profiling(profile)
-            .map_err(|e| e.to_string())?;
+        let builder = trial_ort::session_builder(&providers)?;
+        let builder = if let Some(profile) = profile {
+            builder.with_profiling(profile).map_err(|e| e.to_string())?
+        } else {
+            builder
+                .with_no_environment_execution_providers()
+                .map_err(|e| e.to_string())?
+        };
         checkpoint(cancelled)?;
         let mut session = trial_ort::commit(builder, graph, context)?;
         let validation = (|| {
@@ -158,12 +186,14 @@ impl BeatModel {
                 fixed_frames,
             }),
             Err(primary) => {
-                let profile = session.end_profiling();
-                completion(
-                    profile
-                        .map(|_| ())
-                        .map_err(|e| format!("profile.finish: {e}")),
-                );
+                if profile.is_some() {
+                    completion(
+                        session
+                            .end_profiling()
+                            .map(|_| ())
+                            .map_err(|e| format!("profile.finish: {e}")),
+                    );
+                }
                 Err(primary)
             }
         }

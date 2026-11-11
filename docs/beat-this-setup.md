@@ -5,9 +5,11 @@ Native neural-analysis job. Manual/TAP and cached results keep their existing
 precedence. Source-map preparation and raw-review editor controls are removed.
 Runtime/device checks do not certify musical accuracy.
 
-The two closed profiles are `legacy-cpu-v1` and `cuda-auto-v2`. The legacy source
-project and its scientific request/raw bytes remain unchanged. The CUDA profile
-uses the same model and CPU frontend with a separate pinned Torch runtime.
+The ordinary installers select `legacy-cpu-v1` or `cuda-auto-v2`. A Windows x64
+source checkout can explicitly select the `native-cpu-v3` profile with a local
+package and a matching App Native build. It runs the same final0 model via
+the pinned dynamic ONNX export and ONNX Runtime CPU. The existing Torch
+profiles retain their separate raw and execution provenance.
 
 ## Optional automatic BPM range
 
@@ -44,6 +46,46 @@ additional worker does not delay the primary result. Existing schema8 records
 retain their original source/profile evidence. Installed private runtime bytes
 remain in place; their setup documentation is in
 [the optional worker README](../workers/metrical_prior/README.md).
+
+## Native CPU worker from a source checkout
+
+Build the worker with the repository's Rust toolchain and the matching App
+Native library through the ordinary source build.
+
+```powershell
+cargo build --release --locked --manifest-path rust/Cargo.toml -p flitzis-looper-analysis --features native-beat-this-worker --bin native-beat-this-worker
+```
+
+Assemble a local package directory from that trusted executable and the pinned
+files below. Setup checks the complete bytes of each model and runtime file.
+The executable's hash is recorded at staging and checked again under a read
+handle before launch.
+
+| Relative path | Source |
+| --- | --- |
+| `native-beat-this-worker.exe` | The local Cargo build |
+| `beat-this-dynamic.onnx` | The dynamic `final0` export from `scripts/export_beat_this_trial.py`, SHA-256 `46bfb2c1a1f1e5c1d8786d0d9462f285971ff7fa8a592ac5f4ab609698bd44ca` |
+| `soxr.dll` | Pinned Windows x64 libsoxr 0.1.3, SHA-256 `b2e3a0ff4806540250fa45e9522c3a3549663888397fce4708249369b25db37e` |
+| `ort/onnxruntime.dll`, `ort/onnxruntime_providers_shared.dll` | Pinned Windows x64 ONNX Runtime 1.24.4 CPU |
+
+Setup generates the exact pinned ORT manifests from the verified DLL pins.
+From the checkout root, stage the package and retain the reported installation
+directory. With the App closed and the matching Native library in place, select
+that directory with the existing activation command.
+
+```powershell
+$workerRoot = Join-Path (Get-Location) 'models/beat-this'
+$scratch = Join-Path (Get-Location) '.cache/runtime-setup'
+uv run --no-sync python -m flitzis_looper.analysis.setup --install-dir $workerRoot --scratch-dir $scratch --stage-native-cpu-package $packageDirectory
+uv run --no-sync python -m flitzis_looper.analysis.setup --install-dir $workerRoot --scratch-dir $scratch --activate-installation $retainedInstallation
+uv run --no-sync python scripts/setup-runtime.py --check
+```
+
+The worker borrows the App's complete staged mono PCM in an owned process. The
+App holds the process and both output readers through retirement. Successful
+results record the ONNX graph digest and actual ORT CPU runtime. CPU selection
+applies to BPM analysis through the normal App entry. Native NVIDIA CUDA,
+automatic CPU fallback and Portable/EXE provisioning are follow-up work.
 
 ## Locked Windows runtime
 

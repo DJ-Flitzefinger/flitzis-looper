@@ -16,6 +16,12 @@ from uuid import uuid4
 from flitzis_looper.analysis import artifacts, setup
 from flitzis_looper.analysis.acquisition import acquire_pinned_asset
 from flitzis_looper.analysis.cuda_artifacts import CudaInstalledManifest, read_installed_manifest
+from flitzis_looper.analysis.native_beat_worker import (
+    NativeWorkerConfiguration,
+    require_native_cpu_capability,
+    verify_native_package,
+)
+from flitzis_looper.analysis.worker import WorkerConfiguration
 from flitzis_looper.controller import bs_roformer_assets
 from flitzis_looper.controller.model_pins import DEMUCS_ASSETS
 from flitzis_looper.controller.stem_generation import (
@@ -27,7 +33,6 @@ from flitzis_looper.controller.stem_generation import (
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.cuda_artifacts import WorkerProfile
-    from flitzis_looper.analysis.worker import WorkerConfiguration
 
 
 def require(*, condition: bool, message: str) -> None:
@@ -130,22 +135,33 @@ def inspect_worker(configuration: WorkerConfiguration, scratch: Path) -> None:
 
 def prepare_worker(
     install_root: Path, scratch: Path, *, check: bool, profile: WorkerProfile | None
-) -> WorkerConfiguration:
+) -> setup.InstalledWorkerConfiguration:
     chosen = selected_profile(install_root) if profile is None else profile
     scratch.mkdir(parents=True, exist_ok=True)
+    native_selected = False
     try:
         configuration = setup.load_worker_configuration(install_root, scratch)
+        native_selected = isinstance(configuration, NativeWorkerConfiguration)
+        if isinstance(configuration, NativeWorkerConfiguration):
+            require(
+                condition=profile is None,
+                message="Use the retained-installation command to replace the selected Native worker",
+            )
+            require_native_cpu_capability()
+            verify_native_package(configuration)
+            return configuration
         assert configuration.manifest is not None
         configuration = setup.load_staged_worker_configuration(
             install_root, configuration.manifest.parent, scratch
         )
+        assert isinstance(configuration, WorkerConfiguration)
         require(
             condition=chosen == selected_profile(install_root),
             message="Selected worker differs from the requested profile",
         )
         inspect_worker(configuration, scratch)
     except OSError, ValueError, subprocess.SubprocessError:
-        if check:
+        if check or native_selected:
             raise
         configuration = setup.install_worker(install_root, scratch, profile=chosen, stage_only=True)
         inspect_worker(configuration, scratch)
