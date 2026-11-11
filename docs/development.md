@@ -1418,15 +1418,17 @@ second pad, the pinned stock constant-padding kernel writes its output into a
 iSTFT. The mapped output keeps the stock complex64 shape and strides.
 The stock native C2R uses a second writable file mapping for its 44,564,480-byte
 float32 output. Its batch resize and stride restoration reuse the same tensor
-storage and data pointer. Stock windowing and overlap-add consume those frames
-with the decoded waveform still live. Each tensor storage retains its file
-view through the last alias, including on exceptions.
+storage and data pointer. The stock CPU window multiply writes into a
+separate 44,564,480-byte writable file mapping with the original contiguous
+float32 layout. The stock signal overlap-add reads that backing with the
+decoded waveform still live. Each tensor storage retains its file view
+through the last alias, including on exceptions.
 
-Charge the mapped state, score, second pad and C2R frame extents for physical
-residency and file cache. The stock MKL input pack, windowed frames and
-overlap-add tensors still require private storage. The full learned reference requires a prospective
-commit and residency budget for both forwards, retained activations, vendor
-scratch, allocator behavior and retirement.
+Charge the mapped state, score, second pad, C2R frames and windowed frames for
+physical residency and file cache. The stock MKL input pack and overlap-add
+tensors still require private storage. The full learned reference requires a
+prospective commit and residency budget for both forwards, retained activations,
+vendor scratch, allocator behavior and retirement.
 
 The separated path uses the pinned TorchScript graph conversion with ONNX
 constant folding disabled. It

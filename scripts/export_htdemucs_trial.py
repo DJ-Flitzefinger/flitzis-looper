@@ -109,6 +109,9 @@ STREAM_CHUNK_BYTES = 256 * 1024
 INITIALIZER_TYPES = {"float32": (1, 4), "int64": (7, 8)}
 PCM_SHAPE = SHAPES["decoded_waveform"]
 PAD2_SHAPE = (1, 4, 2, 2049, 340)
+ISTFT_FRAME_SHAPE = (8, 340, 4096)
+ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
+ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
 ONNX_PINS = {
     "onnx": (
         "1.23.2",
@@ -976,13 +979,13 @@ def mapped_reference_pad2(torch, output: Path):
     return pad2
 
 
-def c2r_frame_backing(value):
+def tensor_backing(value):
     return value._cdata, value.untyped_storage()._cdata, value.data_ptr()
 
 
-def check_c2r_frames(value, backing, geometry) -> None:
-    if c2r_frame_backing(value) != backing or state_storage_geometry(value) != geometry:
-        msg = "HTDemucs C2R changed the mapped frame backing"
+def check_frame_backing(value, backing, geometry) -> None:
+    if tensor_backing(value) != backing or state_storage_geometry(value) != geometry:
+        msg = "HTDemucs iSTFT changed the mapped frame backing"
         raise ValueError(msg)
 
 
@@ -990,13 +993,10 @@ def native_c2r_frames(torch, output: Path, func, args):
     """Keep the MKL C2R kernel and supply its initial frame storage."""
     aten = torch.ops.aten
     cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
-    shape = (8, 340, 4096)
-    stride = (1392640, 4096, 1)
+    shape, stride, _, size = ISTFT_FRAME_GEOMETRY
     batch = (2720, 4096)
     batch_stride = (4096, 1)
-    size = prod(shape) * 4
     empty_options = {"dtype": torch.float32, "layout": torch.strided, "device": torch.device("cpu")}
-    frame_geometry = (shape, stride, 0, size)
     batch_geometry = (batch, batch_stride, 0, size)
     backing = None
     step = 0
@@ -1009,11 +1009,11 @@ def native_c2r_frames(torch, output: Path, func, args):
                 raise ValueError(msg)
             owner = mapped_reference_scratch(output, size, "c2r-frames")
             mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
-            backing = c2r_frame_backing(mapped)
+            backing = tensor_backing(mapped)
             if mapped.data_ptr() % STATE_ALIGNMENT or mapped.untyped_storage().resizable():
                 msg = "unexpected HTDemucs C2R frame storage"
                 raise ValueError(msg)
-            check_c2r_frames(mapped, backing, frame_geometry)
+            check_frame_backing(mapped, backing, ISTFT_FRAME_GEOMETRY)
             step = 1
             return mapped
         if op == aten.resize_.default:
@@ -1024,9 +1024,9 @@ def native_c2r_frames(torch, output: Path, func, args):
             ):
                 msg = "unexpected HTDemucs C2R batch resize"
                 raise ValueError(msg)
-            check_c2r_frames(operands[0], backing, frame_geometry)
+            check_frame_backing(operands[0], backing, ISTFT_FRAME_GEOMETRY)
             resized = op(*operands, **options)
-            check_c2r_frames(resized, backing, batch_geometry)
+            check_frame_backing(resized, backing, batch_geometry)
             step = 2
             return resized
         if op == aten.as_strided_.default:
@@ -1038,9 +1038,9 @@ def native_c2r_frames(torch, output: Path, func, args):
             ):
                 msg = "unexpected HTDemucs C2R frame stride restoration"
                 raise ValueError(msg)
-            check_c2r_frames(operands[0], backing, batch_geometry)
+            check_frame_backing(operands[0], backing, batch_geometry)
             restored = op(*operands)
-            check_c2r_frames(restored, backing, frame_geometry)
+            check_frame_backing(restored, backing, ISTFT_FRAME_GEOMETRY)
             step = 3
             return restored
         return op(*operands, **options)
@@ -1052,14 +1052,103 @@ def native_c2r_frames(torch, output: Path, func, args):
     if step != 3:
         msg = "incomplete HTDemucs native C2R frame allocation"
         raise ValueError(msg)
-    check_c2r_frames(frames, backing, frame_geometry)
+    check_frame_backing(frames, backing, ISTFT_FRAME_GEOMETRY)
     return frames
 
 
-def mapped_reference_ispectro(torch, output: Path, stock_ispectro):
-    """Redirect only the fixed mapped reference's C2R frame allocation."""
+def mapped_windowed_frames(torch, output: Path, frames, hann):
+    """Use the stock CPU multiply kernel with a separate file-backed output."""
+    owner = mapped_reference_scratch(output, ISTFT_FRAME_BYTES, "windowed-frames")
+    mapped = torch.frombuffer(owner, dtype=torch.float32).view(ISTFT_FRAME_SHAPE)
+    backing = tensor_backing(mapped)
+    check_frame_backing(mapped, backing, ISTFT_FRAME_GEOMETRY)
+    if (
+        backing[2] % STATE_ALIGNMENT
+        or mapped.untyped_storage().resizable()
+        or backing[1] in {frames.untyped_storage()._cdata, hann.untyped_storage()._cdata}
+    ):
+        msg = "unexpected HTDemucs mapped windowed frame storage"
+        raise ValueError(msg)
+
+    # Both structured CPU overloads use mul_stub. With matching F32 options and
+    # contiguous output of the final shape, TensorIterator uses this data pointer.
+    windowed = torch.ops.aten.mul.out(frames, hann, out=mapped)
+    check_frame_backing(windowed, backing, ISTFT_FRAME_GEOMETRY)
+    return windowed
+
+
+def native_mapped_istft(torch, output: Path, func, args):
+    """Use mapped frames through the pinned iSTFT CPU kernel."""
     aten = torch.ops.aten
     cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    input_bytes = prod(PAD2_SHAPE) * 8
+    storage = args[0].untyped_storage()._cdata
+    hop_length = args[2]
+    c2r_backing = None
+    hann_backing = tensor_backing(args[4])[1:]
+    windowed_backing = None
+    used_signal_ola = False
+
+    def istft_kernel(op, args, options):
+        nonlocal c2r_backing, windowed_backing, used_signal_ola
+        if op == aten._fft_c2r.default:
+            if (
+                (c2r_backing, bool(options), len(args)) != (None, False, 4)
+                or (tuple(args[1]), args[2], args[3]) != ((2,), 1, 4096)
+                or args[0].untyped_storage()._cdata != storage
+                or state_storage_geometry(args[0])
+                != ((8, 340, 2049), (696660, 1, 340), 0, input_bytes)
+            ):
+                msg = "unexpected HTDemucs C2R input"
+                raise ValueError(msg)
+            frames = native_c2r_frames(torch, output, op, args)
+            c2r_backing = tensor_backing(frames)
+            return frames
+        if op == aten.mul.Tensor and not used_signal_ola:
+            if (
+                (c2r_backing is not None, windowed_backing, bool(options), len(args))
+                != (True, None, False, 2)
+                or any(
+                    type(value) is not torch.Tensor
+                    or (value.device.type, value.dtype, value.layout)
+                    != ("cpu", torch.float32, torch.strided)
+                    or value.is_conj()
+                    or value.is_neg()
+                    for value in args
+                )
+                or tensor_backing(args[1])[1:] != hann_backing
+                or state_storage_geometry(args[1])[:3] != ((1, 1, 4096), (4096, 4096, 1), 0)
+            ):
+                msg = "unexpected HTDemucs iSTFT window multiply"
+                raise ValueError(msg)
+            check_frame_backing(args[0], c2r_backing, ISTFT_FRAME_GEOMETRY)
+            windowed = mapped_windowed_frames(torch, output, *args)
+            windowed_backing = tensor_backing(windowed)
+            return windowed
+        if op == aten.unfold_backward.default and not used_signal_ola:
+            if (
+                windowed_backing is None
+                or options
+                or len(args) != 5
+                or (tuple(args[1]), *args[2:]) != ((8, 351232), 1, 4096, hop_length)
+            ):
+                msg = "unexpected HTDemucs iSTFT signal overlap-add"
+                raise ValueError(msg)
+            check_frame_backing(args[0], windowed_backing, ISTFT_FRAME_GEOMETRY)
+            used_signal_ola = True
+        return op(*args, **options)
+
+    with reference_dispatch_mode(istft_kernel):
+        result = func.redispatch(cpu, *args)
+    if not used_signal_ola:
+        msg = "HTDemucs stock iSTFT did not overlap-add the mapped windowed frames"
+        raise ValueError(msg)
+    return result
+
+
+def mapped_reference_ispectro(torch, output: Path, stock_ispectro):
+    """Map the fixed stock iSTFT frame backings through signal overlap-add."""
+    aten = torch.ops.aten
     input_bytes = prod(PAD2_SHAPE) * 8
 
     def ispectro(z, hop_length, *, length):
@@ -1074,29 +1163,14 @@ def mapped_reference_ispectro(torch, output: Path, stock_ispectro):
             raise ValueError(msg)
         check_reference_inference_dispatch(torch, "mapped iSTFT")
         storage = z.untyped_storage()._cdata
-        used_c2r = False
-
-        def c2r(op, args, options):
-            nonlocal used_c2r
-            if op != aten._fft_c2r.default:
-                return op(*args, **options)
-            if (
-                (used_c2r, bool(options), len(args)) != (False, False, 4)
-                or (tuple(args[1]), args[2], args[3]) != ((2,), 1, 4096)
-                or args[0].untyped_storage()._cdata != storage
-                or state_storage_geometry(args[0])
-                != ((8, 340, 2049), (696660, 1, 340), 0, input_bytes)
-            ):
-                msg = "unexpected HTDemucs C2R input"
-                raise ValueError(msg)
-            used_c2r = True
-            return native_c2r_frames(torch, output, op, args)
+        used_istft = False
 
         def dispatch(op, args, options):
+            nonlocal used_istft
             if op != aten.istft.default:
                 return op(*args, **options)
             if (
-                (used_c2r, bool(options), len(args)) != (False, False, 9)
+                (used_istft, bool(options), len(args)) != (False, False, 9)
                 or args[1:4] != (4096, hop_length, 4096)
                 or args[5:] != (True, True, None, length)
                 or args[0].untyped_storage()._cdata != storage
@@ -1105,13 +1179,13 @@ def mapped_reference_ispectro(torch, output: Path, stock_ispectro):
             ):
                 msg = "unexpected HTDemucs stock iSTFT call"
                 raise ValueError(msg)
-            with reference_dispatch_mode(c2r):
-                return op.redispatch(cpu, *args)
+            used_istft = True
+            return native_mapped_istft(torch, output, op, args)
 
         with reference_dispatch_mode(dispatch):
             result = stock_ispectro(z, hop_length, length=length)
-        if not used_c2r:
-            msg = "HTDemucs stock iSTFT did not use the mapped C2R frames"
+        if not used_istft:
+            msg = "HTDemucs stock iSTFT did not use the mapped native path"
             raise ValueError(msg)
         return result
 
