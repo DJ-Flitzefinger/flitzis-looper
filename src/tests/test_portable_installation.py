@@ -1593,10 +1593,49 @@ def test_recovery_validates_candidate_before_any_execution(
         assert (installation.target / "portable-transaction.json").read_bytes() == journal
 
 
-def test_rollback_requires_record_for_completed_native_capture(
-    installation: Installation,
+def _withhold_rollback_custody(
+    problem: str, relocation: Path, worker: Path, original_worker: bytes
+) -> tuple[Path, str]:
+    if problem == "missing-record":
+        withheld = relocation.with_suffix(".withheld")
+        relocation.rename(withheld)
+        return withheld, "completed Native capture is missing its relocation record"
+
+    candidate_worker = worker.read_bytes()
+    foreign = json.loads(candidate_worker)
+    foreign["directory"] = "installation-" + "f" * 32
+    foreign["manifest_sha256"] = "f" * 64
+    foreign_worker = json.dumps(foreign).encode("utf-8")
+    assert foreign_worker not in {original_worker, candidate_worker}
+    worker.write_bytes(foreign_worker)
+    return relocation, "Worker selection changed outside this transaction"
+
+
+def _assert_rollback_refuses_without_changes(
+    installation: Installation, paths: ActivationPaths, files: tuple[Path, ...], message: str
+) -> dict[Path, int]:
+    before = {path: path.read_bytes() for path in files}
+    directories = (paths.checkout, paths.runtime, paths.old_checkout, paths.old_runtime)
+    identities = {path: path.stat().st_ino for path in (*directories, *files)}
+    relocations = installation.trace("native-relocation-history.jsonl")
+
+    result = installation.run()
+
+    assert result.returncode != 0
+    assert message in result.stdout
+    assert {path: path.read_bytes() for path in files} == before
+    assert {path: path.stat().st_ino for path in identities} == identities
+    assert installation.trace("native-relocation-history.jsonl") == relocations
+    assert not paths.source.exists()
+    assert not paths.candidate.exists()
+    return identities
+
+
+@pytest.mark.parametrize("problem", ["missing-record", "foreign-worker"])
+def test_rollback_refuses_unowned_state_before_mutation(
+    installation: Installation, problem: str
 ) -> None:
-    first = installation.publish("first")
+    installation.publish("first")
     require_success(installation.run())
     original_pointer = installation.pointer()
     worker = installation.target / "analysis-runtime/beat-this/current.json"
@@ -1605,44 +1644,52 @@ def test_rollback_requires_record_for_completed_native_capture(
     second = installation.publish("second", failure="prepared-interrupt")
     assert installation.run().returncode != 0
     paths = _simulate_activation_interrupt(installation, "state", second)
-    hidden_record = paths.relocation.with_suffix(".withheld")
-    paths.relocation.rename(hidden_record)
 
     journal = installation.target / "portable-transaction.json"
-    current = installation.target / "current.json"
-    before = {path: path.read_bytes() for path in (journal, current, worker, hidden_record)}
-    directories = (paths.checkout, paths.runtime, paths.old_checkout, paths.old_runtime)
-    identities = {path: path.stat().st_ino for path in directories}
-    relocations = installation.trace("native-relocation-history.jsonl")
-
-    result = installation.run()
-
-    assert result.returncode != 0
-    assert "completed Native capture is missing its relocation record" in result.stdout
-    assert {path: path.read_bytes() for path in before} == before
-    assert {path: path.stat().st_ino for path in directories} == identities
-    assert installation.trace("native-relocation-history.jsonl") == relocations
-    assert not paths.source.exists()
-    assert not paths.candidate.exists()
+    record = json.loads(journal.read_text())
+    assert record["phase"] == "verifying"
+    assert installation.pointer()["git_commit"] == second
+    candidate_worker = worker.read_bytes()
+    assert base64.b64decode(record["worker_before"]) == original_worker
+    assert base64.b64decode(record["worker_candidate"]) == candidate_worker
+    assert candidate_worker != original_worker
     assert all(path.read_bytes() == content for path, content in contents.items())
+    relocation, message = _withhold_rollback_custody(
+        problem, paths.relocation, worker, original_worker
+    )
+    files = (
+        journal,
+        installation.target / "current.json",
+        worker,
+        relocation,
+        *(installation.target / name for name in record["starters"]),
+        *contents,
+    )
+    identities = _assert_rollback_refuses_without_changes(installation, paths, files, message)
 
-    hidden_record.rename(paths.relocation)
+    if problem == "missing-record":
+        relocation.rename(paths.relocation)
+    else:
+        worker.write_bytes(candidate_worker)
     require_success(
         _run_embedded(
             installation.installer.parent,
             f"Recover-PortableTransaction {_ps_string(installation.target)}",
         )
     )
-    assert original_pointer["git_commit"] == first
     assert installation.pointer() == original_pointer
     assert worker.read_bytes() == original_worker
     assert not journal.exists()
     assert not paths.relocation.exists()
     assert not paths.old_checkout.exists()
     assert not paths.old_runtime.exists()
+    assert not paths.source.exists()
+    assert not paths.candidate.exists()
     assert paths.checkout.stat().st_ino == identities[paths.old_checkout]
     assert paths.runtime.stat().st_ino == identities[paths.old_runtime]
-    assert all(path.read_bytes() == content for path, content in contents.items())
+    for path, content in contents.items():
+        assert path.read_bytes() == content
+        assert path.stat().st_ino == identities[path]
 
 
 def test_rollback_rejects_candidate_reparse_before_relocation_execution(
@@ -1661,10 +1708,13 @@ def test_rollback_rejects_candidate_reparse_before_relocation_execution(
     junction = paths.checkout / "unregistered-link"
     _junction(junction, outside)
     checks = installation.trace("preflight-history.jsonl")
+    worker = installation.target / "analysis-runtime/beat-this/current.json"
+    selected = worker.read_bytes()
     try:
         result = installation.run()
         assert result.returncode != 0
         assert sentinel.read_bytes() == b"outside bytes"
+        assert worker.read_bytes() == selected
         assert installation.trace("preflight-history.jsonl") == checks
         assert paths.old_checkout.is_dir()
         assert (installation.target / "portable-transaction.json").exists()
@@ -1788,8 +1838,63 @@ def _run_embedded(tmp_path: Path, commands: str) -> subprocess.CompletedProcess[
 
 
 def test_embedded_common_helpers_match_the_shipped_source() -> None:
-    common = (REPO / "scripts/portable/common.ps1").read_text(encoding="utf-8-sig")
-    assert common.strip() in _embedded_functions()
+    common = (REPO / "scripts/portable/common.ps1").read_bytes()
+    assert (REPO / "INSTALL-LOOPER-PORTABLE.bat").read_bytes().count(common) == 1
+
+
+def test_worker_rollback_accepts_legacy_and_empty_selections(tmp_path: Path) -> None:
+    pointer = tmp_path / "analysis-runtime/beat-this/current.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_bytes(b"worker bytes")
+    result = _run_embedded(
+        tmp_path,
+        f"""
+$root = {_ps_string(tmp_path)}
+$path = {_ps_string(pointer)}
+$candidate = Get-PortableWorkerPointer $root
+Set-PortableWorkerSelection $root ([pscustomobject]@{{phase='prepared'}}) -Restore
+if ((Get-PortableWorkerPointer $root) -cne $candidate) {{ throw 'Legacy pointer changed.' }}
+Set-PortableWorkerSelection $root ([pscustomobject]@{{
+    worker_before=''; worker_candidate=$candidate
+}}) -Restore
+if ((Get-Item -LiteralPath $path).Length -ne 0) {{ throw 'Empty pointer not restored.' }}
+Set-PortableWorkerSelection $root ([pscustomobject]@{{
+    worker_before=$null; worker_candidate=''
+}}) -Restore
+Set-PortableWorkerSelection $root ([pscustomobject]@{{worker_before=$null}}) -Restore
+""",
+    )
+    require_success(result)
+    assert not pointer.exists()
+
+
+def test_worker_rollback_rechecks_selection_before_restore(tmp_path: Path) -> None:
+    pointer = tmp_path / "analysis-runtime/beat-this/current.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_bytes(b"candidate bytes")
+    result = _run_embedded(
+        tmp_path,
+        f"""
+$root = {_ps_string(tmp_path)}
+$path = {_ps_string(pointer)}
+$record = [pscustomobject]@{{
+    operation=('a' * 32); phase='verifying'; old=$null
+    had_samples=$false; had_input=$false; had_checkout=$false; had_runtime=$false
+    worker_before=$null; worker_candidate=(Get-PortableWorkerPointer $root)
+}}
+$save = ${{function:Save-PortableTransaction}}
+function Save-PortableTransaction([string] $Root, $Record, [string] $Phase) {{
+    & $save $Root $Record $Phase
+    if ($Phase -eq 'rolling_back') {{ [IO.File]::WriteAllText($path, 'new selection') }}
+}}
+Undo-PortableTransaction $root $record
+""",
+    )
+    assert result.returncode != 0
+    assert "Worker selection changed outside this transaction" in result.stderr
+    journal = json.loads((tmp_path / "portable-transaction.json").read_bytes())
+    assert journal["phase"] == "rolling_back"
+    assert pointer.read_bytes() == b"new selection"
 
 
 @pytest.mark.parametrize("scope", ["source", "input"])

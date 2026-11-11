@@ -324,18 +324,25 @@ function Get-PortableWorkerPointer([string] $Root) {
     return $null
 }
 
-function Set-PortableWorkerSelection([string] $Root, $Record, [switch] $Restore) {
+function Get-PortableOwnedWorkerPointer([string] $Root, $Record) {
     # Old journals have no worker selection and keep their previous behavior.
     if (-not $Record.PSObject.Properties['worker_before']) { return }
-    $before = $Record.worker_before
     $candidate = if ($Record.PSObject.Properties['worker_candidate']) { $Record.worker_candidate } else { $null }
     $current = Get-PortableWorkerPointer $Root
-    if ($current -ne $before -and $current -ne $candidate) {
+    # The journal stores Base64. Case is significant in the encoded bytes.
+    if ($current -cne $Record.worker_before -and $current -cne $candidate) {
         throw 'Worker selection changed outside this transaction; files will be preserved.'
     }
-    $selected = if ($Restore) { $before } else { $candidate }
-    if (-not $Restore -and -not $candidate) { throw 'Verified worker selection is missing.' }
-    if ($current -eq $selected) { return }
+    return $current
+}
+
+function Set-PortableWorkerSelection([string] $Root, $Record, [switch] $Restore) {
+    if (-not $Record.PSObject.Properties['worker_before']) { return }
+    $current = Get-PortableOwnedWorkerPointer $Root $Record
+    $selected = if ($Restore) { $Record.worker_before }
+        elseif ($Record.PSObject.Properties['worker_candidate']) { $Record.worker_candidate }
+    if (-not $Restore -and -not $selected) { throw 'Verified worker selection is missing.' }
+    if ($current -ceq $selected) { return }
     $path = Join-Path $Root 'analysis-runtime/beat-this/current.json'
     Assert-PlainPath $path
     if ($null -eq $selected) {
@@ -584,6 +591,7 @@ function Undo-PortableTransaction([string] $Root, $Record) {
             throw 'The completed Native capture is missing its relocation record; files will be preserved.'
         }
     }
+    Get-PortableOwnedWorkerPointer $Root $Record | Out-Null
     Save-PortableTransaction $Root $Record 'rolling_back'
     if ($restoreSamples) {
         $custody = Get-PortableCandidateCustody $paths $Record

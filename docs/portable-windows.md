@@ -134,6 +134,9 @@ starting another update. A starter refuses an unfinished transaction and points
 to that recovery step. If the journal records a completed Native Samples
 capture, rollback requires its relocation record. When that record is missing,
 recovery stops before moving files and preserves the transaction for diagnosis.
+Rollback also checks that the worker selection matches the journal before
+changing the journal or moving files, then checks it again before restoring
+the previous selection. A different selection is preserved for diagnosis.
 
 The installation uses these areas:
 
