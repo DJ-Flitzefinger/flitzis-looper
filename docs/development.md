@@ -1224,3 +1224,31 @@ The normal Demucs CLI tries FFmpeg first; Julius is the torchaudio fallback's
 conversion path. Decoding, productive routing, independent High-DC normalization
 parity, and learned/runtime/device acceptance remain open. See the
 [upstream notices](../rust/crates/stem-dsp/THIRD_PARTY_NOTICES.md).
+
+### Native HTDemucs eval composition
+
+The offline `flitzis_stem_dsp::demucs::hybrid` boundary accepts finite planar
+`[B,C,L]` float32 PCM at 44.1 kHz and a caller-established training length.
+It pads on the right and uses the existing normalized FFT and CaC layout.
+The caller supplies separate original-dispatch mean and correction-one standard
+deviation per batch item. The spectral axes are channel, complex part, frequency
+and step. The waveform axes are channel and padded time. The predictor receives
+both inputs normalized with `1e-5 + std` and supplies complete normalized decoder
+tensors in batch, source and channel order.
+
+The boundary restores both tensors using the raw standard deviations and means.
+It reuses scale-zero CaC inverse reconstruction with one training-length lane
+buffer, adds the restored waveform over the entire training extent and copies
+the original-length prefix. The split/apply host owns surrounding context and
+any center trim. Unwritten or nonfinite predictions, callback errors and
+cancellation invalidate the entire result. The logical 512 MiB preflight includes
+the simultaneous borrowed input, output and statistics, the branch vectors, the
+maximum FFT vector workspace and the caller's declared other live payload,
+including predictor allocations. FFT plans, allocator and runtime backing need
+separate admission.
+
+The `demucs_hybrid_trial_reference.py` control uses the pinned CPU
+`HTDemucs.forward` and parameter-free layers to compare all physical PCM,
+including the release segment and shorter prefixes. Independent High-DC
+statistics parity remains failed. Learned execution, productive routing, device
+transitions and whole-process admission remain open.

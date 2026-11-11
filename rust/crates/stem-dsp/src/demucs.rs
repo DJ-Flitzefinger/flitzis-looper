@@ -2,7 +2,8 @@
 //!
 //! This is the unnormalized spectral boundary. The separate `host` module
 //! provides normalization and physical track arithmetic, and `audio` handles
-//! channel conversion and rational resampling. Neither runs the learned model.
+//! channel conversion and rational resampling. The `hybrid` module composes
+//! both normalized branches around a caller-supplied predictor.
 //! Inputs are planar lanes (batch/source/channel axes flattened). Spectra use
 //! CaC `[lane, real/imag, frequency, time]`, matching `_magnitude` / `_mask`.
 //! Calls are synchronous and exclusive; immutable input readers and caller-owned
@@ -12,6 +13,7 @@
 
 pub mod audio;
 pub mod host;
+pub mod hybrid;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex32};
 use std::{fmt, sync::Arc};

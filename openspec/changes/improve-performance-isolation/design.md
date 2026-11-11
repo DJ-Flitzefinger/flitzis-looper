@@ -8011,3 +8011,30 @@ and complete output PCM at unchanged `atol=rtol=2e-5` for the tested cases.
 This covers the tensor conversion boundary, not the normal FFmpeg CLI decoder,
 Torch dispatch in general, the failed High-DC statistics or any learned/CUDA
 or productive replacement gate.
+
+## Offline HTDemucs dual-branch eval boundary
+
+Use the existing 4096/1024 CaC transform on 44.1 kHz PCM after the eval right
+pad. Keep the spectral and time correction-one statistics separate for every
+batch item and require their original-input provenance from the caller. Feed
+both normalized arrays to a synchronous predictor. Read full complex decoder
+coefficients in `[B,S,C,real/imag,Fq,T]` order and time decoder values in
+`[B,S,C,Ltrain]` order. Broadcast each item's raw standard deviations and means
+across its sources. Reconstruct the spectrum at scale zero, add the time branch
+over the training length and copy the physical prefix. Apply owns its separate
+context padding, center trim and track aggregation.
+
+Preflight the simultaneous logical working set including borrowed input/output,
+branch statistics, declared external readers and predictor payload, both
+prepared and decoded tensors, the fixed FFT vectors and one reusable inverse
+lane. Use finite checks, NaN initialization of both decoder outputs, and
+cancellation during preparation, prediction and assembly through the final
+checkpoint. Errors invalidate all output. The 512 MiB limit covers logical
+payload, with separate allocator, runtime and whole-process admission.
+
+Compare every retained PCM value with the original CPU `HTDemucs.forward`
+using parameter-free fixture encoders and decoders. Use observable independent
+branch and tail signals, distinct batch/source/channel ordering, release
+training length, true shorter crop and defined zero-variance controls. The
+High-DC independent reduction FAIL remains. Learned encoder/decoder and
+transformer, runtime, providers and productive wiring remain open.

@@ -131,10 +131,7 @@ impl Statistics {
             return Err(Error::Geometry);
         }
         finite(input, cancelled)?;
-        let denominator = epsilon + self.std;
-        if !denominator.is_finite() || denominator <= 0.0 {
-            return Err(Error::NonFinite);
-        }
+        let denominator = self.normalization_denominator(epsilon)?;
         for (src, dst) in input.chunks(BLOCK).zip(output.chunks_mut(BLOCK)) {
             checkpoint(cancelled)?;
             for (&x, y) in src.iter().zip(dst) {
@@ -142,6 +139,33 @@ impl Statistics {
             }
         }
         finite(output, cancelled)?;
+        checkpoint(cancelled)
+    }
+
+    fn normalization_denominator(self, epsilon: f32) -> Result<f32, Error> {
+        let denominator = epsilon + self.std;
+        if denominator.is_finite() && denominator > 0.0 {
+            Ok(denominator)
+        } else {
+            Err(Error::NonFinite)
+        }
+    }
+
+    pub(super) fn normalize_branch_in_place(
+        self,
+        values: &mut [f32],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        let denominator = self.normalization_denominator(1e-5)?;
+        for block in values.chunks_mut(BLOCK) {
+            checkpoint(cancelled)?;
+            for x in block {
+                *x = (*x - self.mean) / denominator;
+                if !x.is_finite() {
+                    return Err(Error::NonFinite);
+                }
+            }
+        }
         checkpoint(cancelled)
     }
 

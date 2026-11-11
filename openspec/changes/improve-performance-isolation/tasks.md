@@ -1198,3 +1198,16 @@ remaining plan into each successor; report actual hard service limits honestly.
       combined payload, cancellable processing and complete kernel/PCM controls.
 - [ ] Establish full decoder and productive conversion integration, exact
       affected dispatch compatibility and complete original model/runtime proof.
+
+## Offline HTDemucs dual-branch evaluation
+
+- [x] Prepare the native CaC and time branches for a synchronous predictor using
+      caller-supplied original per-item statistics and checked combined payload.
+- [x] Restore complete decoder tensors, reconstruct the spectral waveform at
+      scale zero, add both branches before the prefix crop, and reject unwritten,
+      nonfinite or cancelled output.
+- [x] Compare complete PCM against pinned original HTDemucs forward with
+      parameter-free decoders across the release length, shorter crop, ordered
+      batch/source/channel and defined zero-variance cases.
+- [ ] Establish learned HTDemucs inference, exact independent reduction parity
+      and complete productive runtime, provider and whole-track parity.
