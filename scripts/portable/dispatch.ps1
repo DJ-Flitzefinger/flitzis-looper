@@ -16,7 +16,8 @@ function Assert-PortableStartPath([string] $Path) {
 }
 try {
     $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')
-    foreach ($path in @($Root,(Join-Path $Root '.install.lock'),(Join-Path $Root 'current.json'))) {
+    $markerPath = Join-Path $Root 'portable-root.json'
+    foreach ($path in @($Root,$markerPath,(Join-Path $Root '.install.lock'),(Join-Path $Root 'current.json'))) {
         Assert-PortableStartPath $path
     }
     try { $lock = [IO.File]::Open((Join-Path $Root '.install.lock'), [IO.FileMode]::Open,
@@ -27,11 +28,24 @@ try {
     }
     $pointer = Get-Content -LiteralPath (Join-Path $Root 'current.json') -Raw | ConvertFrom-Json
     if ($pointer.git_commit -notmatch '^[a-f0-9]{40}$') { throw 'Invalid portable source revision.' }
+    $candidate = $false
+    if (Test-Path -LiteralPath $markerPath) {
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        $candidate = $marker.app -eq 'flitzis-looper-candidate'
+    }
+    $candidatePointer = $pointer.schema_version -eq 2 -and $pointer.source_kind -eq 'candidate'
+    if ($candidate -ne $candidatePointer -or ($candidate -and $marker.schema_version -ne 1)) {
+        throw 'Portable candidate owner does not match its source pointer.'
+    }
     if ($pointer.schema_version -eq 1) {
         $directory = [string]$pointer.directory
         if ($directory -notmatch '^main-[a-f0-9]{12}-[a-f0-9]{8}$') { throw 'Invalid legacy version pointer.' }
         $runtime = Join-Path (Join-Path $Root 'versions') $directory
         $arguments = @('-Root',$Root,'-VersionDirectory',$directory)
+    } elseif ($candidate) {
+        if (-not $Check) { throw 'This candidate provides a build preflight. Run START-LOOPER.bat --check.' }
+        $runtime = Join-Path $Root 'Runtime'
+        $arguments = @('-Root',$Root,'-InstallerOwned','-BuildRuntimeCheck')
     } elseif ($pointer.schema_version -eq 2 -and $pointer.source_kind -eq 'main') {
         $runtime = Join-Path $Root 'Runtime'
         $arguments = @('-Root',$Root,'-StartLockHeld')

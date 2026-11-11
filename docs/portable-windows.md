@@ -343,14 +343,25 @@ gates and must be recorded from actual runs before being described as passed.
 ## Advanced maintainer bundle utility
 
 `scripts/portable/build_bundle.py` remains an advanced utility for an already
-synchronized Windows x64 CPython 3.14 developer environment. Its ZIP uses the same
-full `flitzis-looper` checkout plus fixed `Runtime` layout and starter contract.
+synchronized Windows x64 CPython 3.14 developer environment. Its ZIP contains a
+`flitzis-looper` snapshot of tracked source bytes and a fixed private `Runtime`.
+The snapshot excludes Git metadata. The candidate has its own owner marker and
+source kind. Extract it into a separate empty directory and run
+`START-LOOPER.bat --check` for the build preflight. The generated starters only
+provide this check. The tracked installer inside the source snapshot still
+targets a separate remote-main installation.
 It reads installed non-development dependency RECORDs, excludes the base
 interpreter's `site-packages`, and copies the declared dependency closure without
-replacing the developer runtime. A fresh non-editable Release wheel and exact
-Native source commit are required. Runtime imports, private loaded DLL paths and
-offline-worker imports must pass before packaging. The source BAT remains the
-ordinary install/update path and performs the model preparation gate.
+replacing the developer runtime. The vendored BS-RoFormer distribution must
+match the tracked package bytes, even when the installed version is unchanged.
+A fresh non-editable Release wheel and exact Native source commit are required.
+The builder verifies the project, ABI and extension RECORD hash and size, and
+records the complete wheel SHA256 alongside the extension SHA256. Use the
+Native source commit from the matching Release build record.
+Runtime imports, private loaded DLL paths and offline-worker imports must pass
+before packaging. The build preflight skips worker selection and model
+preparation and opens no App or audio device. The ordinary installer performs
+the additional readiness checks.
 
 Preflight also reflects the opaque `CapturedGlobalStart` and the engine's
 `capture_global_start` / `publish_captured_global_start` interface without
