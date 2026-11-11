@@ -425,29 +425,41 @@ def load_model(torch, checkpoint: Path, module):
     return model
 
 
-def original_forward(model, mix):
-    """Capture exact original normalized inputs, both raw decoder outputs and PCM."""
-    captured = {}
-    hooks = [
-        model.encoder[0].register_forward_pre_hook(
-            lambda _, args: captured.update(spectral=args[0].detach())
-        ),
-        model.tencoder[0].register_forward_pre_hook(
-            lambda _, args: captured.update(waveform=args[0].detach())
-        ),
-        model.decoder[-1].register_forward_hook(
-            lambda _, _args, result: captured.update(decoded_spectral=result[0].detach())
-        ),
-        model.tdecoder[-1].register_forward_hook(
-            lambda _, _args, result: captured.update(decoded_waveform=result[0].detach())
-        ),
-    ]
-    try:
+def original_forward(torch, model, mix, output: Path):
+    """Write the four stock hook tensors at their source lifetime boundary."""
+    artifacts = {}
+
+    def capture(name, value):
+        tensor = value.detach().view(SHAPES[name])
+        if name in {"spectral", "waveform"} and not tensor.is_contiguous():
+            msg = f"unexpected original HTDemucs input layout: {name}"
+            raise ValueError(msg)
+        artifacts[name] = write_tensor(torch, output / f"{name}.f32", tensor, SHAPES[name])
+
+    with ExitStack() as hooks:
+        hooks.enter_context(
+            model.encoder[0].register_forward_pre_hook(lambda _, args: capture("spectral", args[0]))
+        )
+        hooks.enter_context(
+            model.tencoder[0].register_forward_pre_hook(
+                lambda _, args: capture("waveform", args[0])
+            )
+        )
+        hooks.enter_context(
+            model.decoder[-1].register_forward_hook(
+                lambda _, _args, result: capture("decoded_spectral", result[0])
+            )
+        )
+        hooks.enter_context(
+            model.tdecoder[-1].register_forward_hook(
+                lambda _, _args, result: capture("decoded_waveform", result[0])
+            )
+        )
         pcm = model(mix)
-    finally:
-        for hook in hooks:
-            hook.remove()
-    return {name: captured[name].reshape(shape) for name, shape in SHAPES.items()}, pcm
+    if artifacts.keys() != SHAPES.keys():
+        msg = "missing original HTDemucs hook output"
+        raise ValueError(msg)
+    return artifacts, pcm
 
 
 def check_inline(onnx, graph) -> None:
@@ -842,14 +854,14 @@ def capture_reference(
     model = load_model(torch, checkpoint, module)
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
     with torch.inference_mode():
-        branches, pcm = original_forward(model, waveform)
-        artifacts = {
-            name: write_tensor(torch, output / f"{name}.f32", branches[name], shape)
-            for name, shape in SHAPES.items()
-        }
+        artifacts, pcm = original_forward(torch, model, waveform, output)
+        del waveform
         original_pcm = write_tensor(torch, output / "original_pcm.f32", pcm, PCM_SHAPE)
-        inputs = (branches["spectral"], branches["waveform"])
-        del branches, pcm, waveform
+        del pcm
+        inputs = tuple(
+            read_tensor(torch, output / f"{name}.f32", artifacts[name], SHAPES[name])
+            for name in ("spectral", "waveform")
+        )
         for name, value in zip(tuple(SHAPES)[2:], wrapper(*inputs), strict=True):
             check_reference_tensor(
                 torch, output / f"{name}.f32", artifacts[name], value, SHAPES[name]

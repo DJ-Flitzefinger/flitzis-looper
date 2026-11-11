@@ -1483,7 +1483,40 @@ fixed signature, provenance and full ONNX validity. The producer still needs a
 compatible, independently admitted development-time Torch export. The CUDA
 wheel failed to load a dependency within the previous 512 MiB producer Job.
 The stock reference and separated CPU trace still require independent
-whole-phase budgets. The mapped Native loader reduces serialized private
+whole-phase budgets. The stock capture hooks write the two normalized inputs
+and both cropped decoder views in 256 KiB chunks as they pass the original
+model's boundaries. They retain only the file identities. The extracted-core
+comparison reopens the two contiguous normalized inputs, verifies their
+digests while reading them, and compares its decoder outputs against the
+original files. Stock dispatch and the original PCM calculation are intact.
+
+For Windows stock CPU admission, build
+`scripts/htdemucs_ideep_recorder.cpp` with the CPU wheel's oneDNN 3.11.2
+headers and the exact iDeep `e539e0f9774e2018f0d56fe865da66581f692e3d` headers.
+Use x64 release MSVC, C++20, the dynamic CRT (`/MD`), `NDEBUG` and
+`_ITERATOR_DEBUG_LEVEL=0`. The recorder binds the exported CPU engine of
+the loaded official Torch 2.12.0+cpu wheel. It delegates allocations and
+frees to the original 4096-byte-aligned allocator and keeps its callbacks
+resident through process teardown.
+
+Run `scripts/probe_htdemucs_ideep.py` in a fresh independently admitted
+CP314 Windows Job with an exact CPU overlay, the recorder DLL and its
+SHA-256. Set `ONEDNN_VERBOSE=profile_create,profile_exec` before launch.
+Each invocation covers one fixed geometry without a checkpoint and reports
+the dense return, iDeep requests and CRT usable sizes next to the stock
+primitive and reorder layouts. Use `--cold-only` to qualify a first call and
+teardown separately from a warm repeat. Keep one intra-op and one inter-op
+thread and preserve the original library and allocator defaults.
+
+The recorder covers the iDeep tensor allocator, including scratchpads passed
+to oneDNN by iDeep. Admission still charges ATen's dense copies and returns,
+error-path plain retries, internal oneDNN allocations and cache/JIT owners,
+MKL workspaces and allocator retention. Adopt each geometry receipt after
+the Job, process tree and both readers end. The largest spectral transpose
+completed one cold call but failed during a warm repeat under its separate
+512 MiB containment. That result leaves whole-phase learned admission open.
+
+The mapped Native loader reduces serialized private
 ownership and still counts the file-backed span and both conservative
 initializer owners. The compact position buffers require 6,209,536 bytes
 for two additional initializer owners during load and 3,104,768 bytes for
