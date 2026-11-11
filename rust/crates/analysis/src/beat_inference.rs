@@ -4,11 +4,13 @@
 //! The separate beat_audio core implements the complete waveform math.
 //! The caller must admit a disposable offline process before loading/running it.
 
+use crate::trial_ort::{self, is_run_termination};
 use ort::{
     ep,
-    session::{RunOptions, Session, builder::AutoDevicePolicy},
+    session::{RunOptions, Session},
     value::{TensorElementType, TensorRef, ValueType},
 };
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -122,42 +124,11 @@ impl BeatModel {
             ],
         };
         checkpoint(cancelled)?;
-        let mut builder = Session::builder()
-            .map_err(|e| e.to_string())?
-            .with_auto_device(AutoDevicePolicy::Default)
-            .map_err(|e| e.to_string())?
-            .with_execution_providers(providers)
-            .map_err(|e| e.to_string())?
-            .with_intra_threads(1)
-            .map_err(|e| e.to_string())?
-            .with_inter_threads(1)
-            .map_err(|e| e.to_string())?
-            .with_parallel_execution(false)
-            .map_err(|e| e.to_string())?
-            .with_intra_op_spinning(false)
-            .map_err(|e| e.to_string())?
-            .with_inter_op_spinning(false)
-            .map_err(|e| e.to_string())?
+        let builder = trial_ort::session_builder(&providers)?
             .with_profiling(profile)
             .map_err(|e| e.to_string())?;
         checkpoint(cancelled)?;
-        // Keep the exact builder's native options alive through the helper join.
-        // Cloning the builder would create different options. Unknown load errors
-        // remain primary even when an own load-cancel request races them.
-        let mut session = if let Some(context) = context {
-            let canceler = builder.canceler();
-            crate::trial_lifetime::terminate_during(
-                context,
-                None,
-                || canceler.cancel().map_err(|e| e.to_string()),
-                || builder.commit_from_memory(graph).map_err(|e| e.to_string()),
-            )
-            .0?
-        } else {
-            builder
-                .commit_from_memory(graph)
-                .map_err(|e| e.to_string())?
-        };
+        let mut session = trial_ort::commit(builder, graph, context)?;
         let validation = (|| {
             if let Some(context) = context {
                 context.cleanup()?;
@@ -277,13 +248,6 @@ impl BeatModel {
     }
 }
 
-// ORT v1.24.4 core/framework/stream_execution_context.cc, RunSince:
-// ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, this exact message). No substring matching.
-fn is_run_termination(code: ort::ErrorCode, message: &str) -> bool {
-    code == ort::ErrorCode::GenericFailure
-        && message == "Exiting due to terminate flag being set to true."
-}
-
 pub(crate) fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     if cancelled() {
         Err("native BeatThis trial cancelled".into())
@@ -307,12 +271,8 @@ pub fn validate_graph_checked(
     if graph.is_empty() || graph.len() > MAX_GRAPH_BYTES {
         return Err("BeatThis graph exceeds trial bound".into());
     }
-    let mut hash = Sha256::new();
-    for block in graph.chunks(65536) {
-        checkpoint(cancelled)?;
-        hash.update(block);
-    }
-    if expected.len() != 64 || format!("{:x}", hash.finalize()) != expected {
+    let hash = trial_ort::sha256(graph, || checkpoint(cancelled))?;
+    if expected.len() != 64 || hash != expected {
         return Err("BeatThis graph digest mismatch".into());
     }
     Ok(())

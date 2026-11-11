@@ -12,10 +12,14 @@ pub mod beat_audio;
 pub mod beat_inference;
 #[cfg(feature = "native-inference-trial")]
 pub mod trial_lifetime;
+#[cfg(feature = "native-inference-trial")]
+mod trial_ort;
 mod bpm_pipeline;
 mod canonical_digest;
 mod detection_function;
 mod downbeat;
+#[cfg(feature = "demucs-inference-trial")]
+pub mod demucs_inference;
 pub mod key_detection;
 mod phase_vocoder;
 pub mod selected_bpm;

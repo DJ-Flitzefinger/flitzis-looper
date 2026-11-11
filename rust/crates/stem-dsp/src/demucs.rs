@@ -42,6 +42,7 @@ pub enum Error {
     },
     Cancelled,
     Envelope,
+    Predictor,
 }
 
 impl fmt::Display for Error {
@@ -60,6 +61,7 @@ impl fmt::Display for Error {
             ),
             Self::Cancelled => f.write_str("HTDemucs spectral work cancelled"),
             Self::Envelope => f.write_str("invalid HTDemucs inverse overlap envelope"),
+            Self::Predictor => f.write_str("HTDemucs normalized predictor failed"),
         }
     }
 }

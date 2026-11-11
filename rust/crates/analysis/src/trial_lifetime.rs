@@ -24,18 +24,27 @@ struct State {
 
 /// One exact invocation marker, latched and shared with its scoped ORT helper.
 #[derive(Clone)]
-pub struct Context(Arc<State>);
+pub struct Context(Arc<State>, &'static str);
 
 impl Context {
     pub fn new(marker: Option<PathBuf>) -> Self {
-        Self(Arc::new(State {
-            marker,
-            start: Instant::now(),
-            next_poll: AtomicU64::new(0),
-            observed: AtomicBool::new(false),
-            stage: Mutex::new("startup"),
-            cleanup: Mutex::new(None),
-        }))
+        Self(
+            Arc::new(State {
+                marker,
+                start: Instant::now(),
+                next_poll: AtomicU64::new(0),
+                observed: AtomicBool::new(false),
+                stage: Mutex::new("startup"),
+                cleanup: Mutex::new(None),
+            }),
+            CANCELLED,
+        )
+    }
+
+    /// Keep the same marker, latch and cleanup owners with another model label.
+    #[cfg(feature = "demucs-inference-trial")]
+    pub(crate) fn with_cancel_message(&self, message: &'static str) -> Self {
+        Self(Arc::clone(&self.0), message)
     }
 
     pub fn from_environment() -> Self {
@@ -75,7 +84,7 @@ impl Context {
 
     pub fn check(&self) -> Result<(), String> {
         if self.cancelled() {
-            Err(CANCELLED.into())
+            Err(self.1.into())
         } else {
             Ok(())
         }

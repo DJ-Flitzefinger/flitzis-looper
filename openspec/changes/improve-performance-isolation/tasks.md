@@ -1201,6 +1201,14 @@ remaining plan into each successor; report actual hard service limits honestly.
 
 ## Offline HTDemucs dual-branch evaluation
 
+- [x] Add a source-pinned release B1 normalized-core export recipe and an
+      opt-in synchronous CPU adapter with exact ordered float32 signatures.
+      Refuse the conservative dense graph payload before ORT bootstrap.
+- [ ] Qualify the separate CPython 3.14 exporter tooling, establish bounded
+      graph/provider liveness and independent whole-process admission, then
+      compare full learned outputs on identical original normalized inputs
+      and complete Native PCM/tails against pinned original HTDemucs.
+
 - [x] Prepare the native CaC and time branches for a synchronous predictor using
       caller-supplied original per-item statistics and checked combined payload.
 - [x] Restore complete decoder tensors, reconstruct the spectral waveform at

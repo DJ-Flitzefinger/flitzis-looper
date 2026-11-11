@@ -1326,3 +1326,40 @@ PCM. Separately, five High-DC raw FFT comparisons retain 1,478 failing values
 at unchanged bounds, with maximum absolute difference 0.00048828125.
 Broader dispatch, learned model/export/runtime, productive routing and Torch
 cutover remain open. Historical independent-f64 High-DC failures remain retained.
+
+### Fixed HTDemucs learned-core export and CPU boundary
+
+`scripts/export_htdemucs_trial.py` checks the installed Demucs and einops
+source pins and the complete `955717e8` checkpoint. Its CLI checks these pins
+and extracts the core without loading Torch. The `export` function is for a
+disposable, independently admitted Windows CPython 3.14 producer with the
+pinned Torch build and separate ONNX 1.23.2 tooling. It checks an owned
+checkpoint snapshot before deserializing and reconstructs the stock model
+strictly. The selected statements from the pinned `HTDemucs.forward` retain
+both original convolutional encoder/decoder stacks, skips, DConv, frequency
+and sinusoidal position embeddings, and cross-transformer. Raw normalization,
+FFT, inversion, restore and apply remain outside the exported graph.
+
+The graph interface is fixed to stereo B1 at 44.1 kHz, 343,980 training frames
+and 336 spectral steps. The input tensors are float32 `[1,2,2,2048,336]` and
+`[1,2,343980]`. The outputs are `[1,4,2,2,2048,336]` and `[1,4,2,343980]`,
+ordered drums, bass, other, vocals with real then imaginary parts. The
+exporter captures the complete original normalized inputs, decoder outputs
+and PCM through original forward hooks, checks the extracted core against
+those tensors, and binds the inline ONNX graph and references by digest.
+
+The opt-in `demucs-inference-trial` feature adds a synchronous CPU adapter.
+It checks the trusted graph digest and metadata and validates both decoder
+outputs through NaN-initialized ORT bindings before writing caller buffers.
+The same adapter can invoke `demucs::offline::Workspace` to restore the
+branches and reconstruct PCM. The caller owns exact reader lifetimes and
+independent process admission. A standalone dynamic runtime must use the
+checked ORT package and `PROCESS_GUARD` through process exit.
+
+The current opset-18 recipe lowers dense attention to separate score and
+softmax values. Each largest FP32 value needs 231,211,008 bytes. Charging both
+and the expanded weights already exceeds 512 MiB. The CPU adapter refuses
+before runtime bootstrap until there is a verified liveness bound or a
+bounded lowering. The current CPython 3.14 producer also lacks the checked
+ONNX toolchain. Actual graph export, runtime execution, complete learned
+branch and PCM/tail comparisons, and production cutover remain open.

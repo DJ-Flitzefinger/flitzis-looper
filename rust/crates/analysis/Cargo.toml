@@ -10,6 +10,7 @@ name = "flitzis_looper_analysis"
 native-inference-trial = ["dep:libloading"]
 native-inference-dynamic = ["native-inference-trial", "ort/load-dynamic"]
 native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
+demucs-inference-trial = ["native-inference-trial", "dep:flitzis-stem-dsp"]
 
 [[example]]
 name = "beat_this_native"
@@ -20,6 +21,7 @@ name = "beat_this_audio"
 required-features = ["native-inference-trial"]
 
 [dependencies]
+flitzis-stem-dsp = { path = "../stem-dsp", optional = true }
 matrixmultiply = "0.3"
 libloading = { version = "0.9", optional = true }
 num-complex = "0.4"

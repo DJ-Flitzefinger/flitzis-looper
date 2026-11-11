@@ -503,6 +503,7 @@ dependencies = [
 name = "flitzis-looper-analysis"
 version = "0.1.0"
 dependencies = [
+ "flitzis-stem-dsp",
  "libloading",
  "matrixmultiply",
  "num-complex",
