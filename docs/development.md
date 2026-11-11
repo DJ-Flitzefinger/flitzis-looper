@@ -1413,14 +1413,13 @@ pre-transpose view until that call returns. The extracted comparison returns
 the raw decoder views. The final spectral decoder's rewrite convolution
 reorders its oneDNN output directly into a 66,060,288-byte writable file
 mapping with ABCD strides. The stock layout operations keep the storage
-through the rewrite hook and GLU. The second pointwise convolution in
-the final spectral DConv also reorders directly into a 66,060,288-byte
-writable file mapping. The native squeeze retains that storage for the stock
-GroupNorm input. Each mapped eager forward gets a separate view. The final
-DConv residual addition produces the separate ABCD input to the transposed
-convolution. In that convolution, the
-pinned oneDNN BRG path reorders into a separate 44,126,208-byte writable file
-mapping with ACDB strides. The native contiguous clone then copies into a
+through the rewrite hook and GLU. Each of the two pointwise convolutions in
+the final spectral DConv reorders directly into its own 66,060,288-byte writable
+file mapping per mapped eager forward. The native squeeze retains that storage
+for the corresponding stock GroupNorm input. The final DConv residual
+addition produces the separate ABCD input to the transposed convolution.
+The pinned oneDNN BRG path reorders into a separate 44,126,208-byte writable
+file mapping with ACDB strides. The native contiguous clone then copies into a
 second 44,126,208-byte writable file mapping with ABCD strides. The stock
 resize and decoder crop keep the dense storage. Each mapped eager forward
 gets its own pair of mappings. SlowTranspose2d and eager trace use their

@@ -1578,7 +1578,7 @@ def mapped_spectral_rewrite(torch, conv, output: Path):
 
 @contextmanager
 def mapped_spectral_dconv_pointwise(torch, conv, output: Path):
-    """Map the second pointwise return of the final spectral DConv."""
+    """Map a pointwise return of the final spectral DConv."""
     stride, padding, dilation = (1,), (0,), (1,)
     if (
         type(conv) is not torch.nn.Conv1d
@@ -2524,9 +2524,8 @@ def capture_reference(
             reference.enter_context(
                 mapped_spectral_rewrite(torch, model.decoder[-1].rewrite, output)
             )
-            reference.enter_context(
-                mapped_spectral_dconv_pointwise(torch, model.decoder[-1].dconv.layers[1][3], output)
-            )
+            for layer in model.decoder[-1].dconv.layers:
+                reference.enter_context(mapped_spectral_dconv_pointwise(torch, layer[3], output))
             reference.enter_context(
                 mapped_spectral_transpose(torch, model.decoder[-1].conv_tr, output)
             )
