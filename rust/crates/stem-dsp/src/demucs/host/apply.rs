@@ -49,12 +49,111 @@ pub struct Workspace<'a> {
     payload_bytes: usize,
 }
 
+struct Plan {
+    channels: usize,
+    sources: usize,
+    shifted_frames: usize,
+    padded: usize,
+    shift_buffer: usize,
+    output: usize,
+    bytes: usize,
+}
+
 impl<'a> Workspace<'a> {
     pub fn new(
         frames: usize,
         models: &'a [Model<'a>],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, Error> {
+        let Plan {
+            channels,
+            sources,
+            shifted_frames,
+            padded,
+            shift_buffer,
+            output,
+            bytes,
+        } = Self::plan(frames, models, cancelled)?;
+        let mut totals = Vec::new();
+        totals
+            .try_reserve_exact(sources)
+            .map_err(|_| Error::Allocation {
+                phase: "demucs.apply.totals",
+                requested_bytes: sources * size_of::<f64>(),
+            })?;
+        totals.resize(sources, 0.0_f64);
+        for m in models {
+            for (dst, src) in totals.chunks_mut(BLOCK).zip(m.weights.chunks(BLOCK)) {
+                checkpoint(cancelled)?;
+                for (total, weight) in dst.iter_mut().zip(src) {
+                    *total += weight;
+                }
+            }
+        }
+        if totals
+            .iter()
+            .any(|&v| !v.is_finite() || !(v as f32).is_finite() || v as f32 == 0.0)
+        {
+            return Err(Error::NonFinite);
+        }
+        let mut tracks = Vec::new();
+        tracks
+            .try_reserve_exact(models.len())
+            .map_err(|_| Error::Allocation {
+                phase: "demucs.apply.models",
+                requested_bytes: models.len() * size_of::<TrackWorkspace>(),
+            })?;
+        for m in models {
+            let n = if m.offsets.is_empty() {
+                frames
+            } else {
+                shifted_frames
+            };
+            tracks.push(TrackWorkspace::new(
+                Track::new(
+                    n,
+                    channels,
+                    sources,
+                    m.segment,
+                    m.overlap,
+                    m.transition_power,
+                    m.valid_frames,
+                    m.training_frames,
+                )?,
+                cancelled,
+            )?);
+        }
+        let work = Self {
+            models,
+            frames,
+            channels,
+            sources,
+            tracks,
+            padded: zeros(padded, "demucs.apply.padded")?,
+            shifted: zeros(shift_buffer, "demucs.apply.shifted")?,
+            estimate: zeros(output, "demucs.apply.estimate")?,
+            totals,
+            payload_bytes: bytes,
+        };
+        checkpoint(cancelled)?;
+        Ok(work)
+    }
+
+    /// Validate and count all coexisting apply buffers without allocating.
+    /// A composing caller adds its other live owners before constructing either.
+    pub fn planned_payload_bytes(
+        frames: usize,
+        models: &[Model<'_>],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<usize, Error> {
+        Ok(Self::plan(frames, models, cancelled)?.bytes)
+    }
+
+    fn plan(
+        frames: usize,
+        models: &[Model<'_>],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Plan, Error> {
         checkpoint(cancelled)?;
         let first = models.first().ok_or(Error::Geometry)?;
         let channels = first.channels;
@@ -147,69 +246,26 @@ impl<'a> Workspace<'a> {
         if frames == 0 || bytes > MAX_PAYLOAD_BYTES {
             return Err(Error::Geometry);
         }
-        let mut totals = Vec::new();
-        totals
-            .try_reserve_exact(sources)
-            .map_err(|_| Error::Allocation {
-                phase: "demucs.apply.totals",
-                requested_bytes: sources * size_of::<f64>(),
-            })?;
-        totals.resize(sources, 0.0_f64);
-        for m in models {
-            for (dst, src) in totals.chunks_mut(BLOCK).zip(m.weights.chunks(BLOCK)) {
+        // Validate source denominators before any allocation, including totals.
+        for source in 0..sources {
+            let mut total = 0.0_f64;
+            for m in models {
                 checkpoint(cancelled)?;
-                for (total, weight) in dst.iter_mut().zip(src) {
-                    *total += weight;
-                }
+                total += m.weights[source];
+            }
+            if !total.is_finite() || !(total as f32).is_finite() || total as f32 == 0.0 {
+                return Err(Error::NonFinite);
             }
         }
-        if totals
-            .iter()
-            .any(|&v| !v.is_finite() || !(v as f32).is_finite() || v as f32 == 0.0)
-        {
-            return Err(Error::NonFinite);
-        }
-        let mut tracks = Vec::new();
-        tracks
-            .try_reserve_exact(models.len())
-            .map_err(|_| Error::Allocation {
-                phase: "demucs.apply.models",
-                requested_bytes: models.len() * size_of::<TrackWorkspace>(),
-            })?;
-        for m in models {
-            let n = if m.offsets.is_empty() {
-                frames
-            } else {
-                shifted_frames
-            };
-            tracks.push(TrackWorkspace::new(
-                Track::new(
-                    n,
-                    channels,
-                    sources,
-                    m.segment,
-                    m.overlap,
-                    m.transition_power,
-                    m.valid_frames,
-                    m.training_frames,
-                )?,
-                cancelled,
-            )?);
-        }
-        let work = Self {
-            models,
-            frames,
+        Ok(Plan {
             channels,
             sources,
-            tracks,
-            padded: zeros(padded, "demucs.apply.padded")?,
-            shifted: zeros(shift_buffer, "demucs.apply.shifted")?,
-            estimate: zeros(output, "demucs.apply.estimate")?,
-            totals,
-            payload_bytes: bytes,
-        };
-        checkpoint(cancelled)?;
-        Ok(work)
+            shifted_frames,
+            padded,
+            shift_buffer,
+            output,
+            bytes,
+        })
     }
 
     /// Declared scalar buffers, TrackWorkspace records, numeric offset/weight

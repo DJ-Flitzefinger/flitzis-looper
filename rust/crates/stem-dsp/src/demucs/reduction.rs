@@ -110,6 +110,62 @@ impl CpuProfile {
         )
     }
 
+    /// Statistics of Native packed planar [B,C,part,F,T] features. This adapter
+    /// reproduces the original CaC reduction traversal, not the physical strides
+    /// of this buffer. Stereo is packed in both representations. Original mono
+    /// has part stride 1, frequency stride 2 and time stride 4098 (Nyquist gap):
+    /// TensorIterator coalesces part/frequency and SumKernel accumulates one
+    /// 4096-element vector cascade per time row. No gather allocation is needed.
+    pub fn planar_cac(
+        self,
+        features: &[f32],
+        [batches, channels, bins, steps]: [usize; 4],
+        statistics: &mut [Statistics],
+        additional_payload_bytes: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        if bins != BINS || steps == 0 {
+            return Err(Error::Geometry);
+        }
+        let row = 2 * BINS;
+        let item = row.checked_mul(steps).ok_or(Error::Geometry)?;
+        if channels == 2 {
+            let item = item.checked_mul(2).ok_or(Error::Geometry)?;
+            return self.cac(
+                features,
+                [batches, 4, bins, steps],
+                [item, bins * steps, steps, 1],
+                statistics,
+                additional_payload_bytes,
+                cancelled,
+            );
+        }
+        if channels != 1
+            || bins != BINS
+            || steps == 0
+            || batches == 0
+            || statistics.len() != batches
+            || batches.checked_mul(item) != Some(features.len())
+        {
+            return Err(Error::Geometry);
+        }
+        guard_payload(features.len(), batches, additional_payload_bytes)?;
+        for (values, stats) in features.chunks_exact(item).zip(statistics) {
+            finite(values, cancelled)?;
+            let sample = |i: usize| {
+                let step = i / row;
+                let inner = i % row;
+                values[((inner % 2) * BINS + inner / 2) * steps + step]
+            };
+            let mut sum = 0.0_f32;
+            for step in 0..steps {
+                sum += sum_row::<LANES>(row, &|i| sample(step * row + i), cancelled)?;
+            }
+            *stats = moments(item, &sample, sum / item as f32, batches == 1, cancelled)?;
+        }
+        checkpoint(cancelled)
+    }
+
     /// Original CLI [C,L] reference. First reduce channels for each sample,
     /// then separately compute global mean and correction-one std of that
     /// reference. No epsilon is used by CLI and zero std is refused.
@@ -200,7 +256,16 @@ fn reduce(
     } else {
         sum_row::<LANES>(count, &sample, cancelled)?
     };
-    let mean = sum / count as f32;
+    moments(count, &sample, sum / count as f32, single_output, cancelled)
+}
+
+fn moments(
+    count: usize,
+    sample: &impl Fn(usize) -> f32,
+    mean: f32,
+    single_output: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Statistics, Error> {
     if !mean.is_finite() {
         return Err(Error::NonFinite);
     }
@@ -319,6 +384,10 @@ mod tests {
         let stats = Statistics::from_reference(0.0, 0.0).unwrap();
         let mut out = [stats];
         let no_poll = || panic!("must refuse before dispatch");
+        assert!(matches!(
+            profile.planar_cac(&pcm, [1, 2, usize::MAX, 2], &mut out, 0, &no_poll),
+            Err(Error::Geometry)
+        ));
         assert!(matches!(
             profile.time(&pcm, [1, 2, 2], [8, 4, 1], &mut out, 0, &no_poll),
             Err(Error::Geometry)

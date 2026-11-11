@@ -1285,9 +1285,44 @@ profile requires one. Full release tensors, High-DC/tiny variance, distinct
 batch/channel axes, zero branch variance, SIMD tails and cascade boundaries
 belong to the controls. The original values of each tensor are identical for
 both reducers, including actual Torch CaC features. The existing Native FFT
-proof is separate. The original mono CaC view, broader CPU/thread dispatch,
+proof is separate. Physical mono view admission, broader CPU/thread dispatch,
 learned execution and productive routing remain open. The retained independent
 f64 API and earlier High-DC failure evidence retain their original scope.
 
 ATen sources and attribution are recorded in the
 [third-party notices](../rust/crates/stem-dsp/THIRD_PARTY_NOTICES.md).
+
+### Independent offline Demucs normalization composition
+
+`demucs::hybrid::Workspace::run_independent` accepts the explicit serial CPU
+profile and measures the actual Native waveform after right padding and its
+Native CaC features. `planar_cac` maps packed Native mono features to the
+original part/frequency-interleaved row traversal: one 4096-element cascade
+per time row, followed by f32 accumulation. Original physical mono view strides
+remain outside `cac` admission; the adapter does not relabel a packed slice.
+Single-result centered std and multiple-result Welford remain distinct.
+
+`demucs::offline::Workspace` composes independent hybrid calls with the existing
+physical host, split/context/trim, supplied shifts and weighted bags. `run_cli`
+forms the whole-track channel-reference statistics before any context/shift,
+normalizes once without epsilon and restores once after the complete bag.
+Constant or singleton CLI reference is refused. `run` omits this CLI envelope.
+All learned core outputs are supplied synchronously by the caller. Existing
+mathematical-independent and supplied-original-statistic APIs keep their scope.
+
+Allocation-free planning checks the simultaneous union of every retained model
+workspace, normalized track, input/output, owned and borrowed statistics, fixed
+FFT/reducer scratch and the caller's predictor/external allowance against
+512 MiB before allocation. Borrowed callback views are counted once. Runtime,
+allocator and WHOLE admission remain separate. Errors and late cancellation
+invalidate the complete result; all immutable source readers survive return.
+
+`demucs_independent_trial_reference.py` compares complete normalized branches
+and PCM with pinned original `HTDemucs.forward`, same-tensor statistic bits,
+Native FFT differences separately, and full original CLI/apply compositions.
+Fixtures have parameter-free decoders; they establish no learned execution.
+The integrated 23-forward/six-apply matrix passes normalized inputs and complete
+PCM. Separately, five High-DC raw FFT comparisons retain 1,478 failing values
+at unchanged bounds, with maximum absolute difference 0.00048828125.
+Broader dispatch, learned model/export/runtime, productive routing and Torch
+cutover remain open. Historical independent-f64 High-DC failures remain retained.

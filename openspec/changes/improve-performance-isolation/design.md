@@ -8061,5 +8061,25 @@ Compare original same-tensor scalar bits, full normalized and restored values
 at unchanged atol/rtol2e-5. Include actual Torch CaC features, release and shorter
 training geometry, distinct batches/channels, difficult DC, zero variance and
 lane/cascade boundaries. Keep the historical independent f64 failure and the
-existing supplied-statistic and FFT proofs. Mono CaC view reduction, broader
+existing supplied-statistic and FFT proofs. Physical mono view admission, broader
 dispatch, learned runtime and productive integration remain open.
+
+## Independent offline normalization composition
+
+Compose the explicit CPU profile with real Native post-right-pad time and CaC
+inputs in hybrid forward. The indexed planar mono adapter preserves the
+original stride-one part/frequency row and 4098 time stride reduction topology,
+including per-row f32 accumulation and B1/B2 std dispatch. Physical mono view
+admission remains refused by the separate packed-original `cac` API.
+Normalize both branches with std+1e-5, call the synchronous normalized predictor,
+restore raw std, reconstruct/add the entire training result, then crop. Host
+center trimming and physical context remain outside this forward boundary.
+
+The offline workspace owns apply, every model's hybrid workspace and one
+whole-track normalization buffer. CLI statistics precede all shifts/context;
+restore follows the complete weighted bag. Preflight their simultaneous union,
+including vector records, owned/borrowed statistics, fixed scratch and declared
+predictor/other owners, before allocation or callback. No silent arithmetic or
+supplied-statistic fallback, productive thread mutation or learned execution.
+Compare full normalized inputs separately from restored PCM and raw FFT error;
+retain unchanged tolerances, historical failures and broader open gates.

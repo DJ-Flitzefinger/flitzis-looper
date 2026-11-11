@@ -13,7 +13,7 @@ pub mod apply;
 /// Mean and correction-one standard deviation, stored as finite f32 scalars.
 /// Measurement below uses independent f64 two-pass arithmetic. The explicit
 /// original CPU dispatch profile is available in the sibling reduction module.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Statistics {
     mean: f32,
     std: f32,

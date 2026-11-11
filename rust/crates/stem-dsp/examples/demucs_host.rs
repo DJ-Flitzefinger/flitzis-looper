@@ -67,7 +67,11 @@ fn cpu_reduction(a: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|arg| arg.parse::<usize>())
         .collect::<Result<Vec<_>, _>>()?;
-    let bins = if a[0] == "cpu-cac" { BINS } else { 1 };
+    let bins = if matches!(a[0].as_str(), "cpu-cac" | "cpu-planar-cac") {
+        BINS
+    } else {
+        1
+    };
     let len = [batches, planes, frames, bins]
         .into_iter()
         .try_fold(1usize, usize::checked_mul)
@@ -98,6 +102,13 @@ fn cpu_reduction(a: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             &input,
             [batches, planes, frames],
             [b, c, l],
+            &mut stats,
+            additional,
+            &cancel,
+        )?,
+        ("cpu-planar-cac", &[channels]) => profile.planar_cac(
+            &input,
+            [batches, channels, BINS, frames],
             &mut stats,
             additional,
             &cancel,
@@ -144,7 +155,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
     if a.first().is_some_and(|mode| {
         matches!(
             mode.as_str(),
-            "cpu-time" | "cpu-time-stats" | "cpu-cac" | "cpu-cli"
+            "cpu-time" | "cpu-time-stats" | "cpu-cac" | "cpu-cli" | "cpu-planar-cac"
         )
     }) {
         return cpu_reduction(&a);

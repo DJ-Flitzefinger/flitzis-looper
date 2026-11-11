@@ -1220,6 +1220,15 @@ remaining plan into each successor; report actual hard service limits honestly.
 - [x] Check scalar bits and complete normalized/restored values on identical
       original tensors, including High-DC/tiny variance, exact per-batch axes,
       zero branch variance, reduction boundaries and release/shorter geometry.
-- [ ] Extend admission to original mono CaC views and broader CPU/thread
+- [ ] Extend admission to broader CPU/thread
       dispatch, establish independent full frontend/learned/runtime parity
       and integrate the complete productive Native replacement.
+
+## Independent offline normalization composition
+
+- [x] Compose explicit-profile independent statistics with actual Native hybrid
+      inputs and the existing physical host/apply/shift/bag boundaries, including
+      a whole-track CLI normalization/restoration envelope and indexed mono CaC.
+- [x] Verify complete normalized branches, same-tensor statistic bits and full
+      original fixture PCM with FFT differences reported separately; retain all
+      historical failures and broader learned/runtime/productive parity gates.

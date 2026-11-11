@@ -2,13 +2,17 @@
 //!
 //! The input is planar [batch, channel, physical frame] at 44100 Hz after any
 //! apply/TensorChunk context padding. The caller supplies the training length and
-//! statistics for each item of the right-padded input and its original spectrum.
+//! either supplies original statistics or explicitly admits a CPU profile to
+//! measure the real Native right-padded waveform and spectrum independently.
 //! The final prefix crop belongs to forward. Any outer center trim remains with
 //! apply. The predictor supplies both decoder outputs synchronously.
 
 use super::{
     BLOCK, Error, Geometry as SpectralGeometry, MAX_PAYLOAD_BYTES, MAX_WORKING_BYTES, RATE,
-    Workspace as SpectralWorkspace, checkpoint, host::Statistics, zeros,
+    Workspace as SpectralWorkspace, checkpoint,
+    host::Statistics,
+    reduction::{self, CpuProfile},
+    zeros,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -80,12 +84,13 @@ impl Geometry {
         .try_fold(0usize, usize::checked_add)
         .ok_or(Error::Geometry)?;
         let stats = batches
-            .checked_mul(size_of::<BranchStatistics>())
+            .checked_mul(size_of::<BranchStatistics>() + 2 * size_of::<Statistics>())
             .ok_or(Error::Geometry)?;
         let payload_bytes = floats
             .checked_mul(size_of::<f32>())
             .and_then(|n| n.checked_add(stats))
             .and_then(|n| n.checked_add(MAX_WORKING_BYTES))
+            .and_then(|n| n.checked_add(reduction::WORKING_BYTES))
             .and_then(|n| n.checked_add(additional_payload_bytes))
             .filter(|&n| n <= MAX_PAYLOAD_BYTES)
             .ok_or(Error::Geometry)?;
@@ -146,6 +151,8 @@ pub struct Workspace {
     decoded_spectral: Vec<f32>,
     decoded_time: Vec<f32>,
     inverse: Vec<f32>,
+    spectral_statistics: Vec<Statistics>,
+    time_statistics: Vec<Statistics>,
 }
 
 impl Workspace {
@@ -165,6 +172,8 @@ impl Workspace {
                 "demucs.hybrid.decoded_time",
             )?,
             inverse: zeros(g.training_frames(), "demucs.hybrid.inverse")?,
+            spectral_statistics: zeros(g.batches, "demucs.hybrid.spectral_statistics")?,
+            time_statistics: zeros(g.batches, "demucs.hybrid.time_statistics")?,
         };
         checkpoint(cancelled)?;
         Ok(work)
@@ -190,6 +199,63 @@ impl Workspace {
         {
             return Err(Error::Geometry);
         }
+        self.prepare(pcm, cancelled)?;
+        self.evaluate(Some(statistics), output, predictor, cancelled)
+    }
+
+    /// Measure both real Native branches using the explicitly admitted original
+    /// CPU profile. No original tensor/statistic is supplied and no mathematical
+    /// or supplied-stat fallback occurs. FFT differences remain independent of
+    /// same-tensor reducer parity. Any error invalidates the whole result.
+    pub fn run_independent(
+        &mut self,
+        profile: CpuProfile,
+        pcm: &[f32],
+        output: &mut [f32],
+        predictor: &mut Predictor<'_>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        let g = self.geometry;
+        if pcm.len() != g.input_len()
+            || output.len() != g.output_len()
+            || !(1..=2).contains(&g.channels)
+        {
+            return Err(Error::Geometry);
+        }
+        self.prepare(pcm, cancelled)?;
+        // Geometry already includes every live owner, including the conservative
+        // borrowed-stat allowance. Subtract only owners counted by the reducer.
+        let additional = |input: usize| {
+            g.payload_bytes
+                - input * size_of::<f32>()
+                - g.batches * size_of::<Statistics>()
+                - reduction::WORKING_BYTES
+        };
+        profile.time(
+            &self.time,
+            [g.batches, g.channels, g.training_frames()],
+            [g.channels * g.training_frames(), g.training_frames(), 1],
+            &mut self.time_statistics,
+            additional(self.time.len()),
+            cancelled,
+        )?;
+        profile.planar_cac(
+            &self.spectral,
+            [g.batches, g.channels, super::BINS, g.spectral_steps()],
+            &mut self.spectral_statistics,
+            additional(self.spectral.len()),
+            cancelled,
+        )?;
+        self.evaluate(None, output, predictor, cancelled)
+    }
+
+    /// Statistics are valid only after a successful independent run.
+    pub fn independent_statistics(&self) -> (&[Statistics], &[Statistics]) {
+        (&self.spectral_statistics, &self.time_statistics)
+    }
+
+    fn prepare(&mut self, pcm: &[f32], cancelled: &dyn Fn() -> bool) -> Result<(), Error> {
+        let g = self.geometry;
         let physical = g.physical_frames;
         let training = g.training_frames();
         for (src, dst) in pcm
@@ -208,9 +274,23 @@ impl Workspace {
         }
         self.fft
             .analyze_into(g.analysis, &self.time, &mut self.spectral, cancelled)?;
+        checkpoint(cancelled)
+    }
+
+    fn evaluate(
+        &mut self,
+        statistics: Option<&[BranchStatistics]>,
+        output: &mut [f32],
+        predictor: &mut Predictor<'_>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        let g = self.geometry;
+        let physical = g.physical_frames;
+        let training = g.training_frames();
         let spectral_item = g.channels * g.inverse_lane.feature_len();
         let time_item = g.channels * training;
-        for (batch, stats) in statistics.iter().enumerate() {
+        for batch in 0..g.batches {
+            let stats = self.statistics(statistics, batch);
             stats.spectral.normalize_branch_in_place(
                 &mut self.spectral[batch * spectral_item..(batch + 1) * spectral_item],
                 cancelled,
@@ -240,7 +320,8 @@ impl Workspace {
 
         let spectral_item = spectral_item * g.sources;
         let time_item = time_item * g.sources;
-        for (batch, stats) in statistics.iter().enumerate() {
+        for batch in 0..g.batches {
+            let stats = self.statistics(statistics, batch);
             stats.spectral.restore_in_place(
                 &mut self.decoded_spectral[batch * spectral_item..(batch + 1) * spectral_item],
                 cancelled,
@@ -277,6 +358,16 @@ impl Workspace {
             }
         }
         checkpoint(cancelled)
+    }
+
+    fn statistics(&self, supplied: Option<&[BranchStatistics]>, batch: usize) -> BranchStatistics {
+        supplied.map_or_else(
+            || BranchStatistics {
+                spectral: self.spectral_statistics[batch],
+                time: self.time_statistics[batch],
+            },
+            |stats| stats[batch],
+        )
     }
 }
 
