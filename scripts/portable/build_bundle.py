@@ -58,6 +58,7 @@ WHEEL_TAG = "cp314-cp314-win_amd64"
 VENDORED_PACKAGE = Path("flitzis_bs_roformer")
 VENDORED_SOURCE = Path("vendor/bs_roformer/src") / VENDORED_PACKAGE
 NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
+RUNTIME_REDISTRIBUTION_RECORD = "windows-runtime-redistribution.json"
 # Keep these literals readable by the legacy inventory parser.
 TRACKED_LICENSES = {
     "flitzis-looper.txt": "LICENSE.txt",
@@ -68,6 +69,7 @@ TRACKED_LICENSES = {
     "cpal-LICENSE.txt": "rust/vendor/cpal/LICENSE",
     "cpal-provenance.json": "rust/vendor/cpal/looper-provenance.json",
     "windows-redistribution-sources.json": "scripts/native/windows-redistribution-sources.json",
+    "windows-runtime-redistribution.json": "scripts/portable/windows-runtime-redistribution.json",
 }
 STARTER = (
     "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n"
@@ -487,7 +489,16 @@ def native_redistribution(
     runtime: Path, checkout_files: dict[str, str], runtime_files: dict[str, str]
 ) -> dict[str, object]:
     """Compare staged files with the qualified Windows Native dependency reference."""
-    record_path = f"licenses/{NATIVE_SOURCE_RECORD}"
+    return _redistribution_reference(runtime, NATIVE_SOURCE_RECORD, checkout_files, runtime_files)
+
+
+def _redistribution_reference(
+    runtime: Path,
+    record_name: str,
+    checkout_files: dict[str, str],
+    runtime_files: dict[str, str],
+) -> dict[str, object]:
+    record_path = f"licenses/{record_name}"
     record = json.loads((runtime / record_path).read_text(encoding="utf-8"))
     inventories = {"checkout_files": checkout_files, "runtime_files": runtime_files}
     mismatches = {
@@ -594,6 +605,9 @@ def build(args: argparse.Namespace) -> None:
         "checkout_directories": directory_inventory(checkout),
         "runtime_files": runtime_files,
         "native_redistribution": native_redistribution(runtime, checkout_files, runtime_files),
+        "runtime_redistribution": _redistribution_reference(
+            runtime, RUNTIME_REDISTRIBUTION_RECORD, checkout_files, runtime_files
+        ),
     }
     if args.runtime_directory:
         destination = args.runtime_directory.absolute()

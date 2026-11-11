@@ -1,0 +1,471 @@
+{
+  "schema_version": 1,
+  "reference_candidate": {
+    "source_commit": "7b6c79f9a7eb8edfe15903d49b50719a378bb67a",
+    "archive_sha256": "22b7acfdac298f32b387eb83c3566d82fffb3387ad3ef82e34e8177e60148402",
+    "archive_bytes": 2448157569,
+    "platform": "Windows x64",
+    "python": "3.14.2"
+  },
+  "pytorch_wheel": {
+    "distribution": "torch==2.12.0+cu130",
+    "tag": "cp314-cp314-win_amd64",
+    "site_packages_root": "python/Lib/site-packages",
+    "record": "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/RECORD",
+    "notices": [
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/LICENSE",
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/NOTICE"
+    ],
+    "build_git": "7661cd9c6b841b62b7f411aa52ec51f05457263b",
+    "build_git_file": "python/Lib/site-packages/torch/version.py",
+    "locked_archive": {
+      "url": "https://download-r2.pytorch.org/whl/cu130/torch-2.12.0%2Bcu130-cp314-cp314-win_amd64.whl",
+      "sha256": "b30d09337048750c1bf10c2abc8cb3d3bf9bb5163d6a34df7c2eb6e9ee32c603",
+      "bytes": 1933541739,
+      "publisher_index": "https://download.pytorch.org/whl/cu130/torch/",
+      "publisher_record_sha256": "c0c179a5720fd8a560a7b1e97a0ef0015edf8962eca20d1b8e3485100aa0db3e",
+      "publisher_record_match": "All 37 Torch DLL rows and the LICENSE, NOTICE and version.py rows match the retained installed RECORD by name, size and SHA-256. The installed RECORD also contains installation metadata."
+    },
+    "windows_recipes": {
+      "cuda_install": "https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/.ci/pytorch/windows/internal/cuda_install.bat",
+      "copy": "https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/.ci/pytorch/windows/internal/copy.bat",
+      "setup_build": "https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/.ci/pytorch/windows/setup_build.bat"
+    },
+    "recipe_scope": "The source recipe selects CUDA 13.0.0 and cuDNN 9.20.0.48 for CUDA 13, permits preinstalled CUDA, and stages third-party DLLs from their respective install paths. The exact runner image, install log and whole wheel download were not verified.",
+    "notice_scope": "The wheel LICENSE and NOTICE remain in the payload. Entries for cuDNN frontend, NVTX source and LLVM OpenMP do not supply terms for the separate proprietary DLLs."
+  },
+  "nvidia": {
+    "manifests": {
+      "cuda_13.0.0": {
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.0.0.json",
+        "sha256": "fe6a86b54450d03ae709123a52717870c49046d65d45303ce585c7aa8a83a217"
+      },
+      "cudnn_9.20.0": {
+        "url": "https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.20.0.json",
+        "sha256": "488be2657edfaaa9eada30247de95e81e3ce767f504dccb847d422cd358226a0"
+      }
+    },
+    "comparison": "Published ZIP central-directory member names, uncompressed sizes and CRC32 match the listed reference candidate members under torch/lib. Their uncompressed sizes and the SHA-256 values in reference.runtime_files also match the separately published NVIDIA Windows wheel RECORD rows. The archive SHA-256 values come from the manifest and package index. Only ZIP metadata and RECORD entries were fetched.",
+    "components": {
+      "cuda_cudart": {
+        "version": "13.0.48",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.0.48-archive.zip",
+          "bytes": 2873274,
+          "sha256": "82fb29001895810ce02e88b180cbaa90607b852a7f67a63f18f202079eaa2966"
+        },
+        "license_manifest_path": "cuda_cudart/LICENSE.txt",
+        "member_metadata_matches": {
+          "cudart64_13.dll": {
+            "archive_member": "cuda_cudart-windows-x86_64-13.0.48-archive/bin/x64/cudart64_13.dll",
+            "bytes": 470640,
+            "crc32": "c44721d5"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cuda-runtime/13.0.48/json",
+          "name": "nvidia_cuda_runtime-13.0.48-py3-none-win_amd64.whl",
+          "sha256": "03e581c7584b13e42ce175c774f46e1219e9c574f27fe88c2ccc75dd3f926ed7",
+          "record": "nvidia_cuda_runtime-13.0.48.dist-info/RECORD"
+        }
+      },
+      "libcublas": {
+        "version": "13.0.0.19",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.0.0.19-archive.zip",
+          "bytes": 399809469,
+          "sha256": "c8fb12715b9639f51983315cc4b195e272128c675aa3766b13c4f470b892e6c8"
+        },
+        "license_manifest_path": "libcublas/LICENSE.txt",
+        "member_metadata_matches": {
+          "cublas64_13.dll": {
+            "archive_member": "libcublas-windows-x86_64-13.0.0.19-archive/bin/x64/cublas64_13.dll",
+            "bytes": 50288240,
+            "crc32": "1a9d284e"
+          },
+          "cublasLt64_13.dll": {
+            "archive_member": "libcublas-windows-x86_64-13.0.0.19-archive/bin/x64/cublasLt64_13.dll",
+            "bytes": 477896816,
+            "crc32": "5d4d5635"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cublas/13.0.0.19/json",
+          "name": "nvidia_cublas-13.0.0.19-py3-none-win_amd64.whl",
+          "sha256": "e6ecde441aaf0bb74ed538cfb3b18aa374f452aebf0162088bcb10942f7bbc33",
+          "record": "nvidia_cublas-13.0.0.19.dist-info/RECORD"
+        }
+      },
+      "libcufft": {
+        "version": "12.0.0.15",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcufft/windows-x86_64/libcufft-windows-x86_64-12.0.0.15-archive.zip",
+          "bytes": 212026240,
+          "sha256": "4f0e0c019e1b53166bdeaf52c91c333450ae9dd05fbadc77cffb70a702501b67"
+        },
+        "license_manifest_path": "libcufft/LICENSE.txt",
+        "member_metadata_matches": {
+          "cufft64_12.dll": {
+            "archive_member": "libcufft-windows-x86_64-12.0.0.15-archive/bin/x64/cufft64_12.dll",
+            "bytes": 284331040,
+            "crc32": "37f38a14"
+          },
+          "cufftw64_12.dll": {
+            "archive_member": "libcufft-windows-x86_64-12.0.0.15-archive/bin/x64/cufftw64_12.dll",
+            "bytes": 201264,
+            "crc32": "906d4f0c"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cufft/12.0.0.15/json",
+          "name": "nvidia_cufft-12.0.0.15-py3-none-win_amd64.whl",
+          "sha256": "ff2083e7c4f5bc063d37ec8399277e514ca97b554e069aa6f7eb7ce6d727dc7b",
+          "record": "nvidia_cufft-12.0.0.15.dist-info/RECORD"
+        }
+      },
+      "libcurand": {
+        "version": "10.4.0.35",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcurand/windows-x86_64/libcurand-windows-x86_64-10.4.0.35-archive.zip",
+          "bytes": 54762976,
+          "sha256": "c4db1ed0595fcdba3c4da0f5605ca4c3f4340b6be833d94765994e239c775a32"
+        },
+        "license_manifest_path": "libcurand/LICENSE.txt",
+        "member_metadata_matches": {
+          "curand64_10.dll": {
+            "archive_member": "libcurand-windows-x86_64-10.4.0.35-archive/bin/x64/curand64_10.dll",
+            "bytes": 58863672,
+            "crc32": "18210e26"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-curand/10.4.0.35/json",
+          "name": "nvidia_curand-10.4.0.35-py3-none-win_amd64.whl",
+          "sha256": "65b1710aa6961d326b411e314b374290904c5ddf41dc3f766ebc3f1d7d4ca69f",
+          "record": "nvidia_curand-10.4.0.35.dist-info/RECORD"
+        }
+      },
+      "libcusolver": {
+        "version": "12.0.3.29",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcusolver/windows-x86_64/libcusolver-windows-x86_64-12.0.3.29-archive.zip",
+          "bytes": 185729760,
+          "sha256": "e0aadc965d757c615a50ffb1c48c155f4b6e1bbaf96100a20b2e46964de8f6da"
+        },
+        "license_manifest_path": "libcusolver/LICENSE.txt",
+        "member_metadata_matches": {
+          "cusolver64_12.dll": {
+            "archive_member": "libcusolver-windows-x86_64-12.0.3.29-archive/bin/x64/cusolver64_12.dll",
+            "bytes": 126421024,
+            "crc32": "698bc681"
+          },
+          "cusolverMg64_12.dll": {
+            "archive_member": "libcusolver-windows-x86_64-12.0.3.29-archive/bin/x64/cusolverMg64_12.dll",
+            "bytes": 95365152,
+            "crc32": "2a19eb82"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cusolver/12.0.3.29/json",
+          "name": "nvidia_cusolver-12.0.3.29-py3-none-win_amd64.whl",
+          "sha256": "103fa9e99d63e4be4d04e4a9cb7dfaec5d86f486bb59838cb72803cabb1690a4",
+          "record": "nvidia_cusolver-12.0.3.29.dist-info/RECORD"
+        }
+      },
+      "libcusparse": {
+        "version": "12.6.2.49",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcusparse/windows-x86_64/libcusparse-windows-x86_64-12.6.2.49-archive.zip",
+          "bytes": 137875869,
+          "sha256": "1a4a35f8bfb453582ee12c5a7160f60150d74bc5fa831340b6257d1faa2b3355"
+        },
+        "license_manifest_path": "libcusparse/LICENSE.txt",
+        "member_metadata_matches": {
+          "cusparse64_12.dll": {
+            "archive_member": "libcusparse-windows-x86_64-12.6.2.49-archive/bin/x64/cusparse64_12.dll",
+            "bytes": 150326304,
+            "crc32": "5cce1008"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cusparse/12.6.2.49/json",
+          "name": "nvidia_cusparse-12.6.2.49-py3-none-win_amd64.whl",
+          "sha256": "b48237614131dedf9cd00d99ce950d8e1b2945ab9d29337fbdc1e014f0ee9830",
+          "record": "nvidia_cusparse-12.6.2.49.dist-info/RECORD"
+        }
+      },
+      "cuda_nvrtc": {
+        "version": "13.0.48",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.0.48-archive.zip",
+          "bytes": 318082272,
+          "sha256": "d1ae61887c0d857f8c0cdb77247ef27fb7c78cc81ecb1a2786e81b7a9bea89a0"
+        },
+        "license_manifest_path": "cuda_nvrtc/LICENSE.txt",
+        "member_metadata_matches": {
+          "nvrtc-builtins64_130.dll": {
+            "archive_member": "cuda_nvrtc-windows-x86_64-13.0.48-archive/bin/x64/nvrtc-builtins64_130.dll",
+            "bytes": 4471328,
+            "crc32": "e2ae2347"
+          },
+          "nvrtc64_130_0.alt.dll": {
+            "archive_member": "cuda_nvrtc-windows-x86_64-13.0.48-archive/bin/x64/nvrtc64_130_0.alt.dll",
+            "bytes": 91028512,
+            "crc32": "a26727d3"
+          },
+          "nvrtc64_130_0.dll": {
+            "archive_member": "cuda_nvrtc-windows-x86_64-13.0.48-archive/bin/x64/nvrtc64_130_0.dll",
+            "bytes": 90961440,
+            "crc32": "1c8dd118"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cuda-nvrtc/13.0.48/json",
+          "name": "nvidia_cuda_nvrtc-13.0.48-py3-none-win_amd64.whl",
+          "sha256": "9f10c41c3822a9d44a19e9150a05c99425514b691b342c6db6729072c5b88edd",
+          "record": "nvidia_cuda_nvrtc-13.0.48.dist-info/RECORD"
+        }
+      },
+      "libnvjitlink": {
+        "version": "13.0.39",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjitlink/windows-x86_64/libnvjitlink-windows-x86_64-13.0.39-archive.zip",
+          "bytes": 269637270,
+          "sha256": "e90265efcc848965a0ae099eb668358ad8e28f210afc249412636c5ff8ff92a9"
+        },
+        "license_manifest_path": "libnvjitlink/LICENSE.txt",
+        "member_metadata_matches": {
+          "nvJitLink_130_0.dll": {
+            "archive_member": "libnvjitlink-windows-x86_64-13.0.39-archive/bin/x64/nvJitLink_130_0.dll",
+            "bytes": 88218656,
+            "crc32": "d0b6429a"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-nvjitlink/13.0.39/json",
+          "name": "nvidia_nvjitlink-13.0.39-py3-none-win_amd64.whl",
+          "sha256": "478d06d3783b1c26a9bea308b972737a9fb2bb832d2254aa51fe753713b4a583",
+          "record": "nvidia_nvjitlink-13.0.39.dist-info/RECORD"
+        }
+      },
+      "cuda_cupti": {
+        "version": "13.0.48",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/windows-x86_64/cuda_cupti-windows-x86_64-13.0.48-archive.zip",
+          "bytes": 13276000,
+          "sha256": "ce1dd7de1c07151bc027bc2acaee95b16669056b7b788e7ac3ef732cc2f4a007"
+        },
+        "license_manifest_path": "cuda_cupti/LICENSE.txt",
+        "member_metadata_matches": {
+          "cupti64_2025.3.0.dll": {
+            "archive_member": "cuda_cupti-windows-x86_64-13.0.48-archive/lib/cupti64_2025.3.0.dll",
+            "bytes": 2067488,
+            "crc32": "ea99d37a"
+          },
+          "nvperf_host.dll": {
+            "archive_member": "cuda_cupti-windows-x86_64-13.0.48-archive/lib/nvperf_host.dll",
+            "bytes": 27764256,
+            "crc32": "ec1652c8"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cuda-cupti/13.0.48/json",
+          "name": "nvidia_cuda_cupti-13.0.48-py3-none-win_amd64.whl",
+          "sha256": "c0f0266d5674afad541888d4383bd172b7f90ff6df62df83ef9f5431a3c2c3b1",
+          "record": "nvidia_cuda_cupti-13.0.48.dist-info/RECORD"
+        }
+      },
+      "cuda_nvtx": {
+        "version": "13.0.39",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.0.39-archive.zip",
+          "bytes": 146415,
+          "sha256": "e69b1fc82d19baddc20ab45be8d84efe2c83ac96d385b8f55c306f4a1baf46f0"
+        },
+        "license_manifest_path": "cuda_nvtx/LICENSE.txt",
+        "member_metadata_matches": {},
+        "note": "The Windows x64 archive lists no DLLs. Legacy nvToolsExt is accounted for separately."
+      },
+      "cudnn": {
+        "version": "9.20.0.48",
+        "archive": {
+          "url": "https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.20.0.48_cuda13-archive.zip",
+          "bytes": 349802474,
+          "sha256": "d3ccce59130f10f68fe09365feea65b622bcecace79a0682fe43ee07b88a6a29"
+        },
+        "license_manifest_path": "cudnn/LICENSE.txt",
+        "member_metadata_matches": {
+          "cudnn64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn64_9.dll",
+            "bytes": 273008,
+            "crc32": "840673f8"
+          },
+          "cudnn_adv64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_adv64_9.dll",
+            "bytes": 106935920,
+            "crc32": "12a6306f"
+          },
+          "cudnn_cnn64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_cnn64_9.dll",
+            "bytes": 1528432,
+            "crc32": "63798aff"
+          },
+          "cudnn_engines_precompiled64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_engines_precompiled64_9.dll",
+            "bytes": 206805616,
+            "crc32": "a9399616"
+          },
+          "cudnn_engines_runtime_compiled64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_engines_runtime_compiled64_9.dll",
+            "bytes": 24853104,
+            "crc32": "d92aac9b"
+          },
+          "cudnn_graph64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_graph64_9.dll",
+            "bytes": 2376304,
+            "crc32": "3bc3bd2b"
+          },
+          "cudnn_heuristic64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_heuristic64_9.dll",
+            "bytes": 58922096,
+            "crc32": "503bee58"
+          },
+          "cudnn_ops64_9.dll": {
+            "archive_member": "cudnn-windows-x86_64-9.20.0.48_cuda13-archive/bin/x64/cudnn_ops64_9.dll",
+            "bytes": 36692592,
+            "crc32": "96e87f26"
+          }
+        },
+        "publisher_wheel": {
+          "metadata": "https://pypi.org/pypi/nvidia-cudnn-cu13/9.20.0.48/json",
+          "name": "nvidia_cudnn_cu13-9.20.0.48-py3-none-win_amd64.whl",
+          "sha256": "af8139732b99c0118be65ea5aac97f0d46018f8c552889e49d2fb0c6261a4a24",
+          "record": "nvidia_cudnn_cu13-9.20.0.48.dist-info/RECORD"
+        }
+      }
+    },
+    "legacy_nvtools_ext": {
+      "file": "nvToolsExt64_1.dll",
+      "bytes": 48128,
+      "recipe_source": "Separate NVIDIA NvToolsExt Windows installation",
+      "origin": "Exact installer version, member hash and applicable legacy terms are open."
+    },
+    "terms": {
+      "cuda_toolkit": "https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html",
+      "cudnn": "https://docs.nvidia.com/deeplearning/cudnn/backend/v9.20.0/reference/eula.html",
+      "scope": "CUDA Attachment A lists component families, and cuDNN has a separate SDK agreement and supplement for its runtime libraries. Confirm exact eligibility for the cuSOLVER Mg and NVRTC alternate DLLs, NVPerf, and legacy NvToolsExt."
+    },
+    "driver": {
+      "cuda_release_notes": "https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/",
+      "cudnn_support_matrix": "https://docs.nvidia.com/deeplearning/cudnn/backend/v9.20.0/reference/support-matrix.html",
+      "scope": "The Windows NVIDIA driver supplies nvcuda.dll separately. The reference ZIP contains no nvcuda.dll. Exact Windows driver and device compatibility remains open."
+    }
+  },
+  "intel_openmp": {
+    "files": [
+      "libiomp5md.dll",
+      "libiompstubs5md.dll"
+    ],
+    "pe_file_version": "20260213",
+    "pe_fixed_version": "5.0.2026.213",
+    "publisher": "Intel Corporation",
+    "publisher_wheel": {
+      "metadata": "https://pypi.org/pypi/intel-openmp/2026.0.0/json",
+      "url": "https://files.pythonhosted.org/packages/2f/48/32b1c24d3f1e4f47495d29bda38002384ae03a9ab709b575dda31842c0a4/intel_openmp-2026.0.0-py2.py3-none-win_amd64.whl",
+      "sha256": "d1f18c4e1be8426da117252a4fb8e5d72be44807b0251fcea23e2fa7b7d85981",
+      "record": "intel_openmp-2026.0.0.dist-info/RECORD",
+      "record_sha256": "07af3e190c97c7f844efb66b9b5c396d634ea68379bc60281dd3d354a624922a",
+      "matching_record_directory": "intel_openmp-2026.0.0.data/data/Library/bin",
+      "notices": {
+        "intel_openmp-2026.0.0.dist-info/LICENSE.txt": "febfb69a5b058f55892dc7f341108a9ca29d50e9fe85723a57eebbb826436958",
+        "intel_openmp-2026.0.0.data/data/share/doc/compiler/licensing/openmp/third-party-programs.txt": "f8ce918fe7311ce279e68380a2e233f8a42b1cd3dda8f4c48d6de97a0255c1d7"
+      }
+    },
+    "terms": "https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html",
+    "scope": "Both candidate DLL sizes and SHA-256 values match the Intel publisher wheel RECORD. The pinned Torch recipe copies the DLLs from its Python library directory. Exact CI install provenance, Intel redistribution designation for both DLLs and notice delivery remain open."
+  },
+  "microsoft": {
+    "edition": "Visual Studio Community 2026",
+    "redist_directory": "VC/Redist/MSVC/14.51.36231/x64",
+    "pe_file_version": "14.51.36247.0",
+    "crt": {
+      "source_directory": "Microsoft.VC145.CRT",
+      "files": [
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll"
+      ]
+    },
+    "openmp": {
+      "source_directory": "Microsoft.VC145.OpenMP",
+      "files": [
+        "vcomp140.dll"
+      ]
+    },
+    "python_siblings": [
+      "python/vcruntime140.dll",
+      "python/vcruntime140_1.dll"
+    ],
+    "redistribution_list": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution",
+    "distributor_terms": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/",
+    "runtime_terms": {
+      "file": "licenses/msvc-2026.docx",
+      "url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx"
+    },
+    "system_ucrt": "https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment",
+    "scope": "The five Native sibling DLLs match the unmodified, signed x64 VC145 Redist files. The builder copies both vcruntime DLLs again beside the private Python executable. The supported Windows OS supplies UCRT; the reference ZIP contains no ucrtbase.dll or api-ms-win-crt DLLs. The official REDIST list is subject to distributor license terms, including use with the program and retaining applicable notices."
+  },
+  "reference": {
+    "checkout_files": {
+      "src/flitzis_looper_audio/msvcp140.dll": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca",
+      "src/flitzis_looper_audio/msvcp140_1.dll": "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982",
+      "src/flitzis_looper_audio/vcomp140.dll": "95d4ce4a6802d1e18b5e0e1722cc30ea72ca7e033f83828f05c0b7b993fe7cbf",
+      "src/flitzis_looper_audio/vcruntime140.dll": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "src/flitzis_looper_audio/vcruntime140_1.dll": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+    },
+    "runtime_files": {
+      "licenses/msvc-2026.docx": "08651651a7602fc7c0e2763de0fde1ff9f868df2780597cd1775ee9d6441c783",
+      "python/LICENSE.txt": "e745807dbaab26bb1050dc9d12e655ca8d946c38d6cb59a593c2d9557830250c",
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/LICENSE": "5cb5a2b12a3422a30a8a3be813847732f8c8bf4f650b4d61eaaafaa785b90e0f",
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/NOTICE": "1c3dec6c0342c7ed9e12af59b296c7bb1d394af5cf881db74191cc8299efce5c",
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/RECORD": "a7d8787b81e111b910d534bb11b84b9746d4e77b5cd5534c0e45713ee8b359b6",
+      "python/Lib/site-packages/torch-2.12.0+cu130.dist-info/WHEEL": "7a1bc384fa097775c6311e337e158328ae418d82377c6259f68f0b39f9636a19",
+      "python/Lib/site-packages/torch/lib/cublas64_13.dll": "5d083083cdd613577496791dd96d00fe3a78c955684b53ca46a8ffa3e0b1e170",
+      "python/Lib/site-packages/torch/lib/cublasLt64_13.dll": "e1c26671801ecd435baf97c6e9cfe28196cf55005c2039356b48030b09ce5dd5",
+      "python/Lib/site-packages/torch/lib/cudart64_13.dll": "58c509047f9dd1879cf82c6d5375a95c02c7bd295ae6c8362c745c936e2afc31",
+      "python/Lib/site-packages/torch/lib/cudnn64_9.dll": "9933c8f1897930e91c75c5789ff3883dd74437f9b430214b4db37e5b00f18305",
+      "python/Lib/site-packages/torch/lib/cudnn_adv64_9.dll": "7a106e9ba24fe1bb80250d598052ad8de1cf1c83fb4e8b0709a58eafd5530373",
+      "python/Lib/site-packages/torch/lib/cudnn_cnn64_9.dll": "664133a39b4f4e87b313aca220157041e52b3af707d8b35b57bce43b3e76476c",
+      "python/Lib/site-packages/torch/lib/cudnn_engines_precompiled64_9.dll": "7f4bac7dee1490395dfac0c115598b2e5936a44936890ffa37f8d2e7772f096e",
+      "python/Lib/site-packages/torch/lib/cudnn_engines_runtime_compiled64_9.dll": "4f64015c5c277a7b49ead956bb791fa805d194584f894507fb385acfda5667ef",
+      "python/Lib/site-packages/torch/lib/cudnn_graph64_9.dll": "4304205b99e3bbf0e9ff7356bd7b1414639025bd3256ba3f715f729cb4c606fe",
+      "python/Lib/site-packages/torch/lib/cudnn_heuristic64_9.dll": "c77916ce651e6322638deceb55450b04801fb94a612960229affcc21c48c6418",
+      "python/Lib/site-packages/torch/lib/cudnn_ops64_9.dll": "849a00faebd533ddac2e3bbe328b888b9f302327dcd66876b812a230a72bec5f",
+      "python/Lib/site-packages/torch/lib/cufft64_12.dll": "611ba7e40dfab64b9b5bd35f4ad3593e00a8e93785fbf53160d9398aacd5ac14",
+      "python/Lib/site-packages/torch/lib/cufftw64_12.dll": "59e3b4cfb3e82481ebd773f3a58bf4f64966d1657ccc6b8f72b33c42fcda6079",
+      "python/Lib/site-packages/torch/lib/cupti64_2025.3.0.dll": "2015295ce64f2b6f36ee8a0b9c91cb365ded4bd7173c63da36f75caad1d464ee",
+      "python/Lib/site-packages/torch/lib/curand64_10.dll": "da51792dc1b4768ea8207a21f5a2e05226263ae399b310cfd9bc7efb481b5530",
+      "python/Lib/site-packages/torch/lib/cusolver64_12.dll": "bf27332ad47b6e86e3c3c8b24d7a3005d823ffd1ee1cadbe6642f6c1ea48fd8f",
+      "python/Lib/site-packages/torch/lib/cusolverMg64_12.dll": "a92dc614fdb5cf48272e26819092a5d012bb4b3d477f9e78bbaaf4290e343b14",
+      "python/Lib/site-packages/torch/lib/cusparse64_12.dll": "a155d5bfd5bff68305557be21486470b9949cf6a45a3acda80b27e1670e671e2",
+      "python/Lib/site-packages/torch/lib/libiomp5md.dll": "2299b0460e8118e8187fd57a8d17df836c2a3d59f2639c3681582070da66b7be",
+      "python/Lib/site-packages/torch/lib/libiompstubs5md.dll": "9b2412b5efc9274f3ebc6acbf8364cb5aeeb87788fa7897db20b9597bbf8b780",
+      "python/Lib/site-packages/torch/lib/nvJitLink_130_0.dll": "b6c247de22ee23ef60d0148bd3a3343164891cd9f2e9946bf23fc459d12c5222",
+      "python/Lib/site-packages/torch/lib/nvToolsExt64_1.dll": "0fe54f1b80ad3e44da2a3d9f0956e7c3903029d6319689ce1c4068f7a20932f3",
+      "python/Lib/site-packages/torch/lib/nvperf_host.dll": "8530cc52b673a0cee8e84ded28c041b16622ae566d4b9d15ffbc275bc8695afc",
+      "python/Lib/site-packages/torch/lib/nvrtc-builtins64_130.dll": "65813a86fbe8fe9ab6adff04275c7e9be9d4ca67fccdb868bb18a4f497155a6b",
+      "python/Lib/site-packages/torch/lib/nvrtc64_130_0.alt.dll": "f0e9688b032feac4f05fbf327493252dda0ad77a527ecb543af91e2b1b337d31",
+      "python/Lib/site-packages/torch/lib/nvrtc64_130_0.dll": "37d2195bcdc5db37a838a8eb4f286f502ea94d82319bb7de68751ad672f4ad6d",
+      "python/Lib/site-packages/torch/version.py": "b78344aeb408da0365227a8f95989ce337a07fef718eb933ef4c06d41fbca6b0",
+      "python/vcruntime140.dll": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "python/vcruntime140_1.dll": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+    }
+  },
+  "open": [
+    "Exact member SHA-256 from the NVIDIA toolkit ZIPs, proprietary build/source records and exact legacy NvToolsExt identity",
+    "Applicable vendor notice delivery and terms of the combined distribution",
+    "Other bundled components, including the separate zlibwapi.dll",
+    "Clean Windows loader and NVIDIA driver/device validation"
+  ]
+}

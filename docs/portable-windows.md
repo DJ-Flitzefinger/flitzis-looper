@@ -400,11 +400,50 @@ confirming terms for the combined distribution, including
 The pinned [FFmpeg binary release](https://github.com/GyanD/codexffmpeg/releases/tag/8.1.1)
 identifies the FFmpeg [upstream source revision](https://github.com/FFmpeg/FFmpeg/commit/239f2c733de417201d7ad3b3b8b0d9b63285b2b1).
 Its linked dependencies still need exact source, patch and build records.
-The Torch CUDA payload needs per-binary origin and terms for the toolkit and
-separately licensed components such as cuDNN, plus verification of the
-required driver. The MSVC CRT/OpenMP binaries need their exact redistribution
-eligibility and terms checked. [CUDA 13.0 terms](https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html),
-[Visual Studio 2026 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution).
+
+The runtime also includes `windows-runtime-redistribution.json`. The release
+manifest's `runtime_redistribution` entry reports missing or changed paths
+using the existing file inventories. It covers the reference Torch CUDA and
+Intel OpenMP DLLs and notices, the Microsoft Native and Python sibling DLLs,
+and the retained Python and Microsoft runtime license files.
+
+The reference Torch `2.12.0+cu130` Windows x64 wheel RECORD identifies the DLLs
+by size and SHA-256. PyTorch's pinned Windows recipe selects CUDA 13.0.0 and
+cuDNN 9.20.0.48 and permits a preinstalled toolkit. For 23 DLLs, the NVIDIA
+Windows wheel RECORDs match the candidate sizes and SHA-256 values, and
+the toolkit and cuDNN ZIP directories match names, sizes and CRC32. These
+include CUPTI's `nvperf_host.dll` and the separate cuDNN runtime. The recipe
+takes the legacy `nvToolsExt64_1.dll` from a separate installation. Its exact
+build and terms remain open. The Windows NVIDIA driver supplies `nvcuda.dll`.
+The reference excludes it, and driver and device compatibility still need
+runtime verification. [PyTorch Windows build recipe](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/.ci/pytorch/windows/internal/cuda_install.bat),
+[CUDA manifest](https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.0.0.json),
+[cuDNN manifest](https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.20.0.json).
+
+CUDA Toolkit and cuDNN redistribution are subject to their respective NVIDIA
+agreements and conditions for distribution within an application. The exact
+designation for some bundled variants and tooling still needs confirmation.
+The Intel OpenMP runtime and stub match both DLLs in the publisher's
+`2026.0.0` Windows wheel RECORD. Intel's terms require a redistribution
+designation and specify conditions on distribution with the application.
+The exact designation and notice delivery for both Intel DLLs remain open.
+[CUDA terms](https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html),
+[cuDNN terms](https://docs.nvidia.com/deeplearning/cudnn/backend/v9.20.0/reference/eula.html),
+[Intel wheel metadata](https://pypi.org/pypi/intel-openmp/2026.0.0/json),
+[Intel terms](https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html).
+
+The four Native CRT DLLs and `vcomp140.dll` match the signed, unmodified
+Visual Studio 2026 x64 VC145 Redist in directory `14.51.36231`. Their PE file
+version is `14.51.36247.0`. The builder also places the same two vcruntime
+DLLs beside its private CPython executable. Windows supplies the UCRT.
+The Microsoft REDIST list allows these release files to accompany the
+program subject to the applicable Visual Studio license. The bundle's
+`msvc-2026.docx` supplies the separate Microsoft runtime terms. Release
+review still needs to confirm the distributor's applicable terms and the
+conditions for the combined package.
+[Microsoft REDIST list](https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution),
+[Visual Studio Community terms](https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/),
+[UCRT deployment](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment).
 
 Clean reviewed source is the builder default. `--allow-dirty` is an explicit local
 candidate option recording the base commit, Native source commit and source

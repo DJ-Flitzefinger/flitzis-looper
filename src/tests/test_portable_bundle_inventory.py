@@ -71,7 +71,12 @@ def test_tracked_licenses_and_provenance_are_copied_byte_exactly(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
-    "record", ["asio-sdk-provenance.json", "windows-redistribution-sources.json"]
+    "record",
+    [
+        "asio-sdk-provenance.json",
+        "windows-redistribution-sources.json",
+        "windows-runtime-redistribution.json",
+    ],
 )
 def test_external_license_cannot_overwrite_tracked_provenance(tmp_path: Path, record: str) -> None:
     builder = _license_builder()
@@ -122,6 +127,43 @@ def test_native_redistribution_checks_staged_dlls_overlay_and_notices(tmp_path: 
         "source_record": record_path,
         "reference_match": False,
         "reference_mismatches": {"checkout_files": [dll, patch], "runtime_files": [notice]},
+    }
+
+
+def test_runtime_redistribution_reports_private_crt_and_wheel_drift(tmp_path: Path) -> None:
+    builder = _license_builder()
+    record = builder.RUNTIME_REDISTRIBUTION_RECORD
+    source = builder.REPO / builder.TRACKED_LICENSES[record]
+    reference = json.loads(source.read_text(encoding="utf-8"))["reference"]
+    record_path = f"licenses/{record}"
+    (tmp_path / "licenses").mkdir()
+    (tmp_path / record_path).write_bytes(source.read_bytes())
+
+    checkout_files = reference["checkout_files"]
+    runtime_files = reference["runtime_files"]
+    assert builder._redistribution_reference(tmp_path, record, checkout_files, runtime_files) == {
+        "source_record": record_path,
+        "reference_match": True,
+        "reference_mismatches": {"checkout_files": [], "runtime_files": []},
+    }
+
+    native_crt = "src/flitzis_looper_audio/vcruntime140.dll"
+    python_crt = "python/vcruntime140.dll"
+    wheel_dll = "python/Lib/site-packages/torch/lib/cudnn64_9.dll"
+    assert checkout_files[native_crt] == runtime_files[python_crt]
+    changed_checkout = {**checkout_files, native_crt: "0" * 64}
+    changed_runtime = {**runtime_files, wheel_dll: "1" * 64}
+    del changed_runtime[python_crt]
+    comparison = builder._redistribution_reference(
+        tmp_path, record, changed_checkout, changed_runtime
+    )
+    assert comparison == {
+        "source_record": record_path,
+        "reference_match": False,
+        "reference_mismatches": {
+            "checkout_files": [native_crt],
+            "runtime_files": sorted([python_crt, wheel_dll]),
+        },
     }
 
 
