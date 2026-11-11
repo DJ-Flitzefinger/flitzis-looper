@@ -1420,12 +1420,19 @@ stock frequency embedding lookup, expansion and scale multiply. The penultimate
 spectral decoder's stock CPU GELU writes the other caller input into its own
 33,030,144-byte file view after the original transposed convolution, norm and
 crop. Both outputs keep the stock ABCD layout and their file storage through
-the final spectral decoder call and any retained aliases. The rewrite convolution
-reorders its oneDNN output directly into a 66,060,288-byte writable file
-mapping with ABCD strides. The stock layout operations keep the storage
-through the rewrite hook and GLU. Each of the two pointwise convolutions in
-the final spectral DConv reorders directly into its own 66,060,288-byte writable
-file mapping per mapped eager forward. The native squeeze retains that storage
+the final spectral decoder call and any retained aliases. The first waveform
+encoder's stock Rewrite and Identity feed the CPU GLU, which writes the saved
+skip into its own 16,511,040-byte file view. The penultimate waveform decoder
+keeps the full 16,512,000-byte transposed convolution backing through
+Identity and the offset-two crop. Stock CPU GELU writes the cropped values
+into a separate 16,511,040-byte file view. Both waveform outputs have dense
+[1, 48, 85995] layout and stay live through the final spectral BRG until the
+waveform decoder reads them. The rewrite convolution reorders its oneDNN
+output directly into a 66,060,288-byte writable file mapping with ABCD strides.
+The stock layout operations keep the storage through the rewrite hook and GLU.
+Each of the two pointwise convolutions in the final spectral DConv reorders
+directly into its own 66,060,288-byte writable file mapping per mapped eager
+forward. The native squeeze retains that storage
 for the corresponding stock GroupNorm input. After the second GroupNorm,
 stock CPU GLU writes its 33,030,144-byte contiguous result directly into a
 writable file mapping. The original LayerScale consumes it. The final CPU
@@ -1454,11 +1461,12 @@ reads that backing with the
 decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
-Charge the mapped state, score, both spectral caller results, skip addition
-and rewrite, both DConv pointwise returns, the second GLU and final residual
-Add, both spectral transpose returns, second pad, C2R input pack, C2R frames
-and windowed frames for physical residency, file cache and disk. The stock
-overlap-add tensors still require private storage.
+Charge the mapped state, score, both spectral and both waveform caller
+results, skip addition and rewrite, both DConv pointwise returns, the second
+GLU and final residual Add, both spectral transpose returns, second pad, C2R
+input pack, C2R frames and windowed frames for physical residency, file cache
+and disk. The waveform producers keep their private Rewrite and transpose
+temporaries, and stock overlap-add still requires private tensors.
 The full learned reference requires a prospective commit and residency budget
 for both forwards, retained activations, vendor scratch, allocator behavior
 and retirement.

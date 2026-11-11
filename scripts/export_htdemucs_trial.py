@@ -117,6 +117,9 @@ C2R_PACK_GEOMETRY = (C2R_PACK_SHAPE, (2049, 1), 0, C2R_INPUT_BYTES)
 ISTFT_FRAME_SHAPE = (8, 340, 4096)
 ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
 ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
+WAVEFORM_CALLER_DENSE = ((1, 48, 85995), (4127760, 85995, 1), 0, 16_511_040)
+WAVEFORM_SKIP_REWRITE = ((1, 96, 85995), (8255520, 85995, 1), 0, 33_022_080)
+WAVEFORM_CALLER_CROP = ((1, 48, 85995), (4128000, 86000, 1), 2, 16_512_000)
 SPECTRAL_SKIP_ADD_DENSE = ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33_030_144)
 SPECTRAL_CALLER_CROP = ((1, 48, 512, 336), (8322048, 173376, 336, 1), 672, 33_288_192)
 SPECTRAL_SCALED_EMBEDDING = ((1, 48, 512, 336), (16128, 336, 16128, 1), 0, 33_030_144)
@@ -1657,6 +1660,117 @@ def mapped_spectral_caller_gelu(torch, decoder, source: bytes, output: Path):
 
 
 @contextmanager
+def mapped_waveform_activation(torch, layer, source, class_name, label, activate):
+    name = "demucs/hdemucs.py"
+    globals_ = type(layer).forward.__globals__
+    if (
+        hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
+        or type(layer) is not globals_.get(class_name)
+        or "forward" in vars(layer)
+        or (layer.training, layer.freq, layer.empty, type(layer.norm2))
+        != (False, False, False, torch.nn.Identity)
+    ):
+        msg = f"unexpected HTDemucs {label} module"
+        raise ValueError(msg)
+
+    forward = method_definition(source, class_name)
+    activation = forward.body[-2].body[-1]
+    if ast.unparse(activation) not in {"z = F.glu(z, dim=1)", "z = F.gelu(z)"}:
+        msg = f"unexpected HTDemucs {label} source"
+        raise ValueError(msg)
+    activation.value.func = ast.Name(id="_mapped_activation", ctx=ast.Load())
+    tree = ast.parse("def bind(_mapped_activation):\n    return forward")
+    tree.body[0].body.insert(0, forward)
+    namespace = {}
+    exec(compile(ast.fix_missing_locations(tree), name, "exec"), globals_, namespace)
+    layer.forward = MethodType(namespace["bind"](activate), layer)
+    try:
+        yield
+    finally:
+        del layer.forward
+
+
+def write_waveform_activation(torch, output, value, input_geometry, label, op, **options):
+    check_reference_inference_dispatch(torch, label)
+    check_spectral_pointwise_operands(torch, (value,), (input_geometry,), label)
+    geometry = WAVEFORM_CALLER_DENSE
+    mapped = mapped_float_return_storage(torch, output, (value,), geometry, label)
+    backing = tensor_backing(mapped)
+    result = op(value, **options, out=mapped)
+    if tensor_backing(result) != backing or state_storage_geometry(result) != geometry:
+        msg = f"unexpected HTDemucs {label} return"
+        raise ValueError(msg)
+    return result
+
+
+def mapped_waveform_skip_glu(torch, encoder, source: bytes, output: Path):
+    """Map the first waveform encoder's stock Rewrite GLU return."""
+    rewrite = encoder.rewrite
+    if type(rewrite) is not torch.nn.Conv1d or (
+        rewrite.in_channels,
+        rewrite.out_channels,
+        rewrite.kernel_size,
+        rewrite.stride,
+        rewrite.padding,
+        rewrite.dilation,
+        rewrite.groups,
+        rewrite.padding_mode,
+    ) != (48, 96, (1,), (1,), (0,), (1,), 1, "zeros"):
+        msg = "unexpected HTDemucs first waveform encoder rewrite"
+        raise ValueError(msg)
+    label = "waveform-skip-glu"
+
+    def glu(value, *, dim):
+        return write_waveform_activation(
+            torch,
+            output,
+            value,
+            WAVEFORM_SKIP_REWRITE,
+            label,
+            torch.ops.aten.glu.out,
+            dim=dim,
+        )
+
+    return mapped_waveform_activation(torch, encoder, source, "HEncLayer", label, glu)
+
+
+def mapped_waveform_caller_gelu(torch, decoder, source: bytes, output: Path):
+    """Map the penultimate waveform decoder's stock post-crop GELU return."""
+    transpose = decoder.conv_tr
+    if (
+        type(transpose) is not torch.nn.ConvTranspose1d
+        or (decoder.last, decoder.chin, decoder.pad) != (False, 96, 2)
+        or (
+            transpose.in_channels,
+            transpose.out_channels,
+            transpose.kernel_size,
+            transpose.stride,
+            transpose.padding,
+            transpose.output_padding,
+            transpose.dilation,
+            transpose.groups,
+        )
+        != (96, 48, (8,), (4,), (0,), (0,), (1,), 1)
+    ):
+        msg = "unexpected HTDemucs penultimate waveform decoder transpose"
+        raise ValueError(msg)
+    label = "waveform-caller-gelu"
+
+    def gelu(value):
+        return write_waveform_activation(
+            torch,
+            output,
+            value,
+            WAVEFORM_CALLER_CROP,
+            label,
+            torch.ops.aten.gelu.out,
+            approximate="none",
+        )
+
+    return mapped_waveform_activation(torch, decoder, source, "HDecLayer", label, gelu)
+
+
+@contextmanager
 def mapped_spectral_skip_add(torch, decoder, source: bytes, output: Path):
     """Use a file-backed destination for the pinned final spectral skip addition."""
     name = "demucs/hdemucs.py"
@@ -2801,6 +2915,16 @@ def capture_reference(
             reference.enter_context(
                 mapped_spectral_caller_gelu(
                     torch, model.decoder[-2], sources["demucs/hdemucs.py"], output
+                )
+            )
+            reference.enter_context(
+                mapped_waveform_skip_glu(
+                    torch, model.tencoder[0], sources["demucs/hdemucs.py"], output
+                )
+            )
+            reference.enter_context(
+                mapped_waveform_caller_gelu(
+                    torch, model.tdecoder[-2], sources["demucs/hdemucs.py"], output
                 )
             )
             reference.enter_context(
