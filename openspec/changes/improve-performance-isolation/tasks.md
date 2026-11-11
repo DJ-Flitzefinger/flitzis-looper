@@ -1249,3 +1249,12 @@ remaining plan into each successor; report actual hard service limits honestly.
       attention geometries through the standalone guarded ORT CPU route.
 - [ ] Establish independent finite learned-export and full runtime allowances
       before actual export, learned branch inference and complete PCM parity.
+
+## HTDemucs producer phase ownership
+
+- [x] Isolate stock reference capture, legacy trace, graph rewrite and full
+      graph check in fresh phase workers with immutable digest and extent custody.
+- [x] Inventory identified owners and verify artifact handoff and admission
+      refusals with nonlearned controls under the disposable process protocol.
+- [ ] Establish prospective whole-process admission for each learned producer
+      phase and the Native load/run, including startup, failures, exit and readers.

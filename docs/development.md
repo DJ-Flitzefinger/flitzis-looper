@@ -1331,11 +1331,11 @@ cutover remain open. Historical independent-f64 High-DC failures remain retained
 
 `scripts/export_htdemucs_trial.py` checks the installed Demucs and einops
 source pins and the complete `955717e8` checkpoint. Its CLI checks these pins
-and extracts the core without loading Torch. The `export` function is for a
-disposable, independently admitted Windows CPython 3.14 producer with the
-pinned Torch build and separate ONNX 1.23.2 tooling. It checks an owned
-checkpoint snapshot before deserializing and reconstructs the stock model
-strictly. The selected statements from the pinned `HTDemucs.forward` retain
+and extracts the core without loading Torch. The producer stages require
+separate, independently admitted Windows CPython 3.14 children. Each learned
+stage checks an owned checkpoint snapshot before deserialization and closes
+it before initializing the stock model and strictly loading its state.
+The selected statements from the pinned `HTDemucs.forward` retain
 both original convolutional encoder/decoder stacks, skips, DConv, frequency
 and sinusoidal position embeddings, and cross-transformer. Raw normalization,
 FFT, inversion, restore and apply remain outside the exported graph.
@@ -1344,9 +1344,28 @@ The graph interface is fixed to stereo B1 at 44.1 kHz, 343,980 training frames
 and 336 spectral steps. The input tensors are float32 `[1,2,2,2048,336]` and
 `[1,2,343980]`. The outputs are `[1,4,2,2,2048,336]` and `[1,4,2,343980]`,
 ordered drums, bass, other, vocals with real then imaginary parts. The
-exporter captures the complete original normalized inputs, decoder outputs
-and PCM through original forward hooks, checks the extracted core against
-those tensors, and binds the inline ONNX graph and references by digest.
+`capture_reference` captures the normalized inputs and decoder outputs with
+hooks on the stock forward, checks the extracted core against those tensors,
+and writes those four tensors and the complete original PCM. It uses stock
+CPU dispatch with one intra-op and one inter-op thread in the trial child.
+`trace_core` reloads the same pinned model in a fresh child and verifies
+both captured normalized inputs against their recorded extents and digests.
+Only this child disables the MHA fastpath for legacy export. It writes a
+marked inline graph without carrying the original forward or decoder captures
+into tracing. `rewrite_graph` lowers the exact marked bytes, validates the
+signature, and binds the checkpoint, source, trace, mix and reference tensors
+in the graph metadata. `check_graph` independently validates the exact
+rewritten bytes and runs the full ONNX checker.
+
+The owner supplies immutable expected artifact identities and admits each
+phase before child startup. It adopts the child result only after successful
+exit, actual Job/tree end, and both output readers and artifact writers ending.
+Partial outputs from failed phases are ineligible. The child requires a fresh
+process and invokes its phase-specific admission callback before heavyweight
+imports. The callback represents the caller's decision. The CLI remains a
+source and checkpoint check. ONNX is absent from the original producer's
+import path. Trace, rewrite and check use the explicit checked overlay and
+verify package versions, module origins and binary digests.
 
 The opt-in `demucs-inference-trial` feature adds a synchronous CPU adapter.
 It checks the trusted graph digest and metadata and validates both decoder
@@ -1367,11 +1386,34 @@ operators and allocator costs accounted for separately. The pinned ORT
 CPU Scan implementation executes each iteration synchronously and writes
 context tiles into slices of the assembled output.
 
+#### Logical ownership and admission
+
+The fixed extents below are bytes of identified owners. Use a separate
+prospective allowance for each child, covering startup through its last reader.
+
+| Phase | Identified logical owners | Remaining allowance work |
+| --- | --- | --- |
+| Original and trace checkpoint load | 84,141,911-byte immutable snapshot and 533 half storages totaling 83,968,912. The half storages then overlap 167,937,824 bytes of initialized FP32 state during strict load. | ZIP and pickle staging, conversion and initialization scratch, and allocator retention after snapshot release. |
+| Original reference | 2,751,840-byte mix, 13,761,888 bytes of normalized captures and 92,890,560 bytes in eight skips at transformer entry. The largest expected fused CPU score is 231,211,008 bytes with in-place softmax. At that site also charge 16,515,072 bytes packed Q/K/V, two 8,257,536-byte activation pairs and a 5,505,024-byte normalized input. The five files total 79,816,800 bytes. Cropped decoder captures can retain 44,126,208 and 11,007,488 bytes of backing. The exact extracted-core comparison adds another decoder output pair while the references are live. | Verify actual stock dispatch, STFT/CaC, position buffers, skip and output lifetimes, operator scratch, finite masks and comparison failure costs. The identified first spectral self-attention owners alone conditionally sum to 547,088,288 bytes including weights. |
+| Legacy trace | 167,937,824-byte model state, 13,761,888 bytes of captured inputs, and 55,047,552 bytes of traced decoder outputs. C++ holds a ModelProto, a serialized string and Python bytes at the export binding. Torch subsequently parses its Python bytes into an ONNX ModelProto while the JIT graph, parameter table, model and outputs are still live. | Bound actual flash/math dispatch, JIT and intermediate graph passes, tensor copies, protobuf and allocation. The 192 MiB accepted artifact limit applies after Torch serialization. |
+| Rewrite | At most 201,326,592 input bytes, the parsed inline graph, old/new node storage during replacement, and a new serialized owner during write. | Bound protobuf memory, replacement growth before serialization, scratch and retained allocation. |
+| Final check | At most 201,326,592 hash-verified bytes, a Python protobuf for inline/signature/provenance validation, then a parsed C++ graph with a full shape-inference copy. The native parser reads the same immutable byte buffer. | Bound C++ parser, inference and allocator retention across these operations. |
+| Native load and run | Inline graph bytes, FP32 initializer storage and provider copies, normalized tensors, skips, outputs, Scan layouts and context. Charge up to 11,010,048 bytes for two score-tile owners in a Scan body. At the graph extent ceiling, the file and two FP32-sized owners alone total 537,202,240 bytes. | Establish actual graph/initializer/provider ownership, allocator and operator scratch, IOBinding, profiler, output and synchronous reader lifetime. |
+
+Each allowance also needs the actual Python/Torch/ONNX/ORT and transitive DLL
+closure for that child, including stacks, runtime initialization, errors,
+panic and exit. The Windows Torch build loads DLLs from its CUDA-enabled
+wheel even for CPU execution. A cap, artifact size or observed peak cannot
+certify prospective successful whole-process execution. See the pinned
+[Torch export binding](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/torch/csrc/jit/python/python_ir.cpp#L243-L280),
+[CPU attention](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/aten/src/ATen/native/transformers/attention.cpp#L348-L382)
+and [ONNX checker](https://github.com/onnx/onnx/blob/v1.23.2/onnx/checker.cc#L1257-L1294).
+
 The separately checked Windows CPython 3.14 export tools use ONNX 1.23.2,
 protobuf 6.33.6 and ml_dtypes 0.5.4 with the existing NumPy and
 typing_extensions. The standalone `demucs_attention_control` example
 exercises the ten Scan sites on synthetic Q/K/V through the controlled
-ORT CPU package. The learned export still requires a finite original
-producer allowance. The CPU adapter remains closed before ORT bootstrap.
+ORT CPU package. The learned export still requires finite per-phase
+producer allowances. The CPU adapter remains closed before ORT bootstrap.
 Full graph/runtime and process admission, complete learned branch and
 PCM/tail comparisons, and production cutover remain open.

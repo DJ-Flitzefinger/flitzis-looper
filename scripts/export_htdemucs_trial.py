@@ -5,12 +5,17 @@ import ast
 import hashlib
 import io
 import json
+import platform
 import sys
-import tempfile
+import sysconfig
 from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import Enum
 from importlib import import_module, metadata, util
+from math import prod
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 if TYPE_CHECKING:
@@ -34,6 +39,11 @@ LOWERING = "torchscript-opset18-scan64"
 MARKER_DOMAIN = "flitzis.htdemucs.export"
 SYMBOLIC = "aten::scaled_dot_product_attention"
 SYMBOLIC_SHA256 = "0b1102d89850cb6e1eff667b5500cc0bea0d2a6c83051b91838acdc117aabc6b"
+TRACE_SOURCE_PINS = {
+    "utils": "2a01910c4972939180bdd75ff264ba7105f7360e8a47c3328e566cfe4100b649",
+    "onnx_proto_utils": "9da95f9437a5d1e5bad430b0a8c5d060d6ae26d20bb5b61d56537542c2c97efa",
+    "symbolic_opset14": SYMBOLIC_SHA256,
+}
 TORCH = "2.12.0+cu130"
 TORCH_COMMIT = "7661cd9c6b841b62b7f411aa52ec51f05457263b"
 SOURCES = ("drums", "bass", "other", "vocals")
@@ -44,6 +54,34 @@ SHAPES = {
     "decoded_waveform": (1, 4, 2, 343980),
 }
 MAX_GRAPH_BYTES = 192 * 1024 * 1024
+PCM_SHAPE = SHAPES["decoded_waveform"]
+ONNX_PINS = {
+    "onnx": (
+        "1.23.2",
+        "onnx.onnx_cpp2py_export",
+        "6489f9fa4e03a5d2d82814568c3a22ff759153ea80012fe865ea089ac2cec7ca",
+    ),
+    "protobuf": (
+        "6.33.6",
+        "google._upb._message",
+        "72970bb66676a4e34ba5fe6ffd8f853b78ea1ef7e4ad1082bb80287a78d47923",
+    ),
+    "ml-dtypes": (
+        "0.5.4",
+        "ml_dtypes._ml_dtypes_ext",
+        "716d223a11cbd4eefe1d2798610fd55a7a69f7b0c7a752bf3cb7dc27be56ba93",
+    ),
+    "numpy": (
+        "2.4.0",
+        "numpy._core._multiarray_umath",
+        "17ffaa9a6b9dcc1c84b7d9455c5fc3b463b525a10245b305928e7830e8117892",
+    ),
+    "typing-extensions": (
+        "4.15.0",
+        "typing_extensions",
+        "433d11d170d3a24d2eb065ebc1bfe848cea7e3d7ce68567ab52bea2d4c2f7ed8",
+    ),
+}
 SOURCE_PINS = {
     "demucs/__init__.py": "2eeae8de4a5f91ba7b7e91cb7c2460787c10afc17e720b8773cd66e8e5a10e26",
     "demucs/htdemucs.py": "3404ed68d35b946f9c54b54201851bb4171dd7861a498945ce53b1df1144b034",
@@ -61,6 +99,115 @@ SOURCE_PINS = {
     "einops/_backends.py": "78ad88d8478d2f33500956723f2771cefbe9f636f57c6a070c3fc8bd3024d664",
     "einops/parsing.py": "0a1474b0a066376cfefa5c84a59bc4c4dee065d8d3826e15ddc7ab6b461fe003",
 }
+
+
+class Phase(Enum):
+    """Independent producer owners for one fixed-release export."""
+
+    REFERENCE = "reference"
+    TRACE = "trace"
+    REWRITE = "rewrite"
+    CHECK = "check"
+
+
+_phase_lock = Lock()
+_started_phases: set[Phase] = set()
+
+
+def begin_phase(phase: Phase, admit: Callable[[Phase], None]) -> None:
+    """Check admission before any heavyweight import and consume this child."""
+    with _phase_lock:
+        if _started_phases or "torch" in sys.modules or "onnx" in sys.modules:
+            msg = "HTDemucs producer phase requires a fresh process"
+            raise ValueError(msg)
+        _started_phases.add(phase)
+    admitted = False
+    try:
+        admit(phase)
+        admitted = True
+    finally:
+        if not admitted:
+            with _phase_lock:
+                _started_phases.remove(phase)
+
+
+@dataclass(frozen=True, slots=True)
+class Artifact:
+    """Extent and SHA-256 of the bytes accepted from a retired stage."""
+
+    size: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if type(self.size) is not int or self.size <= 0:
+            msg = "invalid HTDemucs artifact extent"
+            raise ValueError(msg)
+        if len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256):
+            msg = "invalid HTDemucs artifact digest"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceArtifacts:
+    """Immutable identities from one complete original forward."""
+
+    mix: Artifact
+    spectral: Artifact
+    waveform: Artifact
+    decoded_spectral: Artifact
+    decoded_waveform: Artifact
+    original_pcm: Artifact
+
+    def __post_init__(self) -> None:
+        shapes = {**SHAPES, "mix": SHAPES["waveform"], "original_pcm": PCM_SHAPE}
+        for name, shape in shapes.items():
+            if getattr(self, name).size != prod(shape) * 4:
+                msg = f"unexpected HTDemucs reference extent: {name}"
+                raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class TraceArtifact:
+    """Legacy trace bytes bound to their original reference inputs and outputs."""
+
+    graph: Artifact
+    reference: ReferenceArtifacts
+
+
+def read_artifact(path: Path, expected: Artifact, limit: int) -> bytes:
+    """Read at most the admitted extent plus one and hash the bytes used."""
+    if expected.size > limit:
+        msg = "invalid HTDemucs artifact extent"
+        raise ValueError(msg)
+    with path.open("rb") as stream:
+        raw = stream.read(expected.size + 1)
+    if len(raw) != expected.size or hashlib.sha256(raw).hexdigest() != expected.sha256:
+        msg = f"HTDemucs artifact differs: {path.name}"
+        raise ValueError(msg)
+    return raw
+
+
+def describe_artifact(path: Path, limit: int) -> Artifact:
+    """Record a completed regular file by streaming a bounded extent."""
+    with path.open("rb") as stream:
+        size = stream.seek(0, 2)
+        if not 0 < size <= limit:
+            msg = f"invalid HTDemucs artifact extent: {path.name}"
+            raise ValueError(msg)
+        stream.seek(0)
+        digest = hashlib.sha256()
+        remaining = size
+        while remaining:
+            chunk = stream.read(min(remaining, 256 * 1024))
+            if not chunk:
+                msg = f"truncated HTDemucs artifact: {path.name}"
+                raise ValueError(msg)
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if stream.read(1):
+            msg = f"extended HTDemucs artifact: {path.name}"
+            raise ValueError(msg)
+    return Artifact(size, digest.hexdigest())
 
 
 def source_digest() -> str:
@@ -134,22 +281,67 @@ def core_code(source: bytes) -> Any:
     )
 
 
-def producer():
-    """Verify this original producer and its separately pinned ONNX toolchain."""
-    versions = {name: metadata.version(name) for name in ("demucs", "einops", "torch", "onnx")}
+def check_platform() -> None:
     if (
-        versions != {"demucs": "4.0.1", "einops": "0.6.1", "torch": TORCH, "onnx": "1.23.2"}
-        or sys.platform != "win32"
+        sys.platform != "win32"
         or sys.version_info[:2] != (3, 14)
+        or platform.machine() != "AMD64"
+        or sysconfig.get_config_var("Py_GIL_DISABLED")
     ):
-        msg = "requires the pinned Windows CP314 HTDemucs and ONNX producer"
+        msg = "requires the pinned Windows CP314 HTDemucs producer"
         raise ValueError(msg)
-    return versions, import_module("torch"), import_module("onnx")
 
 
-def load_model(torch, stream: BinaryIO, module):
+def torch_producer():
+    """Verify the Torch/Demucs producer without importing ONNX."""
+    check_platform()
+    versions = {"demucs": "4.0.1", "einops": "0.6.1", "torch": TORCH, "numpy": "2.4.0"}
+    for name, version in versions.items():
+        if metadata.version(name) != version:
+            msg = f"unexpected HTDemucs producer package: {name}"
+            raise ValueError(msg)
+    torch = import_module("torch")
+    if torch.version.git_version != TORCH_COMMIT:
+        msg = "requires the pinned Torch build"
+        raise ValueError(msg)
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+    if torch.get_num_threads() != 1 or torch.get_num_interop_threads() != 1:
+        msg = "requires the pinned Torch build and explicit serial CPU dispatch"
+        raise ValueError(msg)
+    return torch
+
+
+def onnx_producer(overlay: Path):
+    """Verify the checked export-only overlay already on the isolated import path."""
+    check_platform()
+    overlay = overlay.resolve(strict=True)
+    donor = (Path(sys.prefix) / "Lib/site-packages").resolve(strict=True)
+    for name, (version, module, expected) in ONNX_PINS.items():
+        if metadata.version(name) != version:
+            msg = f"unexpected HTDemucs export package: {name}"
+            raise ValueError(msg)
+        path = Path(import_module(module).__file__).resolve(strict=True)
+        root = donor if name in {"numpy", "typing-extensions"} else overlay
+        with path.open("rb") as stream:
+            if (
+                not path.is_relative_to(root)
+                or hashlib.file_digest(stream, "sha256").hexdigest() != expected
+            ):
+                msg = f"unexpected HTDemucs export module: {name}"
+                raise ValueError(msg)
+    if import_module("google.protobuf.internal.api_implementation").Type() != "upb":
+        msg = "requires the pinned ONNX protobuf implementation"
+        raise ValueError(msg)
+    return import_module("onnx")
+
+
+def load_model(torch, checkpoint: Path, module):
     """Load only the pinned stock class and its complete half-precision state."""
-    package = torch.load(stream, map_location="cpu", weights_only=False)
+    with io.BytesIO(
+        read_artifact(checkpoint, Artifact(CHECKPOINT_BYTES, CHECKPOINT), CHECKPOINT_BYTES)
+    ) as snapshot:
+        package = torch.load(snapshot, map_location="cpu", weights_only=False)
     if package["klass"] is not module.HTDemucs or package["args"] or len(package["state"]) != 533:
         msg = "unexpected original HTDemucs checkpoint structure"
         raise ValueError(msg)
@@ -218,9 +410,11 @@ def mark_attention(torch):
     symbolic_helper = import_module(f"{exporter}.symbolic_helper")
     symbolic_opset14 = import_module(f"{exporter}.symbolic_opset14")
 
-    if hashlib.sha256(Path(symbolic_opset14.__file__).read_bytes()).hexdigest() != SYMBOLIC_SHA256:
-        msg = "HTDemucs Torch legacy attention symbolic differs"
-        raise ValueError(msg)
+    for name, expected in TRACE_SOURCE_PINS.items():
+        module = import_module(f"{exporter}.{name}")
+        if hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() != expected:
+            msg = f"HTDemucs Torch legacy exporter source differs: {name}"
+            raise ValueError(msg)
     group = registration.registry.get_function_group(SYMBOLIC)
     if group is None or group.get(18) is not symbolic_opset14.scaled_dot_product_attention:
         msg = "HTDemucs Torch legacy attention symbolic is overridden"
@@ -375,12 +569,9 @@ def scan_nodes(onnx, prefix, inputs, output, queries):
     ]
 
 
-def read_inline_graph(onnx, path: Path):
-    """Read a bounded inline graph without resolving any external data."""
-    if not 0 < path.stat().st_size <= MAX_GRAPH_BYTES:
-        msg = "HTDemucs graph exceeds the inline extent"
-        raise ValueError(msg)
-    graph = onnx.load(path, load_external_data=False)
+def parse_inline_graph(onnx, raw: bytes):
+    """Parse exact immutable bytes without resolving any external data."""
+    graph = onnx.load_model_from_string(raw)
     check_inline(onnx, graph)
     return graph
 
@@ -411,104 +602,42 @@ def inspect_graph(onnx, graph) -> None:
                 raise ValueError(msg)
 
 
-def export(
-    checkpoint: Path,
-    mix_path: Path,
-    output: Path,
-    *,
-    admit: Callable[[], None],
-) -> dict:
-    """Export inline weights and complete original references under caller admission.
-
-    The disposable owner reserves the prospective producer working set, including
-    exporter/graph copies, and applies the physical/commit and process limits
-    before admitting this callback. A refusal happens before model construction.
-    """
-    if output.exists():
-        msg = "HTDemucs output already exists"
-        raise FileExistsError(msg)
-    sources = source_files()
-    code = core_code(sources["demucs/htdemucs.py"])
-    admit()
-    versions, torch, onnx = producer()
-    if torch.version.git_version != TORCH_COMMIT or torch.get_num_threads() != 1:
-        msg = "requires the pinned Torch build and an explicit serial CPU trial"
+def read_tensor(torch, path: Path, artifact: Artifact, shape: tuple[int, ...]):
+    extent = prod(shape) * 4
+    if artifact.size != extent:
+        msg = f"unexpected HTDemucs tensor extent: {path.name}"
         raise ValueError(msg)
-    module = import_module("demucs.htdemucs")
-    with checkpoint.open("rb") as stream, io.BytesIO(stream.read(CHECKPOINT_BYTES + 1)) as owned:
-        # Pin an immutable snapshot before the class-bearing pickle is parsed.
-        # The independent producer admission includes this additional owner.
-        check_checkpoint(owned)
-        model = load_model(torch, owned, module)
-    output.mkdir(exist_ok=False)
-    graph = output / "htdemucs.onnx"
-    with tempfile.TemporaryDirectory(dir=output) as temporary:
-        trace = Path(temporary) / "trace.onnx"
-        mix_digest = execute(torch, model, code, vars(module), mix_path, trace, output)
-        del model
-        checked = read_inline_graph(onnx, trace)
-        lower_attention(onnx, checked)
-    inspect_graph(onnx, checked)
-    onnx.helper.set_model_props(
-        checked,
-        {
-            "flitzis_htdemucs_contract": CONTRACT,
-            "checkpoint_sha256": CHECKPOINT,
-            "torch_version": TORCH,
-            "torch_commit": TORCH_COMMIT,
-            "source_closure_sha256": source_digest(),
-            "lowering": LOWERING,
-            "attention_query_block": str(BLOCK),
-            "sources": ",".join(SOURCES),
-        },
-    )
-    onnx.save_model(checked, graph, save_as_external_data=False)
-    del checked
-    onnx.checker.check_model(graph, full_check=True)
-    if graph.stat().st_size > MAX_GRAPH_BYTES or source_files() != sources:
-        msg = "HTDemucs source closure or final graph extent changed"
-        raise ValueError(msg)
-    artifacts = {}
-    for path in sorted(output.iterdir()):
-        with path.open("rb") as stream:
-            artifacts[path.name] = {
-                "bytes": path.stat().st_size,
-                "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
-            }
-    receipt = {
-        "contract": CONTRACT,
-        "checkpoint_sha256": CHECKPOINT,
-        "versions": versions,
-        "sources": SOURCE_PINS,
-        "source_closure_sha256": source_digest(),
-        "lowering": LOWERING,
-        "attention_query_block": BLOCK,
-        "mix_sha256": mix_digest,
-        "shapes": SHAPES,
-        "artifacts": artifacts,
-    }
-    (output / "export.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-    return receipt
-
-
-def execute(torch, model, code, globals_, mix_path: Path, trace: Path, output: Path) -> str:
-    """Keep the original reference path separate from export-only tracing."""
+    raw = read_artifact(path, artifact, extent)
     numpy = import_module("numpy")
-    extent = 2 * 343980 * 4
-    with mix_path.open("rb") as stream:
-        raw = stream.read(extent + 1)
-    if len(raw) != extent:
-        msg = "expected complete release-sized stereo input"
-        raise ValueError(msg)
-    digest = hashlib.sha256(raw).hexdigest()
-    array = numpy.frombuffer(raw, dtype="<f4").copy()
+    array = numpy.frombuffer(raw, dtype="<f4").reshape(shape).copy()
     del raw
     if not numpy.isfinite(array).all():
-        msg = "nonfinite HTDemucs input waveform"
+        msg = f"nonfinite HTDemucs tensor: {path.name}"
         raise ValueError(msg)
-    mix = torch.from_numpy(array.reshape(SHAPES["waveform"]))
+    return torch.from_numpy(array)
+
+
+def write_tensor(torch, path: Path, value, shape: tuple[int, ...]) -> Artifact:
+    if (
+        tuple(value.shape) != shape
+        or value.dtype != torch.float32
+        or not torch.isfinite(value).all()
+    ):
+        msg = f"invalid original HTDemucs tensor: {path.name}"
+        raise ValueError(msg)
+    extent = prod(shape) * 4
+    with path.open("xb") as stream:
+        value.numpy().astype("<f4", copy=False).tofile(stream)
+    artifact = describe_artifact(path, extent)
+    if artifact.size != extent:
+        msg = f"incomplete original HTDemucs tensor: {path.name}"
+        raise ValueError(msg)
+    return artifact
+
+
+def core_wrapper(torch, model, source: bytes, globals_):
     namespace = {}
-    exec(code, globals_, namespace)  # Executed source has an exact pinned digest.
+    exec(core_code(source), globals_, namespace)  # The caller has verified the source bytes.
     normalized = namespace["normalized"]
 
     class Core(torch.nn.Module):
@@ -519,29 +648,78 @@ def execute(torch, model, code, globals_, mix_path: Path, trace: Path, output: P
         def forward(self, spectral, waveform):
             return normalized(self.model, spectral, waveform)
 
+    return Core(model).eval()
+
+
+def capture_reference(
+    checkpoint: Path,
+    mix_path: Path,
+    mix: Artifact,
+    output: Path,
+    *,
+    admit: Callable[[Phase], None],
+) -> ReferenceArtifacts:
+    """Run the stock forward and check the extracted boundary in an admitted child.
+
+    The caller owns admission from startup through process, file and pipe reader
+    retirement and accepts these identities only after successful retirement.
+    """
+    begin_phase(Phase.REFERENCE, admit)
+    sources = source_files()
+    output.mkdir(exist_ok=False)
+    torch = torch_producer()
+    module = import_module("demucs.htdemucs")
+    waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
+    model = load_model(torch, checkpoint, module)
+    wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
     with torch.inference_mode():
-        branches, pcm = original_forward(model, mix)
+        branches, pcm = original_forward(model, waveform)
         inputs = (branches["spectral"], branches["waveform"])
-        wrapper = Core(model).eval()
         for name, value in zip(tuple(SHAPES)[2:], wrapper(*inputs), strict=True):
             torch.testing.assert_close(value, branches[name], atol=0, rtol=0)
-        for name, value in {**branches, "original_pcm": pcm}.items():
-            if not torch.isfinite(value).all():
-                msg = f"nonfinite original HTDemucs {name}"
-                raise ValueError(msg)
-            value.numpy().astype("<f4", copy=False).tofile(output / f"{name}.f32")
-        del branches, pcm, value
-        # Stock eval's fused MHA is unavailable to the legacy ONNX translator.
-        # Only export tracing changes dispatch. The complete references above
-        # use the original model. Provider arithmetic needs its own comparison.
+        artifacts = {
+            name: write_tensor(torch, output / f"{name}.f32", branches[name], shape)
+            for name, shape in SHAPES.items()
+        }
+        original_pcm = write_tensor(torch, output / "original_pcm.f32", pcm, PCM_SHAPE)
+    if source_files() != sources:
+        msg = "HTDemucs source closure changed during reference capture"
+        raise ValueError(msg)
+    return ReferenceArtifacts(mix=mix, original_pcm=original_pcm, **artifacts)
+
+
+def trace_core(
+    checkpoint: Path,
+    references: Path,
+    reference: ReferenceArtifacts,
+    output: Path,
+    *,
+    overlay: Path,
+    admit: Callable[[Phase], None],
+) -> TraceArtifact:
+    """Trace only the learned core, in a fresh admitted child using captured inputs."""
+    begin_phase(Phase.TRACE, admit)
+    sources = source_files()
+    torch = torch_producer()
+    # Legacy torch.onnx.export uses this parser internally while Torch is live.
+    onnx_producer(overlay)
+    module = import_module("demucs.htdemucs")
+    inputs = (
+        read_tensor(torch, references / "spectral.f32", reference.spectral, SHAPES["spectral"]),
+        read_tensor(torch, references / "waveform.f32", reference.waveform, SHAPES["waveform"]),
+    )
+    with output.open("xb") as stream:
+        model = load_model(torch, checkpoint, module)
+        wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
+        # Stock eval's fused MHA has no legacy ONNX translation. Only trace changes dispatch.
         previous = torch.backends.mha.get_fastpath_enabled()
         try:
             torch.backends.mha.set_fastpath_enabled(False)
-            with mark_attention(torch):
+            with torch.inference_mode(), mark_attention(torch):
                 torch.onnx.export(
                     wrapper,
                     inputs,
-                    trace,
+                    stream,
                     dynamo=False,
                     opset_version=18,
                     input_names=list(SHAPES)[:2],
@@ -551,7 +729,76 @@ def execute(torch, model, code, globals_, mix_path: Path, trace: Path, output: P
                 )
         finally:
             torch.backends.mha.set_fastpath_enabled(previous)
-    return digest
+    if source_files() != sources:
+        msg = "HTDemucs source closure changed during tracing"
+        raise ValueError(msg)
+    return TraceArtifact(describe_artifact(output, MAX_GRAPH_BYTES), reference)
+
+
+def graph_metadata(trace: TraceArtifact) -> dict[str, str]:
+    """Bind the graph to the release and the upstream original references."""
+    reference = trace.reference
+    return {
+        "flitzis_htdemucs_contract": CONTRACT,
+        "checkpoint_sha256": CHECKPOINT,
+        "torch_version": TORCH,
+        "torch_commit": TORCH_COMMIT,
+        "source_closure_sha256": source_digest(),
+        "lowering": LOWERING,
+        "attention_query_block": str(BLOCK),
+        "sources": ",".join(SOURCES),
+        "trace_sha256": trace.graph.sha256,
+        "mix_sha256": reference.mix.sha256,
+        **{f"{name}_sha256": getattr(reference, name).sha256 for name in (*SHAPES, "original_pcm")},
+    }
+
+
+def rewrite_graph(
+    trace_path: Path,
+    trace: TraceArtifact,
+    output: Path,
+    *,
+    overlay: Path,
+    admit: Callable[[Phase], None],
+) -> Artifact:
+    """Lower the checked inline trace in an admitted ONNX-only child."""
+    begin_phase(Phase.REWRITE, admit)
+    onnx = onnx_producer(overlay)
+    graph = parse_inline_graph(onnx, read_artifact(trace_path, trace.graph, MAX_GRAPH_BYTES))
+    lower_attention(onnx, graph)
+    inspect_graph(onnx, graph)
+    onnx.helper.set_model_props(graph, graph_metadata(trace))
+    serialized = graph.SerializeToString()
+    if not 0 < len(serialized) <= MAX_GRAPH_BYTES:
+        msg = "HTDemucs rewritten graph exceeds the inline extent"
+        raise ValueError(msg)
+    with output.open("xb") as stream:
+        stream.write(serialized)
+    return Artifact(len(serialized), hashlib.sha256(serialized).hexdigest())
+
+
+def check_graph(
+    path: Path,
+    expected: Artifact,
+    trace: TraceArtifact,
+    *,
+    overlay: Path,
+    admit: Callable[[Phase], None],
+) -> Artifact:
+    """Check exactly the rewritten bytes in a fresh admitted ONNX-only child."""
+    begin_phase(Phase.CHECK, admit)
+    onnx = onnx_producer(overlay)
+    raw = read_artifact(path, expected, MAX_GRAPH_BYTES)
+    graph = parse_inline_graph(onnx, raw)
+    inspect_graph(onnx, graph)
+    props = [(item.key, item.value) for item in graph.metadata_props]
+    if dict(props) != graph_metadata(trace) or len(props) != len(dict(props)):
+        msg = "HTDemucs rewritten graph provenance differs"
+        raise ValueError(msg)
+    del graph
+    # The bytes overload keeps custody across the C++ parser and full shape check.
+    onnx.checker.check_model(raw, full_check=True)
+    return expected
 
 
 def main() -> None:
