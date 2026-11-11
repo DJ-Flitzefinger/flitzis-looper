@@ -2,17 +2,23 @@
 
 import argparse
 import ast
+import ctypes
 import hashlib
 import io
 import json
+import mmap
+import os
 import platform
+import stat
 import sys
 import sysconfig
 from collections import Counter
 from contextlib import ExitStack, contextmanager
+from ctypes import wintypes
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module, metadata, util
+from itertools import pairwise
 from math import prod
 from pathlib import Path
 from threading import Lock
@@ -23,6 +29,27 @@ if TYPE_CHECKING:
 
 CHECKPOINT = "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4"
 CHECKPOINT_BYTES = 84_141_911
+STATE_TENSORS = 533
+STATE_HALF_BYTES = 83_968_912
+STATE_BANK_BYTES = 167_939_968  # Includes per-tensor padding for stock CPU alignment.
+STATE_ALIGNMENT = 64
+STATE_RUNTIME_PINS = {
+    "torch/lib/torch_cpu.dll": ("de412dd735a2d880bd40f0ef88f2333af846e698e28065912026b650ae34fd1a"),
+    "torch/lib/torch_python.dll": (
+        "25887cacf9cf8acf6fd08dbac87b91f92e34afba6ef19eb54e297ad75ea7d572"
+    ),
+    "torch/serialization.py": "e035546090ba2ced9d358807dd4fabbc3dc3518ad7b6a08329c5c457addc11bd",
+    "torch/nn/modules/module.py": (
+        "34f90ee759ca2d26adb458c9c7d1a98fc207cc92c4d3dcbb12fa0cf7e6ac5941"
+    ),
+    "torchaudio/__init__.py": "fb25996556e5580d3a1d0e1c512f2c46c69266e82a69cab0d00eef4042f18d81",
+    "torchaudio/lib/_torchaudio.pyd": (
+        "71f8712570c11c7613e177cbb0066de002fad9ce04eca1c2970f010a7b04b22d"
+    ),
+    "torchaudio/lib/libtorchaudio.pyd": (
+        "a8d2dd5c13d41f39a3243bdcec39006e65b4f84de3cb3aa0ecd88fd672983f87"
+    ),
+}
 CONTRACT = "htdemucs-4.0.1-955717e8-stereo-b1-v1"
 BLOCK = 64
 HEADS = 8
@@ -114,6 +141,7 @@ SOURCE_PINS = {
 class Phase(Enum):
     """Independent producer owners for one fixed-release export."""
 
+    PREPARE_STATE = "prepare-state"
     REFERENCE = "reference"
     TRACE = "trace"
     ASSEMBLE = "assemble"
@@ -156,6 +184,28 @@ class Artifact:
         if len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256):
             msg = "invalid HTDemucs artifact digest"
             raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelStateBank:
+    """Identities returned by the retired checkpoint conversion phase."""
+
+    manifest: Artifact
+    weights: Artifact
+
+
+@dataclass(frozen=True, slots=True)
+class StateTensor:
+    """One independently owned CPU FP32 parameter and its FP16 source extent."""
+
+    name: str
+    dtype: str
+    shape: tuple[int, ...]
+    stride: tuple[int, ...]
+    offset: int
+    size: int
+    checkpoint_offset: int
+    requires_grad: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +459,11 @@ def load_model(torch, checkpoint: Path, module):
         msg = "unexpected original HTDemucs checkpoint structure"
         raise ValueError(msg)
     model = import_module("demucs.states").load_model(package, strict=True).eval()
+    check_model_geometry(model)
+    return model
+
+
+def check_model_geometry(model) -> None:
     geometry = (
         tuple(model.sources),
         model.audio_channels,
@@ -422,6 +477,308 @@ def load_model(torch, checkpoint: Path, module):
     if geometry != (SOURCES, 2, 44100, 4096, True, True, 343980, 512):
         msg = "unexpected original HTDemucs release geometry"
         raise ValueError(msg)
+
+
+@contextmanager
+def sealed_read(path: Path):
+    """Open a local regular file with Windows write and delete sharing denied."""
+    winapi = import_module("_winapi")
+    msvcrt = import_module("msvcrt")
+    share_read = 1
+    open_reparse_point = 0x00200000
+    volume_name_guid = 1
+    handle = winapi.CreateFile(
+        os.path.abspath(path),
+        winapi.GENERIC_READ,
+        share_read,
+        0,
+        winapi.OPEN_EXISTING,
+        open_reparse_point,
+        0,
+    )
+    fd = None
+    try:
+        final_name = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
+        final_name.argtypes = (wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD)
+        final_name.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = final_name(handle, buffer, len(buffer), volume_name_guid)
+        if not 0 < length < len(buffer) or not buffer.value.startswith("\\\\?\\Volume{"):
+            msg = "HTDemucs state requires a local volume"
+            raise ValueError(msg)
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+    finally:
+        if fd is None:
+            winapi.CloseHandle(handle)
+
+    try:
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                msg = "HTDemucs state requires a regular file"
+                raise ValueError(msg)
+            yield stream
+    finally:
+        os.close(fd)
+
+
+def check_mapped_runtime(torch, cpu_overlay: Path) -> None:
+    """Verify the metadata/assignment implementation and actual CPU TorchAudio images."""
+    if sys.version_info[:3] != (3, 14, 2):
+        msg = "HTDemucs mapped state requires the pinned CPython mmap implementation"
+        raise ValueError(msg)
+    root = cpu_overlay.resolve(strict=True)
+    for name, digest in STATE_RUNTIME_PINS.items():
+        with (root / name).open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                msg = f"pinned HTDemucs mapped-state runtime differs: {name}"
+                raise ValueError(msg)
+    audio = import_module("torchaudio")
+    if (
+        str(audio.__version__) != "2.11.0+cpu"
+        or Path(audio.__file__).resolve(strict=True) != root / "torchaudio/__init__.py"
+        or Path(import_module("torch.serialization").__file__).resolve(strict=True)
+        != root / "torch/serialization.py"
+        or Path(import_module("torch.nn.modules.module").__file__).resolve(strict=True)
+        != root / "torch/nn/modules/module.py"
+        or torch.__future__.get_swap_module_params_on_conversion()
+    ):
+        msg = "unexpected HTDemucs mapped-state runtime"
+        raise ValueError(msg)
+    module_handle = ctypes.WinDLL("kernel32", use_last_error=True).GetModuleHandleW
+    module_handle.argtypes = (wintypes.LPCWSTR,)
+    module_handle.restype = wintypes.HMODULE
+    audio_libraries = {Path(library).resolve(strict=True) for library in torch.ops.loaded_libraries}
+    for name in STATE_RUNTIME_PINS:
+        if not name.endswith((".dll", ".pyd")):
+            continue
+        path = root / name
+        image = module_handle(str(path))
+        if (
+            not image
+            or image != module_handle(path.name)
+            or (path.suffix == ".pyd" and path not in audio_libraries)
+        ):
+            msg = f"missing exact loaded HTDemucs image: {name}"
+            raise ValueError(msg)
+
+
+def state_storage_geometry(value) -> tuple:
+    return (
+        tuple(value.shape),
+        value.stride(),
+        value.storage_offset(),
+        value.untyped_storage().nbytes(),
+    )
+
+
+def model_state_layout(torch, checkpoint: BinaryIO, module):
+    """Derive the stock destination layout without allocating either weight set."""
+    check_checkpoint(checkpoint)
+    package = torch.load(checkpoint, map_location="meta", weights_only=False)
+    state = package["state"]
+    if package["klass"] is not module.HTDemucs or package["args"] or len(state) != STATE_TENSORS:
+        msg = "unexpected HTDemucs state package"
+        raise ValueError(msg)
+    if torch.get_default_dtype() != torch.float32 or torch.get_default_device().type != "cpu":
+        msg = "unexpected HTDemucs stock constructor defaults"
+        raise ValueError(msg)
+    with torch.device("meta"):
+        model = module.HTDemucs(**package["kwargs"]).eval()
+    check_model_geometry(model)
+    parameters = dict(model.named_parameters(remove_duplicate=False))
+    if (
+        list(state) != list(parameters)
+        or list(parameters) != list(model.state_dict())
+        or next(model.buffers(), None) is not None
+    ):
+        msg = "unexpected HTDemucs state names or buffers"
+        raise ValueError(msg)
+
+    layout = []
+    end = 0
+    for name, target in parameters.items():
+        start = (end + STATE_ALIGNMENT - 1) // STATE_ALIGNMENT * STATE_ALIGNMENT
+        tensor = describe_state_tensor(torch, name, state[name], target, start)
+        layout.append(tensor)
+        end = tensor.offset + tensor.size
+    ranges = sorted((t.checkpoint_offset, t.checkpoint_offset + t.size // 2) for t in layout)
+    if (
+        any(left[1] > right[0] for left, right in pairwise(ranges))
+        or sum(stop - start for start, stop in ranges) != STATE_HALF_BYTES
+        or len({p.untyped_storage()._cdata for p in parameters.values()}) != STATE_TENSORS
+        or end != STATE_BANK_BYTES
+    ):
+        msg = "unexpected HTDemucs state ownership or extent"
+        raise ValueError(msg)
+    return model, layout
+
+
+def describe_state_tensor(torch, name, source, target, offset) -> StateTensor:
+    source_offset = getattr(source.untyped_storage(), "_checkpoint_offset", None)
+    half_bytes = target.numel() * 2
+    shape, stride, _, _ = state_storage_geometry(target)
+    if (
+        (source.dtype, target.dtype) != (torch.float16, torch.float32)
+        or (source.device.type, target.device.type) != ("meta", "meta")
+        or state_storage_geometry(source) != (shape, stride, 0, half_bytes)
+        or state_storage_geometry(target) != (shape, stride, 0, half_bytes * 2)
+        or not (source.is_contiguous() and target.is_contiguous() and half_bytes)
+    ):
+        msg = f"unexpected HTDemucs state layout: {name}"
+        raise ValueError(msg)
+    if (
+        type(source_offset) is not int
+        or source_offset % STATE_ALIGNMENT != 0
+        or not 0 < source_offset <= CHECKPOINT_BYTES - half_bytes
+    ):
+        msg = f"unexpected HTDemucs state storage: {name}"
+        raise ValueError(msg)
+    return StateTensor(
+        name, "float32", shape, stride, offset, half_bytes * 2, source_offset, target.requires_grad
+    )
+
+
+def state_manifest(layout: list[StateTensor], digests: list[str]) -> bytes:
+    return json.dumps(
+        {
+            "format": "htdemucs-cpu-f32-state-v1",
+            "checkpoint": asdict(Artifact(CHECKPOINT_BYTES, CHECKPOINT)),
+            "constructor": "demucs.htdemucs.HTDemucs",
+            "source_closure_sha256": source_digest(),
+            "torch": TORCH_CPU,
+            "torch_commit": TORCH_COMMIT,
+            "tensors": [
+                dict(asdict(tensor), sha256=digest)
+                for tensor, digest in zip(layout, digests, strict=True)
+            ],
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def prepare_model_state(
+    checkpoint: Path,
+    output: Path,
+    *,
+    cpu_overlay: Path,
+    admit: Callable[[Phase], None],
+) -> ModelStateBank:
+    """Convert the exact checkpoint in one separately admitted CPU child."""
+    begin_phase(Phase.PREPARE_STATE, admit)
+    sources = source_files()
+    torch = torch_producer(cpu_overlay)
+    check_mapped_runtime(torch, cpu_overlay)
+    module = import_module("demucs.htdemucs")
+    bank_digest = hashlib.sha256()
+    digests = []
+    with sealed_read(checkpoint) as source:
+        _, layout = model_state_layout(torch, source, module)
+        output.mkdir(exist_ok=False)
+        with (output / "state.f32").open("xb") as bank:
+            for tensor in layout:
+                padding = bytes(tensor.offset - bank.tell())
+                bank.write(padding)
+                bank_digest.update(padding)
+                source.seek(tensor.checkpoint_offset)
+                remaining = tensor.size // 2
+                digest = hashlib.sha256()
+                while remaining:
+                    size = min(remaining, STREAM_CHUNK_BYTES)
+                    half = bytearray(size)
+                    if source.readinto(half) != size:
+                        msg = "truncated sealed HTDemucs checkpoint"
+                        raise ValueError(msg)
+                    values = torch.frombuffer(half, dtype=torch.float16).to(dtype=torch.float32)
+                    with memoryview(values.numpy()).cast("B") as raw:
+                        bank.write(raw)
+                        bank_digest.update(raw)
+                        digest.update(raw)
+                    remaining -= size
+                digests.append(digest.hexdigest())
+            if bank.tell() != STATE_BANK_BYTES:
+                msg = "incomplete HTDemucs state bank"
+                raise ValueError(msg)
+    if source_files() != sources:
+        msg = "HTDemucs source closure changed during state conversion"
+        raise ValueError(msg)
+    encoded = state_manifest(layout, digests)
+    if len(encoded) > MAX_MANIFEST_BYTES:
+        msg = "HTDemucs state manifest exceeds its export extent"
+        raise ValueError(msg)
+    with (output / "state.json").open("xb") as stream:
+        stream.write(encoded)
+    return ModelStateBank(
+        Artifact(len(encoded), hashlib.sha256(encoded).hexdigest()),
+        Artifact(STATE_BANK_BYTES, bank_digest.hexdigest()),
+    )
+
+
+def mapped_state_tensors(torch, mapping: mmap.mmap, layout: list[StateTensor]):
+    # frombuffer retains this exporter in the C++ DataPtr, including through JIT
+    # aliases. Its live buffer export prevents explicit mmap.close() as well.
+    # The mmap owns the duplicate of the same FILE_SHARE_READ handle.
+    owner = memoryview(mapping)
+    return {
+        tensor.name: torch.frombuffer(
+            owner,
+            dtype=torch.float32,
+            count=tensor.size // 4,
+            offset=tensor.offset,
+        ).as_strided(tensor.shape, tensor.stride)
+        for tensor in layout
+    }
+
+
+def load_producer_model(
+    torch,
+    checkpoint: Path,
+    module,
+    cpu_overlay: Path | None,
+    mapped_state: tuple[Path, ModelStateBank] | None,
+):
+    """Use mapped stock state only when the caller supplies retired bank custody."""
+    if mapped_state is None:
+        return load_model(torch, checkpoint, module)
+    if cpu_overlay is None:
+        msg = "HTDemucs mapped state requires the pinned CPU producer"
+        raise ValueError(msg)
+    check_mapped_runtime(torch, cpu_overlay)
+    root, custody = mapped_state
+    if custody.weights.size != STATE_BANK_BYTES:
+        msg = "unexpected HTDemucs mapped-state extent"
+        raise ValueError(msg)
+    manifest = read_artifact(root / "state.json", custody.manifest, MAX_MANIFEST_BYTES)
+    with sealed_read(checkpoint) as source:
+        model, layout = model_state_layout(torch, source, module)
+    with sealed_read(root / "state.f32") as bank:
+        if os.fstat(bank.fileno()).st_size != custody.weights.size:
+            msg = "unexpected HTDemucs mapped-state file size"
+            raise ValueError(msg)
+        mapping = mmap.mmap(bank.fileno(), custody.weights.size, access=mmap.ACCESS_READ)
+    with memoryview(mapping) as raw:
+        if hashlib.sha256(raw).hexdigest() != custody.weights.sha256:
+            msg = "unexpected HTDemucs mapped-state file digest"
+            raise ValueError(msg)
+        digests = [hashlib.sha256(raw[t.offset : t.offset + t.size]).hexdigest() for t in layout]
+    if manifest != state_manifest(layout, digests):
+        msg = "unexpected HTDemucs mapped-state manifest"
+        raise ValueError(msg)
+    state = mapped_state_tensors(torch, mapping, layout)
+    model.load_state_dict(state, strict=True, assign=True)
+    for (name, value), tensor in zip(model.named_parameters(), layout, strict=True):
+        if (
+            (name, value.requires_grad) != (tensor.name, tensor.requires_grad)
+            or (value.device.type, value.dtype) != ("cpu", torch.float32)
+            or state_storage_geometry(value) != (tensor.shape, tensor.stride, 0, tensor.size)
+            or value.data_ptr() != state[name].data_ptr()
+            or value.data_ptr() % STATE_ALIGNMENT
+        ):
+            msg = f"HTDemucs mapped-state assignment differs: {name}"
+            raise ValueError(msg)
     return model
 
 
@@ -839,6 +1196,7 @@ def capture_reference(
     *,
     admit: Callable[[Phase], None],
     cpu_overlay: Path | None = None,
+    mapped_state: tuple[Path, ModelStateBank] | None = None,
 ) -> ReferenceArtifacts:
     """Run the stock forward and check the extracted boundary in an admitted child.
 
@@ -851,7 +1209,7 @@ def capture_reference(
     torch = torch_producer(cpu_overlay)
     module = import_module("demucs.htdemucs")
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
-    model = load_model(torch, checkpoint, module)
+    model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
     with torch.inference_mode():
         artifacts, pcm = original_forward(torch, model, waveform, output)
@@ -1177,6 +1535,7 @@ def trace_core_separated(
     *,
     cpu_overlay: Path,
     admit: Callable[[Phase], None],
+    mapped_state: tuple[Path, ModelStateBank] | None = None,
 ) -> SeparatedTrace:
     """Trace the fixed learned core in an admitted CPU-only Torch child."""
     begin_phase(Phase.TRACE, admit)
@@ -1187,7 +1546,7 @@ def trace_core_separated(
         read_tensor(torch, references / "spectral.f32", reference.spectral, SHAPES["spectral"]),
         read_tensor(torch, references / "waveform.f32", reference.waveform, SHAPES["waveform"]),
     )
-    model = load_model(torch, checkpoint, module)
+    model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
     previous = torch.backends.mha.get_fastpath_enabled()
     attention = import_module("torch.nn.attention")

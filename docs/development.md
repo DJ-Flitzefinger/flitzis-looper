@@ -1332,8 +1332,8 @@ cutover remain open. Historical independent-f64 High-DC failures remain retained
 `scripts/export_htdemucs_trial.py` checks the installed Demucs and einops
 source pins and the complete `955717e8` checkpoint. Its CLI checks these pins
 and extracts the core without loading Torch. The producer stages require
-separate, independently admitted Windows CPython 3.14 children. Each learned
-stage checks an owned checkpoint snapshot before deserialization and closes
+separate, independently admitted Windows CPython 3.14 children. The original
+loader checks an owned checkpoint snapshot before deserialization and closes
 it before initializing the stock model and strictly loading its state.
 The selected statements from the pinned `HTDemucs.forward` retain
 both original convolutional encoder/decoder stacks, skips, DConv, frequency
@@ -1373,7 +1373,22 @@ verify package versions, module origins and binary digests.
 
 The CPU release producer uses the separately verified Torch 2.12.0+cpu
 Windows CP314 wheel at the same Torch source commit. It requires its own
-phase admission. Only the separated trace selects the CPU Flash SDPA backend.
+phase admission. An independently admitted `prepare_model_state` child can
+convert the pinned FP16 checkpoint to an aligned FP32 bank in bounded chunks.
+It derives the exact stock parameter layout on the meta device and records the
+checkpoint, source and ordered tensor identities. After the preparation child
+and its readers end, pass the bank directory and returned `ModelStateBank` as
+`mapped_state` to `capture_reference` or `trace_core_separated`. Each consumer
+requires the pinned CPU runtime and checks the manifest and the bytes of the
+read-only view from the same Windows file handle. The file denies write and
+delete sharing. Strict assignment keeps the stock parameter layouts and the
+storage retains the view through the last tensor alias, including trace weights
+used during initializer serialization.
+
+The bank contains 167,937,824 bytes of FP32 payload and 2,144 bytes of alignment
+padding. Its 4 KiB page-rounded extent is 167,940,096 bytes. Include mapped
+residency separately in each phase admission. Only the separated trace selects
+the CPU Flash SDPA backend.
 The stock reference keeps its original dispatch. The separated path uses the
 pinned TorchScript graph conversion with ONNX constant folding disabled. It
 serializes the graph with the learned parameters as named inputs, then writes
