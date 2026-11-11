@@ -130,6 +130,8 @@ SPECTRAL_REWRITE_DENSE = (
 )
 SPECTRAL_DCONV_DENSE = ((512, 96, 1, 336), (32256, 336, 336, 1), 0, 66_060_288)
 SPECTRAL_DCONV_RETURN = ((512, 96, 336), (32256, 336, 1), 0, SPECTRAL_DCONV_DENSE[3])
+SPECTRAL_DCONV_GLU = ((512, 48, 336), (16128, 336, 1), 0, SPECTRAL_SKIP_ADD_DENSE[3])
+SPECTRAL_DCONV_RESIDUAL = ((512, 48, 336), (336, 172032, 1), 0, SPECTRAL_SKIP_ADD_DENSE[3])
 SPECTRAL_TRANSPOSE_SHAPE = (1, 16, 2052, 336)
 SPECTRAL_TRANSPOSE_BYTES = prod(SPECTRAL_TRANSPOSE_SHAPE) * 4
 SPECTRAL_TRANSPOSE_PUBLIC_STRIDES = (11031552, 1, 5376, 16)
@@ -1406,9 +1408,11 @@ def check_mapped_convolution_operands(torch, operands, geometry):
 
 
 def mapped_float_return_storage(torch, output: Path, inputs, geometry, label):
-    shape, _, _, size = geometry
+    shape, strides, offset, size = geometry
     owner = mapped_reference_scratch(output, size, label)
     mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
+    if mapped.stride() != strides:
+        mapped = mapped.as_strided(shape, strides, offset)
     _, storage, address = tensor_backing(mapped)
     # A cropped operand's data pointer skips the prefix of its live backing.
     input_storages = [value.untyped_storage() for value in inputs]
@@ -1820,6 +1824,80 @@ def mapped_spectral_dconv_pointwise(torch, conv, output: Path):
         del conv.forward
 
 
+@contextmanager
+def mapped_spectral_dconv_tail(torch, dconv, source: bytes, output: Path):
+    """Map the second GLU and final residual Add in the pinned spectral DConv."""
+    name = "demucs/demucs.py"
+    stock = (
+        "def forward(self, x):\n"
+        "    for layer in self.layers:\n"
+        "        x = x + layer(x)\n"
+        "    return x"
+    )
+    if (
+        hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
+        or ast.unparse(method_definition(source, "DConv")) != stock
+    ):
+        msg = "unexpected HTDemucs final spectral DConv source"
+        raise ValueError(msg)
+    if (
+        type(dconv) is not type(dconv).forward.__globals__.get("DConv")
+        or "forward" in vars(dconv)
+        or (dconv.training, dconv.channels, dconv.compress, dconv.depth) != (False, 48, 8, 2)
+        or len(dconv.layers) != 2
+    ):
+        msg = "unexpected HTDemucs final spectral DConv module"
+        raise ValueError(msg)
+
+    first, second = dconv.layers
+    if any(type(layer) is not torch.nn.Sequential or len(layer) != 7 for layer in (first, second)):
+        msg = "unexpected HTDemucs final spectral DConv layers"
+        raise ValueError(msg)
+    norm, glu = second[4], second[5]
+    if (
+        type(norm) is not torch.nn.GroupNorm
+        or (norm.num_groups, norm.num_channels) != (1, 96)
+        or type(glu) is not torch.nn.GLU
+        or glu.dim != 1
+        or "forward" in vars(glu)
+    ):
+        msg = "unexpected HTDemucs final spectral DConv GLU module"
+        raise ValueError(msg)
+
+    def write(label, op, inputs, geometries, geometry, **options):
+        check_reference_inference_dispatch(torch, label)
+        check_spectral_pointwise_operands(torch, inputs, geometries, label)
+        mapped = mapped_float_return_storage(torch, output, inputs, geometry, label)
+        backing = tensor_backing(mapped)
+        result = op(*inputs, **options, out=mapped)
+        if tensor_backing(result) != backing or state_storage_geometry(result) != geometry:
+            msg = f"unexpected HTDemucs mapped {label} return"
+            raise ValueError(msg)
+        return result
+
+    def glu_forward(value):
+        return write(
+            "dconv-glu", torch.ops.aten.glu.out, (value,), (SPECTRAL_DCONV_RETURN,),
+            SPECTRAL_DCONV_GLU, dim=glu.dim,
+        )
+
+    def forward(x):
+        # The stock first residual Add creates an independent backing.
+        x = x + first(x)  # noqa: PLR6104
+        return write(
+            "dconv-add", torch.ops.aten.add.out, (x, second(x)),
+            (SPECTRAL_DCONV_RESIDUAL, SPECTRAL_DCONV_GLU), SPECTRAL_DCONV_RESIDUAL,
+        )
+
+    glu.forward = glu_forward
+    dconv.forward = forward
+    try:
+        yield
+    finally:
+        del dconv.forward
+        del glu.forward
+
+
 def check_spectral_transpose_operands(torch, operands):
     # The stock DConv view gives the singleton batch axis its folded stride.
     # A dense ABCD input also has the canonical contiguous batch stride.
@@ -2059,6 +2137,8 @@ def mapped_spectral_transpose(torch, conv, output: Path):
             msg = "unexpected HTDemucs spectral transpose backend"
             raise ValueError(msg)
         check_spectral_transpose_operands(torch, operands)
+        # The recursive dispatcher may outlive this call until Python collects its cycle.
+        expected_tensors = tuple(value._cdata for value in operands)
         used_native = False
 
         def dispatch(op, args, options):
@@ -2070,8 +2150,7 @@ def mapped_spectral_transpose(torch, conv, output: Path):
                 op not in convolution_ops
                 or len(args) != 3 + len(expected) + (0 if wrapper else 4)
                 or options
-                or tuple(value._cdata for value in args[:3])
-                != tuple(value._cdata for value in operands)
+                or tuple(value._cdata for value in args[:3]) != expected_tensors
                 or tuple(tuple(value) if isinstance(value, list) else value for value in parameters)
                 != expected
             ):
@@ -2734,6 +2813,11 @@ def capture_reference(
             )
             for layer in model.decoder[-1].dconv.layers:
                 reference.enter_context(mapped_spectral_dconv_pointwise(torch, layer[3], output))
+            reference.enter_context(
+                mapped_spectral_dconv_tail(
+                    torch, model.decoder[-1].dconv, sources["demucs/demucs.py"], output
+                )
+            )
             reference.enter_context(
                 mapped_spectral_transpose(torch, model.decoder[-1].conv_tr, output)
             )

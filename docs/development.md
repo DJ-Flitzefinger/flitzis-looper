@@ -1426,8 +1426,12 @@ mapping with ABCD strides. The stock layout operations keep the storage
 through the rewrite hook and GLU. Each of the two pointwise convolutions in
 the final spectral DConv reorders directly into its own 66,060,288-byte writable
 file mapping per mapped eager forward. The native squeeze retains that storage
-for the corresponding stock GroupNorm input. The final DConv residual
-addition produces the separate ABCD input to the transposed convolution.
+for the corresponding stock GroupNorm input. After the second GroupNorm,
+stock CPU GLU writes its 33,030,144-byte contiguous result directly into a
+writable file mapping. The original LayerScale consumes it. The final CPU
+residual addition writes a separate 33,030,144-byte file view with the stock
+folded strides. Unfolding preserves the 172032 batch stride and the native
+`bacd` source reorder into the transposed convolution.
 The pinned oneDNN BRG path reorders into a separate 44,126,208-byte writable
 file mapping with ACDB strides. The native contiguous clone then copies into a
 second 44,126,208-byte writable file mapping with ABCD strides. The stock
@@ -1451,9 +1455,10 @@ decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
 Charge the mapped state, score, both spectral caller results, skip addition
-and rewrite, both spectral transpose returns, second pad, C2R input pack, C2R
-frames and windowed frames for physical residency, file cache and disk. The stock overlap-add tensors still
-require private storage.
+and rewrite, both DConv pointwise returns, the second GLU and final residual
+Add, both spectral transpose returns, second pad, C2R input pack, C2R frames
+and windowed frames for physical residency, file cache and disk. The stock
+overlap-add tensors still require private storage.
 The full learned reference requires a prospective commit and residency budget
 for both forwards, retained activations, vendor scratch, allocator behavior
 and retirement.
