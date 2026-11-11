@@ -4,8 +4,10 @@ import argparse
 import ctypes
 import hashlib
 import json
+import mmap
 import os
 import platform
+import struct
 import sys
 import sysconfig
 from dataclasses import dataclass
@@ -15,6 +17,16 @@ from pathlib import Path
 TORCH_COMMIT = "7661cd9c6b841b62b7f411aa52ec51f05457263b"
 TORCH_CPU_DLL = "de412dd735a2d880bd40f0ef88f2333af846e698e28065912026b650ae34fd1a"
 VERBOSE = "profile_create,profile_exec"
+
+SPECTRAL_JOB_LIMIT = 512 * 1024**2
+ATEN_RETURN_ARENA_BYTES = 64 * 1024**2
+DECOMMIT_OPTIONS = {
+    "MIMALLOC_PURGE_DELAY": "0",
+    "MIMALLOC_PURGE_DECOMMITS": "1",
+    "MIMALLOC_ARENA_EAGER_COMMIT": "0",
+    "MIMALLOC_ALLOW_LARGE_OS_PAGES": "0",
+}
+JOURNAL_ROW = struct.Struct("<9Q")
 
 
 @dataclass(frozen=True)
@@ -85,17 +97,19 @@ def emit(**record) -> None:
     sys.stdout.flush()
 
 
-def recorder_for(path: Path, expected: str, cpu_dll: Path):
+def recorder_for(path: Path, expected: str, cpu_dll: Path, journal: Path, *, page_backed: bool):
     """Bind the recorder to the already loaded, pinned wheel CPU image."""
     if sha256(path) != expected:
         msg = "unexpected HTDemucs recorder bytes"
         raise ValueError(msg)
     recorder = ctypes.WinDLL(str(path))
-    recorder.install_ideep_recorder.argtypes = [ctypes.c_wchar_p]
+    recorder.install_ideep_recorder.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_int]
+    recorder.mark_ideep_phase.argtypes = [ctypes.c_long]
+    recorder.mark_ideep_phase.restype = None
     recorder.install_ideep_recorder.restype = ctypes.c_int
     recorder.read_ideep_events.argtypes = [ctypes.POINTER(Event), ctypes.c_size_t]
     recorder.read_ideep_events.restype = ctypes.c_int
-    if status := recorder.install_ideep_recorder(str(cpu_dll)):
+    if status := recorder.install_ideep_recorder(str(cpu_dll), str(journal), page_backed):
         msg = f"iDeep recorder installation failed: {status}"
         raise RuntimeError(msg)
     return recorder
@@ -136,8 +150,46 @@ def allocation_receipt(recorder, cursor: int) -> tuple[int, dict]:
     }
 
 
-def run_geometry(torch, recorder, name: str, geometry: Geometry, *, cold_only: bool) -> None:
+def admit_warm_transpose(journal: Path, cold_reserve: int) -> None:
+    """Require observed return decommit and headroom for the matching cold envelope."""
+    samples = {}
+    with (
+        journal.open("rb") as stream,
+        mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as view,
+    ):
+        for kind, _, phase, _, _, _, private, peak, _ in JOURNAL_ROW.iter_unpack(view):
+            if kind == 1 and private <= peak <= SPECTRAL_JOB_LIMIT:
+                samples[phase] = (private, peak)
+    if not {3, 4, 5} <= samples.keys():
+        msg = "missing cold transpose commit samples"
+        raise RuntimeError(msg)
+    before, _ = samples[3]
+    returned, _ = samples[4]
+    after, peak = samples[5]
+    reserve = max(cold_reserve, peak - before)
+    if returned - after < ATEN_RETURN_ARENA_BYTES or after + reserve >= SPECTRAL_JOB_LIMIT:
+        msg = "spectral transpose warm reserve refused after cold output release"
+        raise RuntimeError(msg)
+    emit(
+        warmPrivateBytes=after,
+        warmAdditionalCommitBytes=reserve,
+        warmEnvelopeBytes=after + reserve,
+        releasedReturnBytes=returned - after,
+    )
+
+
+def run_geometry(
+    torch,
+    recorder,
+    name: str,
+    geometry: Geometry,
+    *,
+    cold_only: bool,
+    journal: Path,
+    warm_reserve: int | None,
+) -> None:
     """Run stock dispatch twice with the exact dense or folded source layout."""
+    recorder.mark_ideep_phase(1)  # Dense inputs are about to be allocated.
     if geometry.fold_spectral:
         batch, channels, frames = geometry.source
         dense = torch.full((1, channels, batch, frames), 0.125, dtype=torch.float32)
@@ -157,12 +209,18 @@ def run_geometry(torch, recorder, name: str, geometry: Geometry, *, cold_only: b
         padding=geometry.padding,
         dilation=geometry.dilation,
     )
+    recorder.mark_ideep_phase(2)  # Dense inputs are live.
     cursor, baseline = allocation_receipt(recorder, 0)
     if baseline["events"]:
         msg = "iDeep allocation stream was not empty before stock execution"
         raise RuntimeError(msg)
-    for iteration in ("cold",) if cold_only else ("cold", "warm"):
+    iterations = ("cold",) if cold_only else ("cold", "warm")
+    for index, iteration in enumerate(iterations):
+        phase = 3 + 3 * index
+        if iteration == "warm" and warm_reserve is not None:
+            admit_warm_transpose(journal, warm_reserve)
         emit(geometry=name, iteration=iteration, started=True)
+        recorder.mark_ideep_phase(phase)
         output = torch.ops.aten.convolution.default(
             source,
             weight,
@@ -174,6 +232,7 @@ def run_geometry(torch, recorder, name: str, geometry: Geometry, *, cold_only: b
             output_padding,
             1,
         )
+        recorder.mark_ideep_phase(phase + 1)  # ATen has returned the dense output.
         if tuple(output.shape) != geometry.output or output.dtype != torch.float32:
             msg = "stock convolution produced an unexpected geometry"
             raise RuntimeError(msg)
@@ -183,7 +242,19 @@ def run_geometry(torch, recorder, name: str, geometry: Geometry, *, cold_only: b
             "denseOutputBytes": output.untyped_storage().nbytes(),
             "first": output[(0,) * output.ndim].item(),
         }
+        if name == "spectral-transpose":
+            extent = output.numel() * output.element_size()
+            if (
+                not output.is_contiguous()
+                or output.storage_offset()
+                or extent != result["denseOutputBytes"]
+            ):
+                msg = "unexpected spectral transpose backing"
+                raise RuntimeError(msg)
+            with ctypes.memoryview_at(output.data_ptr(), extent, readonly=True) as payload:
+                result["denseOutputSHA256"] = hashlib.sha256(payload).hexdigest()
         del output
+        recorder.mark_ideep_phase(phase + 2)
         cursor, allocations = allocation_receipt(recorder, cursor)
         emit(geometry=name, iteration=iteration, **result, **allocations)
     # ATen's query itself packs strided 1D inputs. Keep it out of the cold/warm envelope.
@@ -199,6 +270,10 @@ def run_geometry(torch, recorder, name: str, geometry: Geometry, *, cold_only: b
         1,
     )
     emit(geometry=name, backend=backend.name, backendCode=backend.value)
+    del source, weight, bias
+    if geometry.fold_spectral:
+        del dense
+    recorder.mark_ideep_phase(9)  # All geometry inputs and outputs have been released.
 
 
 def main() -> None:
@@ -208,8 +283,25 @@ def main() -> None:
     parser.add_argument("--cpu-overlay", type=Path, required=True)
     parser.add_argument("--recorder", type=Path, required=True)
     parser.add_argument("--recorder-sha256", required=True)
+    parser.add_argument("--journal", type=Path, required=True)
+    parser.add_argument("--page-backed", action="store_true")
     parser.add_argument("--cold-only", action="store_true")
+    parser.add_argument("--warm-reserve-bytes", type=int)
     args = parser.parse_args()
+    spectral_repeat = args.geometry == "spectral-transpose" and not args.cold_only
+    if spectral_repeat and (
+        args.page_backed
+        or args.warm_reserve_bytes is None
+        or not 0 < args.warm_reserve_bytes < SPECTRAL_JOB_LIMIT
+        or any(os.environ.get(name) != value for name, value in DECOMMIT_OPTIONS.items())
+    ):
+        parser.error(
+            "spectral transpose repeat requires pinned decommit options and a cold reserve"
+        )
+    if args.warm_reserve_bytes is not None and not spectral_repeat:
+        parser.error("the warm reserve applies only to the spectral transpose repeat")
+    if args.page_backed and args.geometry != "spectral-transpose":
+        parser.error("page-backed allocation is scoped to the spectral transpose")
     if (
         sys.platform != "win32"
         or sys.version_info[:2] != (3, 14)
@@ -240,7 +332,15 @@ def main() -> None:
     if (torch.get_num_threads(), torch.get_num_interop_threads()) != (1, 1):
         msg = "could not establish serial stock dispatch"
         raise RuntimeError(msg)
-    recorder = recorder_for(args.recorder.resolve(strict=True), args.recorder_sha256, cpu_dll)
+    journal = args.journal.resolve()
+    recorder = recorder_for(
+        args.recorder.resolve(strict=True),
+        args.recorder_sha256,
+        cpu_dll,
+        journal,
+        page_backed=args.page_backed,
+    )
+    emit(journal=str(journal), allocator="page-backed" if args.page_backed else "ucrt")
     emit(
         processor=platform.processor(),
         torchCpuCapability=torch.backends.cpu.get_cpu_capability(),
@@ -250,7 +350,13 @@ def main() -> None:
     )
     with torch.inference_mode():
         run_geometry(
-            torch, recorder, args.geometry, GEOMETRIES[args.geometry], cold_only=args.cold_only
+            torch,
+            recorder,
+            args.geometry,
+            GEOMETRIES[args.geometry],
+            cold_only=args.cold_only,
+            journal=journal,
+            warm_reserve=args.warm_reserve_bytes,
         )
 
 

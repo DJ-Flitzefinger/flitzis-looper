@@ -1495,26 +1495,52 @@ For Windows stock CPU admission, build
 headers and the exact iDeep `e539e0f9774e2018f0d56fe865da66581f692e3d` headers.
 Use x64 release MSVC, C++20, the dynamic CRT (`/MD`), `NDEBUG` and
 `_ITERATOR_DEBUG_LEVEL=0`. The recorder binds the exported CPU engine of
-the loaded official Torch 2.12.0+cpu wheel. It delegates allocations and
+the loaded official Torch 2.12.0+cpu wheel. By default it delegates allocations and
 frees to the original 4096-byte-aligned allocator and keeps its callbacks
 resident through process teardown.
 
 Run `scripts/probe_htdemucs_ideep.py` in a fresh independently admitted
 CP314 Windows Job with an exact CPU overlay, the recorder DLL and its
 SHA-256. Set `ONEDNN_VERBOSE=profile_create,profile_exec` before launch.
-Each invocation covers one fixed geometry without a checkpoint and reports
-the dense return, iDeep requests and CRT usable sizes next to the stock
-primitive and reorder layouts. Use `--cold-only` to qualify a first call and
-teardown separately from a warm repeat. Keep one intra-op and one inter-op
-thread and preserve the original library and allocator defaults.
+Each invocation covers one fixed geometry without a checkpoint. Pass
+`--journal` with a new private file path. The recorder publishes fixed-width
+phase, allocation-attempt, allocation-result, free and access-fault rows to
+a mapped file. It samples Windows private commit around callbacks and at the
+ATen call boundaries. It records a failed nonzero allocation before ending the
+probe, so oneDNN never receives the failed handle. The fault handler leaves
+Windows exception dispatch in place. The journal can contain raw fault
+addresses. Keep it private and read it with a file mapping after Job, process
+tree and both readers end.
 
-The recorder covers the iDeep tensor allocator, including scratchpads passed
-to oneDNN by iDeep. Admission still charges ATen's dense copies and returns,
-error-path plain retries, internal oneDNN allocations and cache/JIT owners,
-MKL workspaces and allocator retention. Adopt each geometry receipt after
-the Job, process tree and both readers end. The largest spectral transpose
-completed one cold call but failed during a warm repeat under its separate
-512 MiB containment. That result leaves whole-phase learned admission open.
+The default callback uses the pinned UCRT. For the largest spectral
+transpose, `--cold-only --page-backed` gives nonzero iDeep requests dedicated
+pages and releases them with `MEM_RELEASE`. It leaves zero-byte requests with
+the UCRT. The BRG descriptor's 33,181,848-byte user scratch includes the
+nested convolution's workspace. BRG primitive and JIT metadata, reorder
+buffers and descriptor resources have separate lifetimes. The ATen return
+can overlap the 44,126,208-byte iDeep output with two dense ATen backings of
+the same logical size. ATen arena commit also includes allocator rounding.
+
+Use `--cold-only` first for the largest transpose. The guarded repeat
+requires `--warm-reserve-bytes` from an independently settled cold run of the
+same geometry and allocator profile. Derive it by subtracting private commit
+before the cold call from the observed cold Job peak. The supervisor must
+verify the actual 512 MiB Job before resume. Set these options before the
+pinned Torch image loads.
+
+- `MIMALLOC_PURGE_DELAY=0`
+- `MIMALLOC_PURGE_DECOMMITS=1`
+- `MIMALLOC_ARENA_EAGER_COMMIT=0`
+- `MIMALLOC_ALLOW_LARGE_OS_PAGES=0`
+
+The repeat checks that dropping the cold ATen output released at least its
+64 MiB arena extent and that current private commit plus the reserve fits.
+It charges the larger of the independent reserve and this process's cold
+peak increment. This profile preserves the stock BRG and reorder dispatch
+and checks the full dense output SHA-256 for the diagnostic geometry. The
+original default-allocator warm failure remains part of the evidence.
+Whole learned admission still requires the complete oneDNN, MKL, allocator,
+plain-retry and error/exit bounds.
 
 The mapped Native loader reduces serialized private
 ownership and still counts the file-backed span and both conservative
