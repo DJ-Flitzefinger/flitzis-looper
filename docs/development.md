@@ -1410,9 +1410,14 @@ kernel in the geometry fixture.
 Both mapped eager forwards release decoder skip and pre-transpose references
 after their last decoder call. The empty waveform decoder keeps the spectral
 pre-transpose view until that call returns. The extracted comparison returns
-the raw decoder views. The original forward releases the spectral output after
-CAC packing and passes sole ownership of the packed spectrum to the pinned
-inverse-spectrogram code. Its first pad replaces the packed backing. At the
+the raw decoder views. In the final spectral transposed convolution, the
+pinned oneDNN BRG path reorders into a separate 44,126,208-byte writable file
+mapping. The native dense conversion uses that backing with ACDB strides and
+then creates the stock contiguous ABCD return in separate storage. Each eager
+forward gets its own extent. The SlowTranspose2d backend and eager trace run
+their stock convolution paths. The original forward releases the spectral
+output after CAC packing and passes sole ownership of the packed spectrum to
+the pinned inverse-spectrogram code. Its first pad replaces the packed backing. At the
 second pad, the pinned stock constant-padding kernel writes its output into a
 44,586,240-byte writable file mapping. The first pad's storage ends before
 iSTFT. The mapped output keeps the stock complex64 shape and strides.
@@ -1427,11 +1432,12 @@ reads that backing with the
 decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
-Charge the mapped state, score, second pad, C2R input pack, C2R frames and
-windowed frames for physical residency and file cache. The stock overlap-add
-tensors still require private storage. The full learned reference requires a
-prospective commit and residency budget for both forwards, retained activations,
-vendor scratch, allocator behavior and retirement.
+Charge the mapped state, score, spectral transpose public return, second pad,
+C2R input pack, C2R frames and windowed frames for physical residency, file
+cache and disk. The stock overlap-add tensors still require private storage.
+The full learned reference requires a prospective commit and residency budget
+for both forwards, retained activations, vendor scratch, allocator behavior
+and retirement.
 
 The separated path uses the pinned TorchScript graph conversion with ONNX
 constant folding disabled. It

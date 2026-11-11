@@ -117,6 +117,15 @@ C2R_PACK_GEOMETRY = (C2R_PACK_SHAPE, (2049, 1), 0, C2R_INPUT_BYTES)
 ISTFT_FRAME_SHAPE = (8, 340, 4096)
 ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
 ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
+SPECTRAL_TRANSPOSE_SHAPE = (1, 16, 2052, 336)
+SPECTRAL_TRANSPOSE_BYTES = prod(SPECTRAL_TRANSPOSE_SHAPE) * 4
+SPECTRAL_TRANSPOSE_PUBLIC_STRIDES = (11031552, 1, 5376, 16)
+SPECTRAL_TRANSPOSE_DENSE = (
+    SPECTRAL_TRANSPOSE_SHAPE,
+    (11031552, 689472, 336, 1),
+    0,
+    SPECTRAL_TRANSPOSE_BYTES,
+)
 ONNX_PINS = {
     "onnx": (
         "1.23.2",
@@ -1338,6 +1347,172 @@ def reference_dispatch_mode(dispatch):
     return ReferenceDispatch(dispatch)
 
 
+def check_spectral_transpose_operands(torch, operands):
+    geometry = (
+        ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33030144),
+        ((48, 16, 8, 1), (128, 8, 1, 1), 0, 24576),
+        ((16,), (1,), 0, 64),
+    )
+    for value, expected in zip(operands, geometry, strict=True):
+        if (
+            type(value) not in {torch.Tensor, torch.nn.Parameter}
+            or (value.device.type, value.dtype, value.layout)
+            != ("cpu", torch.float32, torch.strided)
+            or value.is_neg()
+            or state_storage_geometry(value) != expected
+        ):
+            msg = "unexpected HTDemucs spectral transpose operands"
+            raise ValueError(msg)
+
+
+def native_spectral_transpose(torch, output: Path, func, args, cpu):
+    """Supply the first full allocation in the stock dense conversion."""
+    aten = torch.ops.aten
+    empty_options = {
+        "dtype": torch.float32,
+        "layout": torch.strided,
+        "device": torch.device("cpu"),
+    }
+    operand_ranges = tuple(
+        (value.data_ptr(), value.untyped_storage().nbytes()) for value in args[:3]
+    )
+    placeholder = False
+    public_backing = None
+    public_layout = False
+
+    def allocate():
+        owner = mapped_reference_scratch(output, SPECTRAL_TRANSPOSE_BYTES, "transpose-public")
+        mapped = torch.frombuffer(owner, dtype=torch.float32).view(SPECTRAL_TRANSPOSE_SHAPE)
+        address = mapped.data_ptr()
+        if (
+            address % STATE_ALIGNMENT
+            or mapped.untyped_storage().resizable()
+            or state_storage_geometry(mapped) != SPECTRAL_TRANSPOSE_DENSE
+            or any(
+                start < address + SPECTRAL_TRANSPOSE_BYTES and address < start + size
+                for start, size in operand_ranges
+            )
+        ):
+            msg = "unexpected HTDemucs spectral transpose mapped storage"
+            raise ValueError(msg)
+        return mapped
+
+    def dispatch(op, operands, options):
+        nonlocal placeholder, public_backing, public_layout
+        if op == aten.empty.memory_format and public_backing is None:
+            shape = tuple(operands[0])
+            if not placeholder and shape == (0,) and options == empty_options:
+                placeholder = True
+                return op(*operands, **options)
+            if not placeholder or shape != SPECTRAL_TRANSPOSE_SHAPE or options != empty_options:
+                msg = "unexpected HTDemucs spectral transpose allocation order"
+                raise ValueError(msg)
+            mapped = allocate()
+            public_backing = tensor_backing(mapped)
+            return mapped
+        if op == aten.as_strided_.default and public_backing is not None:
+            if (
+                public_layout
+                or tensor_backing(operands[0]) != public_backing
+                or (tuple(operands[1]), tuple(operands[2]))
+                != (SPECTRAL_TRANSPOSE_SHAPE, SPECTRAL_TRANSPOSE_PUBLIC_STRIDES)
+                or operands[3:] not in {(), (None,), (0,)}
+                or options
+            ):
+                msg = "unexpected HTDemucs spectral transpose public layout"
+                raise ValueError(msg)
+            public_layout = True
+        return op(*operands, **options)
+
+    with reference_dispatch_mode(dispatch):
+        dense = func.redispatch(cpu, *args)
+    if (
+        public_backing is None
+        or not public_layout
+        or state_storage_geometry(dense) != SPECTRAL_TRANSPOSE_DENSE
+        or dense.untyped_storage()._cdata == public_backing[1]
+        or abs(dense.data_ptr() - public_backing[2]) < SPECTRAL_TRANSPOSE_BYTES
+    ):
+        msg = "unexpected HTDemucs spectral transpose dense return"
+        raise ValueError(msg)
+    return dense
+
+
+@contextmanager
+def mapped_spectral_transpose(torch, conv, output: Path):
+    """Map the native public return at the final spectral decoder convolution."""
+    stride, padding, dilation, output_padding = (4, 1), (0, 0), (1, 1), (0, 0)
+    if (
+        type(conv) is not torch.nn.ConvTranspose2d
+        or "forward" in vars(conv)
+        or (conv.stride, conv.padding, conv.dilation, conv.output_padding)
+        != (stride, padding, dilation, output_padding)
+        or (conv.groups, conv.padding_mode) != (1, "zeros")
+    ):
+        msg = "unexpected HTDemucs final spectral transpose module"
+        raise ValueError(msg)
+    stock = conv.forward
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    transpose_args = (stride, padding, dilation, True, output_padding, 1)
+    wrapper_args = {
+        aten.conv_transpose2d.input: (stride,),
+        aten.convolution.default: transpose_args,
+    }
+    convolution_ops = {*wrapper_args, aten._convolution.default}
+
+    def forward(source):
+        check_reference_inference_dispatch(torch, "spectral transpose")
+        operands = (source, conv.weight, conv.bias)
+        backend = torch._C._select_conv_backend(*operands, *transpose_args)
+        if backend == torch._C._ConvBackend.SlowTranspose2d:
+            return stock(source)
+        # The pinned Python enum omits the name for MkldnnTranspose.
+        if backend.value != 9:
+            msg = "unexpected HTDemucs spectral transpose backend"
+            raise ValueError(msg)
+        check_spectral_transpose_operands(torch, operands)
+        used_native = False
+
+        def dispatch(op, args, options):
+            nonlocal used_native
+            wrapper = op in wrapper_args
+            expected = wrapper_args.get(op, transpose_args)
+            parameters = args[3:] if wrapper else args[3:-4]
+            if (
+                op not in convolution_ops
+                or len(args) != 3 + len(expected) + (0 if wrapper else 4)
+                or options
+                or tuple(value._cdata for value in args[:3])
+                != tuple(value._cdata for value in operands)
+                or tuple(tuple(value) if isinstance(value, list) else value for value in parameters)
+                != expected
+            ):
+                msg = "unexpected HTDemucs spectral transpose convolution"
+                raise ValueError(msg)
+            if wrapper:
+                with reference_dispatch_mode(dispatch):
+                    return op.redispatch(cpu, *args)
+            if used_native:
+                msg = "unexpected HTDemucs native spectral transpose convolution"
+                raise ValueError(msg)
+            used_native = True
+            return native_spectral_transpose(torch, output, op, args, cpu)
+
+        with reference_dispatch_mode(dispatch):
+            dense = stock(source)
+        if not used_native:
+            msg = "missing HTDemucs native spectral transpose"
+            raise ValueError(msg)
+        return dense
+
+    conv.forward = forward
+    try:
+        yield
+    finally:
+        del conv.forward
+
+
 def native_attention_with_score(torch, owner: memoryview, tokens: int, func, args):
     """Redispatch to the pinned native CPU MHA with one substituted allocation."""
     aten = torch.ops.aten
@@ -1947,6 +2122,9 @@ def capture_reference(
     with torch.inference_mode(), ExitStack() as reference:
         if mapped_state is not None:
             reference.enter_context(mapped_reference_attention(torch, model, output))
+            reference.enter_context(
+                mapped_spectral_transpose(torch, model.decoder[-1].conv_tr, output)
+            )
         artifacts, pcm = original_forward(
             torch, model, waveform, output, mapped_forward=mapped_forward
         )
