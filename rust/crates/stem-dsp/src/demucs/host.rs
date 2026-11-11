@@ -1,11 +1,14 @@
 //! Independent Demucs 4.0.1 host arithmetic, one batch item per call.
 //!
 //! This is an offline, synchronous foundation, not a productive separator.
-//! No neural model, random shifts, weighted bags, resampling or runtime is
-//! supplied. Borrowed input/readers, exclusive output and caller admission must
+//! No neural model, random generator, resampling or runtime is supplied.
+//! `apply` adds supplied-offset shifts and weighted bags. Borrowed input/readers,
+//! exclusive output and caller admission must
 //! survive every callback until return. Any error invalidates ALL output.
 
 use super::{BLOCK, Error, MAX_PAYLOAD_BYTES, RATE, checkpoint, finite, zeros};
+
+pub mod apply;
 
 /// Mathematical mean and correction-one standard deviation, rounded to f32
 /// before elementwise arithmetic. The independent f64 two-pass reduction is
@@ -404,6 +407,29 @@ impl TrackWorkspace {
             return Err(Error::Geometry);
         }
         finite(source, cancelled)?;
+        self.run_view(source, 0, t.frames, output, model, cancelled)
+    }
+
+    // Nested TensorChunk keeps the entire backing tensor, while its logical
+    // extent and absolute origin change. Never slice away neighboring context.
+    fn run_view(
+        &mut self,
+        source: &[f32],
+        origin: usize,
+        frames: usize,
+        output: &mut [f32],
+        model: &mut Predictor<'_>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), Error> {
+        let t = self.track;
+        let total = source.len() / t.channels;
+        if frames == 0
+            || frames > t.frames
+            || origin.checked_add(frames).is_none_or(|v| v > total)
+            || output.len() != frames * t.channels * t.sources
+        {
+            return Err(Error::Geometry);
+        }
         for block in output.chunks_mut(BLOCK) {
             checkpoint(cancelled)?;
             block.fill(0.0);
@@ -412,15 +438,15 @@ impl TrackWorkspace {
             checkpoint(cancelled)?;
             block.fill(0.0);
         }
-        for offset in (0..t.frames).step_by(t.stride) {
+        for offset in (0..frames).step_by(t.stride) {
             checkpoint(cancelled)?;
             let chunk = Chunk {
-                offset,
-                frames: t.segment.min(t.frames - offset),
+                offset: origin + offset,
+                frames: t.segment.min(frames - offset),
                 valid_frames: t.valid_frames,
                 training_frames: t.training_frames,
             };
-            chunk.prepare_checked(source, t.frames, t.channels, &mut self.input, cancelled)?;
+            chunk.prepare_checked(source, total, t.channels, &mut self.input, cancelled)?;
             // A successful callback that leaves an unwritten scalar must fail.
             for block in self.prediction.chunks_mut(BLOCK) {
                 checkpoint(cancelled)?;
@@ -436,7 +462,7 @@ impl TrackWorkspace {
                 for start in (0..chunk.frames).step_by(BLOCK) {
                     checkpoint(cancelled)?;
                     for i in start..(start + BLOCK).min(chunk.frames) {
-                        output[lane * t.frames + offset + i] +=
+                        output[lane * frames + offset + i] +=
                             self.weight[i] * self.prediction[lane * t.training_frames + trim + i];
                     }
                 }
@@ -448,7 +474,7 @@ impl TrackWorkspace {
                 }
             }
         }
-        for lane in output.chunks_mut(t.frames) {
+        for lane in output.chunks_mut(frames) {
             for (start, block) in lane.chunks_mut(BLOCK).enumerate() {
                 checkpoint(cancelled)?;
                 for (i, x) in block.iter_mut().enumerate() {

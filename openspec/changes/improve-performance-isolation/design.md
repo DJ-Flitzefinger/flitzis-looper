@@ -7948,3 +7948,42 @@ learned spectral/waveform composition and exact affected numerical compatibility
 remain open, as do all original CPU/CUDA fault-to-freshCPU, producer, platform,
 installer/recovery, quality and footprint gates and every FAIL/UNKNOWN.
 Torch remains active with zero installed savings; finite BS WHOLE stays open.
+
+
+### Supplied-offset Demucs shifts, no-split and weighted bags
+
+The callable `demucs::host::apply::Workspace` composes model-major bags, each
+model's independent supplied shifts, each shifted split and the existing model
+boundary. Shift coordinates use the original whole padded source (L+44100),
+inclusive offsets 0..22050, logical length L+22050-offset, and crop22050-offset.
+Nested splits retain the entire backing context. Empty offsets mean shifts=0.
+No-split uses one fixed, independently established model valid/training boundary;
+it refuses a logical extent beyond valid length. Arbitrary dynamic valid_length
+methods and original Python random generation/dispatch are not supplied.
+
+Shift sums and division retain chronological f32 arithmetic. Every model has
+separate segment/training lengths and offsets. Bags require identical ordered
+source names, rate and channels; per-source weights multiply model estimates
+before chronological bag addition. Totals accumulate in original Python-f64
+order and convert to f32 for final tensor-style division. Nonfinite weights or
+results and zero/nonrepresentable denominators are refused. Negative finite
+weights with valid nonzero totals retain original arithmetic.
+
+Preparation checks all simultaneous source/output, padded source, shifted result,
+model estimate, per-model envelopes/triangles/training buffers and numeric
+controls against the logical512MiB limit before allocating workspaces. Runs
+allocate no vectors. This is not learned/runtime/allocator/process WHOLE admission.
+Immutable inputs/model controls/readers, exclusive output and actual admission
+survive synchronous callbacks; first error, unwritten output, nonfinite or final
+cancellation invalidates the complete run. Reuse clears sums.
+
+`demucs_apply` and `demucs_apply_trial_reference.py` compare complete original
+apply_model outputs and callback order with deterministic nonneural callbacks
+and lexically supplied original random draws. They establish host arithmetic,
+not a learned model, random host, device transition, cancellation runtime or
+Torch replacement. Independent High-DC normalization parity remains FAIL; no
+unchanged statistical/FFT replay is required. Full normalization, resampling,
+learned branches, producer/runtime, CPU/CUDA/fault-to-freshCPU, all platforms,
+distribution/recovery, footprint and quality remain open. Torch stays active
+with zero installed savings; BS finite successful WHOLE and every retained
+FAIL/UNKNOWN remain unchanged.

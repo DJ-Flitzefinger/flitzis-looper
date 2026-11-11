@@ -1190,3 +1190,5 @@ remaining plan into each successor; report actual hard service limits honestly.
       compatibility as affected, random shifts, weighted source/model bags,
       resampling, productive routing and all original runtime/provider/platform/
       quality/distribution/footprint gates. Torch remains active; savings zero.
+
+- [x] Add callable supplied-offset Demucs shifts, no-split and weighted per-source bags in original model/shift/split order, with full context, bounded reusable host buffers and original nonneural arithmetic controls. Random generation, learned/runtime/device parity, independent High-DC normalization and full Native cutover remain open.
