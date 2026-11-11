@@ -1345,9 +1345,13 @@ and 336 spectral steps. The input tensors are float32 `[1,2,2,2048,336]` and
 `[1,2,343980]`. The outputs are `[1,4,2,2,2048,336]` and `[1,4,2,343980]`,
 ordered drums, bass, other, vocals with real then imaginary parts. The
 `capture_reference` captures the normalized inputs and decoder outputs with
-hooks on the stock forward, checks the extracted core against those tensors,
-and writes those four tensors and the complete original PCM. It uses stock
-CPU dispatch with one intra-op and one inter-op thread in the trial child.
+hooks on the stock forward. It writes and hashes those four tensors and the
+complete original PCM, then releases the original mix, raw decoder backings and
+PCM before running the extracted core. It compares the new decoder outputs
+against the persisted originals in C-order float32 chunks of up to 256 KiB.
+Each comparison checks the extent and digest of the same bytes it reads.
+Numeric equality allows either sign of zero. The trial child uses stock CPU
+dispatch with one intra-op and one inter-op thread.
 `trace_core` reloads the same pinned model in a fresh child and verifies
 both captured normalized inputs against their recorded extents and digests.
 Only this child disables the MHA fastpath for legacy export. It writes a
@@ -1375,7 +1379,13 @@ pinned TorchScript graph conversion with ONNX constant folding disabled. It
 serializes the graph with the learned parameters as named inputs, then writes
 each parameter to a bounded raw bank with its name, shape, dtype and SHA-256.
 Using the binding's deferred export flag would instead create a Python bytes
-object for every parameter.
+object for every parameter. Both graph-wide shape sweeps receive tensor type
+metadata without the initializer values. Per-symbolic shape inference stays
+enabled. The trace precomputes the pinned transformer's sinusoidal position data
+with the original source functions. It stores the two spectral axes separately
+and expands and concatenates them in the graph. The two axes and the temporal
+table add 3,104,768 bytes to the initializer bank and use the same custody as the
+learned state.
 
 `assemble_trace` runs in a separate ONNX-only child. It matches the parameter
 manifest to every nonpublic input, checks each tensor and the whole bank as it
@@ -1412,8 +1422,9 @@ prospective allowance for each child, covering startup through its last reader.
 | Phase | Identified logical owners | Remaining allowance work |
 | --- | --- | --- |
 | Original and trace checkpoint load | 84,141,911-byte immutable snapshot and 533 half storages totaling 83,968,912. The half storages then overlap 167,937,824 bytes of initialized FP32 state during strict load. | ZIP and pickle staging, conversion and initialization scratch, and allocator retention after snapshot release. |
-| Original reference | 2,751,840-byte mix, 13,761,888 bytes of normalized captures and 92,890,560 bytes in eight skips at transformer entry. The largest expected fused CPU score is 231,211,008 bytes with in-place softmax. At that site also charge 16,515,072 bytes packed Q/K/V, two 8,257,536-byte activation pairs and a 5,505,024-byte normalized input. The five files total 79,816,800 bytes. Cropped decoder captures can retain 44,126,208 and 11,007,488 bytes of backing. The exact extracted-core comparison adds another decoder output pair while the references are live. | Verify actual stock dispatch, STFT/CaC, position buffers, skip and output lifetimes, operator scratch, finite masks and comparison failure costs. The identified first spectral self-attention owners alone conditionally sum to 547,088,288 bytes including weights. |
+| Original reference | 2,751,840-byte mix, 13,761,888 bytes of normalized captures and 92,890,560 bytes in eight skips at transformer entry. The largest expected fused CPU score is 231,211,008 bytes with in-place softmax. At that site also charge 16,515,072 bytes packed Q/K/V, two 8,257,536-byte activation pairs and a 5,505,024-byte normalized input. The five files total 79,816,800 bytes. Cropped decoder captures can retain 44,126,208 and 11,007,488 bytes of backing. The persisted comparison removes 68,892,896 bytes of original backings from the second forward's live owners. | The first spectral self-attention subtotal remains conditional at 547,088,288 bytes including weights. Account for stock oneDNN descriptor scratch and blocked reorders, MKL FFT and BLAS scratch, caches, and allocation and exit retention. |
 | Legacy trace | 167,937,824-byte model state, 13,761,888 bytes of captured inputs, and 55,047,552 bytes of traced decoder outputs. C++ holds a ModelProto, a serialized string and Python bytes at the export binding. Torch subsequently parses its Python bytes into an ONNX ModelProto while the JIT graph, parameter table, model and outputs are still live. | Bound actual flash/math dispatch, JIT and intermediate graph passes, tensor copies, protobuf and allocation. The 192 MiB accepted artifact limit applies after Torch serialization. |
+| Separated CPU trace | The pinned model state and 3,104,768 bytes of position initializers are carried as named inputs. The two graph-wide shape sweeps cannot serialize those parameter values into temporary node graphs. | Budget Flash non-tile owners, convolution scratch and retention, literal constants, per-symbolic inference, other JIT passes and skeleton serialization. The accepted skeleton extent is checked after export. |
 | Rewrite | At most 201,326,592 input bytes, the parsed inline graph, old/new node storage during replacement, and a new serialized owner during write. | Bound protobuf memory, replacement growth before serialization, scratch and retained allocation. |
 | Final check | At most 201,326,592 hash-verified bytes, a Python protobuf for inline/signature/provenance validation, then a parsed C++ graph with a full shape-inference copy. The native parser reads the same immutable byte buffer. | Bound C++ parser, inference and allocator retention across these operations. |
 | Native load and run | Inline graph bytes, FP32 initializer storage and provider copies, normalized tensors, skips, outputs, Scan layouts and context. Charge up to 11,010,048 bytes for two score-tile owners in a Scan body. At the graph extent ceiling, the file and two FP32-sized owners alone total 537,202,240 bytes. | Establish actual graph/initializer/provider ownership, allocator and operator scratch, IOBinding, profiler, output and synchronous reader lifetime. |
@@ -1471,9 +1482,13 @@ chains in the final artifact and checks the same artifact's inline weights,
 fixed signature, provenance and full ONNX validity. The producer still needs a
 compatible, independently admitted development-time Torch export. The CUDA
 wheel failed to load a dependency within the previous 512 MiB producer Job.
-The known original-reference and weighted-serialization owners require further
-producer work. The mapped Native loader reduces serialized private ownership
-and still counts the file-backed span and both conservative initializer owners.
+The stock reference and separated CPU trace still require independent
+whole-phase budgets. The mapped Native loader reduces serialized private
+ownership and still counts the file-backed span and both conservative
+initializer owners. The compact position buffers require 6,209,536 bytes
+for two additional initializer owners during load and 3,104,768 bytes for
+one during run, in addition to the serialized graph extent and operator
+workspace.
 The dense trial retains its pre-bootstrap refusal.
 
 #### Exact inline graph load control

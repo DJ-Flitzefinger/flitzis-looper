@@ -9,7 +9,7 @@ import platform
 import sys
 import sysconfig
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module, metadata, util
@@ -295,16 +295,20 @@ def check_checkpoint(stream: BinaryIO) -> None:
     stream.seek(0)
 
 
-def core_code(source: bytes) -> Any:
-    """Extract the learned statements between normalization and raw restoration."""
+def forward_definition(source: bytes, class_name: str) -> ast.FunctionDef:
     model = next(
         node
         for node in ast.parse(source).body
-        if isinstance(node, ast.ClassDef) and node.name == "HTDemucs"
+        if isinstance(node, ast.ClassDef) and node.name == class_name
     )
-    forward = next(
+    return next(
         node for node in model.body if isinstance(node, ast.FunctionDef) and node.name == "forward"
     )
+
+
+def core_code(source: bytes) -> Any:
+    """Extract the learned statements between normalization and raw restoration."""
+    forward = forward_definition(source, "HTDemucs")
     start = next(i for i, node in enumerate(forward.body) if ast.unparse(node) == "saved = []")
     stop = next(
         i
@@ -717,32 +721,86 @@ def read_tensor(torch, path: Path, artifact: Artifact, shape: tuple[int, ...]):
     if artifact.size != extent:
         msg = f"unexpected HTDemucs tensor extent: {path.name}"
         raise ValueError(msg)
-    raw = read_artifact(path, artifact, extent)
     numpy = import_module("numpy")
-    array = numpy.frombuffer(raw, dtype="<f4").reshape(shape).copy()
-    del raw
-    if not numpy.isfinite(array).all():
-        msg = f"nonfinite HTDemucs tensor: {path.name}"
-        raise ValueError(msg)
+    array = numpy.empty(shape, dtype="<f4")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream, memoryview(array).cast("B") as raw:
+        for start in range(0, extent, STREAM_CHUNK_BYTES):
+            chunk = raw[start : start + STREAM_CHUNK_BYTES]
+            if stream.readinto(chunk) != chunk.nbytes:
+                msg = f"truncated HTDemucs tensor: {path.name}"
+                raise ValueError(msg)
+            digest.update(chunk)
+            if not numpy.isfinite(numpy.frombuffer(chunk, dtype="<f4")).all():
+                msg = f"nonfinite HTDemucs tensor: {path.name}"
+                raise ValueError(msg)
+        if stream.read(1) or digest.hexdigest() != artifact.sha256:
+            msg = f"HTDemucs tensor differs: {path.name}"
+            raise ValueError(msg)
     return torch.from_numpy(array)
 
 
-def write_tensor(torch, path: Path, value, shape: tuple[int, ...]) -> Artifact:
-    if (
-        tuple(value.shape) != shape
-        or value.dtype != torch.float32
-        or not torch.isfinite(value).all()
-    ):
+def tensor_blocks(torch, path: Path, value, shape: tuple[int, ...]):
+    """Iterate raw little-endian float32 blocks, including strided decoder views."""
+    if tuple(value.shape) != shape or value.dtype != torch.float32:
         msg = f"invalid original HTDemucs tensor: {path.name}"
         raise ValueError(msg)
+    numpy = import_module("numpy")
+    with numpy.nditer(
+        value.numpy(),
+        flags=["external_loop", "buffered"],
+        op_flags=["readonly", "contig"],
+        op_dtypes=numpy.dtype("<f4"),
+        order="C",
+        buffersize=STREAM_CHUNK_BYTES // 4,
+    ) as blocks:
+        for block in blocks:
+            if not numpy.isfinite(block).all():
+                msg = f"nonfinite original HTDemucs tensor: {path.name}"
+                raise ValueError(msg)
+            yield block
+
+
+def write_tensor(torch, path: Path, value, shape: tuple[int, ...]) -> Artifact:
     extent = prod(shape) * 4
+    digest = hashlib.sha256()
     with path.open("xb") as stream:
-        value.numpy().astype("<f4", copy=False).tofile(stream)
-    artifact = describe_artifact(path, extent)
-    if artifact.size != extent:
-        msg = f"incomplete original HTDemucs tensor: {path.name}"
+        for block in tensor_blocks(torch, path, value, shape):
+            with memoryview(block).cast("B") as raw:
+                if stream.write(raw) != raw.nbytes:
+                    msg = f"incomplete original HTDemucs tensor write: {path.name}"
+                    raise OSError(msg)
+                digest.update(raw)
+        if stream.tell() != extent:
+            msg = f"incomplete original HTDemucs tensor: {path.name}"
+            raise ValueError(msg)
+    return Artifact(extent, digest.hexdigest())
+
+
+def check_reference_tensor(torch, path: Path, artifact: Artifact, value, shape: tuple[int, ...]):
+    """Check numeric equality with the exact persisted original decoder bytes."""
+    if artifact.size != prod(shape) * 4:
+        msg = f"unexpected HTDemucs decoder reference extent: {path.name}"
         raise ValueError(msg)
-    return artifact
+    numpy = import_module("numpy")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in tensor_blocks(torch, path, value, shape):
+            raw = stream.read(block.nbytes)
+            if len(raw) != block.nbytes:
+                msg = f"truncated HTDemucs decoder reference: {path.name}"
+                raise ValueError(msg)
+            if not numpy.array_equal(block, numpy.frombuffer(raw, dtype="<f4")):
+                msg = f"HTDemucs extracted core differs: {path.name}"
+                raise ValueError(msg)
+            digest.update(raw)
+        if (
+            stream.tell() != artifact.size
+            or stream.read(1)
+            or digest.hexdigest() != artifact.sha256
+        ):
+            msg = f"HTDemucs decoder reference differs: {path.name}"
+            raise ValueError(msg)
 
 
 def core_wrapper(torch, model, source: bytes, globals_):
@@ -785,14 +843,17 @@ def capture_reference(
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
     with torch.inference_mode():
         branches, pcm = original_forward(model, waveform)
-        inputs = (branches["spectral"], branches["waveform"])
-        for name, value in zip(tuple(SHAPES)[2:], wrapper(*inputs), strict=True):
-            torch.testing.assert_close(value, branches[name], atol=0, rtol=0)
         artifacts = {
             name: write_tensor(torch, output / f"{name}.f32", branches[name], shape)
             for name, shape in SHAPES.items()
         }
         original_pcm = write_tensor(torch, output / "original_pcm.f32", pcm, PCM_SHAPE)
+        inputs = (branches["spectral"], branches["waveform"])
+        del branches, pcm, waveform
+        for name, value in zip(tuple(SHAPES)[2:], wrapper(*inputs), strict=True):
+            check_reference_tensor(
+                torch, output / f"{name}.f32", artifacts[name], value, SHAPES[name]
+            )
     if source_files() != sources:
         msg = "HTDemucs source closure changed during reference capture"
         raise ValueError(msg)
@@ -846,6 +907,113 @@ def trace_core(
     return TraceArtifact(describe_artifact(output, MAX_GRAPH_BYTES), reference)
 
 
+@contextmanager
+def trace_position_buffers(torch, transformer, source: bytes):
+    """Use source-generated position data without tracing its construction."""
+    upstream = import_module("demucs.transformer")
+    if (
+        type(transformer) is not upstream.CrossTransformerEncoder
+        or "forward" in vars(transformer)
+        or (
+            transformer.emb,
+            transformer.sin_random_shift,
+            transformer.max_period,
+            transformer.weight_pos_embed,
+        )
+        != ("sin", 0, 10000, 1)
+        or torch.get_default_dtype() != torch.float32
+        or torch.get_default_device().type != "cpu"
+    ):
+        msg = "unexpected HTDemucs trace position embedding configuration"
+        raise ValueError(msg)
+
+    channels = WIDTH * HEADS
+    height = SPECTRAL_TOKENS // SHAPES["spectral"][-1]
+    width = SHAPES["spectral"][-1]
+    spectral_shape = (1, channels, height, width)
+    waveform_shape = (1, channels, TIME_TOKENS)
+    axis_shape = (1, channels // 2, height, width)
+    replacements = {
+        "pos_emb_2d = create_2d_sin_embedding(C, Fr, T1, x.device, self.max_period)": (
+            f"torch.cat((self.trace_positions_width.expand{axis_shape}, "
+            f"self.trace_positions_height.expand{axis_shape}), dim=1)"
+        ),
+        "pos_emb = self._get_pos_embedding(T2, B, C, x.device)": "self.trace_positions_time",
+    }
+    forward = forward_definition(source, "CrossTransformerEncoder")
+    for statement in forward.body:
+        if isinstance(statement, ast.Assign):
+            expression = replacements.pop(ast.unparse(statement), None)
+            if expression is not None:
+                statement.value = ast.parse(expression, mode="eval").body
+    if replacements:
+        msg = "HTDemucs trace position embedding source differs"
+        raise ValueError(msg)
+    tree = ast.fix_missing_locations(ast.Module(body=[forward], type_ignores=[]))
+    namespace = {}
+    exec(
+        compile(tree, "demucs/transformer.py (trace positions)", "exec"), vars(upstream), namespace
+    )
+
+    def check_geometry(_module, args):
+        for value, shape in zip(args, (spectral_shape, waveform_shape), strict=True):
+            if (
+                tuple(value.shape) != shape
+                or value.dtype != torch.float32
+                or value.device.type != "cpu"
+            ):
+                msg = "unexpected HTDemucs trace transformer input"
+                raise ValueError(msg)
+
+    # The upstream spectral function repeats each channel half along one axis.
+    # Clone the two lanes so the initializer bank does not retain the full table.
+    spectral = upstream.create_2d_sin_embedding(channels, height, width, "cpu", 10000)
+    positions = {
+        "trace_positions_width": spectral[:, : channels // 2, :1, :].clone(
+            memory_format=torch.contiguous_format
+        ),
+        "trace_positions_height": spectral[:, channels // 2 :, :, :1].clone(
+            memory_format=torch.contiguous_format
+        ),
+    }
+    del spectral
+    positions["trace_positions_time"] = upstream.create_sin_embedding(
+        TIME_TOKENS, channels, device="cpu", max_period=10000
+    )
+    with ExitStack() as cleanup:
+        for name, value in positions.items():
+            transformer.register_buffer(name, value)
+            cleanup.callback(delattr, transformer, name)
+        cleanup.enter_context(transformer.register_forward_pre_hook(check_geometry))
+        transformer.forward = namespace["forward"].__get__(transformer)
+        cleanup.callback(delattr, transformer, "forward")
+        yield
+
+
+@contextmanager
+def infer_shapes_without_initializers(torch):
+    """Keep geometry inference while withholding learned values from its graph sweeps."""
+    infer = torch._C._jit_pass_onnx_graph_shape_type_inference
+    sweeps = 0
+
+    def infer_graph(graph, _parameters, opset):
+        nonlocal sweeps
+        sweeps += 1
+        # Input TensorTypes already describe the parameters' shapes and dtypes.
+        # Seeding ConstantValueMap with their values can serialize them into
+        # per-node inference models or evaluate weight-dependent expressions.
+        infer(graph, {}, opset)
+
+    torch._C._jit_pass_onnx_graph_shape_type_inference = infer_graph
+    try:
+        yield
+        if sweeps != 2:
+            msg = "unexpected number of HTDemucs legacy shape sweeps"
+            raise ValueError(msg)
+    finally:
+        torch._C._jit_pass_onnx_graph_shape_type_inference = infer
+
+
 def export_skeleton(torch, wrapper, inputs):
     """Use the pinned legacy lowering while leaving weights as named graph inputs."""
     utils = import_module("torch.onnx._internal.torchscript_exporter.utils")
@@ -854,6 +1022,13 @@ def export_skeleton(torch, wrapper, inputs):
     if settings.in_onnx_export:
         msg = "nested HTDemucs legacy graph export"
         raise ValueError(msg)
+    previous = (
+        settings.in_onnx_export,
+        settings.export_onnx_opset_version,
+        settings.operator_export_type,
+        settings.onnx_shape_inference,
+        settings.autograd_inlining,
+    )
     settings.in_onnx_export = True
     settings.export_onnx_opset_version = 18
     settings.operator_export_type = operator
@@ -862,7 +1037,10 @@ def export_skeleton(torch, wrapper, inputs):
     try:
         utils._trigger_symbolic_function_registration()
         utils._setup_trace_module_map(wrapper, export_modules_as_functions=False)
-        with utils.exporter_context(wrapper, torch._C._onnx.TrainingMode.EVAL, verbose=False):
+        with (
+            utils.exporter_context(wrapper, torch._C._onnx.TrainingMode.EVAL, verbose=False),
+            infer_shapes_without_initializers(torch),
+        ):
             graph, weights, _ = utils._model_to_graph(
                 wrapper,
                 inputs,
@@ -883,20 +1061,18 @@ def export_skeleton(torch, wrapper, inputs):
             torch._C._jit_pass_onnx_assign_scoped_names_for_node_and_value(graph)
             # The binding converts every deferred tensor to bytes if deferral
             # is enabled. An empty initializer map avoids that full owner.
-            defer_weights = keep_initializers_as_inputs = False
-            strip_doc_strings = add_node_names = True
             proto, exported, external, _ = graph._export_onnx(
-                {},
-                18,
-                {},
-                defer_weights,
-                operator,
-                strip_doc_strings,
-                keep_initializers_as_inputs,
-                {MARKER_DOMAIN: 1},
-                add_node_names,
-                "",
-                {},
+                initializers={},
+                onnx_opset_version=18,
+                dynamic_axes={},
+                defer_weight_export=False,
+                operator_export_type=operator,
+                strip_doc_string=True,
+                keep_initializers_as_inputs=False,
+                custom_opsets={MARKER_DOMAIN: 1},
+                add_node_names=True,
+                onnx_file_path="",
+                node_attr_to_name={},
             )
         names = [item.debugName() for item in graph.inputs()][2:]
         if exported or external or len(names) != len(weights) or set(names) != weights.keys():
@@ -904,7 +1080,13 @@ def export_skeleton(torch, wrapper, inputs):
             raise ValueError(msg)
         return proto, {name: weights[name] for name in names}
     finally:
-        settings.in_onnx_export = False
+        (
+            settings.in_onnx_export,
+            settings.export_onnx_opset_version,
+            settings.operator_export_type,
+            settings.onnx_shape_inference,
+            settings.autograd_inlining,
+        ) = previous
         utils._reset_trace_module_map()
 
 
@@ -965,6 +1147,7 @@ def trace_core_separated(
             torch.inference_mode(),
             mark_attention(torch),
             attention.sdpa_kernel(attention.SDPBackend.FLASH_ATTENTION),
+            trace_position_buffers(torch, model.crosstransformer, sources["demucs/transformer.py"]),
         ):
             proto, weights = export_skeleton(torch, wrapper, inputs)
     finally:
