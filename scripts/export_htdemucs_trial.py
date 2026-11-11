@@ -21,6 +21,8 @@ from importlib import import_module, metadata, util
 from itertools import pairwise
 from math import prod
 from pathlib import Path
+from shutil import disk_usage
+from tempfile import TemporaryFile
 from threading import Lock
 from types import MethodType
 from typing import TYPE_CHECKING, Any, BinaryIO
@@ -50,6 +52,18 @@ STATE_RUNTIME_PINS = {
     ),
     "torchaudio/lib/libtorchaudio.pyd": (
         "a8d2dd5c13d41f39a3243bdcec39006e65b4f84de3cb3aa0ecd88fd672983f87"
+    ),
+}
+ATTENTION_RUNTIME_PINS = {
+    "torch._ops": "aed883c8a88051df15c7e8793f8dd1ff875e7b065c0f3ffede80113744e4104e",
+    "torch.nn.modules.activation": (
+        "3268980df05b7eeb49d2703f8723361823aebe6fc79e8b16c78afdacb0c38b1e"
+    ),
+    "torch.nn.modules.transformer": (
+        "3d5b587174a642611bf84e45a879bfaf7e19ef4a5e4607a0ea89d59b817d4d79"
+    ),
+    "torch.utils._python_dispatch": (
+        "b1d3fe4d4e0ff43ac4f8426d1b14b4b481a475d17aad073b3334f68cf58d6c5b"
     ),
 }
 CONTRACT = "htdemucs-4.0.1-955717e8-stereo-b1-v1"
@@ -812,6 +826,195 @@ def mapped_reference_forward(model, module, source: bytes) -> MethodType:
     return MethodType(namespace["forward"], model)
 
 
+@contextmanager
+def mapped_attention_score(output: Path, tokens: int):
+    """Own one reusable, writable score view for the exact native self-attention path."""
+    shape = (HEADS, tokens, tokens)
+    size = prod(shape) * 4
+    if disk_usage(output).free < size:
+        msg = "insufficient disk space for the HTDemucs attention score"
+        raise OSError(msg)
+    # On Windows TemporaryFile creates a unique delete-on-close file. mmap
+    # duplicates the same handle, and the exported buffer keeps its view alive
+    # even if a native operator fails with a tensor retained by a traceback.
+    with TemporaryFile(dir=output, prefix=".htdemucs-score-") as stream:
+        stream.truncate(size)
+        mapping = mmap.mmap(stream.fileno(), size, access=mmap.ACCESS_WRITE)
+    yield memoryview(mapping)
+
+
+def attention_score_tensor(torch, owner: memoryview, shape: tuple[int, int, int]):
+    score = torch.frombuffer(owner, dtype=torch.float32).view(shape)
+    if score.data_ptr() % STATE_ALIGNMENT or score.untyped_storage().nbytes() != len(owner):
+        msg = "unexpected mapped HTDemucs attention score storage"
+        raise ValueError(msg)
+    return score
+
+
+def attention_dispatch_mode(dispatch):
+    mode = import_module("torch.utils._python_dispatch").TorchDispatchMode
+
+    class ReferenceDispatch(mode):
+        def __init__(self, handler):
+            super().__init__()
+            self.handler = handler
+
+        @classmethod
+        def _should_skip_dynamo(cls):
+            # This scope is used only by eager inference.
+            return False
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):  # noqa: PLW3201
+            return self.handler(func, args, kwargs or {})
+
+    return ReferenceDispatch(dispatch)
+
+
+def native_attention_with_score(torch, owner: memoryview, tokens: int, func, args):
+    """Redispatch to the pinned native CPU MHA with one substituted allocation."""
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    packed = ((HEADS, tokens, WIDTH), (tokens * WIDTH, WIDTH, 1))
+    transposed = ((HEADS, WIDTH, tokens), (tokens * WIDTH, 1, WIDTH))
+    score = attention_score_tensor(torch, owner, (HEADS, tokens, tokens))
+    storage = score.untyped_storage()._cdata
+    ptr = score.data_ptr()
+    q_ptr = 0
+    step = 0
+
+    def aliases_score(tensor):
+        return tensor.untyped_storage()._cdata == storage and tensor.data_ptr() == ptr
+
+    def dispatch(op, operands, options):
+        nonlocal step, score, q_ptr
+        if op == aten.bmm.default:
+            q, k = operands
+            if (
+                step != 0
+                or (q.shape, q.stride()) != packed
+                or (k.shape, k.stride()) != transposed
+                or (q.dtype, k.dtype) != (torch.float32, torch.float32)
+            ):
+                msg = "unexpected HTDemucs score operands"
+                raise ValueError(msg)
+            q_ptr = q.data_ptr()
+            step = 1
+            return aten.bmm.out(q, k, out=score)
+        if op == aten._softmax.out:
+            logits, dim, half_to_float = operands
+            if (
+                (step, dim, half_to_float) != (1, 3, False)
+                or logits.shape != (1, HEADS, tokens, tokens)
+                or not logits.is_contiguous()
+                or not aliases_score(logits)
+                or not aliases_score(options["out"])
+            ):
+                msg = "unexpected HTDemucs in-place score softmax"
+                raise ValueError(msg)
+            step = 2
+        if op == aten.bmm.out:
+            probabilities, value = operands
+            if (
+                step != 2
+                or not aliases_score(probabilities)
+                or (value.shape, value.stride()) != packed
+                or options["out"].data_ptr() != q_ptr
+            ):
+                msg = "unexpected HTDemucs attention value write"
+                raise ValueError(msg)
+            step = 3
+            score = None  # The native score view owns the storage through this value BMM.
+        return op(*operands, **options)
+
+    # A fresh inner mode sees the C++ kernel's ATen calls. Redispatch only the
+    # outer call to CPU so it does not enter the Python fallback again.
+    with attention_dispatch_mode(dispatch):
+        result = func.redispatch(cpu, *args)
+    if step != 3 or result[1] is not None:
+        msg = "incomplete HTDemucs mapped score lifecycle"
+        raise ValueError(msg)
+    return result
+
+
+def mapped_self_attention(torch, owner: memoryview, tokens: int):
+    """Keep the stock MHA entry point and intercept only its native score."""
+    aten = torch.ops.aten
+    stock = torch.nn.MultiheadAttention.forward
+
+    def forward(attention, query, key, value, **options):
+        if (
+            query is not key
+            or key is not value
+            or query.shape != (1, tokens, HEADS * WIDTH)
+            or (query.device.type, query.dtype) != ("cpu", torch.float32)
+        ):
+            msg = "unexpected HTDemucs self-attention input"
+            raise ValueError(msg)
+        if (
+            attention.training
+            or not attention.batch_first
+            or options.get("need_weights") is not False
+            or not torch.is_inference_mode_enabled()
+            or not torch.backends.mha.get_fastpath_enabled()
+        ):
+            msg = "expected pinned CPU inference HTDemucs self-attention"
+            raise ValueError(msg)
+        if (
+            torch.is_autocast_enabled("cpu")
+            or torch._C._len_torch_dispatch_stack()
+            or options.get("attn_mask") is not None
+            or options.get("key_padding_mask") is not None
+            or options.get("is_causal")
+        ):
+            msg = "unexpected HTDemucs self-attention dispatch state"
+            raise ValueError(msg)
+        seen = False
+
+        def dispatch(func, args, kwargs):
+            nonlocal seen
+            # The pinned unmasked Python fast path reaches the native operator
+            # before any other ATen op. Refuse fallback before projections/SDPA.
+            if func != aten._native_multi_head_attention.default:
+                msg = "HTDemucs self-attention left the native path"
+                raise ValueError(msg)
+            if (
+                seen
+                or kwargs
+                or args[3:5] != (HEADS * WIDTH, HEADS)
+                or args[9:11] != (None, False)
+                or args[12:] not in {(), (None,)}
+            ):
+                msg = "unexpected HTDemucs native self-attention options"
+                raise ValueError(msg)
+            seen = True
+            return native_attention_with_score(torch, owner, tokens, func, args)
+
+        with attention_dispatch_mode(dispatch):
+            result = stock(attention, query, key, value, **options)
+        if not seen:
+            msg = "missing native HTDemucs self-attention"
+            raise ValueError(msg)
+        return result
+
+    return forward
+
+
+@contextmanager
+def mapped_reference_attention(torch, model, output: Path):
+    """Use the same scratch extent for the three spectral sites in both forwards."""
+    attention_type = torch.nn.MultiheadAttention
+    layers = [model.crosstransformer.layers[index].self_attn for index in (0, 2, 4)]
+    if any(type(layer) is not attention_type or "forward" in vars(layer) for layer in layers):
+        msg = "unexpected HTDemucs spectral self-attention modules"
+        raise ValueError(msg)
+    with mapped_attention_score(output, SPECTRAL_TOKENS) as owner, ExitStack() as restore:
+        forward = mapped_self_attention(torch, owner, SPECTRAL_TOKENS)
+        for layer in layers:
+            layer.forward = MethodType(forward, layer)
+            restore.callback(delattr, layer, "forward")
+        yield
+
+
 def original_forward(torch, model, mix, output: Path, *, mapped_forward: MethodType | None = None):
     """Write the four stock hook tensors at their source lifetime boundary."""
     artifacts = {}
@@ -1244,6 +1447,14 @@ def capture_reference(
     output.mkdir(exist_ok=False)
     torch = torch_producer(cpu_overlay)
     module = import_module("demucs.htdemucs")
+    if mapped_state is not None and cpu_overlay is not None:
+        root = cpu_overlay.resolve(strict=True)
+        for name, digest in ATTENTION_RUNTIME_PINS.items():
+            expected = root / (name.replace(".", "/") + ".py")
+            actual = Path(import_module(name).__file__).resolve(strict=True)
+            if actual != expected or hashlib.sha256(actual.read_bytes()).hexdigest() != digest:
+                msg = f"unexpected HTDemucs attention runtime: {name}"
+                raise ValueError(msg)
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
     model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
@@ -1252,7 +1463,9 @@ def capture_reference(
         if mapped_state is not None
         else None
     )
-    with torch.inference_mode():
+    with torch.inference_mode(), ExitStack() as reference:
+        if mapped_state is not None:
+            reference.enter_context(mapped_reference_attention(torch, model, output))
         artifacts, pcm = original_forward(
             torch, model, waveform, output, mapped_forward=mapped_forward
         )

@@ -1396,8 +1396,24 @@ The CAC mask reads only the decoder output. The two released storages total
 22,156,608 logical bytes at the fixed input geometry. In a checkpoint-free
 front-end comparison, the pinned c10 decommit profile released the Windows
 commit covering both former storage ranges by the first spectral encoder.
-Account for the full reference's allocator commit independently. The separated path uses the
-pinned TorchScript graph conversion with ONNX constant folding disabled. It
+The mapped reference also reuses a single writable 231,211,008-byte file
+mapping for the three spectral self-attention sites in each of the stock
+forward and extracted comparison. The pinned native CPU path writes its
+score to that extent with the stock BMM kernel, applies softmax in the same
+storage, and writes the value result into the packed Q slice. The score
+storage ends before output projection. The reusable file view remains owned
+through the comparison and is released after the last alias. The exact
+checkpoint-free stock and mapped outputs matched byte for byte with identical
+MKL dispatch parameters. Both cross directions selected the stock CPU Flash
+kernel in the geometry fixture.
+
+Charge the full mapped score extent separately for physical residency and
+file cache. The full learned reference still requires a prospective commit
+and residency budget for both forwards, retained activations, vendor scratch,
+allocator behavior and retirement.
+
+The separated path uses the pinned TorchScript graph conversion with ONNX
+constant folding disabled. It
 serializes the graph with the learned parameters as named inputs, then writes
 each parameter to a bounded raw bank with its name, shape, dtype and SHA-256.
 Using the binding's deferred export flag would instead create a Python bytes
