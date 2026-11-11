@@ -1365,40 +1365,144 @@ def check_spectral_transpose_operands(torch, operands):
             raise ValueError(msg)
 
 
+def mapped_spectral_transpose_storage(torch, output: Path, label: str, live_spans):
+    owner = mapped_reference_scratch(output, SPECTRAL_TRANSPOSE_BYTES, label)
+    mapped = torch.frombuffer(owner, dtype=torch.float32).view(SPECTRAL_TRANSPOSE_SHAPE)
+    _, storage, address = tensor_backing(mapped)
+    if (
+        address % STATE_ALIGNMENT
+        or mapped.untyped_storage().resizable()
+        or state_storage_geometry(mapped) != SPECTRAL_TRANSPOSE_DENSE
+        or any(
+            storage == other_storage
+            or (address < start + size and start < address + SPECTRAL_TRANSPOSE_BYTES)
+            for other_storage, start, size in live_spans
+        )
+    ):
+        msg = "unexpected HTDemucs spectral transpose mapped storage"
+        raise ValueError(msg)
+    return mapped
+
+
+def native_spectral_contiguous(torch, output: Path, func, source, cpu, live_spans):
+    """Supply the stock contiguous clone's destination while keeping its CPU copy."""
+    aten = torch.ops.aten
+    source_backing = tensor_backing(source)
+    contiguous = {"memory_format": torch.contiguous_format}
+    empty_options = {
+        "dtype": torch.float32,
+        "layout": torch.strided,
+        "device": torch.device("cpu"),
+        **contiguous,
+    }
+    backing = None
+    copied = False
+
+    def allocate(op, args, options):
+        nonlocal backing, copied
+        if (
+            op == aten.empty_like.default
+            and backing is None
+            and len(args) == 1
+            and tensor_backing(args[0]) == source_backing
+            and options == empty_options
+        ):
+            mapped = mapped_spectral_transpose_storage(torch, output, "transpose-dense", live_spans)
+            backing = tensor_backing(mapped)
+            return mapped
+        if (
+            (op, backing is not None, copied, bool(options), len(args))
+            == (aten.copy_.default, True, False, False, 2)
+            and tensor_backing(args[0]) == backing
+            and tensor_backing(args[1]) == source_backing
+        ):
+            result = op(*args)
+            copied = True
+            return result
+        msg = "unexpected HTDemucs spectral transpose clone operation"
+        raise ValueError(msg)
+
+    def clone(op, args, options):
+        if (
+            op != aten.clone.default
+            or backing is not None
+            or len(args) != 1
+            or tensor_backing(args[0]) != source_backing
+            or options != contiguous
+        ):
+            msg = "unexpected HTDemucs spectral transpose contiguous operation"
+            raise ValueError(msg)
+        with reference_dispatch_mode(allocate):
+            return op.redispatch(cpu, *args, **options)
+
+    with reference_dispatch_mode(clone):
+        dense = func.redispatch(cpu, source)
+    if (
+        not copied
+        or tensor_backing(dense) != backing
+        or state_storage_geometry(dense) != SPECTRAL_TRANSPOSE_DENSE
+    ):
+        msg = "unexpected HTDemucs spectral transpose copy result"
+        raise ValueError(msg)
+    return dense
+
+
+def restore_spectral_public_layout(op, operands, options, backing, restored):
+    if (
+        restored
+        or tensor_backing(operands[0]) != backing
+        or (tuple(operands[1]), tuple(operands[2]))
+        != (SPECTRAL_TRANSPOSE_SHAPE, SPECTRAL_TRANSPOSE_PUBLIC_STRIDES)
+        or operands[3:] not in {(), (None,), (0,)}
+        or options
+    ):
+        msg = "unexpected HTDemucs spectral transpose public layout"
+        raise ValueError(msg)
+    return op(*operands, **options)
+
+
+def resize_spectral_dense(torch, op, operands, options, backing, resized):
+    if (
+        resized
+        or len(operands) != 2
+        or tensor_backing(operands[0]) != backing
+        or tuple(operands[1]) != SPECTRAL_TRANSPOSE_SHAPE
+        or options != {"memory_format": torch.contiguous_format}
+    ):
+        msg = "unexpected HTDemucs spectral transpose dense resize"
+        raise ValueError(msg)
+    dense = op(*operands, **options)
+    if tensor_backing(dense) != backing:
+        msg = "HTDemucs spectral transpose resize replaced the mapped storage"
+        raise ValueError(msg)
+    return dense
+
+
 def native_spectral_transpose(torch, output: Path, func, args, cpu):
-    """Supply the first full allocation in the stock dense conversion."""
+    """Supply the public and contiguous allocations in the stock dense conversion."""
     aten = torch.ops.aten
     empty_options = {
         "dtype": torch.float32,
         "layout": torch.strided,
         "device": torch.device("cpu"),
     }
-    operand_ranges = tuple(
-        (value.data_ptr(), value.untyped_storage().nbytes()) for value in args[:3]
+    operand_spans = tuple(
+        (*tensor_backing(value)[1:], value.untyped_storage().nbytes()) for value in args[:3]
+    )
+    public_geometry = (
+        SPECTRAL_TRANSPOSE_SHAPE,
+        SPECTRAL_TRANSPOSE_PUBLIC_STRIDES,
+        0,
+        SPECTRAL_TRANSPOSE_BYTES,
     )
     placeholder = False
     public_backing = None
     public_layout = False
-
-    def allocate():
-        owner = mapped_reference_scratch(output, SPECTRAL_TRANSPOSE_BYTES, "transpose-public")
-        mapped = torch.frombuffer(owner, dtype=torch.float32).view(SPECTRAL_TRANSPOSE_SHAPE)
-        address = mapped.data_ptr()
-        if (
-            address % STATE_ALIGNMENT
-            or mapped.untyped_storage().resizable()
-            or state_storage_geometry(mapped) != SPECTRAL_TRANSPOSE_DENSE
-            or any(
-                start < address + SPECTRAL_TRANSPOSE_BYTES and address < start + size
-                for start, size in operand_ranges
-            )
-        ):
-            msg = "unexpected HTDemucs spectral transpose mapped storage"
-            raise ValueError(msg)
-        return mapped
+    dense_backing = None
+    resized = False
 
     def dispatch(op, operands, options):
-        nonlocal placeholder, public_backing, public_layout
+        nonlocal placeholder, public_backing, public_layout, dense_backing, resized
         if op == aten.empty.memory_format and public_backing is None:
             shape = tuple(operands[0])
             if not placeholder and shape == (0,) and options == empty_options:
@@ -1407,31 +1511,43 @@ def native_spectral_transpose(torch, output: Path, func, args, cpu):
             if not placeholder or shape != SPECTRAL_TRANSPOSE_SHAPE or options != empty_options:
                 msg = "unexpected HTDemucs spectral transpose allocation order"
                 raise ValueError(msg)
-            mapped = allocate()
+            mapped = mapped_spectral_transpose_storage(
+                torch, output, "transpose-public", operand_spans
+            )
             public_backing = tensor_backing(mapped)
             return mapped
         if op == aten.as_strided_.default and public_backing is not None:
-            if (
-                public_layout
-                or tensor_backing(operands[0]) != public_backing
-                or (tuple(operands[1]), tuple(operands[2]))
-                != (SPECTRAL_TRANSPOSE_SHAPE, SPECTRAL_TRANSPOSE_PUBLIC_STRIDES)
-                or operands[3:] not in {(), (None,), (0,)}
-                or options
-            ):
-                msg = "unexpected HTDemucs spectral transpose public layout"
-                raise ValueError(msg)
+            result = restore_spectral_public_layout(
+                op, operands, options, public_backing, public_layout
+            )
             public_layout = True
+            return result
+        if op == aten.contiguous.default and public_layout:
+            if (
+                dense_backing is not None
+                or len(operands) != 1
+                or options
+                or tensor_backing(operands[0]) != public_backing
+                or state_storage_geometry(operands[0]) != public_geometry
+            ):
+                msg = "unexpected HTDemucs spectral transpose public source"
+                raise ValueError(msg)
+            live_spans = (*operand_spans, (*public_backing[1:], SPECTRAL_TRANSPOSE_BYTES))
+            dense = native_spectral_contiguous(torch, output, op, operands[0], cpu, live_spans)
+            dense_backing = tensor_backing(dense)
+            return dense
+        if op == aten.resize_.default and dense_backing is not None:
+            dense = resize_spectral_dense(torch, op, operands, options, dense_backing, resized)
+            resized = True
+            return dense
         return op(*operands, **options)
 
     with reference_dispatch_mode(dispatch):
         dense = func.redispatch(cpu, *args)
     if (
-        public_backing is None
-        or not public_layout
+        not resized
+        or tensor_backing(dense) != dense_backing
         or state_storage_geometry(dense) != SPECTRAL_TRANSPOSE_DENSE
-        or dense.untyped_storage()._cdata == public_backing[1]
-        or abs(dense.data_ptr() - public_backing[2]) < SPECTRAL_TRANSPOSE_BYTES
     ):
         msg = "unexpected HTDemucs spectral transpose dense return"
         raise ValueError(msg)
@@ -1440,7 +1556,7 @@ def native_spectral_transpose(torch, output: Path, func, args, cpu):
 
 @contextmanager
 def mapped_spectral_transpose(torch, conv, output: Path):
-    """Map the native public return at the final spectral decoder convolution."""
+    """Map the native public and dense returns at the final spectral convolution."""
     stride, padding, dilation, output_padding = (4, 1), (0, 0), (1, 1), (0, 0)
     if (
         type(conv) is not torch.nn.ConvTranspose2d

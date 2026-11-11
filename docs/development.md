@@ -1412,10 +1412,11 @@ after their last decoder call. The empty waveform decoder keeps the spectral
 pre-transpose view until that call returns. The extracted comparison returns
 the raw decoder views. In the final spectral transposed convolution, the
 pinned oneDNN BRG path reorders into a separate 44,126,208-byte writable file
-mapping. The native dense conversion uses that backing with ACDB strides and
-then creates the stock contiguous ABCD return in separate storage. Each eager
-forward gets its own extent. The SlowTranspose2d backend and eager trace run
-their stock convolution paths. The original forward releases the spectral
+mapping with ACDB strides. The native contiguous clone then copies into a
+second 44,126,208-byte writable file mapping with ABCD strides. The stock
+resize and decoder crop keep the dense storage. Each mapped eager forward
+gets its own pair of mappings. SlowTranspose2d and eager trace use their
+stock convolution paths. The original forward releases the spectral
 output after CAC packing and passes sole ownership of the packed spectrum to
 the pinned inverse-spectrogram code. Its first pad replaces the packed backing. At the
 second pad, the pinned stock constant-padding kernel writes its output into a
@@ -1432,7 +1433,7 @@ reads that backing with the
 decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
-Charge the mapped state, score, spectral transpose public return, second pad,
+Charge the mapped state, score, both spectral transpose returns, second pad,
 C2R input pack, C2R frames and windowed frames for physical residency, file
 cache and disk. The stock overlap-add tensors still require private storage.
 The full learned reference requires a prospective commit and residency budget
