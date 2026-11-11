@@ -117,6 +117,7 @@ C2R_PACK_GEOMETRY = (C2R_PACK_SHAPE, (2049, 1), 0, C2R_INPUT_BYTES)
 ISTFT_FRAME_SHAPE = (8, 340, 4096)
 ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
 ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
+SPECTRAL_SKIP_ADD_DENSE = ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33_030_144)
 SPECTRAL_REWRITE_SHAPE = (1, 96, 512, 336)
 SPECTRAL_REWRITE_BYTES = prod(SPECTRAL_REWRITE_SHAPE) * 4
 SPECTRAL_REWRITE_DENSE = (
@@ -1370,7 +1371,7 @@ def check_mapped_convolution_operands(torch, operands, geometry):
             raise ValueError(msg)
 
 
-def mapped_convolution_return_storage(torch, output: Path, inputs, geometry, label):
+def mapped_float_return_storage(torch, output: Path, inputs, geometry, label):
     shape, _, _, size = geometry
     owner = mapped_reference_scratch(output, size, label)
     mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
@@ -1387,7 +1388,7 @@ def mapped_convolution_return_storage(torch, output: Path, inputs, geometry, lab
             for other_storage, start, other_size in live_spans
         )
     ):
-        msg = "unexpected HTDemucs mapped convolution storage"
+        msg = f"unexpected HTDemucs mapped {label} storage"
         raise ValueError(msg)
     return mapped
 
@@ -1412,7 +1413,7 @@ def native_mapped_convolution_return(torch, output: Path, func, args, cpu, geome
                 stage = 1
                 return op(*operands, **options)
             if stage == 1 and tuple(operands[0]) == shape:
-                mapped = mapped_convolution_return_storage(torch, output, args[:3], geometry, label)
+                mapped = mapped_float_return_storage(torch, output, args[:3], geometry, label)
                 backing = tensor_backing(mapped)
                 stage = 2
                 return mapped
@@ -1526,6 +1527,67 @@ def mapped_convolution_dispatch(torch, operands, wrappers, params, redispatch):
 
 
 @contextmanager
+def mapped_spectral_skip_add(torch, decoder, source: bytes, output: Path):
+    """Use a file-backed destination for the pinned final spectral skip addition."""
+    name = "demucs/hdemucs.py"
+    globals_ = type(decoder).forward.__globals__
+    if (
+        hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
+        or type(decoder) is not globals_.get("HDecLayer")
+        or "forward" in vars(decoder)
+        or (
+            decoder.training, decoder.freq, decoder.last, decoder.empty, decoder.chin, decoder.pad,
+            type(decoder.rewrite), type(decoder.norm1), decoder.dconv is not None,
+        )
+        != (False, True, True, False, 48, 2, torch.nn.Conv2d, torch.nn.Identity, True)
+    ):
+        msg = "unexpected HTDemucs final spectral skip addition module"
+        raise ValueError(msg)
+
+    geometry = SPECTRAL_SKIP_ADD_DENSE
+
+    def add(x, skip):
+        check_reference_inference_dispatch(torch, "spectral skip addition")
+        for value in (x, skip):
+            if (
+                type(value) is not torch.Tensor
+                or (value.device.type, value.dtype, value.layout)
+                != ("cpu", torch.float32, torch.strided)
+                or value.is_neg()
+                or state_storage_geometry(value) != geometry
+            ):
+                msg = "unexpected HTDemucs spectral skip addition operands"
+                raise ValueError(msg)
+        mapped = mapped_float_return_storage(torch, output, (x, skip), geometry, "skip-add")
+        backing = tensor_backing(mapped)
+        result = torch.ops.aten.add.out(x, skip, out=mapped)
+        if tensor_backing(result) != backing or state_storage_geometry(result) != geometry:
+            msg = "unexpected HTDemucs spectral skip addition return"
+            raise ValueError(msg)
+        return result
+
+    forward = method_definition(source, "HDecLayer")
+    nonempty = next(
+        node for node in forward.body
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "not self.empty"
+    )
+    addition = nonempty.body[0]
+    if ast.unparse(addition) != "x = x + skip":
+        msg = "unexpected HTDemucs final spectral skip addition source"
+        raise ValueError(msg)
+    addition.value = ast.parse("_mapped_add(x, skip)", mode="eval").body
+    tree = ast.parse("def bind(_mapped_add):\n    return forward")
+    tree.body[0].body.insert(0, forward)
+    namespace = {}
+    exec(compile(ast.fix_missing_locations(tree), name, "exec"), globals_, namespace)
+    decoder.forward = MethodType(namespace["bind"](add), decoder)
+    try:
+        yield
+    finally:
+        del decoder.forward
+
+
+@contextmanager
 def mapped_spectral_rewrite(torch, conv, output: Path):
     """Map the pinned final spectral Conv2d return for mapped eager references."""
     stride, padding, dilation, output_padding = (1, 1), (1, 1), (1, 1), (0, 0)
@@ -1546,7 +1608,7 @@ def mapped_spectral_rewrite(torch, conv, output: Path):
         aten.convolution.default: convolution_args,
     }
     geometry = (
-        ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33030144),
+        SPECTRAL_SKIP_ADD_DENSE,
         ((96, 48, 3, 3), (432, 9, 3, 1), 0, 165888),
         ((96,), (1,), 0, 384),
     )
@@ -2521,6 +2583,11 @@ def capture_reference(
     with torch.inference_mode(), ExitStack() as reference:
         if mapped_state is not None:
             reference.enter_context(mapped_reference_attention(torch, model, output))
+            reference.enter_context(
+                mapped_spectral_skip_add(
+                    torch, model.decoder[-1], sources["demucs/hdemucs.py"], output
+                )
+            )
             reference.enter_context(
                 mapped_spectral_rewrite(torch, model.decoder[-1].rewrite, output)
             )

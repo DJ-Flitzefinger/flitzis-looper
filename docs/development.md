@@ -1410,8 +1410,11 @@ kernel in the geometry fixture.
 Both mapped eager forwards release decoder skip and pre-transpose references
 after their last decoder call. The empty waveform decoder keeps the spectral
 pre-transpose view until that call returns. The extracted comparison returns
-the raw decoder views. The final spectral decoder's rewrite convolution
-reorders its oneDNN output directly into a 66,060,288-byte writable file
+the raw decoder views. In the final spectral decoder, the stock CPU
+TensorIterator skip addition writes its 33,030,144-byte ABCD result directly
+to a writable file mapping. The rewrite reads this result and the decoder
+frame holds it until return. The caller input and saved skip keep their
+independent backing during the call. The rewrite convolution reorders its oneDNN output directly into a 66,060,288-byte writable file
 mapping with ABCD strides. The stock layout operations keep the storage
 through the rewrite hook and GLU. Each of the two pointwise convolutions in
 the final spectral DConv reorders directly into its own 66,060,288-byte writable
@@ -1440,9 +1443,9 @@ reads that backing with the
 decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
-Charge the mapped state, score, spectral rewrite, both spectral transpose
-returns, second pad, C2R input pack, C2R frames and windowed frames for
-physical residency, file cache and disk. The stock overlap-add tensors still
+Charge the mapped state, score, spectral skip addition and rewrite, both
+spectral transpose returns, second pad, C2R input pack, C2R frames and
+windowed frames for physical residency, file cache and disk. The stock overlap-add tensors still
 require private storage.
 The full learned reference requires a prospective commit and residency budget
 for both forwards, retained activations, vendor scratch, allocator behavior
