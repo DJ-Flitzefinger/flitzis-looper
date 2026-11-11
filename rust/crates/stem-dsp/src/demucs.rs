@@ -1,8 +1,8 @@
 //! Offline Demucs 4.0.1 HTDemucs `_spec` / scale-zero `_ispec` arithmetic.
 //!
-//! This is the unnormalized neural boundary: no model, statistical normalization,
-//! waveform model, resampling, shifts or bags is supplied. The separate `host`
-//! module provides isolated normalization and physical track arithmetic.
+//! This is the unnormalized spectral boundary. The separate `host` module
+//! provides normalization and physical track arithmetic, and `audio` handles
+//! channel conversion and rational resampling. Neither runs the learned model.
 //! Inputs are planar lanes (batch/source/channel axes flattened). Spectra use
 //! CaC `[lane, real/imag, frequency, time]`, matching `_magnitude` / `_mask`.
 //! Calls are synchronous and exclusive; immutable input readers and caller-owned
@@ -10,6 +10,7 @@
 //! entire output, including any prefix already written. Return is not OS/reader
 //! END. There is no worker, file publication, process or realtime integration.
 
+pub mod audio;
 pub mod host;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex32};

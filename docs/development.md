@@ -1197,8 +1197,30 @@ apply_model outputs and callback order with deterministic nonneural callbacks
 and lexically supplied original random draws. They establish host arithmetic,
 not a learned model, random host, device transition, cancellation runtime or
 Torch replacement. Independent High-DC normalization parity remains FAIL; no
-unchanged statistical/FFT replay is required. Full normalization, resampling,
+unchanged statistical/FFT replay is required. Full normalization, productive conversion,
 learned branches, producer/runtime, CPU/CUDA/fault-to-freshCPU, all platforms,
 distribution/recovery, footprint and quality remain open. Torch stays active
 with zero installed savings; BS finite successful WHOLE and every retained
 FAIL/UNKNOWN remain unchanged.
+
+### Independent Demucs audio conversion
+
+`stem-dsp::demucs::audio` implements Demucs 4.0.1 channel conversion and the
+Julius 0.2.7 rational FIR. Use `Channels` or `ResampleFrac` separately, or
+`ConversionGeometry` and `Converter` to convert channels before resampling.
+Geometry checks the combined source, intermediate (when needed), kernels and
+output against 512 MiB before allocation. Equal rates use direct channel
+conversion; for differing rates, equal channel counts borrow the source. Kernels are reusable and
+replicate padding is virtual. The physical output preserves Julius's f32
+length rounding, phase ordering and final tail. The bounded planar f32 API
+refuses empty/nonfinite input and oversized kernels, including some coprime
+ratios within the supported 1–768000 Hz rate range. No caller may publish any
+output after error or cancellation, or release borrowed readers before return.
+
+The `demucs_audio` example and `scripts/demucs_audio_trial_reference.py` compare
+complete kernels and PCM with the pinned original CPU operators at `atol=rtol=2e-5`.
+Independent f32 reductions and trigonometry do not promise bitwise equivalence.
+The normal Demucs CLI tries FFmpeg first; Julius is the torchaudio fallback's
+conversion path. Decoding, productive routing, independent High-DC normalization
+parity, and learned/runtime/device acceptance remain open. See the
+[upstream notices](../rust/crates/stem-dsp/THIRD_PARTY_NOTICES.md).

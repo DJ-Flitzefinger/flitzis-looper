@@ -7982,8 +7982,32 @@ apply_model outputs and callback order with deterministic nonneural callbacks
 and lexically supplied original random draws. They establish host arithmetic,
 not a learned model, random host, device transition, cancellation runtime or
 Torch replacement. Independent High-DC normalization parity remains FAIL; no
-unchanged statistical/FFT replay is required. Full normalization, resampling,
+unchanged statistical/FFT replay is required. Full normalization, productive conversion,
 learned branches, producer/runtime, CPU/CUDA/fault-to-freshCPU, all platforms,
 distribution/recovery, footprint and quality remain open. Torch stays active
 with zero installed savings; BS finite successful WHOLE and every retained
 FAIL/UNKNOWN remain unchanged.
+
+### Independent Demucs channel and rational resampling boundary
+
+Use the pinned Demucs `convert_audio_channels` semantics: retain matching
+channels, average all source channels for mono, replicate a mono source, or
+select the first target channels. Refuse a nonmono source with too few channels.
+Convert channels first, then apply Julius `ResampleFrac`. GCD reduction, filter
+width, f32 phased windowed sinc and per-phase normalization follow Julius
+0.2.7. Virtual replicate padding addresses the original stride and interleave
+without storing the padded PCM or unsliced convolution tensor. The original
+f64-to-f32 length calculation precedes floor/ceil; explicit output is bounded
+by the original maximum and sliced to the available convolution. Equal rates
+bypass output flags within the native finite nonempty domain.
+
+The checked logical 512 MiB includes simultaneous declared input, intermediate
+if needed, output and kernels. It excludes the allocator, system, runtime and
+other owners. Execution is synchronous and allocation-free; cancellation and
+nonfinite arithmetic invalidate the whole output. The caller owns the source,
+readers, admission and publication through and beyond return as applicable.
+The arithmetic uses independent f32 reductions; compare all original kernels
+and complete output PCM at unchanged `atol=rtol=2e-5` for the tested cases.
+This covers the tensor conversion boundary, not the normal FFmpeg CLI decoder,
+Torch dispatch in general, the failed High-DC statistics or any learned/CUDA
+or productive replacement gate.

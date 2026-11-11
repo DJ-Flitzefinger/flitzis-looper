@@ -1188,7 +1188,13 @@ remaining plan into each successor; report actual hard service limits honestly.
       reconstruction with true physical tails and first-error cancellation.
 - [ ] Establish complete learned spectral/waveform composition, exact reduction
       compatibility as affected, random shifts, weighted source/model bags,
-      resampling, productive routing and all original runtime/provider/platform/
+      productive decoding/conversion/routing and all original runtime/provider/platform/
       quality/distribution/footprint gates. Torch remains active; savings zero.
 
 - [x] Add callable supplied-offset Demucs shifts, no-split and weighted per-source bags in original model/shift/split order, with full context, bounded reusable host buffers and original nonneural arithmetic controls. Random generation, learned/runtime/device parity, independent High-DC normalization and full Native cutover remain open.
+
+- [x] Add independent finite planar Demucs channel conversion and Julius rational
+      resampling with original f32 length selection, replicate edges, checked
+      combined payload, cancellable processing and complete kernel/PCM controls.
+- [ ] Establish full decoder and productive conversion integration, exact
+      affected dispatch compatibility and complete original model/runtime proof.
