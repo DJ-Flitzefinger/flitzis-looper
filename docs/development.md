@@ -1024,6 +1024,24 @@ still require supervisor escalation. ACK never replaces actual tree and reader
 retirement. `--cancellation-control NEW_PRIVATE_DIRECTORY` exercises this protocol
 without weights or a neural network; its Windows regression is opt-in through
 `FLITZIS_BS_CANCELLATION_EXE`. Production Python inference recognition is unchanged.
+BS diagnostic terminal output now owns two noninheritable duplicates of the
+inherited Windows handles. Its ASCII writes use no stdio lock, LineWriter or
+console conversion, and each transfer is at most8192 bytes. The pinned Rust File
+path retains pending-I/O buffer safety; unsupported asynchronous handles may
+still abort. Both duplicates receive one checked consuming close. Runtime-owned
+original handles and post-main std/CRT cleanup remain separate. Exact private
+output paths survive status writing, terminal flush and both closes; failure
+invalidates only those files and returns1. A marker first observed after terminal
+closure also invalidates and returns1 because no cancellation ACK can be sent.
+Exit0/130, actual tree END and both supervisor pipe-reader END remain distinct.
+
+This reduces a real owner dependency without establishing a finite successful
+WHOLE-process allowance. CRT argv/environment heaps, native API internals, TLS,
+loader, images, stack, panic and exit still lack a complete prospective contract.
+The existing arena and its page backing describe one owner and cannot be added
+again as process margin. No admission floor, numerical geometry or productive
+Torch path changes; full original admission/parity/CUDA/platform gates remain.
+
 Both standalone BeatThis entries use the same exact invocation marker and a shared
 owner for input/hash, frontend, runtime preparation, ORT runs and output completion.
 Session loading uses the actual retained builder's LoadCanceler. Load and run

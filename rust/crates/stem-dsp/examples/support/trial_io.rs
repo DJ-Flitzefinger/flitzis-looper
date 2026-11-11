@@ -87,7 +87,7 @@ pub fn retain_first<T>(result: &mut Result<T>, completion: Result<()>) {
 
 /// Consumes Rust ownership before the sole native close attempt. A failed close
 /// is unresolved OS ownership, never proof of settlement and never retried.
-fn close_file(file: File) -> io::Result<()> {
+pub(super) fn close_file(file: File) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::{ffi::c_void, os::windows::io::IntoRawHandle};
@@ -114,7 +114,7 @@ fn close_file(file: File) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn observe_closed_control(handle: std::os::windows::io::RawHandle) -> Result<()> {
+pub(super) fn observe_closed_control(handle: std::os::windows::io::RawHandle) -> Result<()> {
     use std::ffi::c_void;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -356,11 +356,46 @@ impl Output {
 /// Primary outcome and cleanup qualification are independent. In particular a
 /// Cancelled primary cannot conceal a later close/invalidation failure from ACK.
 pub fn complete<T>(
+    result: Result<T>,
+    inputs: Inputs,
+    outputs: Option<Outputs>,
+    cleanup: &mut Result<()>,
+    final_check: &dyn Fn() -> Result<()>,
+) -> Result<T> {
+    complete_retained(
+        result,
+        inputs,
+        outputs,
+        cleanup,
+        final_check,
+        &mut PrivateOutputs::default(),
+    )
+}
+
+/// Exact exclusive creations remain owned through terminal writes and closes.
+/// No destructor deletes files or retries a failed native operation on unwind.
+#[derive(Default)]
+pub struct PrivateOutputs {
+    paths: [Option<PathBuf>; 4],
+}
+
+impl PrivateOutputs {
+    pub fn finish<T>(self, successful: bool, cleanup: &mut Result<T>) {
+        if !successful {
+            for path in self.paths.into_iter().flatten() {
+                retain_first(cleanup, std::fs::remove_file(path).at("output.invalidate"));
+            }
+        }
+    }
+}
+
+pub fn complete_retained<T>(
     mut result: Result<T>,
     inputs: Inputs,
     mut outputs: Option<Outputs>,
     cleanup: &mut Result<()>,
     final_check: &dyn Fn() -> Result<()>,
+    private: &mut PrivateOutputs,
 ) -> Result<T> {
     // Move path custody, without allocating, beyond the last flush/sync/close.
     let paths = outputs.as_mut().map(Outputs::take_paths);
@@ -373,11 +408,12 @@ pub fn complete<T>(
     if result.is_ok() {
         retain_first(&mut result, final_check());
     }
-    if result.is_err()
-        && let Some(paths) = paths
-    {
-        for path in paths.into_iter().flatten() {
-            retain_first(cleanup, std::fs::remove_file(path).at("output.invalidate"));
+    if let Some(paths) = paths {
+        let owned = PrivateOutputs { paths };
+        if result.is_ok() {
+            *private = owned;
+        } else {
+            owned.finish(false, cleanup);
         }
     }
     result
@@ -498,6 +534,7 @@ pub fn control(
     directory: &Path,
     workspace: &crate::workspace::WorkspaceAllocator,
     status: &mut impl Write,
+    private: &mut PrivateOutputs,
 ) -> Result<()> {
     let mut prepared = Outputs::prepare(directory, true, true)?;
     let mut inputs = Inputs::default();
@@ -550,6 +587,9 @@ pub fn control(
         Ok(error)
     })();
     let successful = result.is_ok();
+    let paths = PrivateOutputs {
+        paths: prepared.take_paths(),
+    };
     prepared.complete(successful, &mut result);
     if let Some(reader) = &mut inputs.source {
         let read_result = (|| {
@@ -587,6 +627,11 @@ pub fn control(
     }
     if let Some(rejected) = rejected {
         retain_first(&mut result, complete_buffer(rejected, false));
+    }
+    if result.is_err() {
+        paths.finish(false, &mut result);
+    } else {
+        *private = paths;
     }
     let error = result?;
     if Some(workspace.stats()) != baseline {

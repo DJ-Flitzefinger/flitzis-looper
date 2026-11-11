@@ -1,6 +1,8 @@
 //! Exclusive private diagnostic output, never an application publication receipt.
 #[path = "support/cancellation.rs"]
 mod cancellation;
+#[path = "support/terminal.rs"]
+mod terminal;
 #[path = "support/trial_io.rs"]
 mod trial_io;
 #[path = "support/workspace.rs"]
@@ -58,7 +60,12 @@ fn reserved(len: usize, phase: &'static str) -> Result<Vec<f32>> {
     Ok(values)
 }
 
-fn execute(status: &mut impl Write, cancel: &Cancellation, cleanup: &mut Result<()>) -> Result<()> {
+fn execute(
+    status: &mut impl Write,
+    cancel: &Cancellation,
+    cleanup: &mut Result<()>,
+    private: &mut trial_io::PrivateOutputs,
+) -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 2 && args[0] == "--cancellation-control" {
         return cancellation_control(Path::new(&args[1]), status, cancel, cleanup);
@@ -78,7 +85,7 @@ fn execute(status: &mut impl Write, cancel: &Cancellation, cleanup: &mut Result<
         return spectral_workspace_rejection(status, prefix);
     }
     if args.len() == 2 && args[0] == "--io-control" {
-        return trial_io::control(Path::new(&args[1]), &WORKSPACE, status);
+        return trial_io::control(Path::new(&args[1]), &WORKSPACE, status, private);
     }
     if !(6..=7).contains(&args.len()) {
         return Err("usage: bs_learned WEIGHTS SHA256 chunk|track PCM_F32 FRAMES NEW_PRIVATE_DIRECTORY [ORIGINAL_FEATURES_F32]".into());
@@ -322,9 +329,14 @@ fn execute(status: &mut impl Write, cancel: &Cancellation, cleanup: &mut Result<
     if result.is_ok() {
         trial_io::retain_first(&mut result, cancel.checkpoint("output.complete"));
     }
-    let result = trial_io::complete(result, inputs, outputs, cleanup, &|| {
-        cancel.checkpoint("output.closed")
-    });
+    let result = trial_io::complete_retained(
+        result,
+        inputs,
+        outputs,
+        cleanup,
+        &|| cancel.checkpoint("output.closed"),
+        private,
+    );
     result?.write(status)
 }
 
@@ -603,20 +615,18 @@ fn spectral_workspace_rejection(status: &mut impl Write, prefix: usize) -> Resul
 }
 
 fn main() -> ExitCode {
-    // Initialize and retain the lazy standard streams before any seal, including
-    // the error path after execute returns. Formatting uses no OS error text.
-    let stdout = std::io::stdout();
-    let stderr = std::io::stderr();
-    let mut status = stdout.lock();
-    let mut errors = stderr.lock();
+    // Prepare both own noninheritable duplicates before any arena seal. Even a
+    // partial setup failure consumes every acquired owner through completion.
+    let (mut status, mut result) = terminal::Native::prepare(-11i32 as u32, "status.prepare");
+    let (errors, ready) = terminal::Native::prepare(-12i32 as u32, "error.prepare");
+    trial_io::retain_first(&mut result, ready);
     let cancel = Cancellation::from_environment();
     let mut cleanup = Ok(());
-    let result = execute(&mut status, &cancel, &mut cleanup);
-    let code = cancellation::report(result, cleanup, &cancel, &mut status, &mut errors);
-    // Release borrowed locks; runtime standard handles remain runtime-owned.
-    drop(status);
-    drop(errors);
-    code
+    let mut private = trial_io::PrivateOutputs::default();
+    if result.is_ok() {
+        result = execute(&mut status, &cancel, &mut cleanup, &mut private);
+    }
+    terminal::complete(result, cleanup, &cancel, status, errors, private)
 }
 
 #[cfg(test)]

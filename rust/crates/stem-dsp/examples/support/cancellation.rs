@@ -27,7 +27,7 @@ impl Cancellation {
         )
     }
 
-    fn new(marker: Option<PathBuf>) -> Self {
+    pub(super) fn new(marker: Option<PathBuf>) -> Self {
         Self {
             marker,
             last: Cell::new(None),

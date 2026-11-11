@@ -7788,6 +7788,45 @@ without an additional physical source reader. The controller binds the source
 from the exact surviving subscriber when it consumes an event. Terminal batch
 rows retain their outcome without holding cancellation readers.
 
+## Standalone BS terminal ownership and successful-process dependency
+
+The BS executable prepares two noninheritable duplicate terminal handles before
+seal, without changing or closing inherited runtime handles. Bounded ASCII writes
+use the pinned Rust File implementation, not lazy stdio locks/LineWriter or
+console transcoding. Each transfer is at most8192 bytes. File's NtWriteFile path
+waits on STATUS_PENDING and fails fast if completion remains pending, preserving
+buffer lifetime; this is not a success guarantee for arbitrary asynchronous
+handles. Flush has no pending user-space bytes and never waits for pipe-peer
+consumption. Each owned duplicate gets one checked consuming close; native I/O
+and close remain unbounded interruption points.
+
+Exact create_new output paths remain owned after their file closes, through the
+status write/flush and both terminal closes. Any failure invalidates only these
+paths. Both closes run even after an earlier failure, and a primary computation
+error is reported before close qualification. A status line or cancellation ACK
+already written cannot be retracted: exit0/130 requires qualified completion.
+A cancellation first observed after terminal closure invalidates and returns1;
+it cannot invent an ACK/130 or reopen an inherited handle. Arbitrary panic still
+has no private-file invalidation or checked native-close guarantee.
+
+Static reconciliation of the actual Windows x64 Release executable identifies
+native heap, NtReadFile/NtWriteFile, VCRUNTIME and UCRT argv/environment/exit/locale/
+math/heap imports, TLS and its callback. Its PE stack reserve is1MiB, unlike the
+older2MiB plan assumption; neither reserve is a measured stack/private peak or
+whole allowance. Rust startup registers stack handling and post-main cleanup
+still initializes zero-capacity stdout state. MSVC/UCRT startup allocates argv and
+environment outside Rust GlobalAlloc; panic backtrace can lazily load dbghelp.
+Local SDK source is not proof of the actual mapped runtime DLL implementation.
+
+WHOLE remains OPEN. The concrete dependency is a complete supported ownership
+contract for actual runtime/loader/API backing from startup through successful,
+error, panic and exit, including invocation/environment and transitive images.
+No finite successful-process total is derived. The768857616-byte arena and its
+768860160-byte Windows page backing are the same owner, never additional process
+margin. Their unchanged original order/geometry/both-residue proof is reused.
+There is no rejected NN/admission/CUDA replay, Native/Torch cutover, altered
+2GiB/3GiB/512MiB guard or full-parity/platform/quality/footprint closure.
+
 ## Standalone BeatThis cancellation and consuming completion
 
 The complete-audio and one-chunk diagnostic entries share one invocation owner.

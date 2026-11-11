@@ -1087,6 +1087,11 @@ matrix from the distinct successful-case union or weaken their original assertio
 
 ## Capacity and continuity
 
+- [x] Own BS diagnostic terminal duplicates and retain exact private paths through
+      terminal completion, preserving primary failures and qualified exit status.
+      Reconcile actual executable/runtime owners and keep the finite successful
+      WHOLE-process allowance open until every remaining dependency is supported.
+
 - [x] Connect both standalone BeatThis entries to the exact invocation marker,
       consuming file/profile completion and run-scoped ORT termination ownership;
       preserve primary failures and independently qualify cleanup and terminal
