@@ -1252,3 +1252,42 @@ The `demucs_hybrid_trial_reference.py` control uses the pinned CPU
 including the release segment and shorter prefixes. Independent High-DC
 statistics parity remains failed. Learned execution, productive routing, device
 transitions and whole-process admission remain open.
+
+### Explicit original CPU reduction profile
+
+The offline `demucs::reduction::CpuProfile` admits the pinned Windows x64 MSVC
+Torch 2.12.0+cu130 commit
+`7661cd9c6b841b62b7f411aa52ec51f05457263b`, reported AVX512 and one intra-op
+thread. The caller establishes the original wheel, CPU dispatch and strides.
+The Native reducer has no Torch dependency. Its scalar Rust operations preserve
+the observed eight-lane sum order, four accumulator groups and four cascade
+levels. The final scalar tail enters before the eight lane sums. Mean uses
+f32 division. A single output std uses f64 squared deviations around the
+separate rounded f32 mean. Multiple batch outputs use f64 Welford per item.
+Both std paths apply correction one.
+
+`time` reduces packed planar mono/stereo or packed interleaved stereo `[B,C,L]`
+after right padding. `cac` reduces packed original stereo `[B,4,2048,T]`.
+`cli` first forms each rounded channel mean for packed planar mono/stereo or
+interleaved stereo, then reduces that reference globally. The APIs accept exact
+shape and element-stride metadata and reject other layouts. Each call includes
+borrowed input, output statistics, fixed reduction scratch and declared other
+live logical payload in the 512 MiB check before dispatch. Cancellation is
+bounded during both reductions and checked through return. Any failure
+invalidates the entire statistic output. Readers and source owners remain held
+through return.
+
+`demucs_reduction_trial_reference.py` compares scalar bits and all normalized
+and raw-std-restored values against the separate pinned original mean/std calls.
+Its isolated oracle uses the explicitly selected serial CPU profile. The
+unmodified default CPU execution reports 16 intra-op threads. This bounded
+profile requires one. Full release tensors, High-DC/tiny variance, distinct
+batch/channel axes, zero branch variance, SIMD tails and cascade boundaries
+belong to the controls. The original values of each tensor are identical for
+both reducers, including actual Torch CaC features. The existing Native FFT
+proof is separate. The original mono CaC view, broader CPU/thread dispatch,
+learned execution and productive routing remain open. The retained independent
+f64 API and earlier High-DC failure evidence retain their original scope.
+
+ATen sources and attribution are recorded in the
+[third-party notices](../rust/crates/stem-dsp/THIRD_PARTY_NOTICES.md).

@@ -1211,3 +1211,15 @@ remaining plan into each successor; report actual hard service limits honestly.
       batch/source/channel and defined zero-variance cases.
 - [ ] Establish learned HTDemucs inference, exact independent reduction parity
       and complete productive runtime, provider and whole-track parity.
+
+## Explicit CPU reduction profile
+
+- [x] Add a callable Torch-independent reducer with explicit original-wheel,
+      CPU/thread and tensor-layout admission, f32 cascade mean and the original
+      single-output or multi-output correction-one std.
+- [x] Check scalar bits and complete normalized/restored values on identical
+      original tensors, including High-DC/tiny variance, exact per-batch axes,
+      zero branch variance, reduction boundaries and release/shorter geometry.
+- [ ] Extend admission to original mono CaC views and broader CPU/thread
+      dispatch, establish independent full frontend/learned/runtime parity
+      and integrate the complete productive Native replacement.

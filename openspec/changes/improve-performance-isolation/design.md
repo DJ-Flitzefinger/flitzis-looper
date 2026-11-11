@@ -8038,3 +8038,28 @@ branch and tail signals, distinct batch/source/channel ordering, release
 training length, true shorter crop and defined zero-variance controls. The
 High-DC independent reduction FAIL remains. Learned encoder/decoder and
 transformer, runtime, providers and productive wiring remain open.
+
+## Explicit original CPU reduction profile
+
+Admit the observed Windows x64 MSVC Torch 2.12.0+cu130 commit
+7661cd9c6b841b62b7f411aa52ec51f05457263b, reported AVX512, one intra-op thread.
+The original SumKernel falls back to eight-lane AVX2. Reproduce its f32
+four-group, four-level cascade and scalar-tail-first finish, followed by f32
+division. Select std by the original number of outputs. A single output sums
+f64 squared deviations around the separately rounded f32 global mean. Multiple
+batch outputs run f64 Welford per batch. Use correction one in both cases.
+
+Validate exact packed planar mono/stereo or interleaved stereo time strides and
+packed stereo CaC strides. Keep post-right-pad time and [B,4,2048,T] axes
+separate. CLI first forms f32 channel means, then performs separate global mean
+and std, with its zero/singleton undefined domain refused. Preflight all input,
+output-statistic, fixed reduction scratch and declared external logical payload
+under 512 MiB. Poll cancellation throughout and at return. Preserve all source
+readers and invalidate all statistic outputs after any failure.
+
+Compare original same-tensor scalar bits, full normalized and restored values
+at unchanged atol/rtol2e-5. Include actual Torch CaC features, release and shorter
+training geometry, distinct batches/channels, difficult DC, zero variance and
+lane/cascade boundaries. Keep the historical independent f64 failure and the
+existing supplied-statistic and FFT proofs. Mono CaC view reduction, broader
+dispatch, learned runtime and productive integration remain open.

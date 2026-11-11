@@ -1,8 +1,9 @@
 //! Nonneural host-arithmetic bridge. Supervisor owns regular files, complete
 //! process settlement and last readers. No productive execution receipt.
 use flitzis_stem_dsp::demucs::{
-    Error, MAX_PAYLOAD_BYTES,
+    BINS, Error, MAX_PAYLOAD_BYTES,
     host::{Chunk, Statistics, Track, TrackWorkspace},
+    reduction::{CpuProfile, WORKING_BYTES as REDUCTION_WORKING_BYTES},
 };
 use std::{
     io::{self, Read, Write},
@@ -53,8 +54,101 @@ fn write(values: &[f32]) -> io::Result<()> {
     writer.flush()
 }
 
+fn cpu_reduction(a: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if a.len() < 9 {
+        return Err(Error::Geometry.into());
+    }
+    let profile = CpuProfile::admit(&a[1], &a[2], &a[3], a[4].parse()?)
+        .ok_or("unsupported original CPU reduction profile")?;
+    let batches: usize = a[5].parse()?;
+    let planes: usize = a[6].parse()?;
+    let frames: usize = a[7].parse()?;
+    let strides = a[8..]
+        .iter()
+        .map(|arg| arg.parse::<usize>())
+        .collect::<Result<Vec<_>, _>>()?;
+    let bins = if a[0] == "cpu-cac" { BINS } else { 1 };
+    let len = [batches, planes, frames, bins]
+        .into_iter()
+        .try_fold(1usize, usize::checked_mul)
+        .ok_or(Error::Geometry)?;
+    // Input, reusable normalized/restored copy, per-item scalars, the
+    // fixed reducer and binary bridge scratch are simultaneously live.
+    const BRIDGE_WORKING_BYTES: usize = 16 * 1024;
+    let additional = len
+        .checked_mul(size_of::<f32>())
+        .and_then(|bytes| bytes.checked_add(BRIDGE_WORKING_BYTES))
+        .ok_or(Error::Geometry)?;
+    if batches == 0
+        || len == 0
+        || batches
+            .checked_mul(size_of::<Statistics>())
+            .and_then(|bytes| bytes.checked_add(additional))
+            .and_then(|bytes| bytes.checked_add(REDUCTION_WORKING_BYTES))
+            .and_then(|bytes| bytes.checked_add(len.checked_mul(size_of::<f32>())?))
+            .is_none_or(|bytes| bytes > MAX_PAYLOAD_BYTES)
+    {
+        return Err(Error::Geometry.into());
+    }
+    let input = read(len)?;
+    let cancel = || false;
+    let mut stats = vec![Statistics::from_reference(0.0, 0.0)?; batches];
+    match (a[0].as_str(), strides.as_slice()) {
+        ("cpu-time" | "cpu-time-stats", &[b, c, l]) => profile.time(
+            &input,
+            [batches, planes, frames],
+            [b, c, l],
+            &mut stats,
+            additional,
+            &cancel,
+        )?,
+        ("cpu-cac", &[b, c, f, t]) => profile.cac(
+            &input,
+            [batches, planes, BINS, frames],
+            [b, c, f, t],
+            &mut stats,
+            additional,
+            &cancel,
+        )?,
+        ("cpu-cli", &[c, l]) if batches == 1 => {
+            stats[0] = profile.cli(&input, [planes, frames], [c, l], additional, &cancel)?;
+        }
+        _ => return Err(Error::Geometry.into()),
+    }
+    for &stats in &stats {
+        write(&[stats.mean(), stats.std()])?;
+    }
+    if a[0] == "cpu-time-stats" {
+        return Ok(());
+    }
+    let mut output = payload(len)?;
+    let item = len / batches;
+    let epsilon = if a[0] == "cpu-cli" { 0.0 } else { 1e-5 };
+    for ((stats, input), output) in stats
+        .iter()
+        .zip(input.chunks_exact(item))
+        .zip(output.chunks_exact_mut(item))
+    {
+        stats.normalize_into(input, output, epsilon, &cancel)?;
+    }
+    write(&output)?;
+    for (stats, output) in stats.iter().zip(output.chunks_exact_mut(item)) {
+        stats.restore_in_place(output, &cancel)?;
+    }
+    write(&output)?;
+    Ok(())
+}
+
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let a: Vec<_> = std::env::args().skip(1).collect();
+    if a.first().is_some_and(|mode| {
+        matches!(
+            mode.as_str(),
+            "cpu-time" | "cpu-time-stats" | "cpu-cac" | "cpu-cli"
+        )
+    }) {
+        return cpu_reduction(&a);
+    }
     if a.len() < 3 {
         return Err("demucs_host branch|cli|prepare|track FRAMES CHANNELS [geometry]".into());
     }

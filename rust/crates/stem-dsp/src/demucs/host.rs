@@ -10,9 +10,9 @@ use super::{BLOCK, Error, MAX_PAYLOAD_BYTES, RATE, checkpoint, finite, zeros};
 
 pub mod apply;
 
-/// Mathematical mean and correction-one standard deviation, rounded to f32
-/// before elementwise arithmetic. The independent f64 two-pass reduction is
-/// deterministic, NOT Torch's device-dependent vector/Welford reduction order.
+/// Mean and correction-one standard deviation, stored as finite f32 scalars.
+/// Measurement below uses independent f64 two-pass arithmetic. The explicit
+/// original CPU dispatch profile is available in the sibling reduction module.
 #[derive(Debug, Clone, Copy)]
 pub struct Statistics {
     mean: f32,

@@ -14,6 +14,7 @@
 pub mod audio;
 pub mod host;
 pub mod hybrid;
+pub mod reduction;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex32};
 use std::{fmt, sync::Arc};
