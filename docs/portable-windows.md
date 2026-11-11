@@ -380,6 +380,32 @@ inventory includes `rubberband.txt`, `samplerate.txt`, `sleef.txt`, `ffmpeg.txt`
 DLL names, including the redistributable VC runtime, are declared in the builder;
 do not source them from System32.
 
+Both Windows build paths copy `windows-redistribution-sources.json` to the
+runtime's `licenses` directory. It lists the archive URLs and SHA-512 pins,
+vcpkg port recipes and patches for Rubber Band, libsamplerate and SLEEF. The
+reference candidate reused baseline Rubber Band and SLEEF binaries and loaded
+the separately built libsamplerate overlay DLL. Its compiler evidence identifies
+the exact overlay build. The ordinary installer builds the vcpkg package with
+the overlay selected.
+
+The release manifest's `native_redistribution` entry compares the four staged
+DLLs, the three copied notices and the tracked overlay files with the reference
+hashes. A match establishes byte identity for those files. Other builds retain
+their actual hashes in the inventories and list which reference paths differ
+or are missing. Their build origin requires separate evidence.
+
+Release work still includes making corresponding source available and
+confirming terms for the combined distribution, including
+[Rubber Band licensing](https://breakfastquay.com/rubberband/license.html).
+The pinned [FFmpeg binary release](https://github.com/GyanD/codexffmpeg/releases/tag/8.1.1)
+identifies the FFmpeg [upstream source revision](https://github.com/FFmpeg/FFmpeg/commit/239f2c733de417201d7ad3b3b8b0d9b63285b2b1).
+Its linked dependencies still need exact source, patch and build records.
+The Torch CUDA payload needs per-binary origin and terms for the toolkit and
+separately licensed components such as cuDNN, plus verification of the
+required driver. The MSVC CRT/OpenMP binaries need their exact redistribution
+eligibility and terms checked. [CUDA 13.0 terms](https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html),
+[Visual Studio 2026 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution).
+
 Clean reviewed source is the builder default. `--allow-dirty` is an explicit local
 candidate option recording the base commit, Native source commit and source
 fingerprint; the ordinary installer rejects such candidates. Optional Beat This

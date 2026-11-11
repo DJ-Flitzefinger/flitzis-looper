@@ -70,17 +70,59 @@ def test_tracked_licenses_and_provenance_are_copied_byte_exactly(tmp_path: Path)
         assert (staging / "licenses" / name).read_bytes() == (builder.REPO / relative).read_bytes()
 
 
-def test_external_license_cannot_overwrite_tracked_provenance(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "record", ["asio-sdk-provenance.json", "windows-redistribution-sources.json"]
+)
+def test_external_license_cannot_overwrite_tracked_provenance(tmp_path: Path, record: str) -> None:
     builder = _license_builder()
     staging = tmp_path / "staging"
     staging.mkdir()
     source = tmp_path / "external.txt"
     source.write_bytes(b"unrelated bytes")
     with pytest.raises(ValueError, match="must not overwrite"):
-        builder.copy_licenses(staging, [f"ASIO-SDK-PROVENANCE.JSON={source}"])
-    assert (staging / "licenses/asio-sdk-provenance.json").read_bytes() == (
-        builder.REPO / builder.TRACKED_LICENSES["asio-sdk-provenance.json"]
+        builder.copy_licenses(staging, [f"{record.upper()}={source}"])
+    assert (staging / "licenses" / record).read_bytes() == (
+        builder.REPO / builder.TRACKED_LICENSES[record]
     ).read_bytes()
+
+
+def test_external_license_requires_a_plain_filename(tmp_path: Path) -> None:
+    builder = _license_builder()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    source = tmp_path / "external.txt"
+    source.write_bytes(b"unrelated bytes")
+    with pytest.raises(ValueError, match="must be plain filenames"):
+        builder.copy_licenses(staging, [f"external.txt.={source}"])
+
+
+def test_native_redistribution_checks_staged_dlls_overlay_and_notices(tmp_path: Path) -> None:
+    builder = _license_builder()
+    record_path = f"licenses/{builder.NATIVE_SOURCE_RECORD}"
+    source = builder.REPO / builder.TRACKED_LICENSES[builder.NATIVE_SOURCE_RECORD]
+    reference = json.loads(source.read_text(encoding="utf-8"))["reference"]
+    (tmp_path / "licenses").mkdir()
+    (tmp_path / record_path).write_bytes(source.read_bytes())
+
+    assert builder.native_redistribution(
+        tmp_path, reference["checkout_files"], reference["runtime_files"]
+    ) == {
+        "source_record": record_path,
+        "reference_match": True,
+        "reference_mismatches": {"checkout_files": [], "runtime_files": []},
+    }
+    dll = "src/flitzis_looper_audio/samplerate.dll"
+    patch = "scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch"
+    notice = "licenses/sleef.txt"
+    checkout_files = {**reference["checkout_files"], dll: "0" * 64}
+    del checkout_files[patch]
+    runtime_files = {**reference["runtime_files"], notice: "1" * 64}
+
+    assert builder.native_redistribution(tmp_path, checkout_files, runtime_files) == {
+        "source_record": record_path,
+        "reference_match": False,
+        "reference_mismatches": {"checkout_files": [dll, patch], "runtime_files": [notice]},
+    }
 
 
 @pytest.mark.skipif(

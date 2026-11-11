@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "scope": "Windows x64 Release Rubber Band, libsamplerate and SLEEF DLLs and their notices",
+  "vcpkg": {
+    "revision": "020c8202737fb3ae3bfef5dd78ca537137be0ea0",
+    "repository": "https://github.com/microsoft/vcpkg",
+    "tool_recipe": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/scripts/vcpkg-tool-metadata.txt",
+    "triplet": {
+      "name": "x64-windows",
+      "recipe": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/triplets/x64-windows.cmake",
+      "sha256": "4556164a2cd3dd6f4742101eabb46def7e71b6e5856faa88e5d005aac12a803c",
+      "library_linkage": "dynamic",
+      "crt_linkage": "dynamic"
+    },
+    "meson_port": {
+      "version": "1.9.0#8",
+      "recipe": "https://github.com/microsoft/vcpkg/tree/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/vcpkg-tool-meson"
+    }
+  },
+  "build_recipe": {
+    "entry": "scripts/portable/install-main.ps1",
+    "vcpkg_arguments": [
+      "install",
+      "rubberband:x64-windows",
+      "--disable-metrics",
+      "--overlay-ports=scripts/native/vcpkg-overlay"
+    ],
+    "toolchain": "Use the x64 MSVC and Windows SDK selected by scripts/portable/toolchain.ps1. The exact toolchain for the reference libsamplerate DLL is recorded below."
+  },
+  "components": {
+    "rubberband": {
+      "version": "4.0.0#1",
+      "license": "GPL-2.0-or-later",
+      "upstream_license": "https://breakfastquay.com/rubberband/license.html",
+      "upstream_archive": {
+        "url": "https://github.com/breakfastquay/rubberband/archive/v4.0.0.tar.gz",
+        "bytes": 290305,
+        "sha512": "f581e900a71f78fde3361d2bed2fe165952c2ca087168c5f4e4994586bd832267eea58e0662a74b6a7430bc361fe80b5307b2ee6bf631a3561a8cba86e1cd3f2"
+      },
+      "port_manifest": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/rubberband/vcpkg.json",
+      "portfile": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/rubberband/portfile.cmake",
+      "patches": [],
+      "configuration": "Meson, FFT via SLEEF DFT and resampling via libsamplerate. CLI, tests, JNI, LADSPA, LV2 and Vamp disabled.",
+      "notice": "licenses/rubberband.txt",
+      "dlls": [
+        "src/flitzis_looper_audio/rubberband-3.dll"
+      ]
+    },
+    "libsamplerate": {
+      "version": "0.2.2#2",
+      "license": "BSD-2-Clause",
+      "upstream_archive": {
+        "url": "https://github.com/libsndfile/libsamplerate/archive/0.2.2.tar.gz",
+        "bytes": 3954784,
+        "sha512": "37e0fd604907caf978659466289315befd66eec16c21a94e0b6106de18ffe803fbf2e7f3a8fb0430b33c0b784ecd6d4eaf3b9a862ed2670104647decbee913d6"
+      },
+      "port_manifest": "scripts/native/vcpkg-overlay/libsamplerate/vcpkg.json",
+      "portfile": "scripts/native/vcpkg-overlay/libsamplerate/portfile.cmake",
+      "patches": [
+        {
+          "checkout_path": "scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch"
+        }
+      ],
+      "configuration": "Shared CMake build with tests and examples disabled.",
+      "notice": "licenses/samplerate.txt",
+      "dlls": [
+        "src/flitzis_looper_audio/samplerate.dll"
+      ]
+    },
+    "sleef": {
+      "version": "3.9.0#2",
+      "license": "BSL-1.0",
+      "upstream_archive": {
+        "url": "https://github.com/shibatch/sleef/archive/3.9.0.tar.gz",
+        "bytes": 1808227,
+        "sha512": "9b47667b33a685308aa65f848b7ee620e9e8783ca4851fd57e873f34310b486fb351813f573f2a7a71b6bdc5c8b2c5ef4eb4f66c890ddfbfada7bb9d74626c0b"
+      },
+      "port_manifest": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/vcpkg.json",
+      "portfile": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/portfile.cmake",
+      "patches": [
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/android-neon.diff",
+          "sha256": "a87aafd80a34577d031069beebab4e39e7b06c0881c3cc066d2f2ae956392e26"
+        },
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/exclude-testerutil.diff",
+          "sha256": "eb2977539714c1f57c04b5fe573e3d800e8e67733866615e25a7a80545315cce"
+        },
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/export-link-libs.diff",
+          "sha256": "92cde473c8a1052a7071e39e3864d416924b7389a268c4dc044fa3cc85f0a2ff"
+        },
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/sleefdft.pc.diff",
+          "sha256": "8486e570bd89b322c4c3b2049168d3408a352fddd76c0f4dfbd3eb1c14cb4988"
+        },
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/seh-cpu-ext.diff",
+          "sha256": "1f72c2fe17325f5ec41b5ae139a657de57bb18bb86a589b7e881c5652ac7590f"
+        },
+        {
+          "url": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/sleef/disable-msvc-builtin-math.diff",
+          "sha256": "e9c999edce7546955cb504f7206836b9e56823cb3f7d9314ec144fbf6fe7e350"
+        }
+      ],
+      "configuration": "CMake, core and dft with OpenMP. The port builds sleefquad.dll as well. Portable packages the two DLLs listed here.",
+      "notice": "licenses/sleef.txt",
+      "dlls": [
+        "src/flitzis_looper_audio/sleef.dll",
+        "src/flitzis_looper_audio/sleefdft.dll"
+      ]
+    }
+  },
+  "reference": {
+    "candidate_release_id": "7b6c79f9a7eb-ecd5d04afa9f",
+    "build_evidence": {
+      "composition": "The reference reused the baseline vcpkg Rubber Band and SLEEF DLLs. The Rubber Band build receipt identifies the stock libsamplerate 0.2.2#1 port. The packaged candidate substituted the separately built 0.2.2#2 DLL at runtime.",
+      "baseline_samplerate_portfile": "https://github.com/microsoft/vcpkg/blob/020c8202737fb3ae3bfef5dd78ca537137be0ea0/ports/libsamplerate/portfile.cmake",
+      "base_vcpkg_abi": {
+        "cmake": "4.4.3",
+        "powershell": "7.6.5",
+        "compiler_id": "7657bc5368d221ba83e6eb71df5307582156e059",
+        "rubberband_samplerate_dependency": "5a453fef901354634f16f2c0483aa66cd1c60f2e11fe273cc33ec13fdac0cc7b"
+      },
+      "samplerate_overlay": {
+        "vcpkg_package": "libsamplerate:x64-windows",
+        "msvc_tools": "14.51.36231",
+        "msvc_compiler": "19.51.36256.0",
+        "windows_sdk": "10.0.26200",
+        "generator": "Ninja",
+        "cmake": "4.4.3",
+        "powershell": "7.6.9",
+        "cl_sha256": "e6d57100c82ae0310c18b16abfe52bc0df8fbb272ca6c5fb287d485807cfce91",
+        "link_sha256": "3ef8fcf80d409fab22ddd89ee19249f31a26ad9914d3e3e48573c30998fa24de",
+        "release_flags": [
+          "/MD",
+          "/O2",
+          "/Oi",
+          "/Gy",
+          "/DNDEBUG",
+          "/Z7"
+        ]
+      }
+    },
+    "checkout_files": {
+      "src/flitzis_looper_audio/rubberband-3.dll": "468d2f64f93b41868fb3195a97f4a2df59b74c85f38e0017fcf397084e11913d",
+      "src/flitzis_looper_audio/samplerate.dll": "af5621e5d6665bb57231d66e7f46a9a9b817eb33f7c83ae411db60bff21eb95e",
+      "src/flitzis_looper_audio/sleef.dll": "ebfb044bdae5c7cd666c35f5cb5881e92536c76a3c50d2f85c031fe8e034f190",
+      "src/flitzis_looper_audio/sleefdft.dll": "19c9474b0b070670c86fcedeaaa95bce30be7e7c57c4481386c3727664b2f2a8",
+      "scripts/native/vcpkg-overlay/libsamplerate/portfile.cmake": "c8bded1c5524cebc289161782dabacc3cb7368f11b8b6cd250d52698144c61fb",
+      "scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch": "967644adf7ee8557ba690bda8a83bb37d99786ca0f98c67d2ce2f6fc94e7916a",
+      "scripts/native/vcpkg-overlay/libsamplerate/vcpkg.json": "642373cfa74e5e04960de0bf36bc984704aba0dd5c074dbaf48e1724e5de4bc0"
+    },
+    "runtime_files": {
+      "licenses/rubberband.txt": "cedd4c1885d75991bf1077cc6e33359103cf04fbc996f20d30ab043d5fc5fcc5",
+      "licenses/samplerate.txt": "2c1f76ce2effdddb425018405d5690c0b1ab4e6976e35296b0a6db65c5e1a55d",
+      "licenses/sleef.txt": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    }
+  }
+}

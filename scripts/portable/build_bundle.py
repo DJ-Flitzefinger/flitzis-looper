@@ -57,6 +57,8 @@ NATIVE_ENTRY = "flitzis_looper_audio/" + NATIVE_NAME
 WHEEL_TAG = "cp314-cp314-win_amd64"
 VENDORED_PACKAGE = Path("flitzis_bs_roformer")
 VENDORED_SOURCE = Path("vendor/bs_roformer/src") / VENDORED_PACKAGE
+NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
+# Keep these literals readable by the legacy inventory parser.
 TRACKED_LICENSES = {
     "flitzis-looper.txt": "LICENSE.txt",
     "bs-roformer-NOTICE.md": "vendor/bs_roformer/NOTICE.md",
@@ -65,6 +67,7 @@ TRACKED_LICENSES = {
     "asio-sdk-provenance.json": "rust/crates/looper/vendor/asio-sdk/provenance.json",
     "cpal-LICENSE.txt": "rust/vendor/cpal/LICENSE",
     "cpal-provenance.json": "rust/vendor/cpal/looper-provenance.json",
+    "windows-redistribution-sources.json": "scripts/native/windows-redistribution-sources.json",
 }
 STARTER = (
     "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n"
@@ -381,16 +384,28 @@ def copy_external_runtime(staging: Path, checkout: Path, args: argparse.Namespac
 def copy_licenses(staging: Path, values: list[str]) -> None:
     licenses = staging / "licenses"
     licenses.mkdir()
+    tracked_names = {name.casefold() for name in TRACKED_LICENSES}
     for name, relative in TRACKED_LICENSES.items():
         shutil.copyfile(REPO / relative, licenses / name)
     for value in values:
         name, path = value.split("=", 1)
-        require(Path(name).name == name, "License names must be plain filenames")
         require(
-            name.casefold() not in {name.casefold() for name in TRACKED_LICENSES},
+            Path(name).name == name
+            and name
+            and not any(character in name for character in ":/\\")
+            and name == name.rstrip(" ."),
+            "License names must be plain filenames",
+        )
+        target = licenses / name
+        require(
+            name.casefold() not in tracked_names
+            and not (
+                target.exists()
+                and any(target.samefile(licenses / tracked) for tracked in TRACKED_LICENSES)
+            ),
             "External license must not overwrite a tracked license or provenance file",
         )
-        shutil.copyfile(path, licenses / name)
+        shutil.copyfile(path, target)
     require(
         not LICENSE_NAMES - {path.name for path in licenses.iterdir()},
         "Required external license texts missing",
@@ -468,6 +483,28 @@ def file_inventory(directory: Path) -> dict[str, str]:
     }
 
 
+def native_redistribution(
+    runtime: Path, checkout_files: dict[str, str], runtime_files: dict[str, str]
+) -> dict[str, object]:
+    """Compare staged files with the qualified Windows Native dependency reference."""
+    record_path = f"licenses/{NATIVE_SOURCE_RECORD}"
+    record = json.loads((runtime / record_path).read_text(encoding="utf-8"))
+    inventories = {"checkout_files": checkout_files, "runtime_files": runtime_files}
+    mismatches = {
+        name: [
+            path
+            for path, sha256 in record["reference"][name].items()
+            if inventory.get(path) != sha256
+        ]
+        for name, inventory in inventories.items()
+    }
+    return {
+        "source_record": record_path,
+        "reference_match": not any(mismatches.values()),
+        "reference_mismatches": mismatches,
+    }
+
+
 def directory_inventory(directory: Path) -> list[str]:
     """Record owned directories, including empty Git and structural folders."""
     return [
@@ -541,6 +578,8 @@ def build(args: argparse.Namespace) -> None:
     # Input data is introduced only during activation; its structural parent
     # must already be owned so a later empty parent is safe to retire.
     (checkout / "config").mkdir(exist_ok=True)
+    checkout_files = file_inventory(checkout)
+    runtime_files = file_inventory(runtime)
     release = {
         "schema_version": 2,
         "release_id": commit,
@@ -551,9 +590,10 @@ def build(args: argparse.Namespace) -> None:
         "native_wheel_sha256": wheel_sha256,
         "runtime_dependencies": dependencies,
         "python_version": sys.version.split()[0],
-        "checkout_files": file_inventory(checkout),
+        "checkout_files": checkout_files,
         "checkout_directories": directory_inventory(checkout),
-        "runtime_files": file_inventory(runtime),
+        "runtime_files": runtime_files,
+        "native_redistribution": native_redistribution(runtime, checkout_files, runtime_files),
     }
     if args.runtime_directory:
         destination = args.runtime_directory.absolute()
