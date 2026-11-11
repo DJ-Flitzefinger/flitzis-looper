@@ -22,6 +22,7 @@ from itertools import pairwise
 from math import prod
 from pathlib import Path
 from threading import Lock
+from types import MethodType
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ STATE_HALF_BYTES = 83_968_912
 STATE_BANK_BYTES = 167_939_968  # Includes per-tensor padding for stock CPU alignment.
 STATE_ALIGNMENT = 64
 STATE_RUNTIME_PINS = {
+    "torch/lib/c10.dll": "0a8422bf6449094af91688d3452852a3e028401d69fa8e8655e44e15022db971",
     "torch/lib/torch_cpu.dll": ("de412dd735a2d880bd40f0ef88f2333af846e698e28065912026b650ae34fd1a"),
     "torch/lib/torch_python.dll": (
         "25887cacf9cf8acf6fd08dbac87b91f92e34afba6ef19eb54e297ad75ea7d572"
@@ -782,7 +784,35 @@ def load_producer_model(
     return model
 
 
-def original_forward(torch, model, mix, output: Path):
+def mapped_reference_forward(model, module, source: bytes) -> MethodType:
+    """Keep the pinned CPU CAC forward and release its unused spectral owners."""
+    name = "demucs/htdemucs.py"
+    if (
+        hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
+        or type(model) is not module.HTDemucs
+        or model.training
+        or model.cac is not True
+        or "forward" in vars(model)
+    ):
+        msg = "mapped HTDemucs reference requires the exact stock CAC eval forward"
+        raise ValueError(msg)
+
+    forward = forward_definition(source, "HTDemucs")
+    mask = next(
+        i for i, node in enumerate(forward.body) if ast.unparse(node) == "zout = self._mask(z, x)"
+    )
+    magnitude = next(i for i, node in enumerate(forward.body) if ast.unparse(node) == "x = mag")
+    # The pinned CAC mask reads only x. Drop z after magnitude conversion and
+    # let x own the magnitude backing until normalization overwrites it.
+    forward.body[mask] = ast.parse("zout = self._mask(None, x)").body[0]
+    forward.body.insert(magnitude + 1, ast.parse("del z, mag").body[0])
+    tree = ast.Module(body=[forward], type_ignores=[])
+    namespace = {}
+    exec(compile(ast.fix_missing_locations(tree), name, "exec"), vars(module), namespace)
+    return MethodType(namespace["forward"], model)
+
+
+def original_forward(torch, model, mix, output: Path, *, mapped_forward: MethodType | None = None):
     """Write the four stock hook tensors at their source lifetime boundary."""
     artifacts = {}
 
@@ -812,6 +842,12 @@ def original_forward(torch, model, mix, output: Path):
                 lambda _, _args, result: capture("decoded_waveform", result[0])
             )
         )
+        if mapped_forward is not None:
+            if mix.device.type != "cpu" or not torch.is_inference_mode_enabled():
+                msg = "mapped HTDemucs reference requires CPU inference mode"
+                raise ValueError(msg)
+            model.forward = mapped_forward
+            hooks.callback(delattr, model, "forward")
         pcm = model(mix)
     if artifacts.keys() != SHAPES.keys():
         msg = "missing original HTDemucs hook output"
@@ -1211,8 +1247,15 @@ def capture_reference(
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
     model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
     wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
+    mapped_forward = (
+        mapped_reference_forward(model, module, sources["demucs/htdemucs.py"])
+        if mapped_state is not None
+        else None
+    )
     with torch.inference_mode():
-        artifacts, pcm = original_forward(torch, model, waveform, output)
+        artifacts, pcm = original_forward(
+            torch, model, waveform, output, mapped_forward=mapped_forward
+        )
         del waveform
         original_pcm = write_tensor(torch, output / "original_pcm.f32", pcm, PCM_SHAPE)
         del pcm

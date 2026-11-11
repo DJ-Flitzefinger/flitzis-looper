@@ -1389,7 +1389,14 @@ The bank contains 167,937,824 bytes of FP32 payload and 2,144 bytes of alignment
 padding. Its 4 KiB page-rounded extent is 167,940,096 bytes. Include mapped
 residency separately in each phase admission. Only the separated trace selects
 the CPU Flash SDPA backend.
-The stock reference keeps its original dispatch. The separated path uses the
+The stock reference keeps its original dispatch. In the mapped CPU CAC
+reference, the pinned forward releases the complex STFT view after magnitude
+conversion and drops the redundant magnitude alias before normalization.
+The CAC mask reads only the decoder output. The two released storages total
+22,156,608 logical bytes at the fixed input geometry. In a checkpoint-free
+front-end comparison, the pinned c10 decommit profile released the Windows
+commit covering both former storage ranges by the first spectral encoder.
+Account for the full reference's allocator commit independently. The separated path uses the
 pinned TorchScript graph conversion with ONNX constant folding disabled. It
 serializes the graph with the learned parameters as named inputs, then writes
 each parameter to a bounded raw bank with its name, shape, dtype and SHA-256.
