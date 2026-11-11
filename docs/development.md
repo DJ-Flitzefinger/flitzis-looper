@@ -1415,14 +1415,16 @@ CAC packing and passes sole ownership of the packed spectrum to the pinned
 inverse-spectrogram code. Its first pad replaces the packed backing. At the
 second pad, the pinned stock constant-padding kernel writes its output into a
 44,586,240-byte writable file mapping. The first pad's storage ends before
-iSTFT. The mapped output keeps the stock complex64 shape and strides, and
-the stock C2R and overlap-add consume it with the decoded waveform still live.
-The tensor storage retains the mapping through its final alias, including
-when an exception retains the input. The trace uses the existing decoder path.
+iSTFT. The mapped output keeps the stock complex64 shape and strides.
+The stock native C2R uses a second writable file mapping for its 44,564,480-byte
+float32 output. Its batch resize and stride restoration reuse the same tensor
+storage and data pointer. Stock windowing and overlap-add consume those frames
+with the decoded waveform still live. Each tensor storage retains its file
+view through the last alias, including on exceptions.
 
-Charge both mapped extents for physical residency and file cache. The stock
-MKL input pack, FFT output, windowed frames and overlap-add tensors still
-require private storage. The full learned reference requires a prospective
+Charge the mapped state, score, second pad and C2R frame extents for physical
+residency and file cache. The stock MKL input pack, windowed frames and
+overlap-add tensors still require private storage. The full learned reference requires a prospective
 commit and residency budget for both forwards, retained activations, vendor
 scratch, allocator behavior and retirement.
 

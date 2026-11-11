@@ -824,7 +824,7 @@ def load_producer_model(
     return model
 
 
-def mapped_reference_forward(model, module, source: bytes, pad2) -> MethodType:
+def mapped_reference_forward(model, module, source: bytes, pad2, ispectro) -> MethodType:
     """Keep the pinned CPU CAC forward and retire its unused tensor owners."""
     name = "demucs/htdemucs.py"
     if (
@@ -850,6 +850,12 @@ def mapped_reference_forward(model, module, source: bytes, pad2) -> MethodType:
     ispec.args.args[1].arg = "packed"
     second_pad = next(node for node in ispec.body if ast.unparse(node) == "z = F.pad(z, (2, 2))")
     second_pad.value.func = ast.Name(id="_mapped_pad2", ctx=ast.Load())
+    inverse = next(
+        node
+        for node in ast.walk(ispec)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "ispectro"
+    )
+    inverse.func = ast.Name(id="_mapped_ispectro", ctx=ast.Load())
     ispec.body[:0] = ast.parse("z = packed.pop()").body
     for node in ast.walk(forward.body[mask + 1]):
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._ispec":
@@ -861,11 +867,11 @@ def mapped_reference_forward(model, module, source: bytes, pad2) -> MethodType:
     ]
     forward.body.insert(magnitude + 1, ast.parse("del z, mag").body[0])
     release_decoder_locals(forward)
-    tree = ast.parse("def bind(_mapped_pad2):\n    return forward")
+    tree = ast.parse("def bind(_mapped_pad2, _mapped_ispectro):\n    return forward")
     tree.body[0].body.insert(0, forward)
     namespace = {}
     exec(compile(ast.fix_missing_locations(tree), name, "exec"), vars(module), namespace)
-    return MethodType(namespace["bind"](pad2), model)
+    return MethodType(namespace["bind"](pad2, ispectro), model)
 
 
 def mapped_reference_scratch(output: Path, size: int, label: str) -> memoryview:
@@ -887,6 +893,16 @@ def mapped_attention_score(output: Path, tokens: int):
     yield mapped_reference_scratch(output, HEADS * tokens * tokens * 4, "score")
 
 
+def check_reference_inference_dispatch(torch, operation: str) -> None:
+    if (
+        not torch.is_inference_mode_enabled()
+        or torch.is_autocast_enabled("cpu")
+        or torch._C._len_torch_dispatch_stack()
+    ):
+        msg = f"unexpected HTDemucs {operation} dispatch state"
+        raise ValueError(msg)
+
+
 def check_reference_pad2(torch, z, padding) -> None:
     if (
         (padding, type(z)) != ((2, 2), torch.Tensor)
@@ -897,13 +913,7 @@ def check_reference_pad2(torch, z, padding) -> None:
     ):
         msg = "unexpected HTDemucs second pad geometry"
         raise ValueError(msg)
-    if (
-        not torch.is_inference_mode_enabled()
-        or torch.is_autocast_enabled("cpu")
-        or torch._C._len_torch_dispatch_stack()
-    ):
-        msg = "unexpected HTDemucs second pad dispatch state"
-        raise ValueError(msg)
+    check_reference_inference_dispatch(torch, "second pad")
 
 
 def mapped_reference_pad2(torch, output: Path):
@@ -964,6 +974,148 @@ def mapped_reference_pad2(torch, output: Path):
         return padded
 
     return pad2
+
+
+def c2r_frame_backing(value):
+    return value._cdata, value.untyped_storage()._cdata, value.data_ptr()
+
+
+def check_c2r_frames(value, backing, geometry) -> None:
+    if c2r_frame_backing(value) != backing or state_storage_geometry(value) != geometry:
+        msg = "HTDemucs C2R changed the mapped frame backing"
+        raise ValueError(msg)
+
+
+def native_c2r_frames(torch, output: Path, func, args):
+    """Keep the MKL C2R kernel and supply its initial frame storage."""
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    shape = (8, 340, 4096)
+    stride = (1392640, 4096, 1)
+    batch = (2720, 4096)
+    batch_stride = (4096, 1)
+    size = prod(shape) * 4
+    empty_options = {"dtype": torch.float32, "layout": torch.strided, "device": torch.device("cpu")}
+    frame_geometry = (shape, stride, 0, size)
+    batch_geometry = (batch, batch_stride, 0, size)
+    backing = None
+    step = 0
+
+    def dispatch(op, operands, options):
+        nonlocal backing, step
+        if op == aten.empty.memory_format:
+            if step != 0 or tuple(operands[0]) != shape or options != empty_options:
+                msg = "unexpected HTDemucs C2R frame allocation"
+                raise ValueError(msg)
+            owner = mapped_reference_scratch(output, size, "c2r-frames")
+            mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
+            backing = c2r_frame_backing(mapped)
+            if mapped.data_ptr() % STATE_ALIGNMENT or mapped.untyped_storage().resizable():
+                msg = "unexpected HTDemucs C2R frame storage"
+                raise ValueError(msg)
+            check_c2r_frames(mapped, backing, frame_geometry)
+            step = 1
+            return mapped
+        if op == aten.resize_.default:
+            if (
+                step != 1
+                or tuple(operands[1]) != batch
+                or options != {"memory_format": torch.contiguous_format}
+            ):
+                msg = "unexpected HTDemucs C2R batch resize"
+                raise ValueError(msg)
+            check_c2r_frames(operands[0], backing, frame_geometry)
+            resized = op(*operands, **options)
+            check_c2r_frames(resized, backing, batch_geometry)
+            step = 2
+            return resized
+        if op == aten.as_strided_.default:
+            if (
+                step != 2
+                or options
+                or len(operands) != 4
+                or (tuple(operands[1]), tuple(operands[2]), operands[3]) != (shape, stride, 0)
+            ):
+                msg = "unexpected HTDemucs C2R frame stride restoration"
+                raise ValueError(msg)
+            check_c2r_frames(operands[0], backing, batch_geometry)
+            restored = op(*operands)
+            check_c2r_frames(restored, backing, frame_geometry)
+            step = 3
+            return restored
+        return op(*operands, **options)
+
+    # The pinned CPU resize changes only metadata for this exact capacity.
+    # DFTI writes the same pointer and the kernel then restores its strides.
+    with reference_dispatch_mode(dispatch):
+        frames = func.redispatch(cpu, *args)
+    if step != 3:
+        msg = "incomplete HTDemucs native C2R frame allocation"
+        raise ValueError(msg)
+    check_c2r_frames(frames, backing, frame_geometry)
+    return frames
+
+
+def mapped_reference_ispectro(torch, output: Path, stock_ispectro):
+    """Redirect only the fixed mapped reference's C2R frame allocation."""
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    input_bytes = prod(PAD2_SHAPE) * 8
+
+    def ispectro(z, hop_length, *, length):
+        if (
+            (hop_length, length, type(z)) != (1024, 347136, torch.Tensor)
+            or (z.device.type, z.dtype, z.layout) != ("cpu", torch.complex64, torch.strided)
+            or (z.is_conj(), z.is_neg()) != (False, False)
+            or state_storage_geometry(z)
+            != (PAD2_SHAPE, (5573280, 1393320, 696660, 340, 1), 0, input_bytes)
+        ):
+            msg = "unexpected HTDemucs mapped iSTFT input"
+            raise ValueError(msg)
+        check_reference_inference_dispatch(torch, "mapped iSTFT")
+        storage = z.untyped_storage()._cdata
+        used_c2r = False
+
+        def c2r(op, args, options):
+            nonlocal used_c2r
+            if op != aten._fft_c2r.default:
+                return op(*args, **options)
+            if (
+                (used_c2r, bool(options), len(args)) != (False, False, 4)
+                or (tuple(args[1]), args[2], args[3]) != ((2,), 1, 4096)
+                or args[0].untyped_storage()._cdata != storage
+                or state_storage_geometry(args[0])
+                != ((8, 340, 2049), (696660, 1, 340), 0, input_bytes)
+            ):
+                msg = "unexpected HTDemucs C2R input"
+                raise ValueError(msg)
+            used_c2r = True
+            return native_c2r_frames(torch, output, op, args)
+
+        def dispatch(op, args, options):
+            if op != aten.istft.default:
+                return op(*args, **options)
+            if (
+                (used_c2r, bool(options), len(args)) != (False, False, 9)
+                or args[1:4] != (4096, hop_length, 4096)
+                or args[5:] != (True, True, None, length)
+                or args[0].untyped_storage()._cdata != storage
+                or state_storage_geometry(args[0])
+                != ((8, 2049, 340), (696660, 340, 1), 0, input_bytes)
+            ):
+                msg = "unexpected HTDemucs stock iSTFT call"
+                raise ValueError(msg)
+            with reference_dispatch_mode(c2r):
+                return op.redispatch(cpu, *args)
+
+        with reference_dispatch_mode(dispatch):
+            result = stock_ispectro(z, hop_length, length=length)
+        if not used_c2r:
+            msg = "HTDemucs stock iSTFT did not use the mapped C2R frames"
+            raise ValueError(msg)
+        return result
+
+    return ispectro
 
 
 def attention_score_tensor(torch, owner: memoryview, shape: tuple[int, int, int]):
@@ -1590,7 +1742,11 @@ def capture_reference(
     )
     mapped_forward = (
         mapped_reference_forward(
-            model, module, sources["demucs/htdemucs.py"], mapped_reference_pad2(torch, output)
+            model,
+            module,
+            sources["demucs/htdemucs.py"],
+            mapped_reference_pad2(torch, output),
+            mapped_reference_ispectro(torch, output, module.ispectro),
         )
         if mapped_state is not None
         else None
