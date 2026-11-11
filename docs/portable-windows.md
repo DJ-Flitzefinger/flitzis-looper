@@ -359,7 +359,11 @@ The builder verifies the project, ABI and extension RECORD hash and size, and
 records the complete wheel SHA256 alongside the extension SHA256. Use the
 Native source commit from the matching Release build record.
 Runtime imports, private loaded DLL paths and offline-worker imports must pass
-before packaging. The build preflight skips worker selection and model
+before packaging. The preflight reports the mapped Torch and shared FFmpeg
+libraries separately for the bootstrap process and its TorchCodec dependency
+child. It checks each package library against its private runtime path and
+reports unused shared FFmpeg libraries and observed Windows UCRT and NVIDIA
+driver DLLs separately. The build preflight skips worker selection and model
 preparation and opens no App or audio device. The ordinary installer performs
 the additional readiness checks.
 

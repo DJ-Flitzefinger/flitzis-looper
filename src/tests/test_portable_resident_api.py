@@ -1038,13 +1038,25 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
         modules[name] = SimpleNamespace(__file__=str(runtime / f"python/{name}/__init__.py"))
     monkeypatch.setattr(bootstrap["importlib"], "import_module", modules.__getitem__)
     monkeypatch.setitem(bootstrap["check_runtime"].__globals__, "private_dlls", lambda *_: {})
+    parent_dlls = {"torch": {"torch_cpu.dll": "parent"}}
+    child_dlls = {"ffmpeg": {"avcodec-62.dll": "child"}}
+    monkeypatch.setitem(
+        bootstrap["check_runtime"].__globals__, "check_dependency_dlls", lambda _: parent_dlls
+    )
     runner = Mock()
+    runner.return_value.stdout = json.dumps(child_dlls)
     monkeypatch.setattr(bootstrap["subprocess"], "run", runner)
     bootstrap["check_runtime"](tmp_path, checkout, runtime, require_analysis=False)
     assert runner.call_count == 3
+    args, options = runner.call_args_list[0]
+    assert "check_stem_dependency_child" in args[0][4]
+    assert args[0][-1] == str(runtime)
+    assert options["check"]
     report = json.loads(capsys.readouterr().out)
     assert report["portable_preflight"] == "passed"
     assert report["analysis_checked"] is False
+    assert report["dependency_dlls"] == parent_dlls
+    assert report["child_dependency_dlls"] == child_dlls
 
 
 @pytest.mark.parametrize("method", ["global_rate_status", "bpm_lock_status"])

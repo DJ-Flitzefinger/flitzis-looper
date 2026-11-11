@@ -2,14 +2,24 @@
 
 # Standalone entrypoint copied into each runtime.
 import argparse
+import csv
 import ctypes
 import importlib
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
-from pathlib import Path
+from contextlib import redirect_stdout
+from ctypes import wintypes
+from importlib import metadata
+from pathlib import Path, PurePosixPath
+
+FFMPEG_DLL = re.compile(
+    r"(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)-[0-9]+\.dll"
+)
+FFMPEG_CODEC_LIBRARIES = {"avcodec", "avfilter", "avformat", "avutil", "swresample", "swscale"}
 
 
 def physical_path(path: Path) -> Path:
@@ -102,6 +112,137 @@ def private_dlls(runtime: Path, checkout: Path) -> dict[str, str]:
         ), f"Nonportable DLL resolution: {dll}"
         dlls[name] = str(dll)
     return dlls
+
+
+def loaded_dll_paths(kernel: ctypes.WinDLL) -> list[Path]:
+    """Read the current process's mapped modules, including same-name DLLs."""
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    enumerate_modules = kernel.K32EnumProcessModules
+    enumerate_modules.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HMODULE),
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    enumerate_modules.restype = wintypes.BOOL
+    file_name = kernel.GetModuleFileNameW
+    file_name.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    file_name.restype = wintypes.DWORD
+    process = kernel.GetCurrentProcess()
+    size = wintypes.DWORD()
+    capacity = 256
+    while True:
+        handles = (wintypes.HMODULE * capacity)()
+        if not enumerate_modules(process, handles, ctypes.sizeof(handles), ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        count = size.value // ctypes.sizeof(wintypes.HMODULE)
+        if count <= capacity:
+            break
+        capacity = count
+    buffer = ctypes.create_unicode_buffer(32768)
+    paths = []
+    for handle in handles[:count]:
+        length = file_name(handle, buffer, len(buffer))
+        if not 0 < length < len(buffer):
+            raise ctypes.WinError(ctypes.get_last_error())
+        paths.append(Path(buffer.value))
+    return paths
+
+
+def dependency_dll_origins(
+    paths: list[Path], runtime: Path, system_dir: Path, torch_names: set[str]
+) -> dict[str, dict[str, str] | list[str]]:
+    """Verify the Windows wheel and TorchCodec's private shared FFmpeg libraries."""
+    runtime = physical_path(runtime)
+    torch = {name: runtime / "python/Lib/site-packages/torch/lib" / name for name in torch_names}
+    ffmpeg = {
+        path.name.lower(): path
+        for path in (runtime / "runtime/ffmpeg").glob("*.dll")
+        if FFMPEG_DLL.fullmatch(path.name.lower())
+    }
+    expected = torch | ffmpeg
+    mapped: dict[str, str] = {}
+    os_dlls: dict[str, str] = {}
+    system_dir = physical_path(system_dir)
+    for path in paths:
+        name = path.name.lower()
+        if name in {"ucrtbase.dll", "nvcuda.dll"}:
+            resolved = physical_path(path)
+            valid = resolved == system_dir / name or (
+                name == "nvcuda.dll" and resolved.is_relative_to(system_dir / "DriverStore")
+            )
+            if not valid:
+                message = f"Unexpected Windows DLL origin: {resolved}"
+                raise RuntimeError(message)
+            os_dlls[name] = str(resolved)
+        elif name in expected or FFMPEG_DLL.fullmatch(name):
+            resolved = physical_path(path)
+            if name not in expected or resolved != expected[name]:
+                message = f"Nonportable dependency DLL resolution: {resolved}"
+                raise RuntimeError(message)
+            mapped[name] = str(resolved)
+
+    # The Windows Torch wheel eagerly loads its lib directory. TorchCodec loads
+    # only the FFmpeg libraries linked by the selected backend.
+    missing_torch = (torch.keys() | {"torch_cpu.dll"}) - mapped.keys()
+    loaded_ffmpeg = {name: mapped[name] for name in sorted(ffmpeg.keys() & mapped.keys())}
+    missing_ffmpeg = FFMPEG_CODEC_LIBRARIES - {name.split("-", 1)[0] for name in loaded_ffmpeg}
+    if missing_torch or missing_ffmpeg:
+        message = (
+            f"Missing loaded dependency DLLs: Torch {sorted(missing_torch)}, "
+            f"FFmpeg {sorted(missing_ffmpeg)}"
+        )
+        raise RuntimeError(message)
+    return {
+        "torch": {name: mapped[name] for name in sorted(torch)},
+        "ffmpeg": loaded_ffmpeg,
+        "ffmpeg_not_loaded": sorted(ffmpeg.keys() - loaded_ffmpeg.keys()),
+        "os_dependencies": os_dlls,
+    }
+
+
+def check_dependency_dlls(runtime: Path) -> dict[str, dict[str, str] | list[str]]:
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    system_directory = kernel.GetSystemDirectoryW
+    system_directory.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+    system_directory.restype = wintypes.UINT
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not 0 < system_directory(buffer, len(buffer)) < len(buffer):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return dependency_dll_origins(
+        loaded_dll_paths(kernel),
+        runtime,
+        Path(buffer.value),
+        torch_wheel_dlls(runtime),
+    )
+
+
+def torch_wheel_dlls(runtime: Path) -> set[str]:
+    """Use the private wheel RECORD even if a declared DLL is missing on disk."""
+    torch = metadata.distribution("torch")
+    site = runtime / "python/Lib/site-packages"
+    record = torch.read_text("RECORD")
+    if physical_path(torch.locate_file("")) != physical_path(site) or record is None:
+        message = "Portable Torch has no private wheel file inventory"
+        raise RuntimeError(message)
+    paths = (PurePosixPath(row[0]) for row in csv.reader(record.splitlines()) if row)
+    return {
+        path.name.lower()
+        for path in paths
+        if path.parent.as_posix() == "torch/lib" and path.suffix.lower() == ".dll"
+    }
+
+
+def check_stem_dependency_child(runtime: Path) -> None:
+    with redirect_stdout(sys.stderr):
+        for name in (
+            "torchcodec.encoders",
+            "flitzis_looper.demucs_streaming",
+            "flitzis_bs_roformer.__main__",
+        ):
+            importlib.import_module(name)
+    sys.stdout.write(json.dumps(check_dependency_dlls(runtime)) + "\n")
+    sys.stdout.flush()
 
 
 def check_resident_api(engine_type: type) -> None:
@@ -870,21 +1011,27 @@ def check_runtime(
     assert app_module.__file__ is not None, "Portable application has no file origin"
     assert physical_path(Path(app_module.__file__)).is_relative_to(physical_path(checkout / "src"))
     dlls = private_dlls(runtime, checkout)
+    dependency_dlls = check_dependency_dlls(runtime)
     child_env = os.environ | {"PYTHONPATH": str(checkout / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
-    subprocess.run(
+    child = subprocess.run(
         [
             sys.executable,
             "-s",
             "-B",
             "-c",
             (
-                "import torchcodec.encoders; import flitzis_looper.demucs_streaming; "
-                "import flitzis_bs_roformer.__main__"
+                "import runpy, sys; from pathlib import Path; "
+                "runpy.run_path(sys.argv[1])['check_stem_dependency_child'](Path(sys.argv[2]))"
             ),
+            str(Path(__file__).absolute()),
+            str(runtime),
         ],
         env=child_env,
         check=True,
+        stdout=subprocess.PIPE,
+        encoding="utf-8",
     )
+    child_dlls = json.loads(child.stdout)
     for tool in ["ffmpeg.exe", "ffprobe.exe"]:
         subprocess.run(
             [str(runtime / "runtime/ffmpeg" / tool), "-version"],
@@ -899,6 +1046,8 @@ def check_runtime(
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
+            "dependency_dlls": dependency_dlls,
+            "child_dependency_dlls": child_dlls,
         })
         + "\n"
     )
