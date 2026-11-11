@@ -118,6 +118,8 @@ ISTFT_FRAME_SHAPE = (8, 340, 4096)
 ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
 ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
 SPECTRAL_SKIP_ADD_DENSE = ((1, 48, 512, 336), (8257536, 172032, 336, 1), 0, 33_030_144)
+SPECTRAL_CALLER_CROP = ((1, 48, 512, 336), (8322048, 173376, 336, 1), 672, 33_288_192)
+SPECTRAL_SCALED_EMBEDDING = ((1, 48, 512, 336), (16128, 336, 16128, 1), 0, 33_030_144)
 SPECTRAL_REWRITE_SHAPE = (1, 96, 512, 336)
 SPECTRAL_REWRITE_BYTES = prod(SPECTRAL_REWRITE_SHAPE) * 4
 SPECTRAL_REWRITE_DENSE = (
@@ -424,11 +426,37 @@ def release_decoder_locals(forward: ast.FunctionDef) -> None:
     decoder.body[2:2] = ast.parse("del skip").body
 
 
-def core_code(source: bytes, *, release_decoder: bool = False) -> Any:
+def redirect_frequency_embedding_add(forward: ast.FunctionDef) -> None:
+    """Change only the pinned Add after the stock embedding and scale."""
+    encoder = next(
+        node
+        for node in forward.body
+        if isinstance(node, ast.For) and ast.unparse(node.iter) == "enumerate(self.encoder)"
+    )
+    embedding = next(
+        node
+        for node in encoder.body
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "idx == 0 and self.freq_emb is not None"
+    )
+    addition = embedding.body[-1]
+    if ast.unparse(addition) != "x = x + self.freq_emb_scale * emb":
+        msg = "unexpected HTDemucs frequency embedding addition source"
+        raise ValueError(msg)
+    addition.value = ast.parse(
+        "_mapped_embedding_add(x, self.freq_emb_scale * emb)", mode="eval"
+    ).body
+
+
+def core_code(
+    source: bytes, *, release_decoder: bool = False, map_embedding_add: bool = False
+) -> Any:
     """Extract the learned statements between normalization and raw restoration."""
     forward = method_definition(source, "HTDemucs")
     if release_decoder:
         release_decoder_locals(forward)
+    if map_embedding_add:
+        redirect_frequency_embedding_add(forward)
     start = next(i for i, node in enumerate(forward.body) if ast.unparse(node) == "saved = []")
     stop = next(
         i
@@ -436,7 +464,7 @@ def core_code(source: bytes, *, release_decoder: bool = False) -> Any:
         if ast.unparse(node) == "x = x * std[:, None] + mean[:, None]"
     )
     prefix = ast.parse(
-        "def normalized(self, spectral, xt):\n"
+        "def normalized(self, spectral, xt, _mapped_embedding_add=None):\n"
         "    x = spectral.reshape(1, 4, 2048, 336)\n"
         "    B, C, Fq, T = x.shape\n"
     )
@@ -852,7 +880,9 @@ def load_producer_model(
     return model
 
 
-def mapped_reference_forward(model, module, source: bytes, pad2, ispectro) -> MethodType:
+def mapped_reference_forward(
+    model, module, source: bytes, pad2, ispectro, *, embedding_add=None
+) -> MethodType:
     """Keep the pinned CPU CAC forward and retire its unused tensor owners."""
     name = "demucs/htdemucs.py"
     if (
@@ -895,11 +925,15 @@ def mapped_reference_forward(model, module, source: bytes, pad2, ispectro) -> Me
     ]
     forward.body.insert(magnitude + 1, ast.parse("del z, mag").body[0])
     release_decoder_locals(forward)
-    tree = ast.parse("def bind(_mapped_pad2, _mapped_ispectro):\n    return forward")
+    if embedding_add is not None:
+        redirect_frequency_embedding_add(forward)
+    tree = ast.parse(
+        "def bind(_mapped_pad2, _mapped_ispectro, _mapped_embedding_add):\n    return forward"
+    )
     tree.body[0].body.insert(0, forward)
     namespace = {}
     exec(compile(ast.fix_missing_locations(tree), name, "exec"), vars(module), namespace)
-    return MethodType(namespace["bind"](pad2, ispectro), model)
+    return MethodType(namespace["bind"](pad2, ispectro, embedding_add), model)
 
 
 def mapped_reference_scratch(output: Path, size: int, label: str) -> memoryview:
@@ -1376,8 +1410,10 @@ def mapped_float_return_storage(torch, output: Path, inputs, geometry, label):
     owner = mapped_reference_scratch(output, size, label)
     mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
     _, storage, address = tensor_backing(mapped)
+    # A cropped operand's data pointer skips the prefix of its live backing.
+    input_storages = [value.untyped_storage() for value in inputs]
     live_spans = tuple(
-        (*tensor_backing(value)[1:], value.untyped_storage().nbytes()) for value in inputs
+        (storage._cdata, storage.data_ptr(), storage.nbytes()) for storage in input_storages
     )
     if (
         address % STATE_ALIGNMENT
@@ -1524,6 +1560,96 @@ def mapped_convolution_dispatch(torch, operands, wrappers, params, redispatch):
         return redispatch(op, args, cpu)
 
     return reference_dispatch_mode(dispatch)
+
+
+def check_spectral_pointwise_operands(torch, operands, geometries, label) -> None:
+    for value, geometry in zip(operands, geometries, strict=True):
+        if (
+            type(value) is not torch.Tensor
+            or (value.device.type, value.dtype, value.layout)
+            != ("cpu", torch.float32, torch.strided)
+            or value.is_neg()
+            or state_storage_geometry(value) != geometry
+        ):
+            msg = f"unexpected HTDemucs {label} operands"
+            raise ValueError(msg)
+
+
+def mapped_frequency_embedding_add(torch, output: Path):
+    """Write the first spectral encoder skip with the stock CPU Add kernel."""
+    geometry = SPECTRAL_SKIP_ADD_DENSE
+
+    def add(x, scaled_embedding):
+        label = "frequency embedding add"
+        operands = (x, scaled_embedding)
+        check_reference_inference_dispatch(torch, label)
+        check_spectral_pointwise_operands(
+            torch, operands, (geometry, SPECTRAL_SCALED_EMBEDDING), label
+        )
+        mapped = mapped_float_return_storage(torch, output, operands, geometry, "embedding-add")
+        backing = tensor_backing(mapped)
+        result = torch.ops.aten.add.out(*operands, out=mapped)
+        if tensor_backing(result) != backing or state_storage_geometry(result) != geometry:
+            msg = "unexpected HTDemucs frequency embedding add return"
+            raise ValueError(msg)
+        return result
+
+    return add
+
+
+@contextmanager
+def mapped_spectral_caller_gelu(torch, decoder, source: bytes, output: Path):
+    """Write the penultimate spectral decoder's post-crop GELU to a file view."""
+    name = "demucs/hdemucs.py"
+    globals_ = type(decoder).forward.__globals__
+    if (
+        hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
+        or type(decoder) is not globals_.get("HDecLayer")
+        or "forward" in vars(decoder)
+        or (
+            decoder.training,
+            decoder.freq,
+            decoder.last,
+            decoder.empty,
+            decoder.chin,
+            decoder.pad,
+            type(decoder.conv_tr),
+            type(decoder.norm2),
+            decoder.conv_tr.out_channels,
+        )
+        != (False, True, False, False, 96, 2, torch.nn.ConvTranspose2d, torch.nn.Identity, 48)
+    ):
+        msg = "unexpected HTDemucs penultimate spectral decoder"
+        raise ValueError(msg)
+
+    def gelu(z):
+        label = "spectral caller GELU"
+        geometry = SPECTRAL_SKIP_ADD_DENSE
+        check_reference_inference_dispatch(torch, label)
+        check_spectral_pointwise_operands(torch, (z,), (SPECTRAL_CALLER_CROP,), label)
+        mapped = mapped_float_return_storage(torch, output, (z,), geometry, "caller-gelu")
+        backing = tensor_backing(mapped)
+        result = torch.ops.aten.gelu.out(z, approximate="none", out=mapped)
+        if tensor_backing(result) != backing or state_storage_geometry(result) != geometry:
+            msg = "unexpected HTDemucs spectral caller GELU return"
+            raise ValueError(msg)
+        return result
+
+    forward = method_definition(source, "HDecLayer")
+    post_crop = forward.body[-2]
+    if ast.unparse(post_crop) != "if not self.last:\n    z = F.gelu(z)":
+        msg = "unexpected HTDemucs spectral caller GELU source"
+        raise ValueError(msg)
+    post_crop.body[0].value.func = ast.Name(id="_mapped_gelu", ctx=ast.Load())
+    tree = ast.parse("def bind(_mapped_gelu):\n    return forward")
+    tree.body[0].body.insert(0, forward)
+    namespace = {}
+    exec(compile(ast.fix_missing_locations(tree), name, "exec"), globals_, namespace)
+    decoder.forward = MethodType(namespace["bind"](gelu), decoder)
+    try:
+        yield
+    finally:
+        del decoder.forward
 
 
 @contextmanager
@@ -2515,10 +2641,15 @@ def check_reference_tensor(torch, path: Path, artifact: Artifact, value, shape: 
             raise ValueError(msg)
 
 
-def core_wrapper(torch, model, source: bytes, globals_, *, release_decoder: bool = False):
+def core_wrapper(
+    torch, model, source: bytes, globals_, *, release_decoder: bool = False, embedding_add=None
+):
     namespace = {}
     # The caller has verified the source bytes.
-    exec(core_code(source, release_decoder=release_decoder), globals_, namespace)
+    code = core_code(
+        source, release_decoder=release_decoder, map_embedding_add=embedding_add is not None
+    )
+    exec(code, globals_, namespace)
     normalized = namespace["normalized"]
 
     class Core(torch.nn.Module):
@@ -2527,7 +2658,7 @@ def core_wrapper(torch, model, source: bytes, globals_, *, release_decoder: bool
             self.model = original
 
         def forward(self, spectral, waveform):
-            return normalized(self.model, spectral, waveform)
+            return normalized(self.model, spectral, waveform, embedding_add)
 
     return Core(model).eval()
 
@@ -2562,12 +2693,16 @@ def capture_reference(
                 raise ValueError(msg)
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
     model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
+    embedding_add = (
+        mapped_frequency_embedding_add(torch, output) if mapped_state is not None else None
+    )
     wrapper = core_wrapper(
         torch,
         model,
         sources["demucs/htdemucs.py"],
         vars(module),
         release_decoder=mapped_state is not None,
+        embedding_add=embedding_add,
     )
     mapped_forward = (
         mapped_reference_forward(
@@ -2576,6 +2711,7 @@ def capture_reference(
             sources["demucs/htdemucs.py"],
             mapped_reference_pad2(torch, output),
             mapped_reference_ispectro(torch, output, module.ispectro),
+            embedding_add=embedding_add,
         )
         if mapped_state is not None
         else None
@@ -2583,6 +2719,11 @@ def capture_reference(
     with torch.inference_mode(), ExitStack() as reference:
         if mapped_state is not None:
             reference.enter_context(mapped_reference_attention(torch, model, output))
+            reference.enter_context(
+                mapped_spectral_caller_gelu(
+                    torch, model.decoder[-2], sources["demucs/hdemucs.py"], output
+                )
+            )
             reference.enter_context(
                 mapped_spectral_skip_add(
                     torch, model.decoder[-1], sources["demucs/hdemucs.py"], output

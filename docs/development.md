@@ -1414,7 +1414,14 @@ the raw decoder views. In the final spectral decoder, the stock CPU
 TensorIterator skip addition writes its 33,030,144-byte ABCD result directly
 to a writable file mapping. The rewrite reads this result and the decoder
 frame holds it until return. The caller input and saved skip keep their
-independent backing during the call. The rewrite convolution reorders its oneDNN output directly into a 66,060,288-byte writable file
+independent backing during the call. The first spectral encoder's stock CPU
+Add writes the saved skip into a separate 33,030,144-byte file view after the
+stock frequency embedding lookup, expansion and scale multiply. The penultimate
+spectral decoder's stock CPU GELU writes the other caller input into its own
+33,030,144-byte file view after the original transposed convolution, norm and
+crop. Both outputs keep the stock ABCD layout and their file storage through
+the final spectral decoder call and any retained aliases. The rewrite convolution
+reorders its oneDNN output directly into a 66,060,288-byte writable file
 mapping with ABCD strides. The stock layout operations keep the storage
 through the rewrite hook and GLU. Each of the two pointwise convolutions in
 the final spectral DConv reorders directly into its own 66,060,288-byte writable
@@ -1443,9 +1450,9 @@ reads that backing with the
 decoded waveform still live. Each tensor storage retains its file view
 through the last alias, including on exceptions.
 
-Charge the mapped state, score, spectral skip addition and rewrite, both
-spectral transpose returns, second pad, C2R input pack, C2R frames and
-windowed frames for physical residency, file cache and disk. The stock overlap-add tensors still
+Charge the mapped state, score, both spectral caller results, skip addition
+and rewrite, both spectral transpose returns, second pad, C2R input pack, C2R
+frames and windowed frames for physical residency, file cache and disk. The stock overlap-add tensors still
 require private storage.
 The full learned reference requires a prospective commit and residency budget
 for both forwards, retained activations, vendor scratch, allocator behavior
