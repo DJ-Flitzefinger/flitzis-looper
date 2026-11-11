@@ -1079,3 +1079,41 @@ layout correctness stays separate and unchanged. No hard10 app cap or device/
 [root introduction](../README.md). Other original FULL-Goal gates remain
 unfinished historical requirements where recorded; no FULL execution program is
 activated by this guidance.
+
+## Independent HTDemucs spectral arithmetic
+
+`flitzis-stem-dsp::demucs` now supplies callable Demucs 4.0.1 HTDemucs
+`_spec` and scale-zero `_ispec` arithmetic without Python or a tensor runtime.
+It uses the original 4096-point normalized FFT, 1024-sample hop, periodic Hann,
+short-input zero-before-reflect padding, discarded Nyquist, time-frame cropping
+and exact final physical length. CaC storage is `[lane, real/imag, frequency,
+time]`; reconstruction takes estimated complex spectra directly. Flattened lanes
+can represent batch/source/channel axes. This is before statistical neural
+normalization, with FFT normalization already applied.
+
+An exclusive reusable workspace keeps FFT work and a 4096-sample inverse ring;
+analysis and reconstruction allocate no vectors after preparation. Checked
+geometry bounds logical PCM/CaC/work payload to 512 MiB. FFT plans, allocator
+overhead, model/caller owners and native/runtime backing need separate accounting
+and actual admission. Cancellation or any error invalidates the entire caller
+output. Immutable inputs, output storage and external reader/admission leases
+remain owned through actual return. A Rust return is not process or peer-reader
+END. This offline core has no application dispatch or realtime integration.
+
+The `demucs_spectral` example bridges little-endian float32 stdin/stdout solely
+for arithmetic controls. Its supervisor owns private files, complete process
+settlement and final readers; failed writes/flush/exit invalidate the whole output.
+Build the example once and run `scripts/demucs_spectral_trial_reference.py
+--executable <built-example> --output <new-private-directory>` with the pinned
+Demucs environment. It calls unchanged original methods without constructing a
+model or loading weights. Ten complete length/tail comparisons passed, including
+the released 343980-sample segment, eight independent inverse lanes and a longer
+705601-sample source. Maximum spectral and inverse PCM differences were
+`4.77e-7` and `3.58e-7`; these controls establish arithmetic only.
+
+Learned Demucs, waveform-branch composition, statistical normalization, training
+padding, whole-track split/overlap, shifts/bags, resampling, model/export/runtime,
+CUDA/fresh CPU, complete producer/platform/distribution/quality and footprint
+acceptance remain open. The productive Torch path remains active with zero
+installed savings. The separate finite successful BS whole-process allowance and
+all original learned-mask/PCM/AMP/tail gates remain unchanged.

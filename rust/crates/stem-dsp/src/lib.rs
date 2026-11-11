@@ -11,6 +11,7 @@
 use rustfft::{FftPlanner, num_complex::Complex32};
 use std::{fmt, sync::Arc};
 
+pub mod demucs;
 #[cfg(feature = "learned-trial")]
 pub mod learned;
 pub mod track;

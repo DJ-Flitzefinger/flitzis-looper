@@ -1157,3 +1157,21 @@ remaining plan into each successor; report actual hard service limits honestly.
 - [x] Identify a concrete semantics-preserving steady cost in the exact pinned
       Native implementation/build/dispatch recipe before changing DSP or
       ownership; qualify any candidate with complete relevant paired evidence.
+
+## Independent HTDemucs spectral foundation
+
+- [x] Resolve the actual pinned release geometry and complete affected original
+      source contracts before implementing independent Rust frontend/inverse math.
+- [x] Implement original normalized4096/1024 STFT, short zero-before-reflect
+      padding, CaC ordering, discarded Nyquist/time frames and exact inverse trim.
+- [x] Supply checked physical geometry, reusable bounded work/ring ownership,
+      cancellation, finite/error refusal and explicit invalid partial-output rules.
+- [x] Compare every spectral/PCM value against unchanged Demucs4.0.1 methods using
+      one frozen executable, original343980 size, short/exact-hop/tail/longer
+      sources and independent complex spectra with eight inverse lanes.
+- [ ] Complete actual learned/waveform Demucs, statistical normalization,
+      segment/split/overlap/shift/bag/resampling and whole-track runtime behavior.
+- [ ] Retain full original learned-mask/PCM/AMP/tail/resource/producer/CUDA-real
+      fault-to-freshCPU/CPU-only/platform/distribution/footprint/quality acceptance
+      before productive Torch removal. This arithmetic delivery closes none of
+      those broader gates or the separate finite BS successful-process allowance.

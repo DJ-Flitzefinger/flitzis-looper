@@ -7861,3 +7861,44 @@ private-file invalidation and actual owned tree plus both pipe-reader END. Real
 learned/mid-ORT/CUDA proof still requires fresh sufficient complete admission.
 The finite BS whole-process allowance remains open; Torch remains active with
 zero installed savings and productive Python command recognition is unchanged.
+
+### Independent HTDemucs frontend and reconstruction foundation
+
+The independent Rust `stem-dsp::demucs` core implements the pinned Demucs 4.0.1
+HTDemucs spectral boundary, not its learned network or productive host. Original
+release metadata selects stereo 44100 Hz, nfft4096, hop1024 and a 39/5-second
+training segment (343980 samples, 336 spectral frames). Geometry accepts original
+physical lengths, including short sources and longer tracks, under a checked
+512 MiB logical payload ceiling; the host's training padding is separate.
+
+Forward padding follows `hdemucs.pad1d`: for short input, insert constant zeros
+before reducing and applying reflection. Outer padding is1536 on the left and
+1536 plus ceil-hop tail on the right. Periodic Hann and normalized FFT match
+`spec.spectro`; drop Nyquist and retain original timeframes2..2+k. Retained
+windows never touch the second centered-STFT reflect extension. CaC ordering is
+`[lane, real/imag, frequency, time]`, with leading original axes flattened.
+
+Inverse spectra directly represent CaC estimates. Restore zero Nyquist and two
+zero frames on each side, including their Hann-squared envelope, ignore imaginary
+DC as real inverse FFT does, and apply both original trims (raw offset3584).
+A fixed4096 ring accumulates in chronological frame order and emits exactly the
+requested length. It is not correct to demand raw PCM identity after the forward
+boundary discards bins and frames. The oracle separately compares arbitrary
+complex reconstruction spectra to unchanged original `_ispec`, including eight
+flattened source/channel lanes at original release size.
+
+Workspace preparation owns fixed FFT vectors/windows/rings. Subsequent calls
+borrow immutable input and exclusive caller output without allocation, returning
+the first detected shape/finite/envelope/cancellation error. Any partial output
+is invalid on error, including final cancellation. Callers retain actual readers
+and admission through return. RustFFT planning/System allocation, other caller
+owners and runtime startup/exit remain separate; no finite WHOLE allowance or
+OS/peer-reader END follows from fixed payload accounting.
+
+One frozen Release arithmetic executable passed ten full original-method length
+controls, with maximum spectral4.77e-7 and independent inverse PCM3.58e-7 errors.
+This adds an original missing Native capability. It supplies no statistical
+normalization, learned/waveform model, segment/shift/bag/whole-track host,
+resampling, productive dispatch or CUDA fallback. All original BS/Demucs/BeatThis
+numerical/resource/runtime/provider/platform/distribution/quality/footprint and
+FAIL/UNKNOWN gates survive; Torch remains active and savings remain zero.
