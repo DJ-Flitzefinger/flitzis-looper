@@ -1175,3 +1175,18 @@ remaining plan into each successor; report actual hard service limits honestly.
       fault-to-freshCPU/CPU-only/platform/distribution/footprint/quality acceptance
       before productive Torch removal. This arithmetic delivery closes none of
       those broader gates or the separate finite BS successful-process allowance.
+
+
+## Independent Demucs host foundation
+
+- [x] Implement per-item branch and whole-channel-reference mathematical
+      statistics, explicitly independent with retained high-DC parity FAIL;
+      support validated original-statistic normalize/restore without adding the
+      branch epsilon to denormalization. Exact dispatch reduction remains open.
+- [x] Implement complete-context chunk preparation, separate shorter-segment
+      training padding and asymmetric trim, triangular chronological full-track
+      reconstruction with true physical tails and first-error cancellation.
+- [ ] Establish complete learned spectral/waveform composition, exact reduction
+      compatibility as affected, random shifts, weighted source/model bags,
+      resampling, productive routing and all original runtime/provider/platform/
+      quality/distribution/footprint gates. Torch remains active; savings zero.

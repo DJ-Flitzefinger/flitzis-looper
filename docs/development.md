@@ -1117,3 +1117,49 @@ CUDA/fresh CPU, complete producer/platform/distribution/quality and footprint
 acceptance remain open. The productive Torch path remains active with zero
 installed savings. The separate finite successful BS whole-process allowance and
 all original learned-mask/PCM/AMP/tail gates remain unchanged.
+
+
+### Independent Demucs host preparation and physical track reconstruction
+
+`stem-dsp::demucs::host` supplies synchronous, one-batch-item host arithmetic.
+`Statistics` separates CLI channel-mean reference from flattened per-item HT
+branch statistics. Standard deviation uses correction one. CLI has no epsilon
+(and refuses undefined singleton/constant references); HT normalization uses
+1e-5, while source restoration always uses raw std. Independent deterministic
+f64 two-pass reductions round mean/std to f32 before elementwise operations.
+They implement source mathematical semantics, not Torch device-dependent
+vector/Welford reduction topology. Actual high-DC/tiny-variance controls FAILED
+original normalization parity (maximum branch0.09281, CLI0.16128 difference;
+unchanged arithmetic atol/rtol2e-5). The explicitly independent measurement APIs
+remain diagnostic. `from_reference` validates caller-supplied original statistics
+for standalone normalize/restore controls; it does not establish their provenance
+or supply the missing original-dispatch reduction. Complete independent native
+normalization compatibility remains OPEN; no full learned parity is claimed.
+
+`Chunk` reads centered context from the complete immutable source, zeroing only
+beyond whole-source edges. An explicit shorter valid segment is then separately
+right-zero-padded to training length. `TrackWorkspace` retains the complete
+prediction until callback return, crops the right training pad before asymmetric
+center trim, and adds original normalized triangular weights and predictions in
+chronological order. The final chunk uses its actual short physical length.
+Segment samples retain original int(rate*segment), stride uses f64 overlap math,
+and transition power acts on f32 weights. No BS track math is substituted.
+
+Preparation fallibly allocates host vectors; run has no vector allocation. The
+512 MiB checked logical payload includes source, complete caller output, full
+weight envelope, triangle, and training input/output buffers. It excludes model,
+FFT plans, allocator and native/runtime backing and is not prospective WHOLE
+admission. The caller holds immutable source readers, exclusive output and
+admission through every actual synchronous callback return. Every model output
+scalar must be written; the first detected error, nonfinite value or cancellation
+(including the final check) invalidates the entire result. Reuse starts fresh.
+
+The standalone `demucs_host` bridge and original-method control script isolate
+host arithmetic with deterministic context-sensitive callbacks, not learned
+models or weights. Unchanged FFT evidence is reused. There is no productive
+Torch dispatch change, realtime integration, process/reader-END claim or runtime
+completion protocol. Random shifts/averaging, weighted bags, resampling, complete
+learned spectral/waveform composition and exact affected numerical compatibility
+remain open, as do all original CPU/CUDA fault-to-freshCPU, producer, platform,
+installer/recovery, quality and footprint gates and every FAIL/UNKNOWN.
+Torch remains active with zero installed savings; finite BS WHOLE stays open.
