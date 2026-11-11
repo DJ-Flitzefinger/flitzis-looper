@@ -1407,6 +1407,15 @@ checkpoint-free stock and mapped outputs matched byte for byte with identical
 MKL dispatch parameters. Both cross directions selected the stock CPU Flash
 kernel in the geometry fixture.
 
+Both mapped eager forwards release decoder skip and pre-transpose references
+after their last decoder call. The empty waveform decoder keeps the spectral
+pre-transpose view until that call returns. The extracted comparison returns
+the raw decoder views. The original forward releases the spectral output after
+CAC packing and passes sole ownership of the packed spectrum to the pinned
+inverse-spectrogram code. Its first pad replaces the packed backing. The
+second pad replaces the first pad's backing. The decoded waveform stays live
+through iSTFT and the final sum. The trace uses the existing decoder path.
+
 Charge the full mapped score extent separately for physical residency and
 file cache. The full learned reference still requires a prospective commit
 and residency budget for both forwards, retained activations, vendor scratch,

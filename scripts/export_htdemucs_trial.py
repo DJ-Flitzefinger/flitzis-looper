@@ -361,20 +361,45 @@ def check_checkpoint(stream: BinaryIO) -> None:
     stream.seek(0)
 
 
-def forward_definition(source: bytes, class_name: str) -> ast.FunctionDef:
+def method_definition(
+    source: bytes, class_name: str, method_name: str = "forward"
+) -> ast.FunctionDef:
     model = next(
         node
         for node in ast.parse(source).body
         if isinstance(node, ast.ClassDef) and node.name == class_name
     )
     return next(
-        node for node in model.body if isinstance(node, ast.FunctionDef) and node.name == "forward"
+        node
+        for node in model.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
     )
 
 
-def core_code(source: bytes) -> Any:
+def release_decoder_locals(forward: ast.FunctionDef) -> None:
+    """Drop the pinned decoder's caller-owned intermediates after their last use."""
+    decoder = next(
+        node
+        for node in forward.body
+        if isinstance(node, ast.For) and ast.unparse(node.iter) == "enumerate(self.decoder)"
+    )
+    waveform = decoder.body[-1]
+    split = waveform.body[-1]
+    # Only the empty waveform decoder consumes the spectral pre-transpose
+    # tensor. Its sliced view must survive until that call returns.
+    split.body.extend(ast.parse("del pre").body)
+    split.orelse[:0] = ast.parse("del pre").body
+    split.orelse.extend(ast.parse("del skip").body)
+    waveform.body.extend(ast.parse("del _").body)
+    waveform.orelse = ast.parse("del pre").body
+    decoder.body[2:2] = ast.parse("del skip").body
+
+
+def core_code(source: bytes, *, release_decoder: bool = False) -> Any:
     """Extract the learned statements between normalization and raw restoration."""
-    forward = forward_definition(source, "HTDemucs")
+    forward = method_definition(source, "HTDemucs")
+    if release_decoder:
+        release_decoder_locals(forward)
     start = next(i for i, node in enumerate(forward.body) if ast.unparse(node) == "saved = []")
     stop = next(
         i
@@ -799,27 +824,41 @@ def load_producer_model(
 
 
 def mapped_reference_forward(model, module, source: bytes) -> MethodType:
-    """Keep the pinned CPU CAC forward and release its unused spectral owners."""
+    """Keep the pinned CPU CAC forward and retire its unused tensor owners."""
     name = "demucs/htdemucs.py"
     if (
         hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
         or type(model) is not module.HTDemucs
         or model.training
         or model.cac is not True
-        or "forward" in vars(model)
+        or {"forward", "_ispec"}.intersection(vars(model))
     ):
         msg = "mapped HTDemucs reference requires the exact stock CAC eval forward"
         raise ValueError(msg)
 
-    forward = forward_definition(source, "HTDemucs")
+    forward = method_definition(source, "HTDemucs")
     mask = next(
         i for i, node in enumerate(forward.body) if ast.unparse(node) == "zout = self._mask(z, x)"
     )
     magnitude = next(i for i, node in enumerate(forward.body) if ast.unparse(node) == "x = mag")
     # The pinned CAC mask reads only x. Drop z after magnitude conversion and
     # let x own the magnitude backing until normalization overwrites it.
-    forward.body[mask] = ast.parse("zout = self._mask(None, x)").body[0]
+    # The stock _ispec rebinds z at each pad. Transfer the packed tensor
+    # out of the caller so its first pad can actually retire the backing.
+    ispec = method_definition(source, "HTDemucs", "_ispec")
+    ispec.name = "_consume_ispec"
+    ispec.args.args[1].arg = "packed"
+    ispec.body[:0] = ast.parse("z = packed.pop()").body
+    for node in ast.walk(forward.body[mask + 1]):
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._ispec":
+            node.func = ast.Name(id=ispec.name, ctx=ast.Load())
+            node.args.insert(0, ast.Name(id="self", ctx=ast.Load()))
+    forward.body[mask : mask + 1] = [
+        ispec,
+        *ast.parse("zout = [self._mask(None, x)]\ndel x").body,
+    ]
     forward.body.insert(magnitude + 1, ast.parse("del z, mag").body[0])
+    release_decoder_locals(forward)
     tree = ast.Module(body=[forward], type_ignores=[])
     namespace = {}
     exec(compile(ast.fix_missing_locations(tree), name, "exec"), vars(module), namespace)
@@ -1411,9 +1450,10 @@ def check_reference_tensor(torch, path: Path, artifact: Artifact, value, shape: 
             raise ValueError(msg)
 
 
-def core_wrapper(torch, model, source: bytes, globals_):
+def core_wrapper(torch, model, source: bytes, globals_, *, release_decoder: bool = False):
     namespace = {}
-    exec(core_code(source), globals_, namespace)  # The caller has verified the source bytes.
+    # The caller has verified the source bytes.
+    exec(core_code(source, release_decoder=release_decoder), globals_, namespace)
     normalized = namespace["normalized"]
 
     class Core(torch.nn.Module):
@@ -1457,7 +1497,13 @@ def capture_reference(
                 raise ValueError(msg)
     waveform = read_tensor(torch, mix_path, mix, SHAPES["waveform"])
     model = load_producer_model(torch, checkpoint, module, cpu_overlay, mapped_state)
-    wrapper = core_wrapper(torch, model, sources["demucs/htdemucs.py"], vars(module))
+    wrapper = core_wrapper(
+        torch,
+        model,
+        sources["demucs/htdemucs.py"],
+        vars(module),
+        release_decoder=mapped_state is not None,
+    )
     mapped_forward = (
         mapped_reference_forward(model, module, sources["demucs/htdemucs.py"])
         if mapped_state is not None
@@ -1566,7 +1612,7 @@ def trace_position_buffers(torch, transformer, source: bytes):
         ),
         "pos_emb = self._get_pos_embedding(T2, B, C, x.device)": "self.trace_positions_time",
     }
-    forward = forward_definition(source, "CrossTransformerEncoder")
+    forward = method_definition(source, "CrossTransformerEncoder")
     for statement in forward.body:
         if isinstance(statement, ast.Assign):
             expression = replacements.pop(ast.unparse(statement), None)
