@@ -18,7 +18,8 @@ from flitzis_looper.analysis.acquisition import acquire_pinned_asset
 from flitzis_looper.analysis.cuda_artifacts import CudaInstalledManifest, read_installed_manifest
 from flitzis_looper.analysis.native_beat_worker import (
     NativeWorkerConfiguration,
-    require_native_cpu_capability,
+    NativeWorkerConfigurationError,
+    require_native_worker_capability,
     verify_native_package,
 )
 from flitzis_looper.analysis.worker import WorkerConfiguration
@@ -145,9 +146,9 @@ def prepare_worker(
         if isinstance(configuration, NativeWorkerConfiguration):
             require(
                 condition=profile is None,
-                message="Use the retained-installation command to replace the selected Native worker",
+                message="Activate a retained installation to replace the selected Native worker",
             )
-            require_native_cpu_capability()
+            require_native_worker_capability(configuration)
             verify_native_package(configuration)
             return configuration
         assert configuration.manifest is not None
@@ -160,6 +161,8 @@ def prepare_worker(
             message="Selected worker differs from the requested profile",
         )
         inspect_worker(configuration, scratch)
+    except NativeWorkerConfigurationError:
+        raise
     except OSError, ValueError, subprocess.SubprocessError:
         if check or native_selected:
             raise

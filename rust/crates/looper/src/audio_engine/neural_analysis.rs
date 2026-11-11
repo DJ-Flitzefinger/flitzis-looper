@@ -7,7 +7,8 @@ pub(super) mod raw;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 use raw::{
-    BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model, pinned_native_model,
+    BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model,
+    pinned_native_cuda_model, pinned_native_model,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -120,6 +121,7 @@ pub(in crate::audio_engine) fn invoke_worker(
         #[derive(serde::Deserialize)]
         struct BridgeVersion {
             schema_version: u32,
+            execution_policy: Option<String>,
         }
         let version: BridgeVersion = serde_json::from_str(encoded).map_err(|e| e.to_string())?;
         if version.schema_version == 2 {
@@ -129,6 +131,15 @@ pub(in crate::audio_engine) fn invoke_worker(
         } else if version.schema_version == 3 {
             expected["schema_version"] = 3.into();
             expected["model"] = pinned_native_model();
+        } else if version.schema_version == 4 {
+            let policy = version
+                .execution_policy
+                .as_deref()
+                .filter(|policy| matches!(*policy, "auto" | "cuda"))
+                .ok_or("unknown Native Beat This CUDA policy")?;
+            expected["schema_version"] = 4.into();
+            expected["model"] = pinned_native_cuda_model(policy);
+            expected["execution_policy"] = policy.into();
         } else if version.schema_version != 1 {
             return Err("unknown Beat This worker profile".into());
         }

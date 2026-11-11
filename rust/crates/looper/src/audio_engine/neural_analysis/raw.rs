@@ -123,6 +123,8 @@ struct WorkerResult {
     request_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution: Option<ExecutionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_policy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -172,6 +174,13 @@ pub(in crate::audio_engine) fn pinned_native_model() -> Value {
     model["sha256"] = NATIVE_GRAPH_SHA256.into();
     model["frontend_id"] = "beat-this-1.1.0-native-soxr-hq-logmel-v1".into();
     model["environment_id"] = "native-onnxruntime-1.24.4-api24-windows-x64-cpu-v1".into();
+    model
+}
+
+pub(in crate::audio_engine) fn pinned_native_cuda_model(policy: &str) -> Value {
+    let mut model = pinned_native_model();
+    model["environment_id"] = "native-onnxruntime-1.24.4-api24-windows-x64-cuda-v1".into();
+    model["device"] = policy.into();
     model
 }
 
@@ -278,18 +287,18 @@ impl BeatThisRawData {
         let source = &self.source;
         let request = &self.request;
         let result = &self.result;
-        let cuda = request.schema_version == 2;
-        let (expected_model, expected_encoding) = match request.schema_version {
-            1 => (pinned_model(), WORKER_ENCODING),
-            2 => (pinned_cuda_model(), "source-map-beat-this-worker-v2"),
-            3 => (pinned_native_model(), "source-map-beat-this-worker-v3"),
+        let policy = request.execution_policy.as_deref();
+        let (expected_model, expected_encoding) = match (request.schema_version, policy) {
+            (1, None) => (pinned_model(), WORKER_ENCODING),
+            (2, Some("auto")) => (pinned_cuda_model(), "source-map-beat-this-worker-v2"),
+            (3, None) => (pinned_native_model(), "source-map-beat-this-worker-v3"),
+            (4, Some(policy @ ("auto" | "cuda"))) => (
+                pinned_native_cuda_model(policy),
+                "source-map-beat-this-worker-v4",
+            ),
             _ => return Err("unknown Beat This worker profile".into()),
         };
-        if (if cuda {
-            request.execution_policy.as_deref() != Some("auto")
-        } else {
-            request.execution_policy.is_some()
-        }) || !codec::text(&request.identity.source_id)
+        if !codec::text(&request.identity.source_id)
             || request.identity.request_id == 0
             || request.identity.source_generation == 0
             || !codec::text(&request.pcm.path)
@@ -329,7 +338,10 @@ impl BeatThisRawData {
                 result.status
             ));
         }
-        if cuda {
+        if result.execution_policy.as_deref() != policy.filter(|_| request.schema_version == 4) {
+            return Err("Beat This worker execution policy differs from the request".into());
+        }
+        if request.schema_version == 2 {
             let echoed = result
                 .request_json
                 .as_ref()
@@ -340,11 +352,18 @@ impl BeatThisRawData {
             {
                 return Err("Beat This CUDA echoed request differs from Native input".into());
             }
-            result
-                .execution
-                .as_ref()
-                .ok_or("Beat This actual execution receipt missing")?
-                .validate()?;
+            let Some(ExecutionReceipt::Torch(receipt)) = result.execution.as_ref() else {
+                return Err("Beat This Torch CUDA execution receipt missing".into());
+            };
+            receipt.validate()?;
+        } else if request.schema_version == 4 {
+            let Some(ExecutionReceipt::NativeCuda(receipt)) = result.execution.as_ref() else {
+                return Err("Beat This Native CUDA execution receipt missing".into());
+            };
+            if result.request_json.is_some() {
+                return Err("unexpected echoed request for Native CUDA Beat This".into());
+            }
+            receipt.validate(policy.unwrap_or_default())?;
         } else if result.execution.is_some() || result.request_json.is_some() {
             return Err("CPU capture cannot contain CUDA execution metadata".into());
         }

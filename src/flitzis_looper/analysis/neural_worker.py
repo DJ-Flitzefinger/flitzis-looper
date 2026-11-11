@@ -29,13 +29,15 @@ from flitzis_looper.analysis.execution import (
     CudaBeatComponentResult,
     CudaBeatModelIdentity,
     CudaBeatWorkerRequest,
+    NativeCudaExecutionReceipt,
+    NativeCudaPolicy,
     require_cuda_native_capability,
     validate_cuda_component_result,
 )
 from flitzis_looper.analysis.native_beat_worker import (
     NativeWorkerConfiguration,
-    require_native_cpu_capability,
-    run_native_cpu,
+    require_native_worker_capability,
+    run_native_worker,
 )
 from flitzis_looper.analysis.publication import _pack
 from flitzis_looper.analysis.setup import load_worker_configuration
@@ -85,24 +87,35 @@ def _envelope(
     reason: str,
     predictions: dict[str, str] | None = None,
     *,
-    native: bool = False,
+    schema_version: int = 1,
+    execution_policy: NativeCudaPolicy | None = None,
+    execution: NativeCudaExecutionReceipt | None = None,
 ) -> str:
+    model_data = None if model is None else asdict(model)
+    if execution_policy is not None and model_data is not None:
+        model_data.update(
+            environment_id="native-onnxruntime-1.24.4-api24-windows-x64-cuda-v1",
+            device=execution_policy,
+        )
     envelope = {
-        "schema_version": 3 if native else 1,
-        "encoding": "source-map-beat-this-worker-v3"
-        if native
-        else "source-map-beat-this-worker-v1",
+        "schema_version": schema_version,
+        "encoding": f"source-map-beat-this-worker-v{schema_version}",
         "identity": asdict(identity),
         "input": input_metadata,
-        "model": None if model is None else asdict(model),
+        "model": model_data,
         "status": status,
         "reason": reason[:1024],
         "resources_released": True,
         "predictions": predictions,
     }
+    if execution_policy is not None:
+        envelope["execution_policy"] = execution_policy
+        envelope["execution"] = None if execution is None else asdict(execution)
     encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_NEURAL_WORKER_BYTES:
         envelope.update(status="failed", reason="neural_worker_response_limit", predictions=None)
+        if execution_policy is not None:
+            envelope["execution"] = None
         encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
     return encoded
 
@@ -237,22 +250,49 @@ def _native_envelope(
     input_metadata: dict[str, object],
     cancel: Event,
 ) -> str:
+    policy = configuration.execution_policy
+    cuda_policy = None if policy == "cpu" else policy
+    version = 3 if cuda_policy is None else 4
     try:
-        require_native_cpu_capability()
-        predictions = run_native_cpu(configuration, pcm, mono_sha, cancel)
+        require_native_worker_capability(configuration)
+        predictions, execution = run_native_worker(configuration, pcm, mono_sha, cancel)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         status: ComponentStatus = "cancelled" if cancel.is_set() else "failed"
         reason = "cancelled" if status == "cancelled" else str(error)
-        return _envelope(identity, input_metadata, NATIVE_MODEL, status, reason, native=True)
+        return _envelope(
+            identity,
+            input_metadata,
+            NATIVE_MODEL,
+            status,
+            reason,
+            schema_version=version,
+            execution_policy=cuda_policy,
+        )
     if cancel.is_set():
         return _envelope(
-            identity, input_metadata, NATIVE_MODEL, "cancelled", "cancelled", native=True
+            identity,
+            input_metadata,
+            NATIVE_MODEL,
+            "cancelled",
+            "cancelled",
+            schema_version=version,
+            execution_policy=cuda_policy,
         )
     packed = {
         "encoding": "float64-le/base64",
         **{name: _pack(getattr(predictions, name)) for name in _ARRAY_NAMES},
     }
-    return _envelope(identity, input_metadata, NATIVE_MODEL, "ready", "ready", packed, native=True)
+    return _envelope(
+        identity,
+        input_metadata,
+        NATIVE_MODEL,
+        "ready",
+        "ready",
+        packed,
+        schema_version=version,
+        execution_policy=cuda_policy,
+        execution=execution,
+    )
 
 
 def run_beat_this(

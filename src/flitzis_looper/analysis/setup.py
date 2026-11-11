@@ -32,12 +32,13 @@ from flitzis_looper.analysis.cuda_artifacts import (
 )
 from flitzis_looper.analysis.execution import (
     CudaBeatModelIdentity,
+    NativeCudaPolicy,
     require_cuda_native_capability,
 )
 from flitzis_looper.analysis.native_beat_worker import (
     NativeWorkerConfiguration,
     load_native_configuration,
-    require_native_cpu_capability,
+    require_native_worker_capability,
     stage_native_package,
     verify_native_package,
 )
@@ -128,14 +129,18 @@ def install_worker(
 
 
 def stage_native_worker(
-    install_dir: Path, scratch_dir: Path, package: Path
+    install_dir: Path,
+    scratch_dir: Path,
+    package: Path,
+    *,
+    cuda_policy: NativeCudaPolicy | None = None,
 ) -> NativeWorkerConfiguration:
-    """Retain a complete local CPU worker without changing the active selection."""
+    """Retain a complete local Native worker without changing the active selection."""
     _validate_setup_paths(install_dir, scratch_dir, package)
     install_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".staging-", dir=install_dir) as temporary:
         staging = Path(temporary)
-        stage_native_package(package, staging)
+        stage_native_package(package, staging, cuda_policy=cuda_policy)
         retained = _retain_installation(staging, install_dir)
     configuration = load_staged_worker_configuration(install_dir, retained, scratch_dir)
     assert isinstance(configuration, NativeWorkerConfiguration)
@@ -175,7 +180,7 @@ def activate_worker_installation(
     assert manifest is not None
     pointer = _InstallationPointer(1, manifest.parent.name, artifacts.file_digest(manifest))
     if isinstance(configuration, NativeWorkerConfiguration):
-        require_native_cpu_capability()
+        require_native_worker_capability(configuration)
     _write_installation_pointer(
         install_dir,
         pointer,
@@ -401,6 +406,8 @@ def main() -> int:
     action.add_argument("--stage-only", action="store_true")
     action.add_argument("--activate-installation", type=Path)
     action.add_argument("--stage-native-cpu-package", type=Path)
+    action.add_argument("--stage-native-cuda-package", type=Path)
+    parser.add_argument("--native-cuda-policy", choices=("cuda", "auto"))
     parser.add_argument(
         "--profile", choices=("legacy-cpu-v1", "cuda-auto-v2"), default="legacy-cpu-v1"
     )
@@ -411,14 +418,22 @@ def main() -> int:
         parser.error(
             "activation uses the retained manifest; omit checkpoint, offline and profile options"
         )
-    if options.stage_native_cpu_package is not None and (
+    package = options.stage_native_cuda_package or options.stage_native_cpu_package
+    if package is not None and (
         options.checkpoint_file is not None or options.offline or options.profile != "legacy-cpu-v1"
     ):
-        parser.error("Native CPU staging uses only the explicit local package")
+        parser.error("Native staging uses only the explicit local package")
+    if options.native_cuda_policy is not None and options.stage_native_cuda_package is None:
+        parser.error("--native-cuda-policy requires --stage-native-cuda-package")
+    cuda_policy = (
+        options.native_cuda_policy or "cuda"
+        if options.stage_native_cuda_package is not None
+        else None
+    )
     try:
-        if options.stage_native_cpu_package is not None:
+        if package is not None:
             configuration = stage_native_worker(
-                options.install_dir, options.scratch_dir, options.stage_native_cpu_package
+                options.install_dir, options.scratch_dir, package, cuda_policy=cuda_policy
             )
         elif options.activate_installation is not None:
             configuration = activate_worker_installation(
@@ -436,7 +451,7 @@ def main() -> int:
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"Beat This setup failed: {error}\n")
         return 1
-    inactive = options.stage_only or options.stage_native_cpu_package is not None
+    inactive = options.stage_only or package is not None
     status = "Verified inactive" if inactive else "Verified"
     sys.stdout.write(f"{status} Beat This worker: {configuration.manifest}\n")
     return 0

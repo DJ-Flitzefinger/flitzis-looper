@@ -10,7 +10,7 @@ name = "flitzis_looper_analysis"
 native-inference-trial = ["dep:libloading"]
 native-inference-dynamic = ["native-inference-trial", "ort/load-dynamic"]
 native-inference-cuda = ["native-inference-dynamic", "ort/cuda"]
-native-beat-this-worker = ["native-inference-dynamic", "dep:serde", "dep:serde_json"]
+native-beat-this-worker = ["native-inference-cuda", "dep:serde", "dep:serde_json"]
 demucs-inference-trial = ["native-inference-trial", "dep:flitzis-stem-dsp"]
 
 [[example]]

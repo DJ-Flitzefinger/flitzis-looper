@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "os": "windows",
+  "arch": "x86_64",
+  "components": [
+    {
+      "name": "cublas64_12.dll",
+      "role": "cuda",
+      "bytes": 113716224,
+      "sha256": "9513540e4ec4c51ee9e7304138c2cc255c29a8c181f9e80c38efa25738becd99"
+    },
+    {
+      "name": "cublasLt64_12.dll",
+      "role": "cuda",
+      "bytes": 674667520,
+      "sha256": "b199d1ff892a81b7fd3d57ba1781549609b41500b36008fef326038393ad46c7"
+    },
+    {
+      "name": "cudart64_12.dll",
+      "role": "cuda",
+      "bytes": 573952,
+      "sha256": "c2c9a9c22a9bcba90e261825968836787b331038047a26770cffb7a583c28344"
+    },
+    {
+      "name": "cudnn64_9.dll",
+      "role": "cudnn",
+      "bytes": 266288,
+      "sha256": "9edbcdff73b0af070eb160b2ce66e59feca04aa017351d8eedcc5e8e149967d2"
+    },
+    {
+      "name": "cudnn_adv64_9.dll",
+      "role": "cudnn",
+      "bytes": 282445872,
+      "sha256": "f202e8ff36209ac4292fe2ef79d4539487495b3b948f0c978cc63298f43a1850"
+    },
+    {
+      "name": "cudnn_cnn64_9.dll",
+      "role": "cudnn",
+      "bytes": 4618272,
+      "sha256": "3f03dec3b81f137f049e1d1c06ff469248eef54ff9424b3b9045fc0f69559d1a"
+    },
+    {
+      "name": "cudnn_engines_precompiled64_9.dll",
+      "role": "cudnn",
+      "bytes": 513926688,
+      "sha256": "ebc2c1f74366b029a4350f7f9a3b109ccd5aa9b4ae02527950793dd29f7b74fb"
+    },
+    {
+      "name": "cudnn_engines_runtime_compiled64_9.dll",
+      "role": "cudnn",
+      "bytes": 20201008,
+      "sha256": "93ab6351ca0f2b6ca842f83d284e56c427525778c14657229801a13cf8121bd8"
+    },
+    {
+      "name": "cudnn_graph64_9.dll",
+      "role": "cudnn",
+      "bytes": 2420256,
+      "sha256": "a933efeb280a3252297f92d79f7e83003bcbc6f665872d11645d1dbbab9cb598"
+    },
+    {
+      "name": "cudnn_heuristic64_9.dll",
+      "role": "cudnn",
+      "bytes": 56823328,
+      "sha256": "458175f12771a35de0ea39c04250d727c2424d42a7ffe0bc987ae81204748fba"
+    },
+    {
+      "name": "cudnn_ops64_9.dll",
+      "role": "cudnn",
+      "bytes": 126508576,
+      "sha256": "851d8f4191a24b322b0be738d191a3159455f0da4db47a19f5cc7ad6e55edf61"
+    },
+    {
+      "name": "cufft64_11.dll",
+      "role": "cuda",
+      "bytes": 276121600,
+      "sha256": "f4fea9227b14843894ad5436725f9638b172171142c95291fc6ae7a493248221"
+    },
+    {
+      "name": "cufftw64_11.dll",
+      "role": "cuda",
+      "bytes": 163328,
+      "sha256": "84c86dcc4d4b770e75766964149ef688c901dc89e380278fe399dd3c03608541"
+    },
+    {
+      "name": "curand64_10.dll",
+      "role": "cuda",
+      "bytes": 71955968,
+      "sha256": "3465fd1b46e551339b8f44c455756a0f2cba8bd846562eb659040d48edb7aaac"
+    },
+    {
+      "name": "cusolver64_11.dll",
+      "role": "cuda",
+      "bytes": 225683456,
+      "sha256": "3d4f7a66b5f352db56d4bb5962bb453a42d5feb2d831779f4a0bebc9971c36fb"
+    },
+    {
+      "name": "cusolverMg64_11.dll",
+      "role": "cuda",
+      "bytes": 157071360,
+      "sha256": "c3377f10606ff0606be2f08401d54aff6c37f137b78d6b6e21be356a5b4d6cc2"
+    },
+    {
+      "name": "cusparse64_12.dll",
+      "role": "cuda",
+      "bytes": 379535872,
+      "sha256": "f4688daa6163c47a0b5293926ec7ae367de6b4af54ea201638b308831b322a0e"
+    },
+    {
+      "name": "nvJitLink_120_0.dll",
+      "role": "cuda",
+      "bytes": 77860352,
+      "sha256": "959d3cb44527ec884db8dc20772520b584dbe7d622d11b0530e6326417078b3e"
+    },
+    {
+      "name": "nvrtc-builtins64_128.dll",
+      "role": "cuda",
+      "bytes": 6356480,
+      "sha256": "a7afa2a40cbd3f922a33d8bf71c13cb26ca707c7016a9bc5fcde36759ba668f5"
+    },
+    {
+      "name": "nvrtc64_120_0.alt.dll",
+      "role": "cuda",
+      "bytes": 86794240,
+      "sha256": "5464ea01b079d78042374dc7819684910c8e9d5c63000e2d2d5aa02298ecf2ae"
+    },
+    {
+      "name": "nvrtc64_120_0.dll",
+      "role": "cuda",
+      "bytes": 86728192,
+      "sha256": "02d2d7ef4690bf1a55dda1d3ac94c86ce8d16920071c87bcd3e70e94ef346e93"
+    },
+    {
+      "name": "onnxruntime.dll",
+      "role": "ort-runtime",
+      "bytes": 15431712,
+      "sha256": "c63af7de44303e401b283457fdb510caa65756afa1e8c4f43f90195358c4294b"
+    },
+    {
+      "name": "onnxruntime_providers_cuda.dll",
+      "role": "ort-provider-cuda",
+      "bytes": 312608800,
+      "sha256": "110929d2552bc775828e7a5c18c5ef9ab90898fc57a57868623fe2fe8c82d494"
+    },
+    {
+      "name": "onnxruntime_providers_shared.dll",
+      "role": "ort-provider-shared",
+      "bytes": 22048,
+      "sha256": "f7ec022e2b5a5126f606db4b46da795cacc6cbae4788ed5188b046bbefc13717"
+    }
+  ]
+}

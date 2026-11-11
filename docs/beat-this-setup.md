@@ -84,8 +84,34 @@ uv run --no-sync python scripts/setup-runtime.py --check
 The worker borrows the App's complete staged mono PCM in an owned process. The
 App holds the process and both output readers through retirement. Successful
 results record the ONNX graph digest and actual ORT CPU runtime. CPU selection
-applies to BPM analysis through the normal App entry. Native NVIDIA CUDA,
-automatic CPU fallback and Portable/EXE provisioning are follow-up work.
+applies to BPM analysis through the normal App entry.
+
+## Native NVIDIA CUDA worker from a source checkout
+
+Build the same executable and matching App Native library. Add a separate
+`cuda/` directory to the local CPU source package. Copy the two exact
+[CUDA loader manifests](../workers/beat_this/native_cuda) and the Windows x64
+ORT 1.24.4, CUDA 12 and cuDNN 9 DLLs listed in `step23-package.json` into that
+directory. The inventory pins the bytes of all 24 DLLs. Windows supplies
+`nvcuda.dll` through the NVIDIA driver.
+
+```powershell
+uv run --no-sync python -m flitzis_looper.analysis.setup --install-dir $workerRoot --scratch-dir $scratch --stage-native-cuda-package $packageDirectory --native-cuda-policy auto
+uv run --no-sync python -m flitzis_looper.analysis.setup --install-dir $workerRoot --scratch-dir $scratch --activate-installation $retainedInstallation
+```
+
+The default CUDA policy is `cuda` and requires execution on NVIDIA device 0.
+With `auto`, a qualified CUDA device error from ONNX Runtime inference can
+start one fresh CPU worker. The GPU Job, descendants and both output readers
+must first retire. The CPU child receives the same staged PCM and `final0`
+graph and gets a fresh host-memory check and Job reservation. Resource, loader,
+input, cancellation and unqualified process failures end the Native request.
+
+The App reports the driver's device name and CUDA compute events observed in
+the first completed model chunk, after the full request succeeds. A successful
+CPU retry carries its CPU runtime and the original device error. The CUDA
+package is selectable in a Windows source checkout. Learned CUDA execution,
+device-failure acceptance and Portable/EXE provisioning remain open.
 
 ## Locked Windows runtime
 

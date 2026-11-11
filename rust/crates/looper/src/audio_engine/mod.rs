@@ -2159,6 +2159,8 @@ impl AudioEngine {
     #[classattr]
     const BEAT_THIS_NATIVE_CPU_API_VERSION: u32 = 1;
     #[classattr]
+    const BEAT_THIS_NATIVE_CUDA_API_VERSION: u32 = 1;
+    #[classattr]
     const BPM_ONLY_RUNTIME_API_VERSION: u32 = 1;
 
     /// One nonblocking read; None means pending, superseded or a busy writer.

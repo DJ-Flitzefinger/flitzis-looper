@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "os": "windows",
+  "arch": "x86_64",
+  "library": "onnxruntime.dll",
+  "bytes": 15431712,
+  "sha256": "c63af7de44303e401b283457fdb510caa65756afa1e8c4f43f90195358c4294b",
+  "version": "1.24.4"
+}

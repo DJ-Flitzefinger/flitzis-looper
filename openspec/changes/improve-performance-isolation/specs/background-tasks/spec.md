@@ -233,6 +233,14 @@ resampling or STFT, without truncating source or tail to satisfy the bound.
 - **THEN** no CUDA success, device-failure-to-CPU or mid-ORT-cancellation claim is made
 - **AND** existing productive workers and original resource floors remain available
 
+#### Scenario: A selected Native BeatThis NVIDIA worker completes or qualifies for CPU fallback
+- **GIVEN** the App admitted a complete source and selected the pinned Native CUDA package
+- **WHEN** the guarded child completes the full dynamic final0 inference
+- **THEN** a CUDA result requires observed CUDA compute in that request, the actual device and verified runtime images
+- **AND** with automatic policy only, a qualified device error may start one fresh guarded CPU child after the GPU Job, tree and both readers end
+- **AND** that child uses the same staged PCM, pinned graph and App request with fresh host admission
+- **AND** mandatory CUDA, explicit CPU, cancellation, host pressure, malformed receipts and unknown failures preserve their own outcomes
+
 #### Scenario: A standalone diagnostic reports a controlled CUDA arena refusal
 - **GIVEN** an explicitly requested isolated CUDA limit1 diagnostic without cancellation
 - **WHEN** actual ORT logs independently bind a unique Cuda/limit1 arena, its last same-thread extension and exactly matching positive rounded BFCArena refusal

@@ -1,4 +1,7 @@
-//! One complete BeatThis CPU request in the App's supervised offline child.
+//! One complete Native BeatThis request in the App's supervised offline child.
+#[cfg(windows)]
+#[path = "beat_worker_cuda.rs"]
+mod cuda;
 #[cfg(windows)]
 #[allow(dead_code)]
 #[path = "../examples/beat_this_audio/invocation.rs"]
@@ -10,16 +13,17 @@ mod runtime;
 
 #[cfg(not(windows))]
 fn main() -> Result<(), String> {
-    Err("native BeatThis worker requires the Windows x64 CPU package".into())
+    Err("native BeatThis worker requires a Windows x64 package".into())
 }
 
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {
     let mut own = invocation::Invocation::new();
-    let result = windows::run(&mut own);
+    let mut fault = None;
+    let result = windows::run(&mut own, &mut fault);
     own.finish(
         result,
-        None,
+        fault,
         &mut std::io::stdout().lock(),
         &mut std::io::stderr().lock(),
     )
@@ -27,10 +31,10 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(windows)]
 mod windows {
-    use super::{invocation, runtime};
+    use super::{cuda, invocation, runtime};
     use flitzis_looper_analysis::{
         beat_audio::{self, Soxr},
-        beat_inference::BeatModel,
+        beat_inference::{BeatModel, Provider},
         trial_lifetime::retain_first,
     };
     use std::{env, path::Path};
@@ -43,15 +47,22 @@ mod windows {
     const ORT_PACKAGE_SHA: &str =
         "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319";
 
-    pub fn run(own: &mut invocation::Invocation) -> Result<serde_json::Value, String> {
+    pub fn run(
+        own: &mut invocation::Invocation,
+        fault: &mut Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
         let context = own.context.clone();
         context.checkpoint("worker.startup")?;
         if !context.bound() || env::consts::ARCH != "x86_64" || ort::MINOR_VERSION != 24 {
             return Err("native BeatThis worker requires its own cancellation and API 24".into());
         }
         let args: Vec<_> = env::args_os().skip(1).collect();
-        let [pcm, rate, frames, mono_sha, out] = args.as_slice() else {
-            return Err("expected PCM RATE FRAMES MONO_SHA256 OUTPUT_DIRECTORY".into());
+        let (args, on_cuda) = match args.as_slice() {
+            [mode, rest @ ..] if mode == "--cuda" => (rest, true),
+            _ => (args.as_slice(), false),
+        };
+        let [pcm, rate, frames, mono_sha, out] = args else {
+            return Err("expected [--cuda] PCM RATE FRAMES MONO_SHA256 OUTPUT_DIRECTORY".into());
         };
         let pcm = Path::new(pcm);
         let out = Path::new(out);
@@ -69,14 +80,19 @@ mod windows {
         beat_audio::validate_audio_shape(frames, rate)?;
         let executable = env::current_exe().map_err(|error| error.to_string())?;
         let root = executable.parent().ok_or("missing worker installation")?;
-        let ort_dir = root.join("ort");
+        let (directory, manifest_sha, package_sha) = if on_cuda {
+            ("cuda", cuda::ORT_MANIFEST_SHA, cuda::ORT_PACKAGE_SHA)
+        } else {
+            ("ort", ORT_MANIFEST_SHA, ORT_PACKAGE_SHA)
+        };
+        let ort_dir = root.join(directory);
         let manifest = ort_dir.join("step23-runtime.json");
         let package = ort_dir.join("step23-package.json");
         if env::var_os(runtime::PACKAGE_ENV).as_deref() != Some(package.as_os_str())
-            || env::var(runtime::PACKAGE_DIGEST_ENV).as_deref() != Ok(ORT_PACKAGE_SHA)
+            || env::var(runtime::PACKAGE_DIGEST_ENV).as_deref() != Ok(package_sha)
             || env::var(runtime::LOAD_POLICY_ENV).as_deref() != Ok("package-system32")
         {
-            return Err("native BeatThis worker requires its pinned ORT CPU package".into());
+            return Err("native BeatThis worker requires its pinned ORT package".into());
         }
 
         let (raw, sha) = own.read_checked(pcm, beat_audio::MAX_AUDIO_BYTES, |len| {
@@ -116,37 +132,84 @@ mod windows {
             return Err("native BeatThis graph digest differs".into());
         }
         let (admission, environment) =
-            runtime::configure(Some((&manifest, ORT_MANIFEST_SHA)), &context)?;
+            runtime::configure(Some((&manifest, manifest_sha)), &context)?;
         let admission = admission.ok_or("missing pinned ORT admission")?;
         runtime::commit(environment)?;
         context.checkpoint("model.prepare")?;
-        let mut model = BeatModel::load_worker_cpu(&graph, GRAPH_SHA, &context)?;
+        let device = on_cuda.then(|| cuda::device(&context)).transpose()?;
+        let mut profile = on_cuda
+            .then(|| own.profile(&out.join("ort-profile")))
+            .transpose()?;
+        let provider = if on_cuda {
+            cuda::provider()
+        } else {
+            Provider::Cpu
+        };
+        let mut model =
+            BeatModel::load_worker(&graph, GRAPH_SHA, profile.as_deref(), provider, &context)?;
         drop(graph);
+        let mut device_error = None;
+        let mut cuda_kernel_events = 0;
         let logits = beat_audio::predict(
             &spect,
-            |chunk| invocation::run(&mut model, chunk, &context, None),
+            |chunk| {
+                let mut result =
+                    invocation::run_observed(&mut model, chunk, &context, None, |code, message| {
+                        if on_cuda {
+                            device_error = cuda::device_error(code, message);
+                        }
+                    });
+                if let Some(prefix) = profile.take() {
+                    let path = own.finish_profile(&mut model, &mut result);
+                    if result.is_ok() {
+                        cuda_kernel_events = cuda::kernel_events(own, &prefix, path.as_deref())?;
+                    }
+                }
+                result
+            },
             &|| context.cancelled(),
-        )?;
-        drop(model);
+        );
         drop(spect);
-        let duration = frames as f64 / f64::from(rate);
-        let (beats, downbeats) =
-            beat_audio::postprocess_checked(&logits, duration, &|| context.cancelled())?;
-        own.write_floats(&out.join("beat.f32"), &logits.beat)?;
-        own.write_floats(&out.join("downbeat.f32"), &logits.downbeat)?;
-        let runtime = admission.receipt()?;
-        Ok(serde_json::json!({
+        let mut evidence = serde_json::json!({
             "schema_version": 1,
             "mono_sha256": sha,
             "frame_count": frames,
             "sample_rate_hz": rate,
             "graph_sha256": graph_sha,
-            "ort_version": runtime["runtime_version"],
-            "ort_api": runtime["ort_api"],
-            "provider": "CPUExecutionProvider",
-            "logit_count": logits.beat.len(),
-            "beat_seconds": beats,
-            "downbeat_seconds": downbeats,
-        }))
+        });
+        let logits = match logits {
+            Ok(logits) => logits,
+            Err(error) => {
+                if let (Some(device_error), Some(device)) = (device_error, &device) {
+                    context.checkpoint("cuda.failure")?;
+                    context.cleanup()?;
+                    let receipt = admission.receipt()?;
+                    evidence["cuda"] = cuda::runtime_evidence(device, &receipt)?;
+                    evidence["cuda_error"] = device_error.into();
+                    *fault = Some(evidence);
+                }
+                return Err(error);
+            }
+        };
+        let runtime = admission.receipt()?;
+        drop(model);
+        evidence["ort_version"] = runtime["runtime_version"].clone();
+        evidence["ort_api"] = runtime["ort_api"].clone();
+        evidence["provider"] = if let Some(device) = &device {
+            evidence["cuda"] = cuda::runtime_evidence(device, &runtime)?;
+            evidence["cuda_kernel_events"] = cuda_kernel_events.into();
+            "CUDAExecutionProvider".into()
+        } else {
+            "CPUExecutionProvider".into()
+        };
+        let duration = frames as f64 / f64::from(rate);
+        let (beats, downbeats) =
+            beat_audio::postprocess_checked(&logits, duration, &|| context.cancelled())?;
+        own.write_floats(&out.join("beat.f32"), &logits.beat)?;
+        own.write_floats(&out.join("downbeat.f32"), &logits.downbeat)?;
+        evidence["logit_count"] = logits.beat.len().into();
+        evidence["beat_seconds"] = serde_json::json!(beats);
+        evidence["downbeat_seconds"] = serde_json::json!(downbeats);
+        Ok(evidence)
     }
 }

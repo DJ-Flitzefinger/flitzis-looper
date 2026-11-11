@@ -89,8 +89,49 @@ class NativeCpuExecutionReceipt(_StrictDto):
     fallback_reason: None
 
 
+NATIVE_CUDA_PACKAGE_SHA = "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b"
+NATIVE_CPU_PACKAGE_SHA = "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319"
+type NativeCudaPolicy = Literal["cuda", "auto"]
+type NativeCudaError = Literal[2, 214, 700, 702, 719]
+type DeviceName = Annotated[str, Field(strict=True, min_length=1, max_length=256)]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCudaRuntime(_StrictDto):
+    """The driver's ordinal zero and the pinned ORT CUDA package observed in the child."""
+
+    device_name: DeviceName
+    driver_api_version: Annotated[int, Field(strict=True, gt=0, le=2**31 - 1)]
+    package_sha256: Literal["d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b"]
+    provider_sha256: Literal["110929d2552bc775828e7a5c18c5ef9ab90898fc57a57868623fe2fe8c82d494"]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCudaExecutionReceipt(_StrictDto):
+    """Effective Native execution and evidence from the original CUDA attempt."""
+
+    schema_version: ProtocolOne
+    requested_policy: NativeCudaPolicy
+    device: Literal["cpu", "cuda:0"]
+    device_name: DeviceName | None
+    precision: Literal["float32"]
+    ort_version: Literal["1.24.4"]
+    ort_api: Literal[24]
+    ort_package_sha256: Literal[
+        "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b",
+        "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319",
+    ]
+    cuda: NativeCudaRuntime
+    cuda_kernel_events: Annotated[int, Field(strict=True, gt=0, le=100_000)] | None
+    fallback_reason: Literal["cuda_device_error"] | None
+    cuda_error: NativeCudaError | None
+
+
 type ActualExecutionReceipt = (
-    ExecutionReceipt | LegacyCpuExecutionReceipt | NativeCpuExecutionReceipt
+    ExecutionReceipt
+    | LegacyCpuExecutionReceipt
+    | NativeCpuExecutionReceipt
+    | NativeCudaExecutionReceipt
 )
 
 
@@ -144,9 +185,36 @@ def validate_execution(
         raise ValueError(msg)
     if isinstance(validated, (LegacyCpuExecutionReceipt, NativeCpuExecutionReceipt)):
         return
+    if isinstance(validated, NativeCudaExecutionReceipt):
+        if not _native_cuda_execution_valid(validated):
+            msg = "incoherent_native_cuda_execution_receipt"
+            raise ValueError(msg)
+        return
     if not _device_fields_valid(validated) or not _policy_fields_valid(validated):
         msg = "incoherent_execution_receipt"
         raise ValueError(msg)
+
+
+def _native_cuda_execution_valid(receipt: NativeCudaExecutionReceipt) -> bool:
+    name = receipt.cuda.device_name
+    if not name.strip() or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in name):
+        return False
+    if receipt.device == "cuda:0":
+        return (
+            receipt.device_name == name
+            and receipt.ort_package_sha256 == NATIVE_CUDA_PACKAGE_SHA
+            and receipt.cuda_kernel_events is not None
+            and receipt.fallback_reason is None
+            and receipt.cuda_error is None
+        )
+    return (
+        receipt.requested_policy == "auto"
+        and receipt.device_name is None
+        and receipt.ort_package_sha256 == NATIVE_CPU_PACKAGE_SHA
+        and receipt.cuda_kernel_events is None
+        and receipt.fallback_reason == "cuda_device_error"
+        and receipt.cuda_error is not None
+    )
 
 
 def _device_fields_valid(receipt: ExecutionReceipt) -> bool:

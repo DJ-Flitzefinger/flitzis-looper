@@ -367,6 +367,7 @@ class _CommandReader(_ResponseReader):
         receipt_prefixes: tuple[bytes, ...] = (),
         *,
         independent_receipts: bool = False,
+        bounded: bool = False,
     ) -> None:
         super().__init__(stream, limit, thread_name="owned-command-output")
         self.receipt_prefixes = receipt_prefixes
@@ -375,9 +376,13 @@ class _CommandReader(_ResponseReader):
         self._receipt_count = 0
         self._receipt: bytes | None = None
         self.independent_receipts = independent_receipts
+        self.bounded = bounded
         self._receipts: dict[bytes, tuple[int, bytes | None]] = {}
 
     def _read(self) -> None:
+        if self.bounded:
+            super()._read()
+            return
         try:
             while chunk := self.stream.read(_READ_CHUNK_BYTES):
                 self.data.extend(chunk)
@@ -710,6 +715,7 @@ def _command_readers(
     receipt_prefixes: tuple[bytes, ...],
     *,
     independent_receipts: bool = False,
+    bounded_stdout: bool = False,
 ) -> tuple[_CommandReader, _CommandReader]:
     if owned.process.stdout is None or owned.process.stderr is None:
         msg = "owned command output pipes were not created"
@@ -719,6 +725,7 @@ def _command_readers(
         limits.max_response_bytes,
         receipt_prefixes,
         independent_receipts=independent_receipts,
+        bounded=bounded_stdout,
     )
     owned.add_reader(stdout)
     stderr = _CommandReader(owned.process.stderr, limits.max_response_bytes)
@@ -730,12 +737,19 @@ def _readers_for_command(
     owned: _OwnedProcess,
     limits: WorkerLimits,
     receipt_prefixes: tuple[bytes, ...] | IndependentReceipts,
+    *,
+    bounded_stdout: bool,
 ) -> tuple[_CommandReader, _CommandReader]:
+    if bounded_stdout and receipt_prefixes:
+        message = "Strict owned command stdout cannot retain diagnostic markers"
+        raise ValueError(message)
     if isinstance(receipt_prefixes, IndependentReceipts):
         prefixes, independent = receipt_prefixes.prefixes, True
     else:
         prefixes, independent = receipt_prefixes, False
-    return _command_readers(owned, limits, prefixes, independent_receipts=independent)
+    return _command_readers(
+        owned, limits, prefixes, independent_receipts=independent, bounded_stdout=bounded_stdout
+    )
 
 
 class _ObserverSetupError(Exception):
@@ -762,6 +776,8 @@ def _supervise_command(
     on_process_started: Callable[[int], None] | None,
     request_abort: Callable[[], None] | None,
     abort_grace_seconds: float,
+    *,
+    observe_before_exit: bool,
 ) -> str:
     _bind_command_observer(process, cancel, on_process_started)
     if on_process_started is None:
@@ -771,9 +787,7 @@ def _supervise_command(
     process.activate()
     for reader in owned.readers:
         reader.thread.start()
-    reason = _monitor(
-        owned, cancel, limits, stop_reason, observe_before_exit=on_process_started is not None
-    )
+    reason = _monitor(owned, cancel, limits, stop_reason, observe_before_exit=observe_before_exit)
     if reason in {"cancelled", "resource_pressure", "resource_unavailable", "audio_headroom"} and (
         request_abort is not None
     ):
@@ -839,6 +853,7 @@ def run_owned_command(  # noqa: PLR0913
     stop_reason: Callable[[], str | None] | None = None,
     on_process_started: Callable[[int], None] | None = None,
     commit_limit_bytes: int | None = None,
+    strict_completion: bool = False,
 ) -> OwnedCommandResult:
     """Run under caller admission, retaining the worker through actual read end.
 
@@ -846,7 +861,8 @@ def run_owned_command(  # noqa: PLR0913
     Cancellation and optional resource pressure are observed on the existing
     offline worker. An optional owned child abort hook receives finite grace before
     tree termination. Legacy commands win over a later resource observation; the
-    opt-in observer checks before accepting completion.
+    opt-in observer checks before accepting completion. Strict completion also
+    bounds the entire stdout protocol and checks resource stop before completion.
     A finite reap failure keeps this worker and all caller resources occupied until
     retirement succeeds.
     """
@@ -875,8 +891,11 @@ def run_owned_command(  # noqa: PLR0913
     stdout = None
     stderr = None
     reason = "worker_supervision_failed"
+    observe_before_exit = on_process_started is not None or strict_completion
     try:
-        stdout, stderr = _readers_for_command(owned, limits, receipt_prefixes)
+        stdout, stderr = _readers_for_command(
+            owned, limits, receipt_prefixes, bounded_stdout=strict_completion
+        )
         reason = _supervise_command(
             owned,
             process,
@@ -886,6 +905,7 @@ def run_owned_command(  # noqa: PLR0913
             on_process_started,
             request_abort,
             abort_grace_seconds,
+            observe_before_exit=observe_before_exit,
         )
     except _ObserverSetupError as error:
         reason = str(error)
@@ -897,11 +917,14 @@ def run_owned_command(  # noqa: PLR0913
             # Do not leave a backend's temporary/source context under a surviving
             # child or output read. The already admitted worker retains its slot.
             retired.wait()
-    final_reason = reason if outcome.reason == "worker_retiring" else outcome.reason
-    if any(reader.failed.is_set() for reader in owned.readers):
-        final_reason = "response_read_failed"
-    if on_process_started is not None and cancel.is_set():
-        final_reason = "cancelled"
+    final_reason = _owned_command_reason(
+        owned,
+        outcome.reason,
+        reason,
+        cancel,
+        observe_before_exit=observe_before_exit,
+        strict_completion=strict_completion,
+    )
     assert process.returncode is not None
     return OwnedCommandResult(
         final_reason,
@@ -909,6 +932,26 @@ def run_owned_command(  # noqa: PLR0913
         stdout.captured() if stdout is not None else b"",
         stderr.captured() if stderr is not None else b"",
     )
+
+
+def _owned_command_reason(
+    owned: _OwnedProcess,
+    settled_reason: str,
+    monitored_reason: str,
+    cancel: Event,
+    *,
+    observe_before_exit: bool,
+    strict_completion: bool,
+) -> str:
+    if observe_before_exit and cancel.is_set():
+        return "cancelled"
+    if strict_completion and any(reader.overflow.is_set() for reader in owned.readers):
+        return "response_limit"
+    if any(reader.failed.is_set() for reader in owned.readers):
+        return "response_read_failed"
+    if settled_reason == "worker_retiring":
+        return "worker_supervision_failed" if strict_completion else monitored_reason
+    return settled_reason
 
 
 def _release_temporary(

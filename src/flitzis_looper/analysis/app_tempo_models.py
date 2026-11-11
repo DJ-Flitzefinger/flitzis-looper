@@ -25,6 +25,7 @@ from flitzis_looper.analysis.execution import (
     ACTUAL_EXECUTION_ADAPTER,
     ActualExecutionReceipt,
     NativeCpuExecutionReceipt,
+    NativeCudaExecutionReceipt,
     validate_execution,
 )
 
@@ -192,7 +193,7 @@ class AppTempoMethod(BaseModel):
         return self
 
     def _validate_estimate(self) -> None:
-        native = isinstance(self.execution, NativeCpuExecutionReceipt)
+        native = isinstance(self.execution, (NativeCpuExecutionReceipt, NativeCudaExecutionReceipt))
         if native != (self.frontend_id == NATIVE_MODEL.frontend_id) or (
             native and self.model_sha256 != NATIVE_MODEL.sha256
         ):

@@ -15,3 +15,6 @@ rust/vendor/cpal/looper-provenance.json text eol=lf
 
 # Unified diff context markers precede upstream tabs and empty source lines.
 scripts/native/vcpkg-overlay/libsamplerate/stereo-controls.patch text eol=lf whitespace=-space-before-tab,-blank-at-eol
+
+# Native BeatThis CUDA manifests are hashed as exact loader inputs.
+workers/beat_this/native_cuda/*.json text eol=lf

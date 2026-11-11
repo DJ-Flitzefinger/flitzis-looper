@@ -1,4 +1,4 @@
-//! Opt-in BeatThis experiment, never selected by the application.
+//! BeatThis inference in a supervised, disposable offline process.
 //!
 //! This core has no Python, PyO3 or LibTorch dependency.
 //! The separate beat_audio core implements the complete waveform math.
@@ -93,19 +93,20 @@ impl BeatModel {
         )
     }
 
-    /// CPU-only disposable worker, with the same exact graph and cancellation
-    /// path as the standalone command. Production needs no profiling file.
+    /// Use the same exact graph and cancellation path as the standalone command.
     #[cfg(feature = "native-beat-this-worker")]
-    pub fn load_worker_cpu(
+    pub fn load_worker(
         graph: &[u8],
         expected_sha256: &str,
+        profile: Option<&Path>,
+        provider: Provider,
         context: &crate::trial_lifetime::Context,
     ) -> Result<Self, String> {
         let model = Self::load_completed(
             graph,
             expected_sha256,
-            None,
-            Provider::Cpu,
+            profile,
+            provider,
             &|| context.cancelled(),
             &|result| context.record(result),
             Some(context),
@@ -132,6 +133,7 @@ impl BeatModel {
             #[cfg(feature = "native-inference-cuda")]
             Provider::Cuda { memory_limit } => vec![
                 ep::CUDA::default()
+                    .with_device_id(0)
                     .with_tf32(false)
                     .with_memory_limit(memory_limit)
                     .build()
@@ -225,15 +227,25 @@ impl BeatModel {
             .0
     }
 
-    /// Preserve native failure details and separately identify only ORT's exact
-    /// termination status. Unknown/new statuses remain ordinary native failures.
+    /// Distinguish the exact native termination status from other failures.
     pub fn run_with_options_observed(
         &mut self,
         spectrogram: &[f32],
         options: &RunOptions,
         cancelled: &dyn Fn() -> bool,
     ) -> (Result<Logits, String>, bool) {
-        let terminated = std::cell::Cell::new(false);
+        self.run_observing_failure(spectrogram, options, cancelled, |_, _| {})
+    }
+
+    /// Observe the exact ORT status only at the native Run boundary.
+    pub fn run_observing_failure(
+        &mut self,
+        spectrogram: &[f32],
+        options: &RunOptions,
+        cancelled: &dyn Fn() -> bool,
+        observe_failure: impl FnOnce(ort::ErrorCode, &str),
+    ) -> (Result<Logits, String>, bool) {
+        let mut terminated = false;
         let result = (|| {
             checkpoint(cancelled)?;
             let frames = spectrogram.len() / BINS;
@@ -250,7 +262,8 @@ impl BeatModel {
                 .session
                 .run_with_options(ort::inputs!["spectrogram" => input], options)
                 .map_err(|e| {
-                    terminated.set(is_run_termination(e.code(), e.message()));
+                    terminated = is_run_termination(e.code(), e.message());
+                    observe_failure(e.code(), e.message());
                     e.to_string()
                 })?;
             checkpoint(cancelled)?;
@@ -269,7 +282,7 @@ impl BeatModel {
                 downbeat: read("downbeat")?,
             })
         })();
-        (result, terminated.get())
+        (result, terminated)
     }
 
     /// Finalize actual executed-node evidence before the process retires.

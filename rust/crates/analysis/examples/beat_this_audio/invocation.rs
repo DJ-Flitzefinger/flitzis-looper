@@ -284,21 +284,35 @@ pub fn run(
     context: &Context,
     diagnostic_ms: Option<u64>,
 ) -> Result<Logits, String> {
+    run_observed(model, chunk, context, diagnostic_ms, |_, _| {})
+}
+
+pub fn run_observed(
+    model: &mut BeatModel,
+    chunk: &[f32],
+    context: &Context,
+    diagnostic_ms: Option<u64>,
+    observe_failure: impl FnOnce(ort::ErrorCode, &str),
+) -> Result<Logits, String> {
     context.checkpoint("model.run")?;
     let options = RunOptions::new().map_err(|e| e.to_string())?;
-    let native_terminated = std::cell::Cell::new(false);
+    let mut native_terminated = false;
     let (result, requested) = terminate_during(
         context,
         diagnostic_ms,
         || options.terminate().map_err(|e| e.to_string()),
         || {
-            let (result, terminated) =
-                model.run_with_options_observed(chunk, &options, &|| context.cancelled());
-            native_terminated.set(terminated);
+            let (result, terminated) = model.run_observing_failure(
+                chunk,
+                &options,
+                &|| context.cancelled(),
+                observe_failure,
+            );
+            native_terminated = terminated;
             result
         },
     );
-    let result = qualify_run(result, native_terminated.get(), requested, context);
+    let result = qualify_run(result, native_terminated, requested, context);
 
     if result.is_ok() && diagnostic_ms.is_some() {
         return Err("diagnostic run finished before termination".into());
