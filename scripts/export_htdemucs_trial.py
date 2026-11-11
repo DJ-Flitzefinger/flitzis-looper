@@ -108,6 +108,7 @@ STREAM_CHUNK_BYTES = 256 * 1024
 # Fixed release parameters and folded tensor inputs are float32 or int64.
 INITIALIZER_TYPES = {"float32": (1, 4), "int64": (7, 8)}
 PCM_SHAPE = SHAPES["decoded_waveform"]
+PAD2_SHAPE = (1, 4, 2, 2049, 340)
 ONNX_PINS = {
     "onnx": (
         "1.23.2",
@@ -823,14 +824,13 @@ def load_producer_model(
     return model
 
 
-def mapped_reference_forward(model, module, source: bytes) -> MethodType:
+def mapped_reference_forward(model, module, source: bytes, pad2) -> MethodType:
     """Keep the pinned CPU CAC forward and retire its unused tensor owners."""
     name = "demucs/htdemucs.py"
     if (
         hashlib.sha256(source).hexdigest() != SOURCE_PINS[name]
         or type(model) is not module.HTDemucs
-        or model.training
-        or model.cac is not True
+        or (model.training, model.cac is True, model.hop_length) != (False, True, 1024)
         or {"forward", "_ispec"}.intersection(vars(model))
     ):
         msg = "mapped HTDemucs reference requires the exact stock CAC eval forward"
@@ -848,6 +848,8 @@ def mapped_reference_forward(model, module, source: bytes) -> MethodType:
     ispec = method_definition(source, "HTDemucs", "_ispec")
     ispec.name = "_consume_ispec"
     ispec.args.args[1].arg = "packed"
+    second_pad = next(node for node in ispec.body if ast.unparse(node) == "z = F.pad(z, (2, 2))")
+    second_pad.value.func = ast.Name(id="_mapped_pad2", ctx=ast.Load())
     ispec.body[:0] = ast.parse("z = packed.pop()").body
     for node in ast.walk(forward.body[mask + 1]):
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._ispec":
@@ -859,27 +861,109 @@ def mapped_reference_forward(model, module, source: bytes) -> MethodType:
     ]
     forward.body.insert(magnitude + 1, ast.parse("del z, mag").body[0])
     release_decoder_locals(forward)
-    tree = ast.Module(body=[forward], type_ignores=[])
+    tree = ast.parse("def bind(_mapped_pad2):\n    return forward")
+    tree.body[0].body.insert(0, forward)
     namespace = {}
     exec(compile(ast.fix_missing_locations(tree), name, "exec"), vars(module), namespace)
-    return MethodType(namespace["forward"], model)
+    return MethodType(namespace["bind"](pad2), model)
+
+
+def mapped_reference_scratch(output: Path, size: int, label: str) -> memoryview:
+    if disk_usage(output).free < size:
+        msg = f"insufficient disk space for the HTDemucs {label}"
+        raise OSError(msg)
+    # On Windows TemporaryFile creates a unique delete-on-close file. mmap
+    # duplicates the same handle, and the exported buffer keeps its view alive
+    # even if a native operator fails with a tensor retained by a traceback.
+    with TemporaryFile(dir=output, prefix=f".htdemucs-{label}-") as stream:
+        stream.truncate(size)
+        mapping = mmap.mmap(stream.fileno(), size, access=mmap.ACCESS_WRITE)
+    return memoryview(mapping)
 
 
 @contextmanager
 def mapped_attention_score(output: Path, tokens: int):
     """Own one reusable, writable score view for the exact native self-attention path."""
-    shape = (HEADS, tokens, tokens)
-    size = prod(shape) * 4
-    if disk_usage(output).free < size:
-        msg = "insufficient disk space for the HTDemucs attention score"
-        raise OSError(msg)
-    # On Windows TemporaryFile creates a unique delete-on-close file. mmap
-    # duplicates the same handle, and the exported buffer keeps its view alive
-    # even if a native operator fails with a tensor retained by a traceback.
-    with TemporaryFile(dir=output, prefix=".htdemucs-score-") as stream:
-        stream.truncate(size)
-        mapping = mmap.mmap(stream.fileno(), size, access=mmap.ACCESS_WRITE)
-    yield memoryview(mapping)
+    yield mapped_reference_scratch(output, HEADS * tokens * tokens * 4, "score")
+
+
+def check_reference_pad2(torch, z, padding) -> None:
+    if (
+        (padding, type(z)) != ((2, 2), torch.Tensor)
+        or (z.device.type, z.dtype, z.layout) != ("cpu", torch.complex64, torch.strided)
+        or state_storage_geometry(z)
+        != ((1, 4, 2, 2049, 336), (5507712, 1376928, 688464, 336, 1), 0, 44061696)
+        or (z.is_conj(), z.is_neg()) != (False, False)
+    ):
+        msg = "unexpected HTDemucs second pad geometry"
+        raise ValueError(msg)
+    if (
+        not torch.is_inference_mode_enabled()
+        or torch.is_autocast_enabled("cpu")
+        or torch._C._len_torch_dispatch_stack()
+    ):
+        msg = "unexpected HTDemucs second pad dispatch state"
+        raise ValueError(msg)
+
+
+def mapped_reference_pad2(torch, output: Path):
+    """Redirect the stock second pad's output allocation into one file view."""
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    stock_pad = torch.nn.functional.pad
+    size = prod(PAD2_SHAPE) * 8
+    empty_options = {
+        "dtype": torch.complex64,
+        "layout": torch.strided,
+        "device": torch.device("cpu"),
+        "memory_format": torch.contiguous_format,
+    }
+
+    def pad2(z, padding):
+        check_reference_pad2(torch, z, padding)
+        mapped = None
+
+        def allocate(op, args, options):
+            nonlocal mapped
+            if op in {aten.fill_.Scalar, aten.narrow.default, aten.copy_.default}:
+                return op(*args, **options)
+            if (
+                op != aten.empty.memory_format
+                or mapped is not None
+                or tuple(args[0]) != PAD2_SHAPE
+                or options != empty_options
+            ):
+                msg = "unexpected HTDemucs second pad allocation"
+                raise ValueError(msg)
+            owner = mapped_reference_scratch(output, size, "pad2")
+            mapped = torch.frombuffer(owner, dtype=torch.complex64).view(PAD2_SHAPE)
+            if mapped.data_ptr() % STATE_ALIGNMENT or mapped.untyped_storage().nbytes() != size:
+                msg = "unexpected HTDemucs mapped second pad storage"
+                raise ValueError(msg)
+            return mapped
+
+        def dispatch(op, args, options):
+            if (
+                op != aten.pad.default
+                or len(args) != 2
+                or args[0]._cdata != z._cdata
+                or tuple(args[1]) != padding
+                or options
+            ):
+                msg = "HTDemucs second pad left the stock constant padding path"
+                raise ValueError(msg)
+            # The stock pad wrapper routes these exact options to this kernel.
+            with reference_dispatch_mode(allocate):
+                return aten.constant_pad_nd.default.redispatch(cpu, *args)
+
+        with reference_dispatch_mode(dispatch):
+            padded = stock_pad(z, padding)
+        if mapped is None or padded._cdata != mapped._cdata:
+            msg = "HTDemucs second pad did not return the mapped allocation"
+            raise ValueError(msg)
+        return padded
+
+    return pad2
 
 
 def attention_score_tensor(torch, owner: memoryview, shape: tuple[int, int, int]):
@@ -890,7 +974,7 @@ def attention_score_tensor(torch, owner: memoryview, shape: tuple[int, int, int]
     return score
 
 
-def attention_dispatch_mode(dispatch):
+def reference_dispatch_mode(dispatch):
     mode = import_module("torch.utils._python_dispatch").TorchDispatchMode
 
     class ReferenceDispatch(mode):
@@ -967,7 +1051,7 @@ def native_attention_with_score(torch, owner: memoryview, tokens: int, func, arg
 
     # A fresh inner mode sees the C++ kernel's ATen calls. Redispatch only the
     # outer call to CPU so it does not enter the Python fallback again.
-    with attention_dispatch_mode(dispatch):
+    with reference_dispatch_mode(dispatch):
         result = func.redispatch(cpu, *args)
     if step != 3 or result[1] is not None:
         msg = "incomplete HTDemucs mapped score lifecycle"
@@ -1028,7 +1112,7 @@ def mapped_self_attention(torch, owner: memoryview, tokens: int):
             seen = True
             return native_attention_with_score(torch, owner, tokens, func, args)
 
-        with attention_dispatch_mode(dispatch):
+        with reference_dispatch_mode(dispatch):
             result = stock(attention, query, key, value, **options)
         if not seen:
             msg = "missing native HTDemucs self-attention"
@@ -1505,7 +1589,9 @@ def capture_reference(
         release_decoder=mapped_state is not None,
     )
     mapped_forward = (
-        mapped_reference_forward(model, module, sources["demucs/htdemucs.py"])
+        mapped_reference_forward(
+            model, module, sources["demucs/htdemucs.py"], mapped_reference_pad2(torch, output)
+        )
         if mapped_state is not None
         else None
     )

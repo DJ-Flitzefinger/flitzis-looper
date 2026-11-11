@@ -1412,14 +1412,19 @@ after their last decoder call. The empty waveform decoder keeps the spectral
 pre-transpose view until that call returns. The extracted comparison returns
 the raw decoder views. The original forward releases the spectral output after
 CAC packing and passes sole ownership of the packed spectrum to the pinned
-inverse-spectrogram code. Its first pad replaces the packed backing. The
-second pad replaces the first pad's backing. The decoded waveform stays live
-through iSTFT and the final sum. The trace uses the existing decoder path.
+inverse-spectrogram code. Its first pad replaces the packed backing. At the
+second pad, the pinned stock constant-padding kernel writes its output into a
+44,586,240-byte writable file mapping. The first pad's storage ends before
+iSTFT. The mapped output keeps the stock complex64 shape and strides, and
+the stock C2R and overlap-add consume it with the decoded waveform still live.
+The tensor storage retains the mapping through its final alias, including
+when an exception retains the input. The trace uses the existing decoder path.
 
-Charge the full mapped score extent separately for physical residency and
-file cache. The full learned reference still requires a prospective commit
-and residency budget for both forwards, retained activations, vendor scratch,
-allocator behavior and retirement.
+Charge both mapped extents for physical residency and file cache. The stock
+MKL input pack, FFT output, windowed frames and overlap-add tensors still
+require private storage. The full learned reference requires a prospective
+commit and residency budget for both forwards, retained activations, vendor
+scratch, allocator behavior and retirement.
 
 The separated path uses the pinned TorchScript graph conversion with ONNX
 constant folding disabled. It
