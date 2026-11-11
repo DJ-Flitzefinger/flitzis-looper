@@ -569,6 +569,57 @@ def scan_nodes(onnx, prefix, inputs, output, queries):
     ]
 
 
+def scan64_digest(onnx, graph) -> str:
+    """Attest each complete Scan64 chain in the independently parsed final graph."""
+    nodes = graph.graph.node
+    queries = Counter()
+    digest = hashlib.sha256()
+    for index, node in enumerate(nodes):
+        if node.op_type == "Scan":
+            count, canonical = _checked_scan64(onnx, nodes, index)
+            queries[count] += 1
+            for member in canonical:
+                raw = member.SerializeToString(deterministic=True)
+                digest.update(len(raw).to_bytes(8, "little"))
+                digest.update(raw)
+        elif node.op_type in {"Attention", "Softmax"} or any(
+            attr.type in {onnx.AttributeProto.GRAPH, onnx.AttributeProto.GRAPHS}
+            for attr in node.attribute
+        ):
+            msg = "HTDemucs has attention or subgraphs outside its ten Scan64 chains"
+            raise ValueError(msg)
+    if queries != {SPECTRAL_TOKENS: 5, TIME_TOKENS: 5}:
+        msg = "HTDemucs Scan64 query-site counts differ from the release"
+        raise ValueError(msg)
+    return digest.hexdigest()
+
+
+def _checked_scan64(onnx, nodes, index: int):
+    if index < 3 or index + 4 > len(nodes):
+        msg = "HTDemucs has an incomplete Scan64 chain"
+        raise ValueError(msg)
+    chain = nodes[index - 3 : index + 4]
+    try:
+        prefix = chain[0].output[0].removesuffix("block_shape")
+        count = chain[0].attribute[0].t.int64_data[2] * BLOCK
+        body = next(attr.g for attr in chain[3].attribute if attr.name == "body")
+        k, v = body.node[0].input[1], body.node[2].input[1]
+        q, output = chain[1].input[0], chain[-1].output[0]
+    except (IndexError, StopIteration) as err:
+        msg = "HTDemucs Scan64 body or geometry is missing"
+        raise ValueError(msg) from err
+    if count not in {SPECTRAL_TOKENS, TIME_TOKENS} or prefix != f"{output}.scan64.":
+        msg = "HTDemucs Scan64 prefix or query extent differs"
+        raise ValueError(msg)
+    canonical = scan_nodes(onnx, prefix, (q, k, v), output, count)
+    if chain != canonical:
+        msg = "HTDemucs Scan64 chain differs from the canonical lowering"
+        raise ValueError(msg)
+    # Key lengths and all ten Q/K pairs are checked on the pinned trace
+    # markers by lower_attention, before these exact bytes are produced.
+    return count, canonical
+
+
 def parse_inline_graph(onnx, raw: bytes):
     """Parse exact immutable bytes without resolving any external data."""
     graph = onnx.load_model_from_string(raw)
@@ -735,7 +786,7 @@ def trace_core(
     return TraceArtifact(describe_artifact(output, MAX_GRAPH_BYTES), reference)
 
 
-def graph_metadata(trace: TraceArtifact) -> dict[str, str]:
+def graph_metadata(trace: TraceArtifact, attention_sha256: str) -> dict[str, str]:
     """Bind the graph to the release and the upstream original references."""
     reference = trace.reference
     return {
@@ -746,6 +797,7 @@ def graph_metadata(trace: TraceArtifact) -> dict[str, str]:
         "source_closure_sha256": source_digest(),
         "lowering": LOWERING,
         "attention_query_block": str(BLOCK),
+        "attention_sha256": attention_sha256,
         "sources": ",".join(SOURCES),
         "trace_sha256": trace.graph.sha256,
         "mix_sha256": reference.mix.sha256,
@@ -767,7 +819,7 @@ def rewrite_graph(
     graph = parse_inline_graph(onnx, read_artifact(trace_path, trace.graph, MAX_GRAPH_BYTES))
     lower_attention(onnx, graph)
     inspect_graph(onnx, graph)
-    onnx.helper.set_model_props(graph, graph_metadata(trace))
+    onnx.helper.set_model_props(graph, graph_metadata(trace, scan64_digest(onnx, graph)))
     serialized = graph.SerializeToString()
     if not 0 < len(serialized) <= MAX_GRAPH_BYTES:
         msg = "HTDemucs rewritten graph exceeds the inline extent"
@@ -792,7 +844,9 @@ def check_graph(
     graph = parse_inline_graph(onnx, raw)
     inspect_graph(onnx, graph)
     props = [(item.key, item.value) for item in graph.metadata_props]
-    if dict(props) != graph_metadata(trace) or len(props) != len(dict(props)):
+    if dict(props) != graph_metadata(trace, scan64_digest(onnx, graph)) or len(props) != len(
+        dict(props)
+    ):
         msg = "HTDemucs rewritten graph provenance differs"
         raise ValueError(msg)
     del graph

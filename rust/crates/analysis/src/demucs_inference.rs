@@ -40,6 +40,12 @@ const CANCELLED: &str = "native HTDemucs trial cancelled";
 // The current opset-18 recipe lowers attention to MatMul/Softmax/MatMul. Charge
 // both live score owners until reuse or a bounded lowering is actually proved.
 const DENSE_SCORE_BYTES: usize = 8 * (8 * STEPS) * (8 * STEPS) * size_of::<f32>();
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+pub const SCAN64_LOWERING: &str = "torchscript-opset18-scan64";
+// Two 8 x 64 x 2688 float32 tile owners. All other operator, runtime and
+// transformation costs must be covered by the approved release allowances.
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+const SCAN64_SCORE_BYTES: usize = 2 * 8 * 64 * (8 * STEPS) * size_of::<f32>();
 const TORCH: &str = "2.12.0+cu130";
 const TORCH_COMMIT: &str = "7661cd9c6b841b62b7f411aa52ec51f05457263b";
 const SOURCE_CLOSURE: &str = "7457feb86c729a70906beabc70afccb4e4e49bf63a639e87c280f85ed1be4113";
@@ -79,6 +85,60 @@ impl Payload {
     }
 
     /// Complete offline invocation. Workspace already includes callback I/O.
+    pub fn offline_bytes(
+        &self,
+        frames: usize,
+        model: &Model<'_>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<usize, Error> {
+        check_model(model)?;
+        offline::Workspace::planned_payload_bytes(
+            frames,
+            std::slice::from_ref(model),
+            self.run_bytes()?,
+            cancelled,
+        )
+    }
+}
+
+/// Frozen liveness allowances reviewed against the exact learned graph and
+/// ORT package. No allowance is derived from a successful allocation or peak.
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scan64Release {
+    pub graph_bytes: usize,
+    pub graph_sha256: String,
+    pub load_extra_bytes: usize,
+    pub run_extra_bytes: usize,
+    pub trace_sha256: String,
+    pub attention_sha256: String,
+}
+
+#[cfg(all(windows, feature = "native-demucs-worker"))]
+impl Scan64Release {
+    pub fn load_bytes(&self) -> Result<usize, Error> {
+        if !(1..=MAX_GRAPH_BYTES).contains(&self.graph_bytes) || self.load_extra_bytes == 0 {
+            return Err(Error::Geometry);
+        }
+        // The mapped serialization consumes physical headroom. Conservatively
+        // include it in the admission union with both possible weight owners.
+        bounded(&[self.graph_bytes, 2 * WEIGHT_BYTES, self.load_extra_bytes])
+    }
+
+    pub fn run_bytes(&self) -> Result<usize, Error> {
+        if self.run_extra_bytes == 0 {
+            return Err(Error::Geometry);
+        }
+        bounded(&[
+            WEIGHT_BYTES,
+            SCAN64_SCORE_BYTES,
+            INPUT_BYTES,
+            OUTPUT_BYTES,
+            self.run_extra_bytes,
+        ])
+    }
+
     pub fn offline_bytes(
         &self,
         frames: usize,
@@ -171,7 +231,7 @@ impl CpuModel {
             .with_profiling(profile)
             .map_err(|e| e.to_string())?;
         let mut session = trial_ort::commit(builder, graph, Some(context))?;
-        let validation = validate_session(&session)
+        let validation = validate_session(&session, "torchscript-opset18-dense")
             .and_then(|()| context.cleanup())
             .and_then(|()| context.checkpoint("demucs.model.loaded"));
         if let Err(primary) = validation {
@@ -187,6 +247,73 @@ impl CpuModel {
             session,
             context: context.clone(),
             run_extra: payload.run_bytes().map_err(|e| e.to_string())?,
+            run_limit,
+        })
+    }
+
+    /// Map the same immutable bytes used for digest verification into the
+    /// synchronous ONNX loader. The graph and load-only owners retire before Run.
+    #[cfg(all(windows, feature = "native-demucs-worker"))]
+    pub fn load_scan64(
+        path: &Path,
+        release: &Scan64Release,
+        ceiling: usize,
+        run_limit: usize,
+        context: &Context,
+        admit_runtime: impl FnOnce() -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let context = context.with_cancel_message(CANCELLED);
+        context.checkpoint("demucs.scan64.prepare")?;
+        let load = release.load_bytes().map_err(|e| e.to_string())?;
+        let run_extra = release.run_bytes().map_err(|e| e.to_string())?;
+        let run_min =
+            bounded(&[run_extra, INPUT_BYTES, OUTPUT_BYTES]).map_err(|e| e.to_string())?;
+        if ceiling > MAX_PAYLOAD_BYTES
+            || load > ceiling
+            || !(run_min..=ceiling).contains(&run_limit)
+        {
+            return Err("HTDemucs Scan64 complete phase bounds exceed the admitted ceiling".into());
+        }
+        let session =
+            super::inline_model::with_read_only(path, release.graph_bytes, &context, |graph| {
+                if trial_ort::sha256(graph, || context.check())? != release.graph_sha256 {
+                    return Err("HTDemucs Scan64 graph digest mismatch".into());
+                }
+                admit_runtime()?;
+                context.checkpoint("demucs.scan64.load")?;
+                let providers = [ep::CPU::default()
+                    .with_arena_allocator(false)
+                    .build()
+                    .error_on_failure()];
+                let builder = trial_ort::session_builder(&providers)?
+                    .with_no_environment_execution_providers()
+                    .map_err(|e| e.to_string())?
+                    .with_memory_pattern(false)
+                    .map_err(|e| e.to_string())?
+                    .with_optimization_level(GraphOptimizationLevel::Disable)
+                    .map_err(|e| e.to_string())?
+                    .with_config_entry("session.disable_prepacking", "1")
+                    .map_err(|e| e.to_string())?
+                    .with_config_entry("session.load_model_format", "ONNX")
+                    .map_err(|e| e.to_string())?;
+                trial_ort::commit(builder, graph, Some(&context))
+            })?;
+        validate_session(&session, SCAN64_LOWERING)?;
+        let metadata = session.metadata().map_err(|e| e.to_string())?;
+        if metadata.custom("attention_query_block").as_deref() != Some("64")
+            || metadata.custom("trace_sha256").as_deref() != Some(release.trace_sha256.as_str())
+            || metadata.custom("attention_sha256").as_deref()
+                != Some(release.attention_sha256.as_str())
+        {
+            return Err("HTDemucs Scan64 learned trace provenance mismatch".into());
+        }
+        context.cleanup()?;
+        drop(metadata);
+        context.checkpoint("demucs.scan64.loaded")?;
+        Ok(Self {
+            session,
+            context,
+            run_extra,
             run_limit,
         })
     }
@@ -403,14 +530,14 @@ fn shape_matches(actual: &[i64], expected: &[usize]) -> bool {
     actual.len() == expected.len() && actual.iter().zip(expected).all(|(&a, &b)| a == b as i64)
 }
 
-fn validate_session(session: &Session) -> Result<(), String> {
+fn validate_session(session: &Session, lowering: &str) -> Result<(), String> {
     let metadata = session.metadata().map_err(|e| e.to_string())?;
     if metadata.custom("flitzis_htdemucs_contract").as_deref() != Some(CONTRACT)
         || metadata.custom("checkpoint_sha256").as_deref() != Some(CHECKPOINT)
         || metadata.custom("torch_version").as_deref() != Some(TORCH)
         || metadata.custom("torch_commit").as_deref() != Some(TORCH_COMMIT)
         || metadata.custom("source_closure_sha256").as_deref() != Some(SOURCE_CLOSURE)
-        || metadata.custom("lowering").as_deref() != Some("torchscript-opset18-dense")
+        || metadata.custom("lowering").as_deref() != Some(lowering)
         || metadata.custom("sources").as_deref() != Some("drums,bass,other,vocals")
     {
         return Err("unexpected HTDemucs release or checkpoint identity".into());

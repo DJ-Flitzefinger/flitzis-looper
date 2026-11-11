@@ -146,6 +146,10 @@ def capture_processing_files(
     request: StemGenerationRequest,
 ) -> tuple[SealedProcessingFiles, str | None] | None:
     """Seal and hash all actual producer inputs off-thread; unavailable lineage is unknown."""
+    if request.native_demucs_cpu:
+        # Native codec/image lineage has a separate execution contract. Legacy
+        # checkpoint and Torch source witnesses cannot identify that producer.
+        return None
     paths = processing_paths(request)
     libraries = processing_library_versions(request)
     if not paths or any(not path.is_file() for path in paths):

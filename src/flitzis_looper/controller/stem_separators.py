@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
+from flitzis_looper.controller.native_demucs_cpu import NativeDemucsCpuBackend
 from flitzis_looper.controller.stem_generation import (
     DemucsStemGenerationBackend,
     StemGenerationBackend,
@@ -32,6 +33,7 @@ class SelectedStemGenerationBackend:
     """Route each captured request to one of two bounded file/artifact adapters."""
 
     def __init__(self, backends: dict[StemSeparator, StemGenerationBackend] | None = None) -> None:
+        self._native_demucs = NativeDemucsCpuBackend() if backends is None else None
         self._backends: dict[StemSeparator, StemGenerationBackend] = (
             {
                 "demucs:htdemucs": DemucsStemGenerationBackend(),
@@ -45,6 +47,8 @@ class SelectedStemGenerationBackend:
         self, request: StemGenerationRequest, progress: StemProgressCallback
     ) -> StemGenerationResult:
         """Use the admitted selection even when Settings changes during processing."""
+        if request.native_demucs_cpu and self._native_demucs is not None:
+            return self._native_demucs.generate(request, progress)
         backend = self._backends.get(request.separator)
         if backend is None:
             msg = f"Unsupported stem separator: {request.separator}"

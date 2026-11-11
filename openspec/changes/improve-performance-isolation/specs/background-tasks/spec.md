@@ -1072,3 +1072,21 @@ Independent sharing failures SHALL retain their original error and cleanup custo
 - **AND** complete committed verification and source-own acknowledgement remain required
 - **AND** cancellation during that wait refuses adoption and retires only owned artifacts
 - **AND** an uncoordinated reader still produces its original sharing error
+
+### Requirement: Explicit Native HTDemucs CPU Uses the Existing Stem Owner
+
+The Windows source-checkout App SHALL capture an explicit Native HTDemucs CPU
+selection with its stem request. A Native model child SHALL use the
+independently admitted CPU package and release-pinned learned Scan64 graph under
+the existing suspended-launch, Job, cancellation and reader ownership. The
+Job limit SHALL be at most 512 MiB and the exact admitted limit SHALL cover the
+checked graph load, source conversion and complete offline invocation. The
+App SHALL verify the completed PCM before shared codec and cache preparation.
+Existing source checks and publication SHALL remain with the stem owner.
+
+#### Scenario: The verified learned CPU release is unavailable
+
+- **GIVEN** the request selected Native HTDemucs CPU
+- **WHEN** the release record lacks an approved learned graph or the actual worker, graph or phase admission fails verification
+- **THEN** the request fails and no new stem set is published
+- **AND** it grants no Torch producer identity or completed-set reuse

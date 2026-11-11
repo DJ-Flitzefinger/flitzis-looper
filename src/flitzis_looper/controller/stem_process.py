@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
+from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -49,6 +50,9 @@ _RECEIPT_PREFIXES = (
     BS_INPUT_RESULT.encode("ascii"),
     STEM_EXECUTION_RESULT.encode("ascii"),
 )
+NATIVE_DEMUCS_EXECUTABLE = "native-htdemucs-worker.exe"
+NATIVE_DEMUCS_LIMIT = 512 * 1024 * 1024
+_NATIVE_JOB_BYTES = "FLITZIS_NATIVE_HTDEMUCS_JOB_BYTES"
 _OWN_INFERENCE_MODULES = ("flitzis_looper.demucs_streaming", "flitzis_bs_roformer")
 
 
@@ -105,6 +109,16 @@ def _own_inference(args: list[str]) -> bool:
     )
 
 
+def _check_native_demucs_launch(args: list[str], scope: _StemCommandScope | None) -> None:
+    if os.name != "nt" or scope is None or scope.resources is None or scope.directory is None:
+        msg = "Native HTDemucs requires an admitted Windows stem scope"
+        raise RuntimeError(msg)
+    executable = Path(args[0]) if args else Path()
+    if not executable.is_absolute() or executable.name != NATIVE_DEMUCS_EXECUTABLE:
+        msg = "Native HTDemucs requires its own absolute worker path"
+        raise RuntimeError(msg)
+
+
 def _request_abort(marker: Path) -> None:
     with marker.open("xb") as handle:
         handle.write(b"cancel")
@@ -117,10 +131,14 @@ def _run_owned(
     cancel: Event,
     request_abort: Callable[[], None] | None = None,
     stop_reason: Callable[[], str | None] | None = None,
+    *,
+    native_demucs: bool = False,
 ) -> OwnedCommandResult:
     try:
         with offline_work_scope(cancel):
-            return _run_admitted(args, cwd, env, cancel, request_abort, stop_reason)
+            return _run_admitted(
+                args, cwd, env, cancel, request_abort, stop_reason, native_demucs=native_demucs
+            )
     except OfflineWorkCancelledError as error:
         raise StemCommandCancelledError(str(error)) from None
 
@@ -132,6 +150,8 @@ def _run_admitted(
     cancel: Event,
     request_abort: Callable[[], None] | None,
     stop_reason: Callable[[], str | None] | None,
+    *,
+    native_demucs: bool,
 ) -> OwnedCommandResult:
     scope = _COMMAND_SCOPE.get()
     budget = None
@@ -143,17 +163,25 @@ def _run_admitted(
             if os.name == "nt" and scope is not None and scope.resources is not None:
                 scope.resources.entry()
                 budget = OfflineChildMemoryReservation()
+            ceiling = budget.limit_bytes if budget is not None else None
+            if native_demucs:
+                if ceiling is None:
+                    msg = "Native HTDemucs requires an admitted Windows Stem Job"
+                    raise RuntimeError(msg)
+                ceiling = min(ceiling, NATIVE_DEMUCS_LIMIT) // PAGESIZE * PAGESIZE
+                env[_NATIVE_JOB_BYTES] = str(ceiling)
             return run_owned_command(
                 args,
                 cwd=cwd,
                 env=env,
                 cancel=cancel,
                 retired=Event(),
-                receipt_prefixes=IndependentReceipts(_RECEIPT_PREFIXES),
+                receipt_prefixes=() if native_demucs else IndependentReceipts(_RECEIPT_PREFIXES),
                 request_abort=request_abort,
                 abort_grace_seconds=0.4,
                 stop_reason=stop_reason,
-                commit_limit_bytes=budget.limit_bytes if budget is not None else None,
+                commit_limit_bytes=ceiling,
+                strict_completion=native_demucs,
             )
         finally:
             # run_owned_command cannot return before tree AND pipe readers end.
@@ -161,7 +189,9 @@ def _run_admitted(
                 budget.close()
 
 
-def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> OwnedCommandResult:
+def run_stem_command(
+    args: list[str], *, cwd: Path, env: dict[str, str], native_demucs: bool = False
+) -> OwnedCommandResult:
     """Drain bounded diagnostics and hold caller custody until tree/read retirement."""
     stem_command_checkpoint()
     scope = _COMMAND_SCOPE.get()
@@ -182,13 +212,26 @@ def run_stem_command(args: list[str], *, cwd: Path, env: dict[str, str]) -> Owne
     )
     child_env = child_environment(env)
     child_env.pop(CANCEL_PATH_ENV, None)
-    if scope is not None and scope.directory is not None and _own_inference(args):
+    child_env.pop(_NATIVE_JOB_BYTES, None)
+    if native_demucs:
+        _check_native_demucs_launch(args, scope)
+    if (
+        scope is not None
+        and scope.directory is not None
+        and (native_demucs or _own_inference(args))
+    ):
         scope.directory.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix=".stem-command-", dir=scope.directory) as name:
             marker = Path(name).absolute() / "cancel"
             child_env[CANCEL_PATH_ENV] = str(marker)
             result = _run_owned(
-                args, cwd, child_env, cancel, partial(_request_abort, marker), stop_reason
+                args,
+                cwd,
+                child_env,
+                cancel,
+                partial(_request_abort, marker),
+                stop_reason,
+                **({"native_demucs": True} if native_demucs else {}),
             )
     else:
         result = _run_owned(args, cwd, child_env, cancel, stop_reason=stop_reason)

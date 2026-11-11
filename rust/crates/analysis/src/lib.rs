@@ -10,16 +10,14 @@
 pub mod beat_audio;
 #[cfg(feature = "native-inference-trial")]
 pub mod beat_inference;
-#[cfg(feature = "native-inference-trial")]
-pub mod trial_lifetime;
-#[cfg(feature = "native-inference-trial")]
-mod trial_ort;
 mod bpm_pipeline;
 mod canonical_digest;
-mod detection_function;
-mod downbeat;
 #[cfg(feature = "demucs-inference-trial")]
 pub mod demucs_inference;
+mod detection_function;
+mod downbeat;
+#[cfg(all(windows, feature = "native-inference-dynamic"))]
+pub mod inline_model;
 pub mod key_detection;
 mod phase_vocoder;
 pub mod selected_bpm;
@@ -28,6 +26,10 @@ pub mod tempo_evidence;
 pub mod tempo_refinement;
 pub mod tempo_summary;
 mod tempotrack;
+#[cfg(feature = "native-inference-trial")]
+pub mod trial_lifetime;
+#[cfg(feature = "native-inference-trial")]
+mod trial_ort;
 
 // Re-export public API surface
 pub use bpm_pipeline::{QmRawAnalysis, analyze_bpm, analyze_bpm_raw, default_bpm_working_bytes};

@@ -108,6 +108,7 @@ class StemGenerationRequest:
     python_source_roots: tuple[Path, ...] = ()
     original_bytes: int | None = None
     producer_identity: str | None = None
+    native_demucs_cpu: bool = False
 
 
 @dataclass(frozen=True, slots=True)

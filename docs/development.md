@@ -1414,9 +1414,49 @@ protobuf 6.33.6 and ml_dtypes 0.5.4 with the existing NumPy and
 typing_extensions. The standalone `demucs_attention_control` example
 exercises the ten Scan sites on synthetic Q/K/V through the controlled
 ORT CPU package. The learned export still requires finite per-phase
-producer allowances. The CPU adapter remains closed before ORT bootstrap.
+producer allowances. The dense CPU adapter still refuses before ORT bootstrap.
 Full graph/runtime and process admission, complete learned branch and
 PCM/tail comparisons, and production cutover remain open.
+
+#### Windows source-checkout HTDemucs CPU worker
+
+The App captures the explicit `FLITZIS_HTDEMUCS_NATIVE_CPU=1` selection when
+it resolves an HTDemucs stem request. It decodes the original first audio
+stream with the shared FFmpeg codec and stages finite float32 PCM for one
+Native model process. The model process checks the actual capped Windows Job,
+maps the digest-pinned learned ONNX file read-only, and loads the pinned
+ORT 1.24.4/API 24 CPU package through the package-system32 process guard.
+It uses Native channel conversion and Julius resampling, the release segment
+and shifts, CLI normalization, split/apply and four named decoder outputs.
+After process and reader retirement, the App verifies all four PCM digests,
+encodes PCM16 and uses the normal aligned five-artifact cache preparation.
+The original App source and publication owners retain their existing checks.
+Native results require separate producer and codec evidence before they can
+grant completed-set reuse.
+
+The Windows executable target is `native-htdemucs-worker` with the
+`native-demucs-worker` feature of `flitzis-looper-analysis`. The source-checkout
+worker layout is `native-cpu` under the configured HTDemucs checkpoint
+directory. It contains `native-htdemucs-worker.exe`, `htdemucs.onnx` and the
+independent checked CPU `ort` package with its `step23-runtime.json` and
+`step23-package.json` manifests. Native selection requires the source-owned
+`workers/htdemucs/native_cpu/release.json` record, compiled into the worker.
+It binds the exact graph extent and digest, trace and canonical attention
+digests, and reviewed extra load/run bytes for the complete pinned graph and
+runtime. The separate source-owned `worker.json` record pins the finished
+Windows executable by digest and extent. Both records currently contain
+`null`. The App refuses explicit Native selection before codec or model
+launch while approval is absent.
+
+The producer's final checker independently recognizes the ten canonical Scan64
+chains in the final artifact and checks the same artifact's inline weights,
+fixed signature, provenance and full ONNX validity. The producer still needs a
+compatible, independently admitted development-time Torch export. The CUDA
+wheel failed to load a dependency within the previous 512 MiB producer Job.
+The known original-reference and weighted-serialization owners require further
+producer work. The mapped Native loader reduces serialized private ownership
+and still counts the file-backed span and both conservative initializer owners.
+The dense trial retains its pre-bootstrap refusal.
 
 #### Exact inline graph load control
 

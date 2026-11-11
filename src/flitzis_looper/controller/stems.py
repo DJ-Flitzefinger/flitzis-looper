@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 import threading
 import wave
@@ -5248,7 +5249,14 @@ class StemController(BaseController):  # noqa: PLR0904
 
     @staticmethod
     def _resolved_processing_request(request: StemGenerationRequest) -> StemGenerationRequest:
-        return replace(request, encoder_executable=resolved_demucs_encoder(request.model_cache_dir))
+        return replace(
+            request,
+            encoder_executable=resolved_demucs_encoder(request.model_cache_dir),
+            native_demucs_cpu=(
+                request.separator == "demucs:htdemucs"
+                and os.environ.get("FLITZIS_HTDEMUCS_NATIVE_CPU") == "1"
+            ),
+        )
 
     @staticmethod
     def _processing_contract(request: StemGenerationRequest, producer: str | None) -> str | None:
