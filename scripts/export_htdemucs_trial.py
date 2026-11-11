@@ -109,6 +109,11 @@ STREAM_CHUNK_BYTES = 256 * 1024
 INITIALIZER_TYPES = {"float32": (1, 4), "int64": (7, 8)}
 PCM_SHAPE = SHAPES["decoded_waveform"]
 PAD2_SHAPE = (1, 4, 2, 2049, 340)
+C2R_INPUT_SHAPE = (8, 340, 2049)
+C2R_INPUT_BYTES = prod(C2R_INPUT_SHAPE) * 8
+C2R_INPUT_GEOMETRY = (C2R_INPUT_SHAPE, (696660, 1, 340), 0, C2R_INPUT_BYTES)
+C2R_PACK_SHAPE = (2720, 2049)
+C2R_PACK_GEOMETRY = (C2R_PACK_SHAPE, (2049, 1), 0, C2R_INPUT_BYTES)
 ISTFT_FRAME_SHAPE = (8, 340, 4096)
 ISTFT_FRAME_BYTES = prod(ISTFT_FRAME_SHAPE) * 4
 ISTFT_FRAME_GEOMETRY = (ISTFT_FRAME_SHAPE, (1392640, 4096, 1), 0, ISTFT_FRAME_BYTES)
@@ -989,36 +994,152 @@ def check_frame_backing(value, backing, geometry) -> None:
         raise ValueError(msg)
 
 
+def allocate_c2r_frames(torch, output: Path, operands, options, step):
+    expected = {"dtype": torch.float32, "layout": torch.strided, "device": torch.device("cpu")}
+    if step != 0 or tuple(operands[0]) != ISTFT_FRAME_SHAPE or options != expected:
+        msg = "unexpected HTDemucs C2R frame allocation"
+        raise ValueError(msg)
+    owner = mapped_reference_scratch(output, ISTFT_FRAME_BYTES, "c2r-frames")
+    mapped = torch.frombuffer(owner, dtype=torch.float32).view(ISTFT_FRAME_SHAPE)
+    backing = tensor_backing(mapped)
+    if backing[2] % STATE_ALIGNMENT or mapped.untyped_storage().resizable():
+        msg = "unexpected HTDemucs C2R frame storage"
+        raise ValueError(msg)
+    check_frame_backing(mapped, backing, ISTFT_FRAME_GEOMETRY)
+    return mapped, backing
+
+
+def native_c2r_pack(torch, output: Path, func, args, options, input_backing, frame_backing):
+    """Replace the contiguous clone's allocation inside the stock MKL reshape."""
+    aten = torch.ops.aten
+    cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
+    contiguous = {"memory_format": torch.contiguous_format}
+    empty_options = {
+        "dtype": torch.complex64,
+        "layout": torch.strided,
+        "device": torch.device("cpu"),
+        **contiguous,
+    }
+    clone_geometry = (C2R_INPUT_SHAPE, (696660, 2049, 1), 0, C2R_INPUT_BYTES)
+    if (
+        options
+        or len(args) != 2
+        or tuple(args[1]) != (-1, C2R_PACK_SHAPE[1])
+        or tensor_backing(args[0])[1:] != input_backing
+        or state_storage_geometry(args[0]) != C2R_INPUT_GEOMETRY
+    ):
+        msg = "unexpected HTDemucs native C2R pack reshape"
+        raise ValueError(msg)
+    source = args[0]._cdata
+    live_spans = (
+        (*input_backing, C2R_INPUT_BYTES),
+        (*frame_backing[1:], ISTFT_FRAME_BYTES),
+    )
+    backing = None
+    copied = False
+    viewed = False
+
+    def allocate(op, args, options):
+        nonlocal backing, copied
+        if (
+            op == aten.empty_like.default
+            and backing is None
+            and len(args) == 1
+            and args[0]._cdata == source
+            and options == empty_options
+        ):
+            owner = mapped_reference_scratch(output, C2R_INPUT_BYTES, "c2r-pack")
+            mapped = torch.frombuffer(owner, dtype=torch.complex64).view(C2R_INPUT_SHAPE)
+            backing = tensor_backing(mapped)
+            _, storage, address = backing
+            if (
+                address % STATE_ALIGNMENT
+                or mapped.untyped_storage().resizable()
+                or state_storage_geometry(mapped) != clone_geometry
+                or any(
+                    storage == other_storage
+                    or (
+                        address < other_address + other_size
+                        and other_address < address + C2R_INPUT_BYTES
+                    )
+                    for other_storage, other_address, other_size in live_spans
+                )
+            ):
+                msg = "unexpected HTDemucs C2R pack storage"
+                raise ValueError(msg)
+            return mapped
+        if (
+            (op, backing is not None, copied, bool(options), len(args))
+            == (aten.copy_.default, True, False, False, 2)
+            and tensor_backing(args[0]) == backing
+            and args[1]._cdata == source
+        ):
+            copied = True
+            return op(*args)
+        msg = "unexpected HTDemucs native C2R clone operation"
+        raise ValueError(msg)
+
+    def reshape(op, args, options):
+        nonlocal viewed
+        if (
+            op == aten.clone.default
+            and backing is None
+            and len(args) == 1
+            and args[0]._cdata == source
+            and options == contiguous
+        ):
+            with reference_dispatch_mode(allocate):
+                return op.redispatch(cpu, *args, **options)
+        if (
+            (op, copied, viewed, bool(options), len(args))
+            == (aten._unsafe_view.default, True, False, False, 2)
+            and tensor_backing(args[0]) == backing
+            and tuple(args[1]) == C2R_PACK_SHAPE
+        ):
+            viewed = True
+            return op(*args)
+        msg = "unexpected HTDemucs native C2R reshape operation"
+        raise ValueError(msg)
+
+    with reference_dispatch_mode(reshape):
+        pack = func.redispatch(cpu, *args)
+    if (
+        not viewed
+        or tensor_backing(pack)[1:] != backing[1:]
+        or state_storage_geometry(pack) != C2R_PACK_GEOMETRY
+    ):
+        msg = "HTDemucs native C2R reshape did not return the mapped pack"
+        raise ValueError(msg)
+    return pack
+
+
 def native_c2r_frames(torch, output: Path, func, args):
-    """Keep the MKL C2R kernel and supply its initial frame storage."""
+    """Supply the stock MKL C2R input pack and output frame storages."""
     aten = torch.ops.aten
     cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
     shape, stride, _, size = ISTFT_FRAME_GEOMETRY
     batch = (2720, 4096)
     batch_stride = (4096, 1)
-    empty_options = {"dtype": torch.float32, "layout": torch.strided, "device": torch.device("cpu")}
     batch_geometry = (batch, batch_stride, 0, size)
+    input_backing = tensor_backing(args[0])[1:]
     backing = None
     step = 0
 
     def dispatch(op, operands, options):
         nonlocal backing, step
         if op == aten.empty.memory_format:
-            if step != 0 or tuple(operands[0]) != shape or options != empty_options:
-                msg = "unexpected HTDemucs C2R frame allocation"
-                raise ValueError(msg)
-            owner = mapped_reference_scratch(output, size, "c2r-frames")
-            mapped = torch.frombuffer(owner, dtype=torch.float32).view(shape)
-            backing = tensor_backing(mapped)
-            if mapped.data_ptr() % STATE_ALIGNMENT or mapped.untyped_storage().resizable():
-                msg = "unexpected HTDemucs C2R frame storage"
-                raise ValueError(msg)
-            check_frame_backing(mapped, backing, ISTFT_FRAME_GEOMETRY)
+            mapped, backing = allocate_c2r_frames(torch, output, operands, options, step)
             step = 1
             return mapped
+        if op == aten.reshape.default:
+            if step != 1:
+                msg = "unexpected HTDemucs C2R pack allocation order"
+                raise ValueError(msg)
+            step = 2
+            return native_c2r_pack(torch, output, op, operands, options, input_backing, backing)
         if op == aten.resize_.default:
             if (
-                step != 1
+                step != 2
                 or tuple(operands[1]) != batch
                 or options != {"memory_format": torch.contiguous_format}
             ):
@@ -1027,11 +1148,11 @@ def native_c2r_frames(torch, output: Path, func, args):
             check_frame_backing(operands[0], backing, ISTFT_FRAME_GEOMETRY)
             resized = op(*operands, **options)
             check_frame_backing(resized, backing, batch_geometry)
-            step = 2
+            step = 3
             return resized
         if op == aten.as_strided_.default:
             if (
-                step != 2
+                step != 3
                 or options
                 or len(operands) != 4
                 or (tuple(operands[1]), tuple(operands[2]), operands[3]) != (shape, stride, 0)
@@ -1041,7 +1162,7 @@ def native_c2r_frames(torch, output: Path, func, args):
             check_frame_backing(operands[0], backing, batch_geometry)
             restored = op(*operands)
             check_frame_backing(restored, backing, ISTFT_FRAME_GEOMETRY)
-            step = 3
+            step = 4
             return restored
         return op(*operands, **options)
 
@@ -1049,7 +1170,7 @@ def native_c2r_frames(torch, output: Path, func, args):
     # DFTI writes the same pointer and the kernel then restores its strides.
     with reference_dispatch_mode(dispatch):
         frames = func.redispatch(cpu, *args)
-    if step != 3:
+    if step != 4:
         msg = "incomplete HTDemucs native C2R frame allocation"
         raise ValueError(msg)
     check_frame_backing(frames, backing, ISTFT_FRAME_GEOMETRY)
@@ -1081,7 +1202,6 @@ def native_mapped_istft(torch, output: Path, func, args):
     """Use mapped frames through the pinned iSTFT CPU kernel."""
     aten = torch.ops.aten
     cpu = torch._C.DispatchKeySet(torch._C.DispatchKey.CPU)
-    input_bytes = prod(PAD2_SHAPE) * 8
     storage = args[0].untyped_storage()._cdata
     hop_length = args[2]
     c2r_backing = None
@@ -1096,8 +1216,7 @@ def native_mapped_istft(torch, output: Path, func, args):
                 (c2r_backing, bool(options), len(args)) != (None, False, 4)
                 or (tuple(args[1]), args[2], args[3]) != ((2,), 1, 4096)
                 or args[0].untyped_storage()._cdata != storage
-                or state_storage_geometry(args[0])
-                != ((8, 340, 2049), (696660, 1, 340), 0, input_bytes)
+                or state_storage_geometry(args[0]) != C2R_INPUT_GEOMETRY
             ):
                 msg = "unexpected HTDemucs C2R input"
                 raise ValueError(msg)
