@@ -6,6 +6,9 @@ import hashlib
 import io
 import json
 import sys
+import tempfile
+from collections import Counter
+from contextlib import contextmanager
 from importlib import import_module, metadata, util
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
@@ -16,7 +19,21 @@ if TYPE_CHECKING:
 CHECKPOINT = "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4"
 CHECKPOINT_BYTES = 84_141_911
 CONTRACT = "htdemucs-4.0.1-955717e8-stereo-b1-v1"
-LOWERING = "torchscript-opset18-dense"
+BLOCK = 64
+HEADS = 8
+WIDTH = 64
+TIME_TOKENS = 1344
+SPECTRAL_TOKENS = 2688
+ATTENTION_SITES = {
+    (SPECTRAL_TOKENS, SPECTRAL_TOKENS): 3,
+    (TIME_TOKENS, TIME_TOKENS): 3,
+    (SPECTRAL_TOKENS, TIME_TOKENS): 2,
+    (TIME_TOKENS, SPECTRAL_TOKENS): 2,
+}
+LOWERING = "torchscript-opset18-scan64"
+MARKER_DOMAIN = "flitzis.htdemucs.export"
+SYMBOLIC = "aten::scaled_dot_product_attention"
+SYMBOLIC_SHA256 = "0b1102d89850cb6e1eff667b5500cc0bea0d2a6c83051b91838acdc117aabc6b"
 TORCH = "2.12.0+cu130"
 TORCH_COMMIT = "7661cd9c6b841b62b7f411aa52ec51f05457263b"
 SOURCES = ("drums", "bass", "other", "vocals")
@@ -193,13 +210,183 @@ def check_inline(onnx, graph) -> None:
                 pending.extend(value if field.is_repeated else (value,))
 
 
-def inspect_graph(onnx, path: Path):
-    """Validate fixed named float32 tensors and forbid all external data."""
+@contextmanager
+def mark_attention(torch):
+    """Mark only the original unmasked, dropout-free legacy SDPA export."""
+    exporter = "torch.onnx._internal.torchscript_exporter"
+    registration = import_module(f"{exporter}.registration")
+    symbolic_helper = import_module(f"{exporter}.symbolic_helper")
+    symbolic_opset14 = import_module(f"{exporter}.symbolic_opset14")
+
+    if hashlib.sha256(Path(symbolic_opset14.__file__).read_bytes()).hexdigest() != SYMBOLIC_SHA256:
+        msg = "HTDemucs Torch legacy attention symbolic differs"
+        raise ValueError(msg)
+    group = registration.registry.get_function_group(SYMBOLIC)
+    if group is None or group.get(18) is not symbolic_opset14.scaled_dot_product_attention:
+        msg = "HTDemucs Torch legacy attention symbolic is overridden"
+        raise ValueError(msg)
+
+    @symbolic_helper.parse_args("v", "v", "v", "v", "f", "b", "v", "b")
+    def symbolic(g, query, key, value, mask, dropout, causal, scale, gqa):
+        if (
+            not symbolic_helper._is_none(mask)
+            or dropout != 0
+            or causal
+            or not symbolic_helper._is_none(scale)
+            or gqa
+        ):
+            msg = "unsupported HTDemucs attention options"
+            raise ValueError(msg)
+        inputs = [g.original_node.inputsAt(index).type() for index in range(3)]
+        shapes = [tensor.sizes() for tensor in inputs]
+        if any(
+            tensor.scalarType() != "Float"
+            or shape is None
+            or len(shape) != 4
+            or shape[:2] != [1, HEADS]
+            or shape[3] != WIDTH
+            for tensor, shape in zip(inputs, shapes, strict=True)
+        ):
+            msg = "unsupported HTDemucs attention tensor geometry"
+            raise ValueError(msg)
+        queries, keys, values = (shape[2] for shape in shapes)
+        if (queries, keys) not in ATTENTION_SITES or keys != values:
+            msg = "unsupported HTDemucs attention sequence lengths"
+            raise ValueError(msg)
+        # Match the exact legacy symbolic's separate Q and K pre-scaling.
+        root_scale = g.op("Sqrt", symbolic_opset14._attention_scale(g, query))
+        q = g.op("Mul", query, root_scale)
+        k = g.op("Mul", g.op("Transpose", key, perm_i=[0, 1, 3, 2]), root_scale)
+        return g.op(
+            f"{MARKER_DOMAIN}::Attention",
+            q,
+            k,
+            value,
+            queries_i=queries,
+            keys_i=keys,
+        ).setType(query.type())
+
+    torch.onnx.register_custom_op_symbolic(SYMBOLIC, symbolic, 18)
+    try:
+        yield
+    finally:
+        torch.onnx.unregister_custom_op_symbolic(SYMBOLIC, 18)
+
+
+def lower_attention(onnx, model) -> None:
+    """Replace the exact release's marked SDPA sites with sequential standard Scan."""
+    graph = model.graph
+    imports = [(entry.domain, entry.version) for entry in model.opset_import]
+    if set(imports) != {("", 18), (MARKER_DOMAIN, 1)} or len(imports) != 2:
+        msg = "unexpected HTDemucs export marker opsets"
+        raise ValueError(msg)
+
+    # Include existing node/initializer names and captures in the fresh namespace.
+    names = {
+        value.name for value in (*graph.input, *graph.output, *graph.value_info, *graph.initializer)
+    }
+    for node in graph.node:
+        names.update((*node.input, *node.output))
+        if any(
+            attr.type in {onnx.AttributeProto.GRAPH, onnx.AttributeProto.GRAPHS}
+            for attr in node.attribute
+        ):
+            msg = "unexpected subgraph in the HTDemucs trace"
+            raise ValueError(msg)
+
+    lowered = []
+    sites = Counter()
+    for node in graph.node:
+        if node.domain != MARKER_DOMAIN:
+            if node.op_type in {"Attention", "Scan", "Softmax"}:
+                msg = "unexpected unmarked HTDemucs attention operator"
+                raise ValueError(msg)
+            lowered.append(node)
+            continue
+        dims = {
+            attr.name: attr.i for attr in node.attribute if attr.type == onnx.AttributeProto.INT
+        }
+        pair = (dims.get("queries"), dims.get("keys"))
+        if (
+            (node.op_type, len(node.input), len(node.output), len(node.attribute))
+            != ("Attention", 3, 1, 2)
+            or not all((*node.input, *node.output))
+            or pair not in ATTENTION_SITES
+        ):
+            msg = "invalid HTDemucs attention export marker"
+            raise ValueError(msg)
+        prefix = f"{node.output[0]}.scan64."
+        if any(name.startswith(prefix) for name in names):
+            msg = "HTDemucs attention name collision"
+            raise ValueError(msg)
+        sites[pair] += 1
+        lowered.extend(scan_nodes(onnx, prefix, node.input, node.output[0], pair[0]))
+
+    if sites != ATTENTION_SITES:
+        msg = f"unexpected HTDemucs attention site counts: {dict(sites)}"
+        raise ValueError(msg)
+    del graph.node[:]
+    graph.node.extend(lowered)
+    del model.opset_import[:]
+    model.opset_import.add(domain="", version=18)
+
+
+def scan_nodes(onnx, prefix, inputs, output, queries):
+    """Scan contiguous query blocks, capturing the complete scaled K and V."""
+    h = onnx.helper
+    q, k, v = inputs
+    tile, scores, weights, context = (
+        prefix + name for name in ("tile", "scores", "weights", "context")
+    )
+    tile_shape = [1, HEADS, BLOCK, WIDTH]
+    body = h.make_graph(
+        [
+            h.make_node("MatMul", [tile, k], [scores]),
+            h.make_node("Softmax", [scores], [weights], axis=-1),
+            h.make_node("MatMul", [weights, v], [context]),
+        ],
+        prefix + "body",
+        [h.make_tensor_value_info(tile, onnx.TensorProto.FLOAT, tile_shape)],
+        [h.make_tensor_value_info(context, onnx.TensorProto.FLOAT, tile_shape)],
+    )
+    blocked, ordered, scanned, merged = (
+        prefix + name for name in ("blocked", "ordered", "scanned", "merged")
+    )
+    return [
+        h.make_node(
+            "Constant",
+            [],
+            [prefix + "block_shape"],
+            value=h.make_tensor(
+                "", onnx.TensorProto.INT64, [5], [1, HEADS, queries // BLOCK, BLOCK, WIDTH]
+            ),
+        ),
+        h.make_node("Reshape", [q, prefix + "block_shape"], [blocked]),
+        h.make_node("Transpose", [blocked], [ordered], perm=[2, 0, 1, 3, 4]),
+        h.make_node("Scan", [ordered], [scanned], num_scan_inputs=1, body=body),
+        h.make_node("Transpose", [scanned], [merged], perm=[1, 2, 0, 3, 4]),
+        h.make_node(
+            "Constant",
+            [],
+            [prefix + "result_shape"],
+            value=h.make_tensor("", onnx.TensorProto.INT64, [4], [1, HEADS, queries, WIDTH]),
+        ),
+        h.make_node("Reshape", [merged, prefix + "result_shape"], [output]),
+    ]
+
+
+def read_inline_graph(onnx, path: Path):
+    """Read a bounded inline graph without resolving any external data."""
     if not 0 < path.stat().st_size <= MAX_GRAPH_BYTES:
         msg = "HTDemucs graph exceeds the inline extent"
         raise ValueError(msg)
     graph = onnx.load(path, load_external_data=False)
     check_inline(onnx, graph)
+    return graph
+
+
+def inspect_graph(onnx, graph) -> None:
+    """Validate the final fixed named float32 tensors and standard opset."""
     if (
         graph.functions
         or any(node.domain not in {"", "ai.onnx"} for node in graph.graph.node)
@@ -222,7 +409,6 @@ def inspect_graph(onnx, path: Path):
             ):
                 msg = f"unexpected HTDemucs ONNX signature: {value.name}"
                 raise ValueError(msg)
-    return graph
 
 
 def export(
@@ -256,9 +442,13 @@ def export(
         model = load_model(torch, owned, module)
     output.mkdir(exist_ok=False)
     graph = output / "htdemucs.onnx"
-    mix_digest = execute(torch, model, code, vars(module), mix_path, graph)
-    del model
-    checked = inspect_graph(onnx, graph)
+    with tempfile.TemporaryDirectory(dir=output) as temporary:
+        trace = Path(temporary) / "trace.onnx"
+        mix_digest = execute(torch, model, code, vars(module), mix_path, trace, output)
+        del model
+        checked = read_inline_graph(onnx, trace)
+        lower_attention(onnx, checked)
+    inspect_graph(onnx, checked)
     onnx.helper.set_model_props(
         checked,
         {
@@ -268,6 +458,7 @@ def export(
             "torch_commit": TORCH_COMMIT,
             "source_closure_sha256": source_digest(),
             "lowering": LOWERING,
+            "attention_query_block": str(BLOCK),
             "sources": ",".join(SOURCES),
         },
     )
@@ -291,6 +482,7 @@ def export(
         "sources": SOURCE_PINS,
         "source_closure_sha256": source_digest(),
         "lowering": LOWERING,
+        "attention_query_block": BLOCK,
         "mix_sha256": mix_digest,
         "shapes": SHAPES,
         "artifacts": artifacts,
@@ -299,7 +491,7 @@ def export(
     return receipt
 
 
-def execute(torch, model, code, globals_, mix_path: Path, graph: Path) -> str:
+def execute(torch, model, code, globals_, mix_path: Path, trace: Path, output: Path) -> str:
     """Keep the original reference path separate from export-only tracing."""
     numpy = import_module("numpy")
     extent = 2 * 343980 * 4
@@ -337,7 +529,7 @@ def execute(torch, model, code, globals_, mix_path: Path, graph: Path) -> str:
             if not torch.isfinite(value).all():
                 msg = f"nonfinite original HTDemucs {name}"
                 raise ValueError(msg)
-            value.numpy().astype("<f4", copy=False).tofile(graph.with_name(f"{name}.f32"))
+            value.numpy().astype("<f4", copy=False).tofile(output / f"{name}.f32")
         del branches, pcm, value
         # Stock eval's fused MHA is unavailable to the legacy ONNX translator.
         # Only export tracing changes dispatch. The complete references above
@@ -345,16 +537,18 @@ def execute(torch, model, code, globals_, mix_path: Path, graph: Path) -> str:
         previous = torch.backends.mha.get_fastpath_enabled()
         try:
             torch.backends.mha.set_fastpath_enabled(False)
-            torch.onnx.export(
-                wrapper,
-                inputs,
-                graph,
-                dynamo=False,
-                opset_version=18,
-                input_names=list(SHAPES)[:2],
-                output_names=list(SHAPES)[2:],
-                external_data=False,
-            )
+            with mark_attention(torch):
+                torch.onnx.export(
+                    wrapper,
+                    inputs,
+                    trace,
+                    dynamo=False,
+                    opset_version=18,
+                    input_names=list(SHAPES)[:2],
+                    output_names=list(SHAPES)[2:],
+                    custom_opsets={MARKER_DOMAIN: 1},
+                    external_data=False,
+                )
         finally:
             torch.backends.mha.set_fastpath_enabled(previous)
     return digest

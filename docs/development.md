@@ -1356,10 +1356,22 @@ branches and reconstruct PCM. The caller owns exact reader lifetimes and
 independent process admission. A standalone dynamic runtime must use the
 checked ORT package and `PROCESS_GUARD` through process exit.
 
-The current opset-18 recipe lowers dense attention to separate score and
-softmax values. Each largest FP32 value needs 231,211,008 bytes. Charging both
-and the expanded weights already exceeds 512 MiB. The CPU adapter refuses
-before runtime bootstrap until there is a verified liveness bound or a
-bounded lowering. The current CPython 3.14 producer also lacks the checked
-ONNX toolchain. Actual graph export, runtime execution, complete learned
-branch and PCM/tail comparisons, and production cutover remain open.
+The exporter marks the original unmasked SDPA sites during legacy Torch
+tracing and replaces all ten markers with standard opset-18 Scan. Each
+iteration takes 64 consecutive queries and computes scaled dot products,
+a last-axis softmax over all keys, and the full value product. This keeps
+the legacy exporter's Q and K pre-scaling and the query/head order. The largest
+FP32 score tile is 5,505,024 bytes. Accounting charges both score and
+softmax tiles, with input/output transposes, context storage, other
+operators and allocator costs accounted for separately. The pinned ORT
+CPU Scan implementation executes each iteration synchronously and writes
+context tiles into slices of the assembled output.
+
+The separately checked Windows CPython 3.14 export tools use ONNX 1.23.2,
+protobuf 6.33.6 and ml_dtypes 0.5.4 with the existing NumPy and
+typing_extensions. The standalone `demucs_attention_control` example
+exercises the ten Scan sites on synthetic Q/K/V through the controlled
+ORT CPU package. The learned export still requires a finite original
+producer allowance. The CPU adapter remains closed before ORT bootstrap.
+Full graph/runtime and process admission, complete learned branch and
+PCM/tail comparisons, and production cutover remain open.

@@ -1240,3 +1240,12 @@ remaining plan into each successor; report actual hard service limits honestly.
 - [x] Verify complete normalized branches, same-tensor statistic bits and full
       original fixture PCM with FFT differences reported separately; retain all
       historical failures and broader learned/runtime/productive parity gates.
+
+## Bounded HTDemucs attention lowering
+
+- [x] Implement fixed query tiling for the ten stock HTDemucs attention sites with
+      the full original keys, values and last-axis softmax in standard ONNX.
+- [x] Verify the isolated CP314 exporter toolchain and exercise full release
+      attention geometries through the standalone guarded ORT CPU route.
+- [ ] Establish independent finite learned-export and full runtime allowances
+      before actual export, learned branch inference and complete PCM parity.
