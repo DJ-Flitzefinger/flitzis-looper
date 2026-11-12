@@ -2,11 +2,13 @@
 
 import math
 import struct
+import sys
 import wave
 from dataclasses import dataclass
 from itertools import pairwise
 from threading import Event
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
@@ -127,6 +129,36 @@ def _outputs(root: Path, *, rate: int = 48_000, channels: int = 2, frames: int =
             ((index * 7919 + seed * 19013) % 65536) - 32768 for index in range(frames * channels)
         ]
         _wav(root / "model" / "source" / f"{name}.wav", rate, channels, samples)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows verbatim paths")
+def test_long_private_generation_uses_verbatim_temp_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output, expected = tmp_path / "model", tmp_path / "expected"
+    _outputs(output)
+    target = AudioShape(sample_rate_hz=48_000, channels=2, frame_count=37)
+    _legacy_oracle(output, expected, target)
+    base_units = len(str(tmp_path).encode("utf-16-le")) // 2
+    cache = tmp_path / ("g" * (225 - base_units - 1))
+    assert len(str(cache).encode("utf-16-le")) // 2 == 225
+    # A manifested Python test executable may accept ordinary long paths. The
+    # embedded App must explicitly use a verbatim spelling for these temp leaves.
+    writer = Mock(wraps=Pcm16WavWriter)
+    monkeypatch.setattr(stem_artifacts, "Pcm16WavWriter", writer)
+    write_project_cache_artifacts(
+        output_root=output,
+        cache_dir=cache,
+        target_shape=target,
+        progress=lambda _value, _stage: None,
+    )
+    opened = [call.args[0] for call in writer.call_args_list]
+    assert len(opened) == len(STEM_KINDS)
+    assert all(str(path).startswith("\\\\?\\") and path.parent.samefile(cache) for path in opened)
+    assert {path.name for path in cache.iterdir()} == {f"{kind}.wav" for kind in STEM_KINDS}
+    for kind in STEM_KINDS:
+        name = f"{kind}.wav"
+        assert (cache / name).read_bytes() == (expected / name).read_bytes()
 
 
 @pytest.mark.parametrize(

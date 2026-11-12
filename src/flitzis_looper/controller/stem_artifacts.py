@@ -1,11 +1,13 @@
 """Bounded offline conversion of separator WAVs to the shared project stem contract."""
 
 import math
+import os
 import struct
 import wave
 from array import array
 from contextlib import ExitStack
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -18,8 +20,6 @@ from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 from flitzis_looper_audio import StemConversionReservation
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from flitzis_looper.controller.stem_generation import AudioShape, StemProgressCallback
 
 MAX_TRANSIENT_PCM_BYTES = 1024 * 1024 * 1024
@@ -307,6 +307,18 @@ def _verify_outputs(
                 raise StemArtifactError(msg)
 
 
+def _cache_io_path(cache_dir: Path) -> Path:
+    """Address long temporary leaves without changing the project's cache path."""
+    if os.name != "nt":
+        return cache_dir
+    absolute = os.path.abspath(cache_dir)
+    if absolute.startswith(("\\\\?\\", "\\\\.\\")):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
 def write_project_cache_artifacts(
     *,
     output_root: Path,
@@ -326,6 +338,7 @@ def write_project_cache_artifacts(
     _validate_limit(max_transient_pcm_bytes)
     _validate_target(target_shape, block_frames)
     stem_conversion_checkpoint()
+    cache_dir = _cache_io_path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex
     temporary: dict[str, Path] = {
