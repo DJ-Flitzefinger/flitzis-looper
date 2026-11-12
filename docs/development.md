@@ -1513,7 +1513,12 @@ learned state.
 `assemble_trace` runs in a separate ONNX-only child. It matches the parameter
 manifest to every nonpublic input, checks each tensor and the whole bank as it
 streams them into the inline graph, and binds the exact assembled bytes as
-the trace identity used by rewrite and check. The approved Scan64 worker
+the trace identity used by rewrite and check. The learned legacy trace can
+label the decoder output dimensions with symbols. The rewriter verifies
+the terminal Reshape and its exact positive INT64 shape constant before
+binding those symbols to the release dimensions. It then checks the fixed
+signature. The separate full checker verifies the final graph bytes.
+The approved Scan64 worker
 requires CPU trace provenance. The original reduction profile retains its
 existing pin. The isolated CPU producer is a development tool and adds no
 installed dependency.

@@ -22,6 +22,7 @@ from itertools import pairwise
 from math import prod
 from pathlib import Path
 from shutil import disk_usage
+from struct import pack
 from tempfile import TemporaryFile
 from threading import Lock
 from types import FunctionType, MethodType, SimpleNamespace
@@ -3125,6 +3126,71 @@ def parse_inline_graph(onnx, raw: bytes):
     return graph
 
 
+def graph_value_producer(graph, name: str):
+    matches = [node for node in graph.node if name in node.output]
+    if len(matches) != 1:
+        msg = f"unexpected HTDemucs ONNX producer: {name}"
+        raise ValueError(msg)
+    return matches[0]
+
+
+def check_trace_output_reshape(onnx, graph, name: str, shape: tuple[int, ...]) -> None:
+    reshape = graph_value_producer(graph, name)
+    allowzero = onnx.helper.make_attribute("allowzero", 0)
+    if (
+        (reshape.domain, reshape.op_type, len(reshape.input)) != ("", "Reshape", 2)
+        or list(reshape.output) != [name]
+        or not all(reshape.input)
+        or list(reshape.attribute) not in ([], [allowzero])
+    ):
+        msg = f"unexpected HTDemucs traced output Reshape: {name}"
+        raise ValueError(msg)
+
+    shape_name = reshape.input[1]
+    constant = graph_value_producer(graph, shape_name)
+    tensor = onnx.TensorProto(
+        data_type=onnx.TensorProto.INT64,
+        dims=[len(shape)],
+        raw_data=pack(f"<{len(shape)}q", *shape),
+    )
+    if (
+        (constant.domain, constant.op_type, len(constant.input)) != ("", "Constant", 0)
+        or list(constant.output) != [shape_name]
+        or list(constant.attribute) != [onnx.helper.make_attribute("value", tensor)]
+    ):
+        msg = f"unexpected HTDemucs traced output shape constant: {name}"
+        raise ValueError(msg)
+
+
+def bind_trace_output_shapes(onnx, graph) -> None:
+    """Resolve legacy output symbols from the fixed terminal Reshape targets."""
+    outputs = graph.graph.output
+    if [value.name for value in outputs] != list(SHAPES)[2:]:
+        msg = "unexpected HTDemucs traced output names"
+        raise ValueError(msg)
+    updates = []
+    for value in outputs:
+        tensor = value.type.tensor_type
+        shape = SHAPES[value.name]
+        dimensions = tensor.shape.dim
+        if tensor.elem_type != onnx.TensorProto.FLOAT or len(dimensions) != len(shape):
+            msg = f"unexpected HTDemucs traced output type or rank: {value.name}"
+            raise ValueError(msg)
+        pending = []
+        for dimension, extent in zip(dimensions, shape, strict=True):
+            if dimension.dim_value == extent:
+                continue
+            if not dimension.dim_param:
+                msg = f"unexpected HTDemucs traced output dimension: {value.name}"
+                raise ValueError(msg)
+            pending.append((dimension, extent))
+        if pending:
+            check_trace_output_reshape(onnx, graph.graph, value.name, shape)
+            updates.extend(pending)
+    for dimension, extent in updates:
+        dimension.dim_value = extent
+
+
 def inspect_graph(onnx, graph) -> None:
     """Validate the final fixed named float32 tensors and standard opset."""
     if (
@@ -3919,6 +3985,7 @@ def rewrite_graph(
     onnx = onnx_producer(overlay)
     graph = parse_inline_graph(onnx, read_artifact(trace_path, trace.graph, MAX_GRAPH_BYTES))
     lower_attention(onnx, graph)
+    bind_trace_output_shapes(onnx, graph)
     inspect_graph(onnx, graph)
     onnx.helper.set_model_props(graph, graph_metadata(trace, scan64_digest(onnx, graph)))
     serialized = graph.SerializeToString()
