@@ -12,10 +12,8 @@ from flitzis_looper.controller.stem_resources import StemResourceGuard
 
 
 class AllocatedChild:
-    def __init__(self, budget_type: type, directory: str) -> None:
+    def __init__(self, directory: str) -> None:
         self.directory = Path(directory)
-        self.previous_budget = stem_process.OfflineChildMemoryReservation
-        stem_process.OfflineChildMemoryReservation = budget_type
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.future = self.executor.submit(self.run)
 
@@ -54,11 +52,10 @@ class AllocatedChild:
             self.future.result(15)
         finally:
             self.executor.shutdown(wait=True)
-            stem_process.OfflineChildMemoryReservation = self.previous_budget
 
 
-def start(budget_type: type, directory: str) -> AllocatedChild:
-    session = AllocatedChild(budget_type, directory)
+def start(directory: str) -> AllocatedChild:
+    session = AllocatedChild(directory)
     try:
         session.wait()
     except AssertionError, OSError, RuntimeError, ValueError:

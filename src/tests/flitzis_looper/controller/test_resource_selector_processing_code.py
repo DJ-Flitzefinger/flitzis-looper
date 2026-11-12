@@ -114,17 +114,7 @@ def test_changed_actual_memory_fields_or_descriptor_refuse_layout(
 
 @pytest.mark.parametrize(
     "name",
-    [
-        "_MIB",
-        "_ADMISSION_COMMIT",
-        "_RECOVERY_COMMIT",
-        "_ADMISSION_PHYSICAL",
-        "_RECOVERY_PHYSICAL",
-        "_CRITICAL_COMMIT",
-        "_CRITICAL_PHYSICAL",
-        "_SAMPLE_SECONDS",
-        "_UNAVAILABLE_SECONDS",
-    ],
+    ["_SAMPLE_SECONDS", "_UNAVAILABLE_SECONDS"],
 )
 def test_actual_resource_constants_positive_then_changed_policy_refuses(
     monkeypatch: pytest.MonkeyPatch, name: str
@@ -138,14 +128,20 @@ def test_actual_resource_constants_positive_then_changed_policy_refuses(
 
 def test_resource_defaults_retain_original_captured_sampler_and_clock() -> None:
     assert stem_resources.StemResourceGuard.__init__.__defaults__ == (
-        system_resources.host_memory_snapshot,
+        system_resources.stem_memory_snapshot,
         time.monotonic,
     )
 
 
 @pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
 @pytest.mark.parametrize(
-    "missing", ["bs_roformer_generation.py", "bs_roformer_assets.py", "bs_input_provenance.py"]
+    "missing",
+    [
+        "bs_roformer_generation.py",
+        "bs_roformer_assets.py",
+        "bs_input_provenance.py",
+        "native_demucs_cpu.py",
+    ],
 )
 def test_selector_consulted_roles_positive_then_missing_role_refuses(
     separator: str, missing: str
@@ -158,11 +154,12 @@ def test_selector_consulted_roles_positive_then_missing_role_refuses(
 
 
 @pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-def test_selector_changed_bs_binding_refuses_for_either_selection(
-    monkeypatch: pytest.MonkeyPatch, separator: str
+@pytest.mark.parametrize("binding", ["BsRoformerStemGenerationBackend", "NativeDemucsCpuBackend"])
+def test_selector_changed_binding_refuses_for_either_selection(
+    monkeypatch: pytest.MonkeyPatch, separator: str, binding: str
 ) -> None:
     manifests = _manifests(separator)
     assert _namespace(stem_separators, manifests)
-    monkeypatch.setattr(stem_separators, "BsRoformerStemGenerationBackend", object())
+    monkeypatch.setattr(stem_separators, binding, object())
     with pytest.raises(ValueError, match="no longer names its measured callable"):
         _namespace(stem_separators, manifests)

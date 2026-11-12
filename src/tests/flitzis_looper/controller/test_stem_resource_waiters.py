@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 def _deny(sample: Mock, clock: _Clock, denial: str) -> None:
     clock.now += 0.25
     if denial == "pressure":
-        sample.return_value = _headroom(system=2 * 1024**3 - 1)
+        sample.return_value = _headroom(low_memory=1)
     else:
         sample.side_effect = OSError("fixture memory query unavailable")
 
@@ -77,9 +77,9 @@ def _exercise_fifo(
         assert not heavy.registered
         unchanged()
 
-        # A valid observation below recovery must not recreate the old barrier.
+        # Continuing OS pressure leaves the original metadata owner waiting.
         sample.side_effect = None
-        sample.return_value = _headroom(system=3 * 1024**3 - 1)
+        sample.return_value = _headroom(low_memory=1)
         clock.now += 0.25
         stems._poll_stem_admissions()
         assert stems._stem_resources.current.state == "pressure"
@@ -89,7 +89,7 @@ def _exercise_fifo(
         unchanged()
 
         # The SAME metadata owner rejoins behind an already waiting successor.
-        sample.return_value = _headroom(system=3 * 1024**3)
+        sample.return_value = _headroom()
         clock.now += 0.25
         stems._poll_stem_admissions()
         assert stems._stem_resources.current.allowed

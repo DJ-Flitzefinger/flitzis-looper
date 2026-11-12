@@ -263,10 +263,12 @@ become numerical failure or select a lower-precision BPM path. Effective child
 numerical pools SHALL be bounded before model work, with child environment applied
 before imports and no mutation of App-global numerical settings.
 
-Windows child commit ceilings SHALL deduct shared Native prospective promises,
-retain existing memory floors, be installed before suspended activation and remain
-owned through actual tree and pipe-reader retirement. A ceiling SHALL NOT claim a
-model-memory estimate, physical working-set bound or whole-system guarantee.
+Windows stem command ownership SHALL assign the child to its kill-on-close Job
+while suspended and retain the Job through actual tree and pipe-reader retirement.
+The stem guard SHALL use actual Windows low-memory status and exhausted observed
+headroom for admission and active stop. Stem command Jobs SHALL run without a RAM
+or commit ceiling. Alignment SHALL account for the concrete block and outstanding
+Native promises against measured capacity.
 
 #### Scenario: Generation competes with playback or analysis
 - **GIVEN** an original source-owned generation remains current
@@ -277,19 +279,19 @@ model-memory estimate, physical working-set bound or whole-system guarantee.
 - **THEN** that attempt reports a distinct playback-headroom failure and retains custody until actual cleanup
 - **AND** a waiting precise analysis retains its original quality and cancellation authority
 
-#### Scenario: A child has less available commit than physical memory
+#### Scenario: Windows signals low memory during a stem command
 - **GIVEN** caller/system commit and physical headroom are measured separately
-- **WHEN** the shared Native ledger grants a child ceiling after existing promises and original floors
-- **THEN** the Windows job enforces that ceiling before child activation
-- **AND** cancellation, allocation failure and launcher exit do not release its promise before actual tree/reader end
-- **AND** unsupported platform enforcement and unmeasured device deadlines remain explicit
+- **WHEN** the existing stem guard observes low memory or exhausted headroom
+- **THEN** the owned command requests cancellation and retires its Job, tree and both readers
+- **AND** the original attempt reports resource pressure after retirement
+- **AND** unsupported platform monitoring and unmeasured device deadlines remain explicit
 
 #### Scenario: A queued stem becomes ineligible for memory admission
 - **GIVEN** a current inference, requested pair preparation or held reuse delivery owns an inactive common FIFO position
 - **WHEN** the existing stem resource guard reports pressure or unavailable monitoring
 - **THEN** the controller SHALL withdraw only that inactive position so an otherwise admitted background owner can progress
 - **AND** the original request, interests, source custody and held delivery remain pending without failure or cancellation
-- **AND** recovery rejoins the same owner behind existing FIFO waiters under the unchanged memory thresholds
+- **AND** recovery rejoins the same owner behind existing FIFO waiters when monitoring reports clear
 - **AND** active tickets and independent borrows remain owned until ordinary retirement, while failed deferred terminal deliveries retain their separate custody
 
 ### Requirement: Cancelled Strict Cold Preparation Retires Its Unclaimed Owners
@@ -1038,7 +1040,7 @@ relationships without encoding live WinDLL or lock state as implementation.
 - **WHEN** another caller clears the cache and successfully initializes a new wrapper
 - **THEN** the original initializer may later return and publish its own wrapper
 - **AND** no partially configured wrapper or failed initialization becomes cached
-- **AND** original observation policy, resource thresholds and failure deadlines remain unchanged
+- **AND** observation cadence and monitoring failure deadlines remain unchanged
 
 ### Requirement: Resource Clock Evidence Preserves Definition-Time Capture
 The exact declared StemResourceGuard constructor clock default SHALL retain its
@@ -1079,14 +1081,14 @@ The Windows source-checkout App SHALL capture an explicit Native HTDemucs CPU
 selection with its stem request. A Native model child SHALL use the
 independently admitted CPU package and release-pinned learned Scan64 graph under
 the existing suspended-launch, Job, cancellation and reader ownership. The
-Job limit SHALL be at most 512 MiB and the exact admitted limit SHALL cover the
-checked graph load, source conversion and complete offline invocation. The
-App SHALL verify the completed PCM before shared codec and cache preparation.
+worker SHALL verify its dedicated Job independently of memory policy. Source,
+output and planner extents SHALL retain exact geometry and checked arithmetic.
+The App SHALL verify the completed PCM before shared codec and cache preparation.
 Existing source checks and publication SHALL remain with the stem owner.
 
 #### Scenario: The verified learned CPU release is unavailable
 
 - **GIVEN** the request selected Native HTDemucs CPU
-- **WHEN** the release record lacks an approved learned graph or the actual worker, graph or phase admission fails verification
+- **WHEN** the release record lacks an approved learned graph or the actual worker, graph, Job or runtime fails verification
 - **THEN** the request fails and no new stem set is published
 - **AND** it grants no Torch producer identity or completed-set reuse

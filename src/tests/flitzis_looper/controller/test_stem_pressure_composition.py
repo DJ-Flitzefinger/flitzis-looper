@@ -50,11 +50,11 @@ class _ResourceImage:
         if self.state == "unavailable":
             message = "fixture host query unavailable"
             raise OSError(message)
-        gib = 1024**3
         return {
-            "available_commit": gib if self.state == "pressure" else 4 * gib,
-            "system_available_commit_bytes": gib if self.state == "pressure" else 4 * gib,
-            "available_physical": 256 * 1024**2 if self.state == "pressure" else gib,
+            "available_commit": 100_000,
+            "system_available_commit_bytes": 200_000,
+            "available_physical": 300_000,
+            "low_memory": int(self.state == "pressure"),
         }
 
     def change(self, state: str) -> None:

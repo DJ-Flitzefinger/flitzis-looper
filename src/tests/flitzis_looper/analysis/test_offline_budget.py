@@ -1,5 +1,6 @@
 """Shared heavy admission, effective child pools and real retirement boundaries."""
 
+import ctypes
 import json
 import os
 import sys
@@ -10,11 +11,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper.analysis import process
+from flitzis_looper.analysis import process, windows_job
 from flitzis_looper.controller import stem_process
 from flitzis_looper.controller.stem_resources import StemResourceGuard
 from flitzis_looper.offline_runtime import child_environment
-from flitzis_looper_audio import OfflineChildMemoryReservation
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -108,28 +108,46 @@ def test_job_commit_limit_blocks_allocation_and_is_preserved_during_termination(
     assert result.stdout.strip() == b"allocation refused"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows Native ledger and owned tree")
-def test_child_commit_promise_and_heavy_permit_survive_finished_launcher_and_held_readers(
+@pytest.mark.skipif(os.name != "nt", reason="actual uncapped Windows Job and readers")
+def test_adaptive_stem_job_and_heavy_permit_survive_held_readers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    held, release, closed = Event(), Event(), Event()
+    held, release = Event(), Event()
     actual_read = process._CommandReader._read
+    actual_activate = process._OwnedTreeProcess.activate
+    actual_close = process._OwnedTreeProcess.close_tree
+    jobs: list[windows_job.WindowsJob] = []
+    readers: list[process._CommandReader] = []
 
-    class Budget:
-        def __init__(self) -> None:
-            self.actual = OfflineChildMemoryReservation()
+    def activate(child: process._OwnedTreeProcess) -> None:
+        job = child._job
+        assert job is not None
+        limits = windows_job._ExtendedLimits()
+        assert job._kernel.QueryInformationJobObject(
+            job._handle,
+            windows_job._JOB_EXTENDED_LIMITS,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+            None,
+        )
+        assert limits.basic.flags == (
+            windows_job._KILL_ON_JOB_CLOSE | windows_job._ACTIVE_PROCESS_LIMIT
+        )
+        assert limits.process_memory_limit == limits.job_memory_limit == 0
+        jobs.append(job)
+        actual_activate(child)
 
-        @property
-        def limit_bytes(self) -> int:
-            return self.actual.limit_bytes
-
-        def close(self) -> None:
-            self.actual.close()
-            closed.set()
+    def close_tree(child: process._OwnedTreeProcess) -> None:
+        assert child.poll() == 0
+        assert not child.tree_active()
+        assert len(readers) == 2
+        assert all(not reader.thread.is_alive() for reader in readers)
+        actual_close(child)
 
     def read(reader: process._CommandReader) -> None:
         actual_read(reader)
+        readers.append(reader)
         held.set()
         assert release.wait(10)
 
@@ -141,19 +159,22 @@ def test_child_commit_promise_and_heavy_permit_survive_finished_launcher_and_hel
                 env=dict(os.environ),
             )
 
-    monkeypatch.setattr(stem_process, "OfflineChildMemoryReservation", Budget)
+    monkeypatch.setattr(process._OwnedTreeProcess, "activate", activate)
+    monkeypatch.setattr(process._OwnedTreeProcess, "close_tree", close_tree)
     monkeypatch.setattr(process._CommandReader, "_read", read)
     with ThreadPoolExecutor(max_workers=1) as executor:
         pending = executor.submit(run)
         try:
             assert held.wait(5)
             assert not pending.done()
-            assert not closed.is_set()
+            (job,) = jobs
+            assert job._handle is not None
             assert not process._PROCESS_SLOT.acquire(blocking=False)
         finally:
             release.set()
         assert pending.result(10).reason == "ok"
-    assert closed.is_set()
+    assert job._handle is None
+    assert all(reader.stream.closed for reader in readers)
     assert process._PROCESS_SLOT.acquire(blocking=False)
     process._PROCESS_SLOT.release()
 

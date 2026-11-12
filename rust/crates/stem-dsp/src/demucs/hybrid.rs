@@ -8,7 +8,7 @@
 //! apply. The predictor supplies both decoder outputs synchronously.
 
 use super::{
-    BLOCK, Error, Geometry as SpectralGeometry, MAX_PAYLOAD_BYTES, MAX_WORKING_BYTES, RATE,
+    BLOCK, Error, Geometry as SpectralGeometry, MAX_WORKING_BYTES, RATE,
     Workspace as SpectralWorkspace, checkpoint,
     host::Statistics,
     reduction::{self, CpuProfile},
@@ -37,8 +37,8 @@ pub struct Geometry {
 impl Geometry {
     /// The caller supplies the peak simultaneous logical bytes of the predictor,
     /// other live readers and other buffers in addition to these explicit owners.
-    /// This allowance must cover every invocation, including callback allocations.
-    /// The limit excludes FFT plans, allocator overhead and process/runtime backing.
+    /// The checked logical extent excludes FFT plans, allocator overhead and
+    /// process/runtime backing.
     pub fn new(
         batches: usize,
         channels: usize,
@@ -92,7 +92,6 @@ impl Geometry {
             .and_then(|n| n.checked_add(MAX_WORKING_BYTES))
             .and_then(|n| n.checked_add(reduction::WORKING_BYTES))
             .and_then(|n| n.checked_add(additional_payload_bytes))
-            .filter(|&n| n <= MAX_PAYLOAD_BYTES)
             .ok_or(Error::Geometry)?;
         Ok(Self {
             batches,
@@ -129,7 +128,7 @@ impl Geometry {
     pub fn output_len(self) -> usize {
         self.input_len() * self.sources
     }
-    /// Simultaneous logical extent, including the caller's declared allowance.
+    /// Simultaneous logical extent, including the caller's declared payload.
     pub fn payload_bytes(self) -> usize {
         self.payload_bytes
     }
@@ -384,22 +383,19 @@ mod tests {
     }
 
     #[test]
-    fn guards_simultaneous_payload_before_construction() {
+    fn checks_simultaneous_payload_geometry_before_construction() {
         let g = Geometry::new(2, 2, 4, 3, 5, 0).unwrap();
         assert_eq!(
             (g.input_len(), g.output_len(), g.spectral_steps()),
             (12, 48, 1)
         );
-        let remaining = MAX_PAYLOAD_BYTES - g.payload_bytes();
-        let capped = Geometry::new(2, 2, 4, 3, 5, remaining).unwrap();
-        assert_eq!(capped.payload_bytes(), MAX_PAYLOAD_BYTES);
-        assert!(Geometry::new(2, 2, 4, 3, 5, remaining + 1).is_err());
         assert!(Geometry::new(1, 1, 1, 1, 1, 0).is_err());
         assert!(Geometry::new(1, 2, 1, 2, 1, 0).is_err());
         assert!(Geometry::new(usize::MAX, 2, 1, 1, 2, 0).is_err());
         assert!(Geometry::new(1, 2, 1, 1, 2, usize::MAX).is_err());
         assert!(SpectralGeometry::new(1_600_001, 2, RATE).is_ok());
-        assert!(Geometry::new(1, 2, 12, 1_600_001, 1_600_001, 0).is_err());
+        let large = Geometry::new(1, 2, 12, 1_600_001, 1_600_001, 0).unwrap();
+        assert!(large.payload_bytes() > 512 * 1024 * 1024);
     }
 
     #[test]

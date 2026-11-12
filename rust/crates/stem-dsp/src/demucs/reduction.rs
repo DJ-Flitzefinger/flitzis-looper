@@ -6,7 +6,7 @@
 //! Callers attest the original dispatch and strides and keep all owners live
 //! through return. A failure invalidates the entire output statistic slice.
 
-use super::{BINS, BLOCK, Error, MAX_PAYLOAD_BYTES, checkpoint, finite, host::Statistics};
+use super::{BINS, BLOCK, Error, checkpoint, finite, host::Statistics};
 
 pub const TORCH_VERSION: &str = "2.12.0+cu130";
 pub const TORCH_GIT: &str = "7661cd9c6b841b62b7f411aa52ec51f05457263b";
@@ -48,7 +48,7 @@ impl CpuProfile {
     /// stereo interleaved input. Strides are in f32 elements.
     ///
     /// Additional bytes include all other simultaneously live logical payload.
-    /// The 512 MiB limit is separate from allocator and process admission.
+    /// The aggregate byte extent is checked for arithmetic overflow.
     pub fn time(
         self,
         pcm: &[f32],
@@ -216,7 +216,6 @@ fn guard_payload(samples: usize, statistics: usize, additional: usize) -> Result
         .and_then(|n| n.checked_add(stats_bytes))
         .and_then(|n| n.checked_add(WORKING_BYTES))
         .and_then(|n| n.checked_add(additional))
-        .filter(|&n| n <= MAX_PAYLOAD_BYTES)
         .map(|_| ())
         .ok_or(Error::Geometry)
 }
@@ -378,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_layouts_and_total_payload_before_read() {
+    fn refuses_layouts_and_payload_overflow_before_read() {
         let profile = CpuProfile(());
         let pcm = [1.0, 2.0, 3.0, 4.0];
         let stats = Statistics::from_reference(0.0, 0.0).unwrap();
@@ -403,20 +402,15 @@ mod tests {
             ),
             Err(Error::Geometry)
         ));
-        let allowance = MAX_PAYLOAD_BYTES - WORKING_BYTES - size_of_val(&pcm) - size_of_val(&out);
-        assert!(matches!(
-            profile.time(
+        profile
+            .time(
                 &pcm,
                 [1, 2, 2],
                 [4, 2, 1],
                 &mut out,
-                allowance + 1,
-                &no_poll
-            ),
-            Err(Error::Geometry)
-        ));
-        profile
-            .time(&pcm, [1, 2, 2], [4, 2, 1], &mut out, allowance, &|| false)
+                512 * 1024 * 1024,
+                &|| false,
+            )
             .unwrap();
         assert!(matches!(
             profile.cli(&pcm, [2, 2], [2, 1], usize::MAX, &no_poll),

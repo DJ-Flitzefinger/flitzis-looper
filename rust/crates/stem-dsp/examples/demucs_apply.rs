@@ -1,6 +1,6 @@
 //! Supplied-offset/bag arithmetic control bridge, never a productive runtime.
 use flitzis_stem_dsp::demucs::{
-    Error, MAX_PAYLOAD_BYTES, RATE,
+    Error, RATE,
     host::apply::{Model, Workspace},
 };
 use std::{
@@ -81,15 +81,12 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     let mut work = Workspace::new(frames, &models, &|| false)?;
-    // The workspace guard includes the following caller PCM owners. Stream I/O
+    // The workspace plan includes the following caller PCM owners. Stream I/O
     // through a bounded stack buffer, with no whole-byte duplicate allocation.
     let len = frames.checked_mul(channels).ok_or(Error::Geometry)?;
     let outlen = len.checked_mul(sources).ok_or(Error::Geometry)?;
     let allocate = |n: usize| -> Result<Vec<f32>, Error> {
         let bytes = n.checked_mul(4).ok_or(Error::Geometry)?;
-        if bytes > MAX_PAYLOAD_BYTES {
-            return Err(Error::Geometry);
-        }
         let mut v = Vec::new();
         v.try_reserve_exact(n).map_err(|_| Error::Allocation {
             phase: "demucs.apply.bridge",

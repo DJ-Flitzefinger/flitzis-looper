@@ -3,7 +3,7 @@
 //! normalized-core predictor; it supplies no learned model, runtime or routing.
 
 use super::{
-    Error, MAX_PAYLOAD_BYTES, checkpoint,
+    Error, checkpoint,
     host::{Statistics, apply},
     hybrid,
     reduction::CpuProfile,
@@ -132,9 +132,6 @@ impl<'a> Workspace<'a> {
                 .checked_add(internal)
                 .and_then(|v| v.checked_add(size_of::<hybrid::Workspace>()))
                 .ok_or(Error::Geometry)?;
-        }
-        if bytes > MAX_PAYLOAD_BYTES {
-            return Err(Error::Geometry);
         }
         checkpoint(cancelled)?;
         Ok(bytes)
@@ -274,16 +271,16 @@ mod tests {
     }
 
     #[test]
-    fn complete_union_and_unsupported_channels_refused_before_allocation() {
+    fn checks_payload_union_overflow_and_channels_before_allocation() {
         let models = [model(), model()];
         let bytes = Workspace::planned_payload_bytes(17, &models, 0, &|| false).unwrap();
-        let margin = MAX_PAYLOAD_BYTES - bytes;
+        let external = 512 * 1024 * 1024;
         assert_eq!(
-            Workspace::planned_payload_bytes(17, &models, margin, &|| false).unwrap(),
-            MAX_PAYLOAD_BYTES
+            Workspace::planned_payload_bytes(17, &models, external, &|| false).unwrap(),
+            bytes + external
         );
         assert!(matches!(
-            Workspace::new(17, &models, profile(), margin + 1, &|| false),
+            Workspace::new(17, &models, profile(), usize::MAX, &|| false),
             Err(Error::Geometry)
         ));
         let one = Workspace::planned_payload_bytes(17, &models[..1], 0, &|| false).unwrap();

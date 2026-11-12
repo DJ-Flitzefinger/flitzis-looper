@@ -1093,7 +1093,7 @@ normalization, with FFT normalization already applied.
 
 An exclusive reusable workspace keeps FFT work and a 4096-sample inverse ring;
 analysis and reconstruction allocate no vectors after preparation. Checked
-geometry bounds logical PCM/CaC/work payload to 512 MiB. FFT plans, allocator
+geometry accounts for the logical PCM/CaC/work payload. FFT plans, allocator
 overhead, model/caller owners and native/runtime backing need separate accounting
 and actual admission. Cancellation or any error invalidates the entire caller
 output. Immutable inputs, output storage and external reader/admission leases
@@ -1146,7 +1146,7 @@ Segment samples retain original int(rate*segment), stride uses f64 overlap math,
 and transition power acts on f32 weights. No BS track math is substituted.
 
 Preparation fallibly allocates host vectors; run has no vector allocation. The
-512 MiB checked logical payload includes source, complete caller output, full
+checked logical payload includes source, complete caller output, full
 weight envelope, triangle, and training input/output buffers. It excludes model,
 FFT plans, allocator and native/runtime backing and is not prospective WHOLE
 admission. The caller holds immutable source readers, exclusive output and
@@ -1209,7 +1209,7 @@ FAIL/UNKNOWN remain unchanged.
 Julius 0.2.7 rational FIR. Use `Channels` or `ResampleFrac` separately, or
 `ConversionGeometry` and `Converter` to convert channels before resampling.
 Geometry checks the combined source, intermediate (when needed), kernels and
-output against 512 MiB before allocation. Equal rates use direct channel
+output byte extents for overflow before allocation. Equal rates use direct channel
 conversion; for differing rates, equal channel counts borrow the source. Kernels are reusable and
 replicate padding is virtual. The physical output preserves Julius's f32
 length rounding, phase ordering and final tail. The bounded planar f32 API
@@ -1241,7 +1241,7 @@ It reuses scale-zero CaC inverse reconstruction with one training-length lane
 buffer, adds the restored waveform over the entire training extent and copies
 the original-length prefix. The split/apply host owns surrounding context and
 any center trim. Unwritten or nonfinite predictions, callback errors and
-cancellation invalidate the entire result. The logical 512 MiB preflight includes
+cancellation invalidate the entire result. The checked logical payload includes
 the simultaneous borrowed input, output and statistics, the branch vectors, the
 maximum FFT vector workspace and the caller's declared other live payload,
 including predictor allocations. FFT plans, allocator and runtime backing need
@@ -1272,7 +1272,7 @@ after right padding. `cac` reduces packed original stereo `[B,4,2048,T]`.
 interleaved stereo, then reduces that reference globally. The APIs accept exact
 shape and element-stride metadata and reject other layouts. Each call includes
 borrowed input, output statistics, fixed reduction scratch and declared other
-live logical payload in the 512 MiB check before dispatch. Cancellation is
+live logical payload in the checked byte calculation before dispatch. Cancellation is
 bounded during both reductions and checked through return. Any failure
 invalidates the entire statistic output. Readers and source owners remain held
 through return.
@@ -1312,8 +1312,8 @@ mathematical-independent and supplied-original-statistic APIs keep their scope.
 
 Allocation-free planning checks the simultaneous union of every retained model
 workspace, normalized track, input/output, owned and borrowed statistics, fixed
-FFT/reducer scratch and the caller's predictor/external allowance against
-512 MiB before allocation. Borrowed callback views are counted once. Runtime,
+FFT/reducer scratch and the caller's predictor/external payload for overflow
+before allocation. Borrowed callback views are counted once. Runtime,
 allocator and WHOLE admission remain separate. Errors and late cancellation
 invalidate the complete result; all immutable source readers survive return.
 
@@ -1372,8 +1372,9 @@ import path. Trace, rewrite and check use the explicit checked overlay and
 verify package versions, module origins and binary digests.
 
 The CPU release producer uses the separately verified Torch 2.12.0+cpu
-Windows CP314 wheel at the same Torch source commit. It requires its own
-phase admission. An independently admitted `prepare_model_state` child can
+Windows CP314 wheel at the same Torch source commit. Each phase runs in its
+own Windows Job under measured host capacity and actual low-memory status.
+An independently owned `prepare_model_state` child can
 convert the pinned FP16 checkpoint to an aligned FP32 bank in bounded chunks.
 It derives the exact stock parameter layout on the meta device and records the
 checkpoint, source and ordered tensor identities. After the preparation child
@@ -1387,7 +1388,7 @@ used during initializer serialization.
 
 The bank contains 167,937,824 bytes of FP32 payload and 2,144 bytes of alignment
 padding. Its 4 KiB page-rounded extent is 167,940,096 bytes. Include mapped
-residency separately in each phase admission. Only the separated trace selects
+residency separately when measuring each phase. Only the separated trace selects
 the CPU Flash SDPA backend.
 The stock reference keeps its original dispatch. In the mapped CPU CAC
 reference, the pinned forward releases the complex STFT view after magnitude
@@ -1454,7 +1455,7 @@ allows the validated oneDNN call and the exact no-copy layout operations.
 It refuses an unexpected backend before invoking its kernel. The separate
 Slow2d route requires its own private budget and keeps the stock kernel and
 private return. The Rewrite fallback with full private columns and the
-second K1 fallback through GroupNorm both exceed the 512 MiB phase limit
+second K1 fallback through GroupNorm both exceeded the former 512 MiB phase limit
 in both reference forecasts.
 After the second GroupNorm, stock CPU GLU writes its 33,030,144-byte contiguous result directly into a
 writable file mapping. The original LayerScale consumes it. The final CPU
@@ -1544,10 +1545,12 @@ context tiles into slices of the assembled output.
 
 #### Logical ownership and admission
 
-The fixed extents below are bytes of identified owners. Use a separate
-prospective allowance for each child, covering startup through its last reader.
+The fixed extents below describe identified owners and historical memory
+forecasts. Measure each actual child through its last reader. Windows
+low-memory status, exhausted headroom, allocation failures and disk capacity
+govern the current runs.
 
-| Phase | Identified logical owners | Remaining allowance work |
+| Phase | Identified logical owners | Additional owners to measure |
 | --- | --- | --- |
 | Original and trace checkpoint load | 84,141,911-byte immutable snapshot and 533 half storages totaling 83,968,912. The half storages then overlap 167,937,824 bytes of initialized FP32 state during strict load. | ZIP and pickle staging, conversion and initialization scratch, and allocator retention after snapshot release. |
 | Original reference | 2,751,840-byte mix, 13,761,888 bytes of normalized captures and 92,890,560 bytes in eight skips at transformer entry. The largest expected fused CPU score is 231,211,008 bytes with in-place softmax. At that site also charge 16,515,072 bytes packed Q/K/V, two 8,257,536-byte activation pairs and a 5,505,024-byte normalized input. The five files total 79,816,800 bytes. Cropped decoder captures can retain 44,126,208 and 11,007,488 bytes of backing. The persisted comparison removes 68,892,896 bytes of original backings from the second forward's live owners. | The first spectral self-attention subtotal remains conditional at 547,088,288 bytes including weights. Account for stock oneDNN descriptor scratch and blocked reorders, MKL FFT and BLAS scratch, caches, and allocation and exit retention. |
@@ -1557,11 +1560,10 @@ prospective allowance for each child, covering startup through its last reader.
 | Final check | At most 201,326,592 hash-verified bytes, a Python protobuf for inline/signature/provenance validation, then a parsed C++ graph with a full shape-inference copy. The native parser reads the same immutable byte buffer. | Bound C++ parser, inference and allocator retention across these operations. |
 | Native load and run | Inline graph bytes, FP32 initializer storage and provider copies, normalized tensors, skips, outputs, Scan layouts and context. Charge up to 11,010,048 bytes for two score-tile owners in a Scan body. At the graph extent ceiling, the file and two FP32-sized owners alone total 537,202,240 bytes. | Establish actual graph/initializer/provider ownership, allocator and operator scratch, IOBinding, profiler, output and synchronous reader lifetime. |
 
-Each allowance also needs the actual Python/Torch/ONNX/ORT and transitive DLL
-closure for that child, including stacks, runtime initialization, errors,
-panic and exit. The Windows Torch build loads DLLs from its CUDA-enabled
-wheel even for CPU execution. A cap, artifact size or observed peak cannot
-certify prospective successful whole-process execution. See the pinned
+The actual Python/Torch/ONNX/ORT and transitive DLL closure, stacks, runtime
+initialization, errors and exit also contribute to each observed peak. The
+historical Windows Torch CUDA wheel loads device DLLs even on CPU. Whole-process
+evidence comes from the measured phase, including startup and retirement. See the pinned
 [Torch export binding](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/torch/csrc/jit/python/python_ir.cpp#L243-L280),
 [CPU attention](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/aten/src/ATen/native/transformers/attention.cpp#L348-L382)
 and [ONNX checker](https://github.com/onnx/onnx/blob/v1.23.2/onnx/checker.cc#L1257-L1294).
@@ -1570,18 +1572,19 @@ The separately checked Windows CPython 3.14 export tools use ONNX 1.23.2,
 protobuf 6.33.6 and ml_dtypes 0.5.4 with the existing NumPy and
 typing_extensions. The standalone `demucs_attention_control` example
 exercises the ten Scan sites on synthetic Q/K/V through the controlled
-ORT CPU package. The learned export still requires finite per-phase
-producer allowances. The dense CPU adapter still refuses before ORT bootstrap.
-Full graph/runtime and process admission, complete learned branch and
-PCM/tail comparisons, and production cutover remain open.
+ORT CPU package. Separate adaptive Jobs completed the learned Reference,
+Trace, Assembly, Scan64 rewrite and full checker. The dense trial still refuses
+before ORT bootstrap. The learned Scan64 core loaded and ran on the pinned
+CPU package. Direct PCM matched within tolerance, and both decoder branches
+still have out-of-tolerance values. Production approval remains open.
 
 #### Windows source-checkout HTDemucs CPU worker
 
 The App captures the explicit `FLITZIS_HTDEMUCS_NATIVE_CPU=1` selection when
 it resolves an HTDemucs stem request. It decodes the original first audio
 stream with the shared FFmpeg codec and stages finite float32 PCM for one
-Native model process. The model process checks the actual capped Windows Job,
-maps the digest-pinned learned ONNX file read-only, and loads the pinned
+Native model process. The model process checks its dedicated kill-on-close
+Windows Job, maps the digest-pinned learned ONNX file read-only, and loads the pinned
 ORT 1.24.4/API 24 CPU package through the package-system32 process guard.
 It uses Native channel conversion and Julius resampling, the release segment
 and shifts, CLI normalization, split/apply and four named decoder outputs.
@@ -1598,20 +1601,18 @@ directory. It contains `native-htdemucs-worker.exe`, `htdemucs.onnx` and the
 independent checked CPU `ort` package with its `step23-runtime.json` and
 `step23-package.json` manifests. Native selection requires the source-owned
 `workers/htdemucs/native_cpu/release.json` record, compiled into the worker.
-It binds the exact graph extent and digest, trace and canonical attention
-digests, and reviewed extra load/run bytes for the complete pinned graph and
-runtime. The separate source-owned `worker.json` record pins the finished
+It binds the exact graph extent and digest and the trace and canonical
+attention digests. The separate source-owned `worker.json` record pins the finished
 Windows executable by digest and extent. Both records currently contain
 `null`. The App refuses explicit Native selection before codec or model
 launch while approval is absent.
 
 The producer's final checker independently recognizes the ten canonical Scan64
 chains in the final artifact and checks the same artifact's inline weights,
-fixed signature, provenance and full ONNX validity. The producer still needs a
-compatible, independently admitted development-time Torch export. The CUDA
-wheel failed to load a dependency within the previous 512 MiB producer Job.
-The stock reference and separated CPU trace still require independent
-whole-phase budgets. The stock capture hooks write the two normalized inputs
+fixed signature, provenance and full ONNX validity. The previous CUDA wheel
+failed to load a dependency within its historical 512 MiB producer Job. The
+verified CPU reference and separated CPU trace used separate uncapped Jobs.
+The stock capture hooks write the two normalized inputs
 and both cropped decoder views in 256 KiB chunks as they pass the original
 model's boundaries. They retain only the file identities. The extracted-core
 comparison reopens the two contiguous normalized inputs, verifies their
@@ -1649,7 +1650,8 @@ buffers and descriptor resources have separate lifetimes. The ATen return
 can overlap the 44,126,208-byte iDeep output with two dense ATen backings of
 the same logical size. ATen arena commit also includes allocator rounding.
 
-Use `--cold-only` first for the largest transpose. The guarded repeat
+The historical bounded-repeat control starts with `--cold-only` for the
+largest transpose. Its guarded repeat
 requires `--warm-reserve-bytes` from an independently settled cold run of the
 same geometry and allocator profile. Derive it by subtracting private commit
 before the cold call from the observed cold Job peak. The supervisor must
@@ -1667,8 +1669,8 @@ It charges the larger of the independent reserve and this process's cold
 peak increment. This profile preserves the stock BRG and reorder dispatch
 and checks the full dense output SHA-256 for the diagnostic geometry. The
 original default-allocator warm failure remains part of the evidence.
-Whole learned admission still requires the complete oneDNN, MKL, allocator,
-plain-retry and error/exit bounds.
+The actual learned phases have separate adaptive measurements for the complete
+invocations.
 
 The mapped Native loader reduces serialized private
 ownership and still counts the file-backed span and both conservative

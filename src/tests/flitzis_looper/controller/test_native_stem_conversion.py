@@ -83,7 +83,8 @@ def test_unsupported_full_inference_host_is_not_relabelled_known_by_converter(
     # The retained public facade is still unsupported. The new internal producer
     # closure is tested independently and must never attest this compiled plan.
     assert origin not in paths
-    assert loaded_code_identity(paths) is None
+    assert loaded_code_identity(paths) is not None
+    assert loaded_code_identity((*paths, origin)) is None
     held.verify()
 
 

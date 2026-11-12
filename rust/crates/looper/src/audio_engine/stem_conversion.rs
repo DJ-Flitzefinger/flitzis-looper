@@ -1,5 +1,5 @@
 //! Thin offline-only bridge. No AudioEngine borrow, control lock or file access.
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 use super::resident_host_memory;
 use super::resident_host_memory::HostReservation;
 use flitzis_stem_conversion::{self as core, Shape, Source};
@@ -76,22 +76,8 @@ impl StemConversionReservation {
         // The fixed metadata/stack allowance is separate from the PCM cap.
         #[cfg(windows)]
         let host = Some(
-            HostReservation::reserve_with(bytes + HOST_SCRATCH, || {
-                let mut image = resident_host_memory::host_headroom()?;
-                // Existing ledger retains 256 MiB commit / 128 MiB physical.
-                // Conversion additionally preserves the unchanged stem entry
-                // floors of 2 GiB commit / 512 MiB physical before its delta.
-                image.caller_available_commit = image
-                    .caller_available_commit
-                    .saturating_sub(1792 * 1024 * 1024);
-                image.system_available_commit = image
-                    .system_available_commit
-                    .saturating_sub(1792 * 1024 * 1024);
-                image.available_physical =
-                    image.available_physical.saturating_sub(384 * 1024 * 1024);
-                Ok(image)
-            })
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+            HostReservation::reserve_conversion(bytes + HOST_SCRATCH)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
         );
         // The pure core remains usable on other OSes with its hard PCM bound.
         // This is explicitly unsupported host monitoring, never invented headroom.

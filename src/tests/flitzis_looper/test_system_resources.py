@@ -14,12 +14,15 @@ from flitzis_looper.system_resources import (
     HostMemory,
     PerformanceInformation,
     host_memory_snapshot,
+    stem_memory_snapshot,
     system_commit_bytes,
     windows_host_memory_snapshot,
 )
 
 
-def _kernel(*, caller: dict[str, int] | None = None, system: dict[str, int] | None = None) -> Mock:
+def _kernel(
+    *, caller: dict[str, int] | None = None, system: dict[str, int] | None = None, low: int = 0
+) -> Mock:
     caller_fields = {
         "total_physical": 32_000,
         "available_physical": 12_000,
@@ -42,9 +45,25 @@ def _kernel(*, caller: dict[str, int] | None = None, system: dict[str, int] | No
             setattr(status, name, value)
         return 1
 
-    kernel = Mock(spec=["GlobalMemoryStatusEx", "K32GetPerformanceInfo"])
+    def read_pressure(handle: int, pointer: ctypes.c_void_p) -> int:
+        assert handle == 37
+        ctypes.cast(pointer, ctypes.POINTER(wintypes.BOOL)).contents.value = low
+        return 1
+
+    kernel = Mock(
+        spec=[
+            "GlobalMemoryStatusEx",
+            "K32GetPerformanceInfo",
+            "CreateMemoryResourceNotification",
+            "QueryMemoryResourceNotification",
+            "CloseHandle",
+        ]
+    )
     kernel.GlobalMemoryStatusEx.side_effect = read_caller
     kernel.K32GetPerformanceInfo.side_effect = read_system
+    kernel.CreateMemoryResourceNotification.return_value = 37
+    kernel.QueryMemoryResourceNotification.side_effect = read_pressure
+    kernel.CloseHandle.return_value = 1
     return kernel
 
 
@@ -120,6 +139,7 @@ def test_non_windows_is_the_only_unsupported_result(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(system_resources, "os", SimpleNamespace(name="posix"))
     monkeypatch.setattr(system_resources, "_windows_kernel", query)
     assert host_memory_snapshot() is None
+    assert stem_memory_snapshot() is None
     query.assert_not_called()
 
 
@@ -149,6 +169,42 @@ def test_query_failure_retains_last_error_and_stops_at_failed_api(
         kernel.K32GetPerformanceInfo.assert_not_called()
 
 
+@pytest.mark.parametrize("low", [0, 1])
+def test_stem_snapshot_reports_os_pressure_and_closes_notification(
+    monkeypatch: pytest.MonkeyPatch, low: int
+) -> None:
+    kernel = _kernel(low=low)
+    monkeypatch.setattr(system_resources, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(system_resources, "_windows_kernel", lambda: kernel)
+    image = stem_memory_snapshot()
+    assert image is not None
+    assert image["low_memory"] == low
+    assert image["system_available_commit_bytes"] == 24_576
+    assert [call[0] for call in kernel.mock_calls] == [
+        "GlobalMemoryStatusEx",
+        "K32GetPerformanceInfo",
+        "CreateMemoryResourceNotification",
+        "QueryMemoryResourceNotification",
+        "CloseHandle",
+    ]
+    kernel.CreateMemoryResourceNotification.assert_called_once_with(0)
+    kernel.CloseHandle.assert_called_once_with(37)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows error translation")
+def test_failed_pressure_query_preserves_error_and_closes_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel = _kernel()
+    kernel.QueryMemoryResourceNotification.side_effect = None
+    kernel.QueryMemoryResourceNotification.return_value = 0
+    monkeypatch.setattr(system_resources, "_windows_kernel", lambda: kernel)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5)
+    with pytest.raises(OSError, match=r"\[WinError 5\]"):
+        stem_memory_snapshot()
+    kernel.CloseHandle.assert_called_once_with(37)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="actual Windows kernel32 configuration")
 def test_default_query_lazily_reuses_configured_functions(monkeypatch: pytest.MonkeyPatch) -> None:
     kernel = _kernel()
@@ -169,6 +225,15 @@ def test_default_query_lazily_reuses_configured_functions(monkeypatch: pytest.Mo
             wintypes.DWORD,
         ]
         assert kernel.K32GetPerformanceInfo.restype is wintypes.BOOL
+        assert kernel.CreateMemoryResourceNotification.argtypes == [ctypes.c_int]
+        assert kernel.CreateMemoryResourceNotification.restype is wintypes.HANDLE
+        assert kernel.QueryMemoryResourceNotification.argtypes == [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.BOOL),
+        ]
+        assert kernel.QueryMemoryResourceNotification.restype is wintypes.BOOL
+        assert kernel.CloseHandle.argtypes == [wintypes.HANDLE]
+        assert kernel.CloseHandle.restype is wintypes.BOOL
     finally:
         system_resources._WINDOWS_KERNEL.clear()
 
@@ -210,5 +275,8 @@ def test_actual_default_queries_preserve_host_fields_without_opening_process_han
     assert kernel.GetProcessHandleCount(process, ctypes.byref(before))
     for _ in range(64):
         assert host_memory_snapshot() is not None
+        stem = stem_memory_snapshot()
+        assert stem is not None
+        assert stem["low_memory"] in {0, 1}
     assert kernel.GetProcessHandleCount(process, ctypes.byref(after))
     assert before.value == after.value

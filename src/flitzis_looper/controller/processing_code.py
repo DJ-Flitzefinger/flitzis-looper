@@ -33,6 +33,9 @@ if TYPE_CHECKING:
 
 _HOST_TARGETS = {
     "contracts.py": ((), ("WorkerLimits",)),
+    # The legacy selector constructs this adapter. Its release and execution
+    # identity are separate from the guarded legacy producer roles.
+    "native_demucs_cpu.py": ((), ("NativeDemucsCpuBackend",)),
     # Explicit acquisition is setup-only; inference executes the pinned verifier.
     "bs_roformer_assets.py": (("verify_model_assets",), ()),
     "encoder_provenance.py": (
@@ -50,7 +53,7 @@ _HOST_TARGETS = {
         (),
     ),
 }
-_HOST_CONSTANT_TARGETS = {"contracts.py": ()}
+_HOST_CONSTANT_TARGETS = {"contracts.py": (), "native_demucs_cpu.py": ()}
 
 
 @contextmanager

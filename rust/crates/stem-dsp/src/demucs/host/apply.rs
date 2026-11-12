@@ -6,10 +6,7 @@
 //! is implemented here. The caller establishes each model's valid/training
 //! contract, source identity/order and actual reader/admission custody.
 
-use super::{
-    BLOCK, Chunk, Error, MAX_PAYLOAD_BYTES, RATE, Track, TrackWorkspace, checkpoint, extent,
-    finite, zeros,
-};
+use super::{BLOCK, Chunk, Error, RATE, Track, TrackWorkspace, checkpoint, extent, finite, zeros};
 
 pub const MAX_SHIFT: usize = (RATE / 2) as usize;
 
@@ -243,7 +240,7 @@ impl<'a> Workspace<'a> {
                 .and_then(|v| v.checked_add(std::mem::size_of_val(m.weights)))
                 .ok_or(Error::Geometry)?;
         }
-        if frames == 0 || bytes > MAX_PAYLOAD_BYTES {
+        if frames == 0 {
             return Err(Error::Geometry);
         }
         // Validate source denominators before any allocation, including totals.
@@ -528,7 +525,10 @@ mod tests {
         let mut other = model(&[0], &[1.0, 1.0]);
         other.split = false;
         assert!(Workspace::new(19, &[other], &|| false).is_err());
-        assert!(Workspace::new(20_000_000, &[model(&[0], &[1.0, 1.0])], &|| false).is_err());
+        let large =
+            Workspace::planned_payload_bytes(20_000_000, &[model(&[0], &[1.0, 1.0])], &|| false)
+                .unwrap();
+        assert!(large > 512 * 1024 * 1024);
         assert!(Workspace::new(19, &[model(&[], &[1.0, 1.0])], &|| true).is_err());
     }
 }

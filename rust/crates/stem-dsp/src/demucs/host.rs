@@ -6,7 +6,7 @@
 //! exclusive output and caller admission must
 //! survive every callback until return. Any error invalidates ALL output.
 
-use super::{BLOCK, Error, MAX_PAYLOAD_BYTES, RATE, checkpoint, finite, zeros};
+use super::{BLOCK, Error, RATE, checkpoint, finite, zeros};
 
 pub mod apply;
 
@@ -195,13 +195,7 @@ fn extent(lengths: &[usize]) -> Result<usize, Error> {
         .iter()
         .try_fold(0_usize, |n, &v| n.checked_add(v))
         .ok_or(Error::Geometry)?;
-    let bytes = scalars
-        .checked_mul(size_of::<f32>())
-        .ok_or(Error::Geometry)?;
-    if bytes > MAX_PAYLOAD_BYTES {
-        return Err(Error::Geometry);
-    }
-    Ok(bytes)
+    scalars.checked_mul(size_of::<f32>()).ok_or(Error::Geometry)
 }
 
 /// Read complete original context around a physical chunk, zero only beyond

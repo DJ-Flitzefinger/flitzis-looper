@@ -1,22 +1,15 @@
-"""Conservative host headroom policy for existing control/offline stem owners."""
+"""Observe Windows memory pressure for existing control/offline stem owners."""
 
 import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Literal
 
-from flitzis_looper.system_resources import host_memory_snapshot
+from flitzis_looper.system_resources import stem_memory_snapshot
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_MIB = 1024 * 1024
-_ADMISSION_COMMIT = 2048 * _MIB
-_RECOVERY_COMMIT = 3072 * _MIB
-_ADMISSION_PHYSICAL = 512 * _MIB
-_RECOVERY_PHYSICAL = 768 * _MIB
-_CRITICAL_COMMIT = 512 * _MIB
-_CRITICAL_PHYSICAL = 128 * _MIB
 _SAMPLE_SECONDS = 0.25
 _UNAVAILABLE_SECONDS = 1.0
 type ResourceState = Literal["unobserved", "clear", "pressure", "unavailable", "unsupported"]
@@ -55,7 +48,7 @@ class StemResourceError(RuntimeError):
 
 
 class StemResourceGuard:
-    """Share bounded observations, recovery latch and fixed query-failure deadline.
+    """Share current observations and the bounded query-failure deadline.
 
     The lock only protects short control/offline OS queries and cached state. No
     background sampler, process handle, job registry or realtime work is created.
@@ -63,7 +56,7 @@ class StemResourceGuard:
 
     def __init__(
         self,
-        sampler: Callable[[], dict[str, int] | None] = host_memory_snapshot,
+        sampler: Callable[[], dict[str, int] | None] = stem_memory_snapshot,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._sampler = sampler
@@ -71,8 +64,6 @@ class StemResourceGuard:
         self._lock = Lock()
         self._observed_at: float | None = None
         self._unknown_since: float | None = None
-        self._blocked = False
-        self._critical = False
         self._current = StemResourceDecision("unobserved")
 
     @property
@@ -99,7 +90,7 @@ class StemResourceGuard:
                 raise StemResourceError(reason, decision.detail)
 
     def command_stop_reason(self) -> str | None:
-        """Stop critical active work or a fixed consecutive query-failure interval."""
+        """Stop on observed OS pressure or sustained monitoring failure."""
         with self._lock:
             decision = self._observe(fresh=False)
             if decision.state == "unavailable":
@@ -109,7 +100,7 @@ class StemResourceGuard:
                 ):
                     return "resource_unavailable"
                 return None
-            return "resource_pressure" if self._critical else None
+            return "resource_pressure" if decision.state == "pressure" else None
 
     def failure(self, reason: str) -> StemResourceError:
         """Build a typed failure only after the original command actually settles."""
@@ -128,26 +119,22 @@ class StemResourceGuard:
         try:
             image = self._sampler()
         except (OSError, ValueError) as error:
-            self._blocked = True
-            self._critical = False
             if self._unknown_since is None:
                 self._unknown_since = now
             self._current = StemResourceDecision("unavailable", str(error))
             return self._current
         self._unknown_since = None
-        self._critical = False
         if image is None:
             self._current = StemResourceDecision("unsupported")
             return self._current
         caller = image["available_commit"]
         system = image["system_available_commit_bytes"]
         physical = image["available_physical"]
-        commit_floor = _RECOVERY_COMMIT if self._blocked else _ADMISSION_COMMIT
-        physical_floor = _RECOVERY_PHYSICAL if self._blocked else _ADMISSION_PHYSICAL
-        self._blocked = min(caller, system) < commit_floor or physical < physical_floor
-        self._critical = min(caller, system) <= _CRITICAL_COMMIT or physical <= _CRITICAL_PHYSICAL
+        low_memory = bool(image["low_memory"])
+        pressure = low_memory or min(caller, system, physical) == 0
         detail = (
-            f"available bytes: caller commit={caller}, system commit={system}, physical={physical}"
+            f"available bytes: caller commit={caller}, system commit={system}, "
+            f"physical={physical}; Windows low-memory signal={low_memory}"
         )
-        self._current = StemResourceDecision("pressure" if self._blocked else "clear", detail)
+        self._current = StemResourceDecision("pressure" if pressure else "clear", detail)
         return self._current

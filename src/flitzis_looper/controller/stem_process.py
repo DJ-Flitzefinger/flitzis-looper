@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -25,7 +24,6 @@ from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 from flitzis_looper.stem_execution import STEM_EXECUTION_RESULT
-from flitzis_looper_audio import OfflineChildMemoryReservation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -51,8 +49,6 @@ _RECEIPT_PREFIXES = (
     STEM_EXECUTION_RESULT.encode("ascii"),
 )
 NATIVE_DEMUCS_EXECUTABLE = "native-htdemucs-worker.exe"
-NATIVE_DEMUCS_LIMIT = 512 * 1024 * 1024
-_NATIVE_JOB_BYTES = "FLITZIS_NATIVE_HTDEMUCS_JOB_BYTES"
 _OWN_INFERENCE_MODULES = ("flitzis_looper.demucs_streaming", "flitzis_bs_roformer")
 
 
@@ -136,40 +132,10 @@ def _run_owned(
 ) -> OwnedCommandResult:
     try:
         with offline_work_scope(cancel):
-            return _run_admitted(
-                args, cwd, env, cancel, request_abort, stop_reason, native_demucs=native_demucs
-            )
-    except OfflineWorkCancelledError as error:
-        raise StemCommandCancelledError(str(error)) from None
-
-
-def _run_admitted(
-    args: list[str],
-    cwd: Path,
-    env: dict[str, str],
-    cancel: Event,
-    request_abort: Callable[[], None] | None,
-    stop_reason: Callable[[], str | None] | None,
-    *,
-    native_demucs: bool,
-) -> OwnedCommandResult:
-    scope = _COMMAND_SCOPE.get()
-    budget = None
-    with offline_work_scope(cancel):
-        try:
             stem_command_checkpoint()
-            # No unsupported platform is labelled as enforced. On Windows the
-            # promise includes existing Native deltas BEFORE suspended launch.
-            if os.name == "nt" and scope is not None and scope.resources is not None:
+            scope = _COMMAND_SCOPE.get()
+            if scope is not None and scope.resources is not None:
                 scope.resources.entry()
-                budget = OfflineChildMemoryReservation()
-            ceiling = budget.limit_bytes if budget is not None else None
-            if native_demucs:
-                if ceiling is None:
-                    msg = "Native HTDemucs requires an admitted Windows Stem Job"
-                    raise RuntimeError(msg)
-                ceiling = min(ceiling, NATIVE_DEMUCS_LIMIT) // PAGESIZE * PAGESIZE
-                env[_NATIVE_JOB_BYTES] = str(ceiling)
             return run_owned_command(
                 args,
                 cwd=cwd,
@@ -180,13 +146,10 @@ def _run_admitted(
                 request_abort=request_abort,
                 abort_grace_seconds=0.4,
                 stop_reason=stop_reason,
-                commit_limit_bytes=ceiling,
                 strict_completion=native_demucs,
             )
-        finally:
-            # run_owned_command cannot return before tree AND pipe readers end.
-            if budget is not None:
-                budget.close()
+    except OfflineWorkCancelledError as error:
+        raise StemCommandCancelledError(str(error)) from None
 
 
 def run_stem_command(
@@ -212,7 +175,6 @@ def run_stem_command(
     )
     child_env = child_environment(env)
     child_env.pop(CANCEL_PATH_ENV, None)
-    child_env.pop(_NATIVE_JOB_BYTES, None)
     if native_demucs:
         _check_native_demucs_launch(args, scope)
     if (

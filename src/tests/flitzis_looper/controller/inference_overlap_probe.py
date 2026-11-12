@@ -61,14 +61,14 @@ class _CallObservation(_OwnedProcessObservation):
         self.calls: list[dict[str, int | str]] = []
         self.command_results: list[dict[str, object]] = []
         self.diagnostic_errors: list[str] = []
-        self.commit_limits: dict[int, int] = {}
+        self.commit_limits: dict[int, int | None] = {}
         super().__init__()
 
     def _profile(self, frame: FrameType, event: str, argument: object) -> None:
         super()._profile(frame, event, argument)
         if (
             event == "return"
-            and frame.f_code is stem_process._run_admitted.__code__
+            and frame.f_code is stem_process._run_owned.__code__
             and argument is not None
             and frame.f_locals["args"][1:3] == ["-m", "flitzis_bs_roformer"]
         ):
@@ -96,8 +96,6 @@ class _CallObservation(_OwnedProcessObservation):
                 job = scope._job
                 if job is None or (retained := job._members.get(scope.pid)) is None:
                     continue
-                assert type(job._commit_limit_bytes) is int
-                assert job._commit_limit_bytes > 0
                 self.commit_limits[scope.pid] = job._commit_limit_bytes
                 began = time.perf_counter_ns()
                 sample = self._member(scope.pid, retained, command)
@@ -266,7 +264,7 @@ class InferenceOverlap:
             ):
                 witnesses.append((index, left, right))
         assert witnesses, {"call": call, "periods": len(self.periods)}
-        assert self.meter.commit_limits[call["pid"]] > 0
+        assert self.meter.commit_limits[call["pid"]] is None
         assert any(
             row.pid == call["pid"]
             and row.creation_ticks == witnesses[0][1][3][3]

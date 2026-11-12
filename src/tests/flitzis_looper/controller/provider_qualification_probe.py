@@ -66,7 +66,7 @@ class _Observation(_OwnedProcessObservation):
                 })
         if (
             event == "return"
-            and frame.f_code is stem_process._run_admitted.__code__
+            and frame.f_code is stem_process._run_owned.__code__
             and argument is not None
         ):
             args = frame.f_locals["args"]

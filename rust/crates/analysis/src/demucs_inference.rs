@@ -6,7 +6,7 @@ use crate::{
     trial_ort,
 };
 use flitzis_stem_dsp::demucs::{
-    BINS, Error, MAX_PAYLOAD_BYTES, RATE,
+    BINS, Error, RATE,
     host::apply::Model,
     hybrid::{self, Geometry},
     offline,
@@ -42,10 +42,8 @@ const CANCELLED: &str = "native HTDemucs trial cancelled";
 const DENSE_SCORE_BYTES: usize = 8 * (8 * STEPS) * (8 * STEPS) * size_of::<f32>();
 #[cfg(all(windows, feature = "native-demucs-worker"))]
 pub const SCAN64_LOWERING: &str = "torchscript-opset18-scan64";
-// Two 8 x 64 x 2688 float32 tile owners. All other operator, runtime and
-// transformation costs must be covered by the approved release allowances.
-#[cfg(all(windows, feature = "native-demucs-worker"))]
-const SCAN64_SCORE_BYTES: usize = 2 * 8 * 64 * (8 * STEPS) * size_of::<f32>();
+// The dense, inline trial is intentionally kept at its original qualified scope.
+const DENSE_TRIAL_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
 const TORCH: &str = "2.12.0+cu130";
 const TORCH_COMMIT: &str = "7661cd9c6b841b62b7f411aa52ec51f05457263b";
 const SOURCE_CLOSURE: &str = "7457feb86c729a70906beabc70afccb4e4e49bf63a639e87c280f85ed1be4113";
@@ -101,65 +99,22 @@ impl Payload {
     }
 }
 
-/// Frozen liveness allowances reviewed against the exact learned graph and
-/// ORT package. No allowance is derived from a successful allocation or peak.
+/// Identity of the exact learned Scan64 graph and its source trace.
 #[cfg(all(windows, feature = "native-demucs-worker"))]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scan64Release {
     pub graph_bytes: usize,
     pub graph_sha256: String,
-    pub load_extra_bytes: usize,
-    pub run_extra_bytes: usize,
     pub trace_sha256: String,
     pub attention_sha256: String,
-}
-
-#[cfg(all(windows, feature = "native-demucs-worker"))]
-impl Scan64Release {
-    pub fn load_bytes(&self) -> Result<usize, Error> {
-        if !(1..=MAX_GRAPH_BYTES).contains(&self.graph_bytes) || self.load_extra_bytes == 0 {
-            return Err(Error::Geometry);
-        }
-        // The mapped serialization consumes physical headroom. Conservatively
-        // include it in the admission union with both possible weight owners.
-        bounded(&[self.graph_bytes, 2 * WEIGHT_BYTES, self.load_extra_bytes])
-    }
-
-    pub fn run_bytes(&self) -> Result<usize, Error> {
-        if self.run_extra_bytes == 0 {
-            return Err(Error::Geometry);
-        }
-        bounded(&[
-            WEIGHT_BYTES,
-            SCAN64_SCORE_BYTES,
-            INPUT_BYTES,
-            OUTPUT_BYTES,
-            self.run_extra_bytes,
-        ])
-    }
-
-    pub fn offline_bytes(
-        &self,
-        frames: usize,
-        model: &Model<'_>,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<usize, Error> {
-        check_model(model)?;
-        offline::Workspace::planned_payload_bytes(
-            frames,
-            std::slice::from_ref(model),
-            self.run_bytes()?,
-            cancelled,
-        )
-    }
 }
 
 fn bounded(parts: &[usize]) -> Result<usize, Error> {
     parts
         .iter()
         .try_fold(0usize, |sum, &part| sum.checked_add(part))
-        .filter(|&sum| sum <= MAX_PAYLOAD_BYTES)
+        .filter(|&sum| sum <= DENSE_TRIAL_PAYLOAD_BYTES)
         .ok_or(Error::Geometry)
 }
 
@@ -176,12 +131,12 @@ fn check_model(model: &Model<'_>) -> Result<(), Error> {
 }
 
 /// One exclusive, single-owner ORT session. Construct it after the owner has
-/// verified the runtime package/ABI and admitted both complete phase budgets.
+/// verified the runtime package and ABI.
 pub struct CpuModel {
     session: Session,
     context: Context,
     run_extra: usize,
-    run_limit: usize,
+    run_limit: Option<usize>,
 }
 
 impl CpuModel {
@@ -207,7 +162,7 @@ impl CpuModel {
         let run_min = payload.normalized_bytes().map_err(
             |_| "HTDemucs dense attention exceeds the conservative 512 MiB payload bound",
         )?;
-        if !(run_min..=MAX_PAYLOAD_BYTES).contains(&run_limit) {
+        if !(run_min..=DENSE_TRIAL_PAYLOAD_BYTES).contains(&run_limit) {
             return Err("unsupported HTDemucs admitted run payload".into());
         }
         if payload.graph_bytes != graph.len()
@@ -247,7 +202,7 @@ impl CpuModel {
             session,
             context: context.clone(),
             run_extra: payload.run_bytes().map_err(|e| e.to_string())?,
-            run_limit,
+            run_limit: Some(run_limit),
         })
     }
 
@@ -257,23 +212,11 @@ impl CpuModel {
     pub fn load_scan64(
         path: &Path,
         release: &Scan64Release,
-        ceiling: usize,
-        run_limit: usize,
         context: &Context,
         admit_runtime: impl FnOnce() -> Result<(), String>,
     ) -> Result<Self, String> {
         let context = context.with_cancel_message(CANCELLED);
         context.checkpoint("demucs.scan64.prepare")?;
-        let load = release.load_bytes().map_err(|e| e.to_string())?;
-        let run_extra = release.run_bytes().map_err(|e| e.to_string())?;
-        let run_min =
-            bounded(&[run_extra, INPUT_BYTES, OUTPUT_BYTES]).map_err(|e| e.to_string())?;
-        if ceiling > MAX_PAYLOAD_BYTES
-            || load > ceiling
-            || !(run_min..=ceiling).contains(&run_limit)
-        {
-            return Err("HTDemucs Scan64 complete phase bounds exceed the admitted ceiling".into());
-        }
         let session =
             super::inline_model::with_read_only(path, release.graph_bytes, &context, |graph| {
                 if trial_ort::sha256(graph, || context.check())? != release.graph_sha256 {
@@ -313,8 +256,8 @@ impl CpuModel {
         Ok(Self {
             session,
             context,
-            run_extra,
-            run_limit,
+            run_extra: 0,
+            run_limit: None,
         })
     }
 
@@ -428,15 +371,17 @@ impl CpuModel {
         }
         let context = self.context.clone();
         let cancelled = || context.cancelled();
-        let planned = offline::Workspace::planned_payload_bytes(
-            input.len() / 2,
-            std::slice::from_ref(model),
-            self.run_extra,
-            &cancelled,
-        )
-        .map_err(|e| e.to_string())?;
-        if planned > self.run_limit {
-            return Err("offline HTDemucs payload exceeds its admitted run extent".into());
+        if let Some(run_limit) = self.run_limit {
+            let planned = offline::Workspace::planned_payload_bytes(
+                input.len() / 2,
+                std::slice::from_ref(model),
+                self.run_extra,
+                &cancelled,
+            )
+            .map_err(|e| e.to_string())?;
+            if planned > run_limit {
+                return Err("offline HTDemucs payload exceeds its admitted run extent".into());
+            }
         }
         let mut work = offline::Workspace::new(
             input.len() / 2,
@@ -623,7 +568,7 @@ mod tests {
                 load_extra: 0,
                 run_extra: 0,
             },
-            MAX_PAYLOAD_BYTES,
+            DENSE_TRIAL_PAYLOAD_BYTES,
             &Context::new(None),
             |_, _| panic!("unadmitted candidate reached ORT bootstrap"),
         );

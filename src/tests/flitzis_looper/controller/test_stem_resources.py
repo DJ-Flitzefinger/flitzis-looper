@@ -7,9 +7,6 @@ import pytest
 
 from flitzis_looper.controller.stem_resources import StemResourceError, StemResourceGuard
 
-_MIB = 1024**2
-_GIB = 1024**3
-
 
 @dataclass(slots=True)
 class _Clock:
@@ -20,17 +17,18 @@ class _Clock:
 
 
 def _headroom(
-    *, caller: int = 4 * _GIB, system: int = 4 * _GIB, physical: int = _GIB
+    *, caller: int = 1, system: int = 1, physical: int = 1, low_memory: int = 0
 ) -> dict[str, int]:
     return {
         "available_commit": caller,
         "system_available_commit_bytes": system,
         "available_physical": physical,
+        "low_memory": low_memory,
     }
 
 
-def test_initial_admission_accepts_exact_commit_and_physical_floors() -> None:
-    sample = Mock(return_value=_headroom(caller=2 * _GIB, system=2 * _GIB, physical=512 * _MIB))
+def test_initial_admission_accepts_positive_headroom_without_os_pressure() -> None:
+    sample = Mock(return_value=_headroom())
     guard = StemResourceGuard(sample, _Clock())
     assert not guard.current.allowed
     sample.assert_not_called()
@@ -44,39 +42,27 @@ def test_initial_admission_accepts_exact_commit_and_physical_floors() -> None:
 
 
 @pytest.mark.parametrize(
-    ("metric", "initial_floor", "recovery_floor"),
-    [
-        ("available_commit", 2 * _GIB, 3 * _GIB),
-        ("system_available_commit_bytes", 2 * _GIB, 3 * _GIB),
-        ("available_physical", 512 * _MIB, 768 * _MIB),
-    ],
+    "metric", ["available_commit", "system_available_commit_bytes", "available_physical"]
 )
-def test_each_low_headroom_channel_latches_until_its_inclusive_recovery_floor(
-    metric: str, initial_floor: int, recovery_floor: int
-) -> None:
+def test_exhausted_headroom_stops_work_and_recovers_when_positive(metric: str) -> None:
     clock = _Clock()
-    image = _headroom()
-    image[metric] = initial_floor - 1
-    sample = Mock(return_value=image)
+    sample = Mock(return_value=_headroom() | {metric: 0})
     guard = StemResourceGuard(sample, clock)
     decision = guard.admission()
     assert decision.state == "pressure"
     assert not decision.allowed
     assert decision.message == "Waiting for available memory"
-    for amount in (initial_floor, recovery_floor - 1):
-        clock.now += 0.25
-        sample.return_value = _headroom() | {metric: amount}
-        assert not guard.admission().allowed
-        # Admission pressure alone does not terminate an already active command.
-        assert guard.command_stop_reason() is None
+    assert guard.command_stop_reason() == "resource_pressure"
+
     clock.now += 0.25
-    sample.return_value = _headroom() | {metric: recovery_floor}
+    sample.return_value = _headroom()
     assert guard.admission().allowed
+    assert guard.command_stop_reason() is None
     guard.entry()
 
 
 @pytest.mark.parametrize("error", [OSError("query denied"), ValueError("bad query geometry")])
-def test_query_failure_blocks_new_work_and_requires_recovery_headroom(
+def test_query_failure_blocks_new_work_until_a_clear_observation(
     error: OSError | ValueError,
 ) -> None:
     clock = _Clock()
@@ -93,10 +79,7 @@ def test_query_failure_blocks_new_work_and_requires_recovery_headroom(
     # Neither a zero image nor an unlimited image may replace a failed query.
     assert guard.current.state == "unavailable"
     sample.side_effect = None
-    sample.return_value = _headroom(caller=2 * _GIB, system=2 * _GIB, physical=512 * _MIB)
-    clock.now += 0.25
-    assert guard.admission().state == "pressure"
-    sample.return_value = _headroom(caller=3 * _GIB, system=3 * _GIB, physical=768 * _MIB)
+    sample.return_value = _headroom()
     clock.now += 0.25
     assert guard.admission().allowed
 
@@ -106,7 +89,7 @@ def test_one_guard_shares_cache_across_admission_status_and_active_monitoring() 
     sample = Mock(return_value=_headroom())
     guard = StemResourceGuard(sample, clock)
     initial = guard.admission()
-    sample.return_value = _headroom(caller=2 * _GIB - 1)
+    sample.return_value = _headroom(low_memory=1)
     for now in (10.0, 10.125, 10.249):
         clock.now = now
         assert guard.current is initial
@@ -116,16 +99,16 @@ def test_one_guard_shares_cache_across_admission_status_and_active_monitoring() 
     clock.now = 10.25
     assert guard.admission().state == "pressure"
     assert sample.call_count == 2
-    assert guard.command_stop_reason() is None
+    assert guard.command_stop_reason() == "resource_pressure"
     assert sample.call_count == 2
 
 
-def test_worker_entry_forces_fresh_query_and_shares_its_recovery_latch() -> None:
+def test_worker_entry_forces_fresh_query_and_publishes_its_observation() -> None:
     clock = _Clock()
     sample = Mock(return_value=_headroom())
     guard = StemResourceGuard(sample, clock)
     assert guard.admission().allowed
-    sample.return_value = _headroom(system=2 * _GIB - 1)
+    sample.return_value = _headroom(system=0)
     clock.now = 10.001
     assert guard.admission().allowed
     with pytest.raises(StemResourceError, match="resource_pressure") as refused:
@@ -135,33 +118,22 @@ def test_worker_entry_forces_fresh_query_and_shares_its_recovery_latch() -> None
     assert guard.current.state == "pressure"
     assert not guard.admission().allowed
     assert sample.call_count == 2
-    sample.return_value = _headroom(caller=2 * _GIB, system=2 * _GIB, physical=512 * _MIB)
-    with pytest.raises(StemResourceError, match="resource_pressure"):
-        guard.entry()
-    sample.return_value = _headroom(caller=3 * _GIB, system=3 * _GIB, physical=768 * _MIB)
+    sample.return_value = _headroom()
     guard.entry()
     assert guard.admission().allowed
-    assert sample.call_count == 4
+    assert sample.call_count == 3
 
 
-@pytest.mark.parametrize(
-    ("metric", "critical_floor"),
-    [
-        ("available_commit", 512 * _MIB),
-        ("system_available_commit_bytes", 512 * _MIB),
-        ("available_physical", 128 * _MIB),
-    ],
-)
-def test_active_command_stops_at_inclusive_critical_floor_but_not_ordinary_pressure(
-    metric: str, critical_floor: int
-) -> None:
+def test_os_low_memory_signal_stops_work_with_positive_measured_headroom() -> None:
     clock = _Clock()
-    sample = Mock(return_value=_headroom() | {metric: critical_floor + 1})
+    headroom = 4 * 1024**3
+    image = _headroom(caller=headroom, system=headroom, physical=headroom)
+    sample = Mock(return_value=image)
     guard = StemResourceGuard(sample, clock)
-    assert not guard.admission().allowed
+    assert guard.admission().allowed
     assert guard.command_stop_reason() is None
     clock.now += 0.25
-    sample.return_value = _headroom() | {metric: critical_floor}
+    sample.return_value = image | {"low_memory": 1}
     assert guard.command_stop_reason() == "resource_pressure"
     assert not guard.admission().allowed
     error = guard.failure("resource_pressure")
@@ -201,9 +173,9 @@ def test_valid_low_observation_resets_unknown_deadline_without_opening_admission
     assert guard.command_stop_reason() is None
     clock.now = 10.75
     sample.side_effect = None
-    sample.return_value = _headroom(caller=_GIB)
+    sample.return_value = _headroom(low_memory=1)
     assert guard.admission().state == "pressure"
-    assert guard.command_stop_reason() is None
+    assert guard.command_stop_reason() == "resource_pressure"
     clock.now = 11.0
     sample.side_effect = ValueError("new invalid query")
     assert guard.command_stop_reason() is None

@@ -126,6 +126,15 @@ def _configure_windows_kernel() -> ctypes.WinDLL:
         wintypes.DWORD,
     ]
     kernel.K32GetPerformanceInfo.restype = wintypes.BOOL
+    kernel.CreateMemoryResourceNotification.argtypes = [ctypes.c_int]
+    kernel.CreateMemoryResourceNotification.restype = wintypes.HANDLE
+    kernel.QueryMemoryResourceNotification.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    kernel.QueryMemoryResourceNotification.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
     return kernel
 
 
@@ -192,3 +201,24 @@ def host_memory_snapshot() -> dict[str, int] | None:
     if os.name != "nt":
         return None
     return windows_host_memory_snapshot(_windows_kernel())
+
+
+def stem_memory_snapshot() -> dict[str, int] | None:
+    """Read host headroom and the system-wide Windows low-memory signal."""
+    if os.name != "nt":
+        return None
+    kernel = _windows_kernel()
+    image = windows_host_memory_snapshot(kernel)
+    # LowMemoryResourceNotification. Each sample closes its own handle.
+    handle = kernel.CreateMemoryResourceNotification(0)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    low_memory = wintypes.BOOL()
+    try:
+        if not kernel.QueryMemoryResourceNotification(handle, ctypes.byref(low_memory)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        closed = kernel.CloseHandle(handle)
+    if not closed:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return image | {"low_memory": int(bool(low_memory.value))}

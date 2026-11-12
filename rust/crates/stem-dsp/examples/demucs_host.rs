@@ -1,7 +1,7 @@
 //! Nonneural host-arithmetic bridge. Supervisor owns regular files, complete
 //! process settlement and last readers. No productive execution receipt.
 use flitzis_stem_dsp::demucs::{
-    BINS, Error, MAX_PAYLOAD_BYTES,
+    BINS, Error,
     host::{Chunk, Statistics, Track, TrackWorkspace},
     reduction::{CpuProfile, WORKING_BYTES as REDUCTION_WORKING_BYTES},
 };
@@ -12,9 +12,6 @@ use std::{
 
 fn payload(len: usize) -> Result<Vec<f32>, Error> {
     let bytes = len.checked_mul(4).ok_or(Error::Geometry)?;
-    if bytes > MAX_PAYLOAD_BYTES {
-        return Err(Error::Geometry);
-    }
     let mut values = Vec::new();
     values
         .try_reserve_exact(len)
@@ -90,7 +87,7 @@ fn cpu_reduction(a: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|bytes| bytes.checked_add(additional))
             .and_then(|bytes| bytes.checked_add(REDUCTION_WORKING_BYTES))
             .and_then(|bytes| bytes.checked_add(len.checked_mul(size_of::<f32>())?))
-            .is_none_or(|bytes| bytes > MAX_PAYLOAD_BYTES)
+            .is_none()
     {
         return Err(Error::Geometry.into());
     }
@@ -172,10 +169,8 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 || (matches!(a[0].as_str(), "branch-reference" | "cli-reference")
                     && a.len() == 5) =>
         {
-            // Bound the simultaneous bridge input, normalized and restored copies.
-            if len.checked_mul(12).is_none_or(|v| v > MAX_PAYLOAD_BYTES) {
-                return Err(Error::Geometry.into());
-            }
+            len.checked_mul(2 * size_of::<f32>())
+                .ok_or(Error::Geometry)?;
             let input = read(len)?;
             let stats = if a.len() == 5 {
                 Statistics::from_reference(a[3].parse()?, a[4].parse()?)?
@@ -206,13 +201,9 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let out_len = channels
                 .checked_mul(chunk.training_frames)
                 .ok_or(Error::Geometry)?;
-            if len
-                .checked_add(out_len)
-                .and_then(|v| v.checked_mul(4))
-                .is_none_or(|v| v > MAX_PAYLOAD_BYTES)
-            {
-                return Err(Error::Geometry.into());
-            }
+            len.checked_add(out_len)
+                .and_then(|v| v.checked_mul(size_of::<f32>()))
+                .ok_or(Error::Geometry)?;
             let input = read(len)?;
             let mut out = payload(out_len)?;
             chunk.prepare_into(&input, channels, &mut out, &|| false)?;

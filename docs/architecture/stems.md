@@ -104,19 +104,16 @@ abort/forced tree retirement have a finite tail: this is not zero-overlap or
 device-deadline proof. A waiting job reports **Waiting for background
 resources** rather than a completed execution device.
 
-On Windows, before child activation an enforced Job commit ceiling is promised
-on the shared Native host ledger. It deducts all outstanding Native promises and
-retains the original 2 GiB commit / 512 MiB physical admission floors. The ceiling
-uses half of current post-floor, post-promise headroom, with no new whole-track
-size ceiling. The other half covers the deliberate actual/prospective double
-charge, so a fully allocated child still leaves the original floor margin for
-new resident/control work. It is a
-resource budget, not a model-memory estimate or a reservation against unrelated
-processes. Actual child commitment is conservatively double charged until the
-tree and both output readers finish; conversion receives its own existing bounded
-promise afterward. The original 3 GiB recovery and 512 MiB critical commit guards
-remain. Recording finalization keeps its independent existing owner and does not
-wait behind separator inference.
+On Windows, the stem guard samples caller and system commit, physical memory
+and the OS low-memory notification. An active low-memory signal or exhausted
+headroom blocks admission and stops active stem commands through their existing
+cancellation and retirement path. The stem launcher assigns the suspended child
+to a kill-on-close Job without a RAM or commit ceiling. The job and both output
+readers settle before the original owner releases its scratch or source.
+Alignment still promises the concrete conversion block against measured
+capacity and outstanding Native promises on the shared ledger. Recording
+finalization keeps its independent existing owner and does not wait behind
+separator inference.
 
 The shared Beat/stem worker launcher requires owned process-tree supervision: a
 Windows Job or the private Linux broker. Other platforms, including macOS,

@@ -45,8 +45,8 @@ unsafe extern "system" {
 
 /// Hold a local, non-reparse file of the exact extent against writes and deletion.
 pub fn open(path: &Path, extent: usize, context: &Context) -> Result<OwnedFile, String> {
-    if !path.is_absolute() || extent == 0 {
-        return Err("expected an absolute path and nonempty ONNX graph".into());
+    if !path.is_absolute() || !(1..=isize::MAX as usize).contains(&extent) {
+        return Err("expected an absolute path and representable nonempty ONNX graph".into());
     }
     let file = OpenOptions::new()
         .read(true)

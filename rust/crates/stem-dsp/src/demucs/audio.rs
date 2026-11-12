@@ -4,17 +4,16 @@
 //! `ResampleFrac`/`core.sinc`. Independent f32 arithmetic, not a bitwise promise
 //! about Torch's platform-specific reductions or trigonometric dispatch.
 //! Positive rates through 768 kHz and nonempty finite planar `[batch,channel,time]`
-//! inputs are supported when the checked logical payload fits 512 MiB. Very
-//! large coprime ratios can exceed that bound. Empty/zero-channel/nonfinite input
-//! is deliberately refused. This is not a decoder, FFmpeg SRC, learned model,
-//! productive binding, whole-process budget or runtime admission certificate.
+//! inputs are supported with checked geometry and fallible allocation. Large
+//! coprime ratios can require large filter kernels. Empty, zero-channel and
+//! nonfinite inputs are refused.
 //!
 //! Calls are synchronous: hold immutable source readers, output and admission
 //! through actual return. Any error invalidates ALL output, including its written
 //! prefix. Return is not process/tree/reader END. Constructors allocate fallibly;
 //! execution allocates nothing and reusable scratch is overwritten on every call.
 
-use super::{BLOCK, Error, MAX_PAYLOAD_BYTES, checkpoint, finite, zeros};
+use super::{BLOCK, Error, checkpoint, finite, zeros};
 
 pub const MAX_RATE: u32 = 768_000;
 
@@ -27,11 +26,7 @@ fn payload(parts: &[usize]) -> Result<usize, Error> {
         .iter()
         .try_fold(0usize, |sum, &n| sum.checked_add(n))
         .ok_or(Error::Geometry)?;
-    let bytes = product(floats, size_of::<f32>())?;
-    if bytes > MAX_PAYLOAD_BYTES {
-        return Err(Error::Geometry);
-    }
-    Ok(bytes)
+    product(floats, size_of::<f32>())
 }
 
 /// All leading dimensions flattened to batches; channel and time stay distinct.
@@ -526,7 +521,8 @@ mod tests {
         );
         assert!(ResampleGeometry::new(17, 2, 44_100, 48_000, both).is_err());
         assert!(ResampleGeometry::new(usize::MAX, 2, 44_100, 48_000, Options::default()).is_err());
-        assert!(ResampleGeometry::new(1, 1, 767_999, 768_000, Options::default()).is_err());
+        let coprime = ResampleGeometry::new(1, 1, 16_001, 16_003, Options::default()).unwrap();
+        assert!(coprime.payload_bytes() > 512 * 1024 * 1024);
         assert!(ResampleGeometry::new(1, 1, 0, 44_100, Options::default()).is_err());
         assert!(ResampleGeometry::new(1, 1, MAX_RATE + 1, 44_100, Options::default()).is_err());
         assert!(Channels::new(1, 1, 2, 3).is_err());
@@ -536,11 +532,14 @@ mod tests {
         let expansion = Channels::new(20_000_000, 1, 1, 5).unwrap();
         let g = ConversionGeometry::new(expansion, 44_100, 44_100, both).unwrap();
         assert_eq!(g.payload_bytes(), 480_000_000);
-        assert!(ConversionGeometry::new(expansion, 48_000, 44_100, Options::default()).is_err());
+        let expanded =
+            ConversionGeometry::new(expansion, 48_000, 44_100, Options::default()).unwrap();
+        assert!(expanded.payload_bytes() > 512 * 1024 * 1024);
         let select = Channels::new(20_000_000, 1, 4, 2).unwrap();
         assert!(select.payload_bytes().is_ok());
         assert!(ResampleGeometry::new(20_000_000, 2, 96_000, 44_100, Options::default()).is_ok());
-        assert!(ConversionGeometry::new(select, 96_000, 44_100, Options::default()).is_err());
+        let selected = ConversionGeometry::new(select, 96_000, 44_100, Options::default()).unwrap();
+        assert!(selected.payload_bytes() > 512 * 1024 * 1024);
     }
 
     #[test]

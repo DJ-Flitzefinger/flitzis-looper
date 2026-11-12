@@ -609,7 +609,7 @@ fn productive_finite_startup_preserves_absolute_metadata_and_matches_original_pc
 
 #[cfg(windows)]
 #[test]
-fn allocated_child_budget_retains_real_cold_load_public_start_pcm_and_stop_headroom() {
+fn allocated_stem_child_retains_real_cold_load_public_start_pcm_and_stop() {
     use pyo3::prelude::*;
     use pyo3::types::PyModule;
     use std::ffi::CString;
@@ -646,18 +646,12 @@ fn allocated_child_budget_retains_real_cold_load_public_start_pcm_and_stop_headr
             c"stem_budget_control_probe",
         )
         .unwrap()
-        .call_method1(
-            "start",
-            (
-                py.get_type::<super::stem_conversion::OfflineChildMemoryReservation>(),
-                directory.path().to_string_lossy().as_ref(),
-            ),
-        )
+        .call_method1("start", (directory.path().to_string_lossy().as_ref(),))
         .unwrap()
         .unbind()
     })));
     let charged = super::resident_host_memory::pending_bytes().unwrap();
-    assert!(charged > baseline + 2048 * 1024 * 1024);
+    assert_eq!(charged, baseline);
     let source = directory.path().join("cold.wav");
     let mono = wav(&source, 48_000);
     let mut engine = AudioEngine::new().unwrap();

@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sys
 from pathlib import Path
 from random import SystemRandom
 from tempfile import TemporaryDirectory
@@ -19,7 +21,6 @@ from flitzis_looper.controller.stem_generation import (
 )
 from flitzis_looper.controller.stem_process import (
     NATIVE_DEMUCS_EXECUTABLE,
-    NATIVE_DEMUCS_LIMIT,
     run_stem_command,
     stem_command_checkpoint,
 )
@@ -57,24 +58,20 @@ def _approved_release() -> _ReleaseIdentity:
     _require(os.name == "nt", "Native HTDemucs CPU requires Windows")
     raw, value = _read_approval(_RELEASE)
     if not isinstance(value, dict):
-        msg = "The pinned HTDemucs learned Scan64 graph and phase admission are unavailable"
+        msg = "The pinned HTDemucs learned Scan64 graph is unavailable"
         raise StemGenerationError(msg)
-    if set(value) != {
-        "graph_bytes",
-        "graph_sha256",
-        "trace_sha256",
-        "attention_sha256",
-        "load_extra_bytes",
-        "run_extra_bytes",
-    } or not all(
-        type(value[key]) is int and value[key] > 0
-        for key in (
+    if (
+        set(value)
+        != {
             "graph_bytes",
-            "load_extra_bytes",
-            "run_extra_bytes",
-        )
+            "graph_sha256",
+            "trace_sha256",
+            "attention_sha256",
+        }
+        or type(value["graph_bytes"]) is not int
+        or not 0 < value["graph_bytes"] <= sys.maxsize
     ):
-        msg = "Native HTDemucs release phase admission is invalid"
+        msg = "Native HTDemucs release extent is invalid"
         raise StemGenerationError(msg)
     graph, trace, attention = (
         value[key]
@@ -165,6 +162,7 @@ def _decode(encoder: Path, source: Path, pcm: Path) -> tuple[int, int, int]:
     ):
         msg = "Native HTDemucs CPU source channel count or rate is outside its supported range"
         raise StemGenerationError(msg)
+    _require(shutil.disk_usage(pcm.parent).free > 0, "No disk space for HTDemucs source PCM")
     _run(
         ffmpeg_command([
             str(encoder),
@@ -185,8 +183,6 @@ def _decode(encoder: Path, source: Path, pcm: Path) -> tuple[int, int, int]:
             "pcm_f32le",
             "-f",
             "f32le",
-            "-fs",
-            str(NATIVE_DEMUCS_LIMIT),
             str(pcm),
         ]),
         pcm.parent,
@@ -195,8 +191,8 @@ def _decode(encoder: Path, source: Path, pcm: Path) -> tuple[int, int, int]:
     extent = pcm.stat().st_size
     frames, remainder = divmod(extent, channels * 4)
     _require(
-        frames > 0 and remainder == 0 and extent < NATIVE_DEMUCS_LIMIT,
-        "HTDemucs source PCM is incomplete or exceeds the staging bound",
+        frames > 0 and remainder == 0 and extent <= sys.maxsize,
+        "HTDemucs source PCM is incomplete or its byte extent is unrepresentable",
     )
     return rate, channels, frames
 
@@ -212,12 +208,11 @@ def _outputs(stdout: bytes, expected: dict[str, object]) -> tuple[int, dict[str,
     loaded = runtime.get("loaded_package") if isinstance(runtime, dict) else None
     package = runtime.get("declared_package") if isinstance(runtime, dict) else None
     _require(
-        set(receipt) == {*expected, "frames", "job_bytes", "outputs", "runtime"}
+        set(receipt) == {*expected, "frames", "job", "outputs", "runtime"}
         and type(frames) is int
-        and 0 < frames <= NATIVE_DEMUCS_LIMIT // (8 * len(_SOURCES))
+        and 0 < frames <= sys.maxsize // (8 * len(_SOURCES))
         and all(receipt.get(key) == value for key, value in expected.items())
-        and type(receipt["job_bytes"]) is int
-        and 0 < receipt["job_bytes"] <= NATIVE_DEMUCS_LIMIT
+        and receipt["job"] == "windows-owned"
         and isinstance(runtime, dict)
         and runtime.get("runtime_version") == "1.24.4"
         and runtime.get("ort_api") == 24
@@ -249,6 +244,10 @@ def _encode(encoder: Path, scratch: Path, frames: int, outputs: dict[str, str]) 
         [(digest, size) for _, digest, size in guard.witnesses()]
         == [(outputs[name], frames * 8) for name in _SOURCES],
         "Native HTDemucs output PCM changed after the worker exited",
+    )
+    _require(
+        shutil.disk_usage(scratch).free >= frames * 4 * len(paths),
+        "Insufficient disk space for HTDemucs WAV output",
     )
     for name, raw in zip(_SOURCES, paths, strict=True):
         wav = scratch / f"{name}.wav"
@@ -330,7 +329,7 @@ def _separate(
     return _outputs(
         stdout,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "device": "cpu",
             "graph_sha256": release.graph_sha256,
             "trace_sha256": release.trace_sha256,

@@ -28,8 +28,6 @@ const PAD: usize = HOP / 2 * 3;
 const TRIM: usize = FFT / 2 + PAD;
 const BLOCK: usize = 4096;
 const MAX_SCRATCH: usize = FFT * 4;
-/// Logical simultaneous PCM, CaC and core-vector ceiling, not process admission.
-pub const MAX_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
 const MAX_WORKING_BYTES: usize = (2 * (FFT + MAX_SCRATCH) * 2 + 3 * FFT) * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,9 +99,6 @@ impl Geometry {
             .and_then(|n| n.checked_mul(4))
             .and_then(|n| n.checked_add(MAX_WORKING_BYTES))
             .ok_or(Error::Geometry)?;
-        if payload_bytes > MAX_PAYLOAD_BYTES {
-            return Err(Error::Geometry);
-        }
         Ok(Self {
             frames,
             lanes,
@@ -396,7 +391,8 @@ mod tests {
         assert!(Geometry::new(0, 2, RATE).is_err());
         assert!(Geometry::new(1, 0, RATE).is_err());
         assert!(Geometry::new(343_980, 2, 48_000).is_err());
-        assert!(Geometry::new(100_000_000, 2, RATE).is_err());
+        let large = Geometry::new(20_000_000, 2, RATE).unwrap();
+        assert!(large.payload_bytes() > 512 * 1024 * 1024);
         assert!(Geometry::new(705_601, 2, RATE).is_ok());
     }
 

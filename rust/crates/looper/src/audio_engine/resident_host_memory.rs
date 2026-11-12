@@ -35,7 +35,7 @@ impl HostHeadroom {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostAdmissionError {
     #[error(
-        "[resident_memory_pressure] resident allocation needs {requested_bytes} bytes with {pending_bytes} pending and {available_bytes} host bytes available after reserve"
+        "[resident_memory_pressure] resident allocation needs {requested_bytes} bytes with {pending_bytes} pending and {available_bytes} host bytes available for the allocation"
     )]
     Pressure {
         requested_bytes: u64,
@@ -52,8 +52,7 @@ struct Promises {
 }
 
 impl Promises {
-    fn admit(&mut self, bytes: u64, image: HostHeadroom) -> Result<(), HostAdmissionError> {
-        let available = image.allowance();
+    fn admit(&mut self, bytes: u64, available: u64) -> Result<(), HostAdmissionError> {
         let total = self.bytes.checked_add(bytes).ok_or_else(|| {
             HostAdmissionError::Unavailable("resident allocation promise overflow".into())
         })?;
@@ -121,7 +120,7 @@ impl HostReservation {
                 available_bytes: image.allowance(),
             });
         }
-        state.admit(bytes, image)?;
+        state.admit(bytes, image.allowance())?;
         drop(state);
         Ok((Self { gate, bytes }, bytes as usize))
     }
@@ -130,13 +129,24 @@ impl HostReservation {
         bytes: usize,
         query: impl FnOnce() -> Result<HostHeadroom, String>,
     ) -> Result<Self, HostAdmissionError> {
-        Self::reserve_on(promises().clone(), bytes, query)
+        Self::reserve_on(promises().clone(), bytes, || {
+            query().map(HostHeadroom::allowance)
+        })
+    }
+
+    /// Promise the conversion's concrete block against measured capacity and
+    /// outstanding audio promises. This uses the existing shared ledger.
+    #[cfg(windows)]
+    pub(super) fn reserve_conversion(bytes: usize) -> Result<Self, HostAdmissionError> {
+        Self::reserve_on(promises().clone(), bytes, || {
+            host_headroom().map(|image| image.available_physical.min(image.available_commit()))
+        })
     }
 
     fn reserve_on(
         gate: Arc<Mutex<Promises>>,
         bytes: usize,
-        query: impl FnOnce() -> Result<HostHeadroom, String>,
+        available: impl FnOnce() -> Result<u64, String>,
     ) -> Result<Self, HostAdmissionError> {
         let bytes = u64::try_from(bytes).map_err(|_| {
             HostAdmissionError::Unavailable("resident allocation extent overflow".into())
@@ -147,7 +157,7 @@ impl HostReservation {
             })?;
             // Query while promises are serialized. A later worker cannot use
             // the same observed headroom before this promise becomes visible.
-            state.admit(bytes, query().map_err(HostAdmissionError::Unavailable)?)?;
+            state.admit(bytes, available().map_err(HostAdmissionError::Unavailable)?)?;
         }
         Ok(Self { gate, bytes })
     }
@@ -291,9 +301,9 @@ mod tests {
     fn prospective_long_ranges_use_real_headroom_without_gigabyte_cutoff() {
         let mut state = Promises::default();
         let bytes = 3 * 1024 * MIB;
-        state.admit(bytes, headroom(bytes)).unwrap();
+        state.admit(bytes, headroom(bytes).allowance()).unwrap();
         assert_eq!(state.bytes, bytes);
-        assert!(state.admit(1, headroom(bytes)).is_err());
+        assert!(state.admit(1, headroom(bytes).allowance()).is_err());
         assert_eq!(state.bytes, bytes);
     }
 
@@ -313,11 +323,11 @@ mod tests {
                 ..headroom(1024)
             },
         ] {
-            assert!(Promises::default().admit(1, image).is_err());
+            assert!(Promises::default().admit(1, image.allowance()).is_err());
         }
         assert!(
             Promises { bytes: u64::MAX }
-                .admit(1, headroom(1024))
+                .admit(1, headroom(1024).allowance())
                 .is_err()
         );
     }
@@ -326,13 +336,19 @@ mod tests {
     fn shared_promises_release_only_committed_or_terminal_bytes_and_reuse_needs_no_query() {
         let gate = Arc::new(Mutex::new(Promises::default()));
         let mut first =
-            HostReservation::reserve_on(gate.clone(), 600, || Ok(headroom(1000))).unwrap();
-        assert!(HostReservation::reserve_on(gate.clone(), 401, || Ok(headroom(1000))).is_err());
+            HostReservation::reserve_on(gate.clone(), 600, || Ok(headroom(1000).allowance()))
+                .unwrap();
+        assert!(
+            HostReservation::reserve_on(gate.clone(), 401, || Ok(headroom(1000).allowance()))
+                .is_err()
+        );
         let reuse = HostReservation::reserve_on(gate.clone(), 0, || panic!("reuse queried host"));
         assert!(reuse.is_ok());
         first.commit(200).unwrap();
         assert_eq!(gate.lock().unwrap().bytes, 400);
-        let second = HostReservation::reserve_on(gate.clone(), 600, || Ok(headroom(1000))).unwrap();
+        let second =
+            HostReservation::reserve_on(gate.clone(), 600, || Ok(headroom(1000).allowance()))
+                .unwrap();
         assert_eq!(gate.lock().unwrap().bytes, 1000);
         drop(first);
         assert_eq!(gate.lock().unwrap().bytes, 600);
@@ -348,7 +364,7 @@ mod tests {
     fn child_commit_ceiling_deducts_native_promises_and_retains_original_floors() {
         let gate = Arc::new(Mutex::new(Promises::default()));
         let old = HostReservation::reserve_on(gate.clone(), (1024 * MIB) as usize, || {
-            Ok(headroom(10 * 1024 * MIB))
+            Ok(headroom(10 * 1024 * MIB).allowance())
         })
         .unwrap();
         let query = || {
@@ -396,9 +412,10 @@ mod tests {
             },
         ] {
             let gate = Arc::new(Mutex::new(Promises::default()));
-            let old =
-                HostReservation::reserve_on(gate.clone(), (1024 * MIB) as usize, || Ok(image))
-                    .unwrap();
+            let old = HostReservation::reserve_on(gate.clone(), (1024 * MIB) as usize, || {
+                Ok(image.allowance())
+            })
+            .unwrap();
             let (child, bytes) =
                 HostReservation::child_ceiling_on(gate.clone(), usize::MAX, || Ok(image)).unwrap();
             let actual = bytes as u64;
@@ -410,7 +427,7 @@ mod tests {
             // The child remains fully promised while ALL of its ceiling is also
             // actual OS-accounted memory. Original resident floors still apply.
             let control = HostReservation::reserve_on(gate.clone(), (256 * MIB) as usize, || {
-                Ok(allocated_image)
+                Ok(allocated_image.allowance())
             })
             .unwrap();
             drop(control);

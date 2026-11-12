@@ -1,4 +1,8 @@
 //! Standalone HTDemucs CPU request. The App owns the enclosing Windows Job.
+// The App supplies stdout/stderr pipes. A console companion would join the
+// dedicated worker Job and invalidate its single-worker admission.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 #[cfg(windows)]
 #[allow(dead_code)]
 #[path = "../examples/beat_this_audio/invocation.rs"]
@@ -33,9 +37,10 @@ mod windows {
         trial_lifetime::{Context, retain_first},
     };
     use flitzis_stem_dsp::demucs::{
-        MAX_PAYLOAD_BYTES, RATE,
+        RATE,
         audio::{Channels, ConversionGeometry, Converter, Options},
         host::apply::{MAX_SHIFT, Model},
+        offline::Workspace,
         reduction::{CpuProfile, TORCH_GIT, TORCH_VERSION},
     };
     use sha2::{Digest, Sha256};
@@ -44,7 +49,7 @@ mod windows {
         ffi::{OsStr, c_void},
         fs::OpenOptions,
         io::{Read, Write},
-        os::windows::fs::OpenOptionsExt,
+        os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
         path::Path,
         ptr::null_mut,
         str::FromStr,
@@ -55,7 +60,7 @@ mod windows {
     const ORT_PACKAGE: &str = "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319";
     const BLOCK_FRAMES: usize = 4096;
     const PCM_BLOCK_BYTES: usize = BLOCK_FRAMES * 2 * size_of::<f32>();
-    const JOB_REQUIRED_FLAGS: u32 = 0x2000 | 0x0200; // KILL_ON_JOB_CLOSE, JOB_MEMORY
+    const JOB_KILL_ON_CLOSE: u32 = 0x2000;
     const JOB_EXTENDED_LIMITS: i32 = 9;
     const JOB_BASIC_ACCOUNTING: i32 = 1;
 
@@ -103,42 +108,78 @@ mod windows {
             size: u32,
             returned: *mut u32,
         ) -> i32;
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            available: *mut u64,
+            capacity: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
     }
 
-    fn job_ceiling() -> Result<usize, String> {
-        let requested = env::var("FLITZIS_NATIVE_HTDEMUCS_JOB_BYTES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| (1..=MAX_PAYLOAD_BYTES).contains(value))
-            .ok_or("HTDemucs requires the App's capped Job admission")?;
+    fn check_owned_job() -> Result<(), String> {
         let mut limits = JobLimits::default();
         let mut accounting = JobAccounting::default();
         // SAFETY: null means the current process's Job; each output buffer has
         // the correct documented layout and exact size for the information class.
-        let valid = unsafe {
-            QueryInformationJobObject(
+        let (class, error) = unsafe {
+            if QueryInformationJobObject(
                 null_mut(),
                 JOB_EXTENDED_LIMITS,
                 (&raw mut limits).cast(),
                 size_of::<JobLimits>() as u32,
                 null_mut(),
-            ) != 0
-                && QueryInformationJobObject(
-                    null_mut(),
-                    JOB_BASIC_ACCOUNTING,
-                    (&raw mut accounting).cast(),
-                    size_of::<JobAccounting>() as u32,
-                    null_mut(),
-                ) != 0
+            ) == 0
+            {
+                (JOB_EXTENDED_LIMITS, Some(std::io::Error::last_os_error()))
+            } else if QueryInformationJobObject(
+                null_mut(),
+                JOB_BASIC_ACCOUNTING,
+                (&raw mut accounting).cast(),
+                size_of::<JobAccounting>() as u32,
+                null_mut(),
+            ) == 0
+            {
+                (JOB_BASIC_ACCOUNTING, Some(std::io::Error::last_os_error()))
+            } else {
+                (0, None)
+            }
         };
-        if !valid
-            || limits.basic.flags & JOB_REQUIRED_FLAGS != JOB_REQUIRED_FLAGS
-            || limits.job_limit != requested
-            || accounting.active != 1
-        {
-            return Err("HTDemucs must run alone in its admitted Windows Job".into());
+        if let Some(error) = error {
+            return Err(format!("HTDemucs Windows Job query class {class}: {error}"));
         }
-        Ok(requested)
+        if limits.basic.flags & JOB_KILL_ON_CLOSE == 0 || accounting.active != 1 {
+            return Err(format!(
+                "HTDemucs must run alone in its admitted Windows Job (flags {:#x}, active {})",
+                limits.basic.flags, accounting.active
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_output_disk(output: &Path, bytes: usize) -> Result<(), String> {
+        let directory: Vec<u16> = output.as_os_str().encode_wide().chain([0]).collect();
+        let mut available = 0;
+        // SAFETY: directory is NUL-terminated and available is a writable u64.
+        if unsafe {
+            GetDiskFreeSpaceExW(
+                directory.as_ptr(),
+                &raw mut available,
+                null_mut(),
+                null_mut(),
+            )
+        } == 0
+        {
+            return Err(format!(
+                "HTDemucs output disk query: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if available < bytes as u64 {
+            return Err(format!(
+                "HTDemucs output needs {bytes} disk bytes; {available} available"
+            ));
+        }
+        Ok(())
     }
 
     fn argument<T: FromStr>(value: &OsStr, name: &str) -> Result<T, String> {
@@ -225,7 +266,7 @@ mod windows {
         let release = serde_json::from_str::<Option<Scan64Release>>(RELEASE)
             .map_err(|e| e.to_string())?
             .ok_or("HTDemucs learned Scan64 release is unavailable")?;
-        let ceiling = job_ceiling()?;
+        check_owned_job()?;
         let args: Vec<_> = env::args_os().skip(1).collect();
         let [
             pcm,
@@ -289,24 +330,27 @@ mod windows {
             .output_len()
             .checked_mul(SOURCES.len())
             .ok_or("HTDemucs output extent overflow")?;
-        let run_limit = release
-            .offline_bytes(output_frames, &model, &cancelled)
-            .map_err(|e| e.to_string())?;
-        let conversion_limit = release
-            .run_bytes()
-            .map_err(|e| e.to_string())?
-            .checked_add(conversion.payload_bytes())
-            .ok_or("HTDemucs conversion extent overflow")?;
-        if conversion_limit > ceiling {
-            return Err("HTDemucs source conversion exceeds its admitted ceiling".into());
-        }
+        let output_bytes = output_len
+            .checked_mul(size_of::<f32>())
+            .ok_or("HTDemucs output byte extent overflow")?;
+        Workspace::planned_payload_bytes(
+            output_frames,
+            std::slice::from_ref(&model),
+            0,
+            &cancelled,
+        )
+        .map_err(|e| e.to_string())?;
+        check_output_disk(output, output_bytes)?;
         let file = OpenOptions::new()
             .read(true)
             .share_mode(1)
             .open(pcm)
             .map_err(|e| e.to_string())?;
         let mut file = context.file(file, "demucs.source.close");
-        let pcm_extent = conversion.input_len() * 4;
+        let pcm_extent = conversion
+            .input_len()
+            .checked_mul(size_of::<f32>())
+            .ok_or("HTDemucs source PCM byte extent overflow")?;
         let info = file.metadata().map_err(|e| e.to_string())?;
         if !info.is_file() || info.len() != pcm_extent as u64 {
             return Err("HTDemucs source PCM extent differs".into());
@@ -330,19 +374,13 @@ mod windows {
             return Err("HTDemucs requires its pinned CPU ORT package".into());
         }
         let mut admission = None;
-        let mut core = CpuModel::load_scan64(
-            &root.join("htdemucs.onnx"),
-            &release,
-            ceiling,
-            run_limit,
-            &context,
-            || {
+        let mut core =
+            CpuModel::load_scan64(&root.join("htdemucs.onnx"), &release, &context, || {
                 let (runtime, environment) =
                     runtime::configure(Some((&manifest, ORT_MANIFEST)), &context)?;
                 admission = Some(runtime.ok_or("missing HTDemucs ORT admission")?);
                 runtime::commit(environment)
-            },
-        )?;
+            })?;
         let mut input = buffer(conversion.input_len())?;
         let mut digest = read_pcm(&mut *file, &mut input, channels, frames, &context);
         retain_first(&mut digest, file.complete());
@@ -373,12 +411,12 @@ mod windows {
             .ok_or("missing settled HTDemucs runtime")?
             .receipt()?;
         Ok(serde_json::json!({
-            "schema_version": 1, "device": "cpu", "graph_sha256": release.graph_sha256,
+            "schema_version": 2, "device": "cpu", "graph_sha256": release.graph_sha256,
             "trace_sha256": release.trace_sha256, "pcm_sha256": digest,
             "approval_sha256": format!("{:x}", Sha256::digest(RELEASE.as_bytes())),
             "source": {"rate": rate, "channels": channels, "frames": frames},
             "frames": output_frames, "overlap": overlap, "offsets": offsets,
-            "job_bytes": ceiling, "outputs": outputs, "runtime": runtime,
+            "job": "windows-owned", "outputs": outputs, "runtime": runtime,
         }))
     }
 }

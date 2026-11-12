@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import flitzis_looper_audio as native
 from flitzis_looper.analysis import process as analysis_process
-from flitzis_looper.controller import bs_roformer_generation, stem_artifacts, stem_process
+from flitzis_looper.controller import bs_roformer_generation, stem_artifacts
 from flitzis_looper.controller.bs_roformer_assets import CHECKPOINT_FILENAME, CONFIG_FILENAME
 from flitzis_looper.controller.processing_code import loaded_code_identity
 from flitzis_looper.controller.stem_generation import (
@@ -60,12 +60,13 @@ DEMUCS_PRODUCER_FILES = (
 def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
     """Name ordered executed host roles independently of optional encoder images."""
     package = Path(__file__).parent.parent
-    # The shared selector constructs both adapters for either request. These host
-    # roles are consulted even when only the Demucs child is selected.
+    # The shared selector constructs the default adapters before choosing a
+    # request route. Their consulted host declarations belong to either lineage.
     separator = (
         package / "controller" / "bs_roformer_generation.py",
         Path(bs_roformer_generation.verify_model_assets.__code__.co_filename),
         package / "bs_input_provenance.py",
+        package / "controller" / "native_demucs_cpu.py",
     )
     return (
         package / "controller" / "stem_artifacts.py",
@@ -180,13 +181,12 @@ def native_conversion_identity() -> tuple[str, str] | None:
     """Bind both executed Native bridges, without claiming full loaded-image attestation."""
     identity = native.stem_conversion_identity
     converter = getattr(stem_artifacts, "StemConversionReservation", None)
-    budget = getattr(stem_process, "OfflineChildMemoryReservation", None)
+    budget = getattr(analysis_process, "OfflineChildMemoryReservation", None)
     process_type = getattr(analysis_process, "PreparedWindowsProcess", None)
     process_identity = getattr(analysis_process, "offline_process_identity", None)
     if (
         converter is not native.StemConversionReservation
         or budget is not native.OfflineChildMemoryReservation
-        or budget is not getattr(analysis_process, "OfflineChildMemoryReservation", None)
         or not isinstance(identity, BuiltinFunctionType)
         or identity.__module__ != native.StemConversionReservation.__module__
     ):
