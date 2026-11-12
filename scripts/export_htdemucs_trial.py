@@ -24,7 +24,7 @@ from pathlib import Path
 from shutil import disk_usage
 from tempfile import TemporaryFile
 from threading import Lock
-from types import MethodType
+from types import FunctionType, MethodType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 if TYPE_CHECKING:
@@ -55,6 +55,7 @@ STATE_RUNTIME_PINS = {
     ),
 }
 ATTENTION_RUNTIME_PINS = {
+    "torch.nn.functional": "e409a97896241e0dfb8c23fbf1f09967ecf5e65ec9626aec0d97d9cc5d727d50",
     "torch._ops": "aed883c8a88051df15c7e8793f8dd1ff875e7b065c0f3ffede80113744e4104e",
     "torch.nn.modules.activation": (
         "3268980df05b7eeb49d2703f8723361823aebe6fc79e8b16c78afdacb0c38b1e"
@@ -224,6 +225,29 @@ class SpectralConvolutionAdmission:
     @property
     def backends(self) -> tuple[SpectralConvolutionBackend, ...]:
         return self.rewrite, self.first_k1, self.second_k1
+
+
+class CrossAttentionBackend(Enum):
+    """Independently budgeted CPU SDPA route for one cross direction."""
+
+    FLASH = 1
+    MATH = 0
+
+
+@dataclass(frozen=True)
+class EagerAttentionAdmission:
+    """The fixed native self route and caller-selected cross routes in both forwards."""
+
+    spectral_queries: CrossAttentionBackend
+    temporal_queries: CrossAttentionBackend
+
+    def __post_init__(self) -> None:
+        if any(
+            type(backend) is not CrossAttentionBackend
+            for backend in (self.spectral_queries, self.temporal_queries)
+        ):
+            msg = "unexpected HTDemucs cross-attention admission"
+            raise ValueError(msg)
 
 
 _phase_lock = Lock()
@@ -2529,8 +2553,8 @@ def native_attention_with_score(torch, owner: memoryview, tokens: int, func, arg
     return result
 
 
-def mapped_self_attention(torch, owner: memoryview, tokens: int):
-    """Keep the stock MHA entry point and intercept only its native score."""
+def native_self_attention(torch, tokens: int, native_score):
+    """Guard the stock native MHA entry before any projection or score."""
     aten = torch.ops.aten
     stock = torch.nn.MultiheadAttention.forward
 
@@ -2580,7 +2604,7 @@ def mapped_self_attention(torch, owner: memoryview, tokens: int):
                 msg = "unexpected HTDemucs native self-attention options"
                 raise ValueError(msg)
             seen = True
-            return native_attention_with_score(torch, owner, tokens, func, args)
+            return native_score(func, args, attention, query)
 
         with reference_dispatch_mode(dispatch):
             result = stock(attention, query, key, value, **options)
@@ -2592,19 +2616,229 @@ def mapped_self_attention(torch, owner: memoryview, tokens: int):
     return forward
 
 
+def mapped_self_attention(torch, owner: memoryview, tokens: int):
+    """Keep the stock MHA entry point and intercept only its native score."""
+
+    def mapped_score(func, args, _attention, _query):
+        return native_attention_with_score(torch, owner, tokens, func, args)
+
+    return native_self_attention(torch, tokens, mapped_score)
+
+
+def temporal_self_attention(torch):
+    """Require the native temporal route with the separately charged private score."""
+
+    def private_score(func, args, attention, query):
+        if args[11:12] not in {(), (True,)} or any(
+            actual._cdata != expected._cdata
+            for actual, expected in zip(
+                (*args[:3], *args[5:9]),
+                (query, query, query, *eager_attention_parameters(attention)),
+                strict=True,
+            )
+        ):
+            msg = "unexpected HTDemucs temporal native attention operands"
+            raise ValueError(msg)
+        return func(*args)
+
+    stock = native_self_attention(torch, TIME_TOKENS, private_score)
+
+    def forward(attention, query, key, value, **options):
+        check_eager_attention_input(torch, query, TIME_TOKENS)
+        check_eager_attention_module(torch, attention, options)
+        return stock(attention, query, key, value, **options)
+
+    return forward
+
+
+def eager_attention_parameters(attention):
+    return (
+        attention.in_proj_weight,
+        attention.in_proj_bias,
+        attention.out_proj.weight,
+        attention.out_proj.bias,
+    )
+
+
+def check_eager_attention_tensor(torch, tensor, geometry) -> None:
+    if type(tensor) not in {torch.Tensor, torch.nn.Parameter} or (
+        tensor.device.type,
+        tensor.dtype,
+        tensor.layout,
+        tensor.is_nested,
+        tensor.is_conj(),
+        tensor.is_neg(),
+        state_storage_geometry(tensor),
+    ) != ("cpu", torch.float32, torch.strided, False, False, False, geometry):
+        msg = "unexpected HTDemucs eager attention tensor"
+        raise ValueError(msg)
+
+
+def check_eager_attention_input(torch, tensor, tokens: int) -> None:
+    embed = HEADS * WIDTH
+    check_eager_attention_tensor(
+        torch, tensor, ((1, tokens, embed), (tokens * embed, embed, 1), 0, tokens * embed * 4)
+    )
+
+
+def check_eager_attention_runtime(torch) -> None:
+    check_reference_inference_dispatch(torch, "eager attention")
+    check_spectral_convolution_environment()
+    if (
+        torch.is_grad_enabled(),
+        torch.get_num_threads(),
+        torch.get_num_interop_threads(),
+        torch._C._get_cpu_capability(),
+        torch._C._get_fp32_precision_getter("mkldnn", "matmul"),
+        torch.get_float32_matmul_precision(),
+    ) != (False, 1, 1, "AVX512", "none", "highest"):
+        msg = "unexpected HTDemucs eager attention runtime"
+        raise ValueError(msg)
+
+
+def check_eager_attention_module(torch, attention, options) -> None:
+    check_eager_attention_runtime(torch)
+    if (
+        attention.training,
+        attention.batch_first,
+        attention._qkv_same_embed_dim,
+        attention.embed_dim,
+        attention.num_heads,
+        attention.bias_k is None,
+        attention.bias_v is None,
+        attention.add_zero_attn,
+        options.get("need_weights") is False,
+        options.get("key_padding_mask") is None,
+        options.get("attn_mask") is None,
+        options.get("is_causal", False) is False,
+        options.get("average_attn_weights", True) is True,
+    ) != (False, True, True, HEADS * WIDTH, HEADS, True, True, False, True, True, True, True, True):
+        msg = "unexpected HTDemucs eager attention module or options"
+        raise ValueError(msg)
+    embed = HEADS * WIDTH
+    for tensor, shape, strides in zip(
+        eager_attention_parameters(attention),
+        ((3 * embed, embed), (3 * embed,), (embed, embed), (embed,)),
+        ((embed, 1), (1,), (embed, 1), (1,)),
+        strict=True,
+    ):
+        check_eager_attention_tensor(torch, tensor, (shape, strides, 0, prod(shape) * 4))
+
+
+def eager_cross_sdpa(torch, queries: int, keys: int, backend: CrossAttentionBackend):
+    aten = torch.ops.aten
+    embed = HEADS * WIDTH
+    strides = (embed, WIDTH, embed, 1)
+
+    def sdpa(q, k, v, attn_mask, dropout_p, is_causal):
+        check_eager_attention_runtime(torch)
+        if attn_mask is not None or dropout_p != 0.0 or is_causal is not False:
+            msg = "unexpected HTDemucs cross SDPA options"
+            raise ValueError(msg)
+        for tensor, tokens, offset, elements in (
+            (q, queries, 0, queries * embed),
+            (k, keys, 0, 2 * keys * embed),
+            (v, keys, keys * embed, 2 * keys * embed),
+        ):
+            check_eager_attention_tensor(
+                torch, tensor, ((1, HEADS, tokens, WIDTH), strides, offset, elements * 4)
+            )
+        q_storage, k_storage, v_storage = (value.untyped_storage()._cdata for value in (q, k, v))
+        if k_storage != v_storage or q_storage == k_storage:
+            msg = "unexpected HTDemucs cross SDPA projection storage"
+            raise ValueError(msg)
+        selected = aten._fused_sdp_choice.default(q, k, v)
+        if selected != backend.value:
+            msg = f"HTDemucs cross SDPA selected {selected}, admission requires {backend.name}"
+            raise ValueError(msg)
+        # The pinned unmasked CPU composite calls these same operators. Invoke
+        # the selected operator directly so a second choice cannot switch routes.
+        if backend is CrossAttentionBackend.FLASH:
+            return aten._scaled_dot_product_flash_attention_for_cpu.default(q, k, v)[0]
+        return aten._scaled_dot_product_attention_math.default(q, k, v)[0]
+
+    return sdpa
+
+
+def eager_cross_attention(torch, queries: int, keys: int, backend: CrossAttentionBackend):
+    """Keep the pinned stock MHA projection code and bind its local SDPA call."""
+    functional = torch.nn.functional
+    projection = functional.multi_head_attention_forward
+    stock = torch.nn.MultiheadAttention.forward
+    guarded_projection = FunctionType(
+        projection.__code__,
+        {
+            **projection.__globals__,
+            "scaled_dot_product_attention": eager_cross_sdpa(torch, queries, keys, backend),
+        },
+        projection.__name__,
+        projection.__defaults__,
+        projection.__closure__,
+    )
+    guarded_projection.__kwdefaults__ = projection.__kwdefaults__
+    local_functional = SimpleNamespace(
+        _canonical_mask=functional._canonical_mask,
+        _none_or_dtype=functional._none_or_dtype,
+        multi_head_attention_forward=guarded_projection,
+    )
+    guarded_forward = FunctionType(
+        stock.__code__,
+        {**stock.__globals__, "F": local_functional},
+        stock.__name__,
+        stock.__defaults__,
+        stock.__closure__,
+    )
+    guarded_forward.__kwdefaults__ = stock.__kwdefaults__
+
+    def forward(attention, query, key, value, **options):
+        check_eager_attention_module(torch, attention, options)
+        if query is key or key is not value:
+            msg = "unexpected HTDemucs cross-attention aliases"
+            raise ValueError(msg)
+        check_eager_attention_input(torch, query, queries)
+        check_eager_attention_input(torch, key, keys)
+        return guarded_forward(attention, query, key, value, **options)
+
+    return forward
+
+
 @contextmanager
-def mapped_reference_attention(torch, model, output: Path):
-    """Use the same scratch extent for the three spectral sites in both forwards."""
+def mapped_reference_attention(torch, model, output: Path, admission: EagerAttentionAdmission):
+    """Guard the ten eager attention calls and reuse the spectral score extent."""
     attention_type = torch.nn.MultiheadAttention
-    layers = [model.crosstransformer.layers[index].self_attn for index in (0, 2, 4)]
-    if any(type(layer) is not attention_type or "forward" in vars(layer) for layer in layers):
-        msg = "unexpected HTDemucs spectral self-attention modules"
+    transformer = model.crosstransformer
+    spectral, temporal = transformer.layers, transformer.layers_t
+    spectral_self = [spectral[index].self_attn for index in (0, 2, 4)]
+    temporal_self = [temporal[index].self_attn for index in (0, 2, 4)]
+    spectral_cross = [spectral[index].cross_attn for index in (1, 3)]
+    temporal_cross = [temporal[index].cross_attn for index in (1, 3)]
+    sites = spectral_self + temporal_self + spectral_cross + temporal_cross
+    if len({id(layer) for layer in sites}) != 10 or any(
+        type(layer) is not attention_type or "forward" in vars(layer) for layer in sites
+    ):
+        msg = "unexpected HTDemucs eager attention modules"
         raise ValueError(msg)
     with mapped_attention_score(output, SPECTRAL_TOKENS) as owner, ExitStack() as restore:
-        forward = mapped_self_attention(torch, owner, SPECTRAL_TOKENS)
-        for layer in layers:
-            layer.forward = MethodType(forward, layer)
-            restore.callback(delattr, layer, "forward")
+        routes = (
+            (spectral_self, mapped_self_attention(torch, owner, SPECTRAL_TOKENS)),
+            (temporal_self, temporal_self_attention(torch)),
+            (
+                spectral_cross,
+                eager_cross_attention(
+                    torch, SPECTRAL_TOKENS, TIME_TOKENS, admission.spectral_queries
+                ),
+            ),
+            (
+                temporal_cross,
+                eager_cross_attention(
+                    torch, TIME_TOKENS, SPECTRAL_TOKENS, admission.temporal_queries
+                ),
+            ),
+        )
+        for layers, forward in routes:
+            for layer in layers:
+                layer.forward = MethodType(forward, layer)
+                restore.callback(delattr, layer, "forward")
         yield
 
 
@@ -3026,6 +3260,17 @@ def core_wrapper(
     return Core(model).eval()
 
 
+def check_mapped_reference_admission(
+    cpu_overlay: Path | None,
+    spectral: SpectralConvolutionAdmission | None,
+    attention: EagerAttentionAdmission | None,
+) -> None:
+    check_spectral_convolution_admission(cpu_overlay, spectral)
+    if type(attention) is not EagerAttentionAdmission:
+        msg = "mapped HTDemucs reference requires prior eager attention admission"
+        raise ValueError(msg)
+
+
 def capture_reference(
     checkpoint: Path,
     mix_path: Path,
@@ -3036,16 +3281,17 @@ def capture_reference(
     cpu_overlay: Path | None = None,
     mapped_state: tuple[Path, ModelStateBank] | None = None,
     spectral_admission: SpectralConvolutionAdmission | None = None,
+    attention_admission: EagerAttentionAdmission | None = None,
 ) -> ReferenceArtifacts:
     """Run the stock forward and check the extracted boundary in an admitted child.
 
     The caller owns admission from startup through process, file and pipe reader
     retirement and accepts these identities only after successful retirement.
     For mapped state, admission includes the exact backend at each spectral
-    convolution for both forwards, including any separately budgeted Slow2d.
+    convolution and cross-attention direction in both forwards.
     """
     if mapped_state is not None:
-        check_spectral_convolution_admission(cpu_overlay, spectral_admission)
+        check_mapped_reference_admission(cpu_overlay, spectral_admission, attention_admission)
     begin_phase(Phase.REFERENCE, admit)
     sources = source_files()
     torch = torch_producer(cpu_overlay)
@@ -3088,7 +3334,9 @@ def capture_reference(
     )
     with torch.inference_mode(), ExitStack() as reference:
         if mapped_state is not None:
-            reference.enter_context(mapped_reference_attention(torch, model, output))
+            reference.enter_context(
+                mapped_reference_attention(torch, model, output, attention_admission)
+            )
             reference.enter_context(
                 mapped_spectral_caller_gelu(
                     torch, model.decoder[-2], sources["demucs/hdemucs.py"], output

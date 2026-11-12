@@ -1404,8 +1404,18 @@ storage, and writes the value result into the packed Q slice. The score
 storage ends before output projection. The reusable file view remains owned
 through the comparison and is released after the last alias. The exact
 checkpoint-free stock and mapped outputs matched byte for byte with identical
-MKL dispatch parameters. Both cross directions selected the stock CPU Flash
-kernel in the geometry fixture.
+MKL dispatch parameters. The three temporal self-attention sites require the
+pinned native MHA entry before projection and retain the 57,802,752-byte
+private score. Each cross direction requires an explicit admission. The
+pinned projection produces FP32 Q/K/V with strides [512, 64, 512, 1],
+no mask or dropout, and default scaling. The live CPU selector must match
+the admitted Flash or Math route before the corresponding stock kernel
+runs. The gate invokes that kernel directly, so the dispatch cannot switch
+routes after the check. Both Flash directions matched the sealed stock
+outputs byte for byte. The separate Math fallback retains both
+115,605,504-byte scores, the 28,901,376-byte negative-infinity mask and the
+row reduction. The itemized fallback exceeded the former 512 MiB Job limit
+in both forward forecasts.
 
 Both mapped eager forwards release decoder skip and pre-transpose references
 after their last decoder call. The empty waveform decoder keeps the spectral
