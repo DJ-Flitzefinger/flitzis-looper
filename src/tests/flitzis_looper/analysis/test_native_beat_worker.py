@@ -6,9 +6,11 @@ import os
 import struct
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -19,9 +21,6 @@ from flitzis_looper.analysis.artifacts import NATIVE_MODEL
 from flitzis_looper.analysis.contracts import MonoPcmInput, WorkerLimits
 from flitzis_looper.analysis.execution import NATIVE_CUDA_PACKAGE_SHA
 from flitzis_looper.controller.stem_resources import StemResourceGuard
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native BeatThis uses Windows Jobs")
 
@@ -118,7 +117,7 @@ def test_native_checks_concrete_output_space_and_rechecks_while_suspended(
 
     def disk_usage(path: Path) -> SimpleNamespace:
         assert path.is_dir()
-        assert path.parent == attempt.scratch
+        assert path.parent.samefile(attempt.scratch)
         queried.append(path)
         return SimpleNamespace(free=free)
 
@@ -148,6 +147,45 @@ def test_native_checks_concrete_output_space_and_rechecks_while_suspended(
         assert retired.is_set()
         assert memory.call_count >= 2
     assert marker.exists() is (refusal is None)
+
+
+def test_native_attempt_retires_long_profile_tree_after_child_exit(
+    native_attempt: tuple[native._Attempt, Event, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt, _, _ = native_attempt
+    scratch = attempt.scratch / ("s" * max(1, 170 - len(str(attempt.scratch)) - 1))
+    scratch.mkdir()
+    attempt = replace(attempt, scratch=scratch)
+    outputs: list[Path] = []
+
+    def launch(_arguments: list[str], **kwargs: Any) -> process.OwnedCommandResult:
+        output: Path = kwargs["cwd"]
+        outputs.append(output)
+        # ORT creates this tree through a verbatim path even when the attempt
+        # was launched with an ordinary path. Reproduce that producer spelling.
+        path = str(output)
+        profile = Path(path if path.startswith("\\\\?\\") else "\\\\?\\" + path)
+        profile /= "ort-profile.native-12345-1794480857314971500"
+        leaf = profile / "profile_2026-11-12_12-54-17.json"
+        assert len(str(leaf).removeprefix("\\\\?\\")) > 260
+        command = _synthetic_command(attempt.scratch / "activated")
+        command[-1] = (
+            f"from pathlib import Path; Path({str(profile)!r}).mkdir(); "
+            f"Path({str(leaf)!r}).write_bytes(b'[]'); " + command[-1]
+        )
+        result = process.run_owned_command(command, **kwargs)
+        assert kwargs["retired"].is_set()
+        assert leaf.is_file()
+        return result
+
+    monkeypatch.setattr(native, "run_owned_command", launch)
+    outcome = attempt.run(cuda=False)
+    assert not isinstance(outcome, native._NativeCudaFault)
+    assert outcome[0].beat_logits == (0.0, 0.5, 1.0)
+    (output,) = outputs
+    assert str(output).startswith("\\\\?\\")
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("cpu_pressure", [False, True])

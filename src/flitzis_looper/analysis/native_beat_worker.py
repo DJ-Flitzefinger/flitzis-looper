@@ -349,6 +349,18 @@ def _read_logits(path: Path, count: int) -> tuple[float, ...]:
     return logits
 
 
+def _attempt_scratch_path(scratch: Path) -> Path:
+    """Keep nested ORT profile files accessible to Windows scratch cleanup."""
+    if os.name != "nt":
+        return scratch
+    absolute = os.path.abspath(scratch)
+    if absolute.startswith(("\\\\?\\", "\\\\.\\")):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
 @dataclass(frozen=True, slots=True)
 class _Attempt:
     executable: Path
@@ -370,7 +382,9 @@ class _Attempt:
         count = _expected_logit_count(self.pcm, self.limits)
         # Two float32 logit files and the cooperative cancel marker have known extents.
         required_bytes = 2 * count * 4 + len(_CANCEL_MARKER)
-        with TemporaryDirectory(prefix="native-beat-", dir=self.scratch) as name:
+        with TemporaryDirectory(
+            prefix="native-beat-", dir=_attempt_scratch_path(self.scratch)
+        ) as name:
             output = Path(name)
             if shutil.disk_usage(output).free < required_bytes:
                 reason = "resource_disk_full"
