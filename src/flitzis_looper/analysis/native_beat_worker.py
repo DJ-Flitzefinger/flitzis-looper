@@ -4,15 +4,16 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import stat
 import struct
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import ConfigDict, FiniteFloat, TypeAdapter, ValidationError
 
@@ -36,17 +37,17 @@ from flitzis_looper.analysis.process import offline_work_scope, run_owned_comman
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.recording_paths import _pin_ancestors, _windows_pin
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
-from flitzis_looper_audio import OfflineChildMemoryReservation
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.contracts import MonoPcmInput
     from flitzis_looper.controller.stem_resources import StemResourceGuard
 
-NATIVE_PROFILE = "native-cpu-v3"
-NATIVE_CUDA_PROFILE = "native-cuda-v4"
+NATIVE_PROFILE: Final = "native-cpu-v3"
+NATIVE_CUDA_PROFILE: Final = "native-cuda-v4"
 _WORKER_EXE = "native-beat-this-worker.exe"
 _EXE_LIMIT = 64 * 1024 * 1024
 _MANIFEST_LIMIT = 4096
+_CANCEL_MARKER = b"cancel"
 _ORT_MANIFEST = "ort/step23-runtime.json"
 _ORT_PACKAGE = "ort/step23-package.json"
 _CUDA_PACKAGE = "cuda/step23-package.json"
@@ -328,8 +329,10 @@ def require_native_worker_capability(configuration: NativeWorkerConfiguration) -
 
 
 def _cancel_marker(marker: Path) -> None:
-    with marker.open("xb") as stream:
-        stream.write(b"cancel")
+    # A failed cooperative marker still leaves the owning Job able to stop the
+    # process. Keep the original cancel or resource reason through that teardown.
+    with suppress(OSError), marker.open("xb") as stream:
+        stream.write(_CANCEL_MARKER)
 
 
 def _read_logits(path: Path, count: int) -> tuple[float, ...]:
@@ -362,74 +365,76 @@ class _Attempt:
         if self.cancel.is_set():
             msg = "cancelled"
             raise RuntimeError(msg)
-        self.guard.entry()
-        budget = OfflineChildMemoryReservation()
-        try:
-            with TemporaryDirectory(prefix="native-beat-", dir=self.scratch) as name:
-                output = Path(name)
-                marker = output / "cancel"
-                package = _CUDA_PACKAGE if cuda else _ORT_PACKAGE
-                digest = NATIVE_CUDA_PACKAGE_SHA if cuda else NATIVE_CPU_PACKAGE_SHA
-                env = child_environment({
-                    "SystemRoot": os.environ["SYSTEMROOT"],
-                    "TEMP": name,
-                    "TMP": name,
-                    CANCEL_PATH_ENV: str(marker),
-                    "FLITZIS_TRIAL_ORT_PACKAGE": str(self.executable.parent / package),
-                    "FLITZIS_TRIAL_ORT_PACKAGE_SHA256": digest,
-                    "FLITZIS_TRIAL_ORT_LOAD_POLICY": "package-system32",
-                })
-                if cuda:
-                    cache = output / "cuda-cache"
-                    cache.mkdir()
-                    env["CUDA_CACHE_PATH"] = str(cache)
-                retired = Event()
-                result = run_owned_command(
-                    [
-                        str(self.executable),
-                        *(("--cuda",) if cuda else ()),
-                        str(self.pcm.path),
-                        str(self.pcm.sample_rate_hz),
-                        str(self.pcm.frame_count),
-                        self.mono_sha,
-                        name,
-                    ],
-                    cwd=output,
-                    env=env,
-                    cancel=self.cancel,
-                    retired=retired,
-                    limits=self.limits,
-                    request_abort=partial(_cancel_marker, marker),
-                    abort_grace_seconds=0.4,
-                    stop_reason=self.guard.command_stop_reason,
-                    commit_limit_bytes=budget.limit_bytes,
-                    strict_completion=True,
-                )
-                if not retired.is_set():
-                    # The supervisor has synchronous custody. Never leave scope
-                    # or start a second attempt without its retirement event.
-                    retired.wait()
-                if self.cancel.is_set():
-                    msg = "cancelled"
-                    raise RuntimeError(msg)
-                if allow_fallback and result.reason == "worker_crashed" and result.returncode == 70:
-                    fault = _CUDA_FAULT.validate_json(result.stdout, strict=True)
-                    _validate_input(fault, self.pcm, self.mono_sha)
-                    return fault
-                if result.reason != "ok" or result.returncode != 0:
-                    msg = f"Native BeatThis worker: {result.reason}"
-                    raise RuntimeError(msg)
-                receipt = (
-                    _CUDA_RESULT.validate_json(result.stdout, strict=True)
-                    if cuda
-                    else _RESULT.validate_json(result.stdout, strict=True)
-                )
-                predictions = _read_predictions(
-                    receipt, output, self.pcm, self.mono_sha, self.limits
-                )
-                return predictions, receipt
-        finally:
-            budget.close()
+        if reason := self.guard.entry_reason():
+            raise RuntimeError(reason)
+        count = _expected_logit_count(self.pcm, self.limits)
+        # Two float32 logit files and the cooperative cancel marker have known extents.
+        required_bytes = 2 * count * 4 + len(_CANCEL_MARKER)
+        with TemporaryDirectory(prefix="native-beat-", dir=self.scratch) as name:
+            output = Path(name)
+            if shutil.disk_usage(output).free < required_bytes:
+                reason = "resource_disk_full"
+                raise RuntimeError(reason)
+            marker = output / "cancel"
+            package = _CUDA_PACKAGE if cuda else _ORT_PACKAGE
+            digest = NATIVE_CUDA_PACKAGE_SHA if cuda else NATIVE_CPU_PACKAGE_SHA
+            env = child_environment({
+                "SystemRoot": os.environ["SYSTEMROOT"],
+                "TEMP": name,
+                "TMP": name,
+                CANCEL_PATH_ENV: str(marker),
+                "FLITZIS_TRIAL_ORT_PACKAGE": str(self.executable.parent / package),
+                "FLITZIS_TRIAL_ORT_PACKAGE_SHA256": digest,
+                "FLITZIS_TRIAL_ORT_LOAD_POLICY": "package-system32",
+            })
+            if cuda:
+                cache = output / "cuda-cache"
+                cache.mkdir()
+                env["CUDA_CACHE_PATH"] = str(cache)
+            retired = Event()
+            result = run_owned_command(
+                [
+                    str(self.executable),
+                    *(("--cuda",) if cuda else ()),
+                    str(self.pcm.path),
+                    str(self.pcm.sample_rate_hz),
+                    str(self.pcm.frame_count),
+                    self.mono_sha,
+                    name,
+                ],
+                cwd=output,
+                env=env,
+                cancel=self.cancel,
+                retired=retired,
+                limits=self.limits,
+                request_abort=partial(_cancel_marker, marker),
+                abort_grace_seconds=0.4,
+                stop_reason=self.guard.command_stop_reason,
+                strict_completion=True,
+                before_resume=self.guard.entry_reason,
+            )
+            if not retired.is_set():
+                # The supervisor has synchronous custody. Never leave scope
+                # or start a second attempt without its retirement event.
+                retired.wait()
+            if self.cancel.is_set():
+                msg = "cancelled"
+                raise RuntimeError(msg)
+            if allow_fallback and result.reason == "worker_crashed" and result.returncode == 70:
+                fault = _CUDA_FAULT.validate_json(result.stdout, strict=True)
+                _validate_input(fault, self.pcm, self.mono_sha)
+                return fault
+            if result.reason != "ok" or result.returncode != 0:
+                raise RuntimeError(result.reason)
+            receipt = (
+                _CUDA_RESULT.validate_json(result.stdout, strict=True)
+                if cuda
+                else _RESULT.validate_json(result.stdout, strict=True)
+            )
+            predictions = _read_predictions(
+                receipt, output, self.pcm, self.mono_sha, count, self.limits
+            )
+            return predictions, receipt
 
 
 def _run_selected(
@@ -442,7 +447,7 @@ def _run_selected(
 
     result = attempt.run(cuda=True, allow_fallback=policy == "auto")
     if isinstance(result, _NativeCudaFault):
-        # The GPU job, both readers, scratch and reservation have ended. This
+        # The GPU job, both readers and scratch have ended. This
         # second guarded child uses the same executable, PCM and pinned graph.
         receipt = NativeCudaExecutionReceipt(
             1,
@@ -493,7 +498,8 @@ def run_native_worker(
     use_cuda = configuration.execution_policy != "cpu"
     guard = StemResourceGuard()
     with offline_work_scope(cancel), ExitStack() as pins:
-        guard.entry()
+        if reason := guard.entry_reason():
+            raise RuntimeError(reason)
         _pin_ancestors(pins, root / "ort")
         if use_cuda:
             _pin_ancestors(pins, root / "cuda")
@@ -524,17 +530,25 @@ def _validate_input(receipt: _NativeInput, pcm: MonoPcmInput, mono_sha: str) -> 
         raise ValueError(msg)
 
 
+def _expected_logit_count(pcm: MonoPcmInput, limits: WorkerLimits) -> int:
+    resampled = (2 * pcm.frame_count * 22_050 + pcm.sample_rate_hz) // (2 * pcm.sample_rate_hz)
+    count = resampled // 441 + 1
+    if not 0 < count <= limits.max_prediction_count:
+        msg = "Native BeatThis input exceeds the logit extent limit"
+        raise ValueError(msg)
+    return count
+
+
 def _read_predictions(
     receipt: _NativePredictions,
     output: Path,
     pcm: MonoPcmInput,
     mono_sha: str,
+    expected: int,
     limits: WorkerLimits,
 ) -> BeatPredictions:
     _validate_input(receipt, pcm, mono_sha)
-    resampled = (2 * pcm.frame_count * 22_050 + pcm.sample_rate_hz) // (2 * pcm.sample_rate_hz)
-    expected = resampled // 441 + 1
-    if receipt.logit_count != expected or not 0 < expected <= limits.max_prediction_count:
+    if receipt.logit_count != expected:
         msg = "Native BeatThis receipt logit extent differs"
         raise ValueError(msg)
     beat = _read_logits(output / "beat.f32", expected)

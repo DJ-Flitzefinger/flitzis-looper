@@ -243,19 +243,27 @@ resampling or STFT, without truncating source or tail to satisfy the bound.
 - **AND** direct/zero-copy graph loading requires its own graph lifetime and is not substituted
 - **AND** Rust deallocation alone proves no OS memory release, process peak improvement or CUDA success
 
-#### Scenario: A device trial cannot be admitted
-- **GIVEN** the unchanged host ledger or owned child limit refuses the attempt
-- **WHEN** native CUDA or cancellation verification is attempted
-- **THEN** no CUDA success, device-failure-to-CPU or mid-ORT-cancellation claim is made
-- **AND** existing productive workers and original resource floors remain available
+#### Scenario: A standalone device trial cannot be admitted
+- **GIVEN** a standalone diagnostic is configured with a host ledger or an explicit child limit
+- **WHEN** that policy refuses a native CUDA or cancellation trial
+- **THEN** the diagnostic records the refusal without claiming CUDA execution, device-failure-to-CPU fallback or mid-ORT cancellation
+
+#### Scenario: A selected Native BeatThis attempt uses live Windows resources
+- **GIVEN** the App admitted a complete source and selected a pinned Native CPU or CUDA package
+- **WHEN** the supervisor prepares an attempt
+- **THEN** it checks live physical memory, caller and system commit headroom, the OS low-memory signal and available scratch space for both logit files and the cancellation marker
+- **AND** it rechecks host memory before resuming the child and observes it while the child runs in an owned Windows Job without a host-memory limit
+- **AND** observed cancellation, pressure, unavailable monitoring, disk exhaustion and allocation failure preserve their own outcomes when known
+- **AND** cancellation takes precedence over result adoption
+- **AND** it waits for the owned tree and both readers to retire before releasing scratch and the staged PCM owner
 
 #### Scenario: A selected Native BeatThis NVIDIA worker completes or qualifies for CPU fallback
-- **GIVEN** the App admitted a complete source and selected the pinned Native CUDA package
+- **GIVEN** the App admitted a complete source and selected the pinned Native CUDA package with its device-memory policy
 - **WHEN** the guarded child completes the full dynamic final0 inference
 - **THEN** a CUDA result requires observed CUDA compute in that request, the actual device and verified runtime images
-- **AND** with automatic policy only, a qualified device error may start one fresh guarded CPU child after the GPU Job, tree and both readers end
-- **AND** that child uses the same staged PCM, pinned graph and App request with fresh host admission
-- **AND** mandatory CUDA, explicit CPU, cancellation, host pressure, malformed receipts and unknown failures preserve their own outcomes
+- **AND** with automatic policy only, an exact qualified device fault receipt and exit status 70 may start one fresh CPU child after the GPU Job, tree and both readers end and GPU scratch is released
+- **AND** that child uses the same staged PCM, pinned graph and App request with fresh host and scratch-volume checks
+- **AND** mandatory CUDA, explicit CPU, cancellation, resource failures, malformed receipts and unknown failures preserve their own outcomes
 
 #### Scenario: A standalone diagnostic reports a controlled CUDA arena refusal
 - **GIVEN** an explicitly requested isolated CUDA limit1 diagnostic without cancellation

@@ -39,6 +39,7 @@ from flitzis_looper.analysis.native_beat_worker import (
     require_native_worker_capability,
     run_native_worker,
 )
+from flitzis_looper.analysis.process import offline_io_failure
 from flitzis_looper.analysis.publication import _pack
 from flitzis_looper.analysis.setup import load_worker_configuration
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
@@ -256,9 +257,21 @@ def _native_envelope(
     try:
         require_native_worker_capability(configuration)
         predictions, execution = run_native_worker(configuration, pcm, mono_sha, cancel)
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        packed = (
+            None
+            if cancel.is_set()
+            else {
+                "encoding": "float64-le/base64",
+                **{name: _pack(getattr(predictions, name)) for name in _ARRAY_NAMES},
+            }
+        )
+    except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
         status: ComponentStatus = "cancelled" if cancel.is_set() else "failed"
-        reason = "cancelled" if status == "cancelled" else str(error)
+        reason = "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
+        if isinstance(error, OSError):
+            reason = offline_io_failure(error, reason)
+        if status == "cancelled":
+            reason = "cancelled"
         return _envelope(
             identity,
             input_metadata,
@@ -278,10 +291,6 @@ def _native_envelope(
             schema_version=version,
             execution_policy=cuda_policy,
         )
-    packed = {
-        "encoding": "float64-le/base64",
-        **{name: _pack(getattr(predictions, name)) for name in _ARRAY_NAMES},
-    }
     return _envelope(
         identity,
         input_metadata,

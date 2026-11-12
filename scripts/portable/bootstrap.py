@@ -334,12 +334,6 @@ def check_stem_conversion_api(native_module: object) -> None:
     assert isinstance(digest, str), "Native stem conversion digest missing"
     assert len(digest) == 64, "Native stem conversion digest incomplete"
     assert all(c in "0123456789abcdef" for c in digest), "Native stem conversion digest invalid"
-    budget = getattr(native_module, "OfflineChildMemoryReservation", None)
-    assert budget is not None, "Native offline child memory budget missing"
-    assert callable(getattr(budget, "close", None)), (
-        "Native offline child memory budget missing; rebuild the Release extension"
-    )
-    assert hasattr(budget, "limit_bytes"), "Native offline child commit ceiling missing"
     prepared = getattr(native_module, "PreparedWindowsProcess", None)
     identity = getattr(native_module, "offline_process_identity", None)
     assert prepared is not None, (

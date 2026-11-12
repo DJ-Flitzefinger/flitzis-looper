@@ -467,18 +467,13 @@ profile before startup. The Portable bootstrap explicitly rejects the removed
 Update through the ordinary installation workflow. API checks establish neither
 model quality nor audio/device/Human acceptance.
 
-The matching Native must also expose `OfflineChildMemoryReservation.limit_bytes`
-and `close`; preactivation rejects an older extension before offline imports use
-the shared commit budget. This adds no dependency or OS setting. Windows uses the
-existing suspended Job Object adapter; Linux/macOS process-tree and host-monitoring
-evidence remains a separate distribution gate. No running installation is updated
-by development verification.
-
-The Windows worker API also requires a prepared native process owner. Runtime
-preflight rejects an older Native before worker activation. Process and pipe
-ownership now precede child creation; existing suspended Job activation and
-actual process-tree/reader retirement remain required. This does not change
-model repair, runtime pins, audio startup or the platform acceptance gates.
+Runtime preflight requires the Native stem conversion identity and the prepared
+Windows process owner before worker activation. Process and pipe ownership
+precede child creation. The supervisor uses suspended Job activation and
+waits for actual process-tree and reader retirement. Windows model attempts
+check live host memory and use Jobs without a host-memory limit. Linux and
+macOS process-tree and host-monitoring evidence remains a separate distribution
+gate.
 
 The opt-in native BeatThis complete-source experiment is not part of installation or
 model repair. Its ONNX graph and standalone developer EXE have no productive

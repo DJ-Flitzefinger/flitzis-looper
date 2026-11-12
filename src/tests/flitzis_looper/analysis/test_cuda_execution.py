@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import asdict, replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -263,17 +264,32 @@ def test_portable_gate_keeps_old_native_usable_with_cpu_pointer(
     check = runpy.run_path(
         str(cuda_source_directory().parents[1] / "scripts" / "portable" / "bootstrap.py")
     )["check_beat_this_execution_api"]
-    (tmp_path / "current.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(
-        setup, "load_worker_configuration", lambda *_: SimpleNamespace(model=BeatModelIdentity())
+    installation = tmp_path / "analysis-runtime" / "beat-this"
+    manifest = installation / "installation-test" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    (installation / "current.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "prepare_analysis.py").write_text(
+        "def verify_python(environment, root):\n"
+        "    assert environment.name == '.venv' and environment.is_relative_to(root)\n",
+        encoding="utf-8",
     )
-    check(object(), tmp_path)
+    monkeypatch.setitem(check.__globals__, "__file__", str(tmp_path / "bootstrap.py"))
+    staged = Mock()
+    monkeypatch.setattr(setup, "load_staged_worker_configuration", staged)
+    monkeypatch.setattr(
+        setup,
+        "load_worker_configuration",
+        lambda *_: SimpleNamespace(model=BeatModelIdentity(), manifest=manifest),
+    )
+    check(object(), installation)
+    staged.assert_called_once_with(installation, manifest.parent, installation.parent)
     monkeypatch.setattr(
         setup,
         "load_worker_configuration",
         lambda *_: SimpleNamespace(
-            model=CudaBeatModelIdentity(artifacts.ACCEPTED_ARTIFACT.sha256, artifacts.FRONTEND_ID)
+            model=CudaBeatModelIdentity(artifacts.ACCEPTED_ARTIFACT.sha256, artifacts.FRONTEND_ID),
+            manifest=manifest,
         ),
     )
     with pytest.raises(ValueError, match="BEAT_THIS_EXECUTION_API_VERSION=2"):
-        check(object(), tmp_path)
+        check(object(), installation)

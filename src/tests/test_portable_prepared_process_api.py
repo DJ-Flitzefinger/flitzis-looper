@@ -15,9 +15,6 @@ def _native() -> SimpleNamespace:
             "Converter", (), {"convert": lambda *_: None, "close": lambda *_: None}
         ),
         stem_conversion_identity=lambda: ("source-bound-aligned-pcm16-native-v3", "a" * 64),
-        OfflineChildMemoryReservation=type(
-            "Budget", (), {"limit_bytes": property(lambda _: 1), "close": lambda *_: None}
-        ),
         PreparedWindowsProcess=type(
             "Prepared",
             (),

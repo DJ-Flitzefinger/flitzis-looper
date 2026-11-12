@@ -86,6 +86,14 @@ App holds the process and both output readers through retirement. Successful
 results record the ONNX graph digest and actual ORT CPU runtime. CPU selection
 applies to BPM analysis through the normal App entry.
 
+Each CPU or CUDA attempt checks available physical memory, caller and system
+commit headroom, and the Windows low-memory signal before launch. It checks
+free space for both logit files and the cancellation marker on the scratch
+volume. The supervisor rechecks host memory before resuming the child, then
+observes it while the child runs in a Windows Job without a host-memory limit.
+OS pressure stops the owned attempt. Cancellation takes precedence over
+result adoption.
+
 ## Native NVIDIA CUDA worker from a source checkout
 
 Build the same executable and matching App Native library. Add a separate
@@ -102,10 +110,12 @@ uv run --no-sync python -m flitzis_looper.analysis.setup --install-dir $workerRo
 
 The default CUDA policy is `cuda` and requires execution on NVIDIA device 0.
 With `auto`, a qualified CUDA device error from ONNX Runtime inference can
-start one fresh CPU worker. The GPU Job, descendants and both output readers
-must first retire. The CPU child receives the same staged PCM and `final0`
-graph and gets a fresh host-memory check and Job reservation. Resource, loader,
-input, cancellation and unqualified process failures end the Native request.
+start one fresh CPU worker. The supervisor waits for the GPU Job, descendants
+and both output readers to retire, then releases the GPU scratch directory.
+The CPU child receives the same staged PCM and `final0` graph, with fresh host
+and scratch-volume checks and a new owned Job. Resource, loader, input,
+cancellation and unqualified process failures end the Native request. The CUDA
+provider retains its 1 GiB device-memory limit.
 
 The App reports the driver's device name and CUDA compute events observed in
 the first completed model chunk, after the full request succeeds. A successful

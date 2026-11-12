@@ -62,6 +62,11 @@ class StemResourceGuard:
             if (reason := decision.refusal_reason) is not None:
                 raise StemResourceError(reason, decision.detail)
 
+    def entry_reason(self) -> str | None:
+        """Recheck live resources before a suspended worker resumes."""
+        with self._lock:
+            return self._monitor.observe(fresh=True).refusal_reason
+
     def command_stop_reason(self) -> str | None:
         """Stop on observed OS pressure or sustained monitoring failure."""
         with self._lock:

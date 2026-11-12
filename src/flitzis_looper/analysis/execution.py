@@ -2,7 +2,7 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import ConfigDict, Field, TypeAdapter
 
@@ -89,8 +89,8 @@ class NativeCpuExecutionReceipt(_StrictDto):
     fallback_reason: None
 
 
-NATIVE_CUDA_PACKAGE_SHA = "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b"
-NATIVE_CPU_PACKAGE_SHA = "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319"
+NATIVE_CUDA_PACKAGE_SHA: Final = "d62a363030d5c75db02f357eb2fd9936fc9edc26160f84b83ef19be231103f4b"
+NATIVE_CPU_PACKAGE_SHA: Final = "7a5e216d9cc35418e8c38afa293ece04e86abc63153553fe56e81aa901cf2319"
 type NativeCudaPolicy = Literal["cuda", "auto"]
 type NativeCudaError = Literal[2, 214, 700, 702, 719]
 type DeviceName = Annotated[str, Field(strict=True, min_length=1, max_length=256)]

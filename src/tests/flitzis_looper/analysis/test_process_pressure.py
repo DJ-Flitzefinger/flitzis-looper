@@ -329,7 +329,7 @@ def test_prepared_windows_failure_uses_win32_codes_without_posix_collisions(
     code: int, reason: str
 ) -> None:
     error = OSError(code, "fixture raw Win32 code")
-    assert process._beat_io_failure(error, "worker_start_failed", prepared=True) == reason
+    assert process.offline_io_failure(error, "worker_start_failed", prepared=True) == reason
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows general analysis admission")

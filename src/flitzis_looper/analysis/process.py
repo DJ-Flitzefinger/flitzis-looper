@@ -773,6 +773,7 @@ def _supervise_command(
     request_abort: Callable[[], None] | None,
     abort_grace_seconds: float,
     *,
+    before_resume: Callable[[], str | None] | None,
     observe_before_exit: bool,
 ) -> str:
     _bind_command_observer(process, cancel, on_process_started)
@@ -780,6 +781,12 @@ def _supervise_command(
         _ = process.pid
     if cancel.is_set():
         return "cancelled"
+    if before_resume is not None:
+        refusal = before_resume()
+        if cancel.is_set():
+            return "cancelled"
+        if refusal is not None:
+            return refusal
     process.activate()
     for reader in owned.readers:
         reader.thread.start()
@@ -850,6 +857,7 @@ def run_owned_command(  # noqa: PLR0913
     on_process_started: Callable[[int], None] | None = None,
     commit_limit_bytes: int | None = None,
     strict_completion: bool = False,
+    before_resume: Callable[[], str | None] | None = None,
 ) -> OwnedCommandResult:
     """Run under caller admission, retaining the worker through actual read end.
 
@@ -859,6 +867,7 @@ def run_owned_command(  # noqa: PLR0913
     tree termination. Legacy commands win over a later resource observation; the
     opt-in observer checks before accepting completion. Strict completion also
     bounds the entire stdout protocol and checks resource stop before completion.
+    An optional pre-resume refusal leaves the suspended child under normal teardown.
     A finite reap failure keeps this worker and all caller resources occupied until
     retirement succeeds.
     """
@@ -882,7 +891,15 @@ def run_owned_command(  # noqa: PLR0913
     if cancel.is_set():
         retired.set()
         return OwnedCommandResult("cancelled", -1, b"", b"")
-    process = _create_owned_command(arguments, cwd, env, retired, commit_limit_bytes)
+    try:
+        process = _create_owned_command(arguments, cwd, env, retired, commit_limit_bytes)
+    except OSError as error:
+        if strict_completion:
+            refusal = offline_io_failure(error, "", prepared=True)
+            if refusal:
+                reason = "cancelled" if cancel.is_set() else refusal
+                return OwnedCommandResult(reason, -1, b"", b"")
+        raise
     owned = _own_process(process, None, retired)
     stdout = None
     stderr = None
@@ -901,6 +918,7 @@ def run_owned_command(  # noqa: PLR0913
             on_process_started,
             request_abort,
             abort_grace_seconds,
+            before_resume=before_resume,
             observe_before_exit=observe_before_exit,
         )
     except _ObserverSetupError as error:
@@ -1083,7 +1101,8 @@ def _acquire_beat_process_slot(cancel: Event, retired: Event) -> bool:
             retired.set()
 
 
-def _beat_io_failure(error: OSError, default: str, *, prepared: bool = False) -> str:
+def offline_io_failure(error: OSError, default: str, *, prepared: bool = False) -> str:
+    """Classify known disk and host allocation errors in their original OS domain."""
     winerror = getattr(error, "winerror", None)
     if os.name == "nt" and prepared and winerror is None:
         # The compiled PreparedWindowsProcess raises OSError with the raw Win32
@@ -1118,7 +1137,7 @@ def _launch_beat(
         prepared = True
         process = _start(command, launch)
     except OSError as error:
-        reason = _beat_io_failure(error, "worker_start_failed", prepared=prepared)
+        reason = offline_io_failure(error, "worker_start_failed", prepared=prepared)
         return _start_failed(temporary, retired, whole_work, reason=reason)
     except RuntimeError:
         return _start_failed(temporary, retired, whole_work)
@@ -1147,7 +1166,7 @@ def _supervise_beat(
             if cancel.is_set():
                 reason = "cancelled"
     except OSError as error:
-        reason = _beat_io_failure(error, "worker_supervision_failed")
+        reason = offline_io_failure(error, "worker_supervision_failed")
     except RuntimeError:
         reason = "worker_supervision_failed"
     finally:
@@ -1196,7 +1215,7 @@ def _run_process_admitted(
             return ProcessResult(reason)
         temporary = tempfile.TemporaryDirectory(prefix="beat-request-", dir=command.scratch_dir)
     except OSError as error:
-        return ProcessResult(_beat_io_failure(error, "worker_scratch_unavailable"))
+        return ProcessResult(offline_io_failure(error, "worker_scratch_unavailable"))
     finally:
         if temporary is None:
             _PROCESS_SLOT.release()
