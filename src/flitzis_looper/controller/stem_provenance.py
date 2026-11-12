@@ -181,12 +181,10 @@ def native_conversion_identity() -> tuple[str, str] | None:
     """Bind both executed Native bridges, without claiming full loaded-image attestation."""
     identity = native.stem_conversion_identity
     converter = getattr(stem_artifacts, "StemConversionReservation", None)
-    budget = getattr(analysis_process, "OfflineChildMemoryReservation", None)
     process_type = getattr(analysis_process, "PreparedWindowsProcess", None)
     process_identity = getattr(analysis_process, "offline_process_identity", None)
     if (
         converter is not native.StemConversionReservation
-        or budget is not native.OfflineChildMemoryReservation
         or not isinstance(identity, BuiltinFunctionType)
         or identity.__module__ != native.StemConversionReservation.__module__
     ):
@@ -199,7 +197,7 @@ def native_conversion_identity() -> tuple[str, str] | None:
     ):
         return None
     try:
-        policy, digest = identity(converter, budget)
+        policy, digest = identity(converter)
         process_policy, process_digest = process_identity(process_type)
     except TypeError, ValueError:
         return None

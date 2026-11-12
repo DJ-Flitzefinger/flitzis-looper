@@ -119,11 +119,11 @@ def test_changed_actual_memory_fields_or_descriptor_refuse_layout(
 def test_actual_resource_constants_positive_then_changed_policy_refuses(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    tree, _codes = processing_code._manifest(Path(stem_resources.__file__))
-    assert name in processing_code._check_constants(tree.body, vars(stem_resources))
-    monkeypatch.setattr(stem_resources, name, getattr(stem_resources, name) + 1)
+    tree, _codes = processing_code._manifest(Path(system_resources.__file__))
+    assert name in processing_code._check_constants(tree.body, vars(system_resources))
+    monkeypatch.setattr(system_resources, name, getattr(system_resources, name) + 1)
     with pytest.raises(ValueError, match="constant differs from held source"):
-        processing_code._check_constants(tree.body, vars(stem_resources))
+        processing_code._check_constants(tree.body, vars(system_resources))
 
 
 def test_resource_defaults_retain_original_captured_sampler_and_clock() -> None:

@@ -350,8 +350,10 @@ class AnalysisJob:
             self._workdir.mkdir(parents=True, exist_ok=True)
             directory = Path(tempfile.mkdtemp(prefix="offline-analysis-", dir=self._workdir))
             beat = self._run_branches(directory / "mono.f32le", key_results)
-        except (OSError, RuntimeError, TypeError, ValueError) as error:
-            beat = self._failed_beats(str(error))
+        except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
+            beat = self._failed_beats(
+                "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
+            )
         beat = self._wait_for_beat(beat)
         self._wait_for_key()
         key = key_results[0] if key_results else _key_failure("Key analysis did not start")

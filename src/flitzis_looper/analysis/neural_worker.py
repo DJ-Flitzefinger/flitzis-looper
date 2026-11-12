@@ -172,8 +172,9 @@ def _run_retired(
     try:
         result = adapter.run(request, cancel)
         validate_component_result(result, request, limits)
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
-        result = BeatComponentResult(request.identity, request.model, "failed", str(error)[:1024])
+    except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
+        reason = "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
+        result = BeatComponentResult(request.identity, request.model, "failed", reason[:1024])
     finally:
         # The adapter's existing retiring process owns descendants, pipe readers
         # and temporary files. A finite reap failure is not permission to return.
@@ -194,10 +195,9 @@ def _run_cuda_retired(
     try:
         result = adapter.run_cuda(request, cancel)
         validate_cuda_component_result(result, request, WorkerLimits())
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
-        result = CudaBeatComponentResult(
-            request.identity, request.model, "failed", str(error)[:1024]
-        )
+    except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
+        reason = "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
+        result = CudaBeatComponentResult(request.identity, request.model, "failed", reason[:1024])
     finally:
         while not adapter.retired.wait(_POLL_SECONDS):
             pass

@@ -23,12 +23,12 @@ def unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, ...]:
         Mock(side_effect=AssertionError("Unsupported host allocated a child resource"))
         for _ in range(4)
     )
-    job, linux, budget, launch = constructors
+    job, linux, memory, launch = constructors
     monkeypatch.setattr(process, "os", SimpleNamespace(name="posix", environ=os.environ))
     monkeypatch.setattr(process, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(process, "WindowsJob", job)
     monkeypatch.setattr(process, "LinuxProcess", linux)
-    monkeypatch.setattr(process, "OfflineChildMemoryReservation", budget)
+    monkeypatch.setattr(process, "OfflineMemoryMonitor", memory)
     monkeypatch.setattr(
         process,
         "subprocess",

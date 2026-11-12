@@ -10,7 +10,16 @@ import ctypes
 import os
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 from threading import Lock
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_SAMPLE_SECONDS = 0.25
+_UNAVAILABLE_SECONDS = 1.0
+type ResourceState = Literal["unobserved", "clear", "pressure", "unavailable", "unsupported"]
 
 
 class HostMemory(ctypes.Structure):
@@ -222,3 +231,94 @@ def stem_memory_snapshot() -> dict[str, int] | None:
     if not closed:
         raise ctypes.WinError(ctypes.get_last_error())
     return image | {"low_memory": int(bool(low_memory.value))}
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryObservation:
+    """The latest measured offline host state and its diagnostic detail."""
+
+    state: ResourceState
+    detail: str = ""
+    message: str | None = None
+
+    @property
+    def allowed(self) -> bool:
+        """Allow measured headroom or explicitly unsupported platform behavior."""
+        return self.state in {"clear", "unsupported"}
+
+    @property
+    def refusal_reason(self) -> str | None:
+        """Give a reason to refuse new work when pressure or a query failure is observed."""
+        if self.state == "pressure":
+            return "resource_pressure"
+        if self.state == "unavailable":
+            return "resource_unavailable"
+        return None
+
+
+class OfflineMemoryMonitor:
+    """Sample on the existing caller. Shared callers supply their own synchronization."""
+
+    def __init__(
+        self,
+        sampler: Callable[[], dict[str, int] | None],
+        clock: Callable[[], float],
+        *,
+        unsupported_message: str | None = None,
+    ) -> None:
+        self._sampler = sampler
+        self._clock = clock
+        self._unsupported_message = unsupported_message
+        self._observed_at: float | None = None
+        self._unknown_since: float | None = None
+        self.current = MemoryObservation("unobserved")
+
+    def observe(self, *, fresh: bool = False) -> MemoryObservation:
+        """Read live Windows headroom at entry or reuse a recent observation."""
+        now = self._clock()
+        if (
+            not fresh
+            and self._observed_at is not None
+            and now - self._observed_at < _SAMPLE_SECONDS
+        ):
+            return self.current
+        self._observed_at = now
+        try:
+            image = self._sampler()
+        except (OSError, ValueError) as error:
+            if self._unknown_since is None:
+                self._unknown_since = now
+            self.current = MemoryObservation(
+                "unavailable", str(error), "Waiting for memory monitoring"
+            )
+            return self.current
+        self._unknown_since = None
+        if image is None:
+            self.current = MemoryObservation("unsupported", message=self._unsupported_message)
+            return self.current
+        caller = image["available_commit"]
+        system = image["system_available_commit_bytes"]
+        physical = image["available_physical"]
+        low_memory = bool(image["low_memory"])
+        pressure = low_memory or min(caller, system, physical) == 0
+        detail = (
+            f"available bytes: caller commit={caller}, system commit={system}, "
+            f"physical={physical}; Windows low-memory signal={low_memory}"
+        )
+        self.current = (
+            MemoryObservation("pressure", detail, "Waiting for available memory")
+            if pressure
+            else MemoryObservation("clear", detail)
+        )
+        return self.current
+
+    def command_stop_reason(self) -> str | None:
+        """Stop active work on OS pressure or a sustained observation failure."""
+        decision = self.observe()
+        if (
+            decision.state == "unavailable"
+            and self._unknown_since is not None
+            and self._clock() - self._unknown_since < _UNAVAILABLE_SECONDS
+        ):
+            return None
+        return decision.refusal_reason

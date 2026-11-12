@@ -6,7 +6,7 @@ process owner and their private pipe objects before creating a child. Successful
 `CreateProcessW` output SHALL write directly into that owner's retained state,
 without requiring a newly allocated Python process-result or handle wrapper.
 Python constructor failure SHALL positively retire the exact suspended root before
-releasing its original child reservation. Existing complete-tree and independent
+releasing its launch resources. Existing complete-tree and independent
 reader-retirement obligations SHALL remain unchanged after activation.
 
 The child SHALL remain suspended until the existing observer, Job assignment and
@@ -18,8 +18,8 @@ and timeout behavior SHALL retain the supported Windows semantics.
 #### Scenario: Python publication fails after an actual suspended child starts
 - **GIVEN** the native owner and pipe objects already exist and an actual suspended Windows child has been created
 - **WHEN** a controlled Python error occurs before the constructor publishes its result
-- **THEN** cleanup terminates the held root and observes its actual kernel-handle END before closing its original child reservation
-- **AND** the child has performed no worker effects and a fresh reservation can be admitted afterward
+- **THEN** cleanup terminates the held root and observes its actual kernel-handle END before releasing its launch resources
+- **AND** the child has performed no worker effects and a fresh request can be admitted afterward
 - **AND** this test does not claim arbitrary continuous-OOM closure or an observed defect in an unproved CPython binary build
 
 #### Scenario: Selective Windows launch preserves the public worker protocol
@@ -85,8 +85,8 @@ acquired Native ticket borrow SHALL remain held until that cleanup ends. The
 original allocation exception SHALL propagate unchanged. Failure to allocate the
 cleanup thread SHALL use synchronous cleanup with the same ownership guards.
 Worker arguments and the child-only environment SHALL be prepared within this
-prechild cleanup boundary, before acquiring a child-memory reservation or
-constructing a process. Unknown partial effects inside process construction
+prechild cleanup boundary before constructing a process.
+Unknown partial effects inside process construction
 SHALL remain outside that no-child guarantee.
 
 #### Scenario: Request preparation fails before child construction
@@ -99,9 +99,25 @@ SHALL remain outside that no-child guarantee.
 #### Scenario: Child environment preparation fails before launch
 - **GIVEN** request preparation retains both Beat permits, temporary storage and a real Native ticket borrow
 - **WHEN** preparing the child-only environment raises a memory allocation error
-- **THEN** neither child-memory reservation nor process construction begins
+- **THEN** process construction does not begin
 - **AND** actual delayed temporary and borrow cleanup precedes retirement and fresh admission
 - **AND** the exact exception and immutable source bytes remain unchanged and fresh Beat execution succeeds
+
+### Requirement: General Windows Analysis Workers Use Observed Host Memory
+The general Python analysis worker SHALL use a Windows Job without a model
+memory limit. Entry and pre-resume checks SHALL use live caller and system
+commit, physical headroom, and the OS low-memory signal. Active supervision
+SHALL stop its owned work on observed pressure or sustained monitoring failure.
+Scratch admission SHALL check space for the actual request file and report
+disk exhaustion and allocation failures separately from pressure, monitoring
+failure and cancellation. Existing Linux ownership behavior, bounded protocol
+output, source lifetime, cancellation, and settlement SHALL remain in force.
+
+#### Scenario: Windows reports memory pressure during analysis
+- **GIVEN** a general Windows analysis worker owns a running process tree and both output readers
+- **WHEN** live observation reports OS memory pressure
+- **THEN** the supervisor stops that owned tree and reports resource pressure
+- **AND** actual tree and reader retirement precede releasing the request files and admission
 
 ### Requirement: Shared Offline Workers Require Process Tree Ownership Before Launch
 The shared Beat/stem worker launcher SHALL refuse execution on platforms without
@@ -572,7 +588,7 @@ results SHALL retain their valid ownership; no OS RAM trimming is required.
 #### Scenario: Available memory differs between machines
 - **GIVEN** a supported machine with16-32GiB RAM or a smaller supported configuration
 - **WHEN** queued heavy work becomes eligible
-- **THEN** admission uses actual available memory/commit and outstanding reservations with the existing safety floors
+- **THEN** admission uses actual available memory/commit and outstanding reservations, with applicable safety floors for audio residency
 - **AND** a fixed8GiB machine assumption does not impose an additional global ceiling
 - **AND** original geometry, numerical quality and failure/retirement guards remain unchanged
 

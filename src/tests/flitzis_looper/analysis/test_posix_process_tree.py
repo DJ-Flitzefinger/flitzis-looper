@@ -48,7 +48,7 @@ def _adapter() -> tuple[type[_OwnedTreeProcess], dict[str, object]]:
     for item in module.body:
         if isinstance(item, ast.Import):
             names = {alias.asname or alias.name.split(".")[0] for alias in item.names}
-        elif isinstance(item, ast.ImportFrom):
+        elif isinstance(item, ast.ImportFrom) and item.module != "flitzis_looper_audio":
             names = {alias.asname or alias.name for alias in item.names}
         else:
             continue

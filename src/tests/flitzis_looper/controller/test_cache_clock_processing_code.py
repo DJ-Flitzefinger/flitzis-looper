@@ -123,13 +123,14 @@ def test_captured_default_remains_original_after_module_clock_is_changed(
     before = _namespace(stem_resources, manifests)
     assert before
     monkeypatch.setattr(time, "monotonic", lambda: -100.0)
-    assert stem_resources.StemResourceGuard(sampler=lambda: None)._clock is captured
+    assert stem_resources.StemResourceGuard(sampler=lambda: None)._monitor._clock is captured
     assert _namespace(stem_resources, manifests) == before
 
     def injected() -> float:
         return 7.0
 
-    assert stem_resources.StemResourceGuard(sampler=lambda: None, clock=injected)._clock is injected
+    guard = stem_resources.StemResourceGuard(sampler=lambda: None, clock=injected)
+    assert guard._monitor._clock is injected
 
 
 def test_replaced_actual_clock_default_rejects_after_same_component_positive(

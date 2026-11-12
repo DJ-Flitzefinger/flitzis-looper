@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from ctypes import wintypes
+from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
@@ -20,7 +21,6 @@ from flitzis_looper.controller.stem_workers import STEM_QUEUED_JOBS, STEM_WORKER
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 def _wait_file(path: Path) -> None:
@@ -304,3 +304,139 @@ def test_pressure_retirement_pins_existing_pool_slot_until_the_actual_readers_en
     assert retired.is_set()
     assert len(results) == 1
     assert results[0].reason == "resource_pressure"
+
+
+def _headroom(*, pressure: bool = False) -> dict[str, int]:
+    return {
+        "available_physical": 1,
+        "available_commit": 1,
+        "system_available_commit_bytes": 1,
+        "low_memory": int(pressure),
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="raw error codes from the prepared Windows process")
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        (12, "worker_start_failed"),
+        (28, "worker_start_failed"),
+        (39, "resource_disk_full"),
+        (1455, "resource_allocation_failed"),
+    ],
+)
+def test_prepared_windows_failure_uses_win32_codes_without_posix_collisions(
+    code: int, reason: str
+) -> None:
+    error = OSError(code, "fixture raw Win32 code")
+    assert process._beat_io_failure(error, "worker_start_failed", prepared=True) == reason
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows general analysis admission")
+@pytest.mark.parametrize(
+    "reason", ["resource_pressure", "resource_unavailable", "resource_disk_full"]
+)
+def test_general_analysis_refuses_pressure_query_failure_or_request_disk_shortage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    launch = Mock(side_effect=AssertionError("refused request created a child"))
+    memory = Mock(
+        return_value=_headroom(pressure=reason == "resource_pressure"),
+        side_effect=OSError("fixture query failure") if reason == "resource_unavailable" else None,
+    )
+    monkeypatch.setattr(process, "_start", launch)
+    monkeypatch.setattr(process, "stem_memory_snapshot", memory)
+    if reason == "resource_disk_full":
+        monkeypatch.setattr(process.shutil, "disk_usage", Mock(return_value=Mock(free=1)))
+    command = process.WorkerCommand(
+        Path(sys.executable), tmp_path / "unused.py", tmp_path / "unused.ckpt", tmp_path
+    )
+    retired = Event()
+    for _ in range(2):
+        result = process.run_process(command, b"{}", Event(), WorkerLimits(), retired)
+        assert result.reason == reason
+        assert result.resources_released
+        assert retired.is_set()
+    launch.assert_not_called()
+    assert not list(tmp_path.glob("beat-request-*"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual suspended Windows analysis worker")
+def test_general_analysis_rechecks_pressure_before_the_suspended_root_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script, marker = tmp_path / "worker.py", tmp_path / "must-not-run"
+    script.write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()")
+    children: list[process._OwnedTreeProcess] = []
+    start_real = process._start
+
+    def start(
+        command: process.WorkerCommand, launch: process._WorkerLaunch
+    ) -> process._OwnedTreeProcess:
+        child = start_real(command, launch)
+        children.append(child)
+        return child
+
+    memory = Mock(side_effect=[_headroom(), _headroom(pressure=True)])
+    monkeypatch.setattr(process, "_start", start)
+    monkeypatch.setattr(process, "stem_memory_snapshot", memory)
+    command = process.WorkerCommand(
+        Path(sys.executable), script, tmp_path / "unused.ckpt", tmp_path
+    )
+    retired = Event()
+    result = process.run_process(command, b"{}", Event(), WorkerLimits(), retired)
+    (child,) = children
+    assert result.reason == "resource_pressure"
+    assert result.resources_released
+    assert memory.call_count == 2
+    assert not marker.exists()
+    _assert_settled(child, retired)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows analysis worker and readers")
+def test_general_analysis_pressure_retains_files_until_diagnostic_reader_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    children = _record_processes(monkeypatch)
+    script, ready = tmp_path / "worker.py", tmp_path / "ready"
+    script.write_text(
+        "import sys, time\nfrom pathlib import Path\n"
+        "sys.stderr.write('x' * 4096)\nsys.stderr.flush()\n"
+        f"Path({str(ready)!r}).write_text('ready')\ntime.sleep(60)\n"
+    )
+    pressure, allow_end, drained, retired, cancel = (Event() for _ in range(5))
+    read_real = process._CommandReader._read
+
+    def read(reader: process._CommandReader) -> None:
+        read_real(reader)
+        drained.set()
+        assert allow_end.wait(10)
+
+    monkeypatch.setattr(process._CommandReader, "_read", read)
+    monkeypatch.setattr(
+        process, "stem_memory_snapshot", lambda: _headroom(pressure=pressure.is_set())
+    )
+    command = process.WorkerCommand(
+        Path(sys.executable), script, tmp_path / "unused.ckpt", tmp_path
+    )
+    limits = WorkerLimits(reap_timeout_seconds=0.05, max_response_bytes=32)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process.run_process, command, b"{}", cancel, limits, retired)
+        try:
+            _wait_file(ready)
+            pressure.set()
+            assert drained.wait(10)
+            outcome = future.result(10)
+            assert outcome.reason == "resource_pressure"
+            assert not outcome.resources_released
+            assert not retired.is_set()
+            assert list(tmp_path.glob("beat-request-*/request.json"))
+            assert not cancel.is_set()
+        finally:
+            cancel.set()
+            allow_end.set()
+            future.result(10)
+            assert retired.wait(10)
+    (child,) = children
+    _assert_settled(child, retired)
+    assert not list(tmp_path.glob("beat-request-*"))

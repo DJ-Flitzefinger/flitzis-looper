@@ -87,7 +87,13 @@ def _supervisor() -> types.ModuleType:
         "_ResponseReader",
         "_CommandReader",
         "_OwnedProcess",
+        "_terminate_process_tree",
+        "_wait_process_tree",
+        "_retire_process_tree",
+        "_release_process_resources",
+        "_own_process",
         "_resource_stop_reason",
+        "_reader_stop_reason",
         "_pending_stop_reason",
         "_completed_reason",
         "_monitor",
@@ -98,7 +104,9 @@ def _supervisor() -> types.ModuleType:
         "_ObserverSetupError",
         "_bind_command_observer",
         "_supervise_command",
+        "_create_owned_command",
         "run_owned_command",
+        "_owned_command_reason",
         "_release_temporary",
     }
     module = types.ModuleType("linux_supervisor_declarations")

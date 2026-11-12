@@ -1,6 +1,8 @@
 """Owned subprocess trees and bounded output supervision for offline workers."""
 
+import errno
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,8 +18,8 @@ from flitzis_looper.analysis.contracts import WorkerLimits
 from flitzis_looper.analysis.linux_process import LinuxProcess
 from flitzis_looper.analysis.windows_job import WindowsJob
 from flitzis_looper.offline_runtime import child_environment
+from flitzis_looper.system_resources import OfflineMemoryMonitor, stem_memory_snapshot
 from flitzis_looper_audio import (
-    OfflineChildMemoryReservation,
     OfflineWorkTicket,
     PreparedWindowsProcess,
     offline_process_identity,
@@ -161,9 +163,7 @@ class IndependentReceipts:
     prefixes: tuple[bytes, ...]
 
 
-def _prepare_windows_process(
-    *, capture_stderr: bool, budget_keeper: object | None
-) -> PreparedWindowsProcess:
+def _prepare_windows_process(*, capture_stderr: bool) -> PreparedWindowsProcess:
     policy, digest = offline_process_identity(PreparedWindowsProcess)
     if (
         policy != "prepared-windows-process-v1"
@@ -172,7 +172,7 @@ def _prepare_windows_process(
     ):
         message = "Prepared Windows process identity is unavailable"
         raise RuntimeError(message)
-    return PreparedWindowsProcess(capture_stderr=capture_stderr, budget_keeper=budget_keeper)
+    return PreparedWindowsProcess(capture_stderr=capture_stderr)
 
 
 class _OwnedTreeProcess:
@@ -212,10 +212,7 @@ class _OwnedTreeProcess:
                 )
                 self._process: PreparedWindowsProcess | LinuxProcess = self._linux
             else:
-                prepared = _prepare_windows_process(
-                    capture_stderr=capture_stderr,
-                    budget_keeper=getattr(self, "_memory_budget", None),
-                )
+                prepared = _prepare_windows_process(capture_stderr=capture_stderr)
                 # Every Python owner, stream projection and bound cleanup method
                 # exists before native start can create its suspended root.
                 self._process = prepared
@@ -309,28 +306,7 @@ class _WorkerProcess(_OwnedTreeProcess):
     def __init__(
         self, arguments: list[str], command: WorkerCommand, environment: dict[str, str]
     ) -> None:
-        self._memory_budget = OfflineChildMemoryReservation() if os.name == "nt" else None
-        try:
-            if self._memory_budget is None:
-                super().__init__(arguments, cwd=command.scratch_dir, env=environment)
-            else:
-                super().__init__(
-                    arguments,
-                    cwd=command.scratch_dir,
-                    env=environment,
-                    commit_limit_bytes=self._memory_budget.limit_bytes,
-                )
-        except OSError, RuntimeError, ValueError, MemoryError:
-            self.abort_startup()
-            if self._memory_budget is not None:
-                self._memory_budget.close()
-            raise
-
-    def close_tree(self) -> None:
-        """Release prospective commit only after all real tree/pipe readers end."""
-        super().close_tree()
-        if self._memory_budget is not None:
-            self._memory_budget.close()
+        super().__init__(arguments, cwd=command.scratch_dir, env=environment, capture_stderr=True)
 
 
 class _ResponseReader:
@@ -341,6 +317,7 @@ class _ResponseReader:
         self.limit = limit
         self.data = bytearray()
         self.failed = Event()
+        self.allocation_failed = False
         self.overflow = Event()
         self.thread = Thread(target=self._read, name=thread_name, daemon=True)
 
@@ -353,6 +330,9 @@ class _ResponseReader:
                 if len(self.data) > self.limit:
                     self.overflow.set()
                     break
+        except MemoryError:
+            self.allocation_failed = True
+            self.failed.set()
         except OSError:
             self.failed.set()
 
@@ -390,6 +370,9 @@ class _CommandReader(_ResponseReader):
                 if self.receipt_prefixes:
                     self._observe_lines(chunk)
             self._finish_line()
+        except MemoryError:
+            self.allocation_failed = True
+            self.failed.set()
         except OSError:
             self.failed.set()
 
@@ -593,9 +576,6 @@ def _start(command: WorkerCommand, launch: _WorkerLaunch) -> _OwnedTreeProcess:
         initialize(pending, launch.arguments, command, launch.environment)
     except BaseException:
         pending.abort_startup()
-        budget = getattr(pending, "_memory_budget", None)
-        if budget is not None:
-            budget.close()
         raise
     return pending
 
@@ -612,6 +592,16 @@ def _resource_stop_reason(stop_reason: Callable[[], str | None] | None) -> str |
     return "resource_unavailable"
 
 
+def _reader_stop_reason(owned: _OwnedProcess) -> str | None:
+    if any(reader.overflow.is_set() for reader in owned.readers):
+        return "response_limit"
+    if any(reader.allocation_failed for reader in owned.readers):
+        return "resource_allocation_failed"
+    if any(reader.failed.is_set() for reader in owned.readers):
+        return "response_read_failed"
+    return None
+
+
 def _pending_stop_reason(
     owned: _OwnedProcess,
     cancel: Event,
@@ -621,11 +611,9 @@ def _pending_stop_reason(
 ) -> str | None:
     if cancel.is_set():
         return "cancelled"
-    if any(reader.overflow.is_set() for reader in owned.readers):
-        return "response_limit"
-    if any(reader.failed.is_set() for reader in owned.readers):
-        return "response_read_failed"
-    return _resource_stop_reason(stop_reason) if observe_before_exit else None
+    return _reader_stop_reason(owned) or (
+        _resource_stop_reason(stop_reason) if observe_before_exit else None
+    )
 
 
 def _completed_reason(
@@ -675,7 +663,9 @@ def _monitor(
         cancel.wait(_POLL_SECONDS)
 
 
-def _finish(owned: _OwnedProcess, reason: str, limits: WorkerLimits) -> ProcessResult:
+def _finish(
+    owned: _OwnedProcess, reason: str, limits: WorkerLimits, *, capture_response: bool = True
+) -> ProcessResult:
     try:
         owned.terminate_tree()
         owned.process.wait(timeout=limits.reap_timeout_seconds)
@@ -688,11 +678,17 @@ def _finish(owned: _OwnedProcess, reason: str, limits: WorkerLimits) -> ProcessR
             reader.thread.join(timeout=limits.reap_timeout_seconds)
         if reader.thread.is_alive():
             return _retire_later(owned)
-    if any(reader.overflow.is_set() for reader in owned.readers):
-        reason = "response_limit"
-    elif any(reader.failed.is_set() for reader in owned.readers):
-        reason = "response_read_failed"
-    response = bytes(owned.reader.data) if reason == "ok" and owned.reader is not None else b""
+    reason = _reader_stop_reason(owned) or reason
+    try:
+        response = (
+            bytes(owned.reader.data)
+            if capture_response and reason == "ok" and owned.reader is not None
+            else b""
+        )
+    except MemoryError:
+        if not owned.release():
+            _retire_later(owned)
+        raise
     if not owned.release():
         return _retire_later(owned)
     return ProcessResult(reason, response)
@@ -701,7 +697,7 @@ def _finish(owned: _OwnedProcess, reason: str, limits: WorkerLimits) -> ProcessR
 def _retire_later(owned: _OwnedProcess) -> ProcessResult:
     try:
         Thread(target=owned.retire, name="beat-worker-retiring", daemon=True).start()
-    except OSError, RuntimeError:
+    except OSError, RuntimeError, MemoryError:
         # This caller already is the offline supervisor. Retain its ownership until
         # teardown finishes if the OS cannot allocate the fallback retirement thread.
         owned.retire()
@@ -912,7 +908,7 @@ def run_owned_command(  # noqa: PLR0913
     except OSError, RuntimeError:
         reason = "worker_supervision_failed"
     finally:
-        outcome = _finish(owned, reason, limits)
+        outcome = _finish(owned, reason, limits, capture_response=False)
         if not outcome.resources_released:
             # Do not leave a backend's temporary/source context under a surviving
             # child or output read. The already admitted worker retains its slot.
@@ -947,6 +943,8 @@ def _owned_command_reason(
         return "cancelled"
     if strict_completion and any(reader.overflow.is_set() for reader in owned.readers):
         return "response_limit"
+    if any(reader.allocation_failed for reader in owned.readers):
+        return "resource_allocation_failed"
     if any(reader.failed.is_set() for reader in owned.readers):
         return "response_read_failed"
     if settled_reason == "worker_retiring":
@@ -984,9 +982,11 @@ def _start_failed(
     temporary: tempfile.TemporaryDirectory[str],
     retired: Event,
     whole_work: OfflineWorkTicket | None = None,
+    *,
+    reason: str = "worker_start_failed",
 ) -> ProcessResult:
     if _release_temporary(temporary, retired, whole_work):
-        return ProcessResult("worker_start_failed")
+        return ProcessResult(reason)
     try:
         Thread(
             target=_retire_temporary,
@@ -996,8 +996,9 @@ def _start_failed(
         ).start()
     except OSError, RuntimeError, MemoryError:
         _retire_temporary(temporary, retired, whole_work)
-        return ProcessResult("worker_start_failed")
-    return ProcessResult("worker_retiring", resources_released=False)
+        return ProcessResult(reason)
+    pending_reason = "worker_retiring" if reason == "worker_start_failed" else reason
+    return ProcessResult(pending_reason, resources_released=False)
 
 
 def run_process(
@@ -1011,8 +1012,10 @@ def run_process(
         return ProcessResult("worker_busy")
     _ANALYSIS_ADMISSION.release()
     retired.clear()
+    entered = False
     try:
         with heavy_work_scope(cancel) as owner:
+            entered = True
             result = _run_process_admitted(command, request, cancel, limits, retired, owner)
             if result.reason == "worker_busy":
                 # This invocation owned the pending Event, but launched nothing.
@@ -1025,43 +1028,137 @@ def run_process(
         # This scope never yielded: no child, pipe or temporary owner exists.
         retired.set()
         return ProcessResult("worker_supervision_failed")
+    except BaseException:
+        if not entered:
+            retired.set()
+        raise
 
 
-def _beat_response_reader(owned: _OwnedProcess, limit: int) -> _ResponseReader:
-    if owned.process.stdout is None:
-        message = "worker stdout pipe was not created"
+def _beat_readers(owned: _OwnedProcess, limit: int) -> None:
+    if owned.process.stdout is None or owned.process.stderr is None:
+        message = "worker output pipes were not created"
         raise RuntimeError(message)
-    reader = _ResponseReader(owned.process.stdout, limit)
-    owned.add_reader(reader)
-    return reader
+    owned.add_reader(_ResponseReader(owned.process.stdout, limit))
+    owned.add_reader(_CommandReader(owned.process.stderr, limit))
+
+
+def _beat_entry_reason(cancel: Event, monitor: OfflineMemoryMonitor | None) -> str | None:
+    if cancel.is_set():
+        return "cancelled"
+    reason = monitor.observe(fresh=True).refusal_reason if monitor is not None else None
+    return "cancelled" if cancel.is_set() else reason
 
 
 def _activate_beat_process(
-    process: subprocess.Popen[bytes] | _OwnedTreeProcess, cancel: Event
-) -> bool:
-    """Resolve gated identity before the final pre-execution cancellation check."""
+    process: subprocess.Popen[bytes] | _OwnedTreeProcess,
+    cancel: Event,
+    monitor: OfflineMemoryMonitor | None,
+) -> str | None:
+    """Resolve gated identity and recheck resources immediately before activation."""
     if isinstance(process, _WorkerProcess):
         _ = process.pid
-    if cancel.is_set():
-        return False
+    if reason := _beat_entry_reason(cancel, monitor):
+        return reason
     if isinstance(process, _WorkerProcess):
         process.activate()
-    return True
+    return None
 
 
 def _acquire_beat_process_slot(cancel: Event, retired: Event) -> bool:
     """Keep existing Beat admission while waiting for its subordinate process slot."""
-    while not _PROCESS_SLOT.acquire(blocking=False):
-        if cancel.wait(_POLL_SECONDS):
-            retired.set()
-            _ANALYSIS_ADMISSION.release()
+    acquired = granted = False
+    try:
+        while not (acquired := _PROCESS_SLOT.acquire(blocking=False)):
+            if cancel.wait(_POLL_SECONDS):
+                return False
+        if cancel.is_set():
             return False
-    if cancel.is_set():
-        retired.set()
-        _PROCESS_SLOT.release()
-        _ANALYSIS_ADMISSION.release()
-        return False
-    return True
+        granted = True
+        return True
+    finally:
+        if not granted:
+            if acquired:
+                _PROCESS_SLOT.release()
+            _ANALYSIS_ADMISSION.release()
+            retired.set()
+
+
+def _beat_io_failure(error: OSError, default: str, *, prepared: bool = False) -> str:
+    winerror = getattr(error, "winerror", None)
+    if os.name == "nt" and prepared and winerror is None:
+        # The compiled PreparedWindowsProcess raises OSError with the raw Win32
+        # code as errno. ctypes errors instead expose it as winerror.
+        winerror = error.errno
+    if winerror is None:
+        if error.errno == errno.ENOSPC:
+            return "resource_disk_full"
+        if error.errno == errno.ENOMEM:
+            return "resource_allocation_failed"
+    elif winerror in {39, 112}:
+        return "resource_disk_full"
+    elif winerror in {8, 14, 1455}:
+        return "resource_allocation_failed"
+    return default
+
+
+def _launch_beat(
+    command: WorkerCommand,
+    request: bytes,
+    retired: Event,
+    temporary: tempfile.TemporaryDirectory[str],
+    owner: _WorkOwner,
+) -> _OwnedProcess | ProcessResult:
+    whole_work = None
+    prepared = False
+    try:
+        request_path = Path(temporary.name) / "request.json"
+        whole_work = owner.ticket.borrow()
+        request_path.write_bytes(request)
+        launch = _prepare_worker_launch(command, request_path)
+        prepared = True
+        process = _start(command, launch)
+    except OSError as error:
+        reason = _beat_io_failure(error, "worker_start_failed", prepared=prepared)
+        return _start_failed(temporary, retired, whole_work, reason=reason)
+    except RuntimeError:
+        return _start_failed(temporary, retired, whole_work)
+    except BaseException:
+        _start_failed(temporary, retired, whole_work)
+        raise
+    return _own_process(process, temporary, retired, whole_work)
+
+
+def _supervise_beat(
+    owned: _OwnedProcess,
+    cancel: Event,
+    limits: WorkerLimits,
+    monitor: OfflineMemoryMonitor | None,
+) -> ProcessResult:
+    reason = "worker_supervision_failed"
+    try:
+        _beat_readers(owned, limits.max_response_bytes)
+        if (refusal := _activate_beat_process(owned.process, cancel, monitor)) is not None:
+            reason = refusal
+        else:
+            for reader in owned.readers:
+                reader.thread.start()
+            stop_reason = monitor.command_stop_reason if monitor is not None else None
+            reason = _monitor(owned, cancel, limits, stop_reason)
+            if cancel.is_set():
+                reason = "cancelled"
+    except OSError as error:
+        reason = _beat_io_failure(error, "worker_supervision_failed")
+    except RuntimeError:
+        reason = "worker_supervision_failed"
+    finally:
+        outcome = _finish(owned, reason, limits)
+    if not outcome.resources_released and reason in {
+        "resource_pressure",
+        "resource_unavailable",
+        "resource_allocation_failed",
+    }:
+        return ProcessResult(reason, resources_released=False)
+    return outcome
 
 
 def _run_process_admitted(
@@ -1085,40 +1182,29 @@ def _run_process_admitted(
         return ProcessResult("cancelled")
     temporary = None
     try:
+        monitor = (
+            OfflineMemoryMonitor(stem_memory_snapshot, time.monotonic) if os.name == "nt" else None
+        )
+        reason = _beat_entry_reason(cancel, monitor)
+        if reason is None:
+            disk_full = shutil.disk_usage(command.scratch_dir).free < len(request)
+            if cancel.is_set():
+                reason = "cancelled"
+            elif disk_full:
+                reason = "resource_disk_full"
+        if reason is not None:
+            return ProcessResult(reason)
         temporary = tempfile.TemporaryDirectory(prefix="beat-request-", dir=command.scratch_dir)
-    except OSError:
-        return ProcessResult("worker_scratch_unavailable")
+    except OSError as error:
+        return ProcessResult(_beat_io_failure(error, "worker_scratch_unavailable"))
     finally:
         if temporary is None:
-            retired.set()
             _PROCESS_SLOT.release()
             _ANALYSIS_ADMISSION.release()
-    whole_work = None
-    try:
-        request_path = Path(temporary.name) / "request.json"
-        whole_work = whole_owner.ticket.borrow()
-        request_path.write_bytes(request)
-        launch = _prepare_worker_launch(command, request_path)
-    except MemoryError:
-        _start_failed(temporary, retired, whole_work)
-        raise
-    except OSError, RuntimeError:
-        return _start_failed(temporary, retired, whole_work)
-    try:
-        process = _start(command, launch)
-    except OSError, RuntimeError:
-        return _start_failed(temporary, retired, whole_work)
-    owned = _own_process(process, temporary, retired, whole_work)
-    reason = "worker_supervision_failed"
-    try:
-        reader = _beat_response_reader(owned, limits.max_response_bytes)
-        if _activate_beat_process(process, cancel):
-            reader.thread.start()
-            reason = _monitor(owned, cancel, limits)
-        else:
-            reason = "cancelled"
-    except OSError, RuntimeError:
-        reason = "worker_supervision_failed"
-    finally:
-        outcome = _finish(owned, reason, limits)
-    return outcome
+            retired.set()
+    owned = _launch_beat(command, request, retired, temporary, whole_owner)
+    return (
+        owned
+        if isinstance(owned, ProcessResult)
+        else _supervise_beat(owned, cancel, limits, monitor)
+    )

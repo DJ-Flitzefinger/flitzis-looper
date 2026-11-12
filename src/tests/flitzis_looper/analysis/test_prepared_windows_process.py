@@ -172,27 +172,16 @@ def test_actual_createprocess_refusal_preserves_zero_child_and_closes_prepared_p
 
 
 @pytest.mark.parametrize("failure_point", ["poststart", "base_return", "worker_return"])
-def test_real_poststart_python_error_waits_root_before_releasing_beat_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+def test_real_poststart_python_error_retires_the_uncapped_suspended_root(
+    tmp_path: Path, failure_point: str
 ) -> None:
     observed: list[tuple[ctypes.WinDLL, int]] = []
     scopes = ExitStack()
-    releases = []
+    children: list[PreparedWindowsProcess] = []
 
-    class ObservedBudget:
-        def __init__(self) -> None:
-            self.actual = OfflineChildMemoryReservation()
-
-        @property
-        def limit_bytes(self) -> int:
-            return self.actual.limit_bytes
-
-        def close(self) -> None:
-            assert observed
-            kernel, handle = observed[0]
-            assert kernel.WaitForSingleObject(handle, 0) == 0
-            releases.append("actual root ended before reservation close")
-            self.actual.close()
+    def record(prepared: PreparedWindowsProcess) -> None:
+        observed.append(scopes.enter_context(_observed(prepared.pid)))
+        children.append(prepared)
 
     def trace(frame: FrameType, event: str, _arg: object) -> object:
         target = (
@@ -203,7 +192,7 @@ def test_real_poststart_python_error_waits_root_before_releasing_beat_budget(
         if failure_point != "poststart" and frame.f_code is target.__code__ and event == "return":
             prepared = getattr(frame.f_locals["self"], "_process", None)
             if isinstance(prepared, PreparedWindowsProcess) and prepared.pid and not observed:
-                observed.append(scopes.enter_context(_observed(prepared.pid)))
+                record(prepared)
                 message = "controlled Python error after real native start"
                 raise RuntimeError(message)
         return trace
@@ -216,38 +205,37 @@ def test_real_poststart_python_error_waits_root_before_releasing_beat_budget(
             and isinstance(prepared, PreparedWindowsProcess)
             and not observed
         ):
-            observed.append(scopes.enter_context(_observed(prepared.pid)))
+            record(prepared)
             message = "controlled Python error after real native start"
             raise RuntimeError(message)
 
-    monkeypatch.setattr(process, "OfflineChildMemoryReservation", ObservedBudget)
     command = process.WorkerCommand(
         Path(sys.executable), tmp_path / "unused.py", tmp_path / "unused.ckpt", tmp_path
     )
     previous = sys.gettrace()
     previous_profile = sys.getprofile()
-    try:
-        sys.settrace(trace)
-        if failure_point == "poststart":
-            sys.setprofile(profile)
-        with pytest.raises(RuntimeError, match="controlled Python error"):
-            process._start(
-                command,
-                process._WorkerLaunch(
-                    [sys.executable, "-I", "-c", "raise SystemExit(7)"],
-                    child_environment(dict(os.environ)),
-                ),
-            )
-    finally:
-        sys.settrace(previous)
-        sys.setprofile(previous_profile)
-        scopes.close()
-    # Nested startup guards may idempotently close the already retired budget.
-    assert releases
-    assert set(releases) == {"actual root ended before reservation close"}
-    # The real reservation can be freshly admitted after the failed constructor.
-    successor = OfflineChildMemoryReservation()
-    successor.close()
+    launch = process._WorkerLaunch(
+        [sys.executable, "-I", "-c", "raise SystemExit(7)"], child_environment(dict(os.environ))
+    )
+    with scopes:
+        try:
+            sys.settrace(trace)
+            if failure_point == "poststart":
+                sys.setprofile(profile)
+            with pytest.raises(RuntimeError, match="controlled Python error"):
+                process._start(command, launch)
+        finally:
+            sys.settrace(previous)
+            sys.setprofile(previous_profile)
+        ((kernel, handle),) = observed
+        assert kernel.WaitForSingleObject(handle, 0) == 0
+        (child,) = children
+        assert child.stdout.closed
+        assert child.stderr is not None
+        assert child.stderr.closed
+    successor = process._start(command, launch)
+    successor.abort_startup()
+    assert successor.poll() is not None
 
 
 def test_shared_constructor_return_error_waits_root_before_retired_signal(tmp_path: Path) -> None:

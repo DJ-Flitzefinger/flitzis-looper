@@ -470,7 +470,15 @@ def test_output_thread_start_failure_still_kills_and_reaps_process(
 
 
 @pytest.mark.parametrize(
-    "failure", ["thread_runtime", "thread_os", "thread_memory", "missing_stdout", "monitor_memory"]
+    "failure",
+    [
+        "thread_runtime",
+        "thread_os",
+        "thread_memory",
+        "missing_stdout",
+        "missing_stderr",
+        "monitor_memory",
+    ],
 )
 def test_early_output_setup_failure_retires_child_and_allows_fresh_analysis(
     prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
@@ -498,15 +506,20 @@ def test_early_output_setup_failure_retires_child_and_allows_fresh_analysis(
         command: process.WorkerCommand, launch: process._WorkerLaunch
     ) -> subprocess.Popen[bytes]:
         child = original(command, launch)
-        assert child.stdout is not None
-        child.stdout.close()
-        child.stdout = None
+        if failure == "missing_stdout":
+            assert child.stdout is not None
+            child.stdout.close()
+            child.stdout = None
+        else:
+            assert child.stderr is not None
+            child.stderr.close()
+            child.stderr = None
         return child
 
     with monkeypatch.context() as failing:
         if failure.startswith("thread_"):
             failing.setattr(process, "Thread", thread)
-        elif failure == "missing_stdout":
+        elif failure in {"missing_stdout", "missing_stderr"}:
             failing.setattr(process, "_start", start)
         else:
             failing.setattr(process, "_monitor", _fail_beat_monitor_allocation)
@@ -703,7 +716,7 @@ def _assert_successful_beat_retry(
     assert children[-1].poll() is not None
 
 
-@pytest.mark.parametrize("allocation", ["temporary", "request"])
+@pytest.mark.parametrize("allocation", ["ticket", "temporary", "request", "start"])
 def test_prelaunch_allocation_failure_releases_admission_for_fresh_analysis(
     prepared: tuple[WorkerConfiguration, BeatWorkerRequest],
     monkeypatch: pytest.MonkeyPatch,
@@ -718,11 +731,18 @@ def test_prelaunch_allocation_failure_releases_admission_for_fresh_analysis(
     def fail_temporary(**_kwargs: object) -> None:
         raise error
 
+    def fail(*_args: object) -> None:
+        raise error
+
     with monkeypatch.context() as failing:
-        if allocation == "temporary":
+        if allocation == "ticket":
+            failing.setattr(process, "OfflineWorkTicket", fail)
+        elif allocation == "temporary":
             failing.setattr(process, "tempfile", SimpleNamespace(TemporaryDirectory=fail_temporary))
-        else:
+        elif allocation == "request":
             failing.setattr(Path, "write_bytes", _request_write_failure(error))
+        else:
+            failing.setattr(process, "_start", fail)
         with pytest.raises(MemoryError) as caught:
             _run(adapter, request)
         assert caught.value is error
@@ -760,12 +780,11 @@ def _inject_prelaunch_failure(
         raise error
 
     def unexpected_launch(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("environment preparation must precede native reservation and process launch")
+        pytest.fail("environment preparation must precede process launch")
 
     if allocation == "environment":
         failing.setattr(process, "_environment", fail_environment)
         failing.setattr(process, "_start", unexpected_launch)
-        failing.setattr(process, "OfflineChildMemoryReservation", unexpected_launch)
         failing.setattr(process, "PreparedWindowsProcess", unexpected_launch)
         failing.setattr(subprocess, "Popen", unexpected_launch)
     else:
