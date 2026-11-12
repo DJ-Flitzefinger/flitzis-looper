@@ -1433,8 +1433,20 @@ The stock layout operations keep the storage through the rewrite hook and GLU.
 Each of the two pointwise convolutions in the final spectral DConv reorders
 directly into its own 66,060,288-byte writable file mapping per mapped eager
 forward. The native squeeze retains that storage
-for the corresponding stock GroupNorm input. After the second GroupNorm,
-stock CPU GLU writes its 33,030,144-byte contiguous result directly into a
+for the corresponding stock GroupNorm input. Both mapped eager forwards
+require a caller-admitted branch for the final Rewrite and each K1 before
+the reference phase starts. The pinned CPU FP32 selector checks the
+Rewrite's non-unit filters and input size and the lifted K1s' batch of 512.
+Startup and live checks require the pinned FP32 configuration and refuse
+oneDNN default math overrides. The stock convolution selects again during
+redispatch. The nested guard
+allows the validated oneDNN call and the exact no-copy layout operations.
+It refuses an unexpected backend before invoking its kernel. The separate
+Slow2d route requires its own private budget and keeps the stock kernel and
+private return. The Rewrite fallback with full private columns and the
+second K1 fallback through GroupNorm both exceed the 512 MiB phase limit
+in both reference forecasts.
+After the second GroupNorm, stock CPU GLU writes its 33,030,144-byte contiguous result directly into a
 writable file mapping. The original LayerScale consumes it. The final CPU
 residual addition writes a separate 33,030,144-byte file view with the stock
 folded strides. Unfolding preserves the 172032 batch stride and the native
