@@ -1,7 +1,9 @@
 import hashlib
 import os
+import sys
 import urllib.request
 import wave
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
@@ -185,6 +187,38 @@ def test_incomplete_model_output_preserves_existing_cache(
     }
     for kind, contents in previous.items():
         assert (request.cache_dir / f"{kind}.wav").read_bytes() == contents
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows verbatim paths")
+def test_bs_long_private_attempt_keeps_nested_paths_addressable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_units = len(str(tmp_path).encode("utf-16-le")) // 2
+    cache_dir = tmp_path / ("g" * (225 - base_units - 1))
+    assert len(str(cache_dir).encode("utf-16-le")) // 2 == 225
+    request = replace(_request(tmp_path), cache_dir=cache_dir, device_policy="cpu")
+    _install_test_assets(request.model_cache_dir, monkeypatch)
+
+    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
+        if args[0] in {"ffprobe", "ffmpeg"}:
+            return CommandResult(0, "ok", "")
+        output = Path(args[args.index("--output") + 1])
+        source_cache = Path(env["PYTHONPYCACHEPREFIX"])
+        assert str(output).startswith("\\\\?\\")
+        assert output.parent.samefile(cache_dir)
+        assert source_cache.parent == output
+        assert not any(source_cache.iterdir())
+        assert args[args.index("--source") + 1] == str(request.source_path)
+        for name in ("drums", "bass", "other", "vocals"):
+            write_mono_pcm16_wav(output / f"{name}.wav", 44_100)
+        return CommandResult(0, "", "")
+
+    result = BsRoformerStemGenerationBackend(command_runner=runner).generate(
+        request, lambda _percent, _stage: None
+    )
+
+    assert result.artifact_count == len(STEM_KINDS)
+    assert {path.name for path in cache_dir.iterdir()} == {f"{kind}.wav" for kind in STEM_KINDS}
 
 
 def _load_pad(controller: AppController, tmp_path: Path, sample_id: int) -> None:

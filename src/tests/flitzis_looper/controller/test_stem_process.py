@@ -155,6 +155,10 @@ def test_exact_own_modules_receive_fresh_channel_and_foreign_commands_strip_inhe
     observed: list[str | None] = []
     environment = {**os.environ, CANCEL_PATH_ENV: "must-never-be-inherited"}
     private = tmp_path / "own-private"
+    if sys.platform == "win32":
+        base_units = len(str(tmp_path).encode("utf-16-le")) // 2
+        private = tmp_path / ("g" * (245 - base_units - 1))
+        assert len(str(private).encode("utf-16-le")) // 2 == 245
 
     def run(
         args: list[str],
@@ -171,7 +175,11 @@ def test_exact_own_modules_receive_fresh_channel_and_foreign_commands_strip_inhe
         observed.append(env.get(CANCEL_PATH_ENV))
         if own_channel:
             assert request_abort is not None
-            channel = private / Path(env[CANCEL_PATH_ENV]).parent.name / "cancel"
+            channel = Path(env[CANCEL_PATH_ENV])
+            assert channel.parent.parent.samefile(private)
+            assert channel.name == "cancel"
+            if sys.platform == "win32":
+                assert str(channel).startswith("\\\\?\\")
             assert channel.parent.is_dir()
             assert not channel.exists()
             request_abort()

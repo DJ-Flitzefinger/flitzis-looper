@@ -115,6 +115,18 @@ def _check_native_demucs_launch(args: list[str], scope: _StemCommandScope | None
         raise RuntimeError(msg)
 
 
+def stem_cache_io_path(cache_dir: Path) -> Path:
+    """Address long temporary leaves without changing the project's cache path."""
+    if os.name != "nt":
+        return cache_dir
+    absolute = os.path.abspath(cache_dir)
+    if absolute.startswith(("\\\\?\\", "\\\\.\\")):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
 def _request_abort(marker: Path) -> None:
     with marker.open("xb") as handle:
         handle.write(b"cancel")
@@ -182,8 +194,9 @@ def run_stem_command(
         and scope.directory is not None
         and (native_demucs or _own_inference(args))
     ):
-        scope.directory.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=".stem-command-", dir=scope.directory) as name:
+        directory = stem_cache_io_path(scope.directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix=".stem-command-", dir=directory) as name:
             marker = Path(name).absolute() / "cancel"
             child_env[CANCEL_PATH_ENV] = str(marker)
             result = _run_owned(

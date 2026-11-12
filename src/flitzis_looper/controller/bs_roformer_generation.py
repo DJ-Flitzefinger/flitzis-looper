@@ -28,6 +28,7 @@ from flitzis_looper.controller.stem_generation import (
     detect_torch_cuda_capability,
     run_command,
 )
+from flitzis_looper.controller.stem_process import stem_cache_io_path
 from flitzis_looper.controller.stem_provider import (
     CudaCapability,
     ProviderCalibration,
@@ -71,10 +72,11 @@ class BsRoformerStemGenerationBackend:
         devices = plan.devices
         started = time.monotonic()
         cuda_error = None
-        request.cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = stem_cache_io_path(request.cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
         for device in devices:
             progress(0.05, f"Running {MODEL_NAME} on {device.upper()}")
-            with tempfile.TemporaryDirectory(prefix=".separator-", dir=request.cache_dir) as name:
+            with tempfile.TemporaryDirectory(prefix=".separator-", dir=cache_dir) as name:
                 output = Path(name)
                 args = [
                     sys.executable,
