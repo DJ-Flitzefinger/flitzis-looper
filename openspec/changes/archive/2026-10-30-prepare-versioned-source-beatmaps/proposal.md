@@ -14,7 +14,7 @@ The legacy downbeat repair is comparator work, not a dependency of this foundati
 - Expose a Rust control-side evaluator for diagnostics and later editor integration.
 
 Status: planned, not implemented. Backend transition belongs to adopt-beat-this-analysis.
-See [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/27ef7f878f55c0955835ca536af8df6ef4a89a28/docs/beatmap-sync-design.md) for selected direction/dependencies and the linked
+See [historical beatmap-sync-design.md](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/949cff1dae4b979639dca1cbc1e86c586387cd21/docs/beatmap-sync-design.md) for selected direction/dependencies and the linked
 research report for primary evidence. Source maps remain independent of future pad transposition.
 
 ## Non-goals
