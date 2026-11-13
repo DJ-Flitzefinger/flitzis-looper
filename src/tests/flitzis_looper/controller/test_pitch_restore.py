@@ -83,5 +83,6 @@ def test_legacy_unknown_manual_key_restores_neutral_tuple_without_retrigger(
     assert options["initial_base_shift"] == 0
     assert options["initial_extra_shift"] == 0
     assert controller.project.pad_key_intent[0].correction == "legacy arbitrary key"
-    assert controller.project.pad_key_intent[0].retrigger is False
+    assert controller.project.pad_key_intent[0].retrigger
+    assert not controller.project.pad_key_intent[0].extra_retrigger
     assert not controller.transport.pitch._owners

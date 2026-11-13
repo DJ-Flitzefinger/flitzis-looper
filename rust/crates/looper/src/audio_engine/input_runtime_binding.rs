@@ -262,6 +262,7 @@ pub(crate) struct InputRuntimeOwnership {
     callback_source_lifetimes: [AtomicU64; NUM_SAMPLES],
     resident_controls: [AtomicU64; NUM_SAMPLES],
     launch_revisions: [AtomicU64; NUM_SAMPLES],
+    individually_stopped_lifetimes: [AtomicU64; NUM_SAMPLES],
     admitted_launches: [AtomicBool; NUM_SAMPLES],
     migration_holds: [AtomicU64; NUM_SAMPLES],
     copy_reservations: [AtomicU64; NUM_SAMPLES],
@@ -311,6 +312,7 @@ impl Default for InputRuntimeOwnership {
             callback_source_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
             resident_controls: std::array::from_fn(|_| AtomicU64::new(0)),
             launch_revisions: std::array::from_fn(|_| AtomicU64::new(0)),
+            individually_stopped_lifetimes: std::array::from_fn(|_| AtomicU64::new(0)),
             admitted_launches: std::array::from_fn(|_| AtomicBool::new(false)),
             migration_holds: std::array::from_fn(|_| AtomicU64::new(0)),
             copy_reservations: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -1316,6 +1318,35 @@ impl InputRuntimeOwnership {
 
     pub(crate) fn launch_revision_for_cell(&self, cell: ContentCell) -> &AtomicU64 {
         &self.launch_revisions[cell.index()]
+    }
+
+    pub(crate) fn individually_stopped(&self, key: ContentKey) -> bool {
+        self.individually_stopped_lifetimes[key.cell().index()].load(Ordering::Acquire)
+            == key.lifetime()
+    }
+
+    pub(crate) fn clear_individual_stop(&self, key: ContentKey) {
+        let _ = self.individually_stopped_lifetimes[key.cell().index()].compare_exchange(
+            key.lifetime(),
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(super) fn individually_stopped_pad_ids(&self) -> Result<Vec<usize>, PlacementError> {
+        let token = self.placement_read_token_result()?;
+        let ids = (0..NUM_SAMPLES)
+            .filter(|&id| {
+                self.slot_snapshot(id)
+                    .and_then(|slot| slot.content_key())
+                    .is_some_and(|key| self.individually_stopped(key))
+            })
+            .collect();
+        if self.placement_read_token_result()? != token {
+            return Err(PlacementError::Pending);
+        }
+        Ok(ids)
     }
 
     #[cfg(test)]
@@ -2503,6 +2534,12 @@ pub(super) fn enqueue_stop_with_producer(
             &prepared,
             || true,
             || {
+                if id.is_some()
+                    && let Some(key) = prepared[0].placement.content_key()
+                {
+                    ownership.individually_stopped_lifetimes[key.cell().index()]
+                        .store(key.lifetime(), Ordering::Release);
+                }
                 producer
                     .push(message)
                     .expect("reserved single-producer STOP capacity");

@@ -459,6 +459,60 @@ fn public_gui_origin_playing_ready_pitch_retrigger_reuses_independent_endpoint_a
 }
 
 #[test]
+fn late_repeated_piano_note_uses_the_ready_independent_endpoint() {
+    let mut hit = fixture();
+    let mut reference = fixture();
+    runtime_rows(&hit, None, LOOP_START, LOOP_END);
+    let first = hit.capture(0, "pitch.note:7:set_retrigger");
+    publish_pitch(&mut hit, &first);
+    hit.wait_worker(&[&first]);
+    hit.render(0);
+    hit.render_to(17_000);
+    assert!(first.effective());
+    assert_eq!(hit.starts(0), 1);
+    let previous_generation = hit.voice(0).generation;
+    let cached = select_ready(&mut hit, Origin::PublicGui);
+    assert_ne!(cached, hit.voice(0).stretch.native_state_address());
+
+    let repeated = hit.capture(0, "pitch.note:7:set_retrigger");
+    let original = repeated.original_due_frame();
+    let timestamp = repeated.received_timestamp();
+    assert!(first.sequence() < repeated.sequence());
+    assert_eq!(repeated.render(), first.render());
+    assert_eq!(original, 17_000);
+    let _worker_gate = WorkerGate::for_pitch(&repeated);
+    hit.render(512);
+    let callback = hit.transport.output_frame();
+    assert_eq!(hit.starts(0), 1);
+    publish_pitch(&mut hit, &repeated);
+    assert_eq!(repeated.execution_target(), callback);
+    let mut pcm = hit.render(1);
+    assert_eq!(hit.starts(0), 2);
+    assert_eq!(hit.voice(0).generation, previous_generation + 1);
+    assert_eq!(hit.voice(0).stretch.native_state_address(), cached);
+    assert_eq!(
+        hit.voice(0).stretch.adopted_request_id(),
+        Some(repeated.sequence())
+    );
+    assert_one_emitted_birth(&hit);
+    assert_eq!(repeated.original_due_frame(), original);
+    assert_eq!(repeated.received_timestamp(), timestamp);
+    assert!(repeated.effective());
+    assert!(hit.scheduler.is_empty());
+
+    reference
+        .mixer
+        .set_pad_pitch_intent(0, PitchIntent::new(7, 0).unwrap())
+        .unwrap();
+    reference.render_to(callback);
+    let expected = ordinary_ready(&mut reference);
+    let expected_pcm = complete_pcm(&mut reference, callback);
+    assert!(expected.state() == "applied");
+    pcm.extend(hit.pcm(47_999));
+    assert_initial_pcm(&pcm, &expected_pcm);
+}
+
+#[test]
 fn routed_midi_stopped_ready_pitch_retrigger_reuses_original_endpoint_at_t() {
     ready_hit_profile(Origin::RoutedMidi, false);
 }

@@ -49,7 +49,9 @@ def _pitch_fixture(controller: AppController, audio: Mock) -> tuple[dict[int, in
     controller.transport.pitch.bind_runtime_refresh(lambda: True)
     controller.project.sample_paths[0] = "samples/synthetic-source-a.wav"
     controller.project.pad_content[0] = PadContentIdentity(instance_id="a" * 32)
-    controller.project.pad_key_intent[0] = PadKeyIntent(source=SourceKeyVersion(raw_key="Em"))
+    controller.project.pad_key_intent[0] = PadKeyIntent(
+        source=SourceKeyVersion(raw_key="Em"), retrigger=False
+    )
     controller.project.sample_paths[1] = "samples/synthetic-source-b.wav"
     controller.project.pad_content[1] = PadContentIdentity(instance_id="b" * 32)
     lifetimes = {0: 77, 1: 88}

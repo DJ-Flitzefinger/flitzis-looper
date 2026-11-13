@@ -86,6 +86,12 @@ def test_numeric_intent_never_coerces_noninteger_values(field: str, invalid: obj
         PadKeyIntent.model_validate({field: invalid})
 
 
+def test_missing_piano_preference_defaults_on_without_enabling_offset_retrigger() -> None:
+    restored = PadKeyIntent.model_validate({"schema_version": 1})
+    assert restored.retrigger
+    assert not restored.extra_retrigger
+
+
 @pytest.mark.parametrize("legacy_retrigger", [False, True])
 def test_legacy_shared_preference_migrates_once_then_roundtrips_independently(
     *, legacy_retrigger: bool

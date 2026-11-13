@@ -218,6 +218,9 @@ impl InputRuntimeOwnership {
     /// Lifecycle observation has no invented ordinary command origin. Same-source custody
     /// retains its exact completed intent frontier; a new source/content has none.
     pub(crate) fn publish_ordinary_lifecycle(&self, key: ContentKey, kind: u64, active: bool) {
+        if kind == STARTED {
+            self.clear_individual_stop(key);
+        }
         let previous = self.ordinary_snapshot(key).unwrap_or_default();
         self.publish_ordinary_lifecycle_state(
             key,

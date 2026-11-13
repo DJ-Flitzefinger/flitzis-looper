@@ -302,6 +302,8 @@ class GlobalParametersController:
         self._bpm_application: _BpmLockApplication | None = None
         self._bpm_feedback: BpmLockStatus | None = None
         self._bpm_application_error: str | None = None
+        self._mouse_output_mute_held = False
+        self._mapped_output_mute_held = False
 
     def _poll_global_rate_status(
         self,
@@ -977,17 +979,25 @@ class GlobalParametersController:
         self._transport._mark_project_changed()
 
     def set_momentary_output_mute(self, *, enabled: bool) -> None:
-        """Temporarily mute engine output without changing persisted volume."""
-        if enabled:
-            if self._session.global_stop_momentary_mute_active:
-                return
-            self._audio.set_volume(VOLUME_MIN)
-            self._session.global_stop_momentary_mute_active = True
-            return
+        """Apply the mouse hold independently of mapped inputs."""
+        self._apply_output_mute(enabled=enabled or self._mapped_output_mute_held)
+        self._mouse_output_mute_held = enabled
 
-        if not self._session.global_stop_momentary_mute_active:
+    def _set_mapped_output_mute(self, *, enabled: bool) -> None:
+        """Apply the aggregate MIDI and keyboard hold independently of the mouse."""
+        self._apply_output_mute(enabled=enabled or self._mouse_output_mute_held)
+        self._mapped_output_mute_held = enabled
+
+    def _apply_output_mute(self, *, enabled: bool) -> None:
+        if enabled == self._session.global_stop_momentary_mute_active:
             return
-        self._audio.set_volume(self._project.volume)
+        self._audio.set_volume(VOLUME_MIN if enabled else self._project.volume)
+        self._session.global_stop_momentary_mute_active = enabled
+
+    def _reset_output_mute_after_retirement(self) -> None:
+        """Forget temporary holds when their output runtime has retired."""
+        self._mouse_output_mute_held = False
+        self._mapped_output_mute_held = False
         self._session.global_stop_momentary_mute_active = False
 
     def set_speed(

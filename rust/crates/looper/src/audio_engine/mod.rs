@@ -4227,6 +4227,15 @@ impl AudioEngine {
     ) -> PyResult<Option<(usize, bool)>> {
         loader_events::resolve_delivery(self, delivery)
     }
+    /// Read the current aggregate hold independently of the input event queues.
+    pub fn midi_output_mute_held(&self) -> PyResult<bool> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(runtime.midi_output_mute_held())
+    }
+
     /// Poll for pending normalized input mapping events.
     ///
     /// Returns `None` when no input events are available.
@@ -4244,6 +4253,9 @@ impl AudioEngine {
         dict.set_item("source", "midi")?;
         dict.set_item("binding_key", event.binding_key)?;
         dict.set_item("value", event.value)?;
+        if event.relative {
+            dict.set_item("relative", true)?;
+        }
         dict.set_item("received_at_ns", event.received_at_ns)?;
         dict.set_item("dispatched", event.dispatched)?;
         dict.set_item("direct", event.direct)?;
@@ -4477,39 +4489,33 @@ impl AudioEngine {
         self.input_runtime_ownership.admitted_launch_ids()
     }
 
+    /// Current slots with an admitted individual STOP and no subsequent effective start.
+    pub fn individually_stopped_pad_ids(&self) -> PyResult<Vec<usize>> {
+        self.input_runtime_ownership
+            .individually_stopped_pad_ids()
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
     /// Admit one controller-owned global launch against actual native current bindings.
     #[pyo3(signature = (entries, *, received_at_ns=None))]
     pub fn capture_global_start(
         &self,
         py: Python<'_>,
-        entries: Vec<(
-            Py<InputRuntimePadBinding>,
-            f64,
-            Option<f64>,
-            Option<Py<resident_relocation::ResidentWindowTicket>>,
-        )>,
+        entries: captured_global_start::GlobalStartEntries,
         received_at_ns: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<CapturedGlobalStart> {
-        let now = self.input_clock.capture_ns();
-        let timestamp =
-            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
-        let bindings: Vec<_> = entries
-            .iter()
-            .map(|(binding, _, _, _)| binding.borrow(py))
-            .collect();
-        let windows: Vec<_> = entries
-            .iter()
-            .map(|(_, _, _, window)| window.as_ref().map(|window| window.borrow(py)))
-            .collect();
-        let entries = bindings
-            .iter()
-            .zip(entries.iter())
-            .zip(windows.iter())
-            .map(|((binding, (_, start, end, _)), window)| {
-                (&**binding, *start, *end, window.as_deref())
-            })
-            .collect();
-        captured_global_start::capture(self, entries, timestamp)
+        captured_global_start::capture(self, py, entries, received_at_ns, false)
+    }
+
+    /// Capture a controller's current or remembered group, fencing individual stops.
+    #[pyo3(signature = (entries, *, received_at_ns=None))]
+    pub fn capture_global_restart(
+        &self,
+        py: Python<'_>,
+        entries: captured_global_start::GlobalStartEntries,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<CapturedGlobalStart> {
+        captured_global_start::capture(self, py, entries, received_at_ns, true)
     }
 
     /// Publish only the original retained group; None means genuine readiness is pending.

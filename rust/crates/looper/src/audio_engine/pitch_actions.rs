@@ -1167,8 +1167,11 @@ impl PitchActionWork {
         &mut self,
         reserve: &mut super::ordinary_endpoint_reserve::EndpointReserveWork,
     ) -> bool {
+        // A late reserve transfer still needs the original constant source and
+        // DSP control proofs captured for this action's own physical birth.
         if self.action.start_behavior() == Some(KeyLockStartBehavior::AttackAtGrid)
-            || self.launch_delay_frames != 0
+            || (self.launch_delay_frames != 0
+                && (self.normal_launch_origin.is_none() || self.dsp_intent.is_none()))
         {
             return false;
         }

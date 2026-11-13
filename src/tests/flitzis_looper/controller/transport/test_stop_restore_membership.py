@@ -61,6 +61,32 @@ def _stopped_slots(audio: Mock) -> list[int]:
     ]
 
 
+@pytest.mark.parametrize("remember", [False, True])
+def test_global_transport_excludes_individual_stop_before_playback_feedback(
+    controller: AppController, audio_engine_mock: Mock, *, remember: bool
+) -> None:
+    _, bindings = _accepted_sources(controller, audio_engine_mock, (0, 1))
+    controller.session.active_sample_ids = {0, 1}
+    playback = controller.transport.playback
+    playback.stop_pad(0)
+    audio_engine_mock.stop_sample.assert_called_once_with(0)
+    audio_engine_mock.individually_stopped_pad_ids.return_value = [0]
+
+    # The individual stop is admitted, but the audio callback has not reported it.
+    assert controller.session.active_sample_ids == {0, 1}
+    if remember:
+        playback.stop_global_start_stop()
+        playback._global_playback.poll()
+        assert controller.session.global_stop_restore_sample_ids == {1}
+        assert _stopped_slots(audio_engine_mock) == [0, 1]
+
+    playback.start_or_restart_global_start_stop(received_at_ns=73)
+
+    entries = audio_engine_mock.capture_global_start.call_args.args[0]
+    assert [binding for binding, *_rest in entries] == [bindings[1]]
+    assert controller.session.active_sample_ids == {0, 1}
+
+
 def test_off_a_b_c_then_on_stop_covers_history_but_next_start_restores_only_c(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

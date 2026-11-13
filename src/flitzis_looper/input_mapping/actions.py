@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from flitzis_looper.models import StemMaskDisplayMode, StemMixMode, TriggerQuantizationMode
 
 type LooperActionSource = Literal["direct", "python"]
+
+START_STOP_MUTE_KEY = "global.start_stop.mute_hold"
+START_STOP_RIGHT_KEY = "global.start_stop.stop"
 type PadEqBand = Literal["low", "mid", "high"]
 type PitchCcMode = Literal["button", "absolute", "twos_complement", "offset_binary"]
 
@@ -313,6 +316,16 @@ def selected_tap_bpm_action() -> LooperAction:
 def start_stop_action() -> LooperAction:
     """Return the serializable bottom-bar START/STOP primary action."""
     return LooperAction(key="global.start_stop", label="START/STOP")
+
+
+def start_stop_right_action() -> LooperAction:
+    """Return the START/STOP action that stops and remembers its transport group."""
+    return LooperAction(key=START_STOP_RIGHT_KEY, label="START/STOP: Stop")
+
+
+def start_stop_mute_action() -> LooperAction:
+    """Return the START/STOP momentary output mute action."""
+    return LooperAction(key=START_STOP_MUTE_KEY, label="START/STOP: Hold output mute")
 
 
 def pad_eq_action(pad_id: int, band: PadEqBand, db: float) -> LooperAction:

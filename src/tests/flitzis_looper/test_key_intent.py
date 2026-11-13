@@ -377,7 +377,7 @@ def test_legacy_migration_preserves_arbitrary_text_and_neutral_audio_intent() ->
     assert project.manual_key[215] == "Bbm"
     assert project.pad_key_intent[215].source_key == MusicalKey(root=10, mode="minor")
     assert all(intent.base_shift == intent.extra_shift == 0 for intent in project.pad_key_intent)
-    assert all(not intent.retrigger for intent in project.pad_key_intent)
+    assert all(intent.retrigger and not intent.extra_retrigger for intent in project.pad_key_intent)
     assert all(
         intent.analysis_epoch == intent.correction_epoch == 0 for intent in project.pad_key_intent
     )

@@ -49,10 +49,14 @@ fn group_cancellation_is_irrevocable_when_an_individual_reject_loses_its_cas() {
 }
 
 fn public_capture(fixture: &Fixture) -> CapturedGlobalStart {
+    capture_slots(fixture, &[0, 1], false).unwrap()
+}
+
+fn capture_slots(fixture: &Fixture, ids: &[usize], restart: bool) -> PyResult<CapturedGlobalStart> {
     Python::attach(|py| {
-        let entries = [0, 1]
-            .into_iter()
-            .map(|id| {
+        let entries = ids
+            .iter()
+            .map(|&id| {
                 let binding = fixture
                     .control
                     .engine
@@ -67,12 +71,88 @@ fn public_capture(fixture: &Fixture) -> CapturedGlobalStart {
                 )
             })
             .collect();
+        if restart {
+            fixture
+                .control
+                .engine
+                .capture_global_restart(py, entries, None)
+        } else {
+            fixture
+                .control
+                .engine
+                .capture_global_start(py, entries, None)
+        }
+    })
+}
+
+#[test]
+fn individual_stop_fences_group_capture_until_a_new_effective_attack() {
+    let mut fixture = Fixture::new(false);
+    let original = public_capture(&fixture);
+    fixture.drain();
+    fixture
+        .control
+        .engine
+        .publish_captured_global_start(&original)
+        .unwrap()
+        .unwrap();
+    fixture.drain();
+    fixture.render(32);
+    assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 1));
+
+    fixture.control.engine.stop_sample(0).unwrap();
+    assert_eq!(
         fixture
             .control
             .engine
-            .capture_global_start(py, entries, None)
+            .individually_stopped_pad_ids()
+            .unwrap(),
+        vec![0]
+    );
+    // No callback has run since STOP was admitted.
+    assert!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    let error = capture_slots(&fixture, &[0, 1], true).unwrap_err();
+    assert!(error.to_string().contains("individually stopped"));
+    let peer_only = capture_slots(&fixture, &[1], true).unwrap();
+    fixture.drain();
+    fixture
+        .control
+        .engine
+        .publish_captured_global_start(&peer_only)
+        .unwrap()
+        .unwrap();
+    fixture.drain();
+    fixture.render(32);
+    assert_eq!((fixture.starts(0), fixture.starts(1)), (1, 2));
+    assert!(
+        !fixture
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(0))
+    );
+    assert!(capture_slots(&fixture, &[0], false).is_ok());
+
+    let note = fixture.capture(0, "pitch.note:0:set_retrigger");
+    fixture.publish(&note);
+    fixture.render(1);
+    assert!(note.effective());
+    assert_eq!(fixture.starts(0), 2);
+    assert!(
+        fixture
+            .control
+            .engine
+            .individually_stopped_pad_ids()
             .unwrap()
-    })
+            .is_empty()
+    );
+    assert!(capture_slots(&fixture, &[0, 1], true).is_ok());
 }
 
 fn drain_grid(fixture: &mut Fixture) {

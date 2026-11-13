@@ -72,7 +72,7 @@ class PadKeyIntent(BaseModel):
     correction_epoch: KeyEpoch = 0
     base_shift: int = Field(default=0, strict=True, ge=-23, le=23)
     extra_shift: int = Field(default=0, strict=True, ge=-18, le=18)
-    retrigger: bool = Field(default=False, strict=True)
+    retrigger: bool = Field(default=True, strict=True)
     extra_retrigger: bool = Field(default=False, strict=True)
 
     @model_validator(mode="before")

@@ -1009,6 +1009,25 @@ STOP; ordinary exclusive launch still applies its mode-specific peer-stop policy
 - **THEN** pads 1 and 2 are started together
 - **AND** START/STOP renders green
 
+#### Scenario: An individually stopped PAD stays stopped
+- **GIVEN** MultiLoop is ON and two pads are playing
+- **WHEN** the performer stops the first pad individually and presses START/STOP
+- **THEN** only the second pad is restarted
+- **AND** the first pad stays stopped even before its stop feedback arrives
+
+### Requirement: Piano Retrigger Preference Belongs to Each PAD
+
+The Piano Retrigger preference SHALL be stored independently for each PAD and
+default to enabled when no preference exists. Every Piano key press with this
+preference enabled SHALL request a new loop attack, including a press on the
+already selected key. The Transposition Retrigger preference SHALL remain a
+separate setting.
+
+#### Scenario: The highlighted Piano key retriggers
+- **GIVEN** Piano Retrigger is enabled for the selected PAD
+- **WHEN** the performer presses the highlighted Piano key again
+- **THEN** the PAD plays a new attack at the effective loop start
+
 
 <!-- Added from refine-gain-master-stop-controls -->
 ### Requirement: Manual Pad Actions Clear Remembered START/STOP Set

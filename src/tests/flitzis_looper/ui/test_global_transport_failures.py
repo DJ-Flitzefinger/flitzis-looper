@@ -7,6 +7,7 @@ from unittest.mock import call
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.input_mapping.storage import load_midi_mapping_file
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import bottom_bar
@@ -364,3 +365,48 @@ def test_held_right_press_never_retries_failed_stop_against_replacement_source(
             [replacement, bindings[2]], received_at_ns=None
         )
         assert ctx.audio.global_.playback_error is None
+
+
+@pytest.mark.parametrize(
+    ("button", "action"),
+    [
+        (imgui.MouseButton_.left, "global.start_stop"),
+        (imgui.MouseButton_.right, "global.start_stop.stop"),
+        (imgui.MouseButton_.middle, "global.start_stop.mute_hold"),
+    ],
+)
+def test_start_stop_mouse_gestures_learn_without_executing(
+    controller: AppController, audio_engine_mock: Mock, button: int, action: str
+) -> None:
+    ctx, _ = _context(controller, audio_engine_mock)
+    audio_engine_mock.capture_input_timestamp_ns.return_value = 17
+    controller.input_mapping.set_enabled(enabled=True)
+    ctx.input.toggle_learn()
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:63",
+        "value": 100,
+    })
+    audio_engine_mock.reset_mock()
+
+    with _imgui_context():
+        _, midpoint = _button_frame(ctx)
+        io = imgui.get_io()
+        io.add_mouse_pos_event(*midpoint)
+        _button_frame(ctx)
+        io.add_mouse_button_event(button, down=True)
+        _button_frame(ctx)
+        _button_frame(ctx)
+        io.add_mouse_button_event(button, down=False)
+        _button_frame(ctx)
+
+    (mapping,) = load_midi_mapping_file().mappings
+    assert mapping.input.key == "midi:note:1:63"
+    assert mapping.action.key == action
+    assert not controller.session.input_learn_active
+    audio_engine_mock.set_input_mapping_snapshot.assert_called_once_with([
+        ("midi:note:1:63", action)
+    ])
+    audio_engine_mock.capture_global_start.assert_not_called()
+    audio_engine_mock.stop_global_playback_batch.assert_not_called()
+    audio_engine_mock.set_volume.assert_not_called()

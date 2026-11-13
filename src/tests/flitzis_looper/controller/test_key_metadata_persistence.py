@@ -145,7 +145,7 @@ def test_direct_fixed_array_rejection_retains_existing_live_assignment(length: i
         ({"correction_epoch": MAX_KEY_EPOCH + 1}, {"correction_epoch": 0}),
         ({"base_shift": True}, {"base_shift": 0}),
         ({"extra_shift": 19}, {"extra_shift": 0}),
-        ({"retrigger": "true"}, {"retrigger": False}),
+        ({"retrigger": "true"}, {"retrigger": True}),
         ({"correction": 12}, {"correction": None}),
         (
             {
@@ -266,7 +266,7 @@ def test_actual_legacy_load_migrates_raw_metadata_with_neutral_pitch(
     )
     assert loaded.pad_key_intent[215] == PadKeyIntent(correction="Bbm")
     assert all(intent.base_shift == intent.extra_shift == 0 for intent in loaded.pad_key_intent)
-    assert all(not intent.retrigger for intent in loaded.pad_key_intent)
+    assert all(intent.retrigger and not intent.extra_retrigger for intent in loaded.pad_key_intent)
     assert loaded.sample_analysis[0] == analysis
     assert loaded.pad_content == original.pad_content
     assert loaded.pad_gain_db == original.pad_gain_db

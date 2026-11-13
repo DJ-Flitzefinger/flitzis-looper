@@ -10,6 +10,7 @@ from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render_ui
 from flitzis_looper.ui.render.file_dialog import cancel_file_dialog, file_dialog_error
+from flitzis_looper.ui.render.render import KEYBOARD_INPUT_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -168,10 +169,22 @@ def _poll_runtime_tick(context: UiContext, *, closing: bool = False) -> None:
         context.ui.waveform.pause_selected_pad_hold_on_release("editor_hidden")
     if closing:
         context.ui.waveform.pause_selected_pad_hold_on_release("close")
-    if context.state.session.global_stop_momentary_mute_active and (
+    if context.audio.global_.mouse_output_mute_held and (
         io.app_focus_lost or closing or not imgui.is_mouse_down(imgui.MouseButton_.middle)
     ):
         context.audio.global_.set_momentary_output_mute(enabled=False)
+    held_keys = context.input.keyboard_mute_keys
+    if held_keys or closing:
+        down_keys = (
+            {
+                name
+                for name, key in KEYBOARD_INPUT_KEYS
+                if name in held_keys and imgui.is_key_down(key)
+            }
+            if not io.app_focus_lost and not closing
+            else set()
+        )
+        context.input.release_keyboard_mute(down_keys, closing=closing)
     context.ui.arrangement.poll(
         left_down=imgui.is_mouse_down(imgui.MouseButton_.left),
         right_down=imgui.is_mouse_down(imgui.MouseButton_.right),

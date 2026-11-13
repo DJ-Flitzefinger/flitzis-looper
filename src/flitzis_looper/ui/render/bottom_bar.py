@@ -689,24 +689,29 @@ def _start_stop_button(ctx: UiContext, *, size: tuple[float, float] | None = Non
     learn_pending = _has_pending_learn_input(ctx)
     arrangement_pointer = ctx.ui.arrangement.owns_pointer
 
+    if ctx.audio.global_.mouse_output_mute_held and not imgui.is_mouse_down(
+        imgui.MouseButton_.middle
+    ):
+        ctx.audio.global_.set_momentary_output_mute(enabled=False)
+
     if learn_pending:
-        ctx.ui.store_global_start_stop_pressed(pressed=False)
-        if not arrangement_pointer and hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
-            received_at_ns = ctx.input.capture_timestamp_ns()
-            ctx.audio.global_.start_or_restart_start_stop(received_at_ns=received_at_ns)
+        if not arrangement_pointer and hovered:
+            if imgui.is_mouse_clicked(imgui.MouseButton_.left):
+                received_at_ns = ctx.input.capture_timestamp_ns()
+                ctx.audio.global_.start_or_restart_start_stop(received_at_ns=received_at_ns)
+                ctx.ui.store_global_start_stop_pressed(pressed=True)
+            elif imgui.is_mouse_clicked(imgui.MouseButton_.right):
+                ctx.audio.global_.stop_start_stop()
+            elif imgui.is_mouse_clicked(imgui.MouseButton_.middle):
+                ctx.audio.global_.set_momentary_output_mute(enabled=True)
         if hovered:
-            imgui.set_tooltip("Set START/STOP mapping")
+            imgui.set_tooltip("Learn: left start/restart, right stop, middle hold mute")
         return
 
     _start_stop_transport_input(ctx, hovered=hovered)
 
     if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.audio.global_.set_momentary_output_mute(enabled=True)
-
-    if ctx.state.session.global_stop_momentary_mute_active and not imgui.is_mouse_down(
-        imgui.MouseButton_.middle
-    ):
-        ctx.audio.global_.set_momentary_output_mute(enabled=False)
 
     if hovered:
         imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")

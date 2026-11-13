@@ -13,6 +13,8 @@ from flitzis_looper.constants import (
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.current_binding import capture_current_pad_binding
 from flitzis_looper.input_mapping.actions import (
+    START_STOP_MUTE_KEY,
+    START_STOP_RIGHT_KEY,
     LooperAction,
     PadEqBand,
     describe_pitch_rejection,
@@ -121,14 +123,19 @@ class InputMappingController(BaseController):
         self._last_input_runtime_state_signature: _InputRuntimeStateSignature | None = None
         self._last_input_runtime_state_error: str | None = None
         self._input_action_error: tuple[str, str] | None = None
+        self._pending_midi_relative = False
+        self._keyboard_mute_bindings: dict[str, str] = {}
+        self._closing_mapped_mute = False
         app.transport.pitch.bind_runtime_refresh(self.refresh_pitch_runtime_state)
         app.transport.bind_input_runtime_refresh(self._refresh_rust_runtime_state)
         app.transport.bind_multi_loop_cancellation(self._stage_multi_loop_cancellation)
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
+        self._on_frame_render_callbacks.append(self._poll_mapped_output_mute)
 
     def apply_project_state_to_input_runtime(self) -> None:
         """Apply persisted mapping state to the Rust input runtime."""
+        self._keyboard_mute_bindings.clear()
         self._sync_rust_mapping_snapshot()
         self._sync_rust_runtime_state()
         self._sync_rust_learn_state()
@@ -142,10 +149,12 @@ class InputMappingController(BaseController):
 
         self._project.input_mapping_enabled = enabled
         if not enabled:
+            self._keyboard_mute_bindings.clear()
             self._clear_learn_state()
         self._mark_project_changed()
         self._set_rust_enabled(enabled=enabled)
         self._sync_midi_ports()
+        self._poll_mapped_output_mute()
 
     def toggle_learn(self) -> None:
         """Toggle Learn mode or delete the pending input mapping."""
@@ -165,11 +174,12 @@ class InputMappingController(BaseController):
 
         next_active = not self._session.input_learn_active
         if next_active:
+            self._keyboard_mute_bindings.clear()
             self._drain_rust_input_events()
         self._session.input_learn_active = next_active
-        self._session.input_learn_pending_source = None
-        self._session.input_learn_pending_binding_key = None
+        self._clear_pending_learn_input()
         self._sync_rust_learn_state()
+        self._poll_mapped_output_mute()
 
     def perform_learnable_action(self, action: LooperAction, execute: Callable[[], None]) -> None:
         """Execute or learn-map a UI action depending on current Learn state."""
@@ -180,8 +190,22 @@ class InputMappingController(BaseController):
         pending_source = self._session.input_learn_pending_source
         pending_key = self._session.input_learn_pending_binding_key
         if pending_source is not None and pending_key is not None:
+            if action.key == START_STOP_MUTE_KEY and (
+                self._pending_midi_relative or pending_key.startswith("midi:nrpn:")
+            ):
+                self._record_input_action_error(
+                    action.key, ValueError("Hold output mute needs a MIDI Note or absolute CC.")
+                )
+                self._clear_pending_learn_input()
+                return
             self.save_mapping(pending_source, pending_key, action)
             self._clear_learn_state()
+            if action.key == START_STOP_MUTE_KEY and self._input_action_error == (
+                action.key,
+                self._session.input_mapping_error,
+            ):
+                self._session.input_mapping_error = None
+                self._input_action_error = None
             return
 
         if self._session.input_learn_active:
@@ -208,6 +232,8 @@ class InputMappingController(BaseController):
 
         if source == "keyboard":
             keyboard_binding = KeyboardBinding.from_key(binding_key)
+            if action.key != START_STOP_MUTE_KEY:
+                self._forget_keyboard_mute_binding(keyboard_binding)
             self._keyboard.mappings = [
                 mapping
                 for mapping in self._keyboard.mappings
@@ -242,6 +268,7 @@ class InputMappingController(BaseController):
             ]
             changed = len(self._keyboard.mappings) != before
             if changed:
+                self._forget_keyboard_mute_binding(KeyboardBinding.from_key(binding_key))
                 save_keyboard_mapping_file(self._keyboard)
             return changed
 
@@ -251,6 +278,7 @@ class InputMappingController(BaseController):
     def delete_all_keyboard_mappings(self) -> None:
         """Clear all keyboard mappings and keep keyboard defaults."""
         self._keyboard = clear_keyboard_mappings()
+        self._keyboard_mute_bindings.clear()
 
     def delete_all_midi_mappings(self) -> None:
         """Clear all MIDI mappings and keep MIDI defaults."""
@@ -295,11 +323,63 @@ class InputMappingController(BaseController):
         action = self._keyboard_action_for(binding.key)
         if action is None:
             return False
+        if action.key == START_STOP_MUTE_KEY:
+            self._keyboard_mute_bindings[binding.key_name] = binding.key
+            self._poll_mapped_output_mute()
+            return True
         received_at_ns = validate_input_timestamp_ns(received_at_ns)
         self._execute_input_action_with_feedback(
             action.key, lambda: self.execute_action(action, received_at_ns=received_at_ns)
         )
         return True
+
+    @property
+    def keyboard_mute_keys(self) -> frozenset[str]:
+        """Physical keys currently owning an output-mute hold."""
+        return frozenset(self._keyboard_mute_bindings)
+
+    def _forget_keyboard_mute_binding(self, binding: KeyboardBinding) -> None:
+        if self._keyboard_mute_bindings.get(binding.key_name) == binding.key:
+            del self._keyboard_mute_bindings[binding.key_name]
+
+    def release_keyboard_mute(self, down_keys: set[str], *, closing: bool = False) -> None:
+        """Release the original keys even if focus or modifiers changed."""
+        for key in self._keyboard_mute_bindings.keys() - down_keys:
+            del self._keyboard_mute_bindings[key]
+        if closing:
+            self._closing_mapped_mute = True
+        self._poll_mapped_output_mute()
+
+    def _poll_mapped_output_mute(self) -> None:
+        output = getattr(self._app, "audio_output", None)
+        if output is not None and not output.can_perform:
+            return
+        global_params = self._app.transport.global_params
+        enabled = (
+            self._project.input_mapping_enabled
+            and not self._session.input_learn_active
+            and not self._closing_mapped_mute
+        )
+
+        held = enabled and bool(self._keyboard_mute_bindings)
+        if (
+            enabled
+            and not held
+            and any(mapping.action.key == START_STOP_MUTE_KEY for mapping in self._midi.mappings)
+        ):
+            try:
+                held = self._audio.midi_output_mute_held()
+            except RuntimeError as error:
+                self._record_input_action_error(START_STOP_MUTE_KEY, error)
+                return
+        if held == global_params._mapped_output_mute_held:
+            return
+
+        def apply_mute() -> bool:
+            global_params._set_mapped_output_mute(enabled=held)
+            return True
+
+        self._execute_input_action_with_feedback(START_STOP_MUTE_KEY, apply_mute)
 
     def _execute_input_action_with_feedback(
         self, action_key: str, execute: Callable[[], bool]
@@ -379,6 +459,7 @@ class InputMappingController(BaseController):
                     received_at_ns=received_at_ns
                 )
             ),
+            START_STOP_RIGHT_KEY: self._app.transport.playback.stop_global_start_stop,
             "global.speed.increase": self._increase_speed,
             "global.speed.decrease": self._decrease_speed,
             "global.speed.reset": self._app.transport.global_params.reset_speed,
@@ -463,7 +544,11 @@ class InputMappingController(BaseController):
             return
 
         action_key = event.get("action_key")
-        if isinstance(action_key, str):
+        if isinstance(action_key, str) and not (
+            action_key == START_STOP_RIGHT_KEY
+            and binding_key.startswith("midi:cc:")
+            and _midi_event_value(event) == 0
+        ):
             self._execute_midi_action(event, binding_key, action_key)
 
     def _capture_midi_learn_input(self, event: dict[str, object], binding_key: str) -> None:
@@ -474,6 +559,7 @@ class InputMappingController(BaseController):
             return
         self._session.input_learn_pending_source = "midi"
         self._session.input_learn_pending_binding_key = binding_key
+        self._pending_midi_relative = event.get("relative") is True
         self._record_midi_cc_value(binding_key, _midi_event_value(event))
 
     def _execute_midi_action(
@@ -1172,9 +1258,13 @@ class InputMappingController(BaseController):
 
     def _clear_learn_state(self) -> None:
         self._session.input_learn_active = False
+        self._clear_pending_learn_input()
+        self._sync_rust_learn_state()
+
+    def _clear_pending_learn_input(self) -> None:
         self._session.input_learn_pending_source = None
         self._session.input_learn_pending_binding_key = None
-        self._sync_rust_learn_state()
+        self._pending_midi_relative = False
 
 
 def _parse_prefixed_sample_id(key: str, prefix: str) -> int | None:

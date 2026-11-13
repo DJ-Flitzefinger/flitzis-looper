@@ -107,6 +107,7 @@ fn note(number: u16, received_at_ns: u64) -> NormalizedMidiEvent {
             channel: 1,
             number,
         },
+        relative: false,
         value: 100,
         received_at_ns,
     }

@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from unittest.mock import ANY, Mock
+from unittest.mock import ANY, Mock, call
 
 import pytest
 
@@ -16,6 +16,7 @@ from flitzis_looper.input_mapping.actions import (
     pad_gain_delta_action,
     selected_pad_eq_delta_action,
     selected_tap_bpm_action,
+    start_stop_mute_action,
     tap_bpm_action,
 )
 from flitzis_looper.input_mapping.bindings import KeyboardBinding
@@ -1644,3 +1645,96 @@ def test_settings_delete_all_mapping_actions(controller: AppController) -> None:
     assert load_keyboard_mapping_file().mappings == []
     assert MIDI_MAPPING_PATH.is_file()
     assert KEYBOARD_MAPPING_PATH.is_file()
+
+
+def test_learned_and_mouse_mute_holds_restore_latest_volume_after_last_release(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    mapping = controller.input_mapping
+    mapping.set_enabled(enabled=True)
+    action = start_stop_mute_action()
+    midi_key = "midi:note:1:63"
+    keyboard = KeyboardBinding(key_name="B", ctrl=True)
+    mapping.save_mapping("midi", midi_key, action)
+    mapping.save_mapping("keyboard", keyboard.key, action)
+    global_params = controller.transport.global_params
+    global_params.set_volume(0.6)
+    audio_engine_mock.reset_mock()
+
+    audio_engine_mock.midi_output_mute_held = Mock(return_value=True)
+    mapping.on_frame_render()
+    assert controller.session.global_stop_momentary_mute_active
+    global_params.set_momentary_output_mute(enabled=True)
+    assert mapping.capture_keyboard_input(keyboard, text_input_focused=False)
+    global_params.set_momentary_output_mute(enabled=False)
+    global_params.set_volume(0.4)
+    audio_engine_mock.midi_output_mute_held.return_value = False
+    mapping.on_frame_render()
+    assert controller.session.global_stop_momentary_mute_active
+    assert audio_engine_mock.set_volume.call_args_list == [call(0.0)]
+
+    mapping.release_keyboard_mute(set())
+    assert not controller.session.global_stop_momentary_mute_active
+    assert audio_engine_mock.set_volume.call_args_list == [call(0.0), call(0.4)]
+
+    audio_engine_mock.midi_output_mute_held = Mock(return_value=True)
+    mapping.on_frame_render()
+    assert controller.session.global_stop_momentary_mute_active
+    mapping.set_enabled(enabled=False)
+    assert not controller.session.global_stop_momentary_mute_active
+    assert audio_engine_mock.set_volume.call_args_list == [
+        call(0.0),
+        call(0.4),
+        call(0.0),
+        call(0.4),
+    ]
+
+
+def test_mapped_mute_retries_volume_release_after_failed_admission(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    mapping = controller.input_mapping
+    mapping.set_enabled(enabled=True)
+    mapping.save_mapping("midi", "midi:cc:1:7", start_stop_mute_action())
+    audio_engine_mock.midi_output_mute_held = Mock(return_value=True)
+    mapping.on_frame_render()
+    assert controller.session.global_stop_momentary_mute_active
+
+    audio_engine_mock.midi_output_mute_held.return_value = False
+    audio_engine_mock.set_volume.side_effect = RuntimeError("Parameter queue full")
+    mapping.on_frame_render()
+    assert controller.session.global_stop_momentary_mute_active
+    assert controller.session.input_mapping_error == "Parameter queue full"
+
+    audio_engine_mock.set_volume.side_effect = None
+    mapping.on_frame_render()
+    assert not controller.session.global_stop_momentary_mute_active
+    assert controller.session.input_mapping_error is None
+
+
+def test_mute_learn_rejects_relative_midi_then_accepts_absolute_cc(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    ctx = UiContext(controller)
+    mapping = controller.input_mapping
+    mapping.set_enabled(enabled=True)
+    ctx.input.toggle_learn()
+    event = {"source": "midi", "binding_key": "midi:cc:1:7", "value": 65}
+    mapping._handle_rust_input_event({**event, "relative": True})
+    ctx.audio.global_.set_momentary_output_mute(enabled=True)
+
+    assert load_midi_mapping_file().mappings == []
+    assert controller.session.input_learn_active
+    assert controller.session.input_learn_pending_binding_key is None
+    assert "absolute CC" in (controller.session.input_mapping_error or "")
+    audio_engine_mock.set_volume.assert_not_called()
+
+    mapping._handle_rust_input_event(event)
+    ctx.audio.global_.set_momentary_output_mute(enabled=True)
+
+    (learned,) = load_midi_mapping_file().mappings
+    assert learned.input.key == "midi:cc:1:7"
+    assert learned.action == start_stop_mute_action()
+    assert not controller.session.input_learn_active
+    assert controller.session.input_mapping_error is None
+    audio_engine_mock.set_volume.assert_not_called()

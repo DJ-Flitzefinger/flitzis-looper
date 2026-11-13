@@ -516,10 +516,12 @@ the nominal label as a measurement of the rendered audio.
 
 ### Two Retrigger preferences
 
-Piano and Transposition have separate **Retrigger** checkboxes. With the relevant
-option ON, a pitch choice also requests a restart. With it OFF, the choice keeps
-the running position or stopped state. Preparation can show **Preparing pitch
-choice…**; a requested choice is not yet a confirmed audio effect.
+Each PAD has separate **Retrigger** checkboxes for Piano and Transposition.
+Piano Retrigger defaults to ON for new PAD assignments and when no preference
+was saved. With Piano Retrigger ON, every key press requests a loop restart,
+including another press on the highlighted key. With Retrigger OFF, a pitch
+choice keeps the running position or stopped state. Preparation can show
+**Preparing pitch choice…** while the request is pending.
 
 Learned pitch bindings capture their own SET versus SET_RETRIGGER behavior and
 target. Editing the visible Retrigger checkbox later does not rewrite an existing
@@ -692,6 +694,12 @@ rather than ordinary playback. Click L to cancel before capture; when an input
 is pending, its tooltip offers deletion of that captured mapping. Settings also
 has **Delete all Keyboard Mappings** and **Delete all MIDI Mappings**. Use those
 deliberately; they affect their respective binding tables.
+
+On **START/STOP**, left-click learns start or restart, right-click learns stop
+with the usual MultiLoop restore behavior, and middle-click learns momentary
+output mute. Hold a learned keyboard key or MIDI note to mute and release it
+to restore output. For an absolute MIDI CC binding, values 64–127 mute and
+values 0–63 release. Relative NRPN encoders do not provide a release gesture.
 
 Pitch's expanded **MIDI / octave steps** supports **Button**, **Absolute
 encoder**, **Relative 1 / 127** and **Relative 65 / 63** modes. Match the controller's

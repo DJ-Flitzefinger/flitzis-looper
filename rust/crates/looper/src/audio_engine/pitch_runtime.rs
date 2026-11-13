@@ -548,8 +548,10 @@ impl PitchRuntime {
                 return;
             }
         };
+        // The reserve contains a physical beginning, so a stable same-note
+        // action can use it at the callback even after its original target.
         let hit = required
-            && work.action.original_due_frame() >= callback
+            && provisional - work.action.original_due_frame() <= MAX_LAUNCH_DELAY
             && work.action.start_behavior()
                 != Some(super::key_lock_start_policy::KeyLockStartBehavior::AttackAtGrid)
             && self

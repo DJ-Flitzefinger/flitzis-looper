@@ -43,6 +43,8 @@ class ApplyProjectState:
         self._apply_bpm_lock_settings()
 
     def _apply_global_audio_settings(self, defaults: ProjectState) -> None:
+        if self._after_output_retirement:
+            self._global_modes._reset_output_mute_after_retirement()
         if self._project.volume != defaults.volume:
             self._audio.set_volume(self._project.volume)
 

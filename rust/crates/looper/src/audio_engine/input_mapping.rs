@@ -14,6 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const INPUT_QUEUE_CAPACITY: usize = 1024;
+const MIDI_MUTE_ACTION_KEY: &str = "global.start_stop.mute_hold";
 const MIDI_NRPN_MSB_CC: u8 = 99;
 const MIDI_NRPN_LSB_CC: u8 = 98;
 const MIDI_RPN_MSB_CC: u8 = 101;
@@ -50,6 +51,152 @@ impl MidiBinding {
         };
         format!("midi:{kind}:{}:{}", self.channel, self.number)
     }
+}
+
+const MIDI_MUTE_HELD: u64 = 1;
+const MIDI_MUTE_CONFIGURED: u64 = 2;
+const MIDI_MUTE_CONTROLS: usize = 2 * 16 * 128;
+
+/// A release must remain observable even when the ordinary input or report queue is full.
+struct MidiMuteRouting {
+    configured: Mutex<Vec<MidiBinding>>,
+    states: Box<[AtomicU64]>,
+    enabled: Arc<AtomicBool>,
+    learn_capture_active: Arc<AtomicBool>,
+}
+
+impl MidiMuteRouting {
+    fn configure(&self, mappings: &[InputMapping]) {
+        let next: Vec<_> = mappings
+            .iter()
+            .filter(|mapping| mapping.action_key == MIDI_MUTE_ACTION_KEY)
+            .filter_map(|mapping| midi_mute_binding(&mapping.binding_key))
+            .collect();
+        let Ok(mut configured) = self.configured.lock() else {
+            return;
+        };
+        for &input in configured.iter().filter(|input| !next.contains(input)) {
+            self.reset(input, false);
+        }
+        for &input in next.iter().filter(|input| !configured.contains(input)) {
+            self.reset(input, true);
+        }
+        *configured = next;
+    }
+
+    fn reset(&self, input: MidiBinding, configured: bool) {
+        if let Some(state) = self.state(input) {
+            // Every configuration change revokes an in-flight capture of this input.
+            let _ = state.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let revision = (current & !3).checked_add(4)?;
+                Some(revision | if configured { MIDI_MUTE_CONFIGURED } else { 0 })
+            });
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(configured) = self.configured.lock() {
+            for &input in configured.iter() {
+                self.reset(input, true);
+            }
+        }
+    }
+
+    fn held(&self) -> bool {
+        self.configured.lock().is_ok_and(|inputs| {
+            inputs.iter().any(|&input| {
+                self.state(input)
+                    .is_some_and(|state| state.load(Ordering::Acquire) & MIDI_MUTE_HELD != 0)
+            })
+        })
+    }
+
+    fn state(&self, input: MidiBinding) -> Option<&AtomicU64> {
+        let offset = match input.kind {
+            MidiBindingKind::Note => 0,
+            MidiBindingKind::ControlChange => 16 * 128,
+            MidiBindingKind::Nrpn => return None,
+        };
+        if input.number > 127 {
+            return None;
+        }
+        self.states
+            .get(offset + usize::from(input.channel - 1) * 128 + usize::from(input.number))
+    }
+
+    fn capture(&self, input: MidiBinding, value: u8) -> bool {
+        let Some(state) = self.state(input) else {
+            return false;
+        };
+        let original = state.load(Ordering::Acquire);
+        if original & MIDI_MUTE_CONFIGURED == 0
+            || !self.enabled.load(Ordering::Acquire)
+            || self.learn_capture_active.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let held = match input.kind {
+            MidiBindingKind::Note => value > 0,
+            MidiBindingKind::ControlChange => value >= 64,
+            MidiBindingKind::Nrpn => return false,
+        };
+        let _ = state.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current & !MIDI_MUTE_HELD == original & !MIDI_MUTE_HELD)
+                .then_some((current & !MIDI_MUTE_HELD) | u64::from(held))
+        });
+        true
+    }
+
+    fn receive(
+        &self,
+        normalizer: &mut MidiNormalizer,
+        input_tx: &SyncSender<NormalizedMidiEvent>,
+        message: &[u8],
+        received_at_ns: u64,
+    ) -> bool {
+        if let Some(event) = normalizer.normalize(message, received_at_ns) {
+            return (!event.relative && self.capture(event.binding, event.value))
+                || input_tx.try_send(event).is_ok();
+        }
+        midi_note_release(message).is_some_and(|binding| self.capture(binding, 0))
+    }
+}
+
+fn midi_mute_binding(key: &str) -> Option<MidiBinding> {
+    let mut parts = key.split(':');
+    if parts.next()? != "midi" {
+        return None;
+    }
+    let kind = match parts.next()? {
+        "note" => MidiBindingKind::Note,
+        "cc" => MidiBindingKind::ControlChange,
+        _ => return None,
+    };
+    let channel = parts.next()?.parse().ok()?;
+    let number = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=16).contains(&channel) || number > 127 {
+        return None;
+    }
+    Some(MidiBinding {
+        kind,
+        channel,
+        number,
+    })
+}
+
+fn midi_note_release(message: &[u8]) -> Option<MidiBinding> {
+    let &[status, number, velocity, ..] = message else {
+        return None;
+    };
+    let message_type = status & 0xF0;
+    if message_type != 0x80 && !(message_type == 0x90 && velocity == 0) {
+        return None;
+    }
+    Some(MidiBinding {
+        kind: MidiBindingKind::Note,
+        channel: (status & 0x0F) + 1,
+        number: u16::from(number),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +336,7 @@ impl Default for RuntimeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NormalizedMidiEvent {
     pub binding: MidiBinding,
+    pub relative: bool,
     pub value: u8,
     pub received_at_ns: u64,
 }
@@ -196,6 +344,7 @@ pub(crate) struct NormalizedMidiEvent {
 #[derive(Debug, Clone)]
 pub(crate) struct InputRuntimeEvent {
     pub binding_key: String,
+    pub relative: bool,
     pub value: u8,
     pub received_at_ns: u64,
     pub action_key: Option<String>,
@@ -221,6 +370,7 @@ pub(crate) struct InputRuntime {
     audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
     test_normalizer: Mutex<MidiNormalizer>,
     midi_connections: Mutex<Vec<MidiInputConnection<()>>>,
+    midi_mute: Arc<MidiMuteRouting>,
     running: Arc<AtomicBool>,
     dispatcher: Mutex<Option<JoinHandle<()>>>,
     dispatcher_join_failed: AtomicBool,
@@ -239,6 +389,12 @@ impl InputRuntime {
     ) -> Self {
         let enabled = Arc::new(AtomicBool::new(false));
         let learn_capture_active = Arc::new(AtomicBool::new(false));
+        let midi_mute = Arc::new(MidiMuteRouting {
+            configured: Mutex::new(Vec::new()),
+            states: (0..MIDI_MUTE_CONTROLS).map(|_| AtomicU64::new(0)).collect(),
+            enabled: enabled.clone(),
+            learn_capture_active: learn_capture_active.clone(),
+        });
         let stop_admission_revision = Arc::new(AtomicU64::new(0));
         let mappings = Arc::new(Mutex::new(Vec::new()));
         let runtime_state = Arc::new(Mutex::new(RuntimeState {
@@ -280,6 +436,7 @@ impl InputRuntime {
             audio_producer,
             test_normalizer: Mutex::new(MidiNormalizer::default()),
             midi_connections: Mutex::new(Vec::new()),
+            midi_mute,
             running,
             dispatcher: Mutex::new(Some(dispatcher)),
             dispatcher_join_failed: AtomicBool::new(false),
@@ -302,6 +459,7 @@ impl InputRuntime {
             self.enabled.store(true, Ordering::Release);
         } else {
             self.enabled.store(false, Ordering::Release);
+            self.midi_mute.clear();
             Self::reset_pitch_step_state(&mappings);
         }
         self.finish_stop_admission_update(next_revision);
@@ -320,6 +478,7 @@ impl InputRuntime {
         let next_revision = self.begin_stop_admission_update();
         if active {
             self.learn_capture_active.store(true, Ordering::Release);
+            self.midi_mute.clear();
             Self::reset_pitch_step_state(&mappings);
         } else {
             Self::reset_pitch_step_state(&mappings);
@@ -392,6 +551,7 @@ impl InputRuntime {
                 previous.owner.store(false, Ordering::Release);
             }
         }
+        self.midi_mute.configure(&parsed);
         *guard = parsed;
         self.finish_stop_admission_update(next_revision);
     }
@@ -892,6 +1052,7 @@ impl InputRuntime {
             .lock()
             .map_err(|_| "failed to acquire MIDI connection lock".to_string())?;
         connections.clear();
+        self.midi_mute.clear();
 
         for index in 0..port_count {
             let mut midi_in = MidiInput::new(&format!("flitzis-looper-midi-{index}"))
@@ -903,6 +1064,7 @@ impl InputRuntime {
             };
 
             let input_tx = self.input_tx.clone();
+            let midi_mute = self.midi_mute.clone();
             let output_admission = self.ownership.clone();
             let clock = self.clock;
             let mut normalizer = MidiNormalizer::default();
@@ -917,9 +1079,7 @@ impl InputRuntime {
                             return;
                         }
                         let received_at_ns = clock.capture_ns();
-                        if let Some(event) = normalizer.normalize(message, received_at_ns) {
-                            let _ = input_tx.try_send(event);
-                        }
+                        midi_mute.receive(&mut normalizer, &input_tx, message, received_at_ns);
                     },
                     (),
                 )
@@ -933,7 +1093,12 @@ impl InputRuntime {
     pub fn stop_midi_input(&self) {
         if let Ok(mut connections) = self.midi_connections.lock() {
             connections.clear();
+            self.midi_mute.clear();
         }
+    }
+
+    pub fn midi_output_mute_held(&self) -> bool {
+        self.midi_mute.held()
     }
 
     /// Retire physical MIDI connections and the original dispatcher before a new
@@ -969,10 +1134,8 @@ impl InputRuntime {
         let Ok(mut normalizer) = self.test_normalizer.lock() else {
             return false;
         };
-        let Some(event) = normalizer.normalize(message, received_at_ns) else {
-            return false;
-        };
-        self.input_tx.try_send(event).is_ok()
+        self.midi_mute
+            .receive(&mut normalizer, &self.input_tx, message, received_at_ns)
     }
 
     pub fn poll_event(&self) -> Option<InputRuntimeEvent> {
@@ -1093,6 +1256,7 @@ impl InputDispatcher {
                                 .event_tx
                                 .try_send(InputRuntimeEvent {
                                     binding_key,
+                                    relative: event.relative,
                                     value: event.value,
                                     received_at_ns: event.received_at_ns,
                                     action_key,
@@ -1184,6 +1348,7 @@ impl InputDispatcher {
             if let Err(TrySendError::Full(event) | TrySendError::Disconnected(event)) =
                 self.event_tx.try_send(InputRuntimeEvent {
                     binding_key,
+                    relative: event.relative,
                     value: event.value,
                     received_at_ns: event.received_at_ns,
                     action_key,
@@ -1473,6 +1638,7 @@ impl MidiNormalizer {
                         channel,
                         number: u16::from(message[1]),
                     },
+                    relative: false,
                     value: message[2],
                     received_at_ns,
                 })
@@ -1510,6 +1676,7 @@ impl MidiNormalizer {
                             channel,
                             number: parameter,
                         },
+                        relative: false,
                         value: data_value,
                         received_at_ns,
                     });
@@ -1531,6 +1698,7 @@ impl MidiNormalizer {
                                 channel,
                                 number: parameter,
                             },
+                            relative: true,
                             value,
                             received_at_ns,
                         });
@@ -1542,6 +1710,7 @@ impl MidiNormalizer {
                             channel,
                             number: u16::from(data_value),
                         },
+                        relative: true,
                         value,
                         received_at_ns,
                     });
@@ -1554,6 +1723,7 @@ impl MidiNormalizer {
                         channel,
                         number: u16::from(controller),
                     },
+                    relative: false,
                     value: data_value,
                     received_at_ns,
                 })
@@ -1879,6 +2049,60 @@ mod tests {
         for message in messages {
             assert!(normalize_midi_message(message, 1).is_none());
         }
+    }
+
+    #[test]
+    fn mapped_mute_tracks_note_release_and_cc_state_outside_bounded_queues() {
+        let (producer, _consumer) = rtrb::RingBuffer::new(1);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![
+            ("midi:note:1:60".into(), MIDI_MUTE_ACTION_KEY.into()),
+            ("midi:cc:1:7".into(), MIDI_MUTE_ACTION_KEY.into()),
+        ]);
+        let (input_tx, _input_rx) = sync_channel(1);
+        let mut normalizer = MidiNormalizer::default();
+        let receive = |normalizer: &mut MidiNormalizer, message: &[u8]| {
+            runtime.midi_mute.receive(normalizer, &input_tx, message, 1)
+        };
+
+        assert!(receive(&mut normalizer, &[0x90, 61, 100]));
+        assert!(!receive(&mut normalizer, &[0x90, 62, 100]));
+        assert!(!receive(&mut normalizer, &[0xb0, 96, 7]));
+        assert!(!runtime.midi_output_mute_held());
+        assert!(receive(&mut normalizer, &[0x90, 60, 30]));
+        assert!(runtime.midi_output_mute_held());
+        assert!(receive(&mut normalizer, &[0xb0, 7, 64]));
+        assert!(receive(&mut normalizer, &[0x80, 60, 120]));
+        assert!(runtime.midi_output_mute_held());
+        assert!(receive(&mut normalizer, &[0xb0, 7, 63]));
+        assert!(!runtime.midi_output_mute_held());
+        assert!(receive(&mut normalizer, &[0x90, 60, 127]));
+        assert!(receive(&mut normalizer, &[0x90, 60, 0]));
+        assert!(!runtime.midi_output_mute_held());
+        assert!(!receive(&mut normalizer, &[0x80, 61, 0]));
+
+        assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+        runtime.set_learn_capture_active(true);
+        assert!(!runtime.midi_output_mute_held());
+        assert!(!runtime.inject_midi_message(&[0x80, 60, 0]));
+        assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+        assert_eq!(wait_for_input_event(&runtime).action_key, None);
+        assert!(runtime.inject_midi_message(&[0xb0, 97, 7]));
+        let relative = wait_for_input_event(&runtime);
+        assert!(relative.relative);
+        assert_eq!(relative.binding_key, "midi:cc:1:7");
+        assert_eq!(relative.action_key, None);
+
+        runtime.set_learn_capture_active(false);
+        assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+        runtime.replace_mappings(vec![("midi:note:1:60".into(), "global.start_stop".into())]);
+        assert!(!runtime.midi_output_mute_held());
+        assert!(!runtime.inject_midi_message(&[0x80, 60, 0]));
+        runtime.replace_mappings(vec![("midi:note:1:60".into(), MIDI_MUTE_ACTION_KEY.into())]);
+        assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+        runtime.set_enabled(false);
+        assert!(!runtime.midi_output_mute_held());
     }
 
     #[test]

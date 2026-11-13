@@ -31,6 +31,8 @@ from flitzis_looper.input_mapping.actions import (
     pitch_original_action,
     pitch_reset_base_action,
     pitch_step_action,
+    start_stop_mute_action,
+    start_stop_right_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.stem_execution import device_label as stem_device_label
@@ -866,13 +868,26 @@ class GlobalAudioActions:
             ),
         )
 
+    @property
+    def mouse_output_mute_held(self) -> bool:
+        """Whether a mouse press is holding the START/STOP mute."""
+        return self._controller.transport.global_params._mouse_output_mute_held
+
     def set_momentary_output_mute(self, *, enabled: bool) -> None:
-        self._perform_playback_action(
-            lambda: self._controller.transport.global_params.set_momentary_output_mute(
-                enabled=enabled
-            ),
-            operation="global_set_momentary_output_mute",
-        )
+        def execute() -> None:
+            self._perform_playback_action(
+                lambda: self._controller.transport.global_params.set_momentary_output_mute(
+                    enabled=enabled
+                ),
+                operation="global_set_momentary_output_mute",
+            )
+
+        if enabled:
+            self._controller.input_mapping.perform_learnable_action(
+                start_stop_mute_action(), execute
+            )
+        else:
+            execute()
 
     def start_or_restart_start_stop(self, *, received_at_ns: int | None = None) -> None:
         """Restart loops with one captured Rust input timestamp shared by all pads."""
@@ -889,10 +904,13 @@ class GlobalAudioActions:
         self._controller.input_mapping.perform_learnable_action(start_stop_action(), execute)
 
     def stop_start_stop(self) -> None:
-        self._perform_playback_action(
-            self._controller.transport.playback.stop_global_start_stop,
-            operation="global_stop_start_stop",
-        )
+        def execute() -> None:
+            self._perform_playback_action(
+                self._controller.transport.playback.stop_global_start_stop,
+                operation="global_stop_start_stop",
+            )
+
+        self._controller.input_mapping.perform_learnable_action(start_stop_right_action(), execute)
 
     def set_speed(self, speed: float) -> None:
         action = (
@@ -1738,6 +1756,15 @@ class InputMappingActions:
     def capture_timestamp_ns(self) -> int:
         """Capture an observed UI input in the shared Rust input clock domain."""
         return self._controller.input_mapping.capture_input_timestamp_ns()
+
+    @property
+    def keyboard_mute_keys(self) -> frozenset[str]:
+        """Physical keyboard inputs currently owning a mute hold."""
+        return self._controller.input_mapping.keyboard_mute_keys
+
+    def release_keyboard_mute(self, down_keys: set[str], *, closing: bool = False) -> None:
+        """Release original keyboard owners before polling the input runtime."""
+        self._controller.input_mapping.release_keyboard_mute(down_keys, closing=closing)
 
     def capture_keyboard(
         self,

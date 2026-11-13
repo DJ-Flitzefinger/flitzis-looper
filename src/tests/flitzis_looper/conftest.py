@@ -509,6 +509,7 @@ class FakeCapturedGlobalStart:
 def _install_captured_global_start_fakes(audio: Mock) -> None:
     # Explicit installation also works with an older installed Native ABI.
     audio.capture_global_start = Mock(side_effect=FakeCapturedGlobalStart)
+    audio.capture_global_restart = audio.capture_global_start
     audio.publish_captured_global_start = Mock(side_effect=lambda captured: captured.publish())
 
 
@@ -516,6 +517,7 @@ def _install_playback_capture_fakes(audio: Mock) -> None:
     """Configure explicit capture APIs without manufacturing current target history."""
     _install_captured_start_fakes(audio)
     _install_captured_global_start_fakes(audio)
+    audio.individually_stopped_pad_ids = Mock(return_value=[])
     audio.current_explicit_playback_target = Mock(return_value=None)
     audio.stop_explicit_playback = Mock(return_value=FakeGlobalPlaybackBatchTicket())
     audio.set_input_runtime_state.return_value = None

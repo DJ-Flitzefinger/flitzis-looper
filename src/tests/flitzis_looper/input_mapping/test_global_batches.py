@@ -118,10 +118,8 @@ def test_actual_app_global_input_drains_accepted_playback_feedback_before_next_t
         AudioMessage.SampleStarted(2),
         None,
     ]
-    if remember_stop:
-        controller.transport.playback.stop_global_start_stop()
-    else:
-        _dispatch_global_action(controller, "global.stop_all", route=route, timestamp=19)
+    stop_action = "global.start_stop.stop" if remember_stop else "global.stop_all"
+    _dispatch_global_action(controller, stop_action, route=route, timestamp=19)
 
     audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
         [bindings[0], bindings[2]], received_at_ns=None if remember_stop else 19

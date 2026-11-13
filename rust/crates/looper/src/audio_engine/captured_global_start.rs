@@ -19,6 +19,13 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
+pub(super) type GlobalStartEntries = Vec<(
+    Py<InputRuntimePadBinding>,
+    f64,
+    Option<f64>,
+    Option<Py<ResidentWindowTicket>>,
+)>;
+
 const GROUP_OPEN: u8 = 0;
 const GROUP_CANCELLED: u8 = 1;
 const GROUP_CLAIMED: u8 = 2;
@@ -259,19 +266,20 @@ impl CapturedGlobalStart {
 
 pub(super) fn capture(
     engine: &AudioEngine,
-    entries: Vec<(
-        &InputRuntimePadBinding,
-        f64,
-        Option<f64>,
-        Option<&ResidentWindowTicket>,
-    )>,
-    received_at_ns: u64,
+    py: Python<'_>,
+    entries: GlobalStartEntries,
+    received_at_ns: Option<&Bound<'_, PyAny>>,
+    exclude_individual_stops: bool,
 ) -> PyResult<CapturedGlobalStart> {
     if entries.is_empty() || entries.len() > MAX_VOICES {
         return Err(PyValueError::new_err(
             "global start exceeds participant capacity or is empty",
         ));
     }
+    let now = engine.input_clock.capture_ns();
+    let received_at_ns =
+        super::validated_input_timestamp(super::parse_input_timestamp(received_at_ns)?, now)
+            .unwrap_or(now);
     let format = engine.ordinary_start_render_format()?;
     let _requests = engine
         .pad_request_ids
@@ -297,6 +305,8 @@ pub(super) fn capture(
     let mut seen = [false; NUM_SAMPLES];
     let mut members = Vec::with_capacity(entries.len());
     for (binding, start_s, end_s, ticket) in &entries {
+        let binding = binding.borrow(py);
+        let ticket = ticket.as_ref().map(|ticket| ticket.borrow(py));
         if binding.id >= NUM_SAMPLES
             || seen[binding.id]
             || !Arc::ptr_eq(&binding.ownership, &engine.input_runtime_ownership)
@@ -307,9 +317,20 @@ pub(super) fn capture(
                 "invalid, duplicate or unavailable global source",
             ));
         }
+        if exclude_individual_stops
+            && binding
+                .binding
+                .placement
+                .and_then(|slot| slot.content_key())
+                .is_some_and(|key| engine.input_runtime_ownership.individually_stopped(key))
+        {
+            return Err(PyValueError::new_err(
+                "global source was individually stopped during target capture",
+            ));
+        }
         seen[binding.id] = true;
         let start = CapturedPadStart::capture_from_binding(
-            binding,
+            &binding,
             *start_s,
             *end_s,
             1.0,
@@ -320,12 +341,16 @@ pub(super) fn capture(
         )
         .map_err(|reason| PyValueError::new_err(reason.as_str()))?;
         let dependency = ticket
+            .as_deref()
             .map(|ticket| ticket.capture_start_dependency(&start))
             .transpose()?;
         start.exclude_explicit_choice();
         members.push(GlobalStartMember { start, dependency });
     }
-    if entries.iter().any(|(binding, _, _, _)| !binding.current()) {
+    if entries
+        .iter()
+        .any(|(binding, _, _, _)| !binding.borrow(py).current())
+    {
         return Err(PyValueError::new_err(
             "global source changed during original capture",
         ));

@@ -403,7 +403,6 @@ def test_actual_repeated_note_mouse_attacks_emit_distinct_captures_and_keep_sele
     pitch_render: _PitchRender, audio_engine_mock: Mock, value: int
 ) -> None:
     controller = pitch_render.controller
-    controller.transport.pad.set_pitch_retrigger_intent(0, enabled=True)
     with _imgui_context():
         frame = pitch_render.open()
         assert frame.piano is not None
@@ -444,8 +443,8 @@ def test_actual_mouse_black_overlap_takes_priority_and_lower_white_remains_playa
         assert frame.piano is not None
         frame.piano.assert_markers(0)
     assert [call.args[1] for call in audio_engine_mock.capture_pad_pitch_action.call_args_list] == [
-        "pitch.note:1:set",
-        "pitch.note:0:set",
+        "pitch.note:1:set_retrigger",
+        "pitch.note:0:set_retrigger",
     ]
 
 
@@ -505,7 +504,6 @@ def test_actual_retrigger_checkboxes_are_independent_and_fix_their_own_action_va
     controller = pitch_render.controller
     with _imgui_context():
         frame = pitch_render.open()
-        frame = pitch_render.click(frame.controls["pitch_piano_retrigger"])
         intent = controller.project.pad_key_intent[0]
         assert intent.retrigger
         assert not intent.extra_retrigger
@@ -517,6 +515,13 @@ def test_actual_retrigger_checkboxes_are_independent_and_fix_their_own_action_va
         intent = controller.project.pad_key_intent[0]
         assert not intent.retrigger
         assert intent.extra_retrigger
+        pitch_render.ctx.ui.select_pad(1)
+        frame = pitch_render.frame()
+        assert controller.project.pad_key_intent[1].retrigger
+        assert not controller.project.pad_key_intent[1].extra_retrigger
+        pitch_render.ctx.ui.select_pad(0)
+        frame = pitch_render.frame()
+        assert not controller.project.pad_key_intent[0].retrigger
         audio_engine_mock.capture_pad_pitch_action.assert_not_called()
         assert frame.piano is not None
         frame = pitch_render.click_at(frame.piano.note_point(1))
@@ -790,7 +795,7 @@ def test_actual_note_refusal_keeps_previous_selection_and_error_outside_panel(
         assert pitch_render.controller.project.pad_key_intent[0].base_shift == 0
         assert not any("not supported" in text for text in frame.text)
     audio_engine_mock.capture_pad_pitch_action.assert_called_once_with(
-        0, "pitch.note:23:set", received_at_ns=123
+        0, "pitch.note:23:set_retrigger", received_at_ns=123
     )
     audio_engine_mock.publish_pitch_action.assert_not_called()
 
@@ -813,7 +818,7 @@ def test_actual_corrected_reference_plays_labelled_notes_and_retains_detected_or
         assert "C / 0 st from base" in frame.text
         assert controller.project.pad_key_intent[0].base_shift == -2
     audio_engine_mock.capture_pad_pitch_action.assert_called_once_with(
-        0, "pitch.note:-2:set", received_at_ns=123
+        0, "pitch.note:-2:set_retrigger", received_at_ns=123
     )
 
 

@@ -25,6 +25,7 @@ PENDING_PLACEMENT = "content placement publication is pending"
 
 def _context(controller: AppController, audio: Mock, action: str) -> UiContext:
     """Provide explicit current source ownership, with a different pad still loading."""
+    controller.project.multi_loop = True
     metadata = {sample_id: current_timing_metadata(sample_id=sample_id) for sample_id in (0, 2)}
     bindings = {
         sample_id: FakeInputRuntimePadBinding(sample_id, accepted_timing=value, intent="automatic")

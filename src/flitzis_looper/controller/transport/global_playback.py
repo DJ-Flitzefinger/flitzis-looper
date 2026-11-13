@@ -374,6 +374,9 @@ class GlobalPlaybackController:
             if self._session.global_stop_engaged
             else self._session.active_sample_ids - self._session.paused_sample_ids
         )
+        # An admitted individual STOP can precede the matching playback observation.
+        if target_ids:
+            target_ids = target_ids.difference(self._audio.individually_stopped_pad_ids())
         if not target_ids:
             return None
         if any(not self._incoming_target_ready(sample_id) for sample_id in sorted(target_ids)):
@@ -392,7 +395,7 @@ class GlobalPlaybackController:
             if entry is None:
                 return None
             entries.append(entry)
-        capture = self._audio.capture_global_start(entries, received_at_ns=received_at_ns)
+        capture = self._audio.capture_global_restart(entries, received_at_ns=received_at_ns)
         return _DeferredStart(
             capture,
             frozenset(target_ids),
@@ -440,10 +443,10 @@ class GlobalPlaybackController:
         # Revoked launch IDs include historical admissions and unclaimed starts.
         # They need ordered STOP coverage, but only post-drain actual playback
         # belongs to the next remembered restart.
-        restore_ids = (
-            frozenset(self._session.active_sample_ids - self._session.paused_sample_ids)
-            if remember
-            else frozenset()
-        )
+        restore_ids = frozenset()
+        if remember:
+            restore_ids = frozenset(self._session.active_sample_ids).difference(
+                self._session.paused_sample_ids, self._audio.individually_stopped_pad_ids()
+            )
         ticket = self._audio.stop_global_playback_batch(bindings, received_at_ns=received_at_ns)
         self._pending = _PendingGlobalBatch(ticket, frozenset(restore_ids), self._restore_revision)

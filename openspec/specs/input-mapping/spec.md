@@ -2,7 +2,8 @@
 
 ## Purpose
 
-<!-- Purpose to be updated after merge -->
+Define how performers learn, save and dispatch keyboard and MIDI mappings for Looper controls.
+Keep the chosen control semantics and original input timing through normal playback.
 
 ## Requirements
 
@@ -94,8 +95,9 @@ events. Data Increment/Data Decrement Control Changes without a fresh NRPN setup
 value-keyed data byte greater than 1, SHALL be treated as relative Control Change inputs whose
 binding number is the event data byte, so hardware Inc/Dec modes that encode knob identity in that
 byte remain independently learnable. The system SHALL treat Note On velocity zero as Note Off and
-SHALL NOT trigger Learn or playback from it. It SHALL ignore NRPN setup Control Changes as
-standalone Learn/playback targets. It SHALL ignore Active Sensing, MIDI Clock, SysEx, Program
+SHALL NOT trigger Learn or playback from it. Note Off SHALL release a learned START/STOP output
+mute held by that Note. It SHALL ignore NRPN setup Control Changes as standalone Learn/playback
+targets. It SHALL ignore Active Sensing, MIDI Clock, SysEx, Program
 Change, Pitch Bend, Aftertouch, and MPE-style messages.
 
 #### Scenario: Note On velocity zero is ignored
@@ -196,13 +198,27 @@ pending, even when normal stem playback availability disables their execution.
 - **THEN** the system saves a mapping to `pad.tap_bpm:4`
 - **AND** normal mapped dispatch registers a Tap BPM event for that pad
 
-#### Scenario: Learn saves START/STOP
+#### Scenario: Learn saves the chosen START/STOP transport gesture
 - **GIVEN** input mapping is enabled
 - **AND** Learn has captured one MIDI or keyboard input
-- **WHEN** the performer activates the bottom-bar START/STOP control
-- **THEN** the system saves a mapping to `global.start_stop`
-- **AND** normal mapped dispatch performs the START/STOP primary start-or-restart action outside
-  the audio callback
+- **WHEN** the performer left-clicks or right-clicks the bottom-bar START/STOP control
+- **THEN** Learn saves `global.start_stop` for left-click and `global.start_stop.stop` for right-click
+- **AND** choosing the target leaves playback unchanged
+- **AND** mapped dispatch performs the same start/restart or remembered stop outside the audio
+  callback
+
+#### Scenario: Learn saves the START/STOP momentary mute
+- **GIVEN** Learn has captured a keyboard key, MIDI Note or absolute MIDI CC
+- **WHEN** the performer middle-clicks the bottom-bar START/STOP control
+- **THEN** Learn saves `global.start_stop.mute_hold`
+- **AND** choosing the target leaves output volume unchanged
+- **AND** a mapped key or Note holds mute until its release
+- **AND** a mapped absolute CC holds mute at values 64–127 and releases it at values 0–63
+- **AND** NRPN and recognized relative CC messages do not become mute targets
+- **AND** the last hold release restores the latest master volume
+- **AND** releasing a mouse hold leaves a MIDI or keyboard hold in effect
+- **AND** MIDI release stays observable when the ordinary input or dispatch queue is full
+- **AND** entering Learn or disabling mappings clears mapped holds
 
 #### Scenario: Keyboard Learn saves bounded set-value controls
 - **GIVEN** input mapping is enabled
