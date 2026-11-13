@@ -10,11 +10,13 @@ original text/JSON documents and preserves original identities, source owners,
 section mappings and evidence retention. Its appended executed dispositions record
 actual cleanup; its original paths and line numbers remain frozen provenance.
 
-All 104 formerly active OpenSpec changes now have a
+The 104 OpenSpec changes archived on 2026-10-30 have a
 [dated disposition and source mapping](../openspec/changes/archive/2026-10-30-archive-index.md)
 and a [canonical historical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md).
 Use current top-level specs for supported contracts; archived tasks retain their
-original incomplete gates and do not activate old work programs.
+original incomplete gates and do not activate old work programs. See the later
+[audio-output and performance disposition](../openspec/changes/archive/2026-11-13-archive-index.md)
+for delivered behavior and outstanding verification.
 
 The current [architecture overview](architecture.md) links focused
 [runtime/transport](architecture/runtime-and-transport.md),

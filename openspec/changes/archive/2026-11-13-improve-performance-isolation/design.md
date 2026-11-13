@@ -3204,7 +3204,7 @@ explicit CUDA limit1 request without cancellation. Typed exit70 additionally
 requires one actual Cuda/limit1 constructor, the **last same-thread** Cuda Extend,
 positive exact256-byte rounding and the matching BFCArena exception. A later
 Cpu/CudaPinned/unknown extension invalidates the match. The separate
-[verifier](../../../scripts/beat_this_trial_fault.py) independently checks stdout
+[verifier](../../../../scripts/beat_this_trial_fault.py) independently checks stdout
 and captured stderr after original tree **and** readers return. This denotes
 controlled device-arena refusal before cudaMalloc, not physical VRAM exhaustion;
 [ORT's allocator source](https://github.com/microsoft/onnxruntime/blob/v1.24.4/onnxruntime/core/framework/bfc_arena.cc#L89)
@@ -4012,7 +4012,7 @@ background-isolation or latency improvement.
 
 Reproduce through the configured adapter's `rust-test` action with
 `-p flitzis-looper --lib app_analysis:: --release -- --test-threads=1`.
-The source is [app_analysis_approximate_tests.rs](../../../rust/crates/looper/src/audio_engine/app_analysis_approximate_tests.rs).
+The source is [app_analysis_approximate_tests.rs](../../../../rust/crates/looper/src/audio_engine/app_analysis_approximate_tests.rs).
 For explicit wrapper replay, set `FLITZIS_APPROXIMATE_EVIDENCE_DIR` to an owned
 absolute generated-output directory containing validated `period-input.json`
 and `interval-input.json`, then run the `app_analysis::approximate` filter with
@@ -4181,8 +4181,8 @@ the implemented subset and supersedes its corresponding reserve-miss observation
 | CUDA and fallback already exist | `bs_roformer_generation.py`, `stem_generation.py`, offline worker code | Preserve actual device/fallback receipts. Additional offline acceleration needs transfer-inclusive evidence; no measured case currently supports moving small callback blocks to CUDA. |
 
 Paths above are under
-[`rust/crates/looper/src/audio_engine`](../../../rust/crates/looper/src/audio_engine/)
-or [`src/flitzis_looper`](../../../src/flitzis_looper/), as qualified.
+[`rust/crates/looper/src/audio_engine`](../../../../rust/crates/looper/src/audio_engine/)
+or [`src/flitzis_looper`](../../../../src/flitzis_looper/), as qualified.
 
 ## STEP2 production response and exact-ready scheduling
 
@@ -4271,7 +4271,7 @@ steps so readiness and a justified prepared-attack DSP change remain explicit.
 Run the paced probe through the configured workspace adapter's `rust-test` action
 with `-p flitzis-looper --lib paced_production_ --release -- --ignored --nocapture --test-threads=1`.
 The test source is
-[`response_probe.rs`](../../../rust/crates/looper/src/audio_engine/ordinary_endpoint_reserve_tests/response_probe.rs).
+[`response_probe.rs`](../../../../rust/crates/looper/src/audio_engine/ordinary_endpoint_reserve_tests/response_probe.rs).
 
 ## STEP3 implementation boundary
 
@@ -4544,7 +4544,7 @@ Run the paired diagnostic through the actual-checkout adapter's `rust-test` with
 `-p flitzis-looper --lib --release -- completed_recording_response --ignored --nocapture --test-threads=1`.
 Regular focused filters are `captured_global_start`, `scheduler::` and
 `early_completion_tests`; the source is
-[`early_completion_tests.rs`](../../../rust/crates/looper/src/audio_engine/captured_global_start_tests/atomic_capture_tests/early_completion_tests.rs).
+[`early_completion_tests.rs`](../../../../rust/crates/looper/src/audio_engine/captured_global_start_tests/atomic_capture_tests/early_completion_tests.rs).
 Systems PRE/frozen/affected, Methods and one independent final-diff review cover
 this step. Formatting, strict OpenSpec and local navigation are checked separately.
 
@@ -4726,8 +4726,8 @@ references. Simultaneously held Native owners and final request identities stay
 distinct. Recording preserves common S/E=80, immutable STOP=24080, independent
 160/320 Hz sources, all 24000 spool sample bits and actual writer/RT settlement.
 Rust callback allocation checks exclude C++/FFT allocations. The focused source is
-[`live_original_tests.rs`](../../../rust/crates/looper/src/audio_engine/ordinary_start_tests/live_original_tests.rs)
-and [`completion_tests.rs`](../../../rust/crates/looper/src/audio_engine/pitch_runtime/completion_tests.rs).
+[`live_original_tests.rs`](../../../../rust/crates/looper/src/audio_engine/ordinary_start_tests/live_original_tests.rs)
+and [`completion_tests.rs`](../../../../rust/crates/looper/src/audio_engine/pitch_runtime/completion_tests.rs).
 
 The final regular closure has 311 distinct successes: 309 source-compatible
 integrated passes plus the two corrected legacy fixtures' final targeted passes.
@@ -4825,7 +4825,7 @@ Run the explicit probe through the actual-checkout adapter's `rust-test` with
 The focused filter is `deferred_`; the integrated filters are
 `ordinary_start_tests pitch_runtime_tests pitch_runtime:: ordinary_endpoint_reserve_tests captured_global_start scheduler:: pad_start:: pitch_actions:: deferred_`.
 The new custody tests are
-[`deferred_group_tests.rs`](../../../rust/crates/looper/src/audio_engine/pitch_runtime/deferred_group_tests.rs).
+[`deferred_group_tests.rs`](../../../../rust/crates/looper/src/audio_engine/pitch_runtime/deferred_group_tests.rs).
 Another 280 Python captured-input/MIDI/Piano/group/recording-control and opaque
 Native/API checks pass with verified external Release Native/API. They do not
 replace audio evidence. Systems PRE/frozen/affected, Methods and one independent
@@ -4913,7 +4913,7 @@ status must stay explicit rather than masquerade as precise timing acceptance.
 Run through the actual-checkout adapter's `rust-test` with
 `-p flitzis-looper --lib --release -- practical_attack_profile_assessment --ignored --nocapture --test-threads=1`.
 The source is
-[`key_lock_physical_onset_tests.rs`](../../../rust/crates/looper/src/audio_engine/key_lock_physical_onset_tests.rs).
+[`key_lock_physical_onset_tests.rs`](../../../../rust/crates/looper/src/audio_engine/key_lock_physical_onset_tests.rs).
 Focused regular filters are `key_lock_physical_onset_tests`,
 `key_lock_tonal_onset_tests`, `physical_birth_history_tests` and
 `prepared_native_history::retained_start::tests`. The explicit diagnostic passes
@@ -7097,7 +7097,7 @@ A dedicated ignored controller diagnostic now connects the real Loader/Project
 source owners to the MultiLoop-OFF global START/STOP route while editor selection
 differs from the last effective explicit target. It retains the original capture,
 T and own E, source/content identity, full stereo PCM, actual feedback and retirement.
-The [architecture evidence](../../../docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
+The [architecture evidence](../../../../docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
 records its functional scope; no production, timing, device or whole-quality claim
 is added. Existing Piano, pause/Hold/seek and neural gates remain separate.
 ## Original parent registry context diagnostics

@@ -33,9 +33,10 @@ The initial stem set SHALL include vocals, melody, bass, drums, and instrumental
 
 <!-- From add-offline-stem-cache -->
 ### Requirement: Offline Generation And Effective Adoption Have Separate Authority
-The system SHALL permit source-leased offline generation for stopped, playing or paused
-pads without running generation in the audio callback. Conflicting load, analysis,
-unload and generation intent SHALL retain their existing admission fences.
+The system SHALL accept source-leased stem requests for stopped, playing or paused
+pads under the per-pad task fences. Heavy inference SHALL follow the shared
+background resource policy. Active playback or a retained paused voice on a
+current subscriber defers admission. Saved-set lookup and playback can continue.
 
 A verified disk selection, its registration and requested residency SHALL remain distinct
 from effective playback. New-set adoption SHALL use its own state-appropriate source,
@@ -48,14 +49,15 @@ preserve current audio and actual reader ownership.
 #### Scenario: Playing pad requests offline generation
 - **GIVEN** a playing or paused pad has a current immutable source and no conflicting task
 - **WHEN** the performer requests stem generation
-- **THEN** the bounded background path retains its source lease through actual backend return
-- **AND** existing playback continues independently of generation
+- **THEN** the request retains its current source lease and visibly waits to start inference
+- **AND** existing playback continues
 
-#### Scenario: Pad starts during generation
-- **WHEN** a pad starts before generation completes
-- **THEN** a verified result may commit for still-current material and model intent
-- **AND** effective new-set playback requires the pad's independently guarded transaction and own ACK
-- **AND** an unavailable adoption domain leaves existing audio usable
+#### Scenario: A current subscriber starts during admitted inference
+- **GIVEN** a source-leased inference attempt is active
+- **WHEN** a current requested subscriber starts playback
+- **THEN** the attempt requests playback-headroom failure and retains its lease through actual backend and reader retirement
+- **AND** unrelated playback and playback from a proven obsolete subscriber do not themselves block inference for a surviving current subscriber
+- **AND** existing playback continues
 
 
 <!-- From add-offline-stem-cache -->

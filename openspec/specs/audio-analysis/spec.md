@@ -13,7 +13,8 @@ concurrent wire storage, bounded conversion/I/O buffers, FFT/Sinc workspace and
 retained CQT responses/frontend. Complete Key PCM and octave signals SHALL use
 job-owned file storage with bounded reads rather than whole-track widening or
 octave heaps. The512MiB preparation allocation cap is not a process-tree RSS or
-OS file-cache guarantee; cached model/ORT arenas remain separately owned.
+OS file-cache guarantee. The KeyNet call owns its model session and session arenas;
+ORT process-wide resources have their own lifetime.
 No source cropping or limit increase SHALL substitute for independent admission.
 Both current loader DTO routes SHALL keep the required key string and explicit
 key_status ready/skipped_budget/not_requested/failed plus available key_error.
@@ -59,8 +60,8 @@ cancellation or stale completion.
 The system SHALL represent the detected key as a musical-notation string (e.g., `"C#m"`) suitable for display in a professional audio application. When key detection fails or the audio is insufficient, the system SHALL use `"unknown"` as the key value.
 
 #### Scenario: Analysis produces BPM, key, and beat grid
-- **GIVEN** a pad has a loaded audio file
-- **WHEN** the analysis workflow is executed for that pad
+- **GIVEN** a loaded audio file qualifies for precise BPM and grid detection and independently admitted key work
+- **WHEN** both analysis branches complete successfully for that pad
 - **THEN** the system decodes the audio once and converts to mono
 - **AND** the system runs BPM detection and key detection concurrently on separate threads
 - **AND** the system produces a BPM value (float) from the BPM pipeline
@@ -148,3 +149,36 @@ audio callback.
 - **THEN** the system can republish the pad's bounded beatgrid/downbeat timing metadata to Rust
 - **AND** quantized playback can use the metadata without re-running analysis in the callback
 
+### Requirement: Failed Precise BPM Has a Usable Approximate Fallback
+When precise automatic BPM estimation fails, the system SHALL attempt a simpler
+bounded source-derived scalar estimate outside realtime. A validated usable
+saved neural period SHALL be reused without repeating inference. Otherwise a
+bounded interval or source-energy estimate MAY provide an approximate BPM.
+Unusable, corrupt, unavailable, cancelled or stale source evidence SHALL NOT
+invent a BPM. Existing precise checks SHALL retain their actual failed outcome.
+
+The selected scalar SHALL carry a separate approximate status, source/model and
+actual execution provenance, original precise refusal and captured request range.
+It SHALL remain within that range without clamping or rounding into acceptance.
+Valid same-source precise values and manual/Tap/half-double choices SHALL retain
+precedence. Existing source/content/current-request, OwnACK and retirement guards
+SHALL remain authoritative.
+
+Approximate evidence SHALL display **Approximate BPM** and an explicit warning
+that the value may be inaccurate, including after save, restore and copy. It
+SHALL NOT certify beat/downbeat/phase, synthesize accepted timing or establish a
+second clock. Explicit performer grid intent SHALL retain its separate authority.
+
+#### Scenario: A usable period fails the precise phase check
+- **GIVEN** current source-bound neural evidence retains a usable period
+- **AND** precise estimation and independent corroboration have failed
+- **WHEN** the approximate fallback completes for the current request
+- **THEN** its scalar BPM is usable with a visible inaccuracy warning
+- **AND** the original failed precision diagnostics remain unchanged
+- **AND** diagnostic raw observations do not become an accepted playback phase
+
+#### Scenario: No neural candidate is available
+- **GIVEN** complete verified source PCM is admitted and the request is current
+- **WHEN** bounded source-energy rhythm evidence supports a coarse period
+- **THEN** the fallback returns an explicitly approximate scalar without claiming neural execution
+- **AND** silence, corruption, cancellation or insufficient rhythm returns no invented BPM

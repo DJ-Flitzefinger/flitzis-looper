@@ -39,9 +39,9 @@ interest; it cannot erase another subscriber's job or active source readers.
 
 [offline_stem_source.rs](../../rust/crates/looper/src/audio_engine/offline_stem_source.rs)
 captures an `OfflineStemSourceLease` for the actual immutable complete source,
-cache marker/generation and target geometry. Generation may run while playing or
-paused, but new heavy inference waits for its current subscriber PADs to stop under the resource
-policy below. This lease grants no assignment, accepted timing, resident-window or live
+cache marker/generation and target geometry. Stem requests may be accepted while
+playing or paused. Heavy inference waits while a current subscriber is playing or
+holds a paused voice. This lease grants no assignment, accepted timing, resident-window or live
 publication authority. Worker completion and borrowed reader retirement are both
 required before cleanup, including cancelled/obsolete results.
 
@@ -365,7 +365,7 @@ masks and ISTFT with the original complete chunk length. It is not an applicatio
 route or full network replacement. Original Torch FFT-only comparisons do not
 establish learned-mask, CUDA AMP, whole-track overlap, quality or distribution
 parity; productive separators and dependency closures stay available. The
-[STEP25 design](../../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
+[STEP25 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
 records its caller-owned resource/reader envelope and exact evidence limits.
 
 The [native track module](../../rust/crates/stem-dsp/src/track.rs) adds release
@@ -374,7 +374,7 @@ rolling overlap-add around synchronous source/predictor/private-output callbacks
 It handles tiny physical sources by padding full release chunks before a predictor
 can call the spectral core. Partial blocks remain private if a later failure or
 cancellation invalidates the attempt. The
-[STEP26 design](../../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration)
+[STEP26 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration)
 separates complete track arithmetic from learned-network and
 whole-model/provider/quality/artifact/distribution requirements. It changes no
 productive generation, selection, live adoption or retirement path.
@@ -385,7 +385,7 @@ blocks and four learned masks. It reuses the spectral reconstruction and supplie
 a synchronous full-chunk track predictor. Fixed effective-state export and tiled
 attention preserve original geometry and bounded vector work; complete original
 process admission remains external. The
-[STEP27 design](../../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network)
+[STEP27 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network)
 separates operator controls and failed full-model attempts from unproved complete
 execution/original numerical parity, batch2/wholetrack, CUDA/AMP, whole-quality,
 complete producer and distribution parity. Productive Torch paths

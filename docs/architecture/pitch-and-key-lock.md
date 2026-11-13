@@ -199,7 +199,7 @@ mixer/scheduler preparation owner.
 
 ## Dependencies, evidence and current limits
 
-The [STEP11 performance assessment](../../openspec/changes/improve-performance-isolation/design.md#step11-practical-principal-attack-assessment)
+The [STEP11 performance assessment](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step11-practical-principal-attack-assessment)
 retains the current Short + ChannelsTogether backend and silent physical birth.
 In 36 uncropped synthetic captures, Medium's principal attack is later in every
 matched pair; nominal-delay cropping can remove substantial response energy.
@@ -233,7 +233,7 @@ The explicit `paced_other_rate_cold_piano_response` diagnostic adds cold public
 neutral Piano OFF/ON controls at 44.1/96 kHz and ratios 0.8/1.16. It verifies
 actual Lock, active source rate and retained source identity/extent, reconstructs
 the same-render mono output and records attack landmarks after each action's
-own E alongside host brackets. See the [scoped observations](../../openspec/changes/improve-performance-isolation/design.md#other-rate-cold-piano-controls).
+own E alongside host brackets. See the [scoped observations](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#other-rate-cold-piano-controls).
 Existing 48 kHz Piano observations remain historical where later shared
 completion changes lack path-specific compatibility proof. Neither an unchanged
 test body nor these eight new cells establishes whole-matrix, quality, overlap,
@@ -245,7 +245,7 @@ PADs and cold six-PAD groups at 44.1/96 kHz. Two members change source rate;
 remaining members stay at unity. Warm selects only PAD0: ON awaits its Native
 endpoint, while neutral OFF uses selection only without Native preparation. Actual source
 rate bits match across controls, with each individual attack measured after its
-own E and same-render source/mix checks retained. See the [scoped group observations](../../openspec/changes/improve-performance-isolation/design.md#faster-and-other-rate-group-controls).
+own E and same-render source/mix checks retained. See the [scoped group observations](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#faster-and-other-rate-group-controls).
 Path-specific qualification permits the exact older ordinary/Piano fixtures'
 source/DSP landmark reuse; their T/E and host costs remain historical N1.
 The explicit `paced_bpm_and_partition_group_response` adds twelve six-PAD
@@ -253,12 +253,12 @@ controls for actual BPM Lock OFF at 512 frames and BPM Lock ON at 128 frames
 or the cycle [128, 256, 64, 1024]. Cold and selected-PAD0 cases use actual Key Lock
 OFF/ON; BPMOFF asserts unity source rates and requires no neutral Native endpoint.
 Every actual span, bounded capture extent, source identity and own-E landmark is
-retained. See the [scoped partition observations](../../openspec/changes/improve-performance-isolation/design.md#bpm-authority-and-callback-partitions).
+retained. See the [scoped partition observations](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#bpm-authority-and-callback-partitions).
 The explicit `paced_slower_other_rate_and_single_faster_group_response` adds eight
 six-PAD controls: cold slower 0.8 groups at 44.1/96 kHz and exactly one faster
 1.16 member at 48 kHz, cold or selected-PAD0. Both actual Lock states retain the
 unchanged group helper, source/adoption/capture guards and each own-E landmark.
-See the [scoped rate-topology observations](../../openspec/changes/improve-performance-isolation/design.md#slower-other-rate-and-single-faster-group-controls).
+See the [scoped rate-topology observations](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#slower-other-rate-and-single-faster-group-controls).
 Further ordinary/exclusive/global states, Piano retrigger/live SET, pause/Hold/seek,
 unobserved rate/count/selection combinations, real background overlap, final
 stress, device, quality and Human acceptance remain open. Internal source-read
@@ -271,7 +271,7 @@ the global target group. Productive guarded artifact conversion makes complete
 call/worker-CPU progress inside adjacent paced playback periods while
 two PADs play; all five numeric fixture outputs are verified. A real separate cold
 import receives its original source ACK, with exact Loader CPU overlap still
-unproved. See the [scoped controller observations](../../openspec/changes/improve-performance-isolation/design.md#actual-controller-routes-beside-artifact-conversion).
+unproved. See the [scoped controller observations](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#actual-controller-routes-beside-artifact-conversion).
 This neither runs inference nor closes further source states, the full overlap
 matrix, device, quality or Human acceptance. Production DSP remains unchanged.
 

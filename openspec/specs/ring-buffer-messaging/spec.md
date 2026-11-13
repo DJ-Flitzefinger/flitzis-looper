@@ -1,7 +1,7 @@
 # Ring Buffer Messaging Specification
 
 ## Purpose
-To enable efficient bounded communication between audio processing, control, loader, and input threads while keeping the CPAL audio callback realtime-safe.
+To enable efficient bounded communication between audio processing, control, loader, and input threads while keeping the audio callback realtime-safe.
 ## Requirements
 ### Requirement: Fixed-capacity Ring Buffer Messaging
 The system SHALL use fixed-capacity ring buffers for inter-thread audio-engine messaging.

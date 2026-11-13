@@ -15,7 +15,7 @@ Its full-source CPU prototype and optional CUDA build do not replace the pinned
 productive workers, locks or model recovery. A Debug EXE, a separately built
 libsoxr and extracted ORT DLLs are not a supported Portable bundle. Native CUDA,
 CPU fallback/CPU-only, all dependency/provenance and Linux/macOS acceptance remain
-open as detailed in the [performance design](../openspec/changes/improve-performance-isolation/design.md).
+open as detailed in the [performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md).
 
 ## Install, start and update
 
@@ -480,7 +480,7 @@ model repair. Its ONNX graph and standalone developer EXE have no productive
 cutover or complete CUDA/CPU-only/quality/DLL-closure acceptance. Keep the original
 App and separate BeatThis locks/models/workers; their runtime removal requires
 the complete parity and recovery gates in the
-[performance design](../openspec/changes/improve-performance-isolation/design.md).
+[performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md).
 
 Its separate `native-inference-dynamic` CPU-only and CUDA trial builds now require
 explicit digest-checked runtime manifests. That standalone loading contract does

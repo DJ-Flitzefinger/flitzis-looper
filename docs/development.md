@@ -253,12 +253,12 @@ Observed vcpkg runtime DLLs for the current branch are `rubberband-3.dll`,
 `sleefdft.dll`, `sleef.dll`, and `samplerate.dll`. Packaging scripts may copy
 those DLLs next to the built native extension instead of requiring `PATH`.
 
-### Performance audit and upgrade plan
+### Performance audit and delivered improvements
 
-The 2026-10-30 source audit starts from `69a8098d` and is tracked in the focused
-[performance change](../openspec/changes/improve-performance-isolation/proposal.md),
-with its [source findings and measurement contract](../openspec/changes/improve-performance-isolation/design.md)
-and [nineteen sequential steps](../openspec/changes/improve-performance-isolation/tasks.md).
+The 2026-10-30 source audit started from `69a8098d`. Its proposal, design, measurements
+and tasks are retained in the [archived performance change](../openspec/changes/archive/2026-11-13-improve-performance-isolation/).
+The [archival disposition](../openspec/changes/archive/2026-11-13-archive-index.md#improve-performance-isolation)
+records delivered behavior and outstanding model and acceptance work.
 Production response measurements and the first exact-ready scheduling correction
 are recorded in the design. Completed ordinary worker starts and playback groups
 now also accelerate within their initial fallback interval, removing 160 ms of
@@ -296,40 +296,27 @@ PCM accounting. Owned shared contexts release the Python Engine borrow before
 reconciliation/binding, both registrations and admission; original successful-order
 watermarks and final source/intent/CAS/own-ACK fences remain authoritative. The
 worker-only gate ends before publication. Legacy full conversion has a separate
-host promise alongside its unchanged cap. Conversion, resource policy, providers,
-native inference/Torch parity and final checks remain steps 15–22. Controlled
-progress is not whole-GIL isolation, device latency or crackle acceptance.
+host promise alongside its source-preparation bound. Later steps delivered
+bounded conversion and shared offline admission. The recorded controlled
+progress covers specific routes and software workloads.
 Recording's whole-group capacity failure remains terminal.
 A separate ordering correction releases later ready originals from conclusively
 rejected predecessors while retaining those predecessors' queued cleanup and
 worker/Native custody. Live-original ordering and recording S/E guards remain.
 
-The first priorities are the 8192-frame prepared-start scheduling lead, selected
-endpoint reserve misses and audible onset; then stem component-loading control
-locks, GIL-bound sample conversion and background CPU budgets. Finite/shared PCM,
-existing offline CUDA and CPU fallback are foundations to measure and preserve.
-STEP15 now runs bounded sample arithmetic in an independent Rust core through
-thin detached bindings, with the established Python WAV/commit chain and exact
-byte oracles. CPU/process budgets remain the next isolation task. Wholesale controller/model
-ports and callback CUDA have no demonstrated benefit at this point.
+The audit examined the 8192-frame preparation lead, endpoint reserve misses,
+onset, stem component locks, Python conversion and background CPU use. STEP15
+runs bounded sample arithmetic in an independent Rust core through thin detached
+bindings with the established Python WAV and commit path and exact byte oracles.
+The [stem architecture](architecture/stems.md) describes the current admission
+and playback-headroom policy.
 New Rust processing/domain code should remain independent of thin Python/PyO3
-bindings. The plan also audits PyTorch replacement and dependency footprint for
-further useful Rust migration and future Windows EXE/Linux/macOS packaging. Keep
-common Rust logic portable, OS-specific process/device/resource handling behind
-adapters and CPU as the baseline with hardware-conditional CUDA. Actual platform tests remain
-distinct from design intent. AMD-capable GPU alternatives are also an explicit
-conditional implementation target, with provider-based selection and CPU fallback.
-This includes Intel/AMD integrated GPUs and automatic per-workload selection
-from supported CPU/GPU paths using measured total cost and resource headroom;
-GPU presence alone is not a reason to offload or claim a speedup.
-NVIDIA CUDA support is mandatory for this upgrade and any inference replacement;
-its use/install is hardware-conditional with CPU fallback. Cost/benefit discretion
-applies to additional AMD/Intel/iGPU backends, not removal of CUDA support.
-Practical PyTorch
-removal is an explicit target, conditional on feasibility and at least current
-model quality, functions and interactions. KeyNet already uses Rust/ONNX; stems
-and separate BeatThis workers retain full Torch pipelines. Model/device/installer
-parity is required before removing their existing inference runtime.
+bindings. The archived plan evaluated Torch replacement and additional Intel/AMD providers.
+The supported Torch workers remain available for stem separation and BeatThis,
+with hardware-conditional CUDA and CPU paths. KeyNet uses Rust/ONNX. A productive
+replacement must retain supported NVIDIA CUDA acceleration and same-model CPU
+fallback, with complete model, device, quality and distribution parity. Additional
+Intel and AMD providers depend on demonstrated support and benefit.
 
 Measure original input, requested target T, actual E, significant sound and
 principal attack separately. For ready 2/4/6-PAD quantization-OFF workloads, 30 ms
@@ -350,7 +337,7 @@ device latency, concurrent background-work acceptance or the whole final matrix.
 Here warm means selected PAD 0 is ready, not that all group members are prewarmed.
 Principal displacement uses the authored source burst; a matched-rate Key Lock OFF
 comparison remains separate. See the measured scoped result in the
-[performance design](../openspec/changes/improve-performance-isolation/design.md#measured-scoped-result).
+[performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#measured-scoped-result).
 
 Use the production-route tests as well as the adapter probe below. Adapter/native
 delay and Rust allocation counters alone do not establish whole-route latency,
@@ -938,14 +925,14 @@ Existing M-ID/legacy data remains supported until verified readable-root migrati
 and fresh current Native ACKs complete; documentation updates never move private
 runtime files.
 
-## Latest performance workload decision — 2026-10-24
+## Historical standalone inference development
 
 The opt-in `native-inference-trial` analysis feature now provides a standalone
 BeatThis complete-source mono PCM trial, separate from the application. Its native
 HQ resampler, LogMel, true variable attention lengths, border6/keep_first and
 minimal postprocessor have bounded original-worker comparisons; the original
 fixed1500 evidence remains separately recorded. The
-[performance design](../openspec/changes/improve-performance-isolation/design.md)
+[performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md)
 records its exporter/tooling lock, exact native-logit/provider evidence and
 remaining CUDA/cancellation/quality/distribution gates. It has no PyO3 or
 LibTorch dependency. This is a developer experiment; productive Torch workers,
@@ -970,7 +957,7 @@ environment options without loading a model. For `infer`, set
 owned manifest and its exact lowercase SHA256. Ambient `ORT_DYLIB_PATH` is not
 the dynamic trial's authority. Static CPU trials reject dynamic configuration.
 The manifest schema and reconstruction recipe are in the
-[STEP21 design](../openspec/changes/improve-performance-isolation/design.md#step21-impact-explicit-standalone-runtime-admission).
+[STEP21 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step21-impact-explicit-standalone-runtime-admission).
 Checked files do not establish a complete loaded-image/dependency closure or an
 installable bundle. STEP22 releases serialized graphs only after the copying
 session loads and original PCM only after full resampling, with the original
@@ -980,7 +967,7 @@ STEP23 optionally admits a separate declared ORT package component manifest with
 `FLITZIS_TRIAL_ORT_PACKAGE` and `FLITZIS_TRIAL_ORT_PACKAGE_SHA256`. Every listed
 file is size/SHA/role/identity checked and pinned through all CLI readers. The
 strict schema, bounds and reconstruction recipe are in the
-[STEP23 design](../openspec/changes/improve-performance-isolation/design.md#step23-impact-declared-ort-package-file-custody).
+[STEP23 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step23-impact-declared-ort-package-file-custody).
 Listed-file custody does not attest loader resolution or complete dependencies.
 STEP24 adds optional `FLITZIS_TRIAL_ORT_LOAD_POLICY=package-system32` for a fresh
 Windows dynamic standalone process with both manifests. It irreversibly changes
@@ -988,13 +975,13 @@ that child's default DLL search policy, restricts the initial runtime load, and
 checks actual returned/export-owner modules and observed declared backing files
 against full file identities/SHA. Pins and module references remain until process
 exit; no CUDA provider is eagerly loaded. Legacy custody-only requests retain
-their behavior. See the [STEP24 design](../openspec/changes/improve-performance-isolation/design.md#step24-impact-opt-in-standalone-windows-loader-and-observed-images)
+their behavior. See the [STEP24 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step24-impact-opt-in-standalone-windows-loader-and-observed-images)
 for the exact policy, terminal failures and still-unknown closure/producer limits.
 STEP25 adds an independent `flitzis-stem-dsp` crate for the pinned BS-RoFormer
 STFT/features/complex masks/ISTFT, with the original complete chunk length.
 Its [CPU Torch arithmetic oracle](../scripts/bs_spectral_trial_reference.py) uses
 synthetic PCM and four distinct complex masks without model/weight/CUDA work.
-See the [STEP25 design](../openspec/changes/improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
+See the [STEP25 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
 for complete geometry, payload promises, cancellation, numerical tolerances and
 reconstruction. This standalone crate is not linked into the App; its workspace
 lock entry only uses the existing `rustfft` dependency. Productive installation/
@@ -1004,7 +991,7 @@ reflection, tail padding, batch2, per-chunk fades and rolling overlap-add. Its
 [original arithmetic oracle](../scripts/bs_track_trial_reference.py) uses the
 unchanged vendored source/OLA/PCM16 path with distinct arithmetic predictions;
 it loads no learned weights and initializes no CUDA. See the
-[STEP26 design](../openspec/changes/improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration).
+[STEP26 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration).
 STEP27 adds the opt-in `stem-dsp/learned-trial` complete learned CPU candidate:
 fixed-schema Torch-free export of the original SHA-pinned checkpoint, full
 release axial attention with bounded score tiles, and four learned mask heads.
@@ -1013,7 +1000,7 @@ the original complete offline admission and `CUDA_VISIBLE_DEVICES=-1` before
 import. Run it as `python -B -m scripts.bs_learned_trial_reference` from an
 authenticated checkout. The private `bs_learned` executable can compare original-feature masks
 and composed spectral/model/PCM; it never publishes application artifacts. See
-the [STEP27 design](../openspec/changes/improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network).
+the [STEP27 design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network).
 The standalone CLI accepts an invocation-specific `FLITZIS_STEM_CANCEL_PATH`.
 Creating that marker requests cooperative cancellation through preparation,
 numerical callbacks and block I/O. After checked file cleanup and private-output

@@ -617,10 +617,10 @@ is also supported. Model setup and FFmpeg requirements are in
    original mixture.
 5. Check the **Audio** caption before treating the switch as effective.
 
-Generation can use retained readable source audio while the PAD is playing or
-paused. It can still be blocked by missing resources, source state, cancellation
-or pressure. Settings changes apply to new requests and do not rewrite a running
-job or an existing stem set.
+You can request stems while the PAD is playing or paused. Existing cached stems
+can still be found. New inference shows **Waiting for playback to stop** while
+the requested PAD is playing or holds a paused voice. Other PADs can keep
+playing. Settings changes apply to new requests.
 
 ### Component buttons
 

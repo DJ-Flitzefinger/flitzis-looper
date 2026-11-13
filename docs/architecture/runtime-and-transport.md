@@ -7,7 +7,8 @@ application intent in [state, input and UI](state-input-and-ui.md).
 ## Clock and execution owners
 
 [audio_stream.rs](../../rust/crates/looper/src/audio_engine/audio_stream.rs)
-creates the CPAL stream and callback state. Its callback owns
+initializes callback state for the [selected output backend](../../openspec/specs/audio-output/spec.md).
+The render state owns
 [TransportTimeline](../../rust/crates/looper/src/audio_engine/transport.rs),
 [TransportScheduler](../../rust/crates/looper/src/audio_engine/scheduler.rs) and
 [RtMixer](../../rust/crates/looper/src/audio_engine/mixer.rs). Output-frame time

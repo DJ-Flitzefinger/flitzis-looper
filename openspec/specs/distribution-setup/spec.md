@@ -91,7 +91,7 @@ On Linux, the preferred development path SHALL use the system Rubber Band develo
 ### Requirement: Runtime Libraries Are Available Before Audio Starts
 The system SHALL make required Rubber Band runtime libraries available before the audio engine enters realtime callback rendering.
 
-Runtime library discovery, DLL or shared-library path configuration, missing-library diagnostics, and packaging-copy decisions MUST happen outside the CPAL audio callback. The callback SHALL receive only initialized backend state and preallocated audio buffers.
+Runtime library discovery, DLL or shared-library path configuration, missing-library diagnostics, and packaging-copy decisions MUST happen outside the audio callback. The callback SHALL receive only initialized backend state and preallocated audio buffers.
 
 #### Scenario: Windows runtime DLLs are available before startup
 - **GIVEN** the Windows build links to Rubber Band dynamically

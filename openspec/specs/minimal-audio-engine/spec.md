@@ -12,7 +12,7 @@ The audio engine implementation SHALL be organized in a modular structure with c
 ```text
 audio_engine/
 |-- mod.rs             - Python-facing API and orchestration
-|-- audio_stream.rs    - CPAL stream and callback setup
+|-- audio_stream.rs    - output backend and callback setup
 |-- mixer.rs           - realtime mixing engine
 |-- voice_slot.rs      - active voice state management
 |-- sample_loader.rs   - audio file loading, decoding, and caching
@@ -53,5 +53,5 @@ The system SHALL expose an `AudioEngine` class to Python through the `flitzis_lo
 #### Scenario: Python FFI integration
 - **WHEN** an `AudioEngine` is instantiated from Python
 - **THEN** the underlying Rust `AudioEngine` is created
-- **AND** the CPAL stream is initialized by `run()`
+- **AND** the selected output backend is initialized by `run()`
 - **AND** no Python GIL is held during audio processing

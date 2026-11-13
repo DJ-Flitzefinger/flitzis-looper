@@ -59,7 +59,7 @@ sealed source -> complete disk PCM -> admitted resident view / prepared readers
   -> rate / pitch / Key Lock processing
   -> smoothed PAD gain -> PAD DSP/isolator -> trigger velocity
   -> PAD metering and sum -> master volume / momentary mute
-  -> master metering / recording capture -> CPAL output
+  -> master metering / recording capture -> selected audio output backend
 ```
 
 Input admission and saved settings describe a request, not proof that audio
@@ -146,8 +146,9 @@ override current source or activate old programs:
   distribution. Source and generic self-contained Portable installations do
   not require personal developer bindings.
 
-Dear ImGui Bundle renders UI; PyO3 exposes native control; CPAL drives output;
-native decoders/converters and Rubber Band support media/rendering. Offline
+Dear ImGui Bundle renders UI and PyO3 exposes native control. The selected
+[audio output backend](../openspec/specs/audio-output/spec.md) drives the device.
+Native decoders, converters and Rubber Band support media and rendering. Offline
 model environments are prepared separately from the callback. Runtime/model
 availability checks do not establish successful inference or audio.
 

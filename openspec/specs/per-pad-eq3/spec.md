@@ -107,7 +107,7 @@ parameter path.
 The audio engine MUST apply the per-pad 3-band DJ isolator as realtime-safe Rust DSP-chain
 processing while mixing audio.
 
-Isolator processing in the CPAL callback MUST avoid heap allocations, disk I/O, JSON access,
+Isolator processing in the audio callback MUST avoid heap allocations, disk I/O, JSON access,
 Python/GIL access, UI calls, blocking operations, logging, neural inference, plugin
 loading/scanning, unbounded loops, and long-running work. Required node state, coefficient state,
 and scratch state SHALL be prepared outside realtime rendering or stored as fixed-size Rust-owned

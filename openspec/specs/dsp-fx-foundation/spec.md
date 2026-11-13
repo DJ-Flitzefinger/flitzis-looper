@@ -42,7 +42,7 @@ side SHALL smooth target changes before sample processing.
 
 <!-- From prepare-dsp-fx-foundation -->
 ### Requirement: DSP Chain Processing Preserves Realtime Constraints
-The system MUST keep DSP chain processing realtime-safe in the CPAL audio callback.
+The system MUST keep DSP chain processing realtime-safe in the audio callback.
 
 DSP processing in the callback MUST NOT perform disk I/O, JSON access, Python/GIL access, UI
 calls, blocking waits, logging, neural inference, plugin loading/scanning, heavy allocation,

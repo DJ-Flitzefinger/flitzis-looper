@@ -246,5 +246,5 @@ CPU does not initialize the GPU; unknown evidence keeps the existing tentative
 CUDA preference with CPU fallback. Complete producer attestation currently remains
 UNKNOWN, so cost learning stays disabled until that separate gate is resolved.
 Additional AMD/Intel providers are not advertised as supported by GPU presence;
-the [performance design](../openspec/changes/improve-performance-isolation/design.md#step17-bounded-provider-selection-and-measured-retirement)
+the [performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step17-bounded-provider-selection-and-measured-retirement)
 records the concrete model/export/packaging tradeoffs and actual scoped evidence.
