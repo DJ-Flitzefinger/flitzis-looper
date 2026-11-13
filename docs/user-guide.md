@@ -156,7 +156,7 @@ installation together when relocating it. See [Portable setup](portable-windows.
 Source setup prepares automatic BPM resources separately with
 `scripts/setup-runtime.py`; optional stem resources use `--with-stems`. Use the
 [source setup instructions](development.md#setup),
-[BeatThis setup](beat-this-setup.md) and [stem setup](stem-generation-setup.md)
+[model worker setup](model-worker-setup.md)
 for the actual commands and required tools. Startup checks are resource checks;
 they do not mean a model has analyzed a song or that the audio device has passed
 a listening test.
@@ -329,15 +329,14 @@ To tempo-match material:
 
 BPM Lock works with MultiLoop either OFF or ON. It retains the established
 master reference as PADs are selected, triggered or rearranged; editor selection
-does not keep replacing the master. PADs with valid source tempo use the
-source/master tempo ratio. Missing source tempo uses the supported speed path,
-so entering a reliable BPM matters when mixing unrelated sources.
+does not keep replacing the master. For PADs with valid source tempo, the
+playback rate ratio is master BPM divided by source BPM within the supported
+speed range. PADs without source tempo use the global speed setting.
 
 This is **constant-rate BPM Lock**. It does not follow changing recorded tempo,
 repair a wrong downbeat or guarantee two inaccurately labeled loops remain in
 phase. Key Lock controls pitch preservation separately. More detail is in the
-[constant-BPM guide](constant-bpm-guide.md) and
-[transport architecture](architecture/runtime-and-transport.md).
+[grid and timing reference](architecture/grid-and-source-timing.md).
 
 ## BPM analysis and correction
 
@@ -409,7 +408,7 @@ existing BPM, retroactively qualify an older result or restrict manual/Tap input
 If no supported candidate fits, analysis can remain unavailable.
 
 See [BPM architecture](architecture/bpm-analysis.md) for policy and confidence
-limits, and [BeatThis setup](beat-this-setup.md) for worker/device repair.
+limits, and [Beat This setup](model-worker-setup.md#beat-this-automatic-bpm) for worker/device repair.
 
 ## Waveform and loop editing
 
@@ -605,7 +604,7 @@ saved volume.
 Stems are prepared offline. They are not neural separation inside the audio
 callback. The fresh separator is **BS-RoFormer MUSDB18HQ**; **Demucs htdemucs**
 is also supported. Model setup and FFmpeg requirements are in
-[stem setup](stem-generation-setup.md).
+[stem setup](model-worker-setup.md#optional-stem-models-and-codecs).
 
 ### Generate and choose
 
@@ -699,7 +698,9 @@ On **START/STOP**, left-click learns start or restart, right-click learns stop
 with the usual MultiLoop restore behavior, and middle-click learns momentary
 output mute. Hold a learned keyboard key or MIDI note to mute and release it
 to restore output. For an absolute MIDI CC binding, values 64–127 mute and
-values 0–63 release. Relative NRPN encoders do not provide a release gesture.
+values 0–63 release. Use a MIDI Note or absolute CC for MIDI mute, since a
+relative encoder has no release gesture. The last active hold restores the
+latest master volume when released.
 
 Pitch's expanded **MIDI / octave steps** supports **Button**, **Absolute
 encoder**, **Relative 1 / 127** and **Relative 65 / 63** modes. Match the controller's
@@ -870,9 +871,6 @@ the installation is source or Portable and whether a change was still preparing.
 Do not replace a failure report with an assumption that a queued action succeeded.
 
 For current implementation detail, follow the [documentation map](README.md).
-Historical reports preserve their original failures, UNKNOWN outcomes and open
-acceptance gates; they are not additional performer controls or an automatic
-feature queue.
 
 ## Capturing an audio workload report
 

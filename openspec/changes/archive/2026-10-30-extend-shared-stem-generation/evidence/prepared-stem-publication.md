@@ -265,7 +265,7 @@ inference performance or human/device acceptance.
 
 ## Remaining G3 boundaries
 
-G3b2a/b/c/d connects [explicit acceptance](../../../../../docs/native-constant-timing.md) to current
+G3b2a/b/c/d connects [explicit acceptance](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/native-constant-timing.md) to current
 native/Python grid, loop, transport/master/rate and MIDI pad consumers. G3b2e
 adds productive prepared-source/stem revision binding with a shared source
 trajectory; the generic preparation epoch remains a separate freshness check.

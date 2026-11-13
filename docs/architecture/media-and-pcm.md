@@ -129,9 +129,8 @@ Stem generation holds source/material leases; compatible jobs may share immutabl
 material and one ready result while retaining individual interests and ACKs.
 Cancelling one interest does not erase other users. Saved stem selection, verified
 disk eligibility, component residency and actual Native mode/mask are distinct.
-Generation during playing/paused states is separate from state-specific adoption
-permits. [Stems](stems.md) describes these states and their retained limits;
-[Key analysis](key-analysis.md) owns the complete-file CQT frontend.
+[Stems](stems.md) describes saved-set lookup, inference admission and live
+switching. [Key analysis](key-analysis.md) owns the complete-file CQT frontend.
 
 ## Copy, rearrangement and memory admission
 
@@ -210,74 +209,15 @@ moves large callback owners to a non-audio consumer.
 [cold_store/lifecycle.rs](../../rust/crates/looper/src/audio_engine/cold_store/lifecycle.rs)
 processes bounded fair cleanup; unknown/changed ownership is preserved.
 
-The ignored `p5b_registry_context_tests` regression retains a genuine saved
-original after its old engine and PCM readers end, then runs the complete
-three-round 216-bank source/window/preload and retirement checks in the same
-shared registry. It checks the saved file identities and bytes before a fresh
-warm restore consumes its own source ACK, and explicitly retires only that
-fixture after its restored readers end. This protects the saved-restore interaction;
-it does not attribute the historical full-phase registry failure whose captured
-assertion was lost when a later test aborted with a stack overflow. Bounded
-current predecessor runs and isolated passes do not resolve that historical cause.
-
-The original 216-bank test also reports a scalar registry census before its
-fixture, after source ACKs, after each complete round and after final retirement.
-On panic it attempts one further census after later locals unwind; this is not
-the ownership state at the failing assertion. This test-only observer uses a nonblocking
-asset-gate read and reports contention or poisoning explicitly. It never collects,
-prunes, creates a ledger scope, upgrades weak witnesses or retains PCM/file owners.
-Saved cold file-only records, live native witnesses, pending assignments, engine
-witnesses, reservations and ledger scopes remain distinct. The residual category
-does not imply dead ownership: shared files can still have a legitimate owner.
-Weak witness counts can change concurrently; the census grants no new ownership.
-Diagnostics go directly to stderr after releasing the asset gate, so a later
-unrelated libtest abort cannot discard the buffered census; diagnostic write errors
-do not replace the original panic. These counts do not prove a memory plateau or
-permit erasing saved assignments after engine shutdown.
-
 Existing [material_migration.rs](../../rust/crates/looper/src/audio_engine/material_migration.rs)
 and [material_migration.py](../../src/flitzis_looper/controller/material_migration.py)
-provide implemented reference/recovery machinery. Durable receipts still need
-current inventory and adoption proof. This description authorizes no new migration,
-tombstone, compatibility or private-data deletion work.
+provide the existing reference and recovery machinery. Durable receipts still need
+current inventory and adoption proof.
 
 Recording has its own raw f32le spool, live file witness and codec/finalization
 custody in [recording_worker.py](../../src/flitzis_looper/recording_worker.py).
 The spool is not an encoded finished recording. Actual worker join and Native
 reader release remain necessary before outer retirement.
 
-## Evidence and limits
-
-The existing [PCM report](../../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-residency.md),
-[measurements](../../openspec/changes/archive/2026-10-30-cache-full-pcm-and-resident-loops/evidence/pcm-cache-measurements.md), [readable material](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/readable-material-validation.md),
-[finite-seek](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/finite-seek-domain-validation.md) and
-[long-source](../../openspec/changes/archive/2026-10-30-adopt-pad-owned-pcm-residency/evidence/long-source-streaming-validation.md) reports retain exact
-source/decoder/resident identity, warm/cold costs, rejected budgets, initial
-failures and scoped repairs. Current live spans now have core/specialist module
-destinations; the complete reports retain their historical assertions and gates
-under associated archives. Full-report retention is mapped in the
-[evidence index](../../openspec/changes/archive/2026-10-30-evidence-index.md).
-
-Allocation admission is not RSS; bounded fixture/integrity passes are not power-loss,
-real disk-exhaustion, device or listening acceptance. RF64 parser/source support
-does not establish five-RF64 stem inference. Optional historical producer lineage
-can remain UNKNOWN. Historical wider programs/statuses are provenance, not new
-work authorization or evidence that delivered foundations are absent.
-
-## Original fixture lifetime boundary
-
-The ignored original ordered-legacy fixture context captures both actual source
-generations at construction, including source ACK assignment IDs and original,
-cache, WAV, root and TempDir file identities. It runs the original operations and
-assertions, then explicitly ends only that generated fixture's assignments. A
-separately saved source retains its own directory and immutable files across
-checked cold-worker shutdown, callback/reference image closure, actual Native
-deletion completion, PCM reader END and the owned fixture's retirement. It then
-requires a fresh warm restore with its own source ACK and exact prior PCM.
-
-This is a fixture-specific protocol test. The ordinary Harness destructor and
-production admission/collection remain unchanged. Nested Native preparation
-workers join during mixer destruction; their discarded panic results are not
-independent successful-join receipts. Saved descriptors surviving an engine or
-PCM owner are intentional and cannot be pruned to make a later test fit. The
-negative cumulative registry context and lost historical assertion remain open.
+See the [load contract](../../openspec/specs/load-audio-files/spec.md) and the
+[PCM and residency evidence](../../openspec/changes/archive/2026-10-30-evidence-index.md).

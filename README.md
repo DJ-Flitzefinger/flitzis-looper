@@ -52,7 +52,7 @@ Public source prerequisites:
 - Rust and the platform C/C++ build toolchain; Windows needs MSVC/Windows SDK.
 - Rubber Band with the **LiveShifter C API**, such as version 4.0.0. Build metadata
   and runtime DLL/library discovery must be configured; see the
-  [native dependency instructions](docs/development.md#native-rubber-band-dependency).
+  [native dependency instructions](docs/development.md#native-dependencies).
 - The separately locked Python 3.12 BeatThis worker for automatic BPM; the setup
   command below provisions it.
 - FFmpeg and separator model assets for optional stem generation.
@@ -75,10 +75,10 @@ For editable source setup, Linux dependency discovery and individual checks, use
 The runtime setup command verifies the required analysis worker without opening
 the app, an audio device or model inference. Add `--with-stems` to acquire and
 CPU-load both optional separator models; install FFmpeg as described in
-[stem setup](docs/stem-generation-setup.md). Re-run setup to repair, or use
+[stem setup](docs/model-worker-setup.md#optional-stem-models-and-codecs). Re-run setup to repair, or use
 `--check` for non-acquiring verification. Public source defaults use ignored
 `models/` and `.cache/runtime-setup/` beneath the checkout; explicitly configured
-developer resource overrides are separate. See [BeatThis setup](docs/beat-this-setup.md).
+developer resource overrides are separate. See [BeatThis setup](docs/model-worker-setup.md#beat-this-automatic-bpm).
 
 ## First loop
 

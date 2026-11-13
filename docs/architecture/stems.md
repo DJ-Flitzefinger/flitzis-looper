@@ -1,405 +1,104 @@
 # Stems
 
-Stem generation is offline work over immutable complete material. Disk selection,
-RAM residency and effective audio adoption are separate states. Shared immutable
-data does not share a PAD's mutable playback or acknowledgement. Common source,
-custody and retirement rules are in [media and PCM](media-and-pcm.md), timing in
-[runtime](runtime-and-transport.md), pitch/history in [Key Lock](pitch-and-key-lock.md).
+Stems are generated offline from a complete leased source. A verified disk set,
+a saved selection, resident component data and audible selection are separate.
+[Media and PCM](media-and-pcm.md) defines shared custody and last readers.
 
-## Request, identity and shared work
+## Requests, workloads and models
 
-[controller/stems.py](../../src/flitzis_looper/controller/stems.py) orchestrates
-Generate/Delete, selection and current feedback. GUI/MIDI/controller actions
-capture the current content/source and selected separator; changing Settings
-affects future requests. [stem_identity.py](../../src/flitzis_looper/controller/stem_identity.py)
-and [stem_provenance.py](../../src/flitzis_looper/controller/stem_provenance.py)
-resolve the complete known producer fingerprint before duplicate admission.
-Compatible known requests can join one inference or reuse its verified result.
-Render-time UI does not hash models. Settings/material ABA fences stop old work
-selecting newer content. Historical UNKNOWN lineage stays UNKNOWN; a verified
-model-free restore does not prove its producer identity. Known producer lineage
-requires actual execution/birth witnesses and bounded file custody (64 files),
-not just source hash, settings or the currently installed model. Historical
-37-file Demucs/33-file BS observations are scoped evidence rather than a claim
-that all possible inputs/process trees have certified lineage.
+[`stems.py`](../../src/flitzis_looper/controller/stems.py) captures the content,
+source, selected model and processing settings for each request.
+[`stem_identity.py`](../../src/flitzis_looper/controller/stem_identity.py) and
+[`stem_provenance.py`](../../src/flitzis_looper/controller/stem_provenance.py)
+resolve producer and source identity. Compatible known requests can join or
+reuse a verified result. Each subscriber retains its own selection interest
+and existing unknown producer provenance stays unknown. The
+[`OfflineStemSourceLease`](../../rust/crates/looper/src/audio_engine/offline_stem_source.rs)
+binds complete immutable material, actual source generation and target geometry.
 
-[stem_workers.py](../../src/flitzis_looper/controller/stem_workers.py) owns two
-workers and 32 queued physical jobs, reserving capacity before ownership changes.
-The reservation decides executor acceptance under its existing lock before a
-worker can take the callable. If worker startup rejects submission after enqueue,
-the reservation releases the callable and capacity once; a later drained wrapper
-cannot restart the rejected job after its source or preparation owners close.
-Accepted callables execute outside that lock and hold capacity until actual return.
-Inert executor wrappers can remain queued until drain after startup failure;
-this does not bound their raw queue count under repeated failures.
-[stem_job.py](../../src/flitzis_looper/controller/stem_job.py) retains source and
-private-generation leases until the backend returns and its queued result settles.
-Each assignment/subscriber has its own interest. Cancellation/Unload removes that
-interest; it cannot erase another subscriber's job or active source readers.
+Saved-set lookup can run while a target is playing or paused. A new inference
+waits until current subscriber PADs no longer hold active or paused voices. If
+a subscriber starts during generation, the poll path requests playback-headroom
+failure and retires that attempt. Unrelated PADs may play while a stopped target
+qualifies, subject to resource admission.
+[`stem_workers.py`](../../src/flitzis_looper/controller/stem_workers.py) admits
+two physical workers and 32 queued jobs. Stem inference and heavy pair
+preparation share FIFO permission with full BPM/Key analysis. Ordinary Cold
+playback preparation and recording finalization retain independent paths.
 
-[offline_stem_source.rs](../../rust/crates/looper/src/audio_engine/offline_stem_source.rs)
-captures an `OfflineStemSourceLease` for the actual immutable complete source,
-cache marker/generation and target geometry. Stem requests may be accepted while
-playing or paused. Heavy inference waits while a current subscriber is playing or
-holds a paused voice. This lease grants no assignment, accepted timing, resident-window or live
-publication authority. Worker completion and borrowed reader retirement are both
-required before cleanup, including cancelled/obsolete results.
-
-Heavy stem generation and complete BPM/Key analysis share one native FIFO
-permission above their existing offline queues. It covers both analysis branches
-and the generation-to-pair-preparation handoff through actual transient retirement.
-The two-worker/32-queue stem pool and original Native analysis owners remain job
-authorities; ordinary Cold playback preparation can progress while heavy work waits.
-Beat child duplicate admission remains subordinate and never holds its guard while
-waiting for a later heavy ticket. Contention cannot count as a numerical failure
-or select approximate BPM. KeyNet's job-owned ORT session uses one intra-op and
-one inter-op thread; the branches within one admitted analysis may still overlap.
-If stem memory admission becomes unavailable or pressured, the control poll
-withdraws its inactive inference and pair-preparation FIFO positions. Original
-requests, interests, source custody and held reuse deliveries remain pending;
-after the existing recovery threshold they rejoin behind current waiters. An
-active generation or preparation keeps every ticket borrow until ordinary
-retirement. Failed deferred terminal deliveries retain their separate custody.
-If Native heavy admission raises RuntimeError before stem inference starts, the
-control poll removes that waiting attempt and uses ordinary terminal delivery.
-Only current subscribers receive the failure; Pair-deferred subscribers retain
-their source, producer files and ticket until unfenced delivery and job disposal.
-The failure launches no backend and does not manufacture performer cancellation.
-Child environments bound numerical pools before imports, separator children
-verify effective Torch counts before model work, and FFmpeg decoder/encoder/filter
-pools are explicitly bounded. App-global numerical settings are unchanged.
-
-New inference displays **Waiting for playback to stop** while a current requested
-subscriber PAD is active. A stopped target can be processed while unrelated PADs
-play, subject to actual resource admission. Saved-set lookup retains its separate
-lane; heavy pair preparation participates in the common permission. If a current
-requested subscriber starts during generation, the control poll requests an
-explicit playback-headroom failure; the user can retry after that PAD stops.
-Provider calibration separately excludes playback. This never stops an active PAD.
-The explicit `FLITZIS_BS_MODEL_CALL_DIAGNOSTICS=1` diagnostic emits at most one
-fixed scalar line after the first successful stock BS model call. Its process
-CPU and monotonic boundaries exclude model loading, decoding and output conversion.
-The line is separate from execution/provenance receipts and grants no admission.
-CUDA host return can precede kernel completion; these boundaries are not GPU
-occupancy, kernel duration or device deadline evidence. Normal execution emits
-no model-call diagnostic and adds no synchronization or observer worker.
-The explicit six-PAD software profile retains its original complete sources,
-outputs and saved selection files after fixture teardown. Its in-process output
-verification and child-scope closure remain separate from the later exclusive
-parent reader proof, which follows the exact test EXE and owning WindowsJob END.
-The measured stock BS fixture uses one stopped target and six complete three-second
-stereo sources at 48 kHz. The CPU call took 57.0733 s with 56.84375 process-CPU
-seconds; 7,574 paced 512-frame periods retained all six contributions and 3,698
-adjacent same-child CPU-growth witness pairs inside the call. The separately
-admitted RTX 5090 Laptop CUDA case recorded a 16.1917 s host-call bracket,
-3,896 complete periods and 1,045 contained witness pairs. Overlapping pairs are
-observations from one run per device, not independent trials. CUDA host return
-can precede kernel completion. Each run verified all five complete 144,000-frame
-stereo outputs, eight current producer modules, current source/selection ACKs,
-owned process settlement and a later exclusive same-handle reader of all 68
-original fixture files. These software observations grant no physical deadline,
-hearing/quality, complete-model memory bound or Native replacement acceptance.
-Observation and cooperative
-abort/forced tree retirement have a finite tail: this is not zero-overlap or
-device-deadline proof. A waiting job reports **Waiting for background
-resources** rather than a completed execution device.
-
-On Windows, the stem guard samples caller and system commit, physical memory
-and the OS low-memory notification. An active low-memory signal or exhausted
-headroom blocks admission and stops active stem commands through their existing
-cancellation and retirement path. The stem launcher assigns the suspended child
-to a kill-on-close Job without a RAM or commit ceiling. The job and both output
-readers settle before the original owner releases its scratch or source.
-Alignment still promises the concrete conversion block against measured
-capacity and outstanding Native promises on the shared ledger. Recording
-finalization keeps its independent existing owner and does not wait behind
-separator inference.
-
-The shared Beat/stem worker launcher requires owned process-tree supervision: a
-Windows Job or the private Linux broker. Other platforms, including macOS,
-currently refuse new offline workers before launch, because launcher exit and closed output pipes
-cannot establish descendant retirement. Verified saved-set restoration retains its
-existing model-free path. Full macOS support still requires an owning adapter and
-actual platform validation. Windows enforcement and Linux subtree ownership do not
-establish Linux/macOS host monitoring or whole application/resource-admission
-acceptance; those remain explicit distribution gates.
-
-Beat request preparation also retains ownership on allocation failure before
-child construction. If temporary construction returns no owner, unused global
-permits retire immediately. If preparing the request fails after a temporary
-owner exists, its actual cleanup precedes permit and Native-ticket-borrow release.
-The original allocation exception propagates; unavailable cleanup-thread memory
-uses synchronous cleanup. This bounded recovery does not certify allocation
-failure inside child construction or the later process-owner handoff.
-
-## Complete artifacts and durable selection
-
-Source-backed paths are material-root `stems` and aligned `.pcm-cache` areas,
-resolved by [stem_cache.py](../../src/flitzis_looper/controller/stem_cache.py). The implemented
-legacy slot-container fallback is not the sole productive storage model.
-Full source/root identity is checked; a readable folder or shortened ID is not
-enough. Unknown files, replaced paths and reparse routes do not become owned.
-
-Private generation becomes an immutable verified ready set. Native
-[stem_pair.rs](../../rust/crates/looper/src/audio_engine/stem_pair.rs) prepares and
-opens the complete pair, binding source/processing geometry and digests for five
-WAV outputs and their aligned f32 derivatives. Instrumental is the established
-pre-quantization non-vocal sum. Complete decoding/alignment/export uses bounded
-blocks and supports long geometry separately from inference/admission limits.
-
-[stem_cache/streamed.rs](../../rust/crates/looper/src/audio_engine/stem_cache/streamed.rs)
-scans complete source/components for global onset maxima, then the first 5-percent
-threshold crossing. Alignment retains the four-second window, 0.5-second pre-onset,
-plus/minus 0.25-second lag and ascending tie rule. PCM16 MIN maps to -1, other
-values divide by 32767; fixed f32 component order and signed offsets preserve exact
-padding/tail. Descriptor-last eligibility and fresh reopening verify all hashes,
-source/mono binding, geometry and EOF through sealed readers.
-[pcm16_wav.py](../../src/flitzis_looper/pcm16_wav.py) supports positioned RIFF/RF64
-PCM16 reads and exclusive writes; large output uses ds64 counts.
-[stem_artifacts.py](../../src/flitzis_looper/controller/stem_artifacts.py) streams model-output
-resampling/instrumental summation with the established small-file rounding oracle.
-
-Inference uses owned subprocesses. Numeric conversion now uses the independent
-`flitzis-stem-conversion` Rust core through a thin synchronous detached binding.
-Python retains positioned RIFF/RF64 readers, exclusive private writers, full
-digest/identity verification and private-generation replacement. The core keeps
-global binary64 positions, compensated mono averaging, ties-even PCM16 rounding
-and ordered instrumental clipping before requantization. A single-use host
-promise precedes even source EOF probes and covers raw spans, native/Python
-payload overlap and writer/scratch space. Cancellation is checked around each
-bounded block and before writes; native work returns before worker custody ends.
-The validated native component identity binds the loaded converter's embedded
-numeric/bridge/Cargo sources, lock and platform/profile. A supported complete v3
-producer proof additionally composes this component with every guarded Python
-role. Producer completion encoding, parsing and passive calibration now use the
-strict frozen source-owned `ExecutionReceipt` in `stem_execution_protocol.py`.
-Both actual child emitters import that codec directly. The public Pydantic
-`StemExecution` stays at control-event, session and cache-history boundaries;
-those converted diagnostics never feed producer identity or calibration.
-The V1 wire fields, LF framing, strict bounds and independent final publication
-and reader guards remain unchanged. Every actual host role, including the codec,
-must pass before the host source identity becomes known; missing or altered roles
-remain UNKNOWN. Public Pydantic compiled plans retain their separate unsupported
-attestation limits, without schema/reduction/repr shortcuts.
-Both selectors include the BS adapter, asset verifier and input-provenance host
-roles because their shared constructor consults both backends. Child model roles
-remain specific to the selected separator. The Win32 memory layouts use explicit
-ABI-equivalent field tuples and resource constants use supported arithmetic.
-Both complete host manifests still return UNKNOWN: the cached Win32 factory and
-the captured monotonic-clock default retain separate unsupported binding proofs.
-These are observed remaining gaps, not an exhaustive whole-runtime diagnosis.
-Component proof does not remove those roles or establish complete producer identity.
-Supported plain dataclass components additionally compare their actual generated
-constructor bodies, exact defaults and frozen captures against stdlib references
-from held declarations, including required post-init calls. Checking this evidence
-does not execute host constructors or hooks. Other generated methods, metaclasses,
-`__new__` and complete Pydantic compiled-plan evidence retain their separate limits;
-constructor evidence alone does not promote a complete producer to known.
-Ordinary function and method defaults, keyword defaults and measured constants
-retain exact builtin types recursively, including dictionary keys and slice
-members. Equal values such as `True` and `1` cannot substitute for one another;
-builtin subclasses and custom default containers remain unsupported without
-calling their equality, iteration or encoding hooks. Guarded callable defaults
-retain their separate source proof, and mutable admission/cancellation carriers
-retain their existing state-independent policy. Dictionary entries retain actual
-insertion order recursively, including supported generated-constructor defaults;
-reordering equal dictionaries cannot preserve source evidence when iteration
-behavior changes. A bounded owner graph additionally preserves sharing of exact
-mutable list/dict/set owners across each function's positional and keyword
-defaults, supported generated-constructor defaults, and within each measured
-constant. Exact tuple/list/dict/slice paths use deterministic evidence without
-persisting object IDs; cycles and excessive graph depth/size remain UNKNOWN.
-Equivalent replacement graphs retain identity. Immutable object identity and
-relationships across separate constants, functions or global/default roots
-retain their separate limits; this is not arbitrary alias completeness.
-This is compiled-source identity, not loaded-image or full compiler attestation.
-Conversion does not remove Torch or prove model quality.
-
-Committed component preparation
-uses a cancellable worker-only gate, preserving serialized sharing and memory
-peaks without retaining owners or the control producer during reads, allocations,
-ledger commits or file-pin retention. Short owners sections revalidate the exact
-proposal, source, content placement and intent before and after preparation;
-the existing guarded publication and own effective ACK remain necessary.
-The public request captures its original per-content admission order before
-releasing its Engine borrow. Owned shared control contexts detach reconciliation,
-binding capture, both registration paths and admission. Only successful admission
-advances the independent explicit/policy watermark; registration has its own
-successful-order watermark. Failed newer work preserves an earlier viable request.
-Final registration rechecks source/window, placement, discard and the captured
-lane's lifecycle after lock waits.
-
-Source/window preparation uses the same worker-only gate before short owners
-sections. Source and component bytes, owner witnesses, assignment reader locators
-and source history are promised before source I/O. History reservations follow an
-immutable accounting row identity through Move; Copy keeps independent target
-history, and an ended row cannot authorize its new occupant. Worker-held historical
-PCM remains charged even after its original view ends. Complete legacy conversion
-has a separate prospective host reservation and retains its existing 1-GiB cap.
-The worker revalidates the original content/lifetime, bank/window, proposal and
-intent after I/O/registration, then releases its preparation gate before the
-unchanged publication CAS and operation-specific ACK.
-
-Coordinated child CPU/process/commit admission is delivered by STEP16. Remaining
-provider selection and whole-process memory evidence are recorded in STEP17.
-Controlled source/component/registration progress does not establish whole-GIL
-isolation, device latency or the cause of callback glitches. The focused
-[performance plan](../development.md#performance-audit-and-upgrade-plan) separates
-control-lock isolation, detached Rust conversion and background resource policy.
-
-The joint set commit covers both disk areas; fenced config selection points to
-the exact immutable result. It does not force unused components into RAM or
-certify a live effect. FULL MIX with preload off need not retain unused stem
-windows. Warm restoration verifies complete source/artifact integrity rather than
-trusting directory existence. Model-free restoration can reuse a verified set
-without rerunning its separator. A changed selected model does not invalidate an
-unrelated already selected source-bound set.
-
-## Disk, resident and effective state
-
-| State | Owner and proof |
+| Separator | Current inference path |
 | --- | --- |
-| Generated/verified disk pair | Complete immutable source/output identity; registration alone does not adopt it. |
-| Saved selection | Fenced ProjectState/config selects an exact set; batch Done means saved. |
-| Pending candidate | Own current content/source/timing/window/voice/history and selection request, with separate new-set registration. |
-| Resident components | Budgeted actual component windows; data availability alone grants no effect. |
-| Effective mode/mask/set | Matching callback adoption and own acknowledgement, with actual output/ramp state where needed. |
+| BS-RoFormer MUSDB18HQ | Fresh default. The vendored Torch worker uses the pinned v1.0.12 config/checkpoint. Audio is stereo at 44.1 kHz with 485100-frame chunks, overlap 2 and batch up to 2. CPU uses FP32 and CUDA uses AMP. Disk-backed input and rolling overlap-add bound PCM staging. Short final chunks use reflection/zero padding. |
+| Demucs `htdemucs` | Supported saved/user choice. The locked Torch CLI retains whole-track model input/output and the configured shifts/overlap. |
+| Native HTDemucs CPU | Explicit Windows x64 trial route through the gated adapter. The [release and worker slots](../../workers/htdemucs/native_cpu/) carry no approvals in this checkout, so that selection is unavailable. |
 
-[committed_stem_residency.py](../../src/flitzis_looper/controller/committed_stem_residency.py)
-tracks registration, residency and effect independently. `register_committed_stem_pair`
-seals disk data; `register_pending_committed_stem_pair` creates a separately guarded
-new-set candidate. [prepared_stems_work.rs](../../rust/crates/looper/src/audio_engine/prepared_stems_work.rs)
-retains the generic inactive new-source/new-set guard. Offline generation during
-playback does not remove it or grant unrestricted direct active publication.
+[`stem_separators.py`](../../src/flitzis_looper/controller/stem_separators.py)
+dispatches the selected producer. A recognized CUDA failure can make one fresh
+CPU attempt for the same model. Integrity, codec, cancellation and resource
+failures retain their own outcomes. The
+[`ExecutionReceipt`](../../src/flitzis_looper/stem_execution_protocol.py)
+records the actual device, including fallback reason. Hardware availability
+and completed model loading establish readiness. The
+[setup guide](../model-worker-setup.md#optional-stem-models-and-codecs) covers pins,
+FFmpeg and offline provisioning.
 
-[committed_stem_residency.rs](../../rust/crates/looper/src/audio_engine/committed_stem_residency.rs)
-captures actual source, voice, window, accepted timing, launch and history. Workers
-reserve/load required components. [committed_stem_mixer.rs](../../rust/crates/looper/src/audio_engine/committed_stem_mixer.rs)
-rechecks binding/content/launch/Native permit/candidate and feedback/retirement
-capacity before adoption. Unsupported context, stale source, queue pressure or
-missed preparation deadline refuses without borrowing another set/PAD's ACK.
+Child numerics and FFmpeg pools are bounded. On Windows admission observes
+actual host capacity and low-memory notification. The suspended child joins
+an owned Windows Job before execution. Linux uses the owned subtree broker.
+Platforms without an owning adapter refuse new subprocess work. Terminal
+status can precede process/tree/pipe or lease retirement, so permissions and
+scratch ownership stay attached through actual settlement.
 
-The bounded transition is 128 source frames, following the same cursor, scalar
-rate, EQ and Native path. Pause stops transition progress. Residency acceptance
-can remain waiting for effective output until the unpaused current wet source
-actually produces it. Normal/Intro/Tail, finite/complete, running/paused and ON/OFF
-states need their own valid physical reader and history domains; saved ALL or
-shared backing cannot substitute. Earlier paused-Intro rejection and later scoped
-software support remain distinguishable evidence, not a universal live-domain claim.
+## Complete artifacts and assignment
 
-Same-set preload is a policy interest. FULL MIX can release components after its
-own effect ACK and outgoing final ramp, retaining the verified disk selection.
-A mode/selection receipt can become historical after ordinary Play without
-revoking an already admitted physical data stamp. UI separates saved replacement,
-pending switch and last-confirmed audio; newer metadata cannot erase an old reader.
+The complete outputs are drums, bass, other, vocals and the instrumental
+non-vocal sum. [`stem_artifacts.py`](../../src/flitzis_looper/controller/stem_artifacts.py)
+uses the detached [Rust conversion core](../../rust/crates/stem-conversion/)
+for bounded resampling, ordered summation and requantization. Python owns
+positioned PCM16 RIFF/RF64 reads, exclusive writes and generation custody.
+The stem pair binds five WAV outputs and complete aligned float32 derivatives.
+Native [streamed alignment](../../rust/crates/looper/src/audio_engine/stem_cache/streamed.rs)
+uses complete onset scanning, a four-second alignment window with a half-second
+pre-onset, and a ±0.25 second lag search with ascending tie order. Hashes,
+geometry, EOF and source binding are checked through sealed readers.
 
-## Cancellation, batch work and final readers
+[`stem_cache.py`](../../src/flitzis_looper/controller/stem_cache.py) resolves
+material-root `stems` and `.pcm-cache` with full identity checks. A joint
+commit and fenced configuration point to an immutable complete set. Verified
+warm restoration can recover a saved set without model inference. Cross-rate
+output restore rebuilds the aligned selection as a schema-2 Pair from complete
+Original-clock evidence with fresh ownership. The exact schema-1 read and
+alignment policy remains available for its original rate.
 
-[stem_batch.py](../../src/flitzis_looper/controller/stem_batch.py) feeds loaded
-PADs across banks fairly within worker/queue limits. Shared results keep separate
-interests. Batch cancellation is cooperative and does not cancel independent work.
-Deletion confirms captured assignments, revokes eligibility first and separates
-logical detachment from physical terminal cleanup. Done/saved is not audio ACK,
-whole-216 resource acceptance or proof all files have disappeared.
+## Residency, switching and final readers
 
-Readers include source leases, workers/results, queued adoption, current/outgoing
-voices, resident PCM and prepared Native/history. Cancelling a candidate revokes
-future adoption without prematurely releasing those actual readers.
-[project_assets.rs](../../rust/crates/looper/src/audio_engine/project_assets.rs),
-[stem_readers.rs](../../rust/crates/looper/src/audio_engine/project_assets/stem_readers.rs) and the
-shared retirement gate recheck file/hash/identity and actual last use. Cleanup is
-off realtime; Unload, ACK, silence or a timeout alone cannot authorize deletion.
-Close continues settlement; unknown/changed custody is preserved.
+| State | Authority |
+| --- | --- |
+| Complete disk set | Verified original/source and output identities, independent of saved selection. |
+| Saved selection | Exact persisted set; batch Done reports this boundary. |
+| Pending candidate | Captured content, source/window, voice/launch, timing and selection request. New-set registration is separately guarded. |
+| Resident | Budgeted required component PCM and reader/history coverage. |
+| Effective | Matching callback adoption and the operation's acknowledgement; actual wet output may still wait for resume. |
 
-Strict Native Pair preparation observes source/shutdown cancellation while waiting
-in the existing cold lane. It removes only its exact unclaimed queued operation,
-then destroys captured readers outside the queue mutex before returning admission
-and heavy capacity. An unrelated heavy owner or occupied worker need not finish
-first. A worker-claimed operation still waits for its actual terminal result and
-reader retirement; independent queued originals retain their places. This does
-not change the separate asynchronous analysis submission path.
+[`committed_stem_residency.py`](../../src/flitzis_looper/controller/committed_stem_residency.py)
+projects the states. [Native preparation](../../rust/crates/looper/src/audio_engine/committed_stem_residency.rs)
+reserves source, window and history outside the callback. The
+[mixer](../../rust/crates/looper/src/audio_engine/committed_stem_mixer.rs)
+revalidates ownership, permits and capacity before the 128-source-frame
+transition on the existing cursor. Pause stops transition progress.
+Running/paused, Intro/Normal/Tail, finite/complete and Key Lock paths need
+their admitted reader and history domains. FULL MIX with preload off can
+release unused components after the effect and outgoing final ramp while
+keeping the disk selection.
 
-Public prepared-stem publication enters this same heavy terminal-waiting owner
-for both Pair and legacy preparation. Its nested Pair kernel borrows that original
-owner inline instead of requesting another heavy position. Source capture,
-currentness, pending publication and final own-ACK remain separate fences.
+[`stem_batch.py`](../../src/flitzis_looper/controller/stem_batch.py) submits
+loaded PADs across banks within queue limits. Cancelling one subscriber leaves
+shared work for others intact. Delete revokes captured assignment eligibility
+before physical cleanup. Queued work, current and outgoing voices, source
+leases, workers and prepared history can still hold readers. The
+[Native asset owner](../../rust/crates/looper/src/audio_engine/project_assets.rs)
+checks last use, file identity and custody off realtime.
 
-## Models, setup and actual execution
-
-[Model setup](../stem-generation-setup.md) is the stable installation reference.
-Fresh separator choice is BS-RoFormer MUSDB18HQ; saved Demucs choices remain.
-Generate/Settings never downloads. Explicit setup resumes retained transfers and
-checks pinned complete size/hash before atomic installation. Portable remains
-self-contained/relocatable, independent of private developer cache policy.
-
-[bs_roformer_assets.py](../../src/flitzis_looper/controller/bs_roformer_assets.py) pins release
-v1.0.12/commit `aef04b2e52fb3beaf25e333199f5a7236e628e7b`, exact YAML/checkpoint
-identities and pre-deserialization checks. The vendored worker hashes and loads
-from one retained handle with `weights_only=True` and strict state matching.
-The four stereo model outputs are drums/bass/other/vocals at 44.1 kHz; productive
-inference uses 485100-frame chunks, overlap 2, batch at most 2, CUDA AMP or CPU FP32.
-A rolling overlap-add ring and independent per-chunk windows bound PCM storage;
-short final chunks follow the established reflection/zero-padding policy.
-Nonfinite output fails. Exact upstream overlap-add numerical parity is not claimed.
-The 183367800-byte PCM estimate excludes weights, activations, decoder internals
-and process RSS. Demucs whole-track inference memory is not bounded by artifact
-streaming or BS-RoFormer's PCM estimate.
-
-CUDA failure may retry the same chosen model once on CPU with an execution receipt
-and reason. It never silently changes BS-RoFormer to Demucs. Completed inference
-device stays visible through later alignment; old missing receipts show unknown.
-Command-output compaction labels diagnostics that would otherwise acquire a
-reserved receipt prefix after whitespace removal. Indented diagnostics cannot
-become CUDA-failure, execution, encoder or BS-input evidence. Independent exact
-receipts keep their original duplicate/size checks and the diagnostic stays bounded.
-Model loading, CUDA availability and source/unit propagation checks are distinct
-from actual separation. The historical E-CUDA delivery records actual paired
-Beat This and Demucs CPU/CUDA executions, while its BS-RoFormer device propagation
-was source/unit-only. Later CPU model-load readiness is not a BS separation receipt.
-
-## Evidence and limits
-
-The isolated [BS spectral Rust trial](../../rust/crates/stem-dsp/src/lib.rs)
-implements pinned STFT2048/hop441, frequency-leading stereo features, four complex
-masks and ISTFT with the original complete chunk length. It is not an application
-route or full network replacement. Original Torch FFT-only comparisons do not
-establish learned-mask, CUDA AMP, whole-track overlap, quality or distribution
-parity; productive separators and dependency closures stay available. The
-[STEP25 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step25-impact-independent-bs-spectral-frontend-and-reconstruction)
-records its caller-owned resource/reader envelope and exact evidence limits.
-
-The [native track module](../../rust/crates/stem-dsp/src/track.rs) adds release
-reflection, strict final-tail padding, batch2, independent fades and bounded
-rolling overlap-add around synchronous source/predictor/private-output callbacks.
-It handles tiny physical sources by padding full release chunks before a predictor
-can call the spectral core. Partial blocks remain private if a later failure or
-cancellation invalidates the attempt. The
-[STEP26 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step26-impact-independent-bs-wholetrack-orchestration)
-separates complete track arithmetic from learned-network and
-whole-model/provider/quality/artifact/distribution requirements. It changes no
-productive generation, selection, live adoption or retirement path.
-
-The optional [learned CPU core](../../rust/crates/stem-dsp/src/learned.rs) now
-implements the complete release band split, eight axial attention/feedforward
-blocks and four learned masks. It reuses the spectral reconstruction and supplies
-a synchronous full-chunk track predictor. Fixed effective-state export and tiled
-attention preserve original geometry and bounded vector work; complete original
-process admission remains external. The
-[STEP27 design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md#step27-impact-independent-learned-bs-cpu-network)
-separates operator controls and failed full-model attempts from unproved complete
-execution/original numerical parity, batch2/wholetrack, CUDA/AMP, whole-quality,
-complete producer and distribution parity. Productive Torch paths
-and installer/recovery dependencies remain in place.
-
-The [canonical E-STEM/E-PCM/E-CUDA index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
-retains exact full reports, UNKNOWN producer/device lineage, queue/refusal/stale/
-deadline/retirement failures, supported domain histories and remaining installed
-inference/resource/power-loss/device/Human gates. RF64 source/parser support does
-not establish five-RF64 separation. Fault injection is not actual disk exhaustion
-or power-loss acceptance. Internal 32 ownership checks are separate from the
-2/4/6 productive target and synthetic stress ceiling of 10 PADs.
-
-Current [stem-cache](../../openspec/specs/stem-cache/spec.md),
-[source alignment](../../openspec/specs/loop-source-stem-alignment/spec.md) and
-[background tasks](../../openspec/specs/background-tasks/spec.md) contracts retain
-these separations. This documentation changes no behavior or acceptance.
+The [stem-cache contract](../../openspec/specs/stem-cache/spec.md) specifies
+selection and retirement. The [archived performance design](../../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md)
+preserves scoped measurements and incomplete provider/producer evidence.

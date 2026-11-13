@@ -1,62 +1,16 @@
 # Project TODOs
 
-This file is the maintained project TODO list for user-requested notes that
-should not be forgotten.
+Record explicit user-requested work here. Work items require their own task
+authorization and applicable [OpenSpec contracts](../openspec/specs/).
 
-It is not an automatic work queue. A concrete user request in the current chat
-always has priority. Codex may work from this file only when the user explicitly
-asks to add to it, review it, choose from it, or complete a specific TODO item.
-
-OpenSpec remains required for user-visible behavior changes. A TODO item is not
-a substitute for a spec, design, tests, or validation.
-
-## How To Use This File
-
-When the user says "add this to the TODO list", add a clear item here.
-
-When a TODO is implemented or intentionally abandoned:
-
-- check it off or remove it if the user asked for cleanup,
-- mention the related commit/change if known,
-- keep any remaining dependent item current.
-
-Prefer this item shape:
-
-```text
-- [ ] <short title>
-  - Type: Bug | Feature | Refactor | Docs | Investigation | Chore
-  - Context: <why it matters>
-  - Dependencies: <OpenSpec change, code area, setup requirement, or "none">
-  - Notes: <optional constraints or acceptance hints>
-```
-
-Keep items concise. If an item grows into a multi-step implementation plan, use
-the local agent handoff workflow for continuation memory and keep only the
-durable TODO summary here.
-
-## Inbox
-
-No open TODO items.
-
-## Bugs
-
-No open TODO items.
-
-## Features
-
-No open TODO items.
-
-## Refactors And Chores
-
-- [ ] Optionally reduce the existing exact six-PAD consuming cost further.
-  - Type: Investigation
-  - Context: The Human accepted the measured 11.2481 ms six-PAD result for initial
-    native testing and prioritized SYNC, REALTIME BPM and BeatThis delivery.
-  - Dependencies: Usable native delivery and Human feedback.
-  - Notes: Preserve exact coordinates, rounding, source ownership and RT guards.
-    This is optional follow-up, not a current delivery gate. The accepted figure
-    does not cover additional costs introduced by new continuation paths.
-
-## Documentation
-
-No open TODO items.
+- [ ] **Complete the Torch replacement.** The repository has Native inference
+  entry points and candidate components. The first cutover attempt failed, so the
+  current Torch paths remain in use. Follow the
+  [temporary replacement plan](plans/torch-replacement.md) for Beat This and
+  both supported stem models. Verify supported NVIDIA CUDA, fresh same-model
+  CPU fallback, complete source and quality parity, and the shipping packages
+  before retiring Torch. Once verified, remove the plan, resolve this item and
+  update the architecture and setup guides.
+- [ ] **Optionally reduce exact six-PAD processing cost further.** Preserve
+  source coordinates, rounding, ownership and realtime guards if this
+  investigation is taken up.

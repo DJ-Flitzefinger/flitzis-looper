@@ -89,19 +89,5 @@ Load/cancel/stale/error and source retirement use the common
 [media ownership](media-and-pcm.md#publication-cancellation-and-retirement) and
 [state polling](state-input-and-ui.md#polling-feedback-and-errors) rules.
 
-## Evidence and limits
-
-The 2026-10-30 complete-file repair retained dense/file and independent Sinc/CQT
-parity, exact admission boundaries/overflow, full-tail/nonfinite/cancellation and
-source-bound metadata checks. The authorized full CHASER/control import checks
-returned Cm and Am with matching OwnACK. These are actual model outputs, not
-musical ground truth, listening, device or MIDI acceptance; no inference was
-repeated for this documentation.
-
-[Historical Key evaluation](../key-detection.md) retains reported 604-track scores
-and agreement. Its proposed causal explanation of a Python/Rust gap was not
-proved; it is not a fresh evaluation of the complete-file implementation.
-The [canonical E-KEY/E-MEMORY evidence](../../openspec/changes/archive/2026-10-30-evidence-index.md)
-preserves original identities, old memory failures and superseded formulas.
-Current [analysis](../../openspec/specs/audio-analysis/spec.md) and
-[classification](../../openspec/specs/musical-key-cnn/spec.md) contracts apply.
+See the [classification contract](../../openspec/specs/musical-key-cnn/spec.md)
+and [historical evaluation and memory evidence](../../openspec/changes/archive/2026-10-30-evidence-index.md).

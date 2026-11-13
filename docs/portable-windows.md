@@ -1,494 +1,99 @@
 # Portable Looper for Windows x64
 
-`INSTALL-LOOPER-PORTABLE.bat` installs the current remote `main` from source.
-Copy that single file into your chosen folder and double-click it. It creates
-`Flitzis-Looper` beside the BAT and acquires the required build tools. No terminal
-commands, preinstalled Git/Python/Rust or project binary release are required.
-Internet access is needed for installation, updates and missing model downloads.
+Copy [`INSTALL-LOOPER-PORTABLE.bat`](../INSTALL-LOOPER-PORTABLE.bat) into
+the chosen parent folder and double-click it. It creates `Flitzis-Looper`
+beside the BAT and installs one exact commit from remote `main`. It acquires
+pinned tools over the network and builds from source. The initial install needs
+download time and disk space. Shared Microsoft C++ Build Tools and the Windows
+SDK can require elevation or a restart. Rerun the BAT afterward.
 
-The BAT is independent of a development workspace or Codex installation. It
-fetches one exact current remote `main` revision, including its portable recipes.
-Use the updated installer BAT when updating an older installation.
+## Start, update and repair
 
-The optional native BeatThis developer trial is separate from this installer.
-Its full-source CPU prototype and optional CUDA build do not replace the pinned
-productive workers, locks or model recovery. A Debug EXE, a separately built
-libsoxr and extracted ORT DLLs are not a supported Portable bundle. Native CUDA,
-CPU fallback/CPU-only, all dependency/provenance and Linux/macOS acceptance remain
-open as detailed in the [performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md).
+- Start with `Flitzis-Looper/START-LOOPER.bat`. The installed `start.bat` and
+  `start-release.bat` aliases use the same private Release runtime. Normal
+  start uses the installed runtime with no build or update.
+- `START-LOOPER.bat --check` runs runtime import, DLL, codec and worker checks
+  before App or device acquisition.
+- Close the App and rerun the current installer BAT to update or repair.
+  The launch and update paths share a lock held for the actual App process
+  lifetime. Older active private Python processes also fence updates.
+- Keep the whole installation directory together when moving it. Use the
+  installed starters to keep the runtime, model and cache bindings local.
+  The automation form accepts an optional target directory and `--no-pause`.
 
-## Install, start and update
+The [user guide](user-guide.md#audio-output-and-startup) describes output
+selection and Apply. Native ASIO uses a vendor driver already installed and
+registered on the system. WASAPI works without ASIO. Portable supplies the App
+runtime and does not install GPU or audio-device drivers.
 
-The installer pins and verifies its private Git, uv, CPython 3.14.2, Rust 1.95.0,
-vcpkg/Rubber Band and FFmpeg/FFprobe inputs, then builds a private Release runtime
-from one exact remote `main` commit. It keeps one complete Git checkout on `main`
-at `Flitzis-Looper/flitzis-looper`, including tracked source, assets, vendor and
-build files. `Flitzis-Looper/Runtime` holds the private Python interpreter,
-dependencies, FFmpeg and launch helpers. Native binaries sit beside their tracked
-wrappers in the checkout. The app's working directory is this checkout.
+## Layout and runtime resources
 
-The pinned Windows build selects the tracked libsamplerate 0.2.2 overlay in
-`scripts/native/vcpkg-overlay`. It reuses unchanged stereo ratio controls within
-each processing call while retaining the original SINC coefficients, tap order,
-history and delay. The upstream BSD-2-Clause notice and complete patch accompany
-source recovery. A changed overlay requires a matching Native build; installed
-system-package builds on other platforms are qualified separately.
+| Path below `Flitzis-Looper` | Contents |
+| --- | --- |
+| `flitzis-looper/` | Full Git checkout and Native extension. `samples/`, `config/input/` and `record/` hold user data. |
+| `Runtime/` | Private interpreter, packages, DLLs, FFmpeg/FFprobe and launch support. |
+| `analysis-runtime/beat-this/` | Movable pinned worker installation and verified active pointer. |
+| `models/` | Independent stem model cache. |
+| `tools/`, `cache/`, `b/`, `logs/` | Bootstrap tools, retained downloads and diagnostics, short Native build path, and logs. UI layout is installation-local in `cache/ui/`. |
 
-The optional `signalsmith-probe` Cargo feature is a development diagnostic.
-Ordinary locked Portable builds do not enable it, compile its C++ shim or add a
-Signalsmith runtime DLL. Its pinned MIT headers ship as tracked source; existing
-MSVC/SDK selection and the productive RubberBand dependency remain unchanged.
+[The installer](../scripts/portable/install-main.ps1) selects verified Git, uv,
+CPython, Rust, vcpkg, Rubber Band and codecs. The Native build uses the tracked
+[vcpkg overlay](../scripts/native/vcpkg-overlay/) and MSVC ASIO bridge. Driver
+access and realtime behavior are described in the
+[audio runtime](architecture/runtime-and-transport.md#output-selection-and-apply).
 
-The bounded stem converter adds a dependency-free Rust workspace crate inside
-the same Native extension. It changes no Python ABI, installer path, external
-DLL or inference dependency. Runtime preflight checks its numeric API and v3
-compiled-source processing identity before activating the matching Python code.
-The arithmetic core has no OS/Python dependency; Windows host promises use the
-existing memory adapter. Other OSes retain the hard PCM cap with explicitly
-unsupported host monitoring until a platform adapter is supplied. Windows tests
-alone do not certify Linux/macOS builds or distribution.
+[`prepare_analysis.py`](../scripts/portable/prepare_analysis.py) selects the
+pinned CPU Beat This worker on fresh install and retains a valid selected
+Torch CUDA profile when updating. The private interpreter and standard library
+move with the worker. Developer Native Beat This trial packages require their
+own explicit setup. [`prepare_models.py`](../scripts/portable/prepare_models.py)
+verifies the pinned BS-RoFormer and Demucs files and loads each model on CPU in
+its own process before activation. Unchanged-main model repair uses the same
+checks and can reuse a healthy Runtime without rebuilding Native.
+[Worker and asset details](model-worker-setup.md) describe both environments.
 
-Start the installed app with `Flitzis-Looper/START-LOOPER.bat`. The `start.bat` and
-`start-release.bat` aliases select the same private Release runtime. Ordinary
-starts perform no build, dependency installation, update or model preflight.
-`START-LOOPER.bat --check` runs the isolated runtime import/DLL/FFmpeg/offline-worker
-checks without opening the GUI or an audio device.
+Acquisition resumes retained partial downloads and checks full pins before use.
+The installer binds child processes to its own runtime and ignores inherited
+personal bindings. Temporary drive mappings protect long build/runtime paths
+and last for the owning process. Starts do not depend on the installation-time
+drive letter.
 
-Audio output Settings support WASAPI and native Windows ASIO in the same Release
-build. WASAPI needs no ASIO driver. ASIO uses the selected vendor driver already
-registered on the computer; the installer does not acquire or install one. Choose
-the backend, device, physical stereo outputs, rate and buffer/period, or use Auto.
-Stop playback and let recording, loading and arrangement owners finish before
-Apply. A failed request keeps Settings accessible and attempts to restore the
-previous output and original musical/source selections without starting playback.
-Invalid saved output preferences require an explicit corrected Apply.
+## Update and recovery
 
-Existing paired-stem assignments support explicit output-rate changes and Auto
-through complete Original-clock-qualified conversion and atomic selection.
-Failed or partially restored startup still permits a corrective Apply; wait for
-restoration to finish before playing.
+Candidate source, runtime, required model resources and file custody are
+verified before activation. A durable transaction journal covers checkout and
+Runtime swaps, data relocation and worker selection. After interruption rerun
+the same BAT to recover or finish the verified operation. The starter refuses
+an unfinished transaction.
 
-WASAPI uses the endpoint's `IAudioClient3` shared-mode period capabilities for the
-exact initialized format. Auto uses its reported default; unsupported fixed
-periods are rejected without rounding. The initialized period, initialization-time
-shared-engine snapshot, stream capacity, observed callback sizes and reported
-latency remain separate values. ASIO similarly reports its selected driver's
-legal buffer pattern, physical channel names/formats, latency and notifications.
-A nominal 96-frame interval at 96 kHz is 1 ms; it does not establish total audible
-latency, deadline reliability or six-PAD listening quality.
-
-The ordinary source build compiles the ASIO bridge with the existing MSVC C++17
-and Windows SDK tools. Its compiler probe only compiles and links; it never runs
-the probe. No Clang, SDK download during compilation or additional runtime DLL is
-required. The tracked ASIO SDK interface headers retain their exact upstream
-license and provenance, and the project selects their GPLv3 option. The runtime
-license collection includes those notices and the CPAL license and downstream
-provenance as exact tracked bytes. Runtime preflight reflects the matching output
-and original-source restoration interfaces before App activation, without
-constructing an Engine or discovering a device.
-
-The piano-control revision requires Native's immutable
-`CapturedPitchAction.resets_key_correction` receipt field. The installer preflight
-rejects an older incompatible binary before activation. Saved schema-1 key intent
-remains compatible: a missing independent offset-retrigger preference inherits
-the old shared preference, while note octaves and both explicit preferences
-survive project and portable relocation. Existing running installations are
-protected by the same update lock.
-
-Every successful installation or update also prepares `demucs:htdemucs` and
-`bs-roformer:musdb18hq` using the existing model resolvers. It verifies checkpoint
-assets and loads each real model on CPU in a separate fresh process, sequentially.
-Model failures prevent activation. Running the installer on an unchanged healthy
-`main` repairs missing or corrupt model assets and repeats both CPU loads without
-invoking the Native builder.
-
-The installer also prepares a pinned BeatThis worker under
-`analysis-runtime/beat-this`. Fresh installations use the existing CPU profile
-(CPython3.12.13, Torch/Torchaudio2.8.0+cpu); a valid selected CUDA-auto-v2 profile
-is retained on update. The worker includes a physical private interpreter,
-standard library and locked packages with relative search paths. Its runtime
-does not depend on the provisioning interpreter, a host venv or the install
-folder's original name. Worker verification checks the checkpoint, receipts and
-actual import environment without inference. An absent worker is an error,
-not successful App readiness.
-
-Candidate bundle creation first checks its Python/Native/codec runtime. The
-installer then selects a verified worker and performs the complete preflight
-before activating the candidate. Failed updates restore the previous worker
-selection; unchanged-main repair does not require a Native rebuild.
-
-The starter holds the same exclusive installation lock as the updater for the
-entire private app process lifetime. Updates stop with a close-and-retry message
-when the app is running. They also detect an older installation's actual private
-Python processes, whose starters did not use that shared lock. The installer
-does not terminate them. Native data custody guards additionally protect against
-an active material owner.
-
-Changed source or a damaged private runtime is prepared in short owned cache
-directories. The installer validates the complete candidate checkout, runtime,
-both models and existing file ownership before activation. A durable transaction
-journal covers short checkout/runtime backups, data transfer and starter
-selection. Repeating the same BAT after an interruption restores the previous
-installation or finishes cleanup of a fully verified accepted candidate before
-starting another update. A starter refuses an unfinished transaction and points
-to that recovery step. If the journal records a completed Native Samples
-capture, rollback requires its relocation record. When that record is missing,
-recovery stops before moving files and preserves the transaction for diagnosis.
-Rollback also checks that the worker selection matches the journal before
-changing the journal or moving files, then checks it again before restoring
-the previous selection. A different selection is preserved for diagnosis.
-
-The installation uses these areas:
-
-- `flitzis-looper/samples`: project samples, PCM caches, material inventories and
-  `flitzis_looper.config.json`.
-- `flitzis-looper/config/input`: persisted input configuration.
-- `flitzis-looper/record`: recordings and recovery custody, transferred with
-  their file identities during updates and restored on rollback.
-- `analysis-runtime/beat-this`: private pinned analysis installations and one
-  verified active pointer; previous installations are retained.
-- `Runtime`: the fixed private interpreter, dependencies, FFmpeg and launch files.
-- `models`: persistent model caches shared by install checks and offline workers.
-- `tools`: verified bootstrap and build tools.
-- `cache`: useful package preparation caches and bounded failed-install diagnostics;
-  successful operation stages and fully owned short backups are removed. Previous
-  checkouts containing unregistered contents are preserved in full as described below.
-- `cache/ui`: installation-local window geometry and UI layout; the app does not
-  read or update another installation's user-profile layout file.
-- `b`: reusable Native build output; its short name protects linker paths.
-- `logs`: installation-local diagnostics.
-
-Stem asset acquisition uses the same resumable pinned transfer helper before
-network-forbidden CPU checks; legacy library downloaders are not used by the
-Portable repair path.
-
-Downloads retain stable partial files and resume transient interruptions with
-interruptible backoff and no overall deadline. SHA256 pins are checked before
-publication. Permanent unavailable/authentication responses fail explicitly and
-retain the partial evidence. Portable launch and child processes bind package,
-model and compute caches to this installation, ignoring inherited personal
-workspace bindings.
-
-The runtime preflight enforces the current constant-BPM and ordinary-transport
-API, including immutable admission/observation receipts and their current-state
-queries. Source SYNC, REALTIME BPM, tempo-map adoption and phase-following are
-retired on main; old map/editor prerequisites are historical, not current
-installation gates. Native checks do not establish hearing/device acceptance.
-
-There is no second `Runtime/app` copy and no permanent per-version runtime tree.
-The full checkout's installed-file inventory distinguishes shipped files from
-Human changes. A recognized old checkout containing unregistered files, such as
-an older `.venv/.gitignore`, or unregistered empty directories can be updated
-without deleting them. The installer prepares a clean source/runtime even if
-`main` is unchanged and never executes or copies those extras into the new checkout.
-After data relocation and verification, it preserves the entire previous checkout
-at its existing `cache/o-<operation>` path, reports the actual path and finishes
-the update. Keep that backup until you have reviewed its contents yourself. The
-new checkout resumes ordinary unchanged-main updates without repeated Native builds.
-Models, tools, downloads and useful package/build caches keep their existing reuse
-paths; missing or changed required assets can still need acquisition.
-
-A recognized previous checkout also has one narrow exception for a changed
-generated Native binary at
-`src/flitzis_looper_audio/flitzis_looper_audio.cp314-win_amd64.pyd`.
-The file must still exist, and its accepted `native_sha256` must match its original
-installed-file inventory hash. The installer treats its changed bytes as contents
-to preserve, builds and verifies a clean candidate even on unchanged `main`, and
-retains the entire old checkout. It never imports or copies the changed previous
-binary. This does not establish why that file changed. Missing Native, missing or
-inconsistent declarations, other changed registered source, Runtime changes and
-candidate Native changes still stop the relevant operation safely.
-
-New manifests record checkout directories as well as files. Older file-only
-manifests cannot prove ownership of otherwise empty folders, so one update may
-conservatively retain an old checkout even without additional files. A directory
-name alone never authorizes recursive deletion. Changed or missing registered
-source files outside that exact previous generated-Native preservation case still
-stop activation with their concrete preserved path. Existing
-Runtime files, including licenses and DLLs, must also match their recorded
-hashes; unknown or replacement bytes stop updates and retired-runtime cleanup. Missing
-Runtime files remain eligible for repair. Files are not removed based only on
-a directory name. Completed downloads and
-successful operation-owned environment, wheel, license and bundle stages are
-removed. The installer reports retained tool/build cache sizes and their reuse
-purpose; it does not recursively purge caches merely to reduce disk usage.
-Recovery validates complete candidate source/Runtime files, hashes and reparse guards
-before running relocation, private preflight or model checks. Source directory
-ownership is also checked; Runtime directory handling remains unchanged. Unknown
-source files/directories or unknown/tampered Runtime files remain
-preserved with their recovery evidence. Unknown installation ownership and links
-remain refusals; checkout-extra preservation does not relax those boundaries.
-
-An older recognized `versions/main-...` plus `data` installation migrates once.
-The installer proves the old runtime's files from its exact source revision,
-pinned interpreter/FFmpeg and installed distribution inventories. Native capture
-binds the real sample directory, config files and journals before any code swap.
-Native moves that same directory into the final checkout and projects location
-references while preserving material birth ownership, latest config state and
-external references. Input files move intact. Unknown old runtime files,
-ambiguous configs, active owners, reparse points, destination collisions or
-unsupported custody capabilities stop before swaps and keep the old installation.
-Sample migration requires same-volume Windows FileIDs and directory alternate
-data streams; NTFS provides the tested capability. Unrelated files left in the
-old `data` area remain preserved.
-
-Temporary drive mappings protect long paths during builds and runtime DLL
-loading. All files stay in the chosen folder. Each operation acquires a free
-letter, preserves existing mappings, keeps its own mapping for its child process
-lifetime and removes it afterward. Starts do not depend on an installation-time
-drive letter. Reparse installation paths, unsafe archive paths, duplicate archive
-entries and archive symlinks are rejected.
-
-Missing Microsoft C++ Build Tools and the Windows SDK use Microsoft's supported
-installer. These shared Windows components may show a UAC prompt and require a
-restart. Declining elevation or requiring a reboot stops without activating a
-partial runtime; after the restart, run the BAT again. The private installation
-does not change the developer environment or persistent user PATH.
-
-The first installation downloads a substantial toolchain, application dependencies
-and both separator checkpoints. Compilation and real CPU model loads can take a
-long time and require substantial disk and memory. There is no fixed time or disk
-size promise. Logs identify the failed stage. Developer settings, samples and
-models are not copied into the installation. Referenced external audio keeps the
-external paths chosen by the user. Shared Build Tools/SDK and GPU/audio drivers
-remain system components. For automation, the BAT accepts an optional target
-directory followed by `--no-pause`.
+Project material and recording files retain their identities. The
+[relocation adapter](../scripts/portable/relocate_data.py) uses Native custody
+and journal validation for current assignments, Copy/Pair histories and the
+recognized older `versions/main-…` plus `data` layout. Legacy sample moves
+require same-volume Windows FileIDs and directory alternate data streams.
+External audio retains its external path. Unknown ownership, unsafe/reparse
+paths and inconsistent receipts stop recovery. A recognized old checkout with
+unregistered extras can be preserved intact in its reported backup path while
+a clean successor activates. Changed registered source or Runtime bytes need
+diagnosis. The tracked generated-extension exception preserves the old checkout
+and builds a clean candidate without importing the changed binary.
 
 ## Installer maintenance and validation
 
-Changes to dependencies, ABI, toolchain, Native DLLs, source layout, data/model
-paths or FFmpeg must review the BAT, `scripts/portable`, focused tests and this
-document together. Keep the Native relocation contract authoritative; installer
-code must not copy sample trees or rewrite JSON references independently.
+Review the BAT, [Portable scripts](../scripts/portable/), and focused tests when
+changing package locks, ABI, toolchains, Native/codec DLLs, layout or model
+resolution. Keep Native relocation authoritative. Preflight must use the
+candidate's actual private interpreter and verified DLLs and reflect the
+matching Native APIs without opening a device. Exercise the affected bootstrap,
+deep-path, unchanged-main repair, update/rollback, legacy data custody or
+lifetime path. Clean-machine setup, device use and listening have separate
+evidence from import and worker readiness.
 
-The runtime activation preflight checks the complete Native pad Copy and internal
-Pair capture/prepare/publish/reconcile/finish/cancel interfaces, including opaque
-Pair acknowledgement validation and fresh Pair and target-only occupied Copy
-recovery acceptance. It also checks
-original-ticket Hold release, captured MIDI trigger/window admission, owned pad
-feedback, original timing-ticket/refresh Pending observations and the Native
-placement-marker/read-token queries, resident-admission protocol version 1, the
-budget setter/status API and the independent preload-interest parameter. These
-checks also require the complete Native pitch interface: immutable
-`CapturedPitchAction` receipts, native selection/projection, GUI and selected MIDI
-capture with original timestamps, publish/cancel, input polling and atomic
-`pitch_rows` runtime publication, plus the atomic source-restore keywords
-`initial_base_shift`, `initial_extra_shift`, `initial_key_lock`, `initial_gain_db`
-and `initial_eq_db`. The complete saved mixing tuple is installed inside the
-original restored source claim before acknowledgement. Ordinary starts
-also require the `CapturedPadStart` observations/cancellation methods and
-`capture_pad_start`, `prepare_captured_pad_start` and `publish_pad_start`, including
-optional original timestamp/source-generation/exclusive capture keywords and the
-default `window=None` publication parameter. The callable `global_rate_status`
-observation is also required so requested speed settings can be distinguished from
-the callback's pending, applied or rejected rate effect. The class must declare
-`GLOBAL_RATE_PROVENANCE_API_VERSION=2`. The BPM Lock setter returns its admitted
-revision, and the callback reports the effect separately. The rate observation
-carries actual master provenance, distinguishing a qualified Manual/TAP/Legacy reference
-from an unknown origin or a qualified accepted revision. Binding metadata carries
-the matching original-source correlation without granting execution authority.
-Missing methods, receipt fields or
-incompatible keyword defaults reject the runtime before activation. These
-checks inspect the built Release
-class without constructing an engine or opening an audio device; an older
-incompatible extension cannot activate the current Python controls. The source
-installer builds these APIs from the selected main checkout through its existing
-private-runtime pipeline. The installer BAT and dependency/toolchain inputs do not
-need a new installation stage for these control APIs.
-
-Mix Capture adds one reflected API family: the opaque `MixCaptureTicket` and its
-`session_id()` observation, `prepare_mix_capture` with bounded-pool defaults
-4096 frames / 32 blocks / 8388608 PCM bytes, explicit-ticket start/stop with
-`target_frame=None` for Native next-admissible timing (or an explicit frame),
-cancellation and status. GLOBAL publication must also expose the keyword-only
-`capture=None` parameter for attaching the original recording ticket to the
-original group. Cancellation reports whether it won before
-the writer's terminal decision; close, join and RT release remain separate.
-Preflight also requires the module-level
-`inspect_mix_capture_spool(path)` recovery-metadata inspector. It checks their
-callable signatures and defaults without constructing an engine, preparing a
-capture, inspecting a spool or writing files. An older binary missing this
-family cannot activate the current checkout.
-
-Recording preflight also reflects `audio_stream_failed()` and
-`quiesce_failed_audio_stream()` without invoking them. These keep the original
-stream failure separate from the first capture failure; positive quiescence
-requires actual checked callback-image retirement. Writer/file finalization and
-outer worker retirement remain separately required. Ordinary development starters
-also reject a Native binary missing these lifecycle methods before starting App.
-
-These interfaces capture an internal float spool. A closed successful spool is
-not an encoded or publicly published recording. The separate inspector reads
-bounded recovery metadata, always requiring verification and granting no publication
-authority even for a `sealed_candidate`; unknown or corrupt spools are rejected
-without modification. API compatibility supplies no RF64/codec, RECORD UI, device,
-listening or complete recording acceptance. The existing source-build pipeline
-provides the APIs; no additional installer or dependency stage is introduced.
-
-The ordinary installer always selects remote `main`. Local uncommitted changes
-are not included by double-clicking the BAT. A development test of such changes
-requires a separately labelled complete source snapshot and a matching fresh
-Native Release; its runtime and project data must remain separate from development.
-
-Native Samples relocation validates complete Legacy Material, Pair and occupied
-Copy journal histories with their distinct schemas before creating relocation
-output. Musical seals, actual receipts and successor lineage remain intact across
-the directory move and rollback, with original journal bytes and FileIDs preserved.
-Historical Config addresses and their moved aliases resolve to the same held files.
-Known foreign Config contents are not read. These installer checks grant no runtime
-source, timing or stem acceptance; the application acquires fresh owners on restore.
-
-Focused missing-tool, deep-path/SUBST, DLL isolation, unchanged-main model repair,
-update/failure/recovery, legacy migration, ownership and actual-process lifetime
-checks are required when these paths change. Passing tests on a configured
-developer computer does not establish a clean-Windows bootstrap. Clean Windows
-x64 installation and Human GUI/audio/device/listening acceptance remain separate
-gates and must be recorded from actual runs before being described as passed.
-
-## Advanced maintainer bundle utility
-
-`scripts/portable/build_bundle.py` remains an advanced utility for an already
-synchronized Windows x64 CPython 3.14 developer environment. Its ZIP contains a
-`flitzis-looper` snapshot of tracked source bytes and a fixed private `Runtime`.
-The snapshot excludes Git metadata. The candidate has its own owner marker and
-source kind. Extract it into a separate empty directory and run
-`START-LOOPER.bat --check` for the build preflight. The generated starters only
-provide this check. The tracked installer inside the source snapshot still
-targets a separate remote-main installation.
-It reads installed non-development dependency RECORDs, excludes the base
-interpreter's `site-packages`, and copies the declared dependency closure without
-replacing the developer runtime. The vendored BS-RoFormer distribution must
-match the tracked package bytes, even when the installed version is unchanged.
-A fresh non-editable Release wheel and exact Native source commit are required.
-The builder verifies the project, ABI and extension RECORD hash and size, and
-records the complete wheel SHA256 alongside the extension SHA256. Use the
-Native source commit from the matching Release build record.
-Runtime imports, private loaded DLL paths and offline-worker imports must pass
-before packaging. The preflight reports the mapped Torch and shared FFmpeg
-libraries separately for the bootstrap process and its TorchCodec dependency
-child. It checks each package library against its private runtime path and
-reports unused shared FFmpeg libraries and observed Windows UCRT and NVIDIA
-driver DLLs separately. The build preflight skips worker selection and model
-preparation and opens no App or audio device. The ordinary installer performs
-the additional readiness checks.
-
-Preflight also reflects the opaque `CapturedGlobalStart` and the engine's
-`capture_global_start` / `publish_captured_global_start` interface without
-constructing an engine or invoking native preparation. A runtime missing this
-contract cannot activate: deferred GLOBAL gestures must retain their original
-native participants and actual resident dependency rather than recapture after a wait.
-
-Required arguments are `--native-wheel`, `--native-source-commit`, `--ffmpeg-dir`,
-one or more `--dll-dir`, external `--license-file NAME=PATH` inputs and `--output`
-outside the repository. The output must be empty or utility-owned. Private
-projects, input settings and checkpoints are excluded. The external license
-inventory includes `rubberband.txt`, `samplerate.txt`, `sleef.txt`, `ffmpeg.txt`,
-`ffmpeg-README.txt`, `antlr-4.9.3.txt`, `onnxruntime-1.24.2.txt`,
-`onnxruntime-1.24.2-notices.txt`, `directml-1.15.4.html`, `msvc-2026.docx` and
-`source-urls.json`. Python/package licenses and project/vendor notices are kept.
-DLL names, including the redistributable VC runtime, are declared in the builder;
-do not source them from System32.
-
-Both Windows build paths copy `windows-redistribution-sources.json` to the
-runtime's `licenses` directory. It lists the archive URLs and SHA-512 pins,
-vcpkg port recipes and patches for Rubber Band, libsamplerate and SLEEF. The
-reference candidate reused baseline Rubber Band and SLEEF binaries and loaded
-the separately built libsamplerate overlay DLL. Its compiler evidence identifies
-the exact overlay build. The ordinary installer builds the vcpkg package with
-the overlay selected.
-
-The release manifest's `native_redistribution` entry compares the four staged
-DLLs, the three copied notices and the tracked overlay files with the reference
-hashes. A match establishes byte identity for those files. Other builds retain
-their actual hashes in the inventories and list which reference paths differ
-or are missing. Their build origin requires separate evidence.
-
-Release work still includes making corresponding source available and
-confirming terms for the combined distribution, including
-[Rubber Band licensing](https://breakfastquay.com/rubberband/license.html).
-The pinned [FFmpeg binary release](https://github.com/GyanD/codexffmpeg/releases/tag/8.1.1)
-identifies the FFmpeg [upstream source revision](https://github.com/FFmpeg/FFmpeg/commit/239f2c733de417201d7ad3b3b8b0d9b63285b2b1).
-Its linked dependencies still need exact source, patch and build records.
-
-The runtime also includes `windows-runtime-redistribution.json`. The release
-manifest's `runtime_redistribution` entry reports missing or changed paths
-using the existing file inventories. It covers the reference Torch CUDA and
-Intel OpenMP DLLs and notices, the Microsoft Native and Python sibling DLLs,
-and the retained Python and Microsoft runtime license files.
-
-The reference Torch `2.12.0+cu130` Windows x64 wheel RECORD identifies the DLLs
-by size and SHA-256. PyTorch's pinned Windows recipe selects CUDA 13.0.0 and
-cuDNN 9.20.0.48 and permits a preinstalled toolkit. For 23 DLLs, the NVIDIA
-Windows wheel RECORDs match the candidate sizes and SHA-256 values, and
-the toolkit and cuDNN ZIP directories match names, sizes and CRC32. These
-include CUPTI's `nvperf_host.dll` and the separate cuDNN runtime. The recipe
-takes the legacy `nvToolsExt64_1.dll` from a separate installation. Its exact
-build and terms remain open. The Windows NVIDIA driver supplies `nvcuda.dll`.
-The reference excludes it, and driver and device compatibility still need
-runtime verification. [PyTorch Windows build recipe](https://github.com/pytorch/pytorch/blob/7661cd9c6b841b62b7f411aa52ec51f05457263b/.ci/pytorch/windows/internal/cuda_install.bat),
-[CUDA manifest](https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.0.0.json),
-[cuDNN manifest](https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.20.0.json).
-
-CUDA Toolkit and cuDNN redistribution are subject to their respective NVIDIA
-agreements and conditions for distribution within an application. The exact
-designation for some bundled variants and tooling still needs confirmation.
-The Intel OpenMP runtime and stub match both DLLs in the publisher's
-`2026.0.0` Windows wheel RECORD. Intel's terms require a redistribution
-designation and specify conditions on distribution with the application.
-The exact designation and notice delivery for both Intel DLLs remain open.
-[CUDA terms](https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html),
-[cuDNN terms](https://docs.nvidia.com/deeplearning/cudnn/backend/v9.20.0/reference/eula.html),
-[Intel wheel metadata](https://pypi.org/pypi/intel-openmp/2026.0.0/json),
-[Intel terms](https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html).
-
-The four Native CRT DLLs and `vcomp140.dll` match the signed, unmodified
-Visual Studio 2026 x64 VC145 Redist in directory `14.51.36231`. Their PE file
-version is `14.51.36247.0`. The builder also places the same two vcruntime
-DLLs beside its private CPython executable. Windows supplies the UCRT.
-The Microsoft REDIST list allows these release files to accompany the
-program subject to the applicable Visual Studio license. The bundle's
-`msvc-2026.docx` supplies the separate Microsoft runtime terms. Release
-review still needs to confirm the distributor's applicable terms and the
-conditions for the combined package.
-[Microsoft REDIST list](https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution),
-[Visual Studio Community terms](https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/),
-[UCRT deployment](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment).
-
-Clean reviewed source is the builder default. `--allow-dirty` is an explicit local
-candidate option recording the base commit, Native source commit and source
-fingerprint; the ordinary installer rejects such candidates. Optional Beat This
-diagnostic setup remains a separate environment workflow.
-
-### Current constant-BPM Native compatibility
-
-The launcher and Portable preflight validate the supported constant-BPM Native
-profile before startup. The Portable bootstrap explicitly rejects the removed
-`SourceBeatmap` API; an obsolete map-enabled engine is not a valid current runtime.
-Update through the ordinary installation workflow. API checks establish neither
-model quality nor audio/device/Human acceptance.
-
-Runtime preflight requires the Native stem conversion identity and the prepared
-Windows process owner before worker activation. Process and pipe ownership
-precede child creation. The supervisor uses suspended Job activation and
-waits for actual process-tree and reader retirement. Windows model attempts
-check live host memory and use Jobs without a host-memory limit. Linux and
-macOS process-tree and host-monitoring evidence remains a separate distribution
-gate.
-
-The opt-in native BeatThis complete-source experiment is not part of installation or
-model repair. Its ONNX graph and standalone developer EXE have no productive
-cutover or complete CUDA/CPU-only/quality/DLL-closure acceptance. Keep the original
-App and separate BeatThis locks/models/workers; their runtime removal requires
-the complete parity and recovery gates in the
-[performance design](../openspec/changes/archive/2026-11-13-improve-performance-isolation/design.md).
-
-Its separate `native-inference-dynamic` CPU-only and CUDA trial builds now require
-explicit digest-checked runtime manifests. That standalone loading contract does
-not alter Portable runtime versions, bootstrap pins, licenses, model repair or
-recovery. Optional separately authenticated declared ORT component manifests pin
-the listed files through all standalone CLI work; they do not attest actual loader
-resolution, mapped dependencies or full producer/CRT closure. The runtime-only
-contract and productive Portable bootstrap remain unchanged. Extracted trial DLLs
-and a developer Debug EXE are not an installable
-bundle; CRT/provider/driver closures, redistribution obligations and clean-system
-acceptance remain mandatory before any productive runtime replacement.
+The advanced [bundle builder](../scripts/portable/build_bundle.py) packages a
+matching Native wheel and tracked source snapshot from a prepared Windows x64
+CPython 3.14 environment. It accepts `--native-wheel`, `--native-source-commit`,
+`--ffmpeg-dir`, declared `--dll-dir` and `--license-file NAME=PATH` inputs,
+and `--output` outside the repository. Its output is a separate development
+bundle with no Git checkout metadata and no private project or model files.
+Extract it in an empty directory and use its `START-LOOPER.bat --check`.
+The ordinary BAT remains the source install entry point.

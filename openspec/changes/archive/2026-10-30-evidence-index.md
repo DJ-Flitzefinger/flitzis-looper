@@ -5,8 +5,8 @@ It preserves report ownership and exact immutable source locators; archival does
 not promote reported results or unfinished gates. STEP6 now retains the eleven
 complete mixed reports at the canonical archive destinations below, after verifying
 their current core/specialist spans. Original hashes,
-section lines, headings and negative evidence remain in the [frozen audit](../../../docs/documentation-audit.md)
-and its [manifest](../../../docs/audit/source-disposition.json).
+section lines, headings and negative evidence remain in the [frozen audit](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/documentation-audit.md)
+and its [manifest](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/audit/source-disposition.json).
 
 ## Canonical full-report retention overrides
 

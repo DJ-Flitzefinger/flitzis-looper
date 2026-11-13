@@ -431,7 +431,7 @@ source through the shared reader and canonical cursor. Its consumed native
 history and pending FIFOs bind that source's address/shape/loaded rate and full
 effective accepted revision with exact period/signed-origin bits. The expected
 next fractional position, including seek mode, guards continuity before samples
-enter native or pending adapter state. See [native timing ownership](../../../../../docs/native-constant-timing.md).
+enter native or pending adapter state. See [native timing ownership](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/native-constant-timing.md).
 
 G3b2f1 supplies continuous productive history ownership. G3b2f2 extends the same
 worker with actual source-specific native/FIFO preparation and timed transactional
@@ -786,7 +786,7 @@ The prepared adapter matrix compares independent algebraic-source/raw-native
 20,017-frame suffixes across steady/smoothed mono/stereo, rates and loop/seek/stem
 cases. Actual mixer/worker tests separately prove the transferred handle/FIFOs,
 12,853-frame productive raw-native suffix, current-permit/runtime rejection and
-off-thread pin retirement. See [productive preparation evidence](../../../../../docs/native-constant-timing.md#productive-prepared-native-continuation)
+off-thread pin retirement. See [productive preparation evidence](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/native-constant-timing.md#productive-prepared-native-continuation)
 for scope; these comparisons do not close the acoustic gates below.
 
 ### Adapter And Measured Delay
@@ -839,7 +839,7 @@ prepared results live in workspace `scratch/`, including
 `slice3-key-lock-latency-findings.md` and
 `slice3-key-lock-latency-{baseline,prepared}.csv`; generated CSVs and logs are
 not repository artifacts. Reproduce the probe using
-[the development guide](../../../../../docs/development.md#offline-key-lock-measurement).
+[the development guide](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/development.md#offline-key-lock-measurement).
 
 The adapter partition test supplies identical already-varispeed samples. The
 fractional source foundation also compares immutable nonconstant sources,
@@ -899,7 +899,7 @@ clipping and discarded energy, alongside the retained response. Negative residua
 and a discarded original peak must remain visible: cropped output alone can hide
 the lost first transient. This is evidence for selecting a later compensation
 strategy, not audible acceptance. Reproduce the proof and CSV using
-[the development guide](../../../../../docs/development.md#offline-key-lock-measurement).
+[the development guide](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/development.md#offline-key-lock-measurement).
 
 The optimized Windows proof passed 984 reference comparisons, including 180
 impulse cases with identical metrics in 45 rate/ratio/marker groups across four

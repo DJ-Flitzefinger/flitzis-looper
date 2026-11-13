@@ -4,10 +4,42 @@ This module describes the current scalar audio runtime. Start with the
 [overview](../architecture.md); media owners are in [media and PCM](media-and-pcm.md),
 application intent in [state, input and UI](state-input-and-ui.md).
 
+## Output selection and Apply
+
+[Audio output control](../../src/flitzis_looper/controller/audio_output.py)
+owns requested settings and the stopped Apply sequence. The
+[Native backend](../../rust/crates/looper/src/audio_engine/audio_output.rs)
+validates endpoint, physical stereo routing, format, rate and buffer policy.
+Automatic Windows output selects the lowest canonical ASIO identity after
+successful discovery. Empty successful ASIO inventory allows WASAPI. Discovery,
+activation or format failure surfaces an error. Explicit WASAPI intent, including
+a saved WASAPI endpoint under Auto, keeps its endpoint interpretation.
+Other platforms use their existing CPAL output path.
+
+ASIO uses the registered driver and fixed callback-owned output planes.
+Driver reset and clock notices surface to control. WASAPI queries shared-mode
+IAudioClient3 periods for the initialized format. Both keep requested,
+installed and observed geometry distinct, including buffer capacity, callback
+size and driver-reported latency. A valid period or sample count alone does
+not measure audible latency.
+
+Apply requires stopped playback and settled Holds, recording, queued starts,
+arrangements and dependent readers. [Restore](../../src/flitzis_looper/controller/audio_output_restore.py)
+waits for verified old stream, dispatcher and reader retirement. It installs
+fresh owners, restores complete sources/loop and grid intent, and can rebuild
+a selected stem Pair at a new rate as schema 2 from executed Original-clock
+evidence. Schema-1 alignment keeps its existing exact policy.
+Speed, a qualified BPM Lock reference and PAD selection are rebound with
+fresh acknowledgements. Selection is independent of an unresolved BPM reference. A failed replacement can restore the last working
+configuration or leave a visible stopped retry state. An uncertain old owner
+fences takeover. Restoring output keeps playback stopped.
+
 ## Clock and execution owners
 
 [audio_stream.rs](../../rust/crates/looper/src/audio_engine/audio_stream.rs)
-initializes callback state for the [selected output backend](../../openspec/specs/audio-output/spec.md).
+initializes the stream and callback state. Windows ASIO dispatches through
+[asio_output.rs](../../rust/crates/looper/src/audio_engine/asio_output.rs).
+Both paths retain the same scheduler, mixer and stereo signal authority.
 The render state owns
 [TransportTimeline](../../rust/crates/looper/src/audio_engine/transport.rs),
 [TransportScheduler](../../rust/crates/looper/src/audio_engine/scheduler.rs) and
@@ -66,7 +98,7 @@ Source-qualified BPM Lock and accepted timing refresh can qualify the internal
 one-time transport bootstrap. It waits for a valid active reference, anchors
 master beat position without moving playheads/resetting output time and does not
 rearm on ordinary silence/wraps/stem changes. There is no general performer
-phase-anchor control. See [accepted timing](../accepted-constant-timing.md).
+phase-anchor control. See [grid and source timing](grid-and-source-timing.md).
 
 [timing.rs](../../rust/crates/looper/src/audio_engine/timing.rs) uses one Rust
 monotonic input epoch, captured at native MIDI entry or the accepted GUI gesture.
@@ -84,7 +116,8 @@ source-qualified membership through deferred preparation; polling cannot
 recapture a new group or invent new original timing.
 
 - MultiLoop ON permits concurrent PADs; global START/STOP uses its captured
-  current group and transactional acknowledgement.
+  current group and transactional acknowledgement. An individually stopped PAD
+  leaves the group restart set before the matching stop feedback is delivered.
 - MultiLoop OFF follows the last genuinely effective Native content/source
   target, including current placement, rather than editor selection. START alone
   may use selected loaded content as fallback when no effective target exists.
@@ -108,29 +141,12 @@ and [ordinary_global.rs](../../rust/crates/looper/src/audio_engine/mixer/ordinar
 own target/batch/effect checks. Arrangement fences prevent observers from
 projecting intermediate participant placement as final playback truth.
 
-## Rates, loops and rendering
+## Source reading and rendering
 
-[SourcePlayback](../../rust/crates/looper/src/audio_engine/source_playback.rs)
-derives fractional source progression from active output-frame counts and a
-binary64 rate epoch. Callback segmentation must not introduce repeated integer
-rounding. [source_grid.rs](../../rust/crates/looper/src/audio_engine/source_grid.rs)
-and [scalar_grid.rs](../../rust/crates/looper/src/audio_engine/scalar_grid.rs)
-project the same scalar timing for transport/UI consumers.
-
-BPM Lock is independent of MultiLoop. With valid source/master periods its tempo
-ratio derives from source period / master output period; missing source timing
-uses the supported global-speed path. Selection is not a new master.
-[mixer/bpm_lock.rs](../../rust/crates/looper/src/audio_engine/mixer/bpm_lock.rs)
-retains requested/effective state and source-bound master provenance; global
-rate/history preparation can remain pending or be rejected.
-
-[SourceReadPlan](../../rust/crates/looper/src/audio_engine/source_reader.rs)
-is shared by dry reading, prepared history and stem trajectories. Physical
-markers are integer frame bounds; musical loop period can be fractional. The
-final PCM knot interpolates to loop zero at that period. Do not substitute
-physical-length/musical-period into rate to hide rounding. Normal/Intro/Tail
-reads require their whole admitted context; finite views keep full-source
-coordinates and can refuse unavailable context.
+The [source read plan](../../rust/crates/looper/src/audio_engine/source_reader.rs)
+supplies a shared trajectory for the dry, pitch/history and prepared stem
+readers. See [grid and source timing](grid-and-source-timing.md) for scalar
+rate, BPM Lock, rounding and loop behavior.
 
 Each [VoiceSlot](../../rust/crates/looper/src/audio_engine/voice_slot.rs) owns
 mutable progression/processing state; immutable material may be shared.
@@ -145,7 +161,10 @@ then sums and applies master level/momentary output mute. PAD meters are
 pre-master; master meters reflect the output mix and expose finite clipping
 above 1.0. [dsp.rs](../../rust/crates/looper/src/audio_engine/dsp.rs) owns the
 bounded chain. Recording uses [mix_capture.rs](../../rust/crates/looper/src/audio_engine/mix_capture.rs);
-file finalization/encoding remains outside realtime.
+file finalization and encoding remain outside realtime. After the callback seals
+a capture interval, a nonempty ASIO or WASAPI spool becomes a sealed candidate
+only if the original stream has submitted that full interval contiguously.
+A later failure can preserve an already confirmed take.
 
 ## Retirement, failures and evidence limits
 
@@ -163,9 +182,11 @@ are visible failures, not promises of eventual playback.
 Relevant regressions include ordinary transport, ON-to-OFF peer stop, pause
 observations, Hold, scheduler ordering/atomic groups, fractional loops, source
 replacement and retirement capacity. Current contracts cover
+[audio output](../../openspec/specs/audio-output/spec.md),
 [transport](../../openspec/specs/transport-timeline/spec.md),
 [MultiLoop](../../openspec/specs/multi-loop-mode/spec.md) and
 [source/stem alignment](../../openspec/specs/loop-source-stem-alignment/spec.md).
-The [loop proof](../loop-period-proof.md) and [device protocol](../device-loop-acceptance.md)
-preserve separate rendered/device/listening limits; documentation and synthetic
-passes do not substitute for their unpassed acceptance gates.
+
+The [November 13 archive index](../../openspec/changes/archive/2026-11-13-archive-index.md)
+records the project owner's current device and listening acceptance, alongside
+the scope of the historical measurements.

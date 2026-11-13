@@ -453,7 +453,7 @@ Recognized exclusive failed/crash staging uses the same contained ownership rule
 No file handle, JSON, lock, hash or filesystem destructor enters the callback.
 
 The historical C1b long-source warm and native export/project-save probes
-described in [development](../../../../../docs/development.md) record preliminary integrity costs.
+described in [development](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/development.md) record preliminary integrity costs.
 They preserve complete save verification, fresh timing ACK and atomic
 previous-config/dirty-state failure behavior. The separate
 [C3 measurements](pcm-cache-measurements.md) cover current 200-pad readiness,
@@ -531,7 +531,7 @@ remain open until the final human-run acceptance stage.
 
 Saved Automatic geometry remains only a hint: unsupported complete evidence
 cannot establish CURRENT. The isolated productive probes and their invocation
-are recorded in [development](../../../../../docs/development.md).
+are recorded in [development](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/development.md).
 
 The productive 600-second PCM24 fixture restores the saved absolute 42.0–42.5
 second loop as 24,000 stereo frames: 192,000 resident PCM bytes, while complete

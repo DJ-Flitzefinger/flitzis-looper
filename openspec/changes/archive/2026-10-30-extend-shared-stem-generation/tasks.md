@@ -232,7 +232,7 @@ logical outcomes with separately observed global cleanup. The Noop shortcut
 avoids project scan/reservation only with no actual saved stem asset assignment
 and no retained, pending or admitted control work. See
 [B2 design](design.md#b2-all-loaded-deletion) and
-[UI ownership](../../../../docs/ui-toolkit.md#all-loaded-stem-deletion).
+[UI ownership](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/ui-toolkit.md#all-loaded-stem-deletion).
 Full B2/tasks6.1-6.3, generation tasks5.1-5.3, complete real-voice/resource and
 Human/parent gates remain OPEN.
 

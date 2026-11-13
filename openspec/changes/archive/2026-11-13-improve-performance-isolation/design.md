@@ -7097,7 +7097,7 @@ A dedicated ignored controller diagnostic now connects the real Loader/Project
 source owners to the MultiLoop-OFF global START/STOP route while editor selection
 differs from the last effective explicit target. It retains the original capture,
 T and own E, source/content identity, full stereo PCM, actual feedback and retirement.
-The [architecture evidence](../../../../docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
+The [architecture evidence](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/architecture/pitch-and-key-lock.md#actual-single-mode-global-target-controller-bridge)
 records its functional scope; no production, timing, device or whole-quality claim
 is added. Existing Piano, pause/Hold/seek and neural gates remain separate.
 ## Original parent registry context diagnostics

@@ -485,8 +485,8 @@ Depending on the current task, consider reading specific documentation.
 - Documentation map: `docs/README.md`
 - Architecture: `docs/architecture.md`
 - Development workflow and package layout: `docs/development.md`
-- User Interface: `docs/ui-toolkit.md`
-- Stem generation setup: `docs/stem-generation-setup.md`
+- User Interface: `docs/architecture/state-input-and-ui.md`
+- Model worker setup: `docs/model-worker-setup.md`
 - Key Lock backend: `docs/architecture/pitch-and-key-lock.md`
 - Project TODOs: `docs/todos.md`
 

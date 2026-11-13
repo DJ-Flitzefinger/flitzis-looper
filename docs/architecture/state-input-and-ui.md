@@ -50,7 +50,14 @@ the separate source/content/claim/OwnACK authority described in [media](media-an
 semantic actions; [bindings.py](../../src/flitzis_looper/input_mapping/bindings.py)
 defines bindings; [controller.py](../../src/flitzis_looper/input_mapping/controller.py)
 owns Learn, keyboard handling, snapshot publication and controller actions.
-Gesture/render conventions remain in [ui-toolkit.md](../ui-toolkit.md).
+Immediate-mode views read state, draw widgets, and send actions through
+UiContext. Use stable domain IDs for widget identity and
+keep file work, model preparation and validation in the relevant controllers.
+The waveform editor delegates view lifecycle and render data to the waveform
+controller. Its cache includes source identity, view revision, range and
+resolution derived from the actual plot interior. Reserve the readiness rows
+above the plot to keep pending/ready frames from changing geometry and causing
+redundant queries. Use transport actions for actual loop, seek and play changes.
 
 [storage.py](../../src/flitzis_looper/input_mapping/storage.py) persists the
 actual bindings separately in `config/input/keyboard.json` and
@@ -68,6 +75,16 @@ dispatch is all-or-none: undispatched events are reported as such, and Python
 retries through the guarded current API rather than an unqualified launch.
 Successfully dispatched effects are not replayed by Python. Captured pitch
 variants retain SET versus SET_RETRIGGER and their original target.
+
+START/STOP has three learnable actions. Start/restart and stop share the
+ordinary guarded hierarchy. Momentary mute combines active mouse and mapped
+keyboard/MIDI holds. MIDI Note Off (including zero-velocity Note On) and
+absolute CC values 0–63 release. Values 64–127 acquire an absolute CC hold.
+Relative CC/NRPN cannot drive a release-capable mute. Release/state observation
+remains possible under ordinary input-queue pressure. Entering Learn or
+disabling mappings clears the mapped holds. Losing App focus clears mouse
+and keyboard holders. MIDI holds still follow their own release path.
+The last hold release restores the latest master volume.
 
 [current_binding.py](../../src/flitzis_looper/controller/current_binding.py) and
 [current_timing.py](../../src/flitzis_looper/controller/current_timing.py) resolve
@@ -109,20 +126,23 @@ dirty. Timing rejection, writer fences and ordinary I/O failure preserve prior
 config and expose failure; serialization is not audio ACK. Atomic replacement
 is not a blanket power-loss guarantee.
 
-The App constructor follows these dependency constraints:
+Startup follows this ownership order:
 
-1. Load/validate `ProjectState`, create fresh `SessionState`, configure resident
-   admission and Key Lock start behavior, then start `AudioEngine`.
-2. Construct asset/controllers and inspect bounded arrangement/recovery journal
-   histories. Retain custody and fence participants before ordinary restore or
-   cleanup.
-3. Restore usable assignments through the loader. Recovery-owned missing
+1. Load and validate `ProjectState`, create fresh `SessionState` and
+   construct an empty `AudioEngine`. Set resident admission and Key Lock
+   start behavior before opening output.
+2. Create and bind controllers, then inspect arrangement and recovery journals.
+   Retain custody and fence participants before ordinary restore or cleanup.
+3. Start the saved output asynchronously. Show inactive PADs while output and
+   sources initialize, with input/playback admission gated on readiness.
+   Startup errors expose corrective Settings.
+4. Restore usable assignments through the loader. Recovery-owned missing
    assignments remain visible/fenced; ordinary invalid assignments are cleared
    with corresponding neutral Native state.
-4. Verify saved stem selections after matching source load; obtain fresh
+5. Verify saved stem selections after matching source load; obtain fresh
    registration and, where requested, component/mask or preload acknowledgement.
    FullMix with preload disabled does not imply component residency.
-5. Publish global and loaded-PAD intent plus input runtime state against current
+6. Publish global and loaded-PAD intent plus input runtime state against current
    sources. Empty PADs do not receive speculative loaded-state settings; explicit
    unload/reset still clears actual stale Native state.
 
@@ -132,23 +152,6 @@ historical journal tokens and an empty selection epoch cannot create current
 ownership or Native acceptance. Existing field-recovery paths preserve valid
 intent without restoring runtime tickets; they do not authorize a new migration/
 compatibility program.
-
-The fresh-process `actual_six_flat_saved_project_startup` regression starts from
-six saved flat `samples/output-*.wav` references, without importing materials or
-seeding PCM first. It exercises ordinary output startup, asynchronous loading and
-the existing material migration, then checks current source adoption, complete
-three-second stereo sources, unchanged original hashes, persisted references and
-musical intent before normal shutdown. It uses the software ASIO owner and makes
-no physical-device or timing claim. Cold publication uses the existing store
-admission lock for final file-handle release, owner-marker deletion and staging
-rename, coordinating with recovery's actual directory and marker readers.
-Cancellation, complete committed verification and lifecycle publication remain
-outside that short critical section. A real-reader overlap regression covers the
-demonstrated Win32 sharing failure, cancellation while waiting and a separate
-uncoordinated reader whose original error still propagates. Earlier untraced
-startup failures retain their exact-operation and holder qualification; passing
-starts do not retrospectively identify their cause. File-reader closure is
-verified separately after the original test process and its owning job end.
 
 ## Copy, Pair, Bank and shared custody
 
@@ -188,20 +191,14 @@ file I/O or encoding.
 Close calls `prepare_shutdown` while callback/controllers are alive: recording
 settles under its actual deadline, holds release, input dispatch is disabled,
 batch generation is cancelled and deletion/Copy/Pair/Bank settle. UI polling
-continues. Focus loss/hidden editor requests matching Hold release; release/
-focus loss/close clears momentary output mute. File-picker cancellation settles
-separately. Only then does `shut_down` release dependent workers, attempt config
+continues. Focus loss or a hidden editor requests matching waveform Hold
+release. Close clears the momentary output mute and settles file-picker
+cancellation separately. Only then does `shut_down` release dependent workers, attempt config
 flush, stop audio, release saved assignments and close the engine. A failed save
 or uncertain stream disposal does not prove durable settlement or last-reader
 release. Runner exceptions cannot bypass the arrangement gate.
 
-## Verification boundaries
-
-Relevant regressions cover selection versus transport target, Learn/direct
-fallback, stale loader/analysis feedback, nullable Key Lock inheritance, ordinary
-pause plus Hold, observer fences, revision-safe saves, recovery-owned missing
-media and close settlement. Current [performance UI](../../openspec/specs/performance-ui/spec.md)
-and [background tasks](../../openspec/specs/background-tasks/spec.md) specify
-contracts. Historical reports retain wider resource/device/Human gates. Earlier
-OPEN boxes do not prove missing code; software passes do not constitute
-whole-216, device, musical or hearing acceptance.
+See the [input mapping](../../openspec/specs/input-mapping/spec.md),
+[performance UI](../../openspec/specs/performance-ui/spec.md) and
+[project persistence](../../openspec/specs/project-persistence/spec.md)
+contracts.

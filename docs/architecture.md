@@ -1,208 +1,71 @@
 # Architecture
 
-Flitzis Looper is a desktop sample looper with six banks of 36 PADs. Python owns
-the application and saved performer intent; Rust owns current audio sources,
-sample-frame time and rendering. It supports scalar constant-tempo playback,
-quantized launches, independent PAD controls, prepared stems and offline analysis.
-The same source and ownership rules apply to GUI and MIDI.
+Flitzis Looper is a desktop sample looper with six banks of 36 PADs. It plays
+one-shot and looping samples, layers independently controlled PADs, schedules
+quantized launches, and supports BPM Lock, Piano/transposition, Key Lock,
+prepared stems and mix recording. Python owns application coordination and
+saved performer intent. Rust owns current sources, output-frame time and audio.
 
-This is the current system overview. Focused references explain the implementation
-without reproducing its development chronology:
-
-| Reference | Responsibility |
+| Reference | Read for |
 | --- | --- |
-| [Runtime and transport](architecture/runtime-and-transport.md) | Callback, clock, scheduler, ordinary transport, rates, rendering and feedback. |
-| [Media and PCM](architecture/media-and-pcm.md) | Material/content/source identity, import, complete disk PCM, finite residency, sharing and last readers. |
-| [State, input and UI](architecture/state-input-and-ui.md) | Controllers, GUI/MIDI intent, persistence, arrangements, restore and shutdown. |
-| [BPM analysis](architecture/bpm-analysis.md) | Productive Beat This, complete-source admission, constant-tempo selection, uncertainty and manual/Tap correction. |
-| [Key analysis](architecture/key-analysis.md) | Complete-file CQT/KeyNet, independent outcomes, memory and source/correction epochs. |
-| [Pitch and Key Lock](architecture/pitch-and-key-lock.md) | Piano/SET/Retrigger, nullable inheritance, Rubber Band preparation, actual source history and limits. |
-| [Stems](architecture/stems.md) | Shared offline jobs, immutable disk selection, component residency, own live adoption and final readers. |
+| [Audio runtime and transport](architecture/runtime-and-transport.md) | Output backend, callback, scheduler, play/stop/pause/hold, render chain and feedback. |
+| [Grid and source timing](architecture/grid-and-source-timing.md) | Source coordinates, precision, timing authority, markers, fractional loops and BPM Lock. |
+| [Media and PCM](architecture/media-and-pcm.md) | Import, identity, disk PCM, finite residency, sharing and last readers. |
+| [State, input and UI](architecture/state-input-and-ui.md) | GUI/MIDI intent, project and session state, arrangements, restore and shutdown. |
+| [BPM analysis](architecture/bpm-analysis.md) | Beat This, full-source admission, scalar selection, uncertainty and manual/Tap correction. |
+| [Key analysis](architecture/key-analysis.md) | Complete-file CQT/KeyNet, independent outcomes and source/correction epochs. |
+| [Pitch and Key Lock](architecture/pitch-and-key-lock.md) | Piano/SET/Retrigger, nullable inheritance, Rubber Band and source history. |
+| [Stems](architecture/stems.md) | Model jobs, immutable artifacts, component residency and live adoption. |
 
-Current [OpenSpec contracts](../openspec/specs/) define supported behavior. Source
-defines implementation facts; historical tests establish only their stated scope.
-The [documentation audit](documentation-audit.md), [frozen provenance manifest](audit/source-disposition.json)
-and [canonical evidence index](../openspec/changes/archive/2026-10-30-evidence-index.md)
-retain original reports, failures and unpassed gates. Archived changes are
-history, not an execution queue or proof of acceptance.
+The [documentation map](README.md) links setup and usage. The
+[OpenSpec contracts](../openspec/specs/) specify supported behavior.
 
-## Runtime split and source layout
+## Runtime owners
 
-| Owner | Entry points and responsibilities |
+| Owner | Entry points |
 | --- | --- |
-| Python application | [__main__.py](../src/flitzis_looper/__main__.py) calls [ui/run.py](../src/flitzis_looper/ui/run.py). [AppController](../src/flitzis_looper/controller/app.py) constructs controllers, loads intent, polls work and coordinates close. |
-| Python state and controls | [models.py](../src/flitzis_looper/models.py), [controller/](../src/flitzis_looper/controller/), [input_mapping/](../src/flitzis_looper/input_mapping/) and [ui/](../src/flitzis_looper/ui/) own validated intent, persistence, input editing, dialogs, presentation and offline orchestration. |
-| Native boundary | [flitzis_looper_audio](../src/flitzis_looper_audio/) wraps the PyO3 module exported by [lib.rs](../rust/crates/looper/src/lib.rs); [__init__.pyi](../src/flitzis_looper_audio/__init__.pyi) describes the Python API. |
-| Rust control and workers | [audio_engine/mod.rs](../rust/crates/looper/src/audio_engine/mod.rs) coordinates non-realtime loading, analysis, preparation, publication and retirement. Rust outside the callback can perform bounded disk work and preparation. |
-| Rust audio | [audio_stream.rs](../rust/crates/looper/src/audio_engine/audio_stream.rs), [transport.rs](../rust/crates/looper/src/audio_engine/transport.rs), [scheduler.rs](../rust/crates/looper/src/audio_engine/scheduler.rs) and [mixer.rs](../rust/crates/looper/src/audio_engine/mixer.rs) own due-frame effects, voices, sources and DSP. |
-| Offline analysis | [analysis crate](../rust/crates/analysis/), [app_analysis.rs](../rust/crates/looper/src/audio_engine/app_analysis.rs), [app_tempo.rs](../rust/crates/looper/src/audio_engine/app_tempo.rs) and Python [analysis/](../src/flitzis_looper/analysis/) implement distinct productive and diagnostic paths outside realtime. |
+| Application and UI (Dear ImGui Bundle) | [`__main__.py`](../src/flitzis_looper/__main__.py) starts [`ui/run.py`](../src/flitzis_looper/ui/run.py). [`AppController`](../src/flitzis_looper/controller/app.py) coordinates input, loading, persistence, observations and close. |
+| Native boundary (PyO3) | [`flitzis_looper_audio`](../src/flitzis_looper_audio/) imports the extension exported by [`lib.rs`](../rust/crates/looper/src/lib.rs). The [type stub](../src/flitzis_looper_audio/__init__.pyi) documents the public Python interface. |
+| Native control | [`audio_engine/mod.rs`](../rust/crates/looper/src/audio_engine/mod.rs) coordinates loading, preparation, command publication and retirement outside realtime. |
+| Realtime | [`audio_stream.rs`](../rust/crates/looper/src/audio_engine/audio_stream.rs), [`transport.rs`](../rust/crates/looper/src/audio_engine/transport.rs), [`scheduler.rs`](../rust/crates/looper/src/audio_engine/scheduler.rs) and [`mixer.rs`](../rust/crates/looper/src/audio_engine/mixer.rs) own the callback, timeline, scheduled effects and audio voices. |
+| Offline processing | The [analysis crate](../rust/crates/analysis/), Native application analysis, [Python analysis](../src/flitzis_looper/analysis/) and [stem controller](../src/flitzis_looper/controller/stems.py) own full-source analysis and separation off the callback. |
 
-Both Python packages are required. The compiled extension and native dependencies
-are build products, not a second Python application.
-
-## Control and signal flow
+## Control and signal paths
 
 ```text
-GUI / captured MIDI or keyboard action / restored performer intent
-  -> controller or guarded native input route
-  -> validate current content + source + requested revision
-  -> prepare immutable data/history off the audio thread when needed
-  -> bounded command / parameter publication
-  -> callback rechecks ownership and capacity
-  -> absolute-frame scheduler / current mixer effect
-  -> operation-specific acknowledgement + observations
-  -> controller updates the matching projection and persistence intent
+GUI / captured input / restored performer intent
+  -> controller or guarded Native input
+  -> validate source, content, and requested revision
+  -> prepare immutable media or history off the audio thread as needed
+  -> bounded publication -> due-frame ownership check and mixer effect
+  -> matching acknowledgement and observations -> controller projection
 
-sealed source -> complete disk PCM -> admitted resident view / prepared readers
-  -> fractional source trajectory + shared source read plan
-  -> full mix or prepared stem selection
-  -> rate / pitch / Key Lock processing
-  -> smoothed PAD gain -> PAD DSP/isolator -> trigger velocity
-  -> PAD metering and sum -> master volume / momentary mute
-  -> master metering / recording capture -> selected audio output backend
+sealed original -> complete disk PCM -> admitted resident or streaming reader
+  -> voice source trajectory -> full mix or prepared stems -> rate/pitch processing
+  -> PAD gain, isolator and trigger velocity -> PAD meters and sum
+  -> master level/mute -> master meters and mix capture -> selected stereo output
 ```
 
-Input admission and saved settings describe a request, not proof that audio
-changed. Loading, timing refresh, ordinary pause, pitch, stem adoption and
-arrangements each have their own current-source acceptance/observation path.
-Meters and playheads are best-effort projections; their absence cannot authorize
-replacing an owner or deleting media.
+A PAD is a location. Content lifetime, source generation, placement, and
+material identity are separate. Sharing immutable PCM leaves each voice's
+progression and DSP state independent. Full-source analysis holds its own
+reader and publishes source-qualified metadata.
 
-## Time, source and ownership invariants
+Requested, pending, and effective state can differ. Input admission reserves an
+operation. Matching Native outcomes establish whether it applied to the intended
+source. Telemetry can be lossy. Replacement, cancellation, and pressure preserve
+ownership until the callback, queues, workers, and last relevant readers settle.
 
-- `TransportTimeline` advances in rendered output frames, including silence.
-  `TransportScheduler` orders fixed-capacity absolute-frame events. UI polling
-  observes work; it does not advance the musical clock.
-- Scalar periods, rates and source progression retain binary64 precision.
-  Physical PCM bounds are integer frames. A rounded endpoint does not redefine
-  fractional musical duration. Quantization chooses launch time; it does not
-  add source phase following.
-- A PAD number is a slot. Content lifetime, placement, source generation,
-  material identity and preparation request have different meanings. Sharing
-  immutable PCM does not share mutable voice state or current acceptance.
-- Publication is guarded again at effect time. Stale/cancelled work, exhausted
-  capacity or failed preparation must not mutate a replacement source or certify
-  success from enqueue alone.
-- Saved assignments, workers, queued effects, active/paused voices and history
-  readers can keep resources alive. Physical retirement waits for the last
-  reader and checked identity; large ownership is released outside realtime.
+Saved project state stores performer intent and material references. Restore
+reopens sources and obtains fresh ownership and acknowledgements. Output Apply
+also restores musical intent against the newly installed stream and starts in
+the stopped state.
 
-The callback must not perform file or JSON I/O, Python/GIL access, UI calls,
-logging, inference, plugin scanning/loading, blocking locks, heavy allocation,
-unbounded loops or long-running work. New non-realtime Rust modules do not
-change that boundary.
+The audio callback runs bounded render, control and telemetry work. File and
+JSON I/O, Python/GIL access, UI, logging, inference, plugin loading, blocking
+locks, large allocations and resource destruction belong outside that path.
 
-## Preparation, publication and retirement
-
-Import captures immutable input and builds complete decoder/playback artifacts
-on disk. Ordinary loading admits the needed finite PCM range rather than making
-full-track RAM residency the default. Complete-source analysis/export and stream
-producers borrow their own checked readers. Pitch/history and stems prepare
-against the same source coordinates and current requested state.
-
-The control owner retains the original request through preparation and enqueue.
-The callback checks its source, lifetime, revisions, timing and available feedback/
-retirement capacity before the effect. A matching acknowledgement settles that
-operation; newer unrelated metadata does not erase a real reader. Conversely,
-an old ticket or journal is no authority for a replacement source. See
-[publication and failure handling](architecture/media-and-pcm.md#publication-cancellation-and-retirement).
-
-## State, persistence and recovery
-
-`ProjectState` stores performer intent and immutable material references;
-`SessionState` is recreated and projects UI/runtime observations. Config writes
-are revision-fenced, timing-verified and atomically replaced. Current Native
-ownership, voices and ACKs are never restored by deserializing JSON.
-
-Startup protects arrangement/recovery custody before ordinary restore, loads
-the current source, and obtains fresh operation-specific acceptance. Copy, Pair
-and Bank have separate journal/settlement paths. Close keeps polling until
-recording, holds, deletion and arrangements permit teardown. See
-[persistence and restore](architecture/state-input-and-ui.md#persistence-and-restore).
-
-## Related subsystems and dependencies
-
-The specialist modules describe current behavior; setup and diagnostic references
-retain their narrower contracts. Historical reports are evidence and do not
-override current source or activate old programs:
-
-- [Constant-BPM controls](constant-bpm-guide.md),
-  [accepted constant timing](accepted-constant-timing.md) and
-  [scalar coordinates](scalar-source-coordinates.md): source-bound scalar timing.
-  Productive automatic BPM uses configured BeatThis policy
-  `neural-stable-regions-v4`; scientific QM/diagnostic interfaces remain separate
-  from live authority.
-- [Key analysis](architecture/key-analysis.md): automatic classification is independent of
-  pitch and BPM admission. The complete-source file frontend replaces the old
-  full-vector memory model. A model result is not musical ground truth.
-- [Pitch and Key Lock](architecture/pitch-and-key-lock.md): prepared Rubber Band processing and
-  timing limits. Global inheritance preserves explicit per-PAD overrides.
-- [Stems](architecture/stems.md) and [model setup](stem-generation-setup.md):
-  offline generation, saved selection, residency and effective Native adoption
-  are separate states. Heavy generation now waits while playback is active;
-  adoption has its own state-specific permits.
-- [Development](development.md), [Rust guide](../rust/README.md) and
-  [Portable Windows](portable-windows.md): toolchains, workers/models and
-  distribution. Source and generic self-contained Portable installations do
-  not require personal developer bindings.
-
-Dear ImGui Bundle renders UI and PyO3 exposes native control. The selected
-[audio output backend](../openspec/specs/audio-output/spec.md) drives the device.
-Native decoders, converters and Rubber Band support media and rendering. Offline
-model environments are prepared separately from the callback. Runtime/model
-availability checks do not establish successful inference or audio.
-
-The opt-in standalone native BeatThis trial is separate from these productive
-workers. Its original complete-source admission, pure Rust frontend and local
-ORT sessions preserve the shared clock/source/OwnACK boundaries. A bounded real
-CPU termination is evidenced; native CUDA/freshCPU, whole quality, complete
-producer and cross-platform distribution remain open. Diagnostic exit receipts
-cannot replace the original owned supervisor, actual reader settlement or
-productive provenance. No Torch closure or installed runtime is removed.
-
-The standalone dynamic experiment now admits explicit manifest/runtime files,
-exact version/API and process OS/architecture before configuring ORT. Its checked
-file handles outlive all CLI sessions/output work; Windows pins deny writes and
-deletes, while other platforms still require an immutable owned directory.
-This process-local bootstrap is deliberately outside the App/core session API.
-It does not attest provider/CRT/driver images or a complete producer, and a
-runtime-only probe does not establish model/device execution. CPU-only dynamic
-loading is a separate opt-in feature. Remaining native parity and combined final
-gates continue as STEP27 and FINAL28 respectively. STEP23 adds an optional separate
-SHA-authenticated declared ORT component list and retains every checked file handle
-through the same last-reader boundary; loader/dependency closure remains UNKNOWN.
-STEP24 adds an explicit Windows standalone loader policy and observed declared
-backing-file identity checks. It retains matching modules and all file pins until
-process exit without eager CUDA loads. Snapshots do not certify relocated image
-bytes, all loader overrides, complete dependency closure or full producer.
-STEP22 ends the standalone
-serialized-graph lifetime after the copying session loads and the original PCM
-lifetime after full synchronous resampling. Saved source frames/duration and all
-prepared/output/runtime pins remain; deallocation alone is not a memory-peak or
-CUDA-success measurement.
-
-The independent `stem-dsp` trial now implements both complete-chunk spectral
-math and bounded wholetrack reflection/tail/batching/fades/rolling overlap-add.
-A synchronous caller-owned predictor supplies complete four-source batches;
-learned BS attention/weights/export/CUDA AMP and the complete Demucs hybrid path
-remain mandatory before productive Torch removal. Arithmetic-only comparisons
-cannot certify those paths or a complete producer/distribution. The App's normal
-separator routes, pins, resource/source/reader guards and installer remain.
-
-## Limits and evidence
-
-The productive optimization target is 2/4/6 simultaneous PADs. Synthetic
-performance stress is limited to 10; more than 10 can cause performance problems
-or glitches. Internal 32-voice capacity/ownership checks are not a device or
-7–10-PAD performance guarantee. Disk integrity, memory admission, queues, worker
-availability and supported finite reader domains can refuse an operation.
-
-Current scope excludes realtime stem separation, plugin hosting, arbitrary
-deck/group/master DSP chains, a new live loop-edit crossfade policy and a full
-Rust port. Retired SYNC/source-map/phase-following designs are not live runtime
-dependencies; the [documentation map](README.md) holds the recovery locator.
-Device/loopback, sustained listening, musical-reference and clean-Windows gates
-remain as limited in original evidence. A docs rewrite passes none of them.
-The complete [original architecture](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/dbc80d3c117dcec50996feef2e8c59f1649388a5/docs/architecture.md)
-preserves the superseded narrative; current navigation and actual section
-dispositions are recorded separately in the audit.
+Performance tuning targets 2/4/6 simultaneous PADs. The 216 assignment slots
+and internal 32-voice capacity serve different purposes. Synthetic performance
+stress is capped at ten PADs. The [user guide](user-guide.md#memory-and-performance)
+describes expected headroom and resident PCM controls.

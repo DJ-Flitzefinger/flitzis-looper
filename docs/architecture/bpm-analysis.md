@@ -18,15 +18,16 @@ The current model is pinned Beat This `final0`, minimal postprocessing, float32.
 binds request/model/input geometry. Python
 [neural_worker.py](../../src/flitzis_looper/analysis/neural_worker.py) verifies an
 existing installation and runs an isolated worker off the main/UI/audio thread.
-Analysis does not install or download models. [Worker setup](../beat-this-setup.md)
-owns the separate Python 3.12 environment, resource hashes and CPU/CUDA profiles;
-it is separate from the main application's Python environment.
+Analysis does not install or download models. [Worker setup](../model-worker-setup.md) describes the separate Python 3.12
+Torch environments and guarded Native CPU/CUDA packages. Fresh setup selects
+the pinned Torch CPU worker. The App bridge can use explicitly staged and
+activated Native packages with a matching extension.
 
-CPU FP32 and CUDA-capable execution have distinct resource identities. A permitted
-CUDA failure can make one fresh CPU attempt, recording the actual fallback reason.
-Availability, a probe or queued work does not establish inference. Completed
-receipts distinguish actual device, fallback and unknown older provenance.
-Operation timeout/reaping guards are not a total download/install deadline.
+CPU FP32 and CUDA-capable execution have distinct resource identities. The Torch
+CUDA profile can retry the same model on CPU. The explicit Native CUDA package
+requires its auto policy for a qualified CUDA inference fault to start a fresh
+CPU process with the same graph and source. Completed receipts distinguish
+actual device, fallback and unknown older provenance.
 
 ## Complete-source preparation and admission
 
@@ -55,19 +56,10 @@ source/content/request ownership. Complete conversion validates finite data,
 extent, resampler delay trim and tail; zero-output padding is not automatically
 evidence that no progress is possible.
 
-The Beat supervisor claims its child before inspecting stdout or constructing an
-output reader. Reader setup failure, including a propagated allocation error,
-still finishes the owned process path. Delayed tree, reader or temporary cleanup
-retains the same heavy-work permission and Beat slots until actual retirement;
-a failure result or exception alone cannot release that custody.
-
-Native heavy-ticket construction or acquisition can also fail before this scope
-begins work. That admission refusal returns a terminal supervision failure with
-its Beat retirement event set, so both protocol bridges can return without waiting
-for a child that never existed. A diagnostic analysis job uses its existing Native
-PCM retirement and failed-result settlement without starting either model branch
-or inventing performer cancellation. Errors in caller callbacks or admitted work
-retain their ordinary exception and actual-reader retirement paths.
+The supervisor claims the child before attaching output readers. Cancellation
+or reader setup failure retains the shared heavy permission and scratch/source
+owners through process-tree and reader retirement. A refused admission before
+launch settles without creating a child or treating contention as model failure.
 
 ## Constant-tempo selection
 
@@ -129,8 +121,7 @@ accumulated drift to 5 ms over the common evidence extent.
 Analytical periods, scalar BPM and source coordinates retain binary64 precision.
 Legacy/display beat arrays can contain binary32 values; they do not redefine the
 selected analytical period. Physical loop markers are integer source frames,
-while musical periods can be fractional. See [scalar coordinates](../scalar-source-coordinates.md)
-and [accepted constant timing](../accepted-constant-timing.md).
+while musical periods can be fractional. See [grid and source timing](grid-and-source-timing.md).
 
 An approximate mean exposes **Possible BPM drift** and **Mean estimate · middle
 60%**. It is one constant playback estimate, with no source-phase following.
@@ -169,27 +160,25 @@ mean of adjacent tap intervals. A pause longer than three seconds or source/PAD
 change resets the series. Systematic Human timing drift cannot be inferred away.
 Grid Offset is separate phase intent; BPM alone cannot choose it.
 
-The following retained interfaces serve explicit scientific/diagnostic work:
+[OfflineAnalysisService](../../src/flitzis_looper/analysis/jobs.py) borrows the
+Native diagnostic job to export complete source PCM and obtain a matching
+terminal result. Its snapshot exposes progress, BPM/Key outcomes and optional
+diagnostic summary. After component and PCM retirement and scratch cleanup,
+Native finish checks the current source and request before publishing the
+terminal result and releasing admission. The
+[Native summary binding](../../rust/crates/looper/src/selected_bpm.rs) assesses
+method-specific metadata.
+[Selected-backend fitting](../../rust/crates/analysis/src/selected_bpm/mod.rs)
+supports complete-sequence and representative-region summaries. The
+[tempo summary kernel](../../rust/crates/analysis/src/tempo_summary/mod.rs)
+binds count/period hypotheses to complete evidence and reports conditional
+precision. QM raw coordinates use the detector's actual hop and resampler
+timebase. An ordinal fit assumes the count mapping. Independent reference
+inputs, source aliases and sealed scoring are handled by the
+[offline scoring CLI](../../src/flitzis_looper/analysis/beat_scoring_cli.py).
+None of these interfaces adopts timing by itself.
 
-| Reference | Scope |
-| --- | --- |
-| [Offline boundary](../offline-analysis.md) | QM raw timebase, complete export, resource/finish/retirement and standalone timing evidence. |
-| [Selected-backend metadata](../selected-backend-bpm.md) | Complete OLS and regional summaries, explicit or assumed counts, conditional lattice sensitivity; no automatic adoption. |
-| [Constant-tempo candidates](../constant-tempo-summary.md) | Source/evidence/count-bound numerical fits and their conditional precision. |
-| [Reference inputs](../beat-this-reference-inputs.md), [scoring](../beat-this-scoring-workflow.md) and [temporal scoring](../beat-this-temporal-scoring.md) | Frozen producer, annotation, seal and metric contracts. |
-
-QM's corrected actual-hop/downbeat timebase does not make it an independent
-musical reference. Conditional detector-lattice bounds do not measure acoustic
-error or establish correct counts. Diagnostic selected regions never silently
-replace complete descriptive estimates, manual phase or productive authority.
-
-## Evidence and limits
-
-The [canonical evidence index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
-retains E-B2/G2/GRID/MEMORY/CUDA original identities, failed tails/envelopes/cold
-ACKs, corrected comparators, unsupported fits and scoped precision results.
-Real independent full labels/ReferenceSeal, balanced musical groups, six paired
-Human sessions, device and listening gates remain distinct and unpassed where
-recorded. A resource readiness check or this documentation passes none of them.
-Current [analysis](../../openspec/specs/audio-analysis/spec.md) and
-[manual BPM](../../openspec/specs/pad-manual-bpm/spec.md) contracts remain normative.
+See the [analysis](../../openspec/specs/audio-analysis/spec.md) and
+[manual BPM](../../openspec/specs/pad-manual-bpm/spec.md) contracts.
+The [evidence index](../../openspec/changes/archive/2026-10-30-evidence-index.md)
+retains independent-label, scoring and correction-session evidence and limits.

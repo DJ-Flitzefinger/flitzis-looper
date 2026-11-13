@@ -52,7 +52,7 @@ acceptance while surviving-source changes remain intact. Saved selected stems
 must acquire their own current registration and demanded component/preload ACKs
 through the existing verification path before settlement. Complete history,
 lineage or custody conflicts retain visible fences. See
-[startup ownership](../../../../../docs/architecture/state-input-and-ui.md#persistence-and-restore) for the controller
+[startup ownership](https://github.com/DJ-Flitzefinger/flitzis-looper/blob/1590e4c3e85bfbbafd63521f083068e1631214c1/docs/architecture/state-input-and-ui.md#persistence-and-restore) for the controller
 sequence and [Portable validation](../../../../../docs/portable-windows.md) for kind routing.
 
 This is an internal software foundation. Public Re-Arrange gestures, complete
