@@ -1,17 +1,10 @@
-"""Actual owned entrypoint cancellation with explicitly non-neural fixture models.
-
-The stock Demucs recursion and BS decode/overlap-add/writers run in real children.
-Private startup fixtures substitute only model assets/network construction and a
-named checkpoint gate. These tests make no release-model or musical quality claim.
-"""
+"""Actual owned HTDemucs codec cancellation at named checkpoints."""
 
 import json
 import os
 import shutil
-import struct
 import sys
 import time
-import wave
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -30,143 +23,67 @@ from tests.flitzis_looper.analysis.test_owned_command import _observed_process
 
 _STARTUP = dedent("""\
     import atexit
-    import hashlib
     import os
     import subprocess
     import sys
     import time
     from pathlib import Path
-    from types import SimpleNamespace
-    import torch
-    from torch import nn
     from flitzis_looper.stem_cancellation import StemCancellation, tool_environment
 
     output = Path(os.environ['FLITZIS_FIXTURE_OUTPUT'])
-    output.mkdir(parents=True, exist_ok=True)
     target = os.environ['FLITZIS_FIXTURE_STAGE']
-    variant = os.environ['FLITZIS_FIXTURE_VARIANT']
-    seen = 0
     original_checkpoint = StemCancellation.checkpoint
 
     def checkpoint(self, stage):
-        global seen
+        if stage == 'encoder_write' and target == 'blocked_codec_call':
+            child_body = (
+                'import os,time; from pathlib import Path; '
+                + 'Path(' + repr(str(output / 'descendant'))
+                + ').write_text(str(os.getpid())); '
+                + 'time.sleep(60)'
+            )
+            subprocess.Popen([sys.executable, '-I', '-c', child_body], env=tool_environment())
+            (output / 'ready').write_text(target)
+            time.sleep(60)
         if stage == target:
-            seen += 1
-            # The second Demucs batch boundary proves stock recursive apply uses
-            # the same explicit checkpoint, rather than only the CLI wrapper.
-            recursive = variant == 'demucs' and target == 'before_model_batch'
-            if not recursive or seen == 2:
-                (output / 'ready').write_text(stage)
-                while True:
-                    original_checkpoint(self, stage)
-                    time.sleep(.005)
+            (output / 'ready').write_text(stage)
+            while True:
+                original_checkpoint(self, stage)
+                time.sleep(.005)
         original_checkpoint(self, stage)
 
     StemCancellation.checkpoint = checkpoint
-
-    def finished():
-        clean = not list(output.rglob('*.part')) and not list(output.glob('.decode-*'))
-        (output / 'finished').write_text(str(clean))
-
-    atexit.register(finished)
-
-    class NonNeuralCopy(nn.Module):
-        sources = ['drums', 'bass', 'other', 'vocals']
-        audio_channels = 2
-        samplerate = 44100
-        segment = 1
-
-        def forward(self, data):
-            if target == 'blocked_model_call':
-                child_body = (
-                    'import os,time; from pathlib import Path; '
-                    + 'Path(' + repr(str(output / 'descendant'))
-                    + ').write_text(str(os.getpid())); '
-                    + 'time.sleep(60)'
-                )
-                subprocess.Popen(
-                    [sys.executable, '-I', '-c', child_body], env=tool_environment()
-                )
-                (output / 'ready').write_text(target)
-                time.sleep(60)
-            return data.unsqueeze(1).repeat(1, 4, 1, 1) * .25
-
-    if variant == 'demucs':
-        import demucs.separate
-        demucs.separate.get_model_from_args = lambda args: NonNeuralCopy()
-    else:
-        from flitzis_bs_roformer import inference, model
-        config = output / 'config'
-        config.write_bytes(b'explicit non-neural cancellation fixture')
-        weights = output / 'weights'
-        torch.save({}, weights)
-        model.CONFIG_BYTES = config.stat().st_size
-        model.CONFIG_SHA256 = hashlib.sha256(config.read_bytes()).hexdigest()
-        model.CHECKPOINT_BYTES = weights.stat().st_size
-        model.CHECKPOINT_SHA256 = hashlib.sha256(weights.read_bytes()).hexdigest()
-        model._network_module = lambda: SimpleNamespace(
-            BSRoformer=lambda **kwargs: NonNeuralCopy()
-        )
-        original_plan = inference.ChunkPlan
-        inference.ChunkPlan = lambda: original_plan(chunk_size=64, batch_size=1)
+    atexit.register(lambda: (output / 'finished').write_text('True'))
     """)
 
 
-def _fixture(tmp_path: Path, variant: str, stage: str) -> tuple[list[str], dict[str, str], Path]:
+def _fixture(tmp_path: Path, stage: str) -> tuple[list[str], dict[str, str], Path]:
     output = tmp_path / "output"
     output.mkdir()
     startup = tmp_path / "startup"
     startup.mkdir()
     (startup / "sitecustomize.py").write_text(_STARTUP, encoding="utf-8")
-    source = tmp_path / "source.wav"
-    with wave.open(str(source), "wb") as handle:
-        handle.setparams((2, 2, 44100, 256, "NONE", "not compressed"))
-        handle.writeframes(
-            b"".join(struct.pack("<hh", index * 32, index * 16) for index in range(256))
-        )
+    executable = shutil.which("ffmpeg")
+    assert executable is not None
+    for kind in ("drums", "bass", "other", "vocals"):
+        (output / f"{kind}.f32").write_bytes(bytes(256 * 8))
     repository = Path(__file__).resolve().parents[4]
     environment = dict(os.environ)
     environment.pop("FLITZIS_BS_INPUT_CONTRACT", None)
     environment.pop("FLITZIS_DEMUCS_ENCODER_CONTRACT", None)
     environment.update({
-        "PYTHONPATH": os.pathsep.join((
-            str(startup),
-            str(repository / "src"),
-            str(repository / "vendor/bs_roformer/src"),
-        )),
+        "PYTHONPATH": os.pathsep.join((str(startup), str(repository / "src"))),
         "FLITZIS_FIXTURE_OUTPUT": str(output),
-        "FLITZIS_FIXTURE_VARIANT": variant,
         "FLITZIS_FIXTURE_STAGE": stage,
     })
-    module = "flitzis_looper.demucs_streaming" if variant == "demucs" else "flitzis_bs_roformer"
-    arguments = [sys.executable, "-m", module]
-    if variant == "demucs":
-        arguments.extend([
-            "-n",
-            "non-neural",
-            "-d",
-            "cpu",
-            "--shifts",
-            "0",
-            "--segment",
-            "1",
-            "-o",
-            str(output),
-            str(source),
-        ])
-    else:
-        arguments.extend([
-            "--source",
-            str(source),
-            "--output",
-            str(output),
-            "--device",
-            "cpu",
-            "--checkpoint",
-            str(output / "weights"),
-            "--config",
-            str(output / "config"),
-        ])
+    arguments = [
+        sys.executable,
+        "-m",
+        "flitzis_looper.htdemucs_codec",
+        "encode",
+        executable,
+        str(output),
+    ]
     return arguments, environment, output
 
 
@@ -208,41 +125,17 @@ def _run(
 @pytest.mark.skipif(
     not shutil.which("ffmpeg"), reason="actual input/output tools require FFmpeg PATH"
 )
-@pytest.mark.parametrize(
-    ("variant", "stage"),
-    [
-        ("demucs", "before_model_stage"),
-        ("demucs", "after_model_load"),
-        ("demucs", "before_model_batch"),
-        ("demucs", "output_pcm_block"),
-        ("demucs", "output_verification"),
-        ("bs", "before_model_stage"),
-        ("bs", "model_artifact_block"),
-        ("bs", "after_model_batch"),
-        ("bs", "before_output_write"),
-        ("bs", "output_verification"),
-    ],
-)
-def test_real_entry_cooperates_at_named_stage_and_cleans_before_exit_130(
-    tmp_path: Path,
-    variant: str,
-    stage: str,
-) -> None:
-    arguments, environment, output = _fixture(tmp_path, variant, stage)
+@pytest.mark.parametrize("stage", ["encoder_start", "encoder_write", "codec_output_witness"])
+def test_real_entry_cooperates_at_named_stage_and_exits_130(tmp_path: Path, stage: str) -> None:
+    arguments, environment, output = _fixture(tmp_path, stage)
     cancel, retired = Event(), Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        # The flushed receipt precedes Python/Torch finalization. Prove the
-        # entrypoint's own exit here; blocked-model escalation keeps its short budget.
         future = executor.submit(
             _run, arguments, environment, tmp_path, cancel, retired, cooperative_exit=True
         )
         try:
             _wait_ready(output / "ready", future)
             assert not retired.is_set()
-            if stage in {"output_pcm_block", "output_verification", "before_output_write"}:
-                assert list(output.rglob("*.part")), (
-                    "checkpoint must occur inside real output custody"
-                )
             cancel.set()
             result = future.result(10)
         finally:
@@ -258,21 +151,22 @@ def test_real_entry_cooperates_at_named_stage_and_cleans_before_exit_130(
     assert ENCODER_RESULT.encode() not in result.stdout
     assert BS_INPUT_RESULT.encode() not in result.stdout
     assert (output / "finished").read_text() == "True"
-    assert not list(output.rglob("*.part"))
-    assert not list(output.glob(".decode-*"))
-    assert not list(output.rglob("drums.wav"))
+    if stage == "codec_output_witness":
+        assert all(
+            (output / f"{kind}.wav").is_file() for kind in ("drums", "bass", "other", "vocals")
+        )
+    else:
+        assert not (output / "vocals.wav").exists()
     assert retired.is_set()
 
 
 @pytest.mark.skipif(
     os.name != "nt" or not shutil.which("ffmpeg"), reason="actual Windows own tree and tools"
 )
-@pytest.mark.parametrize("variant", ["demucs", "bs"])
-def test_blocked_model_call_escalates_and_retires_actual_descendant_and_pipe(
+def test_blocked_codec_call_escalates_and_retires_actual_descendant_and_pipe(
     tmp_path: Path,
-    variant: str,
 ) -> None:
-    arguments, environment, output = _fixture(tmp_path, variant, "blocked_model_call")
+    arguments, environment, output = _fixture(tmp_path, "blocked_codec_call")
     cancel, retired = Event(), Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_run, arguments, environment, tmp_path, cancel, retired)
@@ -303,7 +197,7 @@ def test_own_marker_namespace_survives_delayed_actual_output_read_end(
 ) -> None:
     if not shutil.which("ffmpeg"):
         pytest.skip("actual input tools require FFmpeg PATH")
-    arguments, environment, output = _fixture(tmp_path, "bs", "after_model_batch")
+    arguments, environment, output = _fixture(tmp_path, "encoder_write")
     private = tmp_path / "job-private"
     cancel, eof, release = Event(), Event(), Event()
     original = process._CommandReader._read

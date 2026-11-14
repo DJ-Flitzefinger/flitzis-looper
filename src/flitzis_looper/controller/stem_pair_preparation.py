@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.controller.stem_identity import request_fingerprint
-from flitzis_looper.controller.stem_provenance import capture_processing_files
 from flitzis_looper.models import StemCacheEntry
 from flitzis_looper.stem_pair_selection import (
     STEM_FINGERPRINT_SCHEMA,
@@ -39,6 +38,11 @@ if TYPE_CHECKING:
         ProjectAssetLease,
         SealedProcessingFiles,
     )
+
+
+type _CaptureProducer = Callable[
+    [StemGenerationRequest], tuple[SealedProcessingFiles, str | None] | None
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,11 +130,14 @@ class StemPairPreparationQueue:
         assets: ProjectAssetLifecycle,
         runner: Callable[[Callable[[], None]], None],
         resources: StemResourceGuard | None = None,
+        *,
+        capture_producer: _CaptureProducer | None = None,
     ) -> None:
         self._audio = audio
         self._assets = assets
         self._runner = runner
         self._resources = resources
+        self._capture_producer = capture_producer
         self._results: SimpleQueue[PairPreparation] = SimpleQueue()
         self._held_results: list[PairPreparation] = []
         self.pending: dict[int, PairPreparation] = {}
@@ -303,7 +310,7 @@ class StemPairPreparationQueue:
                     self._resources.entry()
                 if request.processing_request is not None:
                     request.compatibility_rejected = True
-                    processing = capture_processing_files(request.processing_request)
+                    processing = self._capture_processing(request.processing_request)
                     self._validate_saved_producer(request, processing)
                     artifact = MigrationArtifactLease.capture(
                         str(Path.cwd() / "samples"), request.entry.cache_dir
@@ -338,6 +345,11 @@ class StemPairPreparationQueue:
                     request.error = "Stem pair preparation cancelled"
                 request.close()
             self._results.put(request)
+
+    def _capture_processing(
+        self, request: StemGenerationRequest
+    ) -> tuple[SealedProcessingFiles, str | None] | None:
+        return self._capture_producer(request) if self._capture_producer is not None else None
 
     @staticmethod
     def _validate_saved_producer(

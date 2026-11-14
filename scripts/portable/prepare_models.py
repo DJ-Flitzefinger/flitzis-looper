@@ -5,7 +5,6 @@ import importlib
 import importlib.util
 import json
 import os
-import platform
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -13,8 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
     from flitzis_looper.models import StemSeparator
 
@@ -41,13 +38,13 @@ class ModelCheckError(RuntimeError):
 
 
 def configure(context: ModelContext) -> list[object]:
-    """Use this checkout's bootstrap before any application or Torch import."""
+    """Use this checkout's bootstrap before loading application modules."""
     if context.source_clone:
         sys.path.insert(0, str(context.checkout / "src"))
         os.chdir(context.checkout)
         generation = importlib.import_module("flitzis_looper.controller.stem_generation")
-        cache = generation.default_demucs_model_cache_dir(project_root=context.checkout)
-        os.environ.update(generation.demucs_cache_environment(cache))
+        cache = generation.default_stem_model_cache_dir(project_root=context.checkout)
+        os.environ.update(generation.stem_model_environment(cache))
         return []
     path = context.checkout / "scripts" / "portable" / "bootstrap.py"
     spec = importlib.util.spec_from_file_location("portable_model_bootstrap", path)
@@ -81,29 +78,16 @@ def model_cache_dirs(context: ModelContext) -> dict[StemSeparator, Path]:
     return result
 
 
-def demucs_checkpoints(cache: Path) -> Iterator[tuple[Path, str]]:
-    """Take required filenames and their checksum suffixes from the existing table."""
-    generation = importlib.import_module("flitzis_looper.controller.stem_generation")
-    for filename in generation.DEMUCS_REQUIRED_CHECKPOINTS["htdemucs"]:
-        path = cache / filename
-        if not path.resolve().is_relative_to(cache.resolve()):
-            msg = f"Demucs checkpoint leaves its owned cache: {path}"
-            raise RuntimeError(msg)
-        yield path, Path(filename).stem.rsplit("-", 1)[1]
-
-
 def asset_metadata(context: ModelContext) -> list[dict[str, object]]:
     """Describe only pinned owned targets; shared PowerShell acquires the bytes."""
     caches = model_cache_dirs(context)
     pins = importlib.import_module("flitzis_looper.controller.model_pins").DEMUCS_ASSETS
     result: list[dict[str, object]] = []
-    for path, prefix in demucs_checkpoints(caches["demucs:htdemucs"]):
-        if path.name not in pins:
-            message = f"No full Portable model pin for {path.name}"
-            raise RuntimeError(message)
-        size, checksum, url = pins[path.name]
-        if not checksum.startswith(prefix):
-            message = "Portable Demucs pin differs from the locked product identity"
+    cache = caches["demucs:htdemucs"]
+    for filename, (size, checksum, url) in pins.items():
+        path = cache / filename
+        if not path.resolve().is_relative_to(cache):
+            message = f"HTDemucs checkpoint leaves its owned cache: {path}"
             raise RuntimeError(message)
         result.append({
             "relative_path": path.relative_to(context.root).as_posix(),
@@ -131,43 +115,6 @@ def deny_model_network(event: str, _arguments: tuple[object, ...]) -> None:
     if event in {"socket.connect", "socket.getaddrinfo"}:
         message = "Portable model checks require pre-acquired pinned local assets"
         raise RuntimeError(message)
-
-
-def verify_demucs(cache: Path) -> None:
-    """Rehash cache hits, which Demucs' remote downloader otherwise trusts."""
-    repo = importlib.import_module("demucs.repo")
-    for path, checksum in demucs_checkpoints(cache):
-        if not path.is_file():
-            msg = f"no Model installed: demucs:htdemucs ({path.name})"
-            raise RuntimeError(msg)
-        repo.check_checksum(path, checksum)
-
-
-def repair_demucs(cache: Path) -> None:
-    """Validate assets acquired through resumable shared Portable transfers."""
-    verify_demucs(cache)
-
-
-def operate_model(separator: StemSeparator, cache: Path, action: ModelAction) -> None:
-    """Prepare assets or load the exact selected model on CPU without inference."""
-    if separator == "demucs:htdemucs":
-        if action == "prepare":
-            repair_demucs(cache)
-        else:
-            verify_demucs(cache)
-            importlib.import_module("demucs.pretrained").get_model("htdemucs").to("cpu")
-        return
-    if separator != "bs-roformer:musdb18hq":
-        msg = f"Unsupported stem separator: {separator}"
-        raise ValueError(msg)
-    assets = importlib.import_module("flitzis_looper.controller.bs_roformer_assets")
-    if action == "prepare":
-        assets.verify_model_assets(cache)
-        return
-    assets.verify_model_assets(cache)
-    importlib.import_module("flitzis_bs_roformer.model").load_model(
-        cache / assets.CHECKPOINT_FILENAME, cache / assets.CONFIG_FILENAME, "cpu"
-    )
 
 
 def run_model_child(context: ModelContext, separator: StemSeparator, action: ModelAction) -> None:
@@ -205,11 +152,6 @@ def run_model_child(context: ModelContext, separator: StemSeparator, action: Mod
         raise ModelCheckError(diagnostic, separator=separator, stage=action)
 
 
-def windows_bs_onnx() -> bool:
-    """The installed ONNX worker is the Windows x64 separator."""
-    return sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}
-
-
 def portable_bs_onnx(
     context: ModelContext, assets: Path, *, repair: bool
 ) -> BsCudaCacheStatus | None:
@@ -219,6 +161,7 @@ def portable_bs_onnx(
         BS_ONNX_RUNTIME_EXECUTABLE,
     )
     from flitzis_looper.bs_onnx_provisioning import (  # noqa: PLC0415
+        load_bs_onnx_cpu,
         stage_bs_onnx_installation,
         verify_bs_onnx_for_executable,
     )
@@ -240,16 +183,8 @@ def portable_bs_onnx(
             cuda_preparation=preparations.append,
         )
         return preparations[0]
-    verify_bs_onnx_for_executable(package_root, executable)
+    load_bs_onnx_cpu(verify_bs_onnx_for_executable(package_root, executable))
     return None
-
-
-def windows_htdemucs_onnx(context: ModelContext) -> bool:
-    if not windows_bs_onnx():
-        return False
-    from flitzis_looper.htdemucs_onnx_provisioning import htdemucs_onnx_released  # noqa: PLC0415
-
-    return htdemucs_onnx_released(context.checkout)
 
 
 def portable_htdemucs_onnx(context: ModelContext, checkpoint: Path, *, repair: bool) -> None:
@@ -295,28 +230,17 @@ def check_models(context: ModelContext) -> dict[str, object]:
         for separator in caches:
             run_model_child(context, separator, "prepare")
     bs_cuda_cache = None
-    prepare_htdemucs = (
-        context.mode == "repair" and not context.source_clone and windows_htdemucs_onnx(context)
-    )
     for separator in caches:
-        if separator == "demucs:htdemucs" and prepare_htdemucs:
-            try:
-                portable_htdemucs_onnx(context, caches[separator], repair=True)
-            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-                raise ModelCheckError(str(error), separator=separator, stage="load") from error
-            continue
-        if (
-            separator == "bs-roformer:musdb18hq"
-            and windows_bs_onnx()
-            and not context.source_clone
-            and context.mode == "repair"
-        ):
-            try:
-                bs_cuda_cache = portable_bs_onnx(context, caches[separator], repair=True)
-            except (OSError, RuntimeError, ValueError) as error:
-                raise ModelCheckError(str(error), separator=separator, stage="load") from error
-        else:
+        if context.mode == "check" or context.source_clone:
             run_model_child(context, separator, "load")
+            continue
+        try:
+            if separator == "demucs:htdemucs":
+                portable_htdemucs_onnx(context, caches[separator], repair=True)
+            else:
+                bs_cuda_cache = portable_bs_onnx(context, caches[separator], repair=True)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            raise ModelCheckError(str(error), separator=separator, stage="load") from error
     warmup = bool(bs_cuda_cache and bs_cuda_cache.warmup_executed)
     return {
         "portable_models": "passed",
@@ -347,7 +271,7 @@ def run_internal_child(context: ModelContext, separator: str, action: ModelActio
         raise ValueError(msg)
     selected = cast("StemSeparator", separator)
     sys.addaudithook(deny_model_network)
-    if selected == "demucs:htdemucs" and windows_htdemucs_onnx(context):
+    if selected == "demucs:htdemucs":
         if action == "load":
             portable_htdemucs_onnx(context, caches[selected], repair=False)
         else:
@@ -356,20 +280,24 @@ def run_internal_child(context: ModelContext, separator: str, action: ModelActio
             )
 
             verify_htdemucs_checkpoint(caches[selected])
-    elif selected == "bs-roformer:musdb18hq" and action == "load" and windows_bs_onnx():
-        if context.source_clone:
-            from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
-                BS_ONNX_MODELS_DIRECTORY,
-            )
-            from flitzis_looper.bs_onnx_provisioning import (  # noqa: PLC0415
-                selected_bs_onnx_installation,
-            )
+    elif action == "prepare":
+        assets = importlib.import_module("flitzis_looper.controller.bs_roformer_assets")
+        assets.verify_model_assets(caches[selected])
+    elif context.source_clone:
+        from flitzis_looper.bs_onnx_installation import (  # noqa: PLC0415
+            BS_ONNX_MODELS_DIRECTORY,
+        )
+        from flitzis_looper.bs_onnx_provisioning import (  # noqa: PLC0415
+            load_bs_onnx_cpu,
+            selected_bs_onnx_installation,
+        )
 
-            selected_bs_onnx_installation(context.checkout / BS_ONNX_MODELS_DIRECTORY, verify=True)
-        else:
-            portable_bs_onnx(context, caches[selected], repair=False)
+        installation = selected_bs_onnx_installation(
+            context.checkout / BS_ONNX_MODELS_DIRECTORY, verify=True
+        )
+        load_bs_onnx_cpu(installation)
     else:
-        operate_model(selected, caches[selected], action)
+        portable_bs_onnx(context, caches[selected], repair=False)
 
 
 def main(argv: list[str] | None = None) -> int:

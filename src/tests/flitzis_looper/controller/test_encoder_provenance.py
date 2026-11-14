@@ -4,14 +4,15 @@ import hashlib
 import json
 import os
 import shutil
+import struct
+import wave
 from pathlib import Path
 
 import pytest
-import torch
 
-from flitzis_looper import demucs_streaming, encoder_provenance
-from flitzis_looper.demucs_streaming import write_demucs_pcm16
+from flitzis_looper import bs_input_provenance, encoder_provenance, htdemucs_codec
 from flitzis_looper.pcm16_wav import PcmWavReader
+from flitzis_looper.stem_cancellation import StemCancellation
 from flitzis_looper_audio import SealedProcessingFiles
 
 
@@ -39,15 +40,16 @@ def test_actual_four_encoder_children_use_held_images_and_reject_changed_depende
     assert contract is not None
     monkeypatch.setattr(encoder_provenance, "_completed", {})
     monkeypatch.setenv(encoder_provenance.ENCODER_CONTRACT_ENV, contract)
-    monkeypatch.setenv("FLITZIS_DEMUCS_ENCODER", str(executable))
     output = tmp_path / "output"
     output.mkdir()
-    source = torch.tensor([[0.0, 0.1, -0.1, 1.0, -1.0] * 101], dtype=torch.float32)
-    for kind in ("drums", "bass", "other", "vocals"):
-        write_demucs_pcm16(source, output / f"{kind}.wav", 44100, block_frames=7)
+    source = struct.pack("<10f", 0.0, 0.1, -0.1, 0.8, -0.8, 0.0, 0.1, -0.1, 0.8, -0.8) * 101
+    for kind in htdemucs_codec.STEMS:
+        (output / f"{kind}.f32").write_bytes(source)
+    htdemucs_codec.encode(executable, output, StemCancellation(None))
+    for kind in htdemucs_codec.STEMS:
         with PcmWavReader(output / f"{kind}.wav") as reader:
             assert reader.getnframes() == 505
-            assert reader.getnchannels() == 1
+            assert reader.getnchannels() == 2
             assert reader.getframerate() == 44100
             assert reader.verify()
     stdout = encoder_provenance.encoder_completion_line()
@@ -122,7 +124,7 @@ def test_preexisting_encoder_diagnostic_is_preserved_and_grants_no_execution_pro
     )
 
 
-def test_stock_input_tools_launch_captured_absolute_images_with_poisoned_cwd(
+def test_native_input_tools_launch_captured_absolute_images_with_poisoned_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -132,41 +134,24 @@ def test_stock_input_tools_launch_captured_absolute_images_with_poisoned_cwd(
     shutil.copyfile(Path(configured).with_name("ffprobe.exe"), probe)
     images = (*encoder_provenance.supported_encoder_images(executable), probe)
     guard = SealedProcessingFiles([str(path) for path in images])
-    monkeypatch.setenv("FLITZIS_DEMUCS_ENCODER", str(executable))
     monkeypatch.chdir(tmp_path)
     for name in ("ffmpeg.exe", "ffprobe.exe"):
         (tmp_path / name).write_bytes(b"unowned current-directory shadow, never executable")
     source = tmp_path / "source.wav"
-    write_demucs_pcm16(torch.zeros((1, 128)), source, 44100)
-    tools = demucs_streaming._InputTools()
-    info = json.loads(
-        tools.check_output([
-            "ffprobe",
-            "-loglevel",
-            "panic",
-            str(source),
-            "-print_format",
-            "json",
-            "-show_streams",
-        ])
-    )
-    assert int(info["streams"][0]["sample_rate"]) == 44100
+    with wave.open(str(source), "wb") as handle:
+        handle.setparams((1, 2, 44_100, 128, "NONE", "not compressed"))
+        handle.writeframes(bytes(128 * 2))
+    contract = bs_input_provenance.bs_input_contract(executable)
+    assert contract is not None
+    monkeypatch.setenv(bs_input_provenance.BS_INPUT_CONTRACT_ENV, contract)
     output = tmp_path / "decoded.f32"
-    result = tools.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(source),
-            "-f",
-            "f32le",
-            str(output),
-        ],
-        check=True,
-    )
-    assert result.returncode == 0
+    bs_input_provenance.begin_input_attempt(tmp_path)
+    try:
+        htdemucs_codec.decode(source, output, StemCancellation(None))
+    finally:
+        bs_input_provenance.finish_input_attempt()
+    stdout = bs_input_provenance.input_completion_line()
+    assert bs_input_provenance.verified_input_output(tmp_path, contract, stdout)
     assert output.read_bytes() == bytes(128 * 4)
     assert len(guard.witnesses()) == 9
     guard.verify()

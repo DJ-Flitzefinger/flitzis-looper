@@ -20,7 +20,7 @@ from flitzis_looper.encoder_provenance import (
     inspect_encoder,
     record_encoder,
 )
-from flitzis_looper.offline_runtime import configure_child, ffmpeg_command
+from flitzis_looper.offline_runtime import ffmpeg_command
 from flitzis_looper.stem_cancellation import (
     CANCEL_EXIT_CODE,
     StemCancellation,
@@ -81,41 +81,11 @@ def _decode_ffmpeg(source: Path, destination: Path, cancellation: StemCancellati
     return channels
 
 
-def _decode_torchaudio(source: Path, destination: Path, cancellation: StemCancellation) -> int:
-    """Retain stock Demucs's decode-only fallback until its separate migration."""
-    import torch  # noqa: PLC0415
-    import torchaudio  # type: ignore[import-untyped]  # noqa: PLC0415
-    from demucs.audio import convert_audio  # noqa: PLC0415
-
-    configure_child(
-        torch.set_num_threads,
-        torch.set_num_interop_threads,
-        torch.get_num_threads,
-        torch.get_num_interop_threads,
-    )
-    cancellation.checkpoint("alternate_decode_start")
-    audio, rate = torchaudio.load(str(source))
-    audio = convert_audio(audio, rate, RATE, 2)  # type: ignore[no-untyped-call]
-    with destination.open("xb") as output:
-        for block in audio.split(65536, dim=-1):
-            cancellation.checkpoint("alternate_decode_pcm")
-            data = block.transpose(0, 1).contiguous().numpy().astype("<f4", copy=False)
-            data.tofile(output)
-    return 2
-
-
 def decode(source: Path, destination: Path, cancellation: StemCancellation) -> None:
     if destination.exists() or destination.is_symlink():
         msg = "HTDemucs decode destination must be a fresh scratch leaf"
         raise FileExistsError(msg)
-    try:
-        channels = _decode_ffmpeg(source, destination, cancellation)
-    except FileNotFoundError, subprocess.CalledProcessError:
-        # Both actual FFmpeg readers have ended. Retire only the child-owned,
-        # exclusively named partial output before trying the stock recovery path.
-        destination.unlink(missing_ok=True)
-        finish_input_attempt()
-        channels = _decode_torchaudio(source, destination, cancellation)
+    channels = _decode_ffmpeg(source, destination, cancellation)
     sys.stdout.write(json.dumps({"channels": channels}) + "\n")
 
 

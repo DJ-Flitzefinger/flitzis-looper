@@ -1,8 +1,8 @@
-"""Confirmed batch tokens reach real owned stock-entrypoint cancellation.
+"""Confirmed batch tokens reach real owned HTDemucs codec cancellation.
 
 The actual controller, two-worker pool, shared job, command scope, process tree
 and output readers run here. Existing explicit fixtures substitute Native source,
-asset leases and producer inputs, and the stock child uses a non-neural network.
+asset leases, producer inputs and model PCM. The child runs the actual codec.
 The backend adapter only selects that child fixture; production command supervision
 and its finite cancellation grace are unchanged. No neural, RSS, device or musical
 acceptance is inferred, nor is the Native file-deletion implementation exercised.
@@ -53,8 +53,7 @@ _declared_shared_producer = shared_fixtures._declared_shared_producer
 
 
 @dataclass(slots=True)
-class _StockEntry:
-    variant: str
+class _CodecEntry:
     output: Path | None = None
     returned: Event = field(default_factory=Event)
     result: process.OwnedCommandResult | None = field(default=None, init=False)
@@ -64,17 +63,11 @@ class _StockEntry:
     ) -> StemGenerationResult:
         try:
             request.cache_dir.mkdir(parents=True, exist_ok=True)
-            stage = "output_pcm_block" if self.variant == "demucs" else "before_output_write"
-            arguments, environment, self.output = _fixture(request.cache_dir, self.variant, stage)
-            # Read the same original held by the actual controller job, rather
-            # than _fixture's separate input. Partial output and private startup
-            # inputs also stay inside the actual job's held directory.
-            source_index = -1 if self.variant == "demucs" else arguments.index("--source") + 1
-            arguments[source_index] = str(request.source_path)
+            arguments, environment, self.output = _fixture(request.cache_dir, "encoder_write")
             self.result = stem_process.run_stem_command(
                 arguments, cwd=request.cache_dir, env=environment
             )
-            pytest.fail("the gated stock entrypoint returned without cancellation")
+            pytest.fail("the gated codec entrypoint returned without cancellation")
         finally:
             self.returned.set()
 
@@ -142,7 +135,7 @@ def _foreign_process(directory: Path) -> Iterator[subprocess.Popen[bytes]]:
 class _BatchChild:
     controller: AppController
     audio: Mock
-    entry: _StockEntry
+    entry: _CodecEntry
     job: StemGenerationJob
     child: process._OwnedTreeProcess
     foreign: subprocess.Popen[bytes]
@@ -169,7 +162,7 @@ class _BatchChild:
     def wait_for_read_end(self) -> None:
         assert self.read_end.reached.wait(10)
         self.child.wait(timeout=5)
-        assert self.child.poll() is not None, "the actual stock child must have exited"
+        assert self.child.poll() is not None, "the actual codec child must have exited"
         assert not self.entry.returned.is_set(), "the real output reader still owns the worker"
         assert self.child.stdout is not None
         assert not self.child.stdout.closed
@@ -211,16 +204,13 @@ def _running_batch_child(
     backend: FakeStemGenerationBackend,
     temporary: Path,
     monkeypatch: pytest.MonkeyPatch,
-    variant: str,
 ) -> Iterator[_BatchChild]:
-    pool, entry, read_end = StemWorkerPool(), _StockEntry(variant), _ReadEnd()
+    pool, entry, read_end = StemWorkerPool(), _CodecEntry(), _ReadEnd()
     launches = _record_processes(monkeypatch)
     read_end.install(monkeypatch, launches)
     _production_pool(controller, audio, temporary, pool)
     _loaded_metadata(controller, audio, (0, 215))
-    controller.project.stem_separator = (
-        "demucs:htdemucs" if variant == "demucs" else "bs-roformer:musdb18hq"
-    )
+    controller.project.stem_separator = "demucs:htdemucs"
     monkeypatch.setattr(backend, "generate", entry.generate)
     try:
         with _foreign_process(temporary) as foreign:
@@ -232,7 +222,7 @@ def _running_batch_child(
             warning.accept(intent)
             _drive_until(controller, lambda: entry.ready() or entry.returned.is_set())
             assert entry.ready(), (
-                "the actual stock child failed before its output checkpoint",
+                "the actual codec child failed before its output checkpoint",
                 entry.result,
                 controller.stems.stem_generation_error(0),
             )
@@ -240,7 +230,8 @@ def _running_batch_child(
             job = next(iter(controller.stems._jobs.values()))
             assert {row.sample_id for row in job.subscribers()} == {0, 215}
             assert entry.output is not None
-            assert list(entry.output.rglob("*.part")), "checkpoint must hold actual partial output"
+            assert (entry.output / "drums.f32").is_file()
+            assert not (entry.output / "vocals.wav").exists()
             rig = _BatchChild(controller, audio, entry, job, launches[0], foreign, read_end)
             assert rig.summary.running == 2
             rig.assert_custody()
@@ -256,17 +247,15 @@ def _running_batch_child(
 @pytest.mark.skipif(
     os.name != "nt" or not shutil.which("ffmpeg"), reason="actual Windows owned tree and FFmpeg"
 )
-@pytest.mark.parametrize("variant", ["demucs", "bs"])
-def test_final_batch_cancel_waits_for_stock_child_exit_and_actual_reader_end(
+def test_final_batch_cancel_waits_for_codec_child_exit_and_actual_reader_end(
     controller: AppController,
     audio_engine_mock: Mock,
     stem_backend: FakeStemGenerationBackend,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    variant: str,
 ) -> None:
     with _running_batch_child(
-        controller, audio_engine_mock, stem_backend, tmp_path, monkeypatch, variant
+        controller, audio_engine_mock, stem_backend, tmp_path, monkeypatch
     ) as rig:
         controller.stem_batch.cancel()
         assert rig.job.cancel_event.is_set()
@@ -289,17 +278,15 @@ def test_final_batch_cancel_waits_for_stock_child_exit_and_actual_reader_end(
 @pytest.mark.skipif(
     os.name != "nt" or not shutil.which("ffmpeg"), reason="actual Windows owned tree and FFmpeg"
 )
-@pytest.mark.parametrize("variant", ["demucs", "bs"])
-def test_shared_direct_survives_batch_cancel_then_its_last_token_reaps_stock_child(
+def test_shared_direct_survives_batch_cancel_then_its_last_token_reaps_codec_child(
     controller: AppController,
     audio_engine_mock: Mock,
     stem_backend: FakeStemGenerationBackend,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    variant: str,
 ) -> None:
     with _running_batch_child(
-        controller, audio_engine_mock, stem_backend, tmp_path, monkeypatch, variant
+        controller, audio_engine_mock, stem_backend, tmp_path, monkeypatch
     ) as rig:
         owner = next(row.interest_owner for row in rig.job.subscribers() if row.sample_id == 0)
         assert controller.stems.generate_stems_async(0)

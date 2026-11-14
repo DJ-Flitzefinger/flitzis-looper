@@ -18,7 +18,6 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
-from flitzis_looper.controller import stem_pair_preparation as pair_module
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.committed_stem_residency import resident_stem_admission_pressure
@@ -76,6 +75,8 @@ def _wav(samples: array[int], rate: int) -> bytes:
 
 class _DeclaredBackend:
     """Write independently source-bound complete WAVs on the actual stems workers."""
+
+    capture_producer: Callable[[StemGenerationRequest], tuple[SealedProcessingFiles, str]]
 
     def __init__(self, expected: set[str]) -> None:
         self.expected = expected
@@ -349,14 +350,10 @@ class StemBatch216Probe:
             "separator_model_cache_dir": lambda _separator: directory,
             "resolved_demucs_encoder": lambda _model: files[-1],
             "encoder_contract": lambda _encoder: "declared-batch-216-output-receipt",
-            "capture_processing_files": capture,
-            "processing_source_roots": lambda _request, _guard: (directory,),
         }
         for name, replacement in replacements.items():
             self._patches.enter_context(patch.object(stems_module, name, replacement))
-        # Reuse workers freshly validate the same declared producer as resolution.
-        # Their imported alias is independent of the controller's resolve alias.
-        self._patches.enter_context(patch.object(pair_module, "capture_processing_files", capture))
+        self.backend.capture_producer = capture
         return files
 
     def start(self) -> None:

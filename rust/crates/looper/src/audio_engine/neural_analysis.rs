@@ -6,10 +6,7 @@ pub(super) mod descriptor;
 pub(super) mod raw;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
-use raw::{
-    BeatThisRawData, BeatThisSourceInput, pinned_cuda_model, pinned_model,
-    pinned_native_cuda_model, pinned_native_model,
-};
+use raw::{BeatThisRawData, BeatThisSourceInput, pinned_native_cuda_model, pinned_native_model};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -81,10 +78,10 @@ pub(in crate::audio_engine) fn invoke_worker(
     installation_root: &str,
     probe: Py<PyAny>,
 ) -> Result<(BeatThisRawData, usize), String> {
-    let mut expected = json!({"schema_version":1,"identity":identity,
+    let mut expected = json!({"schema_version":3,"identity":identity,
         "pcm":{"path":path,"sample_rate_hz":source.source_sample_rate_hz,
             "frame_count":source.source_frame_count,"origin_seconds":0.0,
-            "dtype":"float32-le","channels":1},"model":pinned_model()});
+            "dtype":"float32-le","channels":1},"model":pinned_native_model()});
     if expected.to_string().len() > 32 * 1024 {
         return Err("Beat This request byte limit exceeded".into());
     }
@@ -124,14 +121,7 @@ pub(in crate::audio_engine) fn invoke_worker(
             execution_policy: Option<String>,
         }
         let version: BridgeVersion = serde_json::from_str(encoded).map_err(|e| e.to_string())?;
-        if version.schema_version == 2 {
-            expected["schema_version"] = 2.into();
-            expected["model"] = pinned_cuda_model();
-            expected["execution_policy"] = "auto".into();
-        } else if version.schema_version == 3 {
-            expected["schema_version"] = 3.into();
-            expected["model"] = pinned_native_model();
-        } else if version.schema_version == 4 {
+        if version.schema_version == 4 {
             let policy = version
                 .execution_policy
                 .as_deref()
@@ -140,7 +130,7 @@ pub(in crate::audio_engine) fn invoke_worker(
             expected["schema_version"] = 4.into();
             expected["model"] = pinned_native_cuda_model(policy);
             expected["execution_policy"] = policy.into();
-        } else if version.schema_version != 1 {
+        } else if version.schema_version != 3 {
             return Err("unknown Beat This worker profile".into());
         }
         BeatThisRawData::from_worker(source, &expected.to_string(), encoded)

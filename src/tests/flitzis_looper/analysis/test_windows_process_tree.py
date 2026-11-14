@@ -18,7 +18,6 @@ from flitzis_looper.analysis.contracts import WorkerLimits
 from flitzis_looper.analysis.windows_job import WindowsJob
 
 if TYPE_CHECKING:
-    import subprocess
     from collections.abc import Iterator
     from pathlib import Path
 
@@ -34,7 +33,6 @@ import time
 from pathlib import Path
 p = argparse.ArgumentParser()
 p.add_argument('--request')
-p.add_argument('--checkpoint')
 args = p.parse_args()
 request = json.loads(Path(args.request).read_text())
 marker = Path(request['marker'])
@@ -77,14 +75,12 @@ else:
 
 
 @pytest.fixture
-def command(tmp_path: Path) -> process.WorkerCommand:
+def command(tmp_path: Path) -> Path:
     environment = tmp_path / "venv"
     venv.EnvBuilder(with_pip=False).create(environment)
     script = tmp_path / "worker.py"
     script.write_text(_TREE_SCRIPT, encoding="utf-8")
-    checkpoint = tmp_path / "fixture.ckpt"
-    checkpoint.write_bytes(b"not used by process fixture")
-    return process.WorkerCommand(environment / "Scripts/python.exe", script, checkpoint, tmp_path)
+    return environment / "Scripts/python.exe"
 
 
 def _wait_file(path: Path) -> None:
@@ -111,19 +107,37 @@ def _observed_process(pid: int) -> Iterator[tuple[ctypes.WinDLL, int]]:
         assert kernel.CloseHandle(handle)
 
 
-def _record_launchers(monkeypatch: pytest.MonkeyPatch) -> list[subprocess.Popen[bytes]]:
-    launches: list[subprocess.Popen[bytes]] = []
-    original = process._start
+def _record_launchers(monkeypatch: pytest.MonkeyPatch) -> list[process._OwnedTreeProcess]:
+    launches: list[process._OwnedTreeProcess] = []
+    original = process._create_owned_command
 
-    def start(
-        command: process.WorkerCommand, launch: process._WorkerLaunch
-    ) -> subprocess.Popen[bytes]:
-        child = original(command, launch)
+    def start(*args, **kwargs):
+        child = original(*args, **kwargs)
         launches.append(child)
         return child
 
-    monkeypatch.setattr(process, "_start", start)
+    monkeypatch.setattr(process, "_create_owned_command", start)
     return launches
+
+
+def _run(
+    interpreter: Path,
+    cwd: Path,
+    request: bytes,
+    cancel: Event,
+    limits: WorkerLimits,
+    retired: Event,
+) -> process.OwnedCommandResult:
+    request_path = cwd / "request.json"
+    request_path.write_bytes(request)
+    return process.run_owned_command(
+        [str(interpreter), "-I", str(cwd / "worker.py"), "--request", str(request_path)],
+        cwd=cwd,
+        env=dict(os.environ),
+        cancel=cancel,
+        retired=retired,
+        limits=limits,
+    )
 
 
 @pytest.mark.parametrize(
@@ -136,11 +150,11 @@ def _record_launchers(monkeypatch: pytest.MonkeyPatch) -> list[subprocess.Popen[
     ],
 )
 def test_real_venv_launcher_and_silent_child_retire_together(
-    command: process.WorkerCommand, monkeypatch: pytest.MonkeyPatch, mode: str, reason: str
+    command: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, reason: str
 ) -> None:
-    marker = command.scratch_dir / "child.pid"
-    ready = command.scratch_dir / "worker.pid"
-    release = command.scratch_dir / "release-root"
+    marker = tmp_path / "child.pid"
+    ready = tmp_path / "worker.pid"
+    release = tmp_path / "release-root"
     request = json.dumps({
         "marker": str(marker),
         "ready": str(ready),
@@ -152,7 +166,7 @@ def test_real_venv_launcher_and_silent_child_retire_together(
     retired = Event()
     limits = WorkerLimits(timeout_seconds=3 if mode == "timeout" else 15)
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(process.run_process, command, request, cancel, limits, retired)
+        future = executor.submit(_run, command, tmp_path, request, cancel, limits, retired)
         try:
             _wait_file(ready)
             child_pid = int(marker.read_text())
@@ -165,17 +179,12 @@ def test_real_venv_launcher_and_silent_child_retire_together(
                 assert kernel.WaitForSingleObject(child_handle, 0) == 258
                 assert worker_pid != launches[0].pid  # Real Windows venv launcher exercised.
                 assert not retired.is_set()
-                assert (
-                    process.run_process(command, request, Event(), limits, Event()).reason
-                    == "worker_busy"
-                )
                 if mode == "cancel":
                     cancel.set()
                 elif mode in {"normal", "crash"}:
                     release.touch()
                 result = future.result(timeout=15)
                 assert result.reason == reason
-                assert result.resources_released
                 assert retired.is_set()
                 assert kernel.WaitForSingleObject(child_handle, 0) == 0
                 assert kernel.WaitForSingleObject(worker_handle, 0) == 0
@@ -184,14 +193,13 @@ def test_real_venv_launcher_and_silent_child_retire_together(
             release.touch()
             future.result(timeout=15)
     assert launches[0].poll() is not None
-    assert list(command.scratch_dir.glob("beat-request-*")) == []
-    command.script.write_text("print('{}')\n", encoding="utf-8")
-    assert process.run_process(command, b"{}", Event(), limits, Event()).reason == "ok"
+    (tmp_path / "worker.py").write_text("print('{}')\n", encoding="utf-8")
+    assert _run(command, tmp_path, b"{}", Event(), limits, Event()).reason == "ok"
 
 
 @pytest.mark.parametrize("failure", ["assign_suspended", "_resume_initial_thread"])
 def test_failed_windows_admission_reaps_the_suspended_root(
-    command: process.WorkerCommand, monkeypatch: pytest.MonkeyPatch, failure: str
+    command: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     launches = _record_launchers(monkeypatch)
     retired = Event()
@@ -202,23 +210,21 @@ def test_failed_windows_admission_reaps_the_suspended_root(
 
     with monkeypatch.context() as patch:
         patch.setattr(WindowsJob, failure, fail)
-        result = process.run_process(command, b"{}", Event(), WorkerLimits(), retired)
+        result = _run(command, tmp_path, b"{}", Event(), WorkerLimits(), retired)
     assert result.reason == "worker_supervision_failed"
-    assert result.resources_released
     assert retired.is_set()
     assert launches[0].poll() is not None
-    assert not (command.scratch_dir / "worker.pid").exists()
-    assert list(command.scratch_dir.glob("beat-request-*")) == []
-    command.script.write_text("print('{}')\n", encoding="utf-8")
-    assert process.run_process(command, b"{}", Event(), WorkerLimits(), Event()).reason == "ok"
+    assert not (tmp_path / "worker.pid").exists()
+    (tmp_path / "worker.py").write_text("print('{}')\n", encoding="utf-8")
+    assert _run(command, tmp_path, b"{}", Event(), WorkerLimits(), Event()).reason == "ok"
 
 
 def test_terminal_admission_limit_keeps_existing_members_but_prevents_new_children(
-    command: process.WorkerCommand, monkeypatch: pytest.MonkeyPatch
+    command: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    marker = command.scratch_dir / "child.pid"
-    ready = command.scratch_dir / "worker.pid"
-    release = command.scratch_dir / "release-root"
+    marker = tmp_path / "child.pid"
+    ready = tmp_path / "worker.pid"
+    release = tmp_path / "release-root"
     request = json.dumps({
         "marker": str(marker),
         "ready": str(ready),
@@ -228,13 +234,10 @@ def test_terminal_admission_limit_keeps_existing_members_but_prevents_new_childr
     launches = _record_launchers(monkeypatch)
     cancel = Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            process.run_process, command, request, cancel, WorkerLimits(), Event()
-        )
+        future = executor.submit(_run, command, tmp_path, request, cancel, WorkerLimits(), Event())
         try:
             _wait_file(ready)
             child = launches[0]
-            assert isinstance(child, process._WorkerProcess)
             assert child._job is not None
             child._job._set_process_limit(1)
             marker.with_suffix(".attempt").touch()
@@ -242,7 +245,7 @@ def test_terminal_admission_limit_keeps_existing_members_but_prevents_new_childr
             assert marker.with_suffix(".spawn").read_text() == "denied"
             assert child._job.active()
             release.touch()
-            assert future.result(timeout=15).resources_released
+            assert future.result(timeout=15).reason == "ok"
         finally:
             cancel.set()
             release.touch()
@@ -250,9 +253,9 @@ def test_terminal_admission_limit_keeps_existing_members_but_prevents_new_childr
 
 
 def test_retirement_retries_a_failed_tree_termination(
-    command: process.WorkerCommand, monkeypatch: pytest.MonkeyPatch
+    command: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    command.script.write_text("print('{}')\n", encoding="utf-8")
+    (tmp_path / "worker.py").write_text("print('{}')\n", encoding="utf-8")
     original = WindowsJob.terminate
     attempts = 0
 
@@ -266,9 +269,7 @@ def test_retirement_retries_a_failed_tree_termination(
 
     monkeypatch.setattr(WindowsJob, "terminate", terminate)
     retired = Event()
-    result = process.run_process(command, b"{}", Event(), WorkerLimits(), retired)
-    assert result.reason == "worker_retiring"
-    assert not result.resources_released
+    result = _run(command, tmp_path, b"{}", Event(), WorkerLimits(), retired)
+    assert result.reason == "ok"
     assert retired.wait(5)
     assert attempts >= 2
-    assert list(command.scratch_dir.glob("beat-request-*")) == []

@@ -10,6 +10,10 @@ maps every source to its archive; the [evidence index](changes/archive/2026-10-3
 retains exact immutable reports and shared ownership. Earlier archives remain intact.
 The [2026-11-13 disposition](changes/archive/2026-11-13-archive-index.md) records
 the later audio-output and performance-isolation changes and their remaining gates.
+The November 14 ONNX cutovers for [Beat This](changes/archive/2026-11-14-use-onnx-beat-this-for-windows-bpm/),
+[BS-RoFormer](changes/archive/2026-11-14-use-onnx-bs-roformer-for-windows-stems/) and
+[HTDemucs](changes/archive/2026-11-14-use-onnx-htdemucs-for-windows-stems/) retain their
+original implementation and acceptance records. Current requirements live in the base specs.
 
 Archival is not implementation or acceptance. No historical execution queue is
 activated, no conflicting deltas were merged wholesale, and retired source-SYNC

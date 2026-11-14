@@ -18,7 +18,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME
 from flitzis_looper.controller.persistence import ProjectPersistence
@@ -40,6 +39,7 @@ from tests.flitzis_looper.conftest import (
     FakeOfflineStemSourceLease,
     FakePreparedSourceTicket,
     FakeProjectAssetLease,
+    sealed_test_producer,
 )
 
 if TYPE_CHECKING:
@@ -129,28 +129,16 @@ class _QueuedScenario:
         monkeypatch.setattr(
             stems_module, "separator_model_cache_dir", lambda _separator: self.current_model
         )
-        monkeypatch.setattr(
-            stem_provenance,
-            "processing_paths",
-            lambda request: tuple(
-                request.model_cache_dir / leaf
-                for leaf in ("checkpoint.bin", "config.yaml", "definition.py")
-            ),
-        )
-        monkeypatch.setattr(
-            stem_provenance,
-            "processing_library_versions",
-            lambda _request: (("owned-fixture", "1"),),
-        )
-        monkeypatch.setattr(
-            stem_provenance, "loaded_code_identity", lambda _paths: "declared-controller-fixture"
-        )
-        monkeypatch.setattr(
-            stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp,)
-        )
-        monkeypatch.setattr(
-            stems_module, "processing_source_roots", lambda _request, _guard: (tmp,)
-        )
+
+        def capture(request):
+            return sealed_test_producer(
+                tuple(
+                    request.model_cache_dir / leaf
+                    for leaf in ("checkpoint.bin", "config.yaml", "definition.py")
+                )
+            )
+
+        monkeypatch.setattr(backend, "capture_producer", capture)
         self._write_outputs = backend.generate
         monkeypatch.setattr(backend, "generate", self.generate_receipt)
         audio.capture_prepared_source.side_effect = self.capture_ticket
@@ -440,7 +428,7 @@ def _assert_active_generated_disk_selection(
 
 
 @pytest.mark.parametrize("mix_mode", ["full_mix", "all_stems"])
-def test_public_generate_while_active_commits_disk_only_and_retains_effective_pair(
+def test_public_generate_waits_for_stop_and_commits_disk_only_after_restart(
     queued: _QueuedScenario,
     mix_mode: str,
 ) -> None:
@@ -478,10 +466,18 @@ def test_public_generate_while_active_commits_disk_only_and_retains_effective_pa
     assert isinstance(source, FakeOfflineStemSourceLease)
     assert not source.verification_threads
     queued.audio.capture_prepared_source.assert_not_called()
-    queued.step()  # actual existing identity resolution admits inference while active
+    queued.step()  # Resolve source/producer identity, retaining its read ownership.
     assert len(queued.backend.requests) == initial_requests
+    assert not queued.tasks
+    assert stems.stem_generation_stage(0) == "Waiting for playback to stop"
     baseline.assert_unchanged(queued)
-    queued.step()  # the declared backend writes/verifies the complete generation
+
+    queued.controller.session.active_sample_ids.remove(0)
+    queued.poll()  # Admit inference while this target pad is stopped.
+    assert len(queued.tasks) == 1
+    queued.tasks.pop(0)()  # The fake inference finishes while the target is stopped.
+    queued.controller.session.active_sample_ids.add(0)
+    queued.poll()  # A new voice starts before the controller consumes the result.
     baseline.assert_unchanged(queued)
     _assert_active_generation_fresh_source(queued, source, earlier)
     queued.step()  # components=False complete-pair preparation and actual config replacement
@@ -957,8 +953,9 @@ def test_unexpected_worker_failure_retires_admission_and_releases_serialization_
         message = "owned unexpected worker failure"
         raise AssertionError(message)
 
+    original_capture = queued.backend.capture_producer
     if stage == "resolution":
-        monkeypatch.setattr(stems_module, "capture_processing_files", unexpected)
+        monkeypatch.setattr(queued.backend, "capture_producer", unexpected)
     else:
         monkeypatch.setattr(queued.backend, "generate", unexpected)
     with pytest.raises(AssertionError, match="owned unexpected worker failure"):
@@ -974,9 +971,7 @@ def test_unexpected_worker_failure_retires_admission_and_releases_serialization_
     assert _released(old_job._source_lease)
     assert _released(old_job._generation_lease)
     assert not queued.pairs
-    monkeypatch.setattr(
-        stems_module, "capture_processing_files", stem_provenance.capture_processing_files
-    )
+    monkeypatch.setattr(queued.backend, "capture_producer", original_capture)
     monkeypatch.setattr(queued.backend, "generate", queued.generate_receipt)
     assert stems.generate_stems_async(0)
     queued.step()  # a new resolution must be able to admit actual inference
@@ -1123,7 +1118,7 @@ def test_current_set_direct_and_ui_duplicate_is_diagnostic_and_render_does_no_ha
     )
     monkeypatch.setattr(stems, "source_version_for_pad", forbidden)
     monkeypatch.setattr(stems_module, "source_version_for_sample_path", forbidden)
-    monkeypatch.setattr(stems_module, "capture_processing_files", forbidden)
+    monkeypatch.setattr(queued.backend, "capture_producer", forbidden)
     monkeypatch.setattr(stems_module, "request_fingerprint", forbidden)
     imgui = Mock()
     imgui.button.return_value = False

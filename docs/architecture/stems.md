@@ -28,13 +28,14 @@ playback preparation and recording finalization retain independent paths.
 
 | Separator | Current inference path |
 | --- | --- |
-| BS-RoFormer MUSDB18HQ | Fresh default. A prepared Windows x64 installation uses the native ONNX worker with the effective weights of the pinned v1.0.12 checkpoint. CPU uses FP32 and CUDA uses a separate AMP graph. Stereo 44.1 kHz, 485100-frame chunks, overlap 2 and batches up to 2 preserve the original Looper geometry. Disk-backed input and rolling overlap-add bound PCM staging. Short final chunks use reflection or zero padding. |
-| Demucs `htdemucs` | Supported saved/user choice. The locked Torch CLI retains whole-track model input/output and the configured shifts/overlap. |
-| Native HTDemucs CPU | Explicit Windows x64 trial route through the gated adapter. The [release and worker slots](../../workers/htdemucs/native_cpu/) carry no approvals in this checkout, so that selection is unavailable. |
+| BS-RoFormer MUSDB18HQ | Fresh default. The native Windows x64 ONNX worker uses the effective weights of the pinned v1.0.12 checkpoint. CPU uses FP32 and CUDA uses a separate AMP graph. It processes stereo 44.1 kHz in 485100-frame chunks, with overlap factor two and batches up to two. Disk-backed input and rolling overlap-add bound PCM staging. Short final chunks use reflection or zero padding. |
+| HTDemucs | Existing saved/user choice. The native Windows x64 ONNX worker uses the pinned stock checkpoint. FFmpeg stages the first audio stream at 44.1 kHz, and the worker applies channel mapping, normalization, captured shifts and overlap, windowed inference and the source-length crop. CPU selects a qualified arithmetic profile. CUDA uses the qualified RTX 5090 Laptop GPU profile. |
 
 [`stem_separators.py`](../../src/flitzis_looper/controller/stem_separators.py)
-dispatches the selected producer. A recognized CUDA failure can make one fresh
-CPU attempt for the same model. Integrity, codec, cancellation and resource
+dispatches the selected model to its native ONNX worker. An explicit CPU request
+bypasses CUDA detection. An eligible CUDA failure allows one fresh CPU attempt
+with the same model, settings and sealed PCM after the failed attempt's process,
+tree, readers and scratch retire. Integrity, codec, cancellation and resource
 failures retain their own outcomes. The
 [`ExecutionReceipt`](../../src/flitzis_looper/stem_execution_protocol.py)
 records the actual device, including fallback reason. Hardware availability
@@ -42,10 +43,11 @@ and completed model loading establish readiness. The
 [setup guide](../model-worker-setup.md#optional-stem-models-and-codecs) covers pins,
 FFmpeg and offline provisioning.
 
-The ONNX adapter records an execution-specific producer after verifying the
-loaded host code, decoder, worker and selected profile. Saved sets use their
-verified restore path. New ONNX Generate requests start an inference because
-the execution identity becomes known after generation.
+The adapters use verified FFmpeg inputs and complete PCM16 WAV outputs. They
+record an execution-specific producer after verifying the loaded host code,
+codec, worker, model and selected profile. Saved sets use their verified restore
+path. New Generate requests execute inference because the execution identity
+becomes known after generation.
 
 CUDA cost calibration uses the reserved ORT device arena and the sampled
 process-local DXGI usage when available. Admission compares the larger observed

@@ -137,10 +137,7 @@ def test_resource_defaults_retain_original_captured_sampler_and_clock() -> None:
 @pytest.mark.parametrize(
     "missing",
     [
-        "bs_roformer_generation.py",
-        "bs_roformer_assets.py",
-        "bs_input_provenance.py",
-        "native_demucs_cpu.py",
+        "stem_generation.py",
     ],
 )
 def test_selector_consulted_roles_positive_then_missing_role_refuses(
@@ -154,7 +151,7 @@ def test_selector_consulted_roles_positive_then_missing_role_refuses(
 
 
 @pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-@pytest.mark.parametrize("binding", ["BsRoformerStemGenerationBackend", "NativeDemucsCpuBackend"])
+@pytest.mark.parametrize("binding", ["default_stem_model_cache_dir"])
 def test_selector_changed_binding_refuses_for_either_selection(
     monkeypatch: pytest.MonkeyPatch, separator: str, binding: str
 ) -> None:

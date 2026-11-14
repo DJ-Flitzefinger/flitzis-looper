@@ -211,7 +211,7 @@ def test_bootstrap_isolates_known_developer_bindings(
         "FLITZIS_WORKSPACE_ENTRY",
         "FLITZIS_NATIVE_EXTENSION_DIR",
         "FLITZIS_APPLICATION_SOURCE_STAGE",
-        "HF_HUB_CACHE",
+        "FLITZIS_MODEL_CACHE_DIR",
         "CUDA_CACHE_PATH",
         "FLITZIS_UI_STATE_DIR",
     ):
@@ -220,12 +220,10 @@ def test_bootstrap_isolates_known_developer_bindings(
     assert "FLITZIS_WORKSPACE_ENTRY" not in os.environ
     assert "FLITZIS_NATIVE_EXTENSION_DIR" not in os.environ
     assert "FLITZIS_APPLICATION_SOURCE_STAGE" not in os.environ
-    assert Path(os.environ["HF_HUB_CACHE"]) == checkout.parent / "models/huggingface/hub"
     assert Path(os.environ["CUDA_CACHE_PATH"]) == checkout.parent / "cache/cuda"
     assert Path(os.environ["FLITZIS_UI_STATE_DIR"]) == checkout.parent / "cache/ui"
     assert (
-        Path(os.environ["FLITZIS_MODEL_CACHE_DIR"])
-        == checkout.parent / "models/torch/hub/checkpoints"
+        Path(os.environ["FLITZIS_MODEL_CACHE_DIR"]) == checkout.parent / "models/stem-checkpoints"
     )
 
 

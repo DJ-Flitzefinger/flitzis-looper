@@ -1,16 +1,11 @@
-import locale
 import math
 import os
 import shutil
-import sys
-import tempfile
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
@@ -19,56 +14,24 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
 )
-from flitzis_looper.controller.processing_code import fresh_python_source_environment
-from flitzis_looper.controller.stem_artifacts import (
-    AudioData,
-    read_pcm16_wav,
-    validate_target_shape,
-)
-from flitzis_looper.controller.stem_artifacts import (
-    StemArtifactError as StemGenerationError,
-)
-from flitzis_looper.controller.stem_artifacts import (
-    write_project_cache_artifacts as _write_project_cache_artifacts,
-)
-from flitzis_looper.controller.stem_process import run_stem_command
-from flitzis_looper.controller.stem_provider import (
-    CudaCapability,
-    ProviderCalibration,
-    ProviderPlan,
-    StemProviderSelector,
-    parse_cuda_capability,
-)
-from flitzis_looper.encoder_provenance import (
-    ENCODER_CONTRACT_ENV,
-    ENCODER_RESULT,
-    verified_encoder_output,
-)
-from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
-from flitzis_looper.models import STEM_KINDS, StemSeparator
+from flitzis_looper.controller.stem_artifacts import StemArtifactError as StemGenerationError
+from flitzis_looper.controller.stem_artifacts import validate_target_shape
 from flitzis_looper.offline_runtime import child_environment
-from flitzis_looper.stem_execution_protocol import (
-    STEM_EXECUTION_RESULT,
-    ExecutionReceipt,
-    completed_execution,
-    report_execution,
-)
 
-__all__ = ["StemGenerationError", "_write_project_cache_artifacts"]
+if TYPE_CHECKING:
+    from flitzis_looper.controller.stem_provider import ProviderCalibration
+    from flitzis_looper.models import StemSeparator
+    from flitzis_looper.stem_execution_protocol import ExecutionReceipt
+
+__all__ = ["StemGenerationError"]
 
 type StemDevicePolicy = Literal["auto", "cpu"]
 type StemDevice = Literal["cuda", "cpu"]
 type StemProgressCallback = Callable[[float, str], None]
 
-DEMUCS_REQUIRED_CHECKPOINTS: dict[str, tuple[str, ...]] = {
-    "htdemucs": ("955717e8-8726e21a.th",),
-}
-NO_MODEL_INSTALLED_MESSAGE = "no Model installed"
-FFMPEG_UNAVAILABLE_MESSAGE = "FFmpeg/ffprobe unavailable"
-TORCHCODEC_UNAVAILABLE_MESSAGE = "TorchCodec unavailable"
 FFMPEG_DIR_ENV_VAR = "FLITZIS_FFMPEG_DIR"
 MODEL_CACHE_DIR_ENV_VAR = "FLITZIS_MODEL_CACHE_DIR"
-DEMUCS_ENCODER_ENV_VAR = "FLITZIS_DEMUCS_ENCODER"
+STEM_MODEL_CACHE_SUBDIR = "models/stem-checkpoints"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,15 +41,6 @@ class AudioShape:
     sample_rate_hz: int
     channels: int
     frame_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    """Bounded result from an external command run outside the audio callback."""
-
-    returncode: int
-    stdout: str
-    stderr: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,10 +59,8 @@ class StemGenerationRequest:
     separator: StemSeparator = "demucs:htdemucs"
     encoder_executable: Path | None = None
     encoder_contract: str | None = None
-    python_source_roots: tuple[Path, ...] = ()
     original_bytes: int | None = None
     producer_identity: str | None = None
-    native_demucs_cpu: bool = False
     bs_onnx_manifest: Path | None = None
 
 
@@ -130,26 +82,6 @@ class StemGenerationResult:
     calibration_family: str | None = None
 
 
-class CommandRunner(Protocol):
-    """Run an external command outside the audio callback."""
-
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        cwd: Path,
-        env: dict[str, str],
-    ) -> CommandResult: ...
-
-
-class CudaDetector(Protocol):
-    """Detect CUDA availability outside startup and outside the audio callback."""
-
-    def __call__(
-        self, env: dict[str, str], command_runner: CommandRunner
-    ) -> bool | CudaCapability: ...
-
-
 class StemGenerationBackend(Protocol):
     """Backend contract for offline stem-generation adapters."""
 
@@ -160,258 +92,32 @@ class StemGenerationBackend(Protocol):
     ) -> StemGenerationResult: ...
 
 
-def run_command(
-    args: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-) -> CommandResult:
-    """Run an owned command with bounded diagnostics and actual read settlement."""
-    completed = run_stem_command(args, cwd=cwd, env=env)
-    encoding = locale.getencoding()
-    return CommandResult(
-        returncode=completed.returncode,
-        stdout=_command_stdout(completed.stdout.decode(encoding, errors="replace")),
-        stderr=_bounded_text(completed.stderr.decode(encoding, errors="replace")),
-    )
-
-
-def detect_torch_cuda_available(env: dict[str, str], command_runner: CommandRunner) -> bool:
-    """Return whether Torch reports CUDA availability from a background subprocess."""
-    result = command_runner(
-        [
-            sys.executable,
-            "-c",
-            "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)",
-        ],
-        cwd=Path.cwd(),
-        env=env,
-    )
-    return result.returncode == 0
-
-
-def detect_torch_cuda_capability(
-    env: dict[str, str], command_runner: CommandRunner
-) -> CudaCapability:
-    """Query actual identity/headroom without claiming any completed model execution."""
-    result = command_runner(
-        [
-            sys.executable,
-            "-c",
-            "import runpy; runpy.run_module('flitzis_looper.provider_probe', run_name='__main__')",
-        ],
-        cwd=Path.cwd(),
-        env=env,
-    )
-    return parse_cuda_capability(result.returncode, result.stdout)
-
-
-def default_demucs_model_cache_dir(
-    *,
-    env: dict[str, str] | None = None,
-    project_root: Path | None = None,
-    home_dir: Path | None = None,
+def default_stem_model_cache_dir(
+    *, env: dict[str, str] | None = None, project_root: Path | None = None
 ) -> Path:
-    """Resolve an explicit cache or this clone's ignored model directory."""
+    """Resolve the explicit cache or this checkout's ignored stem model directory."""
     environment = os.environ if env is None else env
     root = Path.cwd() if project_root is None else project_root
-    if override := environment.get(MODEL_CACHE_DIR_ENV_VAR):
-        return _safe_model_cache_dir(Path(override), root)
-    # Keep home_dir accepted for callers of the former home-cache resolver.
-    candidate = root / "models" / "torch" / "hub" / "checkpoints"
+    override = environment.get(MODEL_CACHE_DIR_ENV_VAR)
+    candidate = Path(override) if override else root / STEM_MODEL_CACHE_SUBDIR
     return _safe_model_cache_dir(candidate, root)
 
 
-def demucs_cache_environment(
-    model_cache_dir: Path,
-    *,
-    base_env: dict[str, str] | None = None,
+def stem_model_environment(
+    model_cache_dir: Path, *, base_env: dict[str, str] | None = None
 ) -> dict[str, str]:
-    """Keep both separator children on their shared Torch checkpoint root."""
+    """Bind setup and its owned children to the selected model and codec paths."""
     env = child_environment(dict(os.environ if base_env is None else base_env))
-    cache_dir = model_cache_dir.resolve(strict=False)
-    if cache_dir.parent.name == "checkpoints" and cache_dir.parent.parent.name == "hub":
-        cache_dir = cache_dir.parent
-    if cache_dir.name == "checkpoints" and cache_dir.parent.name == "hub":
-        env["TORCH_HOME"] = str(cache_dir.parent.parent)
-        env[MODEL_CACHE_DIR_ENV_VAR] = str(cache_dir)
+    env[MODEL_CACHE_DIR_ENV_VAR] = str(model_cache_dir.resolve(strict=False))
     _add_ffmpeg_dir_to_path(env)
     return env
 
 
 def resolved_demucs_encoder(model_cache_dir: Path) -> Path | None:
-    """Resolve the same encoder PATH used by the actual Demucs subprocess."""
-    env = demucs_cache_environment(model_cache_dir)
+    """Resolve the shared FFmpeg selected for stem input and output."""
+    env = stem_model_environment(model_cache_dir)
     executable = shutil.which("ffmpeg", path=env.get("PATH"))
     return Path(executable).resolve(strict=True) if executable is not None else None
-
-
-class DemucsStemGenerationBackend:
-    """Demucs-based stem-generation backend that writes the project cache contract."""
-
-    def __init__(
-        self,
-        *,
-        model_name: str = "htdemucs",
-        command_runner: CommandRunner = run_command,
-        cuda_detector: CudaDetector = detect_torch_cuda_capability,
-    ) -> None:
-        self._model_name = model_name
-        self._command_runner = command_runner
-        self._cuda_detector = cuda_detector
-        self._provider_selector = StemProviderSelector()
-
-    def generate(
-        self,
-        request: StemGenerationRequest,
-        progress: StemProgressCallback,
-    ) -> StemGenerationResult:
-        """Generate aligned project stem cache artifacts using Demucs."""
-        _validate_request(request)
-        request.model_cache_dir.mkdir(parents=True, exist_ok=True)
-        env = demucs_cache_environment(request.model_cache_dir)
-        env.pop(ENCODER_CONTRACT_ENV, None)
-        if request.encoder_executable is not None:
-            env[DEMUCS_ENCODER_ENV_VAR] = str(request.encoder_executable)
-            env["PATH"] = str(request.encoder_executable.parent) + os.pathsep + env.get("PATH", "")
-        if request.encoder_contract is not None:
-            env[ENCODER_CONTRACT_ENV] = request.encoder_contract
-        if not _has_required_demucs_model(request.model_cache_dir, self._model_name):
-            raise StemGenerationError(NO_MODEL_INSTALLED_MESSAGE)
-        _require_demucs_audio_tools(env, self._command_runner)
-        _require_torchcodec(env, self._command_runner)
-
-        plan = self._provider_plan(request, env)
-        devices = plan.devices
-        started = time.monotonic()
-        cuda_error: str | None = None
-
-        for device in devices:
-            progress(0.05, _stage_for_device(device, fallback=cuda_error is not None))
-            with tempfile.TemporaryDirectory(prefix="flitzis-demucs-") as temp_dir_name:
-                temp_dir = Path(temp_dir_name)
-                with fresh_python_source_environment(
-                    env, temp_dir, source_roots=request.python_source_roots
-                ) as child_env:
-                    result = self._run_demucs(request, temp_dir, child_env, device)
-                if result.returncode != 0:
-                    failure_diagnostic = _command_diagnostic(result)
-                    if (
-                        device == "cuda"
-                        and "cpu" in devices
-                        and is_cuda_failure(result.returncode, result.stdout)
-                    ):
-                        cuda_error = failure_diagnostic
-                        continue
-                    raise StemGenerationError(failure_diagnostic)
-
-                execution = completed_execution(
-                    result.stdout,
-                    backend="demucs",
-                    model_name=self._model_name,
-                    device=device,
-                    cpu_fallback=cuda_error is not None and device == "cpu",
-                )
-                report_execution(progress, execution)
-                progress(0.85, "Aligning stem cache")
-                _write_project_cache_artifacts(
-                    output_root=temp_dir,
-                    cache_dir=request.cache_dir,
-                    target_shape=request.target_shape,
-                    progress=progress,
-                )
-                encoder_verified = verified_encoder_output(
-                    temp_dir,
-                    request.encoder_contract,
-                    result.stdout,
-                )
-
-            diagnostic: str | None = None
-            if cuda_error is not None:
-                diagnostic = f"CUDA failed; generated stems on CPU. {cuda_error}"
-
-            return StemGenerationResult(
-                backend_name="demucs",
-                model_name=self._model_name,
-                device=device,
-                cpu_fallback=cuda_error is not None and device == "cpu",
-                artifact_count=len(STEM_KINDS),
-                diagnostic=_bounded_text(diagnostic) if diagnostic is not None else None,
-                encoder_verified=encoder_verified,
-                execution=execution,
-                provider_calibration=ProviderCalibration(
-                    plan,
-                    time.monotonic() - started,
-                    verified=encoder_verified,
-                    observed_at=time.monotonic(),
-                ),
-            )
-
-        msg = "Demucs did not run"
-        raise StemGenerationError(msg)
-
-    def accept_calibration(
-        self, _request: StemGenerationRequest, result: StemGenerationResult
-    ) -> None:
-        """Promote diagnostics only after the original controller's final guards."""
-        if result.provider_calibration is not None:
-            self._provider_selector.accept(result.provider_calibration, result.execution)
-
-    def _devices_for_request(
-        self,
-        request: StemGenerationRequest,
-        env: dict[str, str],
-    ) -> tuple[StemDevice, ...]:
-        return self._provider_plan(request, env).devices
-
-    def _provider_plan(self, request: StemGenerationRequest, env: dict[str, str]) -> ProviderPlan:
-        if request.device_policy == "cpu":
-            return self._provider_selector.cpu_plan(request, self._model_name)
-        try:
-            with (
-                tempfile.TemporaryDirectory(prefix="flitzis-provider-") as name,
-                fresh_python_source_environment(
-                    env, Path(name), source_roots=request.python_source_roots
-                ) as child_env,
-            ):
-                observed = self._cuda_detector(child_env, self._command_runner)
-        except OSError:
-            observed = False
-        capability = observed if isinstance(observed, CudaCapability) else CudaCapability(observed)
-        return self._provider_selector.plan(request, self._model_name, capability)
-
-    def _run_demucs(
-        self,
-        request: StemGenerationRequest,
-        output_dir: Path,
-        env: dict[str, str],
-        device: StemDevice,
-    ) -> CommandResult:
-        args = [
-            sys.executable,
-            "-m",
-            "flitzis_looper.demucs_streaming",
-            "-n",
-            self._model_name,
-            "-o",
-            str(output_dir),
-            "--filename",
-            "{stem}.{ext}",
-            "--clip-mode",
-            "clamp",
-            "--shifts",
-            str(request.demucs_shifts),
-            "--overlap",
-            _format_demucs_float(request.demucs_overlap),
-            "-d",
-            device,
-            str(request.source_path),
-        ]
-        try:
-            return self._command_runner(args, cwd=Path.cwd(), env=env)
-        except OSError as err:
-            msg = f"Failed to run Demucs: {err}"
-            return CommandResult(returncode=1, stdout="", stderr=msg)
 
 
 def _validate_request(request: StemGenerationRequest) -> None:
@@ -579,93 +285,3 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _stage_for_device(device: StemDevice, *, fallback: bool) -> str:
-    if fallback:
-        return "Running Demucs on CPU after CUDA fallback"
-    if device == "cuda":
-        return "Running Demucs on CUDA"
-    return "Running Demucs on CPU"
-
-
-def _has_required_demucs_model(model_cache_dir: Path, model_name: str) -> bool:
-    required_checkpoints = DEMUCS_REQUIRED_CHECKPOINTS.get(model_name)
-    if required_checkpoints is None:
-        return False
-    return all((model_cache_dir / checkpoint).is_file() for checkpoint in required_checkpoints)
-
-
-def _require_demucs_audio_tools(env: dict[str, str], command_runner: CommandRunner) -> None:
-    for tool in ("ffprobe", "ffmpeg"):
-        try:
-            result = command_runner([tool, "-version"], cwd=Path.cwd(), env=env)
-        except OSError as err:
-            raise StemGenerationError(FFMPEG_UNAVAILABLE_MESSAGE) from err
-        if result.returncode != 0:
-            raise StemGenerationError(FFMPEG_UNAVAILABLE_MESSAGE)
-
-
-def _require_torchcodec(env: dict[str, str], command_runner: CommandRunner) -> None:
-    try:
-        result = command_runner(
-            [sys.executable, "-c", "import torchcodec.encoders"],
-            cwd=Path.cwd(),
-            env=env,
-        )
-    except OSError as err:
-        raise StemGenerationError(TORCHCODEC_UNAVAILABLE_MESSAGE) from err
-    if result.returncode != 0:
-        raise StemGenerationError(TORCHCODEC_UNAVAILABLE_MESSAGE)
-
-
-def _command_diagnostic(result: CommandResult) -> str:
-    text = result.stderr.strip() or result.stdout.strip()
-    if not text:
-        text = f"Demucs exited with status {result.returncode}"
-    return _bounded_text(_last_relevant_diagnostic_line(text))
-
-
-def _last_relevant_diagnostic_line(text: str) -> str:
-    for raw_line in reversed(text.replace("\r", "\n").splitlines()):
-        line = raw_line.strip()
-        if line and not _looks_like_progress_line(line):
-            return line
-    return "Stem generation failed"
-
-
-def _looks_like_progress_line(line: str) -> bool:
-    has_rate = "B/s]" in line or "it/s]" in line or "/s]" in line
-    has_progress_shape = "%" in line and "/" in line and "[" in line
-    return has_rate or has_progress_shape
-
-
-def _bounded_text(text: str | None, *, limit: int = 1000) -> str:
-    if text is None:
-        return ""
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return f"{compact[: limit - 3]}..."
-
-
-def _command_stdout(text: str | None) -> str:
-    if text is None:
-        return ""
-    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT, STEM_EXECUTION_RESULT, CUDA_FAILURE_RECEIPT)
-    lines = [line.rstrip("\r") for line in text.split("\n")]
-    diagnostic = _bounded_text("\n".join(line for line in lines if not line.startswith(prefixes)))
-    if diagnostic.startswith(prefixes):
-        # Compaction must not turn a padded diagnostic into protocol evidence.
-        diagnostic = _bounded_text("Diagnostic: " + diagnostic)
-    receipts = []
-    for prefix in prefixes:
-        matches = [line for line in lines if line.startswith(prefix)]
-        if len(matches) == 1 and len(matches[0]) <= 1000:
-            receipts.append(matches[0])
-    return "\n".join([diagnostic, *receipts])
-
-
-def _read_pcm16_wav(path: Path) -> AudioData:
-    """Read bounded compatibility PCM; productive alignment uses streaming blocks."""
-    return read_pcm16_wav(path)

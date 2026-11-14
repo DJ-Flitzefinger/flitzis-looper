@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-CHECKPOINT_URL = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
-MAX_CHECKPOINT_BYTES = 256 * 1024 * 1024
 _CHUNK_BYTES = 1024 * 1024
 _PERMANENT_HTTP = {400, 401, 403, 404, 410, 416}
 _PERMANENT_LOCAL = {
@@ -236,8 +234,8 @@ def _require_complete(partial: Path, expected_bytes: int | None) -> None:
 def acquire_to_quarantine(
     destination: Path,
     *,
-    source_url: str = CHECKPOINT_URL,
-    max_bytes: int = MAX_CHECKPOINT_BYTES,
+    source_url: str,
+    max_bytes: int,
     expected_sha256: str | None = None,
     expected_bytes: int | None = None,
 ) -> AcquiredArtifact:
@@ -301,10 +299,8 @@ def acquire_pinned_asset(
         return AcquiredArtifact(destination, artifact.sha256, artifact.size_bytes)
 
 
-def copy_to_quarantine(
-    source: Path, destination: Path, *, max_bytes: int = MAX_CHECKPOINT_BYTES
-) -> AcquiredArtifact:
-    """Copy selected local bytes without networking or trusting the source filename."""
+def copy_to_quarantine(source: Path, destination: Path, *, max_bytes: int) -> AcquiredArtifact:
+    """Copy a pinned local asset to an exclusively created file with bounded reads."""
     with source.open("rb") as stream:
         return _copy_quarantined(stream, destination, max_bytes)
 

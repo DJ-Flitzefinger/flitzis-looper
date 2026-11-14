@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.controller import stem_cache, stem_job, stem_provenance
+from flitzis_looper.controller import stem_cache, stem_job
 from flitzis_looper.controller.stem_batch_inventory import (
     StemBatchInventory,
     StemBatchItem,
@@ -172,7 +172,6 @@ def test_capture_and_currentness_have_no_io_or_custody_side_effects(
         no_io.setattr(Path, "read_bytes", forbidden)
         no_io.setattr(Path, "resolve", forbidden)
         no_io.setattr(stem_cache, "source_version_for_sample_path", forbidden)
-        no_io.setattr(stem_provenance, "capture_processing_files", forbidden)
         no_io.setattr(stem_job, "StemGenerationJob", forbidden)
         no_io.setattr(StemIntentRegistry, "capture", forbidden)
         inventory = case.capture()
@@ -404,10 +403,12 @@ def test_processing_settings_aba_is_stale_even_after_value_restoration(
     inventory_case: _InventoryCase, setting: str
 ) -> None:
     case = inventory_case
+    if setting != "stem_separator":
+        case.project.stem_separator = "demucs:htdemucs"
     item = _first(case.capture())
     original = getattr(case.project, setting)
     replacement = {
-        "stem_separator": "bs-roformer:musdb18hq",
+        "stem_separator": "demucs:htdemucs",
         "demucs_shifts": 2,
         "demucs_overlap": 0.75,
     }[setting]

@@ -24,7 +24,7 @@ An ordinary source checkout SHALL default downloaded models and its required Bea
 - **GIVEN** installed main dependencies and a built Native extension
 - **WHEN** the documented source setup command completes
 - **THEN** the required worker is verified before selection under `models/beat-this/`
-- **AND** optional separator setup uses `models/torch/hub/checkpoints/` unless explicitly overridden
+- **AND** optional separator setup uses `models/stem-checkpoints/` unless explicitly overridden
 - **AND** setup retains interrupted transfers outside temporary environment staging without an overall download deadline
 
 ### Requirement: Portable Analysis Readiness Is Installation Owned
@@ -48,6 +48,50 @@ usable after moving the installation.
 - **WHEN** the same installer runs again
 - **THEN** it repairs and verifies the worker without rebuilding an unchanged healthy Native runtime
 - **AND** inherited personal cache/profile overrides do not redirect the private runtime
+
+### Requirement: Provision a relocatable Windows BPM worker and CUDA cache
+
+Setup SHALL verify the pinned graph, libsoxr and ONNX Runtime package before
+selection. The verified CPU package SHALL support systems without CUDA. On a
+usable NVIDIA device, setup SHALL prepare the CUDA cache using the verified
+worker with synthetic 48 kHz mono inputs of 30.25, 162 and 8 seconds in order.
+
+#### Scenario: A prepared installation starts again
+
+- **WHEN** the device UUID, driver release, worker, graph, package and warmup
+  configuration still match the persistent cache
+- **THEN** the installation SHALL reuse the ready cache.
+
+#### Scenario: The driver changes, or the cache is lost
+
+- **WHEN** repair or background analysis detects changed cache identity or loss
+- **THEN** one owner SHALL prepare the affected cache and publish readiness only
+  after all three CUDA executions and reader lifetimes are confirmed
+- **AND** a failure SHALL remain visible while the verified CPU path is available.
+
+#### Scenario: The operator checks resources
+
+- **WHEN** the operator runs a setup or launch resource check
+- **THEN** it SHALL report the selected worker, package and CUDA cache state
+  without executing inference.
+
+### Requirement: Windows Stem Setup Binds Verified Derived Resources
+Source, managed Release and Portable SHALL select local pinned model resources
+derived from complete verified upstream inputs. Learned weights SHALL stay in
+the acquisition and local derivation path. Setup SHALL verify worker identity,
+runtime, graphs, derived learned data and the matching CRT before publishing the
+selection. The resources SHALL use installation-appropriate owned paths.
+
+#### Scenario: A verified installation is checked
+- **WHEN** the operator checks its start or setup resources
+- **THEN** the check confirms the selected identities without running separation or
+  downloading dependencies
+- **AND** each Portable Release uses the immutable HTDemucs installation for its
+  sealed worker and CRT
+
+#### Scenario: Staging or model loading fails
+- **WHEN** setup cannot qualify the derived resources or load the CPU models
+- **THEN** the previous usable release, held Native and user data are preserved
 
 ### Requirement: Portable Updates Preserve Recording and Worker Custody
 Portable update transactions SHALL preserve samples, input settings, recordings and recovery data with their file identities. A candidate worker selection SHALL be journaled before activation, and failed updates SHALL restore the previous selection without deleting previous worker installations. Recovery SHALL remain compatible with older journals that have no recording or worker-selection fields.

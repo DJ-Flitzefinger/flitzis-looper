@@ -16,6 +16,7 @@ from flitzis_looper.analysis.contracts import (
     BeatWorkerRequest,
     MonoPcmInput,
     WorkerLimits,
+    encode_request,
     validate_component_result,
 )
 from flitzis_looper.analysis.process import (
@@ -25,7 +26,6 @@ from flitzis_looper.analysis.process import (
 )
 from flitzis_looper.analysis.publication import encode_result
 from flitzis_looper.analysis.selected_bpm import summarize_published
-from flitzis_looper.analysis.worker import BeatWorkerAdapter
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.selected_bpm_models import SelectedBpmReport
@@ -70,6 +70,25 @@ class BeatAnalysisAdapter(Protocol):
     retired: Event
 
     def run(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult: ...
+
+
+class _UnavailableBeatAdapter:
+    """Report missing inference for the diagnostic service's optional beat branch."""
+
+    def __init__(self) -> None:
+        self.retired = Event()
+        self.retired.set()
+
+    def run(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult:
+        if cancel.is_set():
+            return BeatComponentResult(request.identity, request.model, "cancelled", "cancelled")
+        try:
+            encode_request(request, WorkerLimits())
+        except OSError, ValueError:
+            return BeatComponentResult(
+                request.identity, request.model, "failed", "invalid_pcm_request"
+            )
+        return BeatComponentResult(request.identity, request.model, "unavailable", "missing_worker")
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,7 +459,13 @@ class OfflineAnalysisService:
             native = engine.begin_offline_analysis(pad_id)
             try:
                 loaded = _loaded_input(native.metadata())
-                job = AnalysisJob(native, loaded, workdir, model, adapter or BeatWorkerAdapter())
+                job = AnalysisJob(
+                    native,
+                    loaded,
+                    workdir,
+                    model,
+                    adapter if adapter is not None else _UnavailableBeatAdapter(),
+                )
                 self._job = job
                 Thread(
                     target=job._supervise, name="offline-analysis-supervisor", daemon=True

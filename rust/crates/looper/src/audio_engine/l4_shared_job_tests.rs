@@ -191,8 +191,7 @@ job_files = tuple(job_model / name for name in ('checkpoint.bin', 'read-definiti
 for index, path in enumerate(job_files):
     path.write_bytes(f'declared nonneural held-read input {index}'.encode())
 job_saved_functions = (job_stems_module.separator_model_cache_dir,
-    job_stems_module.resolved_demucs_encoder, job_stems_module.encoder_contract,
-    job_stems_module.capture_processing_files, job_stems_module.processing_source_roots)
+    job_stems_module.resolved_demucs_encoder, job_stems_module.encoder_contract)
 def capture_declared_job_files(request):
     guard = SealedProcessingFiles([str(path) for path in job_files])
     producer = hashlib.sha256(json.dumps(guard.witnesses()).encode()).hexdigest()
@@ -200,8 +199,6 @@ def capture_declared_job_files(request):
 job_stems_module.separator_model_cache_dir = lambda separator: job_model
 job_stems_module.resolved_demucs_encoder = lambda model: job_files[-1]
 job_stems_module.encoder_contract = lambda encoder: 'declared-nonneural-held-read'
-job_stems_module.capture_processing_files = capture_declared_job_files
-job_stems_module.processing_source_roots = lambda request, guard: (job_model,)
 class JobAudio:
     def __getattr__(self, name):
         for delegate in (offline_job_audio, unload_audio):
@@ -212,6 +209,7 @@ controller._audio = JobAudio()
 job_entered, job_finish, job_returned = threading.Event(), threading.Event(), threading.Event()
 class DeclaredHeldRead:
     calls = 0
+    capture_producer = staticmethod(capture_declared_job_files)
     def generate(self, request, progress):
         self.calls += 1
         assert threading.current_thread().name.startswith('stems_')
@@ -413,8 +411,7 @@ assert job_reopened.load_error is None
 assert all(job_reopened.project.sample_paths[id] is None and job_reopened.project.stem_cache[id] is None for id in (37, 38))
 assert job_reopened.project.stem_cache[0].pair == disk_v2
 (job_stems_module.separator_model_cache_dir, job_stems_module.resolved_demucs_encoder,
- job_stems_module.encoder_contract, job_stems_module.capture_processing_files,
- job_stems_module.processing_source_roots) = job_saved_functions
+ job_stems_module.encoder_contract) = job_saved_functions
 "#,
     );
     assert!(consumer.is_empty() && parameters.is_empty());

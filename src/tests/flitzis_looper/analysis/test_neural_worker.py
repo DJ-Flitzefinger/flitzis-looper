@@ -3,49 +3,24 @@
 import base64
 import json
 import struct
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
-from threading import Event
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
 from flitzis_looper.analysis import neural_worker as bridge
-from flitzis_looper.analysis.contracts import (
-    AnalysisIdentity,
-    BeatComponentResult,
-    BeatModelIdentity,
-    BeatPredictions,
-)
-from flitzis_looper.analysis.execution import (
-    CudaBeatComponentResult,
-    CudaBeatModelIdentity,
-    ExecutionReceipt,
-)
+from flitzis_looper.analysis.artifacts import NATIVE_MODEL
+from flitzis_looper.analysis.contracts import AnalysisIdentity, BeatPredictions
+from flitzis_looper.analysis.native_beat_worker import NativeWorkerConfiguration
 from flitzis_looper.analysis.publication import MAX_ENVELOPE_BYTES
-from flitzis_looper.analysis.worker import WorkerConfiguration
 
 if TYPE_CHECKING:
-    from flitzis_looper.analysis.contracts import BeatWorkerRequest
+    from threading import Event
 
-
-@pytest.fixture(autouse=True)
-def reference_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bridge, "_production_windows", lambda: False)
-
-
-def test_windows_bridge_requires_native_installation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(bridge, "_production_windows", lambda: True)
-    load = Mock(side_effect=ValueError("BeatThis requires the ONNX worker"))
-    monkeypatch.setattr(bridge, "load_worker_configuration", load)
-    with pytest.raises(ValueError, match="requires the ONNX worker"):
-        bridge._app_configuration(tmp_path / "models", tmp_path)
-    load.assert_called_once_with(tmp_path / "models", tmp_path, native_only=True)
+    from flitzis_looper.analysis.contracts import MonoPcmInput
 
 
 class _Probe:
@@ -58,9 +33,7 @@ class _Probe:
 
 class _Adapter:
     def __init__(self) -> None:
-        self.retired = Event()
-        self.retired.set()
-        self.requests: list[BeatWorkerRequest] = []
+        self.requests: list[MonoPcmInput] = []
         self.predictions = BeatPredictions(
             (0.125, 0.5000000000000001, 0.875),
             (0.125,),
@@ -68,29 +41,34 @@ class _Adapter:
             (0.0, -2.5, 0.9),
         )
 
-    def run(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult:
-        self.requests.append(request)
+    def run(
+        self,
+        configuration: NativeWorkerConfiguration,
+        pcm: MonoPcmInput,
+        mono_sha: str,
+        cancel: Event,
+    ) -> tuple[BeatPredictions, None]:
+        assert configuration.execution_policy == "cpu"
+        assert mono_sha == "b" * 64
         assert not cancel.is_set()
-        return BeatComponentResult(
-            request.identity, request.model, "ready", "ready", self.predictions
-        )
+        self.requests.append(pcm)
+        return self.predictions, None
 
 
 @pytest.fixture
 def request_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration]:
+) -> tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration]:
     pcm = tmp_path / "native-owned-mono.f32le"
     pcm.write_bytes(bytes(48000 * 4))
-    model = BeatModelIdentity(
-        sha256="a" * 64, frontend_id="fixture-frontend", environment_id="fixture-environment"
-    )
-    configuration = WorkerConfiguration(
-        Path(sys.executable), tmp_path / "worker.py", tmp_path / "final0.ckpt", tmp_path, model
+    configuration = NativeWorkerConfiguration(
+        tmp_path / "installed/manifest.json", tmp_path, "a" * 64
     )
     adapter, probe = _Adapter(), _Probe()
-    monkeypatch.setattr(bridge, "load_worker_configuration", lambda *_args: configuration)
-    monkeypatch.setattr(bridge, "BeatWorkerAdapter", lambda *_args: adapter)
+    load = Mock(return_value=configuration)
+    monkeypatch.setattr(bridge, "load_worker_configuration", load)
+    monkeypatch.setattr(bridge, "run_native_worker", adapter.run)
+    monkeypatch.setattr(bridge, "require_native_worker_capability", lambda _configuration: None)
     identity = AnalysisIdentity(3, 42, "original-source-fixture", 9)
     arguments: tuple[object, ...] = (
         str(pcm),
@@ -110,70 +88,18 @@ def _run(arguments: tuple[object, ...]) -> dict[str, object]:
     return json.loads(encoded)
 
 
-@pytest.mark.parametrize("cancelled", [False, True])
-def test_cuda_bridge_resolves_once_echoes_exact_request_and_never_publishes_cancelled_receipt(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    cancelled: bool,
-) -> None:
-    arguments, old_adapter, probe, configuration = request_fixture
-    model = CudaBeatModelIdentity("a" * 64, "beat-this-1.1.0-soxr-hq-logmel-v1")
-    configuration = replace(configuration, model=model)
-    resolves = []
-
-    def resolve(*_args):
-        resolves.append(1)
-        return configuration
-
-    monkeypatch.setattr(bridge, "load_worker_configuration", resolve)
-    monkeypatch.setattr(bridge, "require_cuda_native_capability", lambda: None)
-
-    class Adapter:
-        retired = Event()
-        retired.set()
-
-        def run_cuda(self, request, _cancel):
-            probe.cancelled = cancelled
-            execution = ExecutionReceipt(
-                1, "auto", "cuda:0", "Fixture GPU", "float32", "2.8.0+cu128", "12.8", None
-            )
-            return CudaBeatComponentResult(
-                request.identity,
-                request.model,
-                "ready",
-                "ready",
-                old_adapter.predictions,
-                execution=execution,
-            )
-
-    monkeypatch.setattr(bridge, "BeatWorkerAdapter", lambda *_args: Adapter())
-    result = _run(arguments)
-    assert resolves == [1]
-    assert result["schema_version"] == 2
-    request = json.loads(result["request_json"])
-    assert request["identity"] == json.loads(str(arguments[4]))
-    assert request["pcm"]["path"] == arguments[0]
-    assert request["pcm"]["sample_rate_hz"] == arguments[1]
-    assert request["pcm"]["frame_count"] == arguments[2]
-    assert request["model"] == asdict(model)
-    assert request["execution_policy"] == "auto"
-    if cancelled:
-        assert result["status"] == "cancelled"
-        assert result["predictions"] is result["execution"] is None
-    else:
-        assert result["status"] == "ready"
-        assert result["execution"]["device"] == "cuda:0"
-
-
 def test_bridge_retains_all_four_arrays_and_actual_input_without_frontend_fiction(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration],
 ) -> None:
-    arguments, adapter, _, configuration = request_fixture
+    arguments, adapter, _, _ = request_fixture
     response = _run(arguments)
     assert response["status"] == "ready"
     assert response["resources_released"] is True
-    assert response["model"] == asdict(configuration.model)
+    assert response["schema_version"] == 3
+    assert response["model"] == asdict(NATIVE_MODEL)
+    bridge.load_worker_configuration.assert_called_once_with(
+        Path(str(arguments[5])), Path(str(arguments[0])).parent, native_only=True
+    )
     assert response["identity"] == json.loads(str(arguments[4]))
     assert response["input"] == {
         "sample_rate_hz": 48000,
@@ -191,16 +117,18 @@ def test_bridge_retains_all_four_arrays_and_actual_input_without_frontend_fictio
         assert base64.b64decode(packed[name], validate=True) == struct.pack(
             f"<{len(original)}d", *original
         )
-    assert adapter.requests[0].pcm.path.read_bytes() == bytes(48000 * 4)
+    assert adapter.requests[0].path.read_bytes() == bytes(48000 * 4)
 
 
 def test_main_thread_refuses_before_installation_or_adapter_activity(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     arguments, adapter, _, _ = request_fixture
     monkeypatch.setattr(
-        bridge, "load_worker_configuration", lambda *_args: pytest.fail("main-thread I/O")
+        bridge,
+        "load_worker_configuration",
+        lambda *_args, **_kwargs: pytest.fail("main-thread I/O"),
     )
     with pytest.raises(RuntimeError, match="background worker"):
         bridge.run_beat_this(*arguments)
@@ -208,12 +136,12 @@ def test_main_thread_refuses_before_installation_or_adapter_activity(
 
 
 def test_missing_worker_is_unavailable_without_adapter_or_fallback(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     arguments, adapter, _, _ = request_fixture
 
-    def missing(*_args: object) -> WorkerConfiguration:
+    def missing(*_args: object, **_kwargs: object) -> NativeWorkerConfiguration:
         message = "explicit worker installation is absent"
         raise FileNotFoundError(message)
 
@@ -227,13 +155,13 @@ def test_missing_worker_is_unavailable_without_adapter_or_fallback(
 
 
 def test_native_cancellation_before_configuration_does_not_start_work(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     arguments, adapter, probe, _ = request_fixture
     probe.cancelled = True
     monkeypatch.setattr(
-        bridge, "load_worker_configuration", lambda *_args: pytest.fail("cancelled I/O")
+        bridge, "load_worker_configuration", lambda *_args, **_kwargs: pytest.fail("cancelled I/O")
     )
     response = _run(arguments)
     assert response["status"] == "cancelled"
@@ -250,51 +178,8 @@ def test_existing_event_wait_observes_read_only_native_probe() -> None:
     assert event.wait(0)
 
 
-@pytest.mark.parametrize("malformed", ["retiring", "identity", "exception"])
-def test_retiring_process_blocks_return_even_after_failure_or_invalid_result(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
-    monkeypatch: pytest.MonkeyPatch,
-    malformed: str,
-) -> None:
-    arguments, adapter, probe, _ = request_fixture
-    entered = Event()
-
-    def retiring(request: BeatWorkerRequest, _cancel: Event) -> BeatComponentResult:
-        adapter.retired.clear()
-        entered.set()
-        if malformed == "exception":
-            message = "invalid response while a reader is still retiring"
-            raise ValueError(message)
-        if malformed == "identity":
-            return BeatComponentResult(
-                replace(request.identity, request_id=99),
-                request.model,
-                "failed",
-                "invalid",
-                resources_released=False,
-            )
-        return BeatComponentResult(
-            request.identity, request.model, "failed", "worker_retiring", resources_released=False
-        )
-
-    monkeypatch.setattr(adapter, "run", retiring)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(bridge.run_beat_this, *arguments)
-        try:
-            assert entered.wait(2)
-            assert not future.done()
-            assert Path(str(arguments[0])).is_file()
-            probe.cancelled = True
-        finally:
-            adapter.retired.set()
-        response = json.loads(future.result(timeout=5))
-    assert response["status"] == "cancelled"
-    assert response["resources_released"] is True
-    assert response["predictions"] is None
-
-
 def test_bridge_oversize_fails_without_cropping_or_changing_legacy_cap(
-    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, WorkerConfiguration],
+    request_fixture: tuple[tuple[object, ...], _Adapter, _Probe, NativeWorkerConfiguration],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     arguments, adapter, _, _ = request_fixture

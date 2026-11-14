@@ -52,7 +52,7 @@ def _enter(cancel: Event) -> None:
         pytest.fail("expired context bypassed occupied admission")
 
 
-def test_real_child_effective_torch_pools_and_parent_environment(tmp_path: Path) -> None:
+def test_real_child_thread_environment_does_not_mutate_parent(tmp_path: Path) -> None:
     original = dict(os.environ)
     hostile = original | {
         "OMP_NUM_THREADS": "16",
@@ -60,13 +60,9 @@ def test_real_child_effective_torch_pools_and_parent_environment(tmp_path: Path)
         "OPENBLAS_NUM_THREADS": "16",
     }
     body = (
-        "import json, os, torch\n"
-        "from flitzis_looper.offline_runtime import configure_child\n"
-        "threads = configure_child(torch.set_num_threads, torch.set_num_interop_threads, "
-        "torch.get_num_threads, torch.get_num_interop_threads)\n"
-        "x = torch.arange(64, dtype=torch.float64).reshape(8, 8)\n"
-        "print(json.dumps({'threads':threads, 'omp':os.environ['OMP_NUM_THREADS'], "
-        "'matrix':(x @ x.T).tolist()}))\n"
+        "import json, os\n"
+        "print(json.dumps({k: os.environ[k] for k in "
+        "('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS')}))\n"
     )
     result = process.run_owned_command(
         [sys.executable, "-c", body],
@@ -77,12 +73,11 @@ def test_real_child_effective_torch_pools_and_parent_environment(tmp_path: Path)
     )
     assert result.reason == "ok", result.stderr
     image = json.loads(result.stdout)
-    assert image["threads"] == [1, 1]
-    assert image["omp"] == "1"
-    assert image["matrix"] == [
-        [sum((row * 8 + k) * (column * 8 + k) for k in range(8)) for column in range(8)]
-        for row in range(8)
-    ]
+    assert image == {
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+    }
     assert hostile["OMP_NUM_THREADS"] == "16"
     assert dict(os.environ) == original
 

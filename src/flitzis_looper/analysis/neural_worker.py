@@ -5,10 +5,8 @@ PCM file. This bridge creates no job, polling thread, installation or PCM owner.
 """
 
 import json
-import platform
 import re
-import sys
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from threading import Event, current_thread, main_thread
 from time import monotonic
@@ -19,22 +17,8 @@ from pydantic import TypeAdapter
 from flitzis_looper.analysis.artifacts import NATIVE_MODEL
 from flitzis_looper.analysis.contracts import (
     AnalysisIdentity,
-    BeatComponentResult,
     BeatModelIdentity,
-    BeatWorkerRequest,
     MonoPcmInput,
-    WorkerLimits,
-    validate_component_result,
-)
-from flitzis_looper.analysis.execution import (
-    CUDA_REQUEST_ADAPTER,
-    CudaBeatComponentResult,
-    CudaBeatModelIdentity,
-    CudaBeatWorkerRequest,
-    NativeCudaExecutionReceipt,
-    NativeCudaPolicy,
-    require_cuda_native_capability,
-    validate_cuda_component_result,
 )
 from flitzis_looper.analysis.native_beat_worker import (
     NativeWorkerConfiguration,
@@ -44,28 +28,18 @@ from flitzis_looper.analysis.native_beat_worker import (
 from flitzis_looper.analysis.process import offline_io_failure
 from flitzis_looper.analysis.publication import _pack
 from flitzis_looper.analysis.setup import load_worker_configuration
-from flitzis_looper.analysis.worker import BeatWorkerAdapter
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.contracts import ComponentStatus
-    from flitzis_looper.analysis.worker import WorkerConfiguration
+    from flitzis_looper.analysis.execution import (
+        NativeCudaExecutionReceipt,
+        NativeCudaPolicy,
+    )
 
 MAX_NEURAL_WORKER_BYTES = 16 * 1024 * 1024
 _IDENTITY = TypeAdapter(AnalysisIdentity)
 _POLL_SECONDS = 0.02
 _ARRAY_NAMES = ("beat_seconds", "downbeat_seconds", "beat_logits", "downbeat_logits")
-
-
-def _production_windows() -> bool:
-    return sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}
-
-
-def _app_configuration(
-    installed: Path, scratch: Path
-) -> NativeWorkerConfiguration | WorkerConfiguration:
-    if _production_windows():
-        return load_worker_configuration(installed, scratch, native_only=True)
-    return load_worker_configuration(installed, scratch)
 
 
 class NativeCancellationProbe(Protocol):
@@ -102,7 +76,7 @@ def _envelope(
     reason: str,
     predictions: dict[str, str] | None = None,
     *,
-    schema_version: int = 1,
+    schema_version: int = 3,
     execution_policy: NativeCudaPolicy | None = None,
     execution: NativeCudaExecutionReceipt | None = None,
 ) -> str:
@@ -174,87 +148,6 @@ def _validated_input(
         "dtype": "float32-le",
     }
     return identity, MonoPcmInput(pcm, sample_rate_hz, frame_count), installed, input_metadata
-
-
-def _run_retired(
-    request: BeatWorkerRequest,
-    configuration: WorkerConfiguration,
-    cancel: _NativeCancellationEvent,
-) -> BeatComponentResult:
-    """Validate one existing adapter outcome while retaining its real readers."""
-    limits = WorkerLimits()
-    adapter = BeatWorkerAdapter(configuration, limits)
-    try:
-        result = adapter.run(request, cancel)
-        validate_component_result(result, request, limits)
-    except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
-        reason = "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
-        result = BeatComponentResult(request.identity, request.model, "failed", reason[:1024])
-    finally:
-        # The adapter's existing retiring process owns descendants, pipe readers
-        # and temporary files. A finite reap failure is not permission to return.
-        while not adapter.retired.wait(_POLL_SECONDS):
-            pass
-    result = replace(result, resources_released=True)
-    if cancel.is_set():
-        result = replace(result, status="cancelled", reason="cancelled", predictions=None)
-    return result
-
-
-def _run_cuda_retired(
-    request: CudaBeatWorkerRequest,
-    configuration: WorkerConfiguration,
-    cancel: _NativeCancellationEvent,
-) -> CudaBeatComponentResult:
-    adapter = BeatWorkerAdapter(configuration)
-    try:
-        result = adapter.run_cuda(request, cancel)
-        validate_cuda_component_result(result, request, WorkerLimits())
-    except (MemoryError, OSError, RuntimeError, TypeError, ValueError) as error:
-        reason = "resource_allocation_failed" if isinstance(error, MemoryError) else str(error)
-        result = CudaBeatComponentResult(request.identity, request.model, "failed", reason[:1024])
-    finally:
-        while not adapter.retired.wait(_POLL_SECONDS):
-            pass
-    if cancel.is_set():
-        return CudaBeatComponentResult(request.identity, request.model, "cancelled", "cancelled")
-    return replace(result, resources_released=True)
-
-
-def _cuda_envelope(
-    request: CudaBeatWorkerRequest,
-    input_metadata: dict[str, object],
-    result: CudaBeatComponentResult,
-) -> str:
-    packed = None
-    if result.status == "ready" and result.predictions is not None:
-        packed = {
-            "encoding": "float64-le/base64",
-            **{name: _pack(getattr(result.predictions, name)) for name in _ARRAY_NAMES},
-        }
-    envelope = {
-        "schema_version": 2,
-        "encoding": "source-map-beat-this-worker-v2",
-        "identity": asdict(request.identity),
-        "input": input_metadata,
-        "model": asdict(request.model),
-        "status": result.status,
-        "reason": result.reason[:1024],
-        "resources_released": True,
-        "predictions": packed,
-        "request_json": CUDA_REQUEST_ADAPTER.dump_json(request).decode("utf-8"),
-        "execution": None if result.execution is None else asdict(result.execution),
-    }
-    encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
-    if len(encoded.encode("utf-8")) > MAX_NEURAL_WORKER_BYTES:
-        envelope.update(
-            status="failed",
-            reason="neural_worker_response_limit",
-            predictions=None,
-            execution=None,
-        )
-        encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"))
-    return encoded
 
 
 def _native_envelope(
@@ -343,31 +236,11 @@ def run_beat_this(
     if cancel.is_set():
         return _envelope(identity, input_metadata, None, "cancelled", "cancelled")
     try:
-        # Keep the historical bridge available for reference tools. On Windows x64
-        # the application requires the installed production ONNX package.
-        configuration = _app_configuration(installed, pcm.path.parent)
+        configuration = load_worker_configuration(installed, pcm.path.parent, native_only=True)
     except (OSError, ValueError) as error:
         status: ComponentStatus = "cancelled" if cancel.is_set() else "unavailable"
         reason = (
             "cancelled" if status == "cancelled" else f"worker_installation_unavailable: {error}"
         )
         return _envelope(identity, input_metadata, None, status, reason)
-    if isinstance(configuration, NativeWorkerConfiguration):
-        return _native_envelope(configuration, pcm, mono_sha256, identity, input_metadata, cancel)
-    model = configuration.model
-    if isinstance(model, CudaBeatModelIdentity):
-        require_cuda_native_capability()
-        request = CudaBeatWorkerRequest(identity, pcm, model)
-        return _cuda_envelope(
-            request, input_metadata, _run_cuda_retired(request, configuration, cancel)
-        )
-    if cancel.is_set():
-        return _envelope(identity, input_metadata, model, "cancelled", "cancelled")
-    result = _run_retired(BeatWorkerRequest(identity, pcm, model), configuration, cancel)
-    packed: dict[str, str] | None = None
-    if result.status == "ready" and result.predictions is not None:
-        packed = {
-            "encoding": "float64-le/base64",
-            **{name: _pack(getattr(result.predictions, name)) for name in _ARRAY_NAMES},
-        }
-    return _envelope(identity, input_metadata, model, result.status, result.reason, packed)
+    return _native_envelope(configuration, pcm, mono_sha256, identity, input_metadata, cancel)

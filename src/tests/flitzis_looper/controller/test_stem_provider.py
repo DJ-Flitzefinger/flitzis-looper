@@ -1,24 +1,14 @@
 """Provider policy tests are distinct from actual device/quality evidence."""
 
 import json
-import os
-import sys
 import time
 from dataclasses import asdict, replace
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
-from flitzis_looper.controller.stem_generation import (
-    AudioShape,
-    CommandResult,
-    DemucsStemGenerationBackend,
-    StemGenerationError,
-    StemGenerationResult,
-    run_command,
-)
+from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stem_provider import (
     CudaCapability,
     ProviderCalibration,
@@ -29,28 +19,14 @@ from flitzis_looper.controller.stem_provider import (
 from flitzis_looper.inference_provider import (
     CUDA_FAILURE_EXIT,
     CUDA_FAILURE_RECEIPT,
-    CudaProviderError,
-    cuda_operation,
-    emit_cuda_failure,
     is_cuda_failure,
 )
 from flitzis_looper.stem_execution_protocol import ExecutionReceipt
-from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.controller.test_pair_stem_observers import _job, _resolve_identity, _rig
-from tests.flitzis_looper.controller.test_stem_generation import (
-    _install_htdemucs_checkpoint,
-    _is_backend_preflight,
-)
-from tests.flitzis_looper.controller.test_stem_generation import (
-    _request as _demucs_request,
-)
 from tests.flitzis_looper.controller.test_stem_identity import _request
-from tests.flitzis_looper.controller.test_stem_separators import (
-    _install_test_assets,
-)
-from tests.flitzis_looper.controller.test_stem_separators import (
-    _request as _bs_request,
-)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 CAPABILITY = CudaCapability(available=True, identity="3" * 64, free_bytes=8 * 1024**3)
 
@@ -166,29 +142,12 @@ def test_incomplete_capability_never_invents_identity_or_free_memory(stdout: str
     assert parse_cuda_capability(0, stdout).free_bytes is None
 
 
-def test_device_failure_marker_requires_narrow_scope_exit_and_single_receipt(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    message = "CUDA out of memory. Tried to allocate 1 GiB"
-    with pytest.raises(CudaProviderError) as caught, cuda_operation("cuda"):
-        raise RuntimeError(message)
-    emit_cuda_failure(caught.value)
-    output = capsys.readouterr()
-    assert message in output.err
-    assert is_cuda_failure(CUDA_FAILURE_EXIT, output.out)
-    assert not is_cuda_failure(1, output.out)
-    assert not is_cuda_failure(CUDA_FAILURE_EXIT, output.out + CUDA_FAILURE_RECEIPT + "\n")
-    for device, diagnostic in (
-        ("cpu", "CUDA out of memory"),
-        ("cuda", "corrupt source"),
-        ("cuda", "invalid model state"),
-    ):
-        with pytest.raises(RuntimeError) as failure, cuda_operation(device):
-            raise RuntimeError(diagnostic)
-        assert type(failure.value) is RuntimeError
-    message = "CUDA out of memory in malformed source metadata"
-    with pytest.raises(ValueError, match="malformed source"), cuda_operation("cuda"):
-        raise ValueError(message)
+def test_device_failure_marker_requires_exit_and_single_receipt() -> None:
+    marker = CUDA_FAILURE_RECEIPT + "\n"
+    assert is_cuda_failure(CUDA_FAILURE_EXIT, marker)
+    assert not is_cuda_failure(CUDA_FAILURE_EXIT, marker + marker)
+    assert not is_cuda_failure(CUDA_FAILURE_EXIT, "diagnostic\v" + marker)
+    assert not is_cuda_failure(1, marker)
 
 
 def test_provider_plan_is_fixed_and_does_not_claim_execution() -> None:
@@ -222,140 +181,6 @@ def test_cpu_plan_does_not_extend_last_identity_age_and_promotion_is_idempotent(
         provider_calibration=observation,
     )
     assert json.loads(json.dumps(asdict(result)))["provider_calibration"]["seconds"] == 10
-
-
-@pytest.mark.parametrize("backend_name", ["demucs", "bs"])
-def test_both_cpu_routes_skip_probe_and_auto_probe_uses_fresh_guarded_sources(
-    tmp_path: Path, backend_name: str
-) -> None:
-    roots = tmp_path / "source-root"
-    roots.mkdir()
-    request = replace(_request(), python_source_roots=(roots,))
-    observed = []
-
-    def detector(env, _runner):
-        cache = Path(env["PYTHONPYCACHEPREFIX"])
-        assert not list(cache.iterdir())
-        assert env["PYTHONDONTWRITEBYTECODE"] == "1"
-        assert env["PYTHONPATH"].split(os.pathsep)[0] == str(roots)
-        observed.append(cache)
-        return CAPABILITY
-
-    backend = (
-        DemucsStemGenerationBackend if backend_name == "demucs" else BsRoformerStemGenerationBackend
-    )(cuda_detector=detector)
-    assert backend._provider_plan(replace(request, device_policy="cpu"), {}).devices == ("cpu",)
-    assert not observed
-    assert backend._provider_plan(request, {}).devices == ("cuda", "cpu")
-    assert len(observed) == 1
-    assert not observed[0].exists()
-
-
-@pytest.mark.parametrize("backend_name", ["demucs", "bs"])
-@pytest.mark.parametrize(
-    ("marker_count", "marker_padding"),
-    [(1, ""), (2, ""), (1, " \t"), (1, "diagnostic\v"), (1, "diagnostic\f"), (1, "diagnostic\r")],
-)
-def test_actual_owned_child_marker_survives_diagnostic_tail_and_controls_both_adapters(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    backend_name: str,
-    marker_count: int,
-    marker_padding: str,
-) -> None:
-    attempts = []
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
-        if _is_backend_preflight(args):
-            return CommandResult(0, "ok", "")
-        flag = "-d" if backend_name == "demucs" else "--device"
-        device = args[args.index(flag) + 1]
-        attempts.append(device)
-        if device == "cuda":
-            body = (
-                "import sys\nfrom flitzis_looper.inference_provider import ("
-                "CUDA_FAILURE_EXIT, CudaProviderError, emit_cuda_failure)\n"
-                f"for _ in range({marker_count}):\n"
-                "    emit_cuda_failure(CudaProviderError('CUDA out of memory'))\n"
-                "sys.stdout.write('x'*150000+'\\n'); sys.stdout.flush()\n"
-                "raise SystemExit(CUDA_FAILURE_EXIT)\n"
-            )
-            if marker_padding:
-                body = (
-                    "import sys\nfrom flitzis_looper.inference_provider import ("
-                    "CUDA_FAILURE_EXIT, CUDA_FAILURE_RECEIPT)\n"
-                    f"sys.stdout.write({marker_padding!r}+CUDA_FAILURE_RECEIPT+'\\n')\n"
-                    "sys.stderr.write('CUDA out of memory\\n')\n"
-                    "raise SystemExit(CUDA_FAILURE_EXIT)\n"
-                )
-            return run_command([sys.executable, "-c", body], cwd=cwd, env=env)
-        if backend_name == "demucs":
-            output = Path(args[args.index("-o") + 1]) / "htdemucs" / "source"
-            output.mkdir(parents=True)
-        else:
-            output = Path(args[args.index("--output") + 1])
-        for name in ("drums", "bass", "other", "vocals"):
-            write_mono_pcm16_wav(output / f"{name}.wav", 44_100)
-        return CommandResult(0, "", "")
-
-    if backend_name == "demucs":
-        source = tmp_path / "source.wav"
-        write_mono_pcm16_wav(source, 44_100)
-        request = _demucs_request(tmp_path, source, AudioShape(44_100, 1, 128))
-        _install_htdemucs_checkpoint(request.model_cache_dir)
-        backend = DemucsStemGenerationBackend(
-            command_runner=runner, cuda_detector=lambda _env, _runner: True
-        )
-    else:
-        request = _bs_request(tmp_path)
-        _install_test_assets(request.model_cache_dir, monkeypatch)
-        backend = BsRoformerStemGenerationBackend(
-            command_runner=runner, cuda_detector=lambda _env, _runner: True
-        )
-    if marker_count == 1 and not marker_padding:
-        result = backend.generate(request, lambda _percent, _stage: None)
-        assert result.cpu_fallback
-        assert attempts == ["cuda", "cpu"]
-    else:
-        with pytest.raises(StemGenerationError, match="CUDA out of memory"):
-            backend.generate(request, lambda _percent, _stage: None)
-        assert attempts == ["cuda"]
-
-
-@pytest.mark.parametrize("backend_name", ["demucs", "bs"])
-@pytest.mark.parametrize(
-    "diagnostic",
-    ["corrupt source", "invalid model state", "CUDA out of memory without device receipt"],
-)
-def test_both_real_adapters_do_not_retry_unclassified_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_name: str, diagnostic: str
-) -> None:
-    commands = []
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
-        if _is_backend_preflight(args):
-            return CommandResult(0, "ok", "")
-        commands.append(args)
-        return CommandResult(1, "", diagnostic)
-
-    if backend_name == "demucs":
-        source = tmp_path / "source.wav"
-        write_mono_pcm16_wav(source, 44_100)
-        request = _demucs_request(tmp_path, source, AudioShape(44_100, 1, 128))
-        _install_htdemucs_checkpoint(request.model_cache_dir)
-        backend = DemucsStemGenerationBackend(
-            command_runner=runner, cuda_detector=lambda _env, _runner: True
-        )
-    else:
-        request = _bs_request(tmp_path)
-        _install_test_assets(request.model_cache_dir, monkeypatch)
-        backend = BsRoformerStemGenerationBackend(
-            command_runner=runner, cuda_detector=lambda _env, _runner: True
-        )
-    with pytest.raises(StemGenerationError, match=diagnostic):
-        backend.generate(request, lambda _percent, _stage: None)
-    assert len(commands) == 1
-    assert not list(request.cache_dir.glob("*.wav"))
 
 
 @pytest.mark.parametrize("outcome", ["success", "throw", "demote", "cancel"])

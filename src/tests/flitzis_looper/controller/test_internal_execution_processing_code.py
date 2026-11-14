@@ -1,30 +1,24 @@
 """Actual internal host roles and emitter bindings, without learned inference."""
 
-import importlib
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper import demucs_streaming
 from flitzis_looper import stem_execution as public
 from flitzis_looper import stem_execution_protocol as protocol
 from flitzis_looper.controller import (
-    bs_roformer_generation,
     processing_code,
     stem_generation,
     stem_provenance,
     stem_provider,
 )
-from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
 from flitzis_looper.controller.processing_code import loaded_code_identity
-from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.controller.test_stem_generation import _install_htdemucs_checkpoint
 from tests.flitzis_looper.controller.test_stem_identity import _request
-from tests.flitzis_looper.controller.test_stem_separators import _install_test_assets
-from tests.flitzis_looper.controller.test_stem_separators import _request as _bs_request
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 @pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
@@ -37,8 +31,6 @@ def test_actual_receipt_roles_and_every_host_binding_match_held_sources(
     manifests = {path.resolve(): processing_code._manifest(path) for path in paths}
     for module in (protocol, stem_generation, stem_provider):
         assert _namespace(module, manifests)
-    if separator == "bs-roformer:musdb18hq":
-        assert _namespace(bs_roformer_generation, manifests)
     assert loaded_code_identity((Path(protocol.__file__),)) is not None
     # No whole-tuple positive until every actual loaded role passes independently.
     for path in paths:
@@ -47,9 +39,6 @@ def test_actual_receipt_roles_and_every_host_binding_match_held_sources(
         for module in modules:
             assert _namespace(module, manifests)
     assert loaded_code_identity(paths) is not None
-    del manifests[Path(protocol.__file__).resolve()]
-    with pytest.raises(ValueError, match="outside the guarded producer roles"):
-        _namespace(stem_generation, manifests)
 
 
 def _namespace(module: ModuleType, manifests: dict) -> list[object]:
@@ -96,127 +85,7 @@ def test_mutated_parser_defaults_and_imported_binding_refuse_identity(
         path.resolve(): processing_code._manifest(path)
         for path in stem_provenance._host_processing_paths(_request())
     }
-    assert _namespace(stem_generation, manifests)
-    monkeypatch.setattr(stem_generation, "completed_execution", public.completed_execution)
+    assert _namespace(stem_provider, manifests)
+    monkeypatch.setattr(stem_provider, "request_fingerprint", public.completed_execution)
     with pytest.raises(ValueError, match="outside the guarded producer roles"):
-        _namespace(stem_generation, manifests)
-
-
-def _poison_public(monkeypatch: pytest.MonkeyPatch) -> None:
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("Producer used the public Pydantic facade")
-
-    for name in ("completed_execution", "completed_execution_line", "report_execution"):
-        monkeypatch.setattr(public, name, forbidden)
-    for name in ("model_validate", "model_validate_json", "model_dump_json", "model_copy"):
-        monkeypatch.setattr(public.StemExecution, name, forbidden)
-
-
-@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-def test_actual_backend_parser_and_internal_progress_ignore_public_facade(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: str
-) -> None:
-    request = replace(_bs_request(tmp_path), separator=separator, device_policy="cpu")
-    if separator.startswith("demucs"):
-        _install_htdemucs_checkpoint(request.model_cache_dir)
-        backend_name, model = "demucs", "htdemucs"
-        backend_type = stem_generation.DemucsStemGenerationBackend
-    else:
-        _install_test_assets(request.model_cache_dir, monkeypatch)
-        backend_name, model = "bs-roformer", "BS-RoFormer MUSDB18HQ"
-        backend_type = BsRoformerStemGenerationBackend
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> stem_generation.CommandResult:
-        if args[0] in {"ffmpeg", "ffprobe"} or "-c" in args:
-            return stem_generation.CommandResult(0, "", "")
-        root = Path(args[args.index("-o" if backend_name == "demucs" else "--output") + 1])
-        for name in ("bass", "drums", "other", "vocals"):
-            write_mono_pcm16_wav(root / f"{name}.wav", 44_100)
-        return stem_generation.CommandResult(
-            0, protocol.completed_execution_line(backend_name, model, "cpu"), ""
-        )
-
-    _poison_public(monkeypatch)
-    events = []
-    backend = backend_type(command_runner=runner)
-    result = backend.generate(request, protocol.ExecutionProgress(lambda p, s, e: events.append(e)))
-    assert isinstance(result.execution, protocol.ExecutionReceipt)
-    assert result.execution in events
-    assert result.execution.device == "cpu"
-    assert not result.encoder_verified
-    assert not result.decoder_verified
-
-
-def test_actual_demucs_completion_emitter_ignores_public_facade(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    @contextmanager
-    def cli(_cancellation: object):
-        yield SimpleNamespace(devices={"cpu"}, model_name="htdemucs")
-
-    _poison_public(monkeypatch)
-    monkeypatch.setattr(demucs_streaming, "configure_child", lambda *_: (1, 1))
-    monkeypatch.setattr(demucs_streaming, "_cancellable_cli", cli)
-    monkeypatch.setattr(demucs_streaming._separate, "main", lambda: None)
-    monkeypatch.setattr(demucs_streaming, "encoder_completion_line", lambda: "diagnostic only")
-    demucs_streaming.main()
-    assert (
-        protocol.completed_execution(
-            capsys.readouterr().out,
-            backend="demucs",
-            model_name="htdemucs",
-            device="cpu",
-            cpu_fallback=False,
-        )
-        is not None
-    )
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_actual_bs_completion_emitter_ignores_public_facade(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], device: str
-) -> None:
-    emitter = importlib.import_module("flitzis_bs_roformer.__main__")
-    _poison_public(monkeypatch)
-    model = object()
-    observations = []
-
-    def observe(placed: object) -> tuple[str, int]:
-        assert placed is model
-        observations.append(placed)
-        return "3" * 64, 1234
-
-    monkeypatch.setattr(emitter, "completed_model_cuda_observation", observe)
-    monkeypatch.setattr(emitter, "configure_child", lambda *_: (1, 1))
-    monkeypatch.setattr(emitter, "load_model", lambda *_: model)
-    monkeypatch.setattr(emitter, "decode_source", lambda *_args, **_kwargs: 2)
-    monkeypatch.setattr(emitter, "separate_pcm", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(emitter, "input_completion_line", lambda: "diagnostic only")
-    monkeypatch.setattr(
-        emitter.sys,
-        "argv",
-        [
-            "bs",
-            "--source",
-            str(tmp_path / "source"),
-            "--output",
-            str(tmp_path / "out"),
-            "--checkpoint",
-            "unused",
-            "--config",
-            "unused",
-            "--device",
-            device,
-        ],
-    )
-    emitter.main()
-    receipt = protocol.completed_execution(
-        capsys.readouterr().out,
-        backend="bs-roformer",
-        model_name="BS-RoFormer MUSDB18HQ",
-        device=device,
-        cpu_fallback=False,
-    )
-    assert receipt is not None
-    assert receipt.cuda_device_identity == ("3" * 64 if device == "cuda" else None)
-    assert observations == ([model] if device == "cuda" else [])
+        _namespace(stem_provider, manifests)

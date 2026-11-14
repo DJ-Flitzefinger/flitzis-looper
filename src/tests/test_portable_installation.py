@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -130,7 +131,8 @@ if ($ModelMode) {
     }
     [IO.File]::AppendAllText((Join-Path $Root 'cache/model-history.jsonl'),
         (@{mode=$ModelMode; fixture_version='@VERSION@'} | ConvertTo-Json -Compress) + "`n")
-    if ('@FAILURE@' -eq 'model-cpu') { exit 32 }
+    if ('@FAILURE@' -eq 'model-cpu' -or ('@FAILURE@' -eq 'legacy-launcher-proof-check-failure' -and
+        $ModelMode -eq 'check')) { exit 32 }
     exit 0
 }
 if (-not $Check) { exit 90 }
@@ -179,7 +181,32 @@ $entry = @{fixture_version='@VERSION@'; git_commit=$Commit; source=$canonicalSou
 if ('@FAILURE@' -eq 'helper') { exit 23 }
 [IO.Directory]::CreateDirectory((Join-Path $RuntimeDirectory 'python')) | Out-Null
 $python = Join-Path $RuntimeDirectory 'python/python.exe'
-[IO.File]::WriteAllText($python,'immutable-runtime-@VERSION@')
+if ('@FAILURE@' -like 'legacy-launcher-proof*') {
+    # Run only the standalone ownership helper with the existing test interpreter.
+    # This shim is private to the installer fixture, not a shipped runtime file.
+    $compiler = @"
+using System;
+using System.Diagnostics;
+public static class LegacyProofPython {
+    public static int Main() {
+        string command = Environment.CommandLine;
+        int start = command[0] == '"' ? command.IndexOf('"', 1) + 1 : command.IndexOf(' ');
+        if (start < 0) { return 88; }
+        ProcessStartInfo information = new ProcessStartInfo(
+            Environment.GetEnvironmentVariable("LOOPER_TEST_PORTABLE_PYTHON"),
+            command.Substring(start).TrimStart());
+        information.UseShellExecute = false;
+        information.EnvironmentVariables.Remove("PYTHONHOME");
+        information.EnvironmentVariables.Remove("PYTHONPATH");
+        using (Process helper = Process.Start(information)) {
+            helper.WaitForExit();
+            return helper.ExitCode;
+        }
+    }
+}
+"@
+    Add-Type -TypeDefinition $compiler -OutputAssembly $python -OutputType ConsoleApplication
+} else { [IO.File]::WriteAllText($python,'immutable-runtime-@VERSION@') }
 [IO.File]::WriteAllText((Join-Path $RuntimeDirectory '@VERSION@-required.txt'),'required')
 [IO.Directory]::CreateDirectory((Join-Path $RuntimeDirectory 'licenses')) | Out-Null
 [IO.File]::WriteAllText((Join-Path $RuntimeDirectory 'licenses/samplerate.txt'),'owned-license')
@@ -212,7 +239,8 @@ if ('@FAILURE@' -ne 'missing-manifest') {
     } else { $Commit }
     $release = @{schema_version=2; release_id=$Commit; git_commit=$runtimeCommit;
         source_dirty=('@FAILURE@' -eq 'dirty-manifest'); fixture_version='@VERSION@';
-        native_sha256=(Get-Sha256 $mockNative);
+        native_sha256=(Get-Sha256 $mockNative); native_source_commit=$Commit;
+        python_version='3.14.2';
         checkout_files=(Inventory $Source); checkout_directories=@(Directories $Source);
         runtime_files=(Inventory $RuntimeDirectory)}
     $manifest = Join-Path $RuntimeDirectory 'release-manifest.json'
@@ -421,7 +449,14 @@ class Installation:
         )
         for name in ("dispatch.ps1", "common.ps1", "build-path.ps1"):
             shutil.copyfile(REPO / "scripts/portable" / name, portable / name)
-        (portable / "START-LOOPER.bat").write_bytes(b"@echo off\r\nexit /b 90\r\n")
+        starter = b"@echo off\r\nexit /b 90\r\n"
+        (portable / "START-LOOPER.bat").write_bytes(starter)
+        (portable / "build_bundle.py").write_text(
+            "STARTER = " + repr(starter.decode("ascii")) + "\n", encoding="utf-8"
+        )
+        shutil.copyfile(
+            REPO / "scripts/portable/legacy_launchers.py", portable / "legacy_launchers.py"
+        )
         (self.source / "fixture-version.txt").write_text(version, encoding="utf-8")
         self.git_run("add", "--all")
         self.git_run("commit", "--no-gpg-sign", "-m", version)
@@ -434,7 +469,8 @@ class Installation:
         return subprocess.run(
             f'"{processor}" /d /s /c "{command}"',
             cwd=self.installer.parent,
-            env=_git_environment(),
+            env=_git_environment()
+            | {"LOOPER_TEST_PORTABLE_PYTHON": getattr(sys, "_base_executable", sys.executable)},
             capture_output=True,
             text=True,
             errors="replace",
@@ -1138,9 +1174,37 @@ def _remove_fixture_checkout(checkout: Path, root: Path) -> None:
     shutil.rmtree(owned_checkout, onexc=retry_readonly_pack)
 
 
-def test_legacy_native_data_moves_once_with_same_file_identities(
-    installation: Installation,
-) -> None:
+@dataclass
+class LegacyInstallation:
+    path: Path
+    manifest: dict[str, object]
+    data: Path
+    checkout: Path
+    contents: dict[Path, bytes]
+    ids: dict[Path, int]
+
+    def check_data(self, parent: Path) -> None:
+        for path, content in self.contents.items():
+            target = (
+                parent / path.relative_to(self.checkout)
+                if path.is_relative_to(self.checkout)
+                else path
+            )
+            assert target.read_bytes() == content
+        for relative, identity in self.ids.items():
+            assert (parent / relative).stat().st_ino == identity
+        assert (self.data / "unknown-human.bin").read_bytes() == b"unknown preserved"
+
+    def check_retained_runtime(self) -> None:
+        assert (self.path / "unclaimed-user-file.bin").read_bytes() == (
+            b"legacy bytes retained outside the new runtime"
+        )
+        assert (self.path / "release-manifest.json").read_text() == json.dumps(self.manifest)
+
+
+def _prepare_legacy_installation(
+    installation: Installation, *, has_inventory: bool
+) -> LegacyInstallation:
     commit = installation.publish("first")
     require_success(installation.run())
     contents = _user_data(installation)
@@ -1151,16 +1215,26 @@ def test_legacy_native_data_moves_once_with_same_file_identities(
     (installation.target / "Runtime").rename(legacy)
     manifest = json.loads((legacy / "release-manifest.json").read_text())
     manifest["schema_version"] = 1
+    if not has_inventory:
+        del manifest["runtime_files"]
+        (legacy / "unclaimed-user-file.bin").write_bytes(
+            b"legacy bytes retained outside the new runtime"
+        )
+        root_launcher = installation.target / "launch.ps1"
+        original = root_launcher.read_bytes().replace(b"\r\n", b"\n")
+        root_launcher.write_bytes(original.replace(b"\n", b"\r\n"))
     (legacy / "release-manifest.json").write_text(json.dumps(manifest))
     data = installation.target / "data"
     (data / "config").mkdir(parents=True)
-    samples_identity = (checkout / "samples").stat().st_ino
-    original_identity = (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino
-    record_identity = (checkout / "record").stat().st_ino
-    take_identity = (checkout / "record/take-001/take.flac").stat().st_ino
-    (checkout / "samples").rename(data / "samples")
-    (checkout / "config/input").rename(data / "config/input")
-    (checkout / "record").rename(data / "record")
+    paths = (
+        "samples",
+        "samples/.pcm-cache/material/original.wav",
+        "record",
+        "record/take-001/take.flac",
+    )
+    ids = {Path(relative): (checkout / relative).stat().st_ino for relative in paths}
+    for relative in ("samples", "config/input", "record"):
+        (checkout / relative).rename(data / relative)
     assert checkout.resolve().is_relative_to(installation.target.resolve())
     _remove_fixture_checkout(checkout, installation.target)
     (data / "unknown-human.bin").write_bytes(b"unknown preserved")
@@ -1173,21 +1247,58 @@ def test_legacy_native_data_moves_once_with_same_file_identities(
             "source_kind": "main",
         })
     )
+    return LegacyInstallation(legacy, manifest, data, checkout, contents, ids)
+
+
+@pytest.mark.parametrize("has_inventory", [True, False])
+def test_legacy_native_data_moves_once_with_same_file_identities(
+    installation: Installation, *, has_inventory: bool
+) -> None:
+    legacy = _prepare_legacy_installation(installation, has_inventory=has_inventory)
+    if not has_inventory:
+        installation.publish("second", failure="legacy-launcher-proof")
     require_success(installation.run())
-    for path, content in contents.items():
-        assert path.read_bytes() == content
-    assert (checkout / "samples").stat().st_ino == samples_identity
-    assert (checkout / "samples/.pcm-cache/material/original.wav").stat().st_ino == (
-        original_identity
-    )
-    assert (checkout / "record").stat().st_ino == record_identity
-    assert (checkout / "record/take-001/take.flac").stat().st_ino == take_identity
-    assert (data / "unknown-human.bin").read_bytes() == b"unknown preserved"
-    assert not legacy.exists()
-    assert not (installation.target / "versions").exists()
+    legacy.check_data(legacy.checkout)
+    if has_inventory:
+        assert not legacy.path.exists()
+        assert not legacy.path.parent.exists()
+    else:
+        legacy.check_retained_runtime()
     calls = len(installation.trace("helper-invocations.jsonl"))
     require_success(installation.run())
     assert len(installation.trace("helper-invocations.jsonl")) == calls
+
+
+def test_inventoryless_legacy_rollback_requires_unchanged_release(
+    installation: Installation,
+) -> None:
+    legacy = _prepare_legacy_installation(installation, has_inventory=False)
+    installation.publish("second", failure="legacy-launcher-proof-check-failure")
+    launchers = {
+        name: (installation.target / name).read_bytes()
+        for name in ("launch.ps1", "START-LOOPER.bat", "start.bat", "start-release.bat")
+    }
+    old_pointer = installation.pointer()
+    assert installation.run().returncode != 0
+    assert installation.pointer() == old_pointer
+    for name, value in launchers.items():
+        assert (installation.target / name).read_bytes() == value
+    legacy.check_retained_runtime()
+    legacy.check_data(legacy.data)
+    journal = installation.target / "portable-transaction.json"
+    assert json.loads(journal.read_text())["phase"] == "rolled_back"
+    release = legacy.path / "release-manifest.json"
+    release.write_text(json.dumps(legacy.manifest | {"source_dirty": True}))
+    result = installation.run()
+    assert result.returncode != 0
+    assert "Legacy runtime does not match the accepted source" in result.stdout
+    assert journal.exists()
+    assert installation.pointer() == old_pointer
+    release.write_text(json.dumps(legacy.manifest))
+    installation.publish("third", failure="legacy-launcher-proof")
+    require_success(installation.run())
+    legacy.check_data(legacy.checkout)
+    legacy.check_retained_runtime()
 
 
 INTERRUPTION_SEAMS = (

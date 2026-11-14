@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class Response(io.BytesIO):
-    url = acquisition.CHECKPOINT_URL
+    url = "https://models.example.test/fixture.bin"
     status = 200
     headers: dict[str, str] = {}
 
@@ -141,6 +141,6 @@ def test_unknown_download_directories_are_preserved_and_fail_before_network(
     )
     monkeypatch.setattr(time, "sleep", lambda _: pytest.fail("retried local directory"))
     with pytest.raises(ValueError, match="must be regular files"):
-        acquisition.acquire_to_quarantine(target)
+        acquisition.acquire_to_quarantine(target, source_url=Response.url, max_bytes=16)
     assert sentinel.read_bytes() == b"unknown original"
     assert not target.exists()

@@ -9,8 +9,9 @@ keyboard/MIDI mappings.
 Six banks of 36 PADs provide **216 assignment slots**. Play one PAD at a time or
 layer them with MultiLoop; use constant-rate BPM Lock, quantized launches,
 waveform loop editing, Piano/transposition and Rubber Band Key Lock. Each PAD
-has Gain/Trim and a three-band isolator. Offline BS-RoFormer or Demucs separation
-provides component stems, and mix recording saves WAV, FLAC or MP3 takes.
+has Gain/Trim and a three-band isolator. BS-RoFormer and HTDemucs use ONNX Runtime
+for offline stem separation on Windows x64. Mix recording saves WAV, FLAC or MP3
+takes.
 
 The productive performance target is **up to six simultaneous PADs**. Synthetic
 stress uses at most ten; more than ten can cause glitches or other performance

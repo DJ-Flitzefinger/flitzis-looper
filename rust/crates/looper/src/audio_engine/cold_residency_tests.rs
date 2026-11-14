@@ -10,9 +10,6 @@ mod keylock_controller_worker_tests;
 #[path = "stem_publication_tests.rs"]
 mod stem_publication_tests;
 
-#[path = "separator_native_probe.rs"]
-mod separator_native_probe;
-
 #[path = "c3_measurement.rs"]
 mod c3_measurement;
 

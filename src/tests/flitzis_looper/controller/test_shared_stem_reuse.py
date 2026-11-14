@@ -6,20 +6,13 @@ Native complete pair/callback custody is covered separately by the Native suite.
 
 import hashlib
 import json
-import os
-import shutil
 from dataclasses import replace
-from importlib.util import find_spec
-from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.controller import stem_generation, stem_provenance
 from flitzis_looper.controller import stems as stems_module
-from flitzis_looper.controller.bs_roformer_assets import CHECKPOINT_FILENAME, CONFIG_FILENAME
 from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORMER_MODEL_NAME
 from flitzis_looper.controller.stem_cache import expected_stem_files, promote_generation_artifacts
 from flitzis_looper.controller.stem_generation import AudioShape, StemGenerationRequest
@@ -30,277 +23,31 @@ from flitzis_looper.stem_pair_selection import (
     StemGenerationProvenance,
     StemPairSelection,
 )
-from flitzis_looper_audio import SealedProcessingFiles
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import FakePreparedSourceTicket, write_test_stem_marker
+from tests.flitzis_looper.conftest import (
+    FakePreparedSourceTicket,
+    sealed_test_producer,
+    write_test_stem_marker,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.stem_job import StemGenerationJob
-    from flitzis_looper.models import StemSeparator
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 
 @pytest.fixture(autouse=True)
 def _declared_bs_backend_receipt(stem_backend: FakeStemGenerationBackend) -> None:
-    """Controller fixtures declare the executed separator and verified decoder receipt."""
+    """Declare executed separator and decoder evidence for this controller fixture."""
     stem_backend.result = replace(
         stem_backend.result,
         backend_name="bs-roformer",
         model_name=BS_ROFORMER_MODEL_NAME,
         decoder_verified=True,
     )
-
-
-def _declared_source_root_inventory(
-    tmp: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
-) -> tuple[StemGenerationRequest, tuple[Path, ...], tuple[Path, ...]]:
-    """Declare tiny ordered roles; Native seals the actual files, without model execution."""
-    package = tmp / "owned-separator" / "fixture_separator"
-    host = tmp / "owned-host" / "fixture_host"
-    model = tmp / "owned-model"
-    separator_init = package / "__init__.py"
-    host_init = host / "__init__.py"
-    host_roles = host / "transform.py", host_init
-    leading = (
-        (model / "checkpoint.bin", model / "config.yaml")
-        if separator == "bs-roformer:musdb18hq"
-        else (model / "checkpoint.bin", package / "model.yaml", package / "files.txt")
-    )
-    inventory = (*leading, separator_init, *host_roles)
-    for index, path in enumerate(inventory):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"" if path == host_init else f"declared owned role {index}".encode())
-    request = StemGenerationRequest(
-        sample_id=0,
-        source_path=tmp / "unused-source.wav",
-        source_version="declared-source|sha256-v1:" + "1" * 64,
-        cache_dir=tmp / "unused-cache",
-        target_shape=AudioShape(44_100, 1, 128),
-        model_cache_dir=model,
-        separator=separator,
-    )
-    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: inventory)
-    monkeypatch.setattr(stem_provenance, "_host_processing_paths", lambda _request: host_roles)
-    return request, inventory, (host.parent, package.parent)
-
-
-@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-def test_ordered_actual_native_witness_aliases_return_expected_guarded_package_roots(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
-) -> None:
-    request, inventory, expected_roots = _declared_source_root_inventory(
-        tmp_path, monkeypatch, separator
-    )
-    guard = SealedProcessingFiles([str(path) for path in inventory])
-    guard.verify()
-    witnesses = guard.witnesses()
-    assert len(witnesses) == len(inventory)
-    assert all(
-        Path(name).samefile(path)
-        for (name, _digest, _size), path in zip(witnesses, inventory, strict=True)
-    )
-    if os.name == "nt":
-        assert all(name.startswith("\\\\?\\") for name, _digest, _size in witnesses)
-        assert all(
-            Path(name) != path.absolute()
-            for (name, _digest, _size), path in zip(witnesses, inventory, strict=True)
-        )
-    roots = stem_provenance.processing_source_roots(request, guard)
-    assert roots == expected_roots
-    assert all(not str(root).startswith("\\\\?\\") for root in roots)
-    guard.verify()
-
-
-@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-@pytest.mark.parametrize("mismatch", ["order", "equal_bytes", "missing_role"])
-def test_actual_native_source_root_witnesses_require_exact_order_file_identity_and_count(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    separator: StemSeparator,
-    mismatch: str,
-) -> None:
-    request, inventory, _roots = _declared_source_root_inventory(tmp_path, monkeypatch, separator)
-    captured = list(inventory)
-    if mismatch == "order":
-        captured[0], captured[1] = captured[1], captured[0]
-    elif mismatch == "equal_bytes":
-        substitute = tmp_path / "different-file-equal-bytes.bin"
-        substitute.write_bytes(inventory[0].read_bytes())
-        assert substitute.read_bytes() == inventory[0].read_bytes()
-        assert not substitute.samefile(inventory[0])
-        captured[0] = substitute
-    else:
-        captured.pop()
-    guard = SealedProcessingFiles([str(path) for path in captured])
-    guard.verify()
-    assert len(guard.witnesses()) == len(captured)
-    if mismatch == "equal_bytes":
-        _name, digest, size = guard.witnesses()[0]
-        assert digest == hashlib.sha256(inventory[0].read_bytes()).hexdigest()
-        assert size == inventory[0].stat().st_size
-    assert stem_provenance.processing_source_roots(request, guard) == ()
-    guard.verify()
-
-
-def _actual_bs_processing_request(
-    tmp: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[StemGenerationRequest, Path]:
-    """Copy executed package code, with explicit non-neural model/config inputs."""
-    module = find_spec("flitzis_bs_roformer")
-    assert module is not None
-    assert module.submodule_search_locations is not None
-    installed = Path(next(iter(module.submodule_search_locations)))
-    package = tmp / "owned-bs-implementation"
-    for name in stem_provenance.BS_PRODUCER_FILES:
-        destination = package / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(installed / name, destination)
-    model = tmp / "owned-bs-model"
-    model.mkdir()
-    for name in (CHECKPOINT_FILENAME, CONFIG_FILENAME):
-        (model / name).write_bytes(b"declared non-neural owned producer input")
-    source = tmp / "source.wav"
-    write_mono_pcm16_wav(source, 44_100)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    encoder = tmp / "owned-unproved-ffmpeg.exe"
-    encoder.write_bytes(b"declared non-runnable owned tool; no actual module proof")
-    request = StemGenerationRequest(
-        sample_id=0,
-        source_path=source,
-        source_version=f"source.wav|sha256-v1:{digest}",
-        cache_dir=tmp / "stems",
-        target_shape=AudioShape(44_100, 1, 128),
-        model_cache_dir=model,
-        separator="bs-roformer:musdb18hq",
-        encoder_executable=encoder,
-        original_bytes=source.stat().st_size,
-    )
-    # Only the package location changes. Actual library policy and Native full
-    # file witnesses remain production code, with no inference or fake identity.
-    monkeypatch.setattr(
-        stem_provenance,
-        "find_spec",
-        lambda _name: SimpleNamespace(submodule_search_locations=[package]),
-    )
-    return request, package
-
-
-def _bs_implementation_witnesses(
-    request: StemGenerationRequest, package: Path
-) -> dict[str, tuple[str, int]]:
-    processing = stem_provenance.capture_processing_files(request)
-    assert processing is not None
-    assert processing[1] is None
-    witnesses = processing[0].witnesses()
-    expected = stem_provenance.processing_paths(request)
-    # Exact cumulative inventory: two model files, eight package files, probe,
-    # isolated broker, 23 parent roles and the explicitly unproved encoder.
-    assert len(witnesses) == 36
-    assert len(expected) == 36
-    assert {
-        "stem_process.py",
-        "process.py",
-        "windows_job.py",
-        "linux_process.py",
-        "linux_broker.py",
-        "contracts.py",
-        "stem_cancellation.py",
-        "stem_execution.py",
-    } <= {path.name for path in expected}
-    for (name, digest, size), path in zip(witnesses, expected, strict=True):
-        assert Path(name).samefile(path)
-        assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
-        assert size == path.stat().st_size
-        if path.is_relative_to(package) or path.is_relative_to(request.model_cache_dir):
-            with pytest.raises(PermissionError):
-                path.write_bytes(b"rewrite during actual BS model/config/code custody")
-    processing[0].verify()
-    return {
-        str(path): (digest, size)
-        for path, (_, digest, size) in zip(expected, witnesses, strict=True)
-    }
-
-
-@pytest.mark.parametrize(
-    "changed_file",
-    [
-        "audio.py",
-        "network/attend.py",
-        "network/bs_roformer.py",
-        "__init__.py",
-        "network/__init__.py",
-    ],
-)
-def test_actual_bs_implementation_changes_are_sealed_but_unproved_tools_keep_producer_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_file: str
-) -> None:
-    request, package = _actual_bs_processing_request(tmp_path, monkeypatch)
-    assert stem_provenance.processing_library_versions(request) is None
-    assert request_fingerprint(request) is None
-    before = _bs_implementation_witnesses(request, package)
-    changed = package / changed_file
-    assert str(changed) in before
-    # All actual Native readers returned before changing this owned copy. No
-    # installed package, real checkpoint, or neural implementation is executed.
-    with changed.open("ab") as output:
-        output.write(b"\n# owned implementation changed after reader settlement\n")
-    after = _bs_implementation_witnesses(request, package)
-    assert after[str(changed)] != before[str(changed)]
-    assert request_fingerprint(request) is None
-    assert stem_provenance.processing_library_versions(request) is None
-
-
-def _held_broker_witness(request: StemGenerationRequest, broker: Path) -> tuple[str, int]:
-    processing = stem_provenance.capture_processing_files(request)
-    assert processing is not None
-    guard, identity = processing
-    assert identity is None
-    paths = stem_provenance.processing_paths(request)
-    parents = stem_provenance._parent_processing_paths(request, paths)
-    supervisor = broker.with_name("linux_process.py")
-    assert supervisor in parents
-    assert broker in paths
-    assert broker not in parents
-    assert parents[-1].name == "__init__.py"
-    assert stem_provenance.processing_source_roots(request, guard)
-    witness = guard.witnesses()[paths.index(broker)]
-    assert Path(witness[0]).samefile(broker)
-    assert witness[1] == hashlib.sha256(broker.read_bytes()).hexdigest()
-    with pytest.raises(PermissionError):
-        broker.write_bytes(b"rewrite during actual isolated broker source custody")
-    guard.verify()
-    return witness[1], witness[2]
-
-
-@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
-def test_isolated_linux_broker_source_is_held_separately_from_loaded_parent_roles(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
-) -> None:
-    request, _package = _actual_bs_processing_request(tmp_path, monkeypatch)
-    request = replace(request, separator=separator)
-    original_package = Path(stem_provenance.__file__).parent.parent
-    owned_package = tmp_path / "owned-host" / "flitzis_looper"
-    monkeypatch.setattr(
-        stem_provenance, "__file__", str(owned_package / "controller" / "stem_provenance.py")
-    )
-    paths = stem_provenance.processing_paths(request)
-    for path in paths:
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            original = (
-                original_package / path.relative_to(owned_package)
-                if path.is_relative_to(owned_package)
-                else None
-            )
-            path.write_bytes(original.read_bytes() if original is not None else b"owned model role")
-    broker = owned_package / "analysis" / "linux_broker.py"
-    before = _held_broker_witness(request, broker)
-    broker.write_bytes(broker.read_bytes() + b"\n# changed after actual source guard end\n")
-    after = _held_broker_witness(request, broker)
-    assert after != before
 
 
 class _SelectedPair:
@@ -355,16 +102,11 @@ def _known_set(
         path.write_bytes(f"isolated producer input {index}".encode())
     controller.project.stem_separator = "bs-roformer:musdb18hq"
     monkeypatch.setattr(stems_module, "separator_model_cache_dir", lambda _separator: model)
-    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: tuple(files))
     monkeypatch.setattr(
-        stem_provenance, "processing_library_versions", lambda _request: (("owned-fixture", "1"),)
+        controller.stems._stem_backend,
+        "capture_producer",
+        lambda _request: sealed_test_producer(tuple(files)),
     )
-    # This controller-only fixture declares execution lineage separately from
-    # its actual Native file guard; composed backend tests use the real verifier.
-    monkeypatch.setattr(
-        stem_provenance, "loaded_code_identity", lambda _paths: "declared-controller-fixture"
-    )
-    monkeypatch.setattr(stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp,))
     request = StemGenerationRequest(
         sample_id=0,
         source_path=source,
@@ -375,7 +117,7 @@ def _known_set(
         separator=controller.project.stem_separator,
         original_bytes=source.stat().st_size,
     )
-    processing = stem_provenance.capture_processing_files(request)
+    processing = controller.stems._capture_processing_files(request)
     assert processing is not None
     producer = processing[1]
     assert producer is not None
@@ -695,75 +437,3 @@ def test_processing_file_guard_outlives_backend_return_through_cache_publication
         assert admitted_entry.producer_identity is None
         assert controller.stems.stem_generation_error(215) == "owned producer failed"
         assert not (tmp_path / admitted_entry.cache_dir / ".complete.json").exists()
-
-
-def test_owned_encoder_witness_covers_common_pcm_and_keeps_unproved_demucs_producer_unknown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model = tmp_path / "owned-model"
-    model.mkdir()
-    (model / stem_generation.DEMUCS_REQUIRED_CHECKPOINTS["htdemucs"][0]).write_bytes(b"weights")
-    package = tmp_path / "owned-demucs"
-    (package / "remote").mkdir(parents=True)
-    for name in stem_provenance.DEMUCS_PRODUCER_FILES:
-        (package / name).write_bytes(f"isolated producer {name}".encode())
-    tools = tmp_path / "owned-tools"
-    tools.mkdir()
-    encoder = tools / "ffmpeg.exe"
-    encoder.write_bytes(b"owned encoder bytes, not a runnable inference fixture")
-    monkeypatch.setattr(
-        stem_generation, "demucs_cache_environment", lambda _model: {"PATH": str(tools)}
-    )
-    monkeypatch.setattr(
-        stem_provenance,
-        "find_spec",
-        lambda _name: SimpleNamespace(submodule_search_locations=[package]),
-    )
-    resolved = stem_generation.resolved_demucs_encoder(model)
-    assert resolved == encoder.resolve()
-    request = StemGenerationRequest(
-        sample_id=0,
-        source_path=tmp_path / "source.wav",
-        source_version="source|sha256-v1:" + "1" * 64,
-        cache_dir=tmp_path / "cache",
-        target_shape=AudioShape(44100, 1, 128),
-        model_cache_dir=model,
-        encoder_executable=resolved,
-    )
-    paths = stem_provenance.processing_paths(request)
-    # One checkpoint, fifteen package files, wrapper/probe/broker, twenty parent
-    # roles and the explicitly unproved encoder are held in their original order.
-    assert len(paths) == 40
-    assert any(path.name == "pcm16_wav.py" for path in paths)
-    assert any(path.name == "stem_execution.py" for path in paths)
-    assert paths[-1] == resolved
-    assert stem_provenance.processing_library_versions(request) is None
-    processing = stem_provenance.capture_processing_files(request)
-    assert processing is not None
-    assert len(processing[0].witnesses()) == 40
-    assert processing[1] is None  # no shared encoder DLL execution identity is inferred
-    with pytest.raises(PermissionError):
-        encoder.write_bytes(b"encoder changed before publication")
-    processing[0].verify()
-    processing = None
-    # The following identity describes only this explicitly attested owned
-    # fixture, never the actual shared FFmpeg installation or neural inference.
-    monkeypatch.setattr(
-        stem_provenance, "processing_library_versions", lambda _request: (("owned-fixture", "1"),)
-    )
-    monkeypatch.setattr(
-        stem_provenance, "loaded_code_identity", lambda _paths: "declared-encoder-file-fixture"
-    )
-    monkeypatch.setattr(
-        stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp_path,)
-    )
-    processing = stem_provenance.capture_processing_files(request)
-    assert processing is not None
-    previous_identity = processing[1]
-    assert previous_identity is not None
-    processing = None
-    encoder.write_bytes(b"changed actual encoder bytes")
-    processing = stem_provenance.capture_processing_files(request)
-    assert processing is not None
-    assert processing[1] != previous_identity

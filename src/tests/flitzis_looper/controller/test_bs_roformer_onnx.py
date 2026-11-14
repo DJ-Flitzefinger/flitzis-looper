@@ -34,7 +34,6 @@ from flitzis_looper.controller.stem_generation import (
     StemGenerationRequest,
     StemGenerationResult,
 )
-from flitzis_looper.controller.stem_provenance import capture_processing_files
 from flitzis_looper.controller.stem_provider import ProviderCalibration
 from flitzis_looper.controller.stem_separators import SelectedStemGenerationBackend
 from flitzis_looper.inference_provider import CUDA_FAILURE_EXIT, CUDA_FAILURE_RECEIPT
@@ -103,11 +102,10 @@ def _receipt(device: str, *, kernels: int = 2) -> bytes:
     }).encode()
 
 
-def test_selected_onnx_request_cannot_acquire_torch_lineage(
+def test_selected_bs_request_routes_to_onnx_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     request = _request(tmp_path)
-    assert capture_processing_files(request) is None
     generate = Mock()
     monkeypatch.setattr(adapter.BsOnnxStemGenerationBackend, "generate", generate)
     progress = Mock()

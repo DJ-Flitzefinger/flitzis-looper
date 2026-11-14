@@ -49,6 +49,8 @@ class _SourceAudio:
 class _DeclaredBackend:
     """Hold a real pool task's source/model read before returning complete known WAVs."""
 
+    capture_producer: Callable[[StemGenerationRequest], tuple[SealedProcessingFiles, str]]
+
     def __init__(self, wavs: tuple[bytes, ...]) -> None:
         assert len(wavs) == 5
         self.wavs = wavs
@@ -144,13 +146,12 @@ class SharedJobProbe(BankControllerProbe):
             "separator_model_cache_dir": lambda _separator: directory,
             "resolved_demucs_encoder": lambda _model: files[-1],
             "encoder_contract": lambda _encoder: "declared-bank-shared-output-receipt",
-            "capture_processing_files": capture,
-            "processing_source_roots": lambda _request, _guard: (directory,),
         }
         for name, replacement in replacements.items():
             owner = patch.object(stems_module, name, replacement)
             owner.start()
             self._patches.append(owner.stop)
+        self.backend.capture_producer = capture
 
     def start_shared_job(self, case: str) -> None:
         """Admit two independently current contents through ordinary public Generate."""

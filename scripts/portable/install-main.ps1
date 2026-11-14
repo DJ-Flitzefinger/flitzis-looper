@@ -187,32 +187,12 @@ try {
             '--','-C','target-feature=+crt-static') | Out-Host
         $bsWorker = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/native-bs-roformer-worker.exe'
         Assert-PlainPath $bsWorker
-        $htdemucsWorkerArguments = @()
-        $htdemucsPins = @('native_cpu/release.json', 'native_cuda/release.json', 'native_cpu/worker.json')
-        $htdemucsApproved = 0
-        foreach ($relative in $htdemucsPins) {
-            $pin = Join-Path $Source "workers/htdemucs/$relative"
-            Assert-PlainPath $pin
-            if (Test-Path -LiteralPath $pin -PathType Leaf) {
-                if ((Get-Item -LiteralPath $pin).Length -gt 4096) {
-                    throw 'The HTDemucs approval file exceeds its size limit.'
-                }
-                $approval = Get-Content -LiteralPath $pin -Raw | ConvertFrom-Json
-                if ($null -ne $approval) { $htdemucsApproved++ }
-            }
-        }
-        if ($htdemucsApproved -gt 0) {
-            if ($htdemucsApproved -ne $htdemucsPins.Count) {
-                throw 'The HTDemucs CPU, CUDA and worker approvals must be complete.'
-            }
-            Write-Host 'Building the ONNX HTDemucs worker in the Release profile ...'
-            Invoke-Checked $cargo @('rustc','--locked','--release','--target','x86_64-pc-windows-msvc','--manifest-path',(Join-Path $Source 'rust/Cargo.toml'),
-                '-p','flitzis-looper-analysis','--features','native-demucs-worker','--bin','native-htdemucs-worker',
-                '--','-C','target-feature=+crt-static','-C','link-arg=/Brepro') | Out-Host
-            $htdemucsWorker = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/native-htdemucs-worker.exe'
-            Assert-PlainPath $htdemucsWorker
-            $htdemucsWorkerArguments = @('--htdemucs-worker-executable',$htdemucsWorker)
-        }
+        Write-Host 'Building the ONNX HTDemucs worker in the Release profile ...'
+        Invoke-Checked $cargo @('rustc','--locked','--release','--target','x86_64-pc-windows-msvc','--manifest-path',(Join-Path $Source 'rust/Cargo.toml'),
+            '-p','flitzis-looper-analysis','--features','native-demucs-worker','--bin','native-htdemucs-worker',
+            '--','-C','target-feature=+crt-static','-C','link-arg=/Brepro') | Out-Host
+        $htdemucsWorker = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/native-htdemucs-worker.exe'
+        Assert-PlainPath $htdemucsWorker
         Write-Host 'Preparing FFmpeg and the standalone runtime ...'
         $ffmpegArchive = Get-VerifiedArchive 'ffmpeg-8.1.1' 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-full_build-shared.zip' '4296b396bdfd5fbc3dfc75ab4c8703354a56963232d65c4182993543df2d2f45'
         $ffmpeg = Join-Path $ffmpegArchive 'ffmpeg-8.1.1-full_build-shared'
@@ -225,7 +205,7 @@ try {
         $dllDirectories = @((Join-Path $vcpkg 'installed/x64-windows/bin'), (Join-Path $env:CARGO_TARGET_DIR 'release'))
         $dllDirectories += @(Get-ChildItem -LiteralPath (Join-Path $redist 'x64') -Directory | Where-Object { $_.Name -match '^Microsoft\.VC\d+\.(CRT|OpenMP)$' } | ForEach-Object { $_.FullName })
         $arguments = @('run','--no-sync','python','-B',(Join-Path $Source 'scripts/portable/build_bundle.py'),'--native-wheel',$wheels[0].FullName,'--beat-worker-executable',$beatWorker,'--bs-worker-executable',$bsWorker,'--native-source-commit',$Commit,'--ffmpeg-dir',(Join-Path $ffmpeg 'bin'),'--output',(Join-Path $Root "cache/bundle-$shortOperation"),'--runtime-directory',$RuntimeDirectory,'--checkout-directory',$Source,'--root',$Root)
-        $arguments += $htdemucsWorkerArguments
+        $arguments += @('--htdemucs-worker-executable',$htdemucsWorker)
         foreach ($directory in $dllDirectories) { $arguments += @('--dll-dir',$directory) }
         foreach ($license in Get-ChildItem -LiteralPath $licenses -File) { $arguments += @('--license-file',($license.Name + '=' + $license.FullName)) }
         Invoke-Checked $uv $arguments | Out-Host

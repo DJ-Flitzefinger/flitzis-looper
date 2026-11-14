@@ -6,7 +6,7 @@ learned initializers are external ranges of a single locally derived file,
 pinned effective tensor layout, and ends at byte 526,818,456. Neither the
 checkpoint nor the effective weights are distributed here. The upstream
 release contains the original configuration and checkpoint. See the
-[vendored model notice](../../vendor/bs_roformer/NOTICE.md).
+[model source and license notice](NOTICE.md).
 
 | Graph | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -15,7 +15,7 @@ release contains the original configuration and checkpoint. See the
 
 Both graphs take `features[B,1101,4100]` and write
 `masks[B,4,1101,4100]` as float32, for B=1 or B=2. The CUDA graph preserves
-mixed-precision boundaries of the pinned Torch CUDA reference. Time attention
+qualified mixed-precision boundaries of the pinned model. Time attention
 splits independent queries into tiles and evaluates each against all keys.
 The worker verifies the full graph, external weight file, ORT runtime and
 input geometry before inference.

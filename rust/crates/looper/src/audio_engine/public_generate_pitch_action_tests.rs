@@ -857,8 +857,7 @@ assert session.active_sample_ids == {215}
 assert not session.stem_generation_errors and not session.sample_load_errors
 assert len(generate_demucs.calls) == len(generate_bs.calls) == 1
 (generate_module.separator_model_cache_dir, generate_module.resolved_demucs_encoder,
- generate_module.encoder_contract, generate_module.bs_input_contract,
- generate_module.capture_processing_files, generate_module.processing_source_roots) = generate_saved_functions
+ generate_module.encoder_contract, generate_module.bs_input_contract) = generate_saved_functions
 "#,
     );
     playback.callback.retirement.actual.take();

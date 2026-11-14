@@ -4,7 +4,7 @@
 #[cfg(test)]
 use super::analysis_pcm::LoadedPcmSnapshot;
 use super::analysis_pcm::{CompletePcm, PcmIdentity, key_input_to_f32_le, stream_complete_f32_le};
-use super::neural_analysis::raw::{BeatThisSourceInput, expected_logit_count, pinned_model};
+use super::neural_analysis::raw::{BeatThisSourceInput, expected_logit_count, pinned_native_model};
 use super::neural_analysis::{MonoWriter, invoke_worker, verify_staged};
 use super::resident_host_memory::HostReservation;
 use crate::messages::{AnalysisKeyStatus, LoadedAnalysis, SampleBuffer};
@@ -448,9 +448,7 @@ pub(super) fn analyze_neural(
         let (raw, _) = match beat {
             Ok(raw) => raw,
             Err(error) => {
-                let model = if cfg!(windows) {
-                    super::neural_analysis::raw::pinned_native_model()
-                } else { pinned_model() };
+                let model = pinned_native_model();
                 let original = json!({"schema_version":4,"backend":"beat_this","policy":"neural-unavailable",
                     "status":"insufficient","bpm":null,"selected":null,"regions":[],
                     "model_sha256":model["sha256"],"frontend_id":model["frontend_id"],

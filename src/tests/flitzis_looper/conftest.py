@@ -10,15 +10,13 @@ from unittest.mock import DEFAULT, Mock, patch
 
 import pytest
 
-from flitzis_looper.controller import AppController, stem_provenance
+from flitzis_looper.controller import AppController
 from flitzis_looper.controller.stem_generation import (
     StemGenerationRequest,
     StemGenerationResult,
 )
-from flitzis_looper.controller.stem_provenance import (
-    processing_paths as _default_processing_paths,
-)
 from flitzis_looper.models import STEM_KINDS
+from flitzis_looper_audio import SealedProcessingFiles
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -595,6 +593,13 @@ class FakeInputSelection:
         return self._revision, matches[0] if len(matches) == 1 else None
 
 
+def sealed_test_producer(paths: tuple[Path, ...]) -> tuple[SealedProcessingFiles, str]:
+    """Hold actual test files and bind the fixture lineage to their bytes and roles."""
+    guard = SealedProcessingFiles([str(path) for path in paths])
+    witnessed = [(digest, size) for _, digest, size in guard.witnesses()]
+    return guard, hashlib.sha256(json.dumps(witnessed).encode()).hexdigest()
+
+
 class FakeStemGenerationBackend:
     def __init__(self) -> None:
         self.requests: list[StemGenerationRequest] = []
@@ -607,6 +612,12 @@ class FakeStemGenerationBackend:
         )
         self.error: RuntimeError | None = None
         self.sample_value = 1024
+
+    def capture_producer(
+        self, request: StemGenerationRequest
+    ) -> tuple[SealedProcessingFiles, str | None] | None:
+        """Fake generation has unknown lineage unless a test declares owned inputs."""
+        return None
 
     def generate(
         self,
@@ -823,24 +834,6 @@ def controller(
     # Its explicit readiness double grants no Native/source/device acceptance.
     with patch.object(app.audio_output_runtime, "startup_restored", return_value=True):
         _settle_output_control_mock(app)
-    configured_paths = stem_provenance.processing_paths
-    if configured_paths is _default_processing_paths:
-        # This backend writes tiny synthetic WAVs and executes no installed model.
-        # Keep actual Native file sealing/hashing while owning its small inputs.
-        # Explicit provenance fixtures and replacement real backends retain their
-        # independently configured inventory and full producer checks.
-        producer = tmp_path / "owned-fake-stem-producer"
-        producer.mkdir()
-        inputs = tuple(producer / name for name in ("checkpoint.bin", "recipe.json", "backend.py"))
-        for index, path in enumerate(inputs):
-            path.write_bytes(f"unattested fake separator input role {index}\n".encode())
-
-        def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
-            if app.stems._stem_backend is stem_backend and request.cache_dir in app.stems._jobs:
-                return inputs
-            return configured_paths(request)
-
-        monkeypatch.setattr(stem_provenance, "processing_paths", processing_paths)
     try:
         yield app
     finally:

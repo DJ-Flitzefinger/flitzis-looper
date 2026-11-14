@@ -491,6 +491,58 @@ function Get-PortableInputInventory([string] $Path) {
     return [pscustomobject]$inventory
 }
 
+function Get-PortableLegacyRelease([string] $Root, $Pointer, [string] $Directory) {
+    if (-not $Pointer -or $Pointer.schema_version -ne 1 -or $Pointer.source_kind -ne 'main' -or
+        $Pointer.git_commit -notmatch '^[a-f0-9]{40}$' -or $Pointer.directory -ne $Directory -or
+        $Directory -notmatch ('^main-' + $Pointer.git_commit.Substring(0,12) + '-[a-f0-9]{8}$')) {
+        throw 'Legacy runtime pointer does not name its accepted version; existing files will be preserved.'
+    }
+    $runtime = Join-Path (Join-Path $Root 'versions') $Directory
+    $manifest = Join-Path $runtime 'release-manifest.json'
+    Assert-PlainPath $runtime
+    Assert-PlainPath $manifest
+    if (-not (Test-Path -LiteralPath $runtime -PathType Container) -or
+        -not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+        throw 'Legacy runtime or its release manifest is missing; existing files will be preserved.'
+    }
+    $release = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+    if ($release.schema_version -ne 1 -or $release.git_commit -ne $Pointer.git_commit -or
+        $release.source_dirty -isnot [bool] -or $release.source_dirty) {
+        throw 'Legacy runtime does not match the accepted source; existing files will be preserved.'
+    }
+    return $release
+}
+
+function Test-RetainedLegacyRelease($Record) {
+    return ($Record.PSObject.Properties['legacy_directory'] -and $Record.legacy_directory -and
+        -not $Record.old_release.PSObject.Properties['runtime_files'])
+}
+
+function Confirm-RetainedLegacyRelease([string] $Root, $Record) {
+    if (-not (Test-RetainedLegacyRelease $Record)) { return }
+    $current = Get-PortableLegacyRelease $Root $Record.old $Record.legacy_directory
+    $commit = $Record.old.git_commit
+    if ($Record.old.release_id -ne $commit -or $current.release_id -ne $commit -or
+        $current.native_source_commit -ne $commit -or $current.python_version -ne '3.14.2' -or
+        $current.native_sha256 -notmatch '^[a-f0-9]{64}$' -or
+        $current.release_id -ne $Record.old_release.release_id -or
+        $current.native_source_commit -ne $Record.old_release.native_source_commit -or
+        $current.python_version -ne $Record.old_release.python_version -or
+        $current.native_sha256 -ne $Record.old_release.native_sha256 -or
+        $current.PSObject.Properties['runtime_files']) {
+        throw 'Retained legacy release identity changed; existing files will be preserved.'
+    }
+}
+
+function Assert-RetainedLegacyStarter([string] $Path, $Previous, [byte[]] $Candidate) {
+    Assert-PlainPath $Path
+    if (Test-Path -LiteralPath $Path) {
+        $actual = [Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
+        if ($actual -ceq $Previous -or $actual -ceq [Convert]::ToBase64String($Candidate)) { return }
+    } elseif ($null -eq $Previous) { return }
+    throw "Legacy starter changed during activation; file will be preserved: $Path"
+}
+
 function Get-PortableDataSource([string] $Root, $Record, $Paths) {
     if ($Record.legacy_directory) { return (Join-Path $Root 'data') }
     if (Test-Path -LiteralPath $Paths.old_checkout) { return $Paths.old_checkout }
@@ -583,7 +635,17 @@ function Complete-PortableTransaction([string] $Root, $Record) {
 }
 
 function Undo-PortableTransaction([string] $Root, $Record) {
+    Confirm-RetainedLegacyRelease $Root $Record
     $paths = Get-PortablePaths $Root $Record.operation
+    $legacyStarters = @{}
+    if ((Test-RetainedLegacyRelease $Record) -and $Record.PSObject.Properties['starters']) {
+        $candidate = (Get-PortableCandidateCustody $paths $Record).runtime
+        foreach ($name in @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) {
+            $template = if ($name -eq 'launch.ps1') { 'dispatch.ps1' } else { 'START-LOOPER.bat' }
+            $legacyStarters[$name] = [IO.File]::ReadAllBytes((Join-Path $candidate $template))
+            Assert-RetainedLegacyStarter (Join-Path $Root $name) $Record.starters.$name $legacyStarters[$name]
+        }
+    }
     $restoreSamples = $Record.had_samples -and $Record.capture_completed
     if ($restoreSamples) {
         Assert-PlainPath $paths.relocation
@@ -630,10 +692,14 @@ function Undo-PortableTransaction([string] $Root, $Record) {
         foreach ($property in $Record.starters.PSObject.Properties) {
             if ($property.Name -notin @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) { throw 'Invalid launcher in journal.' }
             $path = Join-Path $Root $property.Name
+            if ($legacyStarters.ContainsKey($property.Name)) {
+                Assert-RetainedLegacyStarter $path $property.Value $legacyStarters[$property.Name]
+            }
             if ($null -ne $property.Value) { Write-PortableBytes $path ([Convert]::FromBase64String($property.Value)) }
             elseif (Test-Path -LiteralPath $path) { Assert-PlainPath $path; Remove-Item -LiteralPath $path }
         }
     }
+    Confirm-RetainedLegacyRelease $Root $Record
     if ($Record.old) { Write-AtomicJson (Join-Path $Root 'current.json') $Record.old }
     elseif (Test-Path -LiteralPath (Join-Path $Root 'current.json')) { Remove-Item -LiteralPath (Join-Path $Root 'current.json') }
     Set-PortableWorkerSelection $Root $Record -Restore
@@ -658,6 +724,7 @@ function Recover-PortableTransaction([string] $Root) {
         return
     }
     if ($record.phase -notin @('staging','prepared','rolled_back')) { Undo-PortableTransaction $Root $record }
+    Confirm-RetainedLegacyRelease $Root $record
     Set-PortableWorkerSelection $Root $record -Restore
     $proven = $false
     if ((Test-Path -LiteralPath $paths.source) -and (Test-Path -LiteralPath (Join-Path $paths.candidate 'release-manifest.json'))) {
@@ -685,7 +752,10 @@ function Recover-PortableTransaction([string] $Root) {
             if ($record.had_checkout) { Assert-PortableInventory $paths.checkout $record.old_release.checkout_files -Directories (Get-PortableCheckoutDirectories $record.old_release) -PreviousNativeHash (Get-PortablePreviousNativeHash $record.old_release) -Persistent -VerifyHashes -AllowExtras | Out-Null }
             if ($record.had_runtime) { Assert-PortableInventory $paths.runtime $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories }
             if ($record.legacy_directory) {
-                Assert-PortableInventory (Join-Path (Join-Path $Root 'versions') $record.legacy_directory) $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
+                $legacy = Join-Path (Join-Path $Root 'versions') $record.legacy_directory
+                if ($record.old_release.PSObject.Properties['runtime_files']) {
+                    Assert-PortableInventory $legacy $record.old_release.runtime_files -ReleaseManifest -IgnoreUnrecordedDirectories
+                }
             }
             $diagnostic = Join-Path $Root ('cache/failed-relocation-' + $record.operation + '.json')
             Assert-PlainPath $diagnostic
@@ -943,10 +1013,10 @@ try {
         if ($old.schema_version -notin @(1,2) -or $old.git_commit -notmatch '^[a-f0-9]{40}$' -or $old.source_kind -ne 'main') { throw 'Unknown previous installation state.' }
         if ($old.schema_version -eq 1) {
             $legacyDirectory = [string]$old.directory
-            if ($legacyDirectory -notmatch '^main-[a-f0-9]{12}-[a-f0-9]{8}$') { throw 'Invalid legacy version pointer.' }
-            $oldRuntime = Join-Path (Join-Path $target 'versions') $legacyDirectory
-            Assert-PortableTree $oldRuntime
-            $oldRelease = Get-Content -LiteralPath (Join-Path $oldRuntime 'release-manifest.json') -Raw | ConvertFrom-Json
+            $oldRelease = Get-PortableLegacyRelease $target $old $legacyDirectory
+            if ($oldRelease.PSObject.Properties['runtime_files']) {
+                Assert-PortableTree (Join-Path (Join-Path $target 'versions') $legacyDirectory)
+            }
             if ((Test-Path -LiteralPath $checkout) -or (Test-Path -LiteralPath $runtime)) { throw 'Old and new portable layouts conflict; files will be preserved.' }
         } else {
             $oldRelease = $old.release
@@ -1019,17 +1089,29 @@ try {
     Set-PortableWorkerSelection $target $record
     Invoke-PortableModels $actualTarget $paths.source $paths.candidate 'repair'
     Invoke-PortableCheck $actualTarget $paths.source $paths.candidate
-    if ($legacyDirectory -and -not $oldRelease.PSObject.Properties['runtime_files']) {
-        $proofPath = Join-Path $target "cache/legacy-owner-$operation.json"
+    Confirm-RetainedLegacyRelease $target $record
+    $launcherProof = $null
+    $retainLegacy = $false
+    $legacyDispatcherCrlf = $null
+    if ($oldRelease -and $oldRelease.PSObject.Properties['runtime_files']) {
+        $launcherProof = $oldRelease.runtime_files
+    } elseif ($legacyDirectory) {
+        $retainLegacy = $true
+        # Keep the entire old version directory for rollback. Only root
+        # launchers will be replaced; authenticate those through exact Git blobs.
+        $proofPath = Join-Path $target "cache/legacy-launchers-$operation.json"
+        Assert-PlainPath $proofPath
         $savedPythonHome = $env:PYTHONHOME; $savedPythonPath = $env:PYTHONPATH
         try {
             $env:PYTHONHOME = Join-Path $paths.candidate 'python'; $env:PYTHONPATH = ''
             Invoke-Checked (Join-Path $paths.candidate 'python/python.exe') @('-s','-B',
-                (Join-Path $paths.source 'scripts/portable/legacy_inventory.py'),'--source',$paths.source,
-                '--candidate',$paths.candidate,'--legacy',$oldRuntime,'--git',$git,'--commit',$old.git_commit,'--output',$proofPath)
+                (Join-Path $paths.source 'scripts/portable/legacy_launchers.py'),'--source',$paths.source,
+                '--git',$git,'--commit',$old.git_commit,'--output',$proofPath)
         } finally { $env:PYTHONHOME = $savedPythonHome; $env:PYTHONPATH = $savedPythonPath }
-        $oldRelease | Add-Member -NotePropertyName runtime_files -NotePropertyValue (Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json)
-        $record.old_release = $oldRelease
+        $launcherProof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+        if ($launcherProof.PSObject.Properties['dispatch.ps1.crlf']) {
+            $legacyDispatcherCrlf = $launcherProof.'dispatch.ps1.crlf'
+        }
         Remove-Item -LiteralPath $proofPath
     }
     if ($hadSamples -and (Test-Path -LiteralPath (Join-Path $paths.source 'samples'))) { throw 'New source samples conflict with existing samples.' }
@@ -1040,9 +1122,23 @@ try {
         $path = Join-Path $target $name; Assert-PlainPath $path
         if (Test-Path -LiteralPath $path) {
             $template = if ($name -eq 'launch.ps1') { 'dispatch.ps1' } else { 'START-LOOPER.bat' }
-            if (-not $oldRelease -or -not $oldRelease.runtime_files.PSObject.Properties[$template]) { throw "Launcher file ownership is unknown; file will be preserved: $path" }
-            Assert-Hash $path $oldRelease.runtime_files.$template
-            $starters[$name] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+            if (-not $launcherProof -or -not $launcherProof.PSObject.Properties[$template]) { throw "Launcher file ownership is unknown; file will be preserved: $path" }
+            $expected = $launcherProof.$template
+            if ($retainLegacy) {
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $sha = [Security.Cryptography.SHA256]::Create()
+                try {
+                    $actual = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+                } finally { $sha.Dispose() }
+                if ($actual -ne $expected -and
+                    ($template -ne 'dispatch.ps1' -or $actual -ne $legacyDispatcherCrlf)) {
+                    throw "SHA256 verification failed: $path"
+                }
+            } else {
+                Assert-Hash $path $expected
+                $bytes = [IO.File]::ReadAllBytes($path)
+            }
+            $starters[$name] = [Convert]::ToBase64String($bytes)
         } else { $starters[$name] = $null }
     }
     $record | Add-Member -NotePropertyName starters -NotePropertyValue ([pscustomobject]$starters)
@@ -1082,7 +1178,9 @@ try {
     foreach ($name in @('launch.ps1','START-LOOPER.bat','start.bat','start-release.bat')) {
         $path = Join-Path $target $name; Assert-PlainPath $path
         $template = if ($name -eq 'launch.ps1') { 'dispatch.ps1' } else { 'START-LOOPER.bat' }
-        Write-PortableBytes $path ([IO.File]::ReadAllBytes((Join-Path $paths.runtime $template)))
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $paths.runtime $template))
+        if ($retainLegacy) { Assert-RetainedLegacyStarter $path $starters[$name] $bytes }
+        Write-PortableBytes $path $bytes
     }
     Write-AtomicJson $pointerPath @{schema_version=2; git_commit=$commit; release_id=$commit; source_kind='main'; release=$release}
     Save-PortableTransaction $target $record 'accepted'

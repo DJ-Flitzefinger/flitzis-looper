@@ -24,7 +24,7 @@ from flitzis_looper.encoder_provenance import ENCODER_RESULT
 from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT
 from flitzis_looper.offline_runtime import child_environment
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
-from flitzis_looper.stem_execution import STEM_EXECUTION_RESULT
+from flitzis_looper.stem_execution_protocol import STEM_EXECUTION_RESULT
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -51,8 +51,6 @@ _RECEIPT_PREFIXES = (
 )
 NATIVE_DEMUCS_EXECUTABLE = "native-htdemucs-worker.exe"
 _OWN_INFERENCE_MODULES = (
-    "flitzis_looper.demucs_streaming",
-    "flitzis_bs_roformer",
     "flitzis_looper.bs_decode",
     "flitzis_looper.htdemucs_codec",
 )

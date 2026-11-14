@@ -1,6 +1,5 @@
 import hashlib
 import os
-import platform
 import re
 import threading
 import wave
@@ -82,10 +81,6 @@ from flitzis_looper.controller.stem_pair_preparation import (
     StemPairPreparationSpec,
 )
 from flitzis_looper.controller.stem_process import stem_command_scope
-from flitzis_looper.controller.stem_provenance import (
-    capture_processing_files,
-    processing_source_roots,
-)
 from flitzis_looper.controller.stem_publication_retry import (
     StemPublicationRetries,
     StemPublicationRetry,
@@ -102,7 +97,6 @@ from flitzis_looper.controller.stem_workers import (
     StemWorkerReservation,
 )
 from flitzis_looper.encoder_provenance import encoder_contract
-from flitzis_looper.htdemucs_onnx_provisioning import htdemucs_onnx_released
 from flitzis_looper.models import (
     STEM_MIX_MODES,
     StemCacheEntry,
@@ -347,7 +341,11 @@ class StemController(BaseController):  # noqa: PLR0904
             int, tuple[StemCacheEntry | None, StemCacheEntry | None]
         ] = {}
         self._pair_preparations = StemPairPreparationQueue(
-            audio, self._assets, self._stem_task_runner, self._stem_resources
+            audio,
+            self._assets,
+            self._stem_task_runner,
+            self._stem_resources,
+            capture_producer=self._capture_processing_files,
         )
         self._resident_pairs: set[int] = set()
         self._publication_retries = StemPublicationRetries()
@@ -3426,9 +3424,7 @@ class StemController(BaseController):  # noqa: PLR0904
             for subscriber in current:
                 self._clear_stem_generation_state(subscriber.sample_id)
                 self._session.stem_generation_diagnostics[subscriber.sample_id] = (
-                    "BS-RoFormer ONNX compatibility is unverified before Generate"
-                    if resolved.bs_onnx_manifest is not None
-                    else "Saved stems differ from the current producer; Generate to replace them"
+                    "Saved stems differ from the current producer; Generate to replace them"
                 )
 
     def _select_generation_admission(
@@ -5053,7 +5049,7 @@ class StemController(BaseController):  # noqa: PLR0904
                     request, original_bytes=self._verified_original_extent(request, source_lease)
                 )
             )
-            processing = capture_processing_files(request)
+            processing = self._capture_processing_files(request)
             job.processing_files = processing[0] if processing is not None else None
             job.producer_identity = processing[1] if processing is not None else None
             if processing is not None:
@@ -5062,11 +5058,6 @@ class StemController(BaseController):  # noqa: PLR0904
                     request,
                     encoder_contract=self._processing_contract(request, processing[1]),
                     producer_identity=processing[1],
-                    python_source_roots=(
-                        processing_source_roots(request, processing[0])
-                        if processing[1] is not None
-                        else ()
-                    ),
                 )
             job.resolved_request = request
             job.generation_fingerprint = request_fingerprint(request, job.producer_identity)
@@ -5278,13 +5269,14 @@ class StemController(BaseController):  # noqa: PLR0904
             request,
             encoder_executable=resolved_demucs_encoder(request.model_cache_dir),
             bs_onnx_manifest=manifest,
-            native_demucs_cpu=(
-                request.separator == "demucs:htdemucs"
-                and os.name == "nt"
-                and platform.machine().lower() in {"amd64", "x86_64"}
-                and htdemucs_onnx_released(Path(__file__).resolve().parents[3])
-            ),
         )
+
+    def _capture_processing_files(
+        self, request: StemGenerationRequest
+    ) -> tuple[SealedProcessingFiles, str | None] | None:
+        """Allow an adapter with a provable pre-execution identity to lend a witness."""
+        capture = getattr(self._stem_backend, "capture_producer", None)
+        return capture(request) if callable(capture) else None
 
     @staticmethod
     def _processing_contract(request: StemGenerationRequest, producer: str | None) -> str | None:
@@ -5301,24 +5293,22 @@ class StemController(BaseController):  # noqa: PLR0904
         processing: tuple[SealedProcessingFiles, str | None] | None,
         result: StemGenerationResult,
     ) -> None:
-        if request.bs_onnx_manifest is not None or request.native_demucs_cpu:
+        if processing is None:
+            is_htdemucs = request.separator == "demucs:htdemucs"
             expected = (
-                ("demucs", "htdemucs") if request.native_demucs_cpu
-                else ("bs-roformer", BS_ROFORMER_MODEL_NAME)
+                ("demucs", "htdemucs") if is_htdemucs else ("bs-roformer", BS_ROFORMER_MODEL_NAME)
             )
             producer = (
                 result.executed_producer_identity
                 if result.decoder_verified
                 and result.execution is not None
                 and (result.execution.backend, result.execution.model_name) == expected
-                and (not request.native_demucs_cpu or result.encoder_verified)
+                and (not is_htdemucs or result.encoder_verified)
                 and result.execution.device == result.device
                 else None
             )
             job.generation_fingerprint = request_fingerprint(request, producer)
             job.producer_identity = producer if job.generation_fingerprint else None
-            return
-        if processing is None:
             return
         processing[0].verify()
         expected_producer = (

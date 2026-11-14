@@ -82,7 +82,6 @@ _HOST_TARGETS = {
     "bs_onnx_vram.py": (("nvml_free_bytes", "_query_free_bytes", "parse_cuda_memory"), ()),
     "beat_cuda_cache.py": (("cuda_device_identity",), ("CudaDeviceIdentity",)),
     "contracts.py": ((), ("WorkerLimits",)),
-    "native_demucs_cpu.py": ((), ("NativeDemucsCpuBackend",)),
     "htdemucs_onnx.py": (
         (
             "_identity",
@@ -111,8 +110,6 @@ _HOST_TARGETS = {
         ),
         ("HtdemucsInstallation",),
     ),
-    # Explicit acquisition is setup-only; inference executes the pinned verifier.
-    "bs_roformer_assets.py": (("verify_model_assets",), ()),
     "encoder_provenance.py": (
         (
             "supported_encoder_images",
@@ -130,7 +127,6 @@ _HOST_TARGETS = {
 }
 _HOST_CONSTANT_TARGETS = {
     "contracts.py": (),
-    "native_demucs_cpu.py": (),
     "htdemucs_onnx.py": (
         "_SOURCES",
         "_CODEC_OUTPUT",
@@ -309,7 +305,6 @@ def _runtime_constant(
         return _kernel_cache_carrier(expression, namespace)
     if role not in {
         ("process.py", "_PROCESS_SLOT"),
-        ("process.py", "_ANALYSIS_ADMISSION"),
         ("process.py", "_WORK_OWNER"),
         ("stem_process.py", "_COMMAND_SCOPE"),
     }:
@@ -320,10 +315,7 @@ def _runtime_constant(
     actual = namespace[name]
     arguments = tuple(_expression(item, namespace) for item in expression.args)
     keywords = {item.arg: _expression(item.value, namespace) for item in expression.keywords}
-    if role in {("process.py", "_PROCESS_SLOT"), ("process.py", "_ANALYSIS_ADMISSION")}:
-        if namespace.get("_PROCESS_SLOT") is namespace.get("_ANALYSIS_ADMISSION"):
-            msg = "analysis admission and heavy resource carriers must be distinct"
-            raise ValueError(msg)
+    if role == ("process.py", "_PROCESS_SLOT"):
         if (
             expression.func.id != "Semaphore"
             or namespace.get("Semaphore") is not Semaphore

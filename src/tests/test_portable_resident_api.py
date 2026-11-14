@@ -1025,13 +1025,13 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
         "flitzis_looper.controller.stems": SimpleNamespace(StemController=object()),
         "flitzis_looper.ui.render.sidebar_left": object(),
         "flitzis_looper.controller.stem_generation": SimpleNamespace(
-            default_demucs_model_cache_dir=lambda: tmp_path / "models/torch/hub/checkpoints"
+            default_stem_model_cache_dir=lambda: tmp_path / "models/stem-checkpoints"
         ),
         "flitzis_looper": SimpleNamespace(
             __file__=str(checkout / "src/flitzis_looper/__init__.py")
         ),
     }
-    for name in ("imgui_bundle", "torch", "torchaudio", "torchcodec"):
+    for name in ("imgui_bundle", "pydantic"):
         modules[name] = SimpleNamespace(__file__=str(runtime / f"python/{name}/__init__.py"))
     monkeypatch.setattr(bootstrap["importlib"], "import_module", modules.__getitem__)
     monkeypatch.setitem(bootstrap["check_runtime"].__globals__, "private_dlls", lambda *_: {})
@@ -1040,25 +1040,28 @@ def test_runtime_preflight_accepts_complete_reflected_native_before_activation(
         "check_bs_roformer_runtime",
         lambda *_args, **_options: {"model_checked": False},
     )
-    parent_dlls = {"torch": {"torch_cpu.dll": "parent"}}
-    child_dlls = {"ffmpeg": {"avcodec-62.dll": "child"}}
+    monkeypatch.setitem(
+        bootstrap["check_runtime"].__globals__,
+        "check_htdemucs_runtime",
+        lambda *_args, **_options: {"model_checked": False},
+    )
+    parent_dlls = {"ffmpeg": {}, "os_dependencies": {"ucrtbase.dll": "parent"}}
     monkeypatch.setitem(
         bootstrap["check_runtime"].__globals__, "check_dependency_dlls", lambda _: parent_dlls
     )
     runner = Mock()
-    runner.return_value.stdout = json.dumps(child_dlls)
     monkeypatch.setattr(bootstrap["subprocess"], "run", runner)
     bootstrap["check_runtime"](tmp_path, checkout, runtime, require_analysis=False)
-    assert runner.call_count == 3
-    args, options = runner.call_args_list[0]
-    assert "check_stem_dependency_child" in args[0][4]
-    assert args[0][-1] == str(runtime)
-    assert options["check"]
+    assert runner.call_count == 2
+    assert [Path(call.args[0][0]).name for call in runner.call_args_list] == [
+        "ffmpeg.exe",
+        "ffprobe.exe",
+    ]
+    assert all(call.kwargs["check"] for call in runner.call_args_list)
     report = json.loads(capsys.readouterr().out)
     assert report["portable_preflight"] == "passed"
     assert report["analysis_checked"] is False
     assert report["dependency_dlls"] == parent_dlls
-    assert report["child_dependency_dlls"] == child_dlls
 
 
 @pytest.mark.parametrize("method", ["global_rate_status", "bpm_lock_status"])

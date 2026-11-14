@@ -191,6 +191,12 @@ def _load_staged_cpu(installation: BsOnnxInstallation, directory: Path) -> None:
             raise RuntimeError(msg)
 
 
+def load_bs_onnx_cpu(installation: BsOnnxInstallation) -> None:
+    """Verify a fresh CPU load of a checked BS-RoFormer installation."""
+    with TemporaryDirectory(prefix="bs-roformer-load-") as temporary:
+        _load_staged_cpu(installation, Path(temporary).resolve())
+
+
 def _copy_model_graphs(repository: Path, stage: Path, *, cuda: bool) -> None:
     for filename, digest in _graph_pins(cuda=cuda):
         path = stage / filename

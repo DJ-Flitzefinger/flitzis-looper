@@ -439,8 +439,7 @@ for key, role in (('demucs:htdemucs', 'demucs'), ('bs-roformer:musdb18hq', 'bs')
     generate_models[key] = (directory, paths)
     generate_role_bytes[key] = tuple(path.read_bytes() for path in paths)
 generate_saved_functions = (generate_module.separator_model_cache_dir, generate_module.resolved_demucs_encoder,
-    generate_module.encoder_contract, generate_module.bs_input_contract,
-    generate_module.capture_processing_files, generate_module.processing_source_roots)
+    generate_module.encoder_contract, generate_module.bs_input_contract)
 generate_module.separator_model_cache_dir = lambda separator: generate_models[separator][0]
 generate_module.resolved_demucs_encoder = lambda directory: directory / 'encoder-input-contract.bin'
 generate_module.encoder_contract = lambda encoder: 'declared-inference-output-receipt'
@@ -449,8 +448,6 @@ def capture_declared_generate_files(request):
     guard = SealedProcessingFiles([str(path) for path in generate_models[request.separator][1]])
     witnesses = [(index, digest, size) for index, (_name, digest, size) in enumerate(guard.witnesses())]
     return guard, hashlib.sha256(json.dumps(witnesses).encode()).hexdigest()
-generate_module.capture_processing_files = capture_declared_generate_files
-generate_module.processing_source_roots = lambda request, guard: (generate_models[request.separator][0],)
 
 class DeclaredAdapter:
     def __init__(self, separator, wavs):
@@ -460,11 +457,10 @@ class DeclaredAdapter:
     def generate(self, request, progress):
         assert threading.current_thread().name.startswith('stems_')
         assert request.separator == self.separator
-        directory, paths = generate_models[self.separator]
+        _, paths = generate_models[self.separator]
         assert request.encoder_executable.resolve() == paths[-1].resolve()
         assert request.encoder_contract == ('declared-inference-input-receipt'
             if self.separator == 'bs-roformer:musdb18hq' else 'declared-inference-output-receipt')
-        assert request.python_source_roots == (directory,)
         assert tuple(path.read_bytes() for path in paths) == generate_role_bytes[self.separator]
         assert request.source_path == generate_original
         assert request.target_shape.sample_rate_hz == fixture['rate'] and request.target_shape.channels == 2
@@ -494,6 +490,8 @@ generate_demucs = DeclaredAdapter('demucs:htdemucs', generated_wavs1)
 generate_bs = DeclaredAdapter('bs-roformer:musdb18hq', generated_wavs2)
 controller._stem_backend = SelectedStemGenerationBackend({
     'demucs:htdemucs': generate_demucs, 'bs-roformer:musdb18hq': generate_bs})
+controller._capture_processing_files = capture_declared_generate_files
+controller._pair_preparations._capture_producer = capture_declared_generate_files
 assert isinstance(controller._stem_backend, SelectedStemGenerationBackend)
 assert controller._stem_worker_pool._executor._max_workers == 2
 assert controller.stem_generation_block_reason(0) is None
@@ -1277,8 +1275,7 @@ assert session.active_sample_ids == {215}
 assert not session.stem_generation_errors and not session.sample_load_errors
 assert len(generate_demucs.calls) == len(generate_bs.calls) == 1
 (generate_module.separator_model_cache_dir, generate_module.resolved_demucs_encoder,
- generate_module.encoder_contract, generate_module.bs_input_contract,
- generate_module.capture_processing_files, generate_module.processing_source_roots) = generate_saved_functions
+ generate_module.encoder_contract, generate_module.bs_input_contract) = generate_saved_functions
 "#,
     );
     playback.callback.retirement.actual.take();

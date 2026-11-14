@@ -22,7 +22,7 @@ def test_opt_in_observer_checks_before_fast_exit_acceptance(reason: str) -> None
     child = Mock(spec=subprocess.Popen)
     child.poll.return_value = 0
     observer = Mock(return_value=reason)
-    owner = process._OwnedProcess(child, None, None, Event())
+    owner = process._OwnedProcess(child, Event())
     assert (
         process._monitor(owner, Event(), WorkerLimits(), observer, observe_before_exit=True)
         == reason
@@ -35,7 +35,7 @@ def test_new_observer_failure_is_not_hidden_by_fast_zero_exit() -> None:
     child = Mock(spec=subprocess.Popen)
     child.poll.return_value = 0
     observer = Mock(side_effect=OSError("query failed"))
-    owner = process._OwnedProcess(child, None, None, Event())
+    owner = process._OwnedProcess(child, Event())
     assert (
         process._monitor(owner, Event(), WorkerLimits(), observer, observe_before_exit=True)
         == "resource_unavailable"
@@ -67,7 +67,7 @@ def test_final_query_observes_a_peak_first_visible_at_exit_and_retires(reason: s
     child.poll.side_effect = poll
     observer = Mock(side_effect=observe)
     retired = Event()
-    owner = process._OwnedProcess(child, None, None, retired)
+    owner = process._OwnedProcess(child, retired)
     limits = WorkerLimits()
     outcome = process._monitor(owner, Event(), limits, observer, observe_before_exit=True)
     assert outcome == reason
@@ -100,7 +100,7 @@ def test_cancel_wins_before_and_after_final_completed_process_query(cancel_at: s
 
     child.poll.side_effect = poll
     observer = Mock(side_effect=observe)
-    owner = process._OwnedProcess(child, None, None, Event())
+    owner = process._OwnedProcess(child, Event())
     assert (
         process._monitor(owner, cancel, WorkerLimits(), observer, observe_before_exit=True)
         == "cancelled"
@@ -115,7 +115,7 @@ def test_cancel_precedes_the_new_observer_and_zero_exit() -> None:
     observer = Mock(return_value="resource_pressure")
     cancel = Event()
     cancel.set()
-    owner = process._OwnedProcess(child, None, None, Event())
+    owner = process._OwnedProcess(child, Event())
     assert (
         process._monitor(owner, cancel, WorkerLimits(), observer, observe_before_exit=True)
         == "cancelled"
@@ -128,7 +128,7 @@ def test_existing_default_monitor_keeps_completed_command_precedence() -> None:
     child = Mock(spec=subprocess.Popen)
     child.poll.return_value = 0
     observer = Mock(return_value="resource_pressure")
-    owner = process._OwnedProcess(child, None, None, Event())
+    owner = process._OwnedProcess(child, Event())
     assert process._monitor(owner, Event(), WorkerLimits(), observer) == "ok"
     observer.assert_not_called()
 

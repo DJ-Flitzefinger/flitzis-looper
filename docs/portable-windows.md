@@ -32,7 +32,7 @@ runtime and does not install GPU or audio-device drivers.
 | Path below `Flitzis-Looper` | Contents |
 | --- | --- |
 | `flitzis-looper/` | Full Git checkout and Native extension. `samples/`, `config/input/` and `record/` hold user data. |
-| `Runtime/` | Private interpreter, packages, DLLs, FFmpeg/FFprobe, launch support and the Release Beat This executable. |
+| `Runtime/` | Private interpreter, packages, DLLs, FFmpeg/FFprobe, launch support and the Release ONNX workers. |
 | `analysis-runtime/beat-this/` | Pinned ONNX worker assets, verified active pointer and installation-owned CUDA cache. |
 | `models/` | Independent stem model cache. |
 | `tools/`, `cache/`, `b/`, `logs/` | Bootstrap tools, retained downloads and diagnostics, short Native build path, and logs. UI layout is installation-local in `cache/ui/`. |
@@ -58,7 +58,9 @@ confirms CUDA execution and exits. The cache survives restarts and can be reused
 on unchanged-main repair. The selected GPU, NVIDIA driver release, worker,
 model and package determine which cache is usable. After a driver change or
 cache loss, repair or the App's background analysis path can prepare the new
-cache. If a CPU-only installation later gains a usable NVIDIA device, rerun
+cache. On deep Windows paths Beat This can use `%LOCALAPPDATA%/LoBtJit`.
+This cache is keyed to the physical installation and is prepared again if
+the installation moves. If a CPU-only installation later gains a usable NVIDIA device, rerun
 the installer to acquire the CUDA package. If the installer cannot complete
 CUDA preparation for a detected device, it reports the failure and keeps
 the previous installation selected. A system without usable CUDA can install
@@ -68,14 +70,16 @@ the CPU worker.
 pinned model inputs and derives the BS-RoFormer and HTDemucs ONNX graphs
 locally. Setup verifies the locally built Windows HTDemucs worker and
 loads the CPU graph before selecting its immutable installation. Each
-Portable Release uses the installation for its own worker. The HTDemucs
+Portable Release uses the installation for its own sealed worker and CRT.
+The starter verifies the runtime and resources before launch. The HTDemucs
 CUDA path uses the qualified RTX 5090 Laptop GPU profile. Other devices
 use ONNX on CPU. A qualifying CUDA device failure starts a fresh CPU
 attempt.
 
 Unchanged-main worker and model repair can reuse a healthy Runtime without
 rebuilding Native.
-[Worker and asset details](model-worker-setup.md) describe both environments.
+[Worker and asset details](model-worker-setup.md) describe the pinned inputs,
+checks and provider selection.
 
 Acquisition resumes retained partial downloads and checks full pins before use.
 The installer binds child processes to its own runtime and ignores inherited
@@ -116,12 +120,11 @@ evidence from import and worker readiness.
 
 The advanced [bundle builder](../scripts/portable/build_bundle.py) packages a
 matching Native wheel and tracked source snapshot from a prepared Windows x64
-CPython 3.14 environment. It builds the matching Beat This executable and
-stages both provider packages for its runtime check. It accepts
+CPython 3.14 environment. It builds matching native workers and stages the
+Beat This provider packages for its runtime check. It accepts
 `--native-wheel`, `--native-source-commit`,
 `--ffmpeg-dir`, declared `--dll-dir` and `--license-file NAME=PATH` inputs,
 and `--output` outside the repository. Its output is a separate development
-bundle with no Git checkout metadata, private project data, Stem models or
-machine-specific CUDA cache.
+bundle with no Git checkout metadata, private project data, learned stem model bytes or machine-specific CUDA cache.
 Extract it in an empty directory and use its `START-LOOPER.bat --check`.
 The ordinary BAT remains the source install entry point.

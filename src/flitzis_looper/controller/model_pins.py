@@ -1,7 +1,6 @@
 """Full public model identities shared by source and Portable setup recipes."""
 
-# Existing verified bytes, matching the locked Demucs remote/files.txt identity.
-# This receipt is authored source; no personal workspace or previous cache is needed.
+# Stock HTDemucs checkpoint used to hydrate the locally installed ONNX graphs.
 DEMUCS_ASSETS: dict[str, tuple[int, str, str]] = {
     "955717e8-8726e21a.th": (
         84141911,

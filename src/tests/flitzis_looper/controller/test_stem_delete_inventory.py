@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.controller import stem_job, stem_provenance
+from flitzis_looper.controller import stem_job
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.stem_delete_inventory import (
     StemDeleteInventory,
@@ -147,7 +147,6 @@ def test_capture_is_detached_and_never_performs_io_or_acquires_custody(
         no_io.setattr(ProjectAssetLifecycle, "admission", forbidden)
         no_io.setattr(ProjectAssetLifecycle, "acquire", forbidden)
         no_io.setattr(ProjectAssetLifecycle, "retire", forbidden)
-        no_io.setattr(stem_provenance, "capture_processing_files", forbidden)
         no_io.setattr(stem_job, "StemGenerationJob", forbidden)
         no_io.setattr(StemIntentRegistry, "capture", forbidden)
         inventory = _single(metadata)
@@ -185,9 +184,7 @@ def test_settings_revision_alone_does_not_invalidate_existing_deletion_scope() -
 
     item = _first(_single(read_metadata(0)))
     before_revision = project.stem_processing_revision
-    project.stem_separator = "bs-roformer:musdb18hq"
-    project.demucs_shifts += 1
-    project.demucs_overlap = 0.5
+    project.stem_separator = "demucs:htdemucs"
     assert project.stem_processing_revision > before_revision
 
     assert stem_delete_item_currentness(item, read_metadata=read_metadata) == "current"

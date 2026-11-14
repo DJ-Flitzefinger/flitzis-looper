@@ -57,14 +57,13 @@ NATIVE_ENTRY = "flitzis_looper_audio/" + NATIVE_NAME
 WHEEL_TAG = "cp314-cp314-win_amd64"
 BEAT_WORKER_EXECUTABLE = Path("runtime/beat-this/native-beat-this-worker.exe")
 BS_WORKER_EXECUTABLE = Path("runtime/bs-roformer/native-bs-roformer-worker.exe")
-VENDORED_PACKAGE = Path("flitzis_bs_roformer")
-VENDORED_SOURCE = Path("vendor/bs_roformer/src") / VENDORED_PACKAGE
 NATIVE_SOURCE_RECORD = "windows-redistribution-sources.json"
 RUNTIME_REDISTRIBUTION_RECORD = "windows-runtime-redistribution.json"
 # Keep these literals readable by the legacy inventory parser.
 TRACKED_LICENSES = {
     "flitzis-looper.txt": "LICENSE.txt",
-    "bs-roformer-NOTICE.md": "vendor/bs_roformer/NOTICE.md",
+    "bs-roformer-NOTICE.md": "workers/bs_roformer/NOTICE.md",
+    "bs-roformer-LICENSE.txt": "workers/bs_roformer/LICENSE",
     "asio-sdk-LICENSE.txt": "rust/crates/looper/vendor/asio-sdk/LICENSE.txt",
     "asio-sdk-README.md": "rust/crates/looper/vendor/asio-sdk/README.md",
     "asio-sdk-provenance.json": "rust/crates/looper/vendor/asio-sdk/provenance.json",
@@ -143,43 +142,9 @@ def runtime_distributions() -> list[importlib.metadata.Distribution]:
     return [result[name] for name in sorted(result)]
 
 
-def check_vendored_source(distribution: importlib.metadata.Distribution) -> None:
-    """Reject a same-version vendored wheel built from different source."""
-    tracked = {
-        Path(name).relative_to(VENDORED_SOURCE)
-        for name in git("ls-files", "-z", "--", VENDORED_SOURCE.as_posix()).split("\0")
-        if name
-    }
-    packaged = {
-        Path(record).relative_to(VENDORED_PACKAGE): record
-        for record in distribution.files or []
-        if Path(record).is_relative_to(VENDORED_PACKAGE) and "__pycache__" not in record.parts
-    }
-    require(
-        tracked and packaged.keys() == tracked, "BS-RoFormer wheel file list differs from source"
-    )
-    for path, record in sorted(packaged.items()):
-        installed = Path(distribution.locate_file(record)).read_bytes()
-        require(
-            installed == (REPO / VENDORED_SOURCE / path).read_bytes(),
-            f"BS-RoFormer wheel differs from tracked source: {path.as_posix()}",
-        )
-        checksum = base64.urlsafe_b64encode(hashlib.sha256(installed).digest()).decode().rstrip("=")
-        require(
-            record.size == len(installed)
-            and record.hash is not None
-            and record.hash.mode == "sha256"
-            and record.hash.value == checksum,
-            f"BS-RoFormer wheel RECORD differs from source: {path.as_posix()}",
-        )
-
-
 def copy_runtime_dependencies(destination: Path) -> dict[str, str]:
     site = Path(sysconfig.get_path("purelib")).resolve()
     distributions = runtime_distributions()
-    for distribution in distributions:
-        if canonicalize_name(distribution.name) == "flitzis-bs-roformer":
-            check_vendored_source(distribution)
     for distribution in distributions:
         copy_distribution(distribution, site, destination)
     return {distribution.metadata["Name"]: distribution.version for distribution in distributions}
@@ -190,26 +155,15 @@ def copy_distribution(
 ) -> None:
     require(distribution.files, f"Missing installed file inventory: {distribution.name}")
     distribution_site = Path(distribution.locate_file("")).resolve()
-    vendor = canonicalize_name(distribution.name) == "flitzis-bs-roformer"
     require(
-        distribution_site == site or vendor,
+        distribution_site == site,
         f"Distribution is outside the build environment: {distribution.name}",
     )
-    vendor_metadata = Path(f"flitzis_bs_roformer-{distribution.version}.dist-info")
     for record in distribution.files or []:
         source = Path(distribution.locate_file(record)).resolve()
         if not source.is_relative_to(distribution_site):
             continue  # Console scripts are unused: workers use this Python.
         relative = source.relative_to(distribution_site)
-        if vendor:
-            require(
-                relative == Path(record)
-                and (
-                    relative.is_relative_to(VENDORED_PACKAGE)
-                    or relative.is_relative_to(vendor_metadata)
-                ),
-                f"Unexpected BS-RoFormer wheel entry: {record}",
-            )
         if source.name == "direct_url.json" or "__pycache__" in relative.parts:
             continue
         if source.suffix == ".pth":
@@ -478,30 +432,30 @@ def bs_worker_executable(args: argparse.Namespace, output: Path) -> Path:
 def copy_htdemucs_worker(
     args: argparse.Namespace, output: Path, runtime: Path, checkout: Path
 ) -> None:
-    """Package the HTDemucs worker only for a checkout with complete approvals."""
+    """Package the checkout's approved HTDemucs worker."""
     from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
         HTDEMUCS_RUNTIME_EXECUTABLE,
         build_htdemucs_onnx_worker,
-        htdemucs_onnx_released,
         verify_htdemucs_release_worker,
     )
 
     executable: Path | None = getattr(args, "htdemucs_worker_executable", None)
-    if not htdemucs_onnx_released(checkout):
-        require(executable is None, "This checkout has no approved HTDemucs worker")
-        return
     if args.runtime_directory:
         if executable is None:
             msg = "Ordinary installs must supply their built HTDemucs worker"
             raise ValueError(msg)
         build_target = os.environ.get("CARGO_TARGET_DIR")
         expected = (
-            Path(build_target) / "x86_64-pc-windows-msvc/release"
+            Path(build_target)
+            / "x86_64-pc-windows-msvc/release"
             / Path(HTDEMUCS_RUNTIME_EXECUTABLE).name
-            if build_target else None
+            if build_target
+            else None
         )
-        require(expected is not None and executable.resolve() == expected.resolve(),
-                "The HTDemucs worker must come from the owned Cargo target")
+        require(
+            expected is not None and executable.resolve() == expected.resolve(),
+            "The HTDemucs worker must come from the owned Cargo target",
+        )
     else:
         require(executable is None, "The ZIP builder compiles its HTDemucs worker from source")
         executable = build_htdemucs_onnx_worker(REPO, output / "htdemucs-worker-build")

@@ -25,54 +25,49 @@ The device UUID, driver release, package, graph and warmup identity govern reuse
 After an update or cache loss, setup or the next background analysis prepares
 the cache again. CPU execution is available when CUDA is unavailable. The
 check command verifies the package and reports cache status without inference.
+On deep Windows paths the worker uses a compact installation cache or
+`%LOCALAPPDATA%/LoBtJit`, keyed to the physical installation path.
 
 Keep the earlier worker installation and its pointer while testing a new
-installation. The separate Python 3.12 [CPU](../workers/beat_this/uv.lock) and
-[CUDA](../workers/beat_this_cuda/uv.lock) environments remain available through
-the explicit lower-level `flitzis_looper.analysis.setup` command for reference
-work. Windows x64 production uses the ONNX package.
-
+installation.
 
 ## Optional stem models and codecs
 
+On Windows x64, make a supported shared FFmpeg build with FFprobe available.
+Use the runtime PATH or set `FLITZIS_FFMPEG_DIR` to its bin directory. Portable
+binds its own copies. Prepare and check the stem installations from the
+repository root:
+
 ```powershell
 uv run --no-sync python scripts/setup-runtime.py --with-stems
-ffmpeg -version
-ffprobe -version
+uv run --no-sync python scripts/setup-runtime.py --with-stems --check
 ```
 
-Use FFmpeg with FFprobe on the runtime path. On Windows use the shared build
-that also supplies the DLLs needed by TorchCodec. Portable bundles its own
-copy. The application's [main lock](../uv.lock) selects Windows CUDA 13.0
-Torch 2.12.0 and TorchAudio 2.11.0 wheels and TorchCodec 0.13.0. The separate
-Beat This worker does not share these packages.
+Setup verifies the pinned [HTDemucs checkpoint](../src/flitzis_looper/controller/model_pins.py)
+and [BS-RoFormer configuration and checkpoint](../src/flitzis_looper/controller/bs_roformer_assets.py).
+The default input cache is `models/stem-checkpoints`. `FLITZIS_MODEL_CACHE_DIR`
+selects an explicit cache subject to path ownership checks. Model acquisition
+resumes interrupted transfers and verifies the complete files against their
+pinned digests. Setup uses tracked graph topology and derives the learned data
+locally. Checkpoints and derived weights stay in the local model cache.
 
-The extra setup flag acquires and verifies the pinned Demucs `htdemucs` and
-BS-RoFormer MUSDB18HQ assets and checks each model on CPU. On Windows x64,
-it builds the native BS-RoFormer worker, derives its external weights locally
-and verifies its [CPU and CUDA graph topology](../workers/bs_roformer/README.md).
-The validated installation is retained under `models/bs-roformer-onnx/`.
-The CPU worker also verifies the Intel oneMKL and OpenMP DLLs acquired from
-pinned Intel wheels during installation. Their original licenses and
-third-party notices stay with each installed package in `mkl-notices/`.
-The Source checkout and Portable archive carry the installer and graph
-topology. The installer obtains the Intel libraries directly from PyPI.
-CUDA preparation runs under the offline worker owner and reuses the cache for
-the matching GPU, driver, worker, graph and runtime. The
-[Demucs pins](../src/flitzis_looper/controller/model_pins.py) and
-[BS-RoFormer pins](../src/flitzis_looper/controller/bs_roformer_assets.py)
-are the authority for filenames, checksums and source provenance. The default
-stem checkpoint path is `models/torch/hub/checkpoints/`. An explicit
-`FLITZIS_MODEL_CACHE_DIR` selects a separate model cache subject to path
-ownership checks. Generate and Settings use existing local assets.
+- **BS-RoFormer MUSDB18HQ** uses an installed native worker under
+  `models/bs-roformer-onnx/` with the
+  [CPU and CUDA graph topology](../workers/bs_roformer/README.md). Its CPU path
+  uses Intel oneMKL and OpenMP libraries from pinned Intel wheels. The
+  installation retains their licenses and notices in `mkl-notices/`.
+  CUDA preparation reuses the cache for the matching GPU, driver, worker, graph
+  and runtime.
+- **HTDemucs** uses an immutable ONNX installation paired with the locally
+  built worker and its C runtime. Source resolves the worker from its own Cargo
+  build output. Portable pairs each installed Release with its sealed worker
+  and CRT. Managed Release environments can bind an independently built worker
+  through their verified runtime configuration.
 
-BS-RoFormer is the default for fresh settings. A saved Demucs choice remains
-valid, and switching the setting affects future generation requests. Verified
-saved sets can restore with neither model installed. A qualifying CUDA failure
-retries the selected model on CPU and records the reason. Asset, codec,
-cancellation and host-resource errors keep their own outcomes.
-See [stem execution and adoption](architecture/stems.md).
-
-Setup resumes interrupted acquisitions and checks complete pinned digests before
-activation. Model-load and availability checks establish readiness. Actual
-inference receipts establish execution and fallback device.
+Setup checks both model loads on CPU before selecting verified resources.
+Generation and Settings use the installed resources. Verified saved stem sets
+restore without model inference, including when a separator is unavailable.
+BS-RoFormer is the default for fresh settings. Selecting HTDemucs preserves
+its configured shifts and overlap for subsequent jobs. See the
+[stem architecture](architecture/stems.md) for provider qualification,
+fallback and assignments.

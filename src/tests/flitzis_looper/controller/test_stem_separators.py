@@ -1,59 +1,20 @@
-import hashlib
-import os
-import sys
 import urllib.request
-import wave
-from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
-import pytest
-
 from flitzis_looper.controller import AppController, bs_roformer_assets
-from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
-from flitzis_looper.controller.stem_generation import (
-    AudioShape,
-    CommandResult,
-    StemGenerationError,
-    StemGenerationRequest,
-)
 from flitzis_looper.controller.stem_separators import SelectedStemGenerationBackend
-from flitzis_looper.models import STEM_KINDS
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
+
+    import pytest
 
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
     from flitzis_looper.models import StemSeparator
-
-
-def _request(tmp_path: Path) -> StemGenerationRequest:
-    source = tmp_path / "source.wav"
-    write_mono_pcm16_wav(source, 44_100)
-    return StemGenerationRequest(
-        sample_id=0,
-        source_path=source,
-        source_version="source.wav|sha256-v1:" + hashlib.sha256(source.read_bytes()).hexdigest(),
-        cache_dir=tmp_path / "generation",
-        target_shape=AudioShape(sample_rate_hz=44_100, channels=1, frame_count=128),
-        model_cache_dir=tmp_path / "models",
-        separator="bs-roformer:musdb18hq",
-    )
-
-
-def _install_test_assets(directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Small fixtures retain real size/digest verification at the adapter boundary;
-    # they are never deserialized or presented as actual model inference.
-    directory.mkdir()
-    pins = []
-    for filename in (bs_roformer_assets.CONFIG_FILENAME, bs_roformer_assets.CHECKPOINT_FILENAME):
-        payload = filename.encode("ascii")
-        (directory / filename).write_bytes(payload)
-        pins.append((filename, len(payload), hashlib.sha256(payload).hexdigest()))
-    monkeypatch.setattr(bs_roformer_assets, "MODEL_ASSETS", tuple(pins))
 
 
 def _forbid_downloads(monkeypatch: pytest.MonkeyPatch) -> Mock:
@@ -61,164 +22,6 @@ def _forbid_downloads(monkeypatch: pytest.MonkeyPatch) -> Mock:
     monkeypatch.setattr(bs_roformer_assets, "install_model_assets", forbidden)
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
     return forbidden
-
-
-@pytest.mark.parametrize("filename", [None, bs_roformer_assets.CONFIG_FILENAME])
-def test_missing_or_corrupt_model_rejects_before_subprocess(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str | None
-) -> None:
-    request = _request(tmp_path)
-    if filename is not None:
-        _install_test_assets(request.model_cache_dir, monkeypatch)
-        asset = request.model_cache_dir / filename
-        stat = asset.stat()
-        asset.write_bytes(b"x" * stat.st_size)
-        os.utime(asset, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-    runner = Mock()
-    downloads = _forbid_downloads(monkeypatch)
-    backend = BsRoformerStemGenerationBackend(command_runner=runner)
-
-    with pytest.raises(StemGenerationError, match=r"no Model installed|integrity check failed"):
-        backend.generate(request, lambda _percent, _stage: None)
-
-    runner.assert_not_called()
-    downloads.assert_not_called()
-    assert not request.cache_dir.exists()
-
-
-def test_same_size_same_mtime_checkpoint_corruption_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _request(tmp_path)
-    _install_test_assets(request.model_cache_dir, monkeypatch)
-    asset = request.model_cache_dir / bs_roformer_assets.CHECKPOINT_FILENAME
-    stat = asset.stat()
-    asset.write_bytes(b"x" * stat.st_size)
-    os.utime(asset, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-    runner = Mock()
-    backend = BsRoformerStemGenerationBackend(command_runner=runner)
-
-    with pytest.raises(StemGenerationError, match="integrity check failed"):
-        backend.generate(request, lambda _percent, _stage: None)
-
-    runner.assert_not_called()
-    assert asset.stat().st_size == stat.st_size
-    assert asset.stat().st_mtime_ns == stat.st_mtime_ns
-
-
-def test_cuda_failure_retries_identical_model_on_cpu_without_download(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _request(tmp_path)
-    _install_test_assets(request.model_cache_dir, monkeypatch)
-    downloads = _forbid_downloads(monkeypatch)
-    commands: list[list[str]] = []
-    stages: list[str] = []
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
-        if args[0] in {"ffprobe", "ffmpeg"}:
-            return CommandResult(0, "ok", "")
-        commands.append(args)
-        if args[args.index("--device") + 1] == "cuda":
-            return CommandResult(
-                70, "FLITZIS_CUDA_FAILURE_V1:placement_or_inference", "CUDA out of memory"
-            )
-        output = Path(args[args.index("--output") + 1])
-        for name in ("drums", "bass", "other", "vocals"):
-            write_mono_pcm16_wav(output / f"{name}.wav", 44_100)
-        return CommandResult(0, "", "")
-
-    backend = BsRoformerStemGenerationBackend(
-        command_runner=runner, cuda_detector=lambda _env, _runner: True
-    )
-    result = backend.generate(request, lambda _percent, stage: stages.append(stage))
-
-    assert result.backend_name == "bs-roformer"
-    assert result.model_name == bs_roformer_assets.MODEL_NAME
-    assert result.device == "cpu"
-    assert result.cpu_fallback is True
-    assert result.artifact_count == len(STEM_KINDS)
-    assert "same model" in (result.diagnostic or "")
-    assert [args[args.index("--device") + 1] for args in commands] == ["cuda", "cpu"]
-    for args in commands:
-        assert args[1:3] == ["-m", "flitzis_bs_roformer"]
-        assert Path(args[args.index("--checkpoint") + 1]) == (
-            request.model_cache_dir / bs_roformer_assets.CHECKPOINT_FILENAME
-        )
-        assert Path(args[args.index("--config") + 1]) == (
-            request.model_cache_dir / bs_roformer_assets.CONFIG_FILENAME
-        )
-    assert any("retrying same BS-RoFormer model on CPU" in stage for stage in stages)
-    downloads.assert_not_called()
-    assert {path.name for path in request.cache_dir.iterdir()} == {
-        f"{kind}.wav" for kind in STEM_KINDS
-    }
-    for kind in STEM_KINDS:
-        with wave.open(str(request.cache_dir / f"{kind}.wav"), "rb") as wav:
-            assert (wav.getframerate(), wav.getnchannels(), wav.getnframes()) == (44_100, 1, 128)
-
-
-def test_incomplete_model_output_preserves_existing_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = _request(tmp_path)
-    _install_test_assets(request.model_cache_dir, monkeypatch)
-    request.cache_dir.mkdir()
-    previous = {kind: kind.encode("ascii") for kind in STEM_KINDS}
-    for kind, contents in previous.items():
-        (request.cache_dir / f"{kind}.wav").write_bytes(contents)
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
-        if args[0] in {"ffprobe", "ffmpeg"}:
-            return CommandResult(0, "ok", "")
-        output = Path(args[args.index("--output") + 1])
-        for name in ("drums", "other", "vocals"):
-            write_mono_pcm16_wav(output / f"{name}.wav", 44_100)
-        return CommandResult(0, "", "")
-
-    backend = BsRoformerStemGenerationBackend(
-        command_runner=runner, cuda_detector=lambda _env, _runner: False
-    )
-    with pytest.raises(StemGenerationError, match=r"missing bass\.wav"):
-        backend.generate(request, lambda _percent, _stage: None)
-
-    assert {path.name for path in request.cache_dir.iterdir()} == {
-        f"{kind}.wav" for kind in STEM_KINDS
-    }
-    for kind, contents in previous.items():
-        assert (request.cache_dir / f"{kind}.wav").read_bytes() == contents
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows verbatim paths")
-def test_bs_long_private_attempt_keeps_nested_paths_addressable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    base_units = len(str(tmp_path).encode("utf-16-le")) // 2
-    cache_dir = tmp_path / ("g" * (225 - base_units - 1))
-    assert len(str(cache_dir).encode("utf-16-le")) // 2 == 225
-    request = replace(_request(tmp_path), cache_dir=cache_dir, device_policy="cpu")
-    _install_test_assets(request.model_cache_dir, monkeypatch)
-
-    def runner(args: list[str], *, cwd: Path, env: dict[str, str]) -> CommandResult:
-        if args[0] in {"ffprobe", "ffmpeg"}:
-            return CommandResult(0, "ok", "")
-        output = Path(args[args.index("--output") + 1])
-        source_cache = Path(env["PYTHONPYCACHEPREFIX"])
-        assert str(output).startswith("\\\\?\\")
-        assert output.parent.samefile(cache_dir)
-        assert source_cache.parent == output
-        assert not any(source_cache.iterdir())
-        assert args[args.index("--source") + 1] == str(request.source_path)
-        for name in ("drums", "bass", "other", "vocals"):
-            write_mono_pcm16_wav(output / f"{name}.wav", 44_100)
-        return CommandResult(0, "", "")
-
-    result = BsRoformerStemGenerationBackend(command_runner=runner).generate(
-        request, lambda _percent, _stage: None
-    )
-
-    assert result.artifact_count == len(STEM_KINDS)
-    assert {path.name for path in cache_dir.iterdir()} == {f"{kind}.wav" for kind in STEM_KINDS}
 
 
 def _load_pad(controller: AppController, tmp_path: Path, sample_id: int) -> None:
@@ -290,9 +93,6 @@ def test_restore_complete_demucs_cache_needs_no_selected_roformer_model(
     downloads = _forbid_downloads(monkeypatch)
     no_model_load = Mock(side_effect=AssertionError("restore must not load separator models"))
     monkeypatch.setattr(bs_roformer_assets, "verify_model_assets", no_model_load)
-    monkeypatch.setattr(
-        "flitzis_looper.controller.bs_roformer_generation.verify_model_assets", no_model_load
-    )
     audio_engine_mock.publish_prepared_stems.reset_mock()
 
     controller.stems.restore_stem_cache_from_project_state()

@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 from io import BytesIO
-from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING
 
@@ -22,6 +21,7 @@ from flitzis_looper.analysis.windows_job import WindowsJob
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from pathlib import Path
 
 
 def _wait_file(path: Path) -> None:
@@ -366,46 +366,6 @@ def _blocked_body(ready: Path, release: Path) -> str:
         f"while not Path({str(release)!r}).exists(): time.sleep(0.005)\n"
         "print('{}')\n"
     )
-
-
-def test_analysis_slot_and_two_owned_commands_have_independent_admission(tmp_path: Path) -> None:
-    beat_ready = tmp_path / "beat.ready"
-    first_ready = tmp_path / "first.ready"
-    second_ready = tmp_path / "second.ready"
-    release = tmp_path / "release"
-    script = tmp_path / "beat.py"
-    script.write_text(_blocked_body(beat_ready, release), encoding="utf-8")
-    command = process.WorkerCommand(Path(sys.executable), script, tmp_path / "unused", tmp_path)
-    cancel = Event()
-    beat_retired = Event()
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        beat = executor.submit(
-            process.run_process, command, b"{}", cancel, WorkerLimits(), beat_retired
-        )
-        first = executor.submit(
-            _run,
-            [sys.executable, "-I", "-c", _blocked_body(first_ready, release)],
-            tmp_path,
-        )
-        second = executor.submit(
-            _run,
-            [sys.executable, "-I", "-c", _blocked_body(second_ready, release)],
-            tmp_path,
-        )
-        try:
-            for ready in (beat_ready, first_ready, second_ready):
-                _wait_file(ready)
-            assert not beat_retired.is_set()
-            assert not first.done()
-            assert not second.done()
-            busy = process.run_process(command, b"{}", Event(), WorkerLimits(), Event())
-            assert busy.reason == "worker_busy"
-        finally:
-            release.touch()
-            cancel.set()
-        assert beat.result(10).resources_released
-        assert first.result(10).reason == "ok"
-        assert second.result(10).reason == "ok"
 
 
 def test_optional_owned_abort_hook_can_settle_child_before_escalation(tmp_path: Path) -> None:

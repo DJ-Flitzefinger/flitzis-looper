@@ -3,7 +3,6 @@
 import argparse
 import base64
 import hashlib
-import importlib.metadata
 import importlib.util
 import json
 import os
@@ -130,7 +129,7 @@ def test_native_redistribution_checks_staged_dlls_overlay_and_notices(tmp_path: 
     }
 
 
-def test_runtime_redistribution_reports_private_crt_and_wheel_drift(tmp_path: Path) -> None:
+def test_runtime_redistribution_reports_private_crt_and_notice_drift(tmp_path: Path) -> None:
     builder = _license_builder()
     record = builder.RUNTIME_REDISTRIBUTION_RECORD
     source = builder.REPO / builder.TRACKED_LICENSES[record]
@@ -149,10 +148,10 @@ def test_runtime_redistribution_reports_private_crt_and_wheel_drift(tmp_path: Pa
 
     native_crt = "src/flitzis_looper_audio/vcruntime140.dll"
     python_crt = "python/vcruntime140.dll"
-    wheel_dll = "python/Lib/site-packages/torch/lib/cudnn64_9.dll"
+    notice = "licenses/msvc-2026.docx"
     assert checkout_files[native_crt] == runtime_files[python_crt]
     changed_checkout = {**checkout_files, native_crt: "0" * 64}
-    changed_runtime = {**runtime_files, wheel_dll: "1" * 64}
+    changed_runtime = {**runtime_files, notice: "1" * 64}
     del changed_runtime[python_crt]
     comparison = builder._redistribution_reference(
         tmp_path, record, changed_checkout, changed_runtime
@@ -162,7 +161,7 @@ def test_runtime_redistribution_reports_private_crt_and_wheel_drift(tmp_path: Pa
         "reference_match": False,
         "reference_mismatches": {
             "checkout_files": [native_crt],
-            "runtime_files": sorted([python_crt, wheel_dll]),
+            "runtime_files": sorted([python_crt, notice]),
         },
     }
 
@@ -292,36 +291,6 @@ def test_candidate_archive_contains_tracked_bytes_and_empty_directories(
             "release-manifest.json",
         }
         assert archive.read("flitzis-looper/Tracked File.py") == b"exact bytes\r\n"
-
-
-def test_vendored_wheel_must_match_source_even_at_same_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    builder = _license_builder()
-    relative = builder.VENDORED_SOURCE / "inference.py"
-    source = tmp_path / "source"
-    tracked = source / relative
-    tracked.parent.mkdir(parents=True)
-    tracked.write_bytes(b"current vendor source")
-    monkeypatch.setattr(builder, "REPO", source)
-    monkeypatch.setattr(builder, "git", lambda *args: relative.as_posix() + "\0")
-    site = tmp_path / "site"
-    metadata = site / "flitzis_bs_roformer-0.1.0.dist-info"
-    metadata.mkdir(parents=True)
-    package_file = site / "flitzis_bs_roformer/inference.py"
-    package_file.parent.mkdir()
-    package_file.write_bytes(b"stale vendor source")
-    checksum = (
-        base64.urlsafe_b64encode(hashlib.sha256(tracked.read_bytes()).digest()).decode().rstrip("=")
-    )
-    record = f"flitzis_bs_roformer/inference.py,sha256={checksum},{tracked.stat().st_size}\n"
-    (metadata / "RECORD").write_text(record, encoding="utf-8")
-    distribution = importlib.metadata.PathDistribution(metadata)
-    with pytest.raises(ValueError, match=r"differs from tracked source: inference\.py"):
-        builder.check_vendored_source(distribution)
-
-    package_file.write_bytes(tracked.read_bytes())
-    builder.check_vendored_source(distribution)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Portable starter")

@@ -17,7 +17,6 @@ from flitzis_looper.analysis.contracts import (
 )
 from flitzis_looper.analysis.jobs import OfflineAnalysisService
 from flitzis_looper.analysis.publication import MAX_ENVELOPE_BYTES, decode_result
-from flitzis_looper.analysis.worker import BeatWorkerAdapter
 from tests.conftest import write_mono_pcm16_wav
 
 if TYPE_CHECKING:
@@ -38,9 +37,10 @@ def _wait_event(engine: AudioEngine, event_type: str) -> dict[str, object]:
     pytest.fail(f"timed out waiting for native event {event_type}")
 
 
-class _InspectingMissingAdapter(BeatWorkerAdapter):
+class _InspectingMissingAdapter:
     def __init__(self) -> None:
-        super().__init__()
+        self.retired = Event()
+        self.retired.set()
         self.pcm: tuple[float, ...] = ()
         self.request: BeatWorkerRequest | None = None
 
@@ -48,7 +48,8 @@ class _InspectingMissingAdapter(BeatWorkerAdapter):
         self.request = request
         pcm = request.pcm.path.read_bytes()
         self.pcm = struct.unpack(f"<{request.pcm.frame_count}f", pcm)
-        return super().run(request, cancel)
+        assert not cancel.is_set()
+        return BeatComponentResult(request.identity, request.model, "unavailable", "missing_worker")
 
 
 class _HoldingAdapter:

@@ -37,6 +37,13 @@ _RECIPE = "beat-this-fp32-repeated-half-second-v1"
 _SYSTEM32 = 0x800
 _REPARSE = 0x400
 _RECEIPT_BYTES = 256 * 1024
+_WINDOWS_MAX_PATH = 260
+# NVIDIA writes /00/<62 hex>.bin and needs extra room for a temporary name
+# before publication. The retained 158-unit root produced those files; the
+# 176-unit Source root created shard directories but no binaries.
+_KERNEL_PATH_SUFFIX = len("/00/") + 62 + len(".bin")
+_KERNEL_TEMP_HEADROOM = 31
+_USER_CACHE_FOLDER = "LoBtJit"
 
 type CacheState = Literal["ready", "unavailable", "pending", "failed"]
 
@@ -158,17 +165,23 @@ class _Cache:
     key: str
     identity: CudaDeviceIdentity
     generation: str | None = None
+    compact: bool = False
 
     @property
     def folder(self) -> Path:
         # The receipt retains the whole key; shorter path components leave room
         # for NVIDIA's own nested cache paths in a relocated installation.
-        return self.root / self.key[:32]
+        return self.root / (self.key[:24] if self.compact else self.key[:32])
 
     @property
     def kernels(self) -> Path:
         assert self.generation is not None
-        return self.folder / f"kernels-{self.generation}"
+        return self.folder / (self.generation if self.compact else f"kernels-{self.generation}")
+
+    def fits_windows(self) -> bool:
+        prospective = replace(self, generation="0" * 12).kernels
+        chars = len(str(prospective).encode("utf-16-le")) // 2
+        return chars + _KERNEL_PATH_SUFFIX + _KERNEL_TEMP_HEADROOM + 1 <= _WINDOWS_MAX_PATH
 
     @property
     def receipt(self) -> Path:
@@ -195,7 +208,29 @@ def _selection(
         "warmup_frames": _FRAMES,
     }
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
-    return _Cache(configuration.manifest.parent.parent / "cuda-cache", key, identity)
+    root = configuration.manifest.parent.parent
+    # Check custody on the supplied path even when a DOS drive alias resolves
+    # to the actual installation used by the application.
+    _ordinary_tree(root)
+    root = root.resolve(strict=True)
+    cache = _Cache(root / "cuda-cache", key, identity)
+    if os.name != "nt" or cache.fits_windows():
+        return cache
+    compact = _Cache(root / "jit", key, identity, compact=True)
+    if compact.fits_windows():
+        return compact
+    local = os.environ.get("LOCALAPPDATA")
+    user_cache = Path(local) if local else Path.home() / "AppData" / "Local"
+    if user_cache.is_absolute():
+        _ordinary_tree(user_cache)
+        fallback_root = user_cache / _USER_CACHE_FOLDER
+        owner = os.path.normcase(str(root))
+        fallback_key = hashlib.sha256(f"{key}:{owner}".encode()).hexdigest()
+        fallback = _Cache(fallback_root, fallback_key, identity, compact=True)
+        if fallback.fits_windows():
+            return fallback
+    message = "BeatThis CUDA cache path is too long for NVIDIA kernel files"
+    raise ValueError(message)
 
 
 def _status(
@@ -516,6 +551,9 @@ def _ensure(
         current = _selection(configuration)
         if not isinstance(current, _Cache):
             return current
+        if current.root != cache.root:
+            message = "BeatThis CUDA cache root changed during preparation"
+            raise RuntimeError(message)
         receipt = _read_receipt(current)
         status = _cached_status(current, receipt)
         if status["status"] == "ready" or (

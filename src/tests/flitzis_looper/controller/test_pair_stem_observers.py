@@ -226,8 +226,9 @@ def _resolve_identity(
     rig.controller._inference_jobs.discard(job.request.cache_dir)
     guard = Mock(name="owned producer files")
     monkeypatch.setattr(rig.controller, "_resolved_processing_request", lambda request: request)
-    monkeypatch.setattr(stems, "capture_processing_files", lambda _request: (guard, "2" * 64))
-    monkeypatch.setattr(stems, "processing_source_roots", lambda _request, _guard: ())
+    monkeypatch.setattr(
+        rig.backend, "capture_producer", lambda _request: (guard, "2" * 64), raising=False
+    )
     rig.backend.result = replace(
         rig.backend.result,
         backend_name="demucs",

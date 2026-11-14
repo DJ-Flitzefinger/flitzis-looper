@@ -2,7 +2,6 @@
 
 # Standalone entrypoint copied into each runtime.
 import argparse
-import csv
 import ctypes
 import importlib
 import inspect
@@ -11,15 +10,12 @@ import os
 import re
 import subprocess
 import sys
-from contextlib import redirect_stdout
 from ctypes import wintypes
-from importlib import metadata
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 FFMPEG_DLL = re.compile(
     r"(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)-[0-9]+\.dll"
 )
-FFMPEG_CODEC_LIBRARIES = {"avcodec", "avfilter", "avformat", "avutil", "swresample", "swscale"}
 
 
 def physical_path(path: Path) -> Path:
@@ -54,25 +50,14 @@ def configure(root: Path, checkout: Path, runtime: Path | None = None) -> list[o
     os.environ["PYTHONPATH"] = str(checkout / "src")
     os.chdir(checkout)
     os.environ["FLITZIS_PORTABLE_RUNTIME"] = str(runtime.absolute())
-    os.environ["FLITZIS_MODEL_CACHE_DIR"] = str(root / "models/torch/hub/checkpoints")
-    os.environ["TORCH_HOME"] = str(root / "models/torch")
-    os.environ["HF_HOME"] = str(root / "models/huggingface")
-    os.environ["HF_HUB_CACHE"] = str(root / "models/huggingface/hub")
+    os.environ["FLITZIS_MODEL_CACHE_DIR"] = str(root / "models/stem-checkpoints")
     os.environ["XDG_CACHE_HOME"] = str(root / "cache")
-    os.environ["DORA_DIR"] = str(root / "cache/dora")
     os.environ["FLITZIS_UI_STATE_DIR"] = str(root / "cache/ui")
     os.environ["TMP"] = os.environ["TEMP"] = str(root / "cache/temp")
     for name, relative in {
         "PIP_CACHE_DIR": "cache/pip",
         "UV_CACHE_DIR": "cache/uv",
-        "HF_ASSETS_CACHE": "models/huggingface/assets",
-        "HUGGINGFACE_HUB_CACHE": "models/huggingface/hub",
-        "NUMBA_CACHE_DIR": "cache/numba",
         "CUDA_CACHE_PATH": "cache/cuda",
-        "TRITON_CACHE_DIR": "cache/triton",
-        "TORCHINDUCTOR_CACHE_DIR": "cache/torchinductor",
-        "TORCH_EXTENSIONS_DIR": "cache/torch-extensions",
-        "MPLCONFIGDIR": "cache/matplotlib",
         "PYTHONPYCACHEPREFIX": "cache/pycache",
     }.items():
         os.environ[name] = str(root / relative)
@@ -154,17 +139,15 @@ def loaded_dll_paths(kernel: ctypes.WinDLL) -> list[Path]:
 
 
 def dependency_dll_origins(
-    paths: list[Path], runtime: Path, system_dir: Path, torch_names: set[str]
-) -> dict[str, dict[str, str] | list[str]]:
-    """Verify the Windows wheel and TorchCodec's private shared FFmpeg libraries."""
+    paths: list[Path], runtime: Path, system_dir: Path
+) -> dict[str, dict[str, str]]:
+    """Verify the origins of observed system dependencies and any mapped FFmpeg images."""
     runtime = physical_path(runtime)
-    torch = {name: runtime / "python/Lib/site-packages/torch/lib" / name for name in torch_names}
     ffmpeg = {
         path.name.lower(): path
         for path in (runtime / "runtime/ffmpeg").glob("*.dll")
         if FFMPEG_DLL.fullmatch(path.name.lower())
     }
-    expected = torch | ffmpeg
     mapped: dict[str, str] = {}
     os_dlls: dict[str, str] = {}
     system_dir = physical_path(system_dir)
@@ -179,33 +162,18 @@ def dependency_dll_origins(
                 message = f"Unexpected Windows DLL origin: {resolved}"
                 raise RuntimeError(message)
             os_dlls[name] = str(resolved)
-        elif name in expected or FFMPEG_DLL.fullmatch(name):
+        elif FFMPEG_DLL.fullmatch(name):
             resolved = physical_path(path)
-            if name not in expected or resolved != expected[name]:
+            if resolved != ffmpeg.get(name):
                 message = f"Nonportable dependency DLL resolution: {resolved}"
                 raise RuntimeError(message)
             mapped[name] = str(resolved)
 
-    # The Windows Torch wheel eagerly loads its lib directory. TorchCodec loads
-    # only the FFmpeg libraries linked by the selected backend.
-    missing_torch = (torch.keys() | {"torch_cpu.dll"}) - mapped.keys()
-    loaded_ffmpeg = {name: mapped[name] for name in sorted(ffmpeg.keys() & mapped.keys())}
-    missing_ffmpeg = FFMPEG_CODEC_LIBRARIES - {name.split("-", 1)[0] for name in loaded_ffmpeg}
-    if missing_torch or missing_ffmpeg:
-        message = (
-            f"Missing loaded dependency DLLs: Torch {sorted(missing_torch)}, "
-            f"FFmpeg {sorted(missing_ffmpeg)}"
-        )
-        raise RuntimeError(message)
-    return {
-        "torch": {name: mapped[name] for name in sorted(torch)},
-        "ffmpeg": loaded_ffmpeg,
-        "ffmpeg_not_loaded": sorted(ffmpeg.keys() - loaded_ffmpeg.keys()),
-        "os_dependencies": os_dlls,
-    }
+    # Codecs normally run in their own FFmpeg processes.
+    return {"ffmpeg": mapped, "os_dependencies": os_dlls}
 
 
-def check_dependency_dlls(runtime: Path) -> dict[str, dict[str, str] | list[str]]:
+def check_dependency_dlls(runtime: Path) -> dict[str, dict[str, str]]:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     system_directory = kernel.GetSystemDirectoryW
     system_directory.argtypes = [wintypes.LPWSTR, wintypes.UINT]
@@ -217,36 +185,7 @@ def check_dependency_dlls(runtime: Path) -> dict[str, dict[str, str] | list[str]
         loaded_dll_paths(kernel),
         runtime,
         Path(buffer.value),
-        torch_wheel_dlls(runtime),
     )
-
-
-def torch_wheel_dlls(runtime: Path) -> set[str]:
-    """Use the private wheel RECORD even if a declared DLL is missing on disk."""
-    torch = metadata.distribution("torch")
-    site = runtime / "python/Lib/site-packages"
-    record = torch.read_text("RECORD")
-    if physical_path(torch.locate_file("")) != physical_path(site) or record is None:
-        message = "Portable Torch has no private wheel file inventory"
-        raise RuntimeError(message)
-    paths = (PurePosixPath(row[0]) for row in csv.reader(record.splitlines()) if row)
-    return {
-        path.name.lower()
-        for path in paths
-        if path.parent.as_posix() == "torch/lib" and path.suffix.lower() == ".dll"
-    }
-
-
-def check_stem_dependency_child(runtime: Path) -> None:
-    with redirect_stdout(sys.stderr):
-        for name in (
-            "torchcodec.encoders",
-            "flitzis_looper.demucs_streaming",
-            "flitzis_bs_roformer.__main__",
-        ):
-            importlib.import_module(name)
-    sys.stdout.write(json.dumps(check_dependency_dlls(runtime)) + "\n")
-    sys.stdout.flush()
 
 
 def check_resident_api(engine_type: type) -> None:
@@ -1006,27 +945,21 @@ def check_bs_roformer_runtime(
 
 def check_htdemucs_runtime(
     root: Path, checkout: Path, runtime: Path, *, require_model: bool
-) -> dict[str, object] | None:
+) -> dict[str, object]:
     """Bind an approved HTDemucs Release to its local model installation."""
-    if not (checkout / "workers/htdemucs").exists():
-        return None
-
     from flitzis_looper.htdemucs_onnx_provisioning import (  # noqa: PLC0415
         HTDEMUCS_RUNTIME_EXECUTABLE,
-        htdemucs_onnx_released,
         verify_htdemucs_release_worker,
         verify_selected_htdemucs_onnx,
     )
 
-    if not htdemucs_onnx_released(checkout.absolute()):
-        return None
     executable = (runtime / HTDEMUCS_RUNTIME_EXECUTABLE).absolute()
     if not require_model:
         verify_htdemucs_release_worker(checkout.absolute(), executable, source_built=True)
         return {"worker": str(executable), "model_checked": False}
     package = verify_selected_htdemucs_onnx(
         checkout.absolute(),
-        root / "models/torch/hub/checkpoints",
+        root / "models/stem-checkpoints",
         executable=executable,
         crt_dir=(checkout / "src/flitzis_looper_audio").absolute(),
         load=False,
@@ -1083,7 +1016,7 @@ def check_runtime(
     assert physical_path(Path(customization.__file__)).is_relative_to(
         physical_path(runtime / "python")
     )
-    for name in ["imgui_bundle", "torch", "torchaudio", "torchcodec"]:
+    for name in ("imgui_bundle", "pydantic"):
         module = importlib.import_module(name)
         assert module.__file__ is not None, f"Portable dependency has no file origin: {name}"
         assert physical_path(Path(module.__file__)).is_relative_to(
@@ -1092,7 +1025,7 @@ def check_runtime(
     assert importlib.import_module("flitzis_looper.controller.stems").StemController
     assert importlib.import_module("flitzis_looper.ui.render.sidebar_left")
     generation = importlib.import_module("flitzis_looper.controller.stem_generation")
-    assert generation.default_demucs_model_cache_dir() == root / "models/torch/hub/checkpoints"
+    assert generation.default_stem_model_cache_dir() == root / "models/stem-checkpoints"
     assert physical_path(Path.cwd()) == physical_path(checkout)
     assert (checkout / "assets/models/keynet.onnx").is_file()
     app_module = importlib.import_module("flitzis_looper")
@@ -1100,26 +1033,6 @@ def check_runtime(
     assert physical_path(Path(app_module.__file__)).is_relative_to(physical_path(checkout / "src"))
     dlls = private_dlls(runtime, checkout)
     dependency_dlls = check_dependency_dlls(runtime)
-    child_env = os.environ | {"PYTHONPATH": str(checkout / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
-    child = subprocess.run(
-        [
-            sys.executable,
-            "-s",
-            "-B",
-            "-c",
-            (
-                "import runpy, sys; from pathlib import Path; "
-                "runpy.run_path(sys.argv[1])['check_stem_dependency_child'](Path(sys.argv[2]))"
-            ),
-            str(Path(__file__).absolute()),
-            str(runtime),
-        ],
-        env=child_env,
-        check=True,
-        stdout=subprocess.PIPE,
-        encoding="utf-8",
-    )
-    child_dlls = json.loads(child.stdout)
     for tool in ["ffmpeg.exe", "ffprobe.exe"]:
         subprocess.run(
             [str(runtime / "runtime/ffmpeg" / tool), "-version"],
@@ -1133,12 +1046,11 @@ def check_runtime(
             "analysis_checked": require_analysis,
             "analysis": analysis,
             "bs_roformer": separator,
-            **({"htdemucs": demucs} if demucs is not None else {}),
+            "htdemucs": demucs,
             "native": str(native),
             "checkout": str(physical_path(checkout)),
             "dlls": dlls,
             "dependency_dlls": dependency_dlls,
-            "child_dependency_dlls": child_dlls,
         })
         + "\n"
     )

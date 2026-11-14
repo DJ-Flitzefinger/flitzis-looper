@@ -12,21 +12,12 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.analysis.process import OwnedCommandResult
-from flitzis_looper.controller import bs_roformer_generation, stem_generation, stem_process
-from flitzis_looper.controller.bs_roformer_generation import BsRoformerStemGenerationBackend
-from flitzis_looper.controller.stem_generation import (
-    AudioShape,
-    CommandResult,
-    DemucsStemGenerationBackend,
-    StemGenerationRequest,
-    run_command,
-)
+from flitzis_looper.controller import stem_process
 from flitzis_looper.controller.stem_process import (
     StemCommandCancelledError,
     stem_command_checkpoint,
     stem_command_scope,
 )
-from flitzis_looper.inference_provider import CUDA_FAILURE_RECEIPT, is_cuda_failure
 from flitzis_looper.stem_cancellation import CANCEL_PATH_ENV
 
 if TYPE_CHECKING:
@@ -40,29 +31,12 @@ def _wait_file(path: Path) -> None:
         Event().wait(0.01)
 
 
-def test_public_command_keeps_embedded_vertical_tab_marker_diagnostic(tmp_path: Path) -> None:
-    payload = b"diagnostic\v" + CUDA_FAILURE_RECEIPT.encode("ascii") + b"\n"
-    result = run_command(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            f"import sys; sys.stdout.buffer.write({payload!r}); raise SystemExit(70)",
-        ],
-        cwd=tmp_path,
-        env=dict(os.environ),
-    )
-    assert result.returncode == 70
-    assert "diagnostic" in result.stdout
-    assert not is_cuda_failure(result.returncode, result.stdout)
-
-
 def test_cancelled_scope_starts_no_command_and_resets_context_after_failure(tmp_path: Path) -> None:
     cancel = Event()
     cancel.set()
     marker = tmp_path / "must-not-run"
     with stem_command_scope(cancel), pytest.raises(StemCommandCancelledError):
-        run_command(
+        stem_process.run_stem_command(
             [
                 sys.executable,
                 "-I",
@@ -73,10 +47,11 @@ def test_cancelled_scope_starts_no_command_and_resets_context_after_failure(tmp_
             env=dict(os.environ),
         )
     assert not marker.exists()
-    result = run_command(
+    result = stem_process.run_stem_command(
         [sys.executable, "-I", "-c", "print('independent')"], cwd=tmp_path, env=dict(os.environ)
     )
-    assert result == CommandResult(0, "independent", "")
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"independent"
 
 
 def test_two_worker_scopes_cancel_only_their_own_running_command(tmp_path: Path) -> None:
@@ -86,7 +61,7 @@ def test_two_worker_scopes_cancel_only_their_own_running_command(tmp_path: Path)
     cancel_first = Event()
     cancel_second = Event()
 
-    def run(cancel: Event, ready: Path) -> CommandResult:
+    def run(cancel: Event, ready: Path) -> OwnedCommandResult:
         body = (
             "import time\nfrom pathlib import Path\n"
             f"Path({str(ready)!r}).write_text('ready')\n"
@@ -94,7 +69,7 @@ def test_two_worker_scopes_cancel_only_their_own_running_command(tmp_path: Path)
             "print('survived')\n"
         )
         with stem_command_scope(cancel):
-            return run_command(
+            return stem_process.run_stem_command(
                 [sys.executable, "-I", "-c", body], cwd=tmp_path, env=dict(os.environ)
             )
 
@@ -112,7 +87,9 @@ def test_two_worker_scopes_cancel_only_their_own_running_command(tmp_path: Path)
             assert not first.done()
             assert not second_ready.exists()
             release.touch()
-            assert first.result(10) == CommandResult(0, "survived", "")
+            result = first.result(10)
+            assert result.returncode == 0
+            assert result.stdout.strip() == b"survived"
         finally:
             release.touch()
             cancel_first.set()
@@ -137,11 +114,11 @@ def test_parent_checkpoint_observes_sticky_event_and_resets_nested_scope() -> No
 @pytest.mark.parametrize(
     ("arguments", "own_channel"),
     [
-        ([sys.executable, "-m", "flitzis_looper.demucs_streaming"], True),
-        ([sys.executable, "-m", "flitzis_bs_roformer"], True),
+        ([sys.executable, "-m", "flitzis_looper.htdemucs_codec"], True),
+        ([sys.executable, "-m", "flitzis_looper.bs_decode"], True),
         ([sys.executable, "-m", "foreign_module"], False),
-        ([sys.executable, "-I", "-m", "flitzis_looper.demucs_streaming"], False),
-        (["foreign-python.exe", "-m", "flitzis_bs_roformer"], False),
+        ([sys.executable, "-I", "-m", "flitzis_looper.htdemucs_codec"], False),
+        (["foreign-python.exe", "-m", "flitzis_looper.bs_decode"], False),
         (["ffprobe", "-v", "error"], False),
     ],
 )
@@ -227,7 +204,7 @@ def test_resource_entry_refusal_starts_no_child_or_cancellation_namespace(
         pytest.raises(_ResourceError, match="unavailable headroom"),
     ):
         stem_process.run_stem_command(
-            [sys.executable, "-m", "flitzis_looper.demucs_streaming"],
+            [sys.executable, "-m", "flitzis_looper.htdemucs_codec"],
             cwd=tmp_path,
             env=dict(os.environ),
         )
@@ -250,65 +227,3 @@ def test_user_cancellation_wins_before_resource_entry(
         stem_process.run_stem_command(["unused"], cwd=tmp_path, env={})
     guard.entry.assert_not_called()
     launch.assert_not_called()
-
-
-@pytest.mark.parametrize("reason", ["resource_pressure", "resource_unavailable"])
-@pytest.mark.parametrize("separator", ["demucs", "bs-roformer"])
-def test_typed_resource_stop_propagates_through_both_backends_without_cpu_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str, separator: str
-) -> None:
-    guard = _resources()
-    guard.command_stop_reason.return_value = reason
-    cancel = Event()
-    launched_devices: list[str] = []
-    private = tmp_path / "private"
-
-    def run(
-        args: list[str],
-        cwd: Path,
-        env: dict[str, str],
-        cancel: Event,
-        request_abort: Callable[[], None] | None = None,
-        stop_reason: Callable[[], str | None] | None = None,
-    ) -> OwnedCommandResult:
-        assert not cancel.is_set()
-        assert stop_reason is not None
-        if args[:3] in (
-            [sys.executable, "-m", "flitzis_looper.demucs_streaming"],
-            [sys.executable, "-m", "flitzis_bs_roformer"],
-        ):
-            flag = "-d" if separator == "demucs" else "--device"
-            launched_devices.append(args[args.index(flag) + 1])
-            assert Path(env[CANCEL_PATH_ENV]).parent.is_dir()
-            assert request_abort is not None
-            assert stop_reason() == reason
-            return OwnedCommandResult(reason, -1, b"", b"")
-        return OwnedCommandResult("ok", 0, b"", b"")
-
-    monkeypatch.setattr(stem_process, "_run_owned", run)
-    monkeypatch.setattr(stem_generation, "_has_required_demucs_model", lambda *_args: True)
-    monkeypatch.setattr(bs_roformer_generation, "verify_model_assets", lambda *_args: None)
-    backend = (
-        DemucsStemGenerationBackend(cuda_detector=lambda *_args: True)
-        if separator == "demucs"
-        else BsRoformerStemGenerationBackend(cuda_detector=lambda *_args: True)
-    )
-    source = tmp_path / "fixture.wav"
-    source.write_bytes(b"no model or audio decoding occurs")
-    request = StemGenerationRequest(
-        sample_id=0,
-        source_path=source,
-        source_version="fixture-source",
-        cache_dir=tmp_path / "cache",
-        target_shape=AudioShape(48000, 2, 4),
-        model_cache_dir=tmp_path / "model",
-    )
-    with (
-        stem_command_scope(cancel, directory=private, resources=guard),
-        pytest.raises(_ResourceError, match="memory pressure"),
-    ):
-        backend.generate(request, lambda *_args: None)
-    assert launched_devices == ["cuda"]
-    guard.failure.assert_called_once_with(reason)
-    assert not cancel.is_set()
-    assert not list(private.glob(".stem-command-*"))

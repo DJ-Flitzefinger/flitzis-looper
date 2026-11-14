@@ -320,9 +320,6 @@ def test_cross_root_preparation_retains_own_ticket_and_native_verified_new_ident
     own_version = "samples/copy.wav|sha256-v1:" + "1" * 64
     intent = cast("StemGenerationIntent", Mock())
     capture = Mock(side_effect=AssertionError("Pair preparation must not recapture a sealed job"))
-    monkeypatch.setattr(
-        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
-    )
     queue, jobs, ticket = _metadata_queue(
         controller,
         audio_engine_mock,
@@ -337,6 +334,7 @@ def test_cross_root_preparation_retains_own_ticket_and_native_verified_new_ident
             source_path="samples/copy.wav",
         ),
     )
+    monkeypatch.setattr(queue, "_capture_producer", capture)
     jobs[0]()
     (request,) = queue.collect()
     assert request.error is None
@@ -406,12 +404,10 @@ def test_new_pair_or_legacy_restore_uses_saved_metadata_without_model_io(
             pair=StemPairSelection.model_validate(data),
         )
     capture = Mock(side_effect=AssertionError("Restore/new generation must not recapture producer"))
-    monkeypatch.setattr(
-        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
-    )
     queue, jobs, ticket = _metadata_queue(
         controller, audio_engine_mock, monkeypatch, tmp_path, entry, data
     )
+    monkeypatch.setattr(queue, "_capture_producer", capture)
     jobs[0]()
     (request,) = queue.collect()
     assert request.error is None
@@ -498,9 +494,6 @@ def test_explicit_compatible_reuse_checks_full_request_and_marker_schema(
         entry = entry.model_copy(update={"fingerprint_schema": None})
     guard = Mock()
     capture = Mock(return_value=(guard, "6" * 64 if fault == "producer" else "5" * 64))
-    monkeypatch.setattr(
-        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
-    )
     artifact_lease = Mock()
     artifact = Mock()
     artifact.capture.return_value = artifact_lease
@@ -524,6 +517,7 @@ def test_explicit_compatible_reuse_checks_full_request_and_marker_schema(
     if fault == "marker_schema":
         marker.pop("fingerprint_schema")
     (tmp_path / entry.cache_dir / ".complete.json").write_text(json.dumps(marker), encoding="utf-8")
+    monkeypatch.setattr(queue, "_capture_producer", capture)
     jobs[0]()
     (request,) = queue.collect()
     if fault == "none":

@@ -7,14 +7,17 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.stem_process import stem_conversion_checkpoint
 from flitzis_looper.models import PadContentIdentity
 from flitzis_looper.stem_execution import StemExecution
 from flitzis_looper_audio import OfflineWorkTicket
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import FakePreparedSourceTicket, FakeProjectAssetLease
+from tests.flitzis_looper.conftest import (
+    FakePreparedSourceTicket,
+    FakeProjectAssetLease,
+    sealed_test_producer,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,18 +49,8 @@ def _declared_shared_producer(
     monkeypatch.setattr(stems_module, "separator_model_cache_dir", lambda _separator: model)
     monkeypatch.setattr(stems_module, "resolved_demucs_encoder", lambda _model: files[-1])
     monkeypatch.setattr(stems_module, "encoder_contract", lambda _encoder: "owned-fixture")
-    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: tuple(files))
     monkeypatch.setattr(
-        stem_provenance, "processing_library_versions", lambda _request: (("owned-fixture", "1"),)
-    )
-    monkeypatch.setattr(
-        stem_provenance, "loaded_code_identity", lambda _paths: "declared-shared-controller-fixture"
-    )
-    monkeypatch.setattr(
-        stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp_path,)
-    )
-    monkeypatch.setattr(
-        stems_module, "processing_source_roots", stem_provenance.processing_source_roots
+        stem_backend, "capture_producer", lambda _request: sealed_test_producer(tuple(files))
     )
     stem_backend.result = replace(
         stem_backend.result, backend_name="demucs", model_name="htdemucs", encoder_verified=True

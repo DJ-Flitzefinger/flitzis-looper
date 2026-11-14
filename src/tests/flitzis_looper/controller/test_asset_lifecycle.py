@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from flitzis_looper.controller import stem_generation
+from flitzis_looper.controller.stem_artifacts import read_pcm16_wav
 from flitzis_looper.models import STEM_KINDS
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakeProjectAssetLease
@@ -811,7 +811,7 @@ def test_backend_invalid_output_releases_readers_and_cleanup_reservation(
             request.cache_dir.mkdir(parents=True)
             output = request.cache_dir / "vocals.wav"
             output.write_bytes(b"" if failure == "eof" else b"malformed WAV output")
-            stem_generation._read_pcm16_wav(output)
+            read_pcm16_wav(output)
         if failure == "type_error":
             message = "invalid backend result type"
             raise TypeError(message)

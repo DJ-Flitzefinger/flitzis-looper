@@ -148,93 +148,64 @@ events, corrupt full-mix sample buffers, or require special recovery from the pe
 
 <!-- From add-offline-stem-cache -->
 ### Requirement: Production Stem Generation Uses A Replaceable Backend
-The system SHALL route production stem generation through a replaceable file/artifact backend
-boundary before cached stem artifacts are eligible for publication.
+The system SHALL route production stem generation through a file/artifact backend
+boundary before cached stem artifacts are eligible for publication. Windows x64
+SHALL use the qualified native ONNX worker for the selected separator.
 
-The backend request SHALL contain stable control-plane inputs such as the source audio path,
-pad id, source version, project-local target cache directory, target sample rate, target channel
-count, target frame count, model cache directory, device policy, and bounded backend quality
-parameters. Backend implementations SHALL NOT expose Demucs, Torch, tensors, Python module
-objects, process handles, or unbounded metadata to project state, Rust control messages, or the
-audio callback.
+The request SHALL capture the source path and version, target cache and audio
+geometry, pinned model installation, device policy and bounded model settings.
+Backend objects, tensors, paths, process handles and unbounded metadata SHALL stay
+outside the audio callback.
 
-#### Scenario: Demucs is isolated behind the backend boundary
+#### Scenario: A stopped pad requests stem generation
 - **GIVEN** a stopped loaded pad has source audio
 - **WHEN** the performer requests stem generation
-- **THEN** the control layer builds a backend request for the current source version
-- **AND** the backend writes only the expected project-local cache artifacts
-- **AND** Rust publication continues to use the existing prepared-stem validation path
+- **THEN** the control layer captures a request for the current source version
+- **AND** only the expected cache artifacts can reach prepared-stem validation
+- **AND** the callback receives bounded prepared-stem handles and scalar mix state
 
-#### Scenario: Backend objects do not reach the audio callback
-- **GIVEN** the Demucs backend imports Torch or runs a subprocess
-- **WHEN** stem generation completes or fails
-- **THEN** the audio callback receives no Demucs objects, Torch objects, tensors, file paths, or process handles
-- **AND** the callback remains limited to bounded prepared-stem handles and scalar mix state
+### Requirement: Native Stem Workers Require Installed Model And Codec Resources
+The selected worker, graph and verified weights SHALL be installed before UI
+generation. Generation SHALL NOT download dependencies. Both separators SHALL
+use verified FFmpeg and FFprobe to decode source audio. HTDemucs SHALL also use
+FFmpeg to write its four complete PCM16 WAVs. Codec and package failures SHALL
+be reported off realtime, leaving the pad playable with its existing assignment.
 
+#### Scenario: Model resources are missing
+- **WHEN** the performer requests a separator with no valid model installation
+- **THEN** the backend reports the unavailable resource and does not run inference
+- **AND** playback remains available
 
-<!-- From add-offline-stem-cache -->
-### Requirement: Demucs Runtime Dependency Is Declared Separately From Model Files
-The system SHALL declare the Demucs adapter package as an application runtime dependency while
-requiring Demucs model files to be installed before UI-driven generation starts.
+#### Scenario: The required decoder cannot stage input
+- **WHEN** required FFmpeg or FFprobe is unavailable or first-stream decode fails
+- **THEN** the backend reports a codec error without invoking inference
+- **AND** the attempt's artifacts retire through the existing source and last-reader fences
 
-Demucs model files SHALL remain runtime cache data rather than vendored repository files or
-project-local sample artifacts. The Looper SHALL NOT trigger Demucs model download from the
-Generate Stems UI path. If the required model checkpoint is missing, the system SHALL report the
-short error `no Model installed` outside the audio callback and SHALL NOT invoke the Demucs
-separation subprocess. If required external audio tools are unavailable, the system SHALL report
-the short error `FFmpeg/ffprobe unavailable` outside the audio callback before invoking Demucs. If
-TorchCodec cannot load for the current Torchaudio output path, the system SHALL report
-`TorchCodec unavailable` outside the audio callback before invoking Demucs.
-The backend SHALL resolve `ffmpeg` and `ffprobe` from the process `PATH`, from an explicit
-`FLITZIS_FFMPEG_DIR` directory, or from a local WinGet `Gyan.FFmpeg*` package directory before
-reporting those tools unavailable.
-
-#### Scenario: Preinstalled model allows generation to start
-- **GIVEN** the project dependencies have been synced into the active Python environment
-- **AND** the required Demucs model checkpoint exists in the standard Torch Hub checkpoint cache
-- **AND** a stopped loaded pad has source audio
+#### Scenario: An explicit FFmpeg directory is used
+- **GIVEN** `FLITZIS_FFMPEG_DIR` contains a supported FFmpeg and FFprobe build
 - **WHEN** the performer requests stem generation
-- **THEN** `python -m demucs` is available to the background backend
-- **AND** the background backend may run Demucs without starting a model download from the UI path
+- **THEN** the backend verifies and binds those tools outside realtime
 
-#### Scenario: Missing model fails briefly before Demucs runs
-- **GIVEN** the project dependencies have been synced into the active Python environment
-- **AND** the required Demucs model checkpoint is missing
-- **WHEN** the performer requests stem generation
-- **THEN** the backend reports `no Model installed`
-- **AND** Demucs is not invoked
-- **AND** the pad remains playable with full-mix playback
+### Requirement: Windows Stem Workers Retain Model-Specific Processing
+BS-RoFormer MUSDB18HQ SHALL use the qualified ONNX graphs with the effective
+pinned weights and the established chunk, batch, padding and overlap-add
+geometry. HTDemucs SHALL use the qualified ONNX graphs derived from the pinned
+stock checkpoint. Its first-stream decode, rate and channel conversion,
+normalization, split, captured shifts and overlap, and final crop SHALL preserve
+the complete source extent. Both workers SHALL preserve four-stem ordering and
+use the common alignment, publication and per-pad OwnACK path.
 
-#### Scenario: Unsynced environment fails without affecting playback
-- **GIVEN** the active Python environment is missing the declared Demucs runtime dependency
-- **WHEN** the performer requests stem generation
-- **THEN** the backend reports a normal generation error outside the audio callback
-- **AND** the pad remains playable with full-mix playback
+#### Scenario: A result has no established ONNX producer identity
+- **WHEN** a generated stem set lacks verified worker, graph, runtime, codec or
+  actual provider evidence
+- **THEN** it remains ineligible for automatic cross-job reuse and provider calibration
+- **AND** verified saved sets retain their existing source, format, EOF and custody
+  checks on restoration
 
-#### Scenario: Missing external audio tools fail before Demucs runs
-- **GIVEN** the required Demucs model checkpoint is installed
-- **AND** `ffprobe` or `ffmpeg` is missing or inaccessible
-- **WHEN** the performer requests stem generation
-- **THEN** the backend reports `FFmpeg/ffprobe unavailable`
-- **AND** Demucs is not invoked
-- **AND** the pad remains playable with full-mix playback
-
-#### Scenario: Explicit FFmpeg directory is used
-- **GIVEN** the required Demucs model checkpoint is installed
-- **AND** `FLITZIS_FFMPEG_DIR` points to a directory containing `ffmpeg` and `ffprobe`
-- **WHEN** the performer requests stem generation
-- **THEN** the backend prepends that directory to the Demucs subprocess environment
-- **AND** the backend preflights those tools before invoking Demucs
-
-#### Scenario: Missing TorchCodec support fails before Demucs runs
-- **GIVEN** the required Demucs model checkpoint is installed
-- **AND** `ffprobe` and `ffmpeg` are available
-- **AND** TorchCodec cannot load its native libraries
-- **WHEN** the performer requests stem generation
-- **THEN** the backend reports `TorchCodec unavailable`
-- **AND** Demucs is not invoked
-- **AND** the pad remains playable with full-mix playback
-
+#### Scenario: Inference completes after cancellation or source replacement
+- **WHEN** cancellation or changed source identity makes a completed attempt stale
+- **THEN** the background owner leaves the previous assignment in place
+- **AND** owned pending assets retire after their last reader
 
 <!-- From add-offline-stem-cache -->
 ### Requirement: Demucs Output Maps To Project Stem Artifacts
@@ -265,26 +236,26 @@ playback of only `instrumental.wav`.
 When Demucs is selected, the system SHALL run that backend with bounded quality parameters outside the audio
 callback.
 
-The Demucs backend SHALL pass `--shifts 1` and `--overlap 0.5` unless the Settings page
+The HTDemucs backend SHALL use one shift and 0.5 overlap unless the Settings page
 provides validated replacement values. The control layer SHALL persist the configured values in
 project state and SHALL reject Demucs quality parameters outside the app-supported range before
 invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and `overlap` from
 0.25 through 0.95.
 
 #### Scenario: Default quality parameters are used
-- **GIVEN** the required Demucs model, FFmpeg tools, and TorchCodec support are available
+- **GIVEN** the qualified HTDemucs installation and FFmpeg tools are available
 - **AND** Demucs is the selected separator
 - **AND** no Settings page override has supplied alternate quality parameters
 - **WHEN** the performer requests stem generation
-- **THEN** the background backend invokes Demucs with `--shifts 1`
-- **AND** the background backend invokes Demucs with `--overlap 0.5`
+- **THEN** the background worker uses one shift
+- **AND** the worker uses 0.5 overlap
 
 #### Scenario: Settings quality values are used
 - **GIVEN** the performer configures Demucs shifts to 4
 - **AND** the performer configures Demucs overlap to 0.25
 - **WHEN** the performer requests stem generation
-- **THEN** the background backend invokes Demucs with `--shifts 4`
-- **AND** the background backend invokes Demucs with `--overlap 0.25`
+- **THEN** the background worker uses four shifts
+- **AND** the worker uses 0.25 overlap
 
 #### Scenario: Invalid settings are rejected before Demucs runs
 - **GIVEN** the Settings page supplies an unsupported Demucs quality value such as shifts `0`,
@@ -296,31 +267,25 @@ invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and
 
 
 <!-- From add-offline-stem-cache -->
-### Requirement: Demucs Model Cache And Device Fallback Stay Off The Audio Path
-The system SHALL use the configured, isolated model directory and resolve GPU-to-CPU fallback
-only on the background generation path.
+### Requirement: Stem Model Cache And Device Fallback Stay Off The Audio Path
+Model packages SHALL live outside generated stem artifacts. The default source
+input cache is `models/stem-checkpoints/`. Explicit managed and Portable model
+bindings take precedence. Protected sample, recording, configuration and source
+trees SHALL be excluded from model installation.
 
-The source-clone default Demucs model checkpoint directory SHALL be
-`models/torch/hub/checkpoints` inside the repository and ignored by Git. Explicit
-external model-cache overrides SHALL retain precedence, including managed developer
-and installation-owned Portable caches. Model paths inside protected sample,
-recording, configuration or source trees SHALL be rejected without a global TEMP fallback. The default `htdemucs` model SHALL require
-the `955717e8-8726e21a.th` checkpoint in that directory before UI-driven generation invokes
-Demucs. The default device policy SHALL attempt CUDA only when Torch reports it is available, then
-retry once on CPU if the CUDA run fails.
+The explicit CPU policy SHALL bypass CUDA probing. Auto MAY use a qualified CUDA
+provider and device. A qualified CUDA device or provider failure permits one
+fresh CPU attempt with the same model, sealed input and effective settings once
+the CUDA process, tree, readers and attempt scratch have retired. Cancellation,
+stale input, package, codec, host, disk and unclassified failures retain distinct
+outcomes.
 
-#### Scenario: Models are separate from generated stem artifacts
-- **GIVEN** a performer starts Demucs stem generation
-- **WHEN** the backend prepares model cache configuration
-- **THEN** model lookup uses the ignored repo-local models directory or its explicit external override, outside `samples/stems/`
-- **AND** the project cache stores only generated stem artifacts
-
-#### Scenario: CUDA failure falls back to CPU
-- **GIVEN** Torch reports CUDA is available
-- **AND** the Demucs CUDA run fails during initialization, model loading, inference, or GPU memory allocation
-- **WHEN** CPU processing can still proceed
-- **THEN** the background worker retries the same source-version request on CPU
-- **AND** the failure and fallback are reported only through non-audio-thread status or diagnostics
+#### Scenario: A CUDA attempt fails with an eligible receipt
+- **GIVEN** a captured request permits automatic CUDA and the worker reports a
+  qualified CUDA device or provider failure
+- **WHEN** the original attempt's process, tree, readers and scratch have retired
+- **THEN** the backend may retry with the same input, model and effective settings
+- **AND** the first diagnostic and actual fallback device are reported off realtime
 
 #### Scenario: Compacted diagnostics cannot authorize a CPU retry
 - **GIVEN** an owned separator exits with the CUDA-failure exit code

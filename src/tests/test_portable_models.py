@@ -10,21 +10,22 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper import bs_onnx_provisioning
+from flitzis_looper import bs_onnx_provisioning, htdemucs_onnx_provisioning
 from flitzis_looper.bs_onnx_cuda_cache import BsCudaCacheStatus
 from flitzis_looper.bs_onnx_installation import BS_ONNX_MODELS_DIRECTORY, BS_ONNX_RUNTIME_EXECUTABLE
-from flitzis_looper.controller import bs_roformer_assets, stem_generation
+from flitzis_looper.controller import bs_roformer_assets
 from flitzis_looper.controller.stem_generation import MODEL_CACHE_DIR_ENV_VAR
 from flitzis_looper.controller.stem_separators import separator_model_cache_dir
 from flitzis_looper.models import STEM_SEPARATORS
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from scripts.portable.prepare_models import ModelContext
 
 
@@ -37,7 +38,6 @@ def helper() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    module.windows_bs_onnx = lambda: False
     return module
 
 
@@ -46,13 +46,13 @@ def context(tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch)
     root = tmp_path / "Portable"
     checkout = root / "flitzis-looper"
     checkout.mkdir(parents=True)
-    monkeypatch.setenv(MODEL_CACHE_DIR_ENV_VAR, str(root / "models/torch/hub/checkpoints"))
+    monkeypatch.setenv(MODEL_CACHE_DIR_ENV_VAR, str(root / "models/stem-checkpoints"))
     return cast("ModelContext", helper.ModelContext(root, checkout, root / "Runtime", "repair"))
 
 
 def test_shared_resolver_keeps_both_portable_models_outside_checkout(tmp_path: Path) -> None:
     root = tmp_path / "Portable"
-    cache = root / "models" / "torch" / "hub" / "checkpoints"
+    cache = root / "models" / "stem-checkpoints"
     environment = {MODEL_CACHE_DIR_ENV_VAR: str(cache)}
     paths = {
         separator: separator_model_cache_dir(
@@ -72,7 +72,7 @@ def test_source_clone_mode_allows_owned_models_without_relaxing_portable_guard(
     monkeypatch.chdir(tmp_path)
     source = helper.ModelContext(tmp_path, tmp_path, None, "check", source_clone=True)
     assert helper.model_cache_dirs(source)["demucs:htdemucs"] == (
-        tmp_path / "models/torch/hub/checkpoints"
+        tmp_path / "models/stem-checkpoints"
     )
     portable = helper.ModelContext(tmp_path, tmp_path, None, "check")
     with pytest.raises(RuntimeError, match="owned sibling models directory"):
@@ -95,7 +95,11 @@ def test_parent_prepares_both_before_sequential_fresh_cpu_checks(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(helper.subprocess, "run", run)
-    report = helper.check_models(context)
+    report = helper.check_models(
+        helper.ModelContext(
+            context.root, context.checkout, context.runtime, "repair", source_clone=True
+        )
+    )
 
     assert calls == [
         ("prepare", "demucs:htdemucs"),
@@ -130,6 +134,7 @@ def test_windows_model_repair_pairs_package_with_release_worker(
 ) -> None:
     stage = Mock()
     verify = Mock()
+    load = Mock()
     preparation = BsCudaCacheStatus("ready", "prepared", warmup_executed=True)
 
     def staged(*_args: object, **options: object) -> None:
@@ -140,6 +145,7 @@ def test_windows_model_repair_pairs_package_with_release_worker(
     stage.side_effect = staged
     monkeypatch.setattr(bs_onnx_provisioning, "stage_bs_onnx_installation", stage)
     monkeypatch.setattr(bs_onnx_provisioning, "verify_bs_onnx_for_executable", verify)
+    monkeypatch.setattr(bs_onnx_provisioning, "load_bs_onnx_cpu", load)
     assets = context.root / "checkpoint-pins"
     assert context.runtime is not None
 
@@ -154,6 +160,7 @@ def test_windows_model_repair_pairs_package_with_release_worker(
     )
     assert stage.call_args.kwargs["crt_dir"] == context.checkout / "src/flitzis_looper_audio"
     verify.assert_not_called()
+    load.assert_not_called()
 
     stage.reset_mock()
     helper.portable_bs_onnx(context, assets, repair=False)
@@ -162,13 +169,14 @@ def test_windows_model_repair_pairs_package_with_release_worker(
         context.root / BS_ONNX_MODELS_DIRECTORY,
         context.runtime / BS_ONNX_RUNTIME_EXECUTABLE,
     )
+    load.assert_called_once_with(verify.return_value)
 
 
 @pytest.mark.parametrize("warmup", [False, True])
 def test_windows_repair_reports_only_cuda_work_done_by_this_invocation(
     helper: ModuleType, context: ModelContext, monkeypatch: pytest.MonkeyPatch, *, warmup: bool
 ) -> None:
-    monkeypatch.setattr(helper, "windows_bs_onnx", lambda: True)
+    monkeypatch.setattr(helper, "portable_htdemucs_onnx", Mock())
     monkeypatch.setattr(helper, "run_model_child", Mock())
     monkeypatch.setattr(
         helper,
@@ -215,118 +223,45 @@ def test_helper_rejects_project_cache_redirect_before_starting_model_children(
     runner.assert_not_called()
 
 
-def fake_demucs(
-    helper: ModuleType, monkeypatch: pytest.MonkeyPatch, cache: Path
-) -> tuple[bytes, Path, Mock]:
-    payload = b"small pinned checkpoint fixture, never a real model"
-    checksum = hashlib.sha256(payload).hexdigest()[:8]
-    filename = f"955717e8-{checksum}.th"
-    checkpoint = cache / filename
-    monkeypatch.setattr(stem_generation, "DEMUCS_REQUIRED_CHECKPOINTS", {"htdemucs": (filename,)})
-
-    class InvalidChecksumError(RuntimeError):
-        __slots__ = ()
-
-    def check_checksum(path: Path, expected: str) -> None:
-        if hashlib.sha256(path.read_bytes()).hexdigest()[: len(expected)] != expected:
-            msg = "invalid pinned checksum"
-            raise InvalidChecksumError(msg)
-
-    repo = SimpleNamespace(check_checksum=check_checksum, ModelLoadingError=InvalidChecksumError)
-
-    def download(name: str) -> object:
-        assert name == "htdemucs"
-        assert not checkpoint.exists()
-        checkpoint.write_bytes(payload)
-        return object()
-
-    downloader = Mock(side_effect=download)
-    pretrained = SimpleNamespace(get_model=downloader)
-    original_import = importlib.import_module
-
-    def imported(name: str, package: str | None = None) -> ModuleType | SimpleNamespace:
-        if name == "demucs.repo":
-            return repo
-        if name == "demucs.pretrained":
-            return pretrained
-        return original_import(name, package)
-
-    monkeypatch.setattr(helper.importlib, "import_module", imported)
-    return payload, checkpoint, downloader
-
-
-@pytest.mark.parametrize("existing", ["missing", "valid", "corrupt"])
-def test_demucs_prepare_only_verifies_preacquired_checkpoint(
-    tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch, existing: str
+def test_portable_htdemucs_checks_the_sealed_release_worker_and_crt(
+    helper: ModuleType, context: ModelContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cache = tmp_path / "checkpoints"
-    cache.mkdir()
-    payload, checkpoint, downloader = fake_demucs(helper, monkeypatch, cache)
-    unrelated = cache / "other-user-model.th"
-    unrelated.write_bytes(b"preserve this model")
-    if existing != "missing":
-        checkpoint.write_bytes(payload if existing == "valid" else b"x" * len(payload))
+    stage = Mock()
+    load = Mock()
+    monkeypatch.setattr(htdemucs_onnx_provisioning, "stage_htdemucs_onnx_installation", stage)
+    monkeypatch.setattr(htdemucs_onnx_provisioning, "verify_selected_htdemucs_onnx", load)
+    assert context.runtime is not None
+    worker = context.runtime / htdemucs_onnx_provisioning.HTDEMUCS_RUNTIME_EXECUTABLE
+    crt = context.checkout / "src/flitzis_looper_audio"
+    cache = context.root / "models/stem-checkpoints"
 
-    if existing == "valid":
-        helper.repair_demucs(cache)
-        assert checkpoint.read_bytes() == payload
-    else:
-        with pytest.raises(RuntimeError, match=r"no Model installed|invalid pinned checksum"):
-            helper.repair_demucs(cache)
-    assert unrelated.read_bytes() == b"preserve this model"
-    downloader.assert_not_called()
+    helper.portable_htdemucs_onnx(context, cache, repair=True)
+    stage.assert_called_once_with(
+        context.checkout,
+        cache,
+        worker,
+        context.root / "cache/analysis/beat-this-downloads",
+        crt_dir=crt,
+        local_build=True,
+    )
+    load.assert_not_called()
 
-
-@pytest.mark.parametrize("existing", ["missing", "corrupt"])
-def test_demucs_check_rejects_bad_cache_before_loader_or_download(
-    tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch, existing: str
-) -> None:
-    payload, checkpoint, downloader = fake_demucs(helper, monkeypatch, tmp_path)
-    if existing == "corrupt":
-        checkpoint.write_bytes(b"x" * len(payload))
-
-    with pytest.raises(RuntimeError, match=r"no Model installed|invalid pinned checksum"):
-        helper.operate_model("demucs:htdemucs", tmp_path, "load")
-
-    downloader.assert_not_called()
-
-
-def test_demucs_prepare_never_falls_back_to_library_download(
-    tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    payload, checkpoint, downloader = fake_demucs(helper, monkeypatch, tmp_path)
-    downloader.side_effect = lambda _name: checkpoint.write_bytes(b"x" * len(payload))
-
-    with pytest.raises(RuntimeError, match="no Model installed"):
-        helper.repair_demucs(tmp_path)
-
-    downloader.assert_not_called()
-
-
-def test_demucs_valid_cache_is_verified_and_loaded_on_cpu(
-    tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    payload, checkpoint, loader = fake_demucs(helper, monkeypatch, tmp_path)
-    checkpoint.write_bytes(payload)
-    cpu = Mock()
-    loader.side_effect = None
-    loader.return_value = SimpleNamespace(to=cpu)
-
-    helper.operate_model("demucs:htdemucs", tmp_path, "load")
-
-    loader.assert_called_once_with("htdemucs")
-    cpu.assert_called_once_with("cpu")
+    helper.portable_htdemucs_onnx(context, cache, repair=False)
+    load.assert_called_once_with(context.checkout, cache, executable=worker, crt_dir=crt)
 
 
 def test_bs_prepare_verifies_without_legacy_temporary_downloads(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(helper, "model_cache_dirs", lambda _: {"bs-roformer:musdb18hq": tmp_path})
+    monkeypatch.setattr(helper.sys, "addaudithook", Mock())
+    context = helper.ModelContext(tmp_path, tmp_path, None, "repair")
     installer = Mock()
     verifier = Mock()
     monkeypatch.setattr(bs_roformer_assets, "install_model_assets", installer)
     monkeypatch.setattr(bs_roformer_assets, "verify_model_assets", verifier)
 
-    helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
+    helper.run_internal_child(context, "bs-roformer:musdb18hq", "prepare")
 
     verifier.assert_called_once_with(tmp_path)
     installer.assert_not_called()
@@ -336,6 +271,9 @@ def test_bs_prepare_verifies_without_legacy_temporary_downloads(
 def test_bs_prepare_rejects_invalid_preacquired_bytes_without_downloading(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch, existing: str
 ) -> None:
+    monkeypatch.setattr(helper, "model_cache_dirs", lambda _: {"bs-roformer:musdb18hq": tmp_path})
+    monkeypatch.setattr(helper.sys, "addaudithook", Mock())
+    context = helper.ModelContext(tmp_path, tmp_path, None, "repair")
     payloads = {
         filename: filename.encode("ascii")
         for filename in (bs_roformer_assets.CONFIG_FILENAME, bs_roformer_assets.CHECKPOINT_FILENAME)
@@ -363,11 +301,11 @@ def test_bs_prepare_rejects_invalid_preacquired_bytes_without_downloading(
 
     monkeypatch.setattr(urllib.request, "urlopen", download)
     if existing == "valid":
-        helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
+        helper.run_internal_child(context, "bs-roformer:musdb18hq", "prepare")
         bs_roformer_assets.verify_model_assets(tmp_path)
     else:
         with pytest.raises(RuntimeError, match=r"no Model installed|integrity check failed"):
-            helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
+            helper.run_internal_child(context, "bs-roformer:musdb18hq", "prepare")
     assert unrelated.read_bytes() == b"unchanged"
     assert downloads == []
     assert not list(tmp_path.glob(".install-*"))
@@ -376,6 +314,9 @@ def test_bs_prepare_rejects_invalid_preacquired_bytes_without_downloading(
 def test_bs_invalid_preacquired_asset_is_preserved_and_blocks_repair(
     tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(helper, "model_cache_dirs", lambda _: {"bs-roformer:musdb18hq": tmp_path})
+    monkeypatch.setattr(helper.sys, "addaudithook", Mock())
+    context = helper.ModelContext(tmp_path, tmp_path, None, "repair")
     target = tmp_path / bs_roformer_assets.CONFIG_FILENAME
     target.write_bytes(b"old invalid config")
     payload = b"expected config"
@@ -391,7 +332,7 @@ def test_bs_invalid_preacquired_asset_is_preserved_and_blocks_repair(
     )
 
     with pytest.raises(RuntimeError, match="integrity check failed"):
-        helper.operate_model("bs-roformer:musdb18hq", tmp_path, "prepare")
+        helper.run_internal_child(context, "bs-roformer:musdb18hq", "prepare")
 
     assert target.read_bytes() == b"old invalid config"
     assert not list(tmp_path.glob(".install-*"))
@@ -403,9 +344,7 @@ def test_asset_metadata_has_complete_public_pins_and_owned_relative_targets(
 ) -> None:
     metadata = helper.asset_metadata(context)
     assert len(metadata) == 3
-    assert all(
-        item["relative_path"].startswith("models/torch/hub/checkpoints/") for item in metadata
-    )
+    assert all(item["relative_path"].startswith("models/stem-checkpoints/") for item in metadata)
     assert all(len(item["sha256"]) == 64 and item["bytes"] > 0 for item in metadata)
     assert all(item["url"].startswith("https://") for item in metadata)
     demucs = next(
@@ -536,36 +475,6 @@ public static class ModelLauncherFixture {
         assert Path(base64.b64decode(event["home"]).decode()) == python.parent
     assert "--asset-metadata" in base64.b64decode(events[0]["arguments"]).decode()
     assert base64.b64decode(events[-1]["arguments"]).decode().endswith("--mode\x1frepair")
-
-
-def test_bs_check_verifies_before_actual_cpu_loader_without_download(
-    tmp_path: Path, helper: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-    installer = Mock(side_effect=AssertionError("check must not repair"))
-    monkeypatch.setattr(bs_roformer_assets, "install_model_assets", installer)
-    monkeypatch.setattr(
-        bs_roformer_assets, "verify_model_assets", lambda _path: calls.append("verify")
-    )
-    loader = Mock(side_effect=lambda *_args: calls.append("load"))
-    original_import = importlib.import_module
-
-    def imported(name: str, package: str | None = None) -> ModuleType | SimpleNamespace:
-        if name == "flitzis_bs_roformer.model":
-            assert calls == ["verify"]
-            return SimpleNamespace(load_model=loader)
-        return original_import(name, package)
-
-    monkeypatch.setattr(helper.importlib, "import_module", imported)
-    helper.operate_model("bs-roformer:musdb18hq", tmp_path, "load")
-
-    loader.assert_called_once_with(
-        tmp_path / bs_roformer_assets.CHECKPOINT_FILENAME,
-        tmp_path / bs_roformer_assets.CONFIG_FILENAME,
-        "cpu",
-    )
-    assert calls == ["verify", "load"]
-    installer.assert_not_called()
 
 
 def test_model_failure_is_reported_and_cannot_be_success(

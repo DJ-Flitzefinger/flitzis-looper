@@ -12,7 +12,6 @@ import sys
 import uuid
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
-from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING
 
@@ -28,6 +27,7 @@ from flitzis_looper_audio import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
     from types import FrameType
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="native prepared Windows child owner")
@@ -171,7 +171,7 @@ def test_actual_createprocess_refusal_preserves_zero_child_and_closes_prepared_p
         prepared.stdout.read(1)
 
 
-@pytest.mark.parametrize("failure_point", ["poststart", "base_return", "worker_return"])
+@pytest.mark.parametrize("failure_point", ["poststart", "base_return"])
 def test_real_poststart_python_error_retires_the_uncapped_suspended_root(
     tmp_path: Path, failure_point: str
 ) -> None:
@@ -184,12 +184,11 @@ def test_real_poststart_python_error_retires_the_uncapped_suspended_root(
         children.append(prepared)
 
     def trace(frame: FrameType, event: str, _arg: object) -> object:
-        target = (
-            process._WorkerProcess.__init__
-            if failure_point == "worker_return"
-            else process._OwnedTreeProcess.__init__
-        )
-        if failure_point != "poststart" and frame.f_code is target.__code__ and event == "return":
+        if (
+            failure_point != "poststart"
+            and frame.f_code is process._OwnedTreeProcess.__init__.__code__
+            and event == "return"
+        ):
             prepared = getattr(frame.f_locals["self"], "_process", None)
             if isinstance(prepared, PreparedWindowsProcess) and prepared.pid and not observed:
                 record(prepared)
@@ -209,21 +208,17 @@ def test_real_poststart_python_error_retires_the_uncapped_suspended_root(
             message = "controlled Python error after real native start"
             raise RuntimeError(message)
 
-    command = process.WorkerCommand(
-        Path(sys.executable), tmp_path / "unused.py", tmp_path / "unused.ckpt", tmp_path
-    )
     previous = sys.gettrace()
     previous_profile = sys.getprofile()
-    launch = process._WorkerLaunch(
-        [sys.executable, "-I", "-c", "raise SystemExit(7)"], child_environment(dict(os.environ))
-    )
+    command = [sys.executable, "-I", "-c", "raise SystemExit(7)"]
+    retired = Event()
     with scopes:
         try:
             sys.settrace(trace)
             if failure_point == "poststart":
                 sys.setprofile(profile)
             with pytest.raises(RuntimeError, match="controlled Python error"):
-                process._start(command, launch)
+                process._create_owned_command(command, tmp_path, dict(os.environ), retired, None)
         finally:
             sys.settrace(previous)
             sys.setprofile(previous_profile)
@@ -233,7 +228,7 @@ def test_real_poststart_python_error_retires_the_uncapped_suspended_root(
         assert child.stdout.closed
         assert child.stderr is not None
         assert child.stderr.closed
-    successor = process._start(command, launch)
+    successor = process._create_owned_command(command, tmp_path, dict(os.environ), retired, None)
     successor.abort_startup()
     assert successor.poll() is not None
 

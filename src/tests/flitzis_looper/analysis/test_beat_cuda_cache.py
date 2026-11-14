@@ -1,4 +1,5 @@
 import hashlib
+import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import replace
@@ -172,3 +173,70 @@ def test_cpu_absence_and_probe_failure_have_different_status(
     result = cache.ensure_cuda_cache(cpu)
     assert result["status"] == "failed"
     assert "NVML release query failed" in result["detail"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NVIDIA's Windows kernel path geometry")
+def test_deep_installation_uses_compact_owned_cache(
+    worker: NativeWorkerConfiguration, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path("D:/") / ("x" * 90)
+    ordinary = replace(worker, manifest=root / "installation" / "manifest.json")
+    monkeypatch.setattr(cache, "_ordinary_tree", lambda _path: None)
+    monkeypatch.setattr(Path, "resolve", lambda path, *, strict=False: path)
+    ordinary_cache = cache._selection(ordinary)
+    assert isinstance(ordinary_cache, cache._Cache)
+    assert ordinary_cache.root == root / "cuda-cache"
+    assert ordinary_cache.fits_windows()
+
+    # An astral path character uses two UTF-16 code units.
+    deep_root = root.with_name(root.name + ("🎶" * 9))
+    deep = replace(ordinary, manifest=deep_root / ordinary.manifest.relative_to(root))
+    compact = cache._selection(deep)
+    assert isinstance(compact, cache._Cache)
+    assert compact.root == deep_root / "jit"
+    assert compact.key == ordinary_cache.key
+    assert compact.receipt != ordinary_cache.receipt
+    assert compact.fits_windows()
+    path = replace(compact, generation="0" * 12).kernels
+    assert len(str(path).encode("utf-16-le")) // 2 == 153
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NVIDIA's Windows kernel path geometry")
+def test_external_cache_binds_physical_owner_and_rejects_unsuitable_location(
+    worker: NativeWorkerConfiguration, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path("D:/") / ("x" * 130)
+    other_root = root.with_name(root.name + "y")
+    user_cache = Path("C:/AppData")
+    monkeypatch.setenv("LOCALAPPDATA", str(user_cache))
+    monkeypatch.setattr(cache, "_ordinary_tree", lambda _path: None)
+    monkeypatch.setattr(Path, "resolve", lambda path, *, strict=False: path)
+    first = replace(worker, manifest=root / "installation" / "manifest.json")
+    second = replace(first, manifest=other_root / first.manifest.relative_to(root))
+    selected = cache._selection(first)
+    other = cache._selection(second)
+    assert isinstance(selected, cache._Cache)
+    assert isinstance(other, cache._Cache)
+    assert selected.root == user_cache / "LoBtJit"
+    assert selected.root == other.root
+    assert selected.key != other.key
+    assert selected.receipt != other.receipt
+    assert selected.fits_windows()
+
+    monkeypatch.setenv("LOCALAPPDATA", str(root))
+    oversized = cache.cuda_cache_status(first)
+    assert oversized["status"] == "failed"
+    assert "too long" in oversized["detail"]
+    assert oversized["cache_path"] is None
+
+    def assert_ordinary(path: Path) -> None:
+        if path == user_cache:
+            message = "fixture cache ancestor is a reparse point"
+            raise ValueError(message)
+
+    monkeypatch.setenv("LOCALAPPDATA", str(user_cache))
+    monkeypatch.setattr(cache, "_ordinary_tree", assert_ordinary)
+    blocked = cache.cuda_cache_status(first)
+    assert blocked["status"] == "failed"
+    assert "reparse point" in blocked["detail"]
+    assert blocked["cache_path"] is None

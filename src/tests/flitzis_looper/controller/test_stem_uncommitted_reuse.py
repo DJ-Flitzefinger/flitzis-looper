@@ -16,12 +16,11 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.stem_job import DIRECT_STEM_INTEREST, StemGenerationInterest
 from flitzis_looper.models import PadContentIdentity
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import FakePreparedSourceTicket
+from tests.flitzis_looper.conftest import FakePreparedSourceTicket, sealed_test_producer
 from tests.flitzis_looper.controller.test_shared_stem_material import (
     _declared_shared_producer,  # noqa: F401
 )
@@ -346,7 +345,7 @@ def test_equal_resolution_during_real_config_commit_uses_exact_disk_settlement_o
     assert len(rig.backend.requests) == 1
 
 
-def _other_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _other_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend) -> None:
     directory = tmp_path / "different-owned-producer"
     directory.mkdir()
     files = tuple(directory / name for name in ("checkpoint.bin", "definition.py", "ffmpeg.exe"))
@@ -354,8 +353,7 @@ def _other_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         path.write_bytes(f"different complete producer input {index}".encode())
     monkeypatch.setattr(stems_module, "separator_model_cache_dir", lambda _separator: directory)
     monkeypatch.setattr(stems_module, "resolved_demucs_encoder", lambda _model: files[-1])
-    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: files)
-    monkeypatch.setattr(stem_provenance, "loaded_code_identity", lambda _paths: "different-fixture")
+    monkeypatch.setattr(backend, "capture_producer", lambda _request: sealed_test_producer(files))
 
 
 @pytest.mark.parametrize("invalid", ["different_producer", "cancelled", "failed_discard", "closed"])
@@ -367,7 +365,7 @@ def test_pending_metadata_without_eligible_complete_owner_cannot_authorize_reuse
 ) -> None:
     rig = uncommitted
     if invalid == "different_producer":
-        _other_producer(tmp_path, monkeypatch)
+        _other_producer(tmp_path, monkeypatch, rig.backend)
     elif invalid == "cancelled":
         rig.first.cancelled.set()
     elif invalid == "failed_discard":

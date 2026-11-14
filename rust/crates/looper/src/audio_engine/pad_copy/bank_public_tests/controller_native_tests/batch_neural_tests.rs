@@ -715,21 +715,7 @@ fn isolated_neural(name: &str, case: NeuralCase) {
 }
 
 #[test]
-#[ignore = "explicit actual stock-model CPU resource profile; requires installed model assets"]
-fn neural_demucs_two_distinct_sources_commit_and_accept_own_all() {
-    isolated_neural(
-        "neural_demucs_two_distinct_sources_commit_and_accept_own_all",
-        NeuralCase {
-            separator: "demucs:htdemucs",
-            label: "demucs-two-distinct",
-            full: false,
-            distinct: true,
-        },
-    );
-}
-
-#[test]
-#[ignore = "explicit actual stock-model CPU resource profile; requires installed model assets"]
+#[ignore = "explicit actual BS-RoFormer ONNX profile; requires verified model installation"]
 fn neural_bs_roformer_two_distinct_sources_commit_and_accept_own_all() {
     isolated_neural(
         "neural_bs_roformer_two_distinct_sources_commit_and_accept_own_all",
@@ -738,48 +724,6 @@ fn neural_bs_roformer_two_distinct_sources_commit_and_accept_own_all() {
             label: "bs-roformer-two-distinct",
             full: false,
             distinct: true,
-        },
-    );
-}
-
-#[test]
-#[ignore = "explicit full216 actual Demucs profile; bounded real model work"]
-fn neural_demucs_full216_duplicate_sources_commit_and_accept_own_all() {
-    isolated_neural(
-        "neural_demucs_full216_duplicate_sources_commit_and_accept_own_all",
-        NeuralCase {
-            separator: "demucs:htdemucs",
-            label: "demucs216-duplicate",
-            full: true,
-            distinct: false,
-        },
-    );
-}
-
-#[test]
-#[ignore = "explicit full216 actual Demucs profile; bounded real model work"]
-fn neural_demucs_full216_distinct_sources_commit_and_accept_own_all() {
-    isolated_neural(
-        "neural_demucs_full216_distinct_sources_commit_and_accept_own_all",
-        NeuralCase {
-            separator: "demucs:htdemucs",
-            label: "demucs216-distinct",
-            full: true,
-            distinct: true,
-        },
-    );
-}
-
-#[test]
-#[ignore = "explicit full216 actual BS-RoFormer profile; bounded real model work"]
-fn neural_bs_roformer_full216_duplicate_sources_commit_and_accept_own_all() {
-    isolated_neural(
-        "neural_bs_roformer_full216_duplicate_sources_commit_and_accept_own_all",
-        NeuralCase {
-            separator: "bs-roformer:musdb18hq",
-            label: "bs-roformer216-duplicate",
-            full: true,
-            distinct: false,
         },
     );
 }
